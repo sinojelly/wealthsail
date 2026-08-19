@@ -1,0 +1,10 @@
+{
+  "description": "Create stunning user interfaces from documents with ease, designed for seamless future conversion into mobile applications.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
