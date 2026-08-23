@@ -1,5 +1,7 @@
 {
-  "description": "Create stunning user interfaces from documents with ease, designed for seamless future conversion into mobile applications.",
+  "title": "WealthSail · 个人投研工作台",
+  "description": "面向中国股票、场内基金与场外基金的可追溯个人投研助手原型。",
+  "language": "zh-CN",
   "robots": {
     "index": false
   },

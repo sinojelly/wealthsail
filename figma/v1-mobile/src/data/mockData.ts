@@ -1,237 +1,367 @@
-export type Sentiment = "bullish" | "bearish" | "neutral";
-export type View = "chat" | "portfolio" | "watchlist";
-export type Channel = "premarket" | "diagnosis";
+import type {
+  Asset,
+  InvestmentReport,
+  Position,
+  SourceEvidence,
+  Tenant,
+  UserProfile,
+} from "../domain/types"
 
-export interface StockData {
-  symbol: string;
-  name: string;
-  exchange: "HK" | "SH" | "SZ";
-  price: number;
-  change: number;
-  changePercent: number;
-  support: number;
-  resistance: number;
-  sentiment: Sentiment;
-  volume: string;
-  pe: number;
-  high52w: number;
-  low52w: number;
-  sparkline: number[];
-}
+export const tenants: Tenant[] = [
+  { id: "tenant-lin", name: "林远航的核心账户", shortName: "核心" },
+  { id: "tenant-zhou", name: "周可盈的稳健账户", shortName: "稳健" },
+  { id: "tenant-chen", name: "陈望的成长账户", shortName: "成长" },
+]
 
-export interface Position {
-  stock: StockData;
-  shares: number;
-  costBasis: number;
-}
-
-export type MessageType =
-  | "premarket-report"
-  | "stock-analysis"
-  | "trade-confirm"
-  | "thinking"
-  | "text";
-
-export interface TradeData {
-  action: "buy" | "sell";
-  symbol: string;
-  name: string;
-  shares: number;
-  price: number;
-}
-
-export interface Message {
-  id: string;
-  role: "agent" | "user";
-  type: MessageType;
-  content?: string;
-  timestamp: string;
-  stocks?: StockData[];
-  tradeData?: TradeData;
-}
-
-export const stocks: Record<string, StockData> = {
-  "00700": {
-    symbol: "00700",
-    name: "腾讯控股",
-    exchange: "HK",
-    price: 375.2,
-    change: -4.8,
-    changePercent: -1.26,
-    support: 368.0,
-    resistance: 385.0,
-    sentiment: "bullish",
-    volume: "18.3M",
-    pe: 22.4,
-    high52w: 430.2,
-    low52w: 298.0,
-    sparkline: [
-      340, 355, 348, 362, 358, 371, 368, 375, 380, 378, 382, 375.2,
-    ],
+export const users: UserProfile[] = [
+  {
+    id: "user-lin",
+    tenantId: "tenant-lin",
+    name: "林远航",
+    initials: "林",
+    riskProfile: "BALANCED",
+    weComConnected: true,
   },
-  "600519": {
+  {
+    id: "user-zhou",
+    tenantId: "tenant-zhou",
+    name: "周可盈",
+    initials: "周",
+    riskProfile: "CONSERVATIVE",
+    weComConnected: true,
+  },
+  {
+    id: "user-chen",
+    tenantId: "tenant-chen",
+    name: "陈望",
+    initials: "陈",
+    riskProfile: "AGGRESSIVE",
+    weComConnected: false,
+  },
+]
+
+export const assets: Asset[] = [
+  {
+    id: "asset-600519",
+    type: "CN_STOCK",
     symbol: "600519",
     name: "贵州茅台",
-    exchange: "SH",
-    price: 1420.5,
-    change: 12.5,
-    changePercent: 0.89,
-    support: 1400.0,
-    resistance: 1450.0,
-    sentiment: "bearish",
-    volume: "2.1M",
-    pe: 38.2,
-    high52w: 1550.0,
-    low52w: 1180.0,
-    sparkline: [
-      1280, 1310, 1350, 1380, 1370, 1390, 1410, 1405, 1415, 1420, 1418,
-      1420.5,
-    ],
+    market: "SH",
+    price: 1467.2,
+    changePercent: 0.86,
+    priceAsOf: "2026-08-21T15:00:00+08:00",
+    quality: "FRESH",
+    tags: ["消费", "核心持仓"],
+    sparkline: [1428, 1436, 1442, 1438, 1452, 1459, 1467],
   },
-  "300750": {
+  {
+    id: "asset-300750",
+    type: "CN_STOCK",
     symbol: "300750",
     name: "宁德时代",
-    exchange: "SZ",
-    price: 228.4,
-    change: -16.6,
-    changePercent: -6.78,
-    support: 220.0,
-    resistance: 240.0,
-    sentiment: "bearish",
-    volume: "42.8M",
-    pe: 28.6,
-    high52w: 312.0,
-    low52w: 180.0,
-    sparkline: [
-      280, 265, 258, 252, 261, 248, 243, 240, 245, 238, 232, 228.4,
-    ],
+    market: "SZ",
+    price: 252.48,
+    changePercent: -1.34,
+    priceAsOf: "2026-08-21T15:00:00+08:00",
+    quality: "FRESH",
+    tags: ["新能源", "高波动"],
+    sparkline: [263, 260, 258, 261, 257, 255, 252],
   },
-  "03690": {
-    symbol: "03690",
-    name: "美团",
-    exchange: "HK",
-    price: 156.8,
-    change: 14.8,
-    changePercent: 10.42,
-    support: 150.0,
-    resistance: 165.0,
-    sentiment: "bullish",
-    volume: "36.5M",
-    pe: 45.8,
-    high52w: 168.0,
-    low52w: 95.0,
-    sparkline: [
-      112, 120, 118, 125, 132, 138, 142, 148, 152, 154, 158, 156.8,
-    ],
+  {
+    id: "asset-510300",
+    type: "EXCHANGE_FUND",
+    symbol: "510300",
+    name: "沪深 300 ETF",
+    market: "SH",
+    price: 4.213,
+    changePercent: 0.42,
+    priceAsOf: "2026-08-21T15:00:00+08:00",
+    quality: "FRESH",
+    tags: ["宽基", "场内基金"],
+    sparkline: [4.12, 4.15, 4.14, 4.18, 4.2, 4.19, 4.21],
   },
-  "09988": {
-    symbol: "09988",
-    name: "阿里巴巴",
-    exchange: "HK",
-    price: 86.4,
-    change: 2.15,
-    changePercent: 2.55,
-    support: 82.0,
-    resistance: 92.0,
-    sentiment: "bullish",
-    volume: "28.2M",
-    pe: 18.9,
-    high52w: 104.5,
-    low52w: 68.0,
-    sparkline: [72, 74, 78, 76, 80, 82, 85, 84, 83, 86, 85, 86.4],
+  {
+    id: "asset-512100",
+    type: "EXCHANGE_FUND",
+    symbol: "512100",
+    name: "中证 1000 ETF",
+    market: "SH",
+    price: 2.684,
+    changePercent: -0.28,
+    priceAsOf: "2026-08-21T15:00:00+08:00",
+    quality: "STALE",
+    tags: ["小盘", "场内基金"],
+    sparkline: [2.65, 2.68, 2.71, 2.69, 2.7, 2.67, 2.68],
   },
-  "00941": {
-    symbol: "00941",
-    name: "中国移动",
-    exchange: "HK",
-    price: 78.25,
-    change: -0.35,
-    changePercent: -0.45,
-    support: 76.0,
-    resistance: 82.0,
-    sentiment: "neutral",
-    volume: "8.4M",
-    pe: 12.1,
-    high52w: 88.0,
-    low52w: 62.0,
-    sparkline: [
-      68, 70, 72, 74, 76, 75, 78, 77, 79, 78, 78.5, 78.25,
-    ],
+  {
+    id: "asset-005827",
+    type: "OFF_EXCHANGE_FUND",
+    symbol: "005827",
+    name: "易方达蓝筹精选混合",
+    market: "FUND_OTC",
+    price: 1.7824,
+    changePercent: 0.31,
+    priceAsOf: "2026-08-21T14:30:00+08:00",
+    quality: "ESTIMATED",
+    tags: ["主动权益", "场外基金"],
+    sparkline: [1.74, 1.75, 1.73, 1.76, 1.77, 1.78, 1.78],
   },
-};
+]
 
-export const portfolio: Position[] = [
-  { stock: stocks["00700"], shares: 500, costBasis: 380.0 },
-  { stock: stocks["600519"], shares: 30, costBasis: 1380.0 },
-  { stock: stocks["300750"], shares: 200, costBasis: 245.0 },
-  { stock: stocks["03690"], shares: 1000, costBasis: 142.0 },
-];
+export const positions: Position[] = [
+  {
+    id: "pos-lin-600519",
+    tenantId: "tenant-lin",
+    assetId: "asset-600519",
+    quantity: 30,
+    costBasis: 1388,
+    marketValue: 44016,
+    pnlPercent: 5.71,
+  },
+  {
+    id: "pos-lin-510300",
+    tenantId: "tenant-lin",
+    assetId: "asset-510300",
+    quantity: 10000,
+    costBasis: 3.98,
+    marketValue: 42130,
+    pnlPercent: 5.85,
+  },
+  {
+    id: "pos-lin-005827",
+    tenantId: "tenant-lin",
+    assetId: "asset-005827",
+    quantity: 18000,
+    costBasis: 1.83,
+    marketValue: 32083.2,
+    pnlPercent: -2.6,
+  },
+  {
+    id: "pos-zhou-510300",
+    tenantId: "tenant-zhou",
+    assetId: "asset-510300",
+    quantity: 16000,
+    costBasis: 4.05,
+    marketValue: 67408,
+    pnlPercent: 4.02,
+  },
+  {
+    id: "pos-zhou-005827",
+    tenantId: "tenant-zhou",
+    assetId: "asset-005827",
+    quantity: 26000,
+    costBasis: 1.76,
+    marketValue: 46342.4,
+    pnlPercent: 1.27,
+  },
+  {
+    id: "pos-chen-300750",
+    tenantId: "tenant-chen",
+    assetId: "asset-300750",
+    quantity: 400,
+    costBasis: 238,
+    marketValue: 100992,
+    pnlPercent: 6.08,
+  },
+  {
+    id: "pos-chen-512100",
+    tenantId: "tenant-chen",
+    assetId: "asset-512100",
+    quantity: 24000,
+    costBasis: 2.72,
+    marketValue: 64416,
+    pnlPercent: -1.32,
+  },
+]
 
-export const watchlist: StockData[] = [
-  stocks["00700"],
-  stocks["600519"],
-  stocks["300750"],
-  stocks["03690"],
-  stocks["09988"],
-  stocks["00941"],
-];
+export const evidence: SourceEvidence[] = [
+  {
+    id: "evidence-exchange",
+    publisher: "上海证券交易所",
+    title: "交易所行情与上市公司公告",
+    sourceType: "DISCLOSURE",
+    publishedAt: "2026-08-21T15:10:00+08:00",
+    url: "https://www.sse.com.cn/",
+    quality: "FRESH",
+  },
+  {
+    id: "evidence-fund",
+    publisher: "基金管理人披露",
+    title: "基金净值与定期报告",
+    sourceType: "MARKET_DATA",
+    publishedAt: "2026-08-21T14:30:00+08:00",
+    url: "https://www.amac.org.cn/",
+    quality: "ESTIMATED",
+  },
+  {
+    id: "evidence-tu",
+    publisher: "兔主席 · 抖音精选",
+    title: "宏观与政策分析候选源（待授权接入）",
+    sourceType: "MEDIA",
+    publishedAt: "2026-08-20T20:00:00+08:00",
+    url: "https://www.douyin.com/",
+    quality: "STALE",
+  },
+  {
+    id: "evidence-su",
+    publisher: "苏涵 · 公开媒体",
+    title: "市场结构分析候选源（待授权接入）",
+    sourceType: "MEDIA",
+    publishedAt: "2026-08-20T19:30:00+08:00",
+    url: "https://www.douyin.com/",
+    quality: "STALE",
+  },
+]
 
-export const preMarketStocks = [
-  stocks["00700"],
-  stocks["600519"],
-  stocks["300750"],
-  stocks["03690"],
-];
+const reportDate = "2026-08-21"
 
-export const initialMessages: Message[] = [
-  {
-    id: "1",
-    role: "agent",
-    type: "premarket-report",
-    timestamp: "08:30",
-    stocks: preMarketStocks,
-  },
-  {
-    id: "2",
-    role: "user",
-    type: "text",
-    content: "帮我看看宁德时代今天怎么跌了？还能拿吗？",
-    timestamp: "10:23",
-  },
-  {
-    id: "3",
-    role: "agent",
-    type: "thinking",
-    content: "正在检索 [宁德时代] 实时新闻与技术面...",
-    timestamp: "10:23",
-  },
-  {
-    id: "4",
-    role: "agent",
-    type: "stock-analysis",
-    timestamp: "10:24",
-    stocks: [stocks["300750"]],
-    content:
-      "**下跌原因**\n外资大幅减仓新能源板块，欧盟对华电动车反补贴税落地预期升温，今日放量跌幅 6.78%，出货信号明显。\n**持仓建议**\n您当前成本 ¥245，现价 ¥228.4，浮亏约 ¥3,320（-6.78%）\n短线支撑位 ¥220 是关键防守线。若跌破且成交量继续放大，建议减仓 1/2 止损\n中线若 ¥220–228 企稳且有明显买盘介入，可持仓观望等待反弹至 ¥240 附近减仓\n**操作预案**\n设置 ¥218 为硬止损价，触发后无论情绪如何坚决执行",
-  },
-  {
-    id: "5",
-    role: "user",
-    type: "text",
-    content: "/buy 03690 156 300",
-    timestamp: "10:31",
-  },
-  {
-    id: "6",
-    role: "agent",
-    type: "trade-confirm",
-    timestamp: "10:31",
-    tradeData: {
-      action: "buy",
-      symbol: "03690",
-      name: "美团",
-      shares: 300,
-      price: 156,
+function createReports(
+  tenantId: string,
+  accountName: string,
+  riskNote: string,
+): InvestmentReport[] {
+  return [
+    {
+      id: `${tenantId}-pre`,
+      tenantId,
+      session: "PRE_MARKET",
+      title: "盘前简报",
+      summary: `${accountName} · 开盘前优先检查组合暴露与隔夜事件，不把信息摘要直接当作交易指令。`,
+      generatedAt: `${reportDate}T08:20:00+08:00`,
+      dataCutoffAt: `${reportDate}T08:15:00+08:00`,
+      quality: "FRESH",
+      evidenceIds: ["evidence-exchange"],
+      sections: [
+        {
+          id: `${tenantId}-pre-risk`,
+          eyebrow: "组合风险",
+          title: "先看暴露，再看机会",
+          body: riskNote,
+          tone: "WARNING",
+          assetIds: ["asset-600519", "asset-510300"],
+        },
+        {
+          id: `${tenantId}-pre-plan`,
+          eyebrow: "今日计划",
+          title: "用触发条件替代方向预测",
+          body: "记录关键价位、公告变化与计划失效条件；任何动作仍需用户确认。",
+          tone: "INFO",
+        },
+      ],
     },
-  },
-];
+    {
+      id: `${tenantId}-intraday`,
+      tenantId,
+      session: "INTRADAY",
+      title: "盘中跟踪报告",
+      summary: `${accountName} · 当前只推送相对计划发生变化的事项，减少行情噪声。`,
+      generatedAt: `${reportDate}T11:05:00+08:00`,
+      dataCutoffAt: `${reportDate}T11:04:30+08:00`,
+      quality: "FRESH",
+      evidenceIds: ["evidence-exchange"],
+      sections: [
+        {
+          id: `${tenantId}-intraday-delta`,
+          eyebrow: "变化检测",
+          title: "未出现组合级紧急风险",
+          body: "新能源持仓波动上升，但尚未触发预设回撤阈值；继续观察成交量与板块联动。",
+          tone: "NEUTRAL",
+          assetIds: ["asset-300750"],
+        },
+        {
+          id: `${tenantId}-intraday-data`,
+          eyebrow: "数据健康",
+          title: "一项场内基金行情已滞后",
+          body: "中证 1000 ETF 使用最近一次成功快照，系统不据此生成即时操作建议。",
+          tone: "WARNING",
+          assetIds: ["asset-512100"],
+        },
+      ],
+    },
+    {
+      id: `${tenantId}-fund`,
+      tenantId,
+      session: "FUND_1430",
+      title: "基金 14:30 报告",
+      summary: `${accountName} · 场外基金为盘中估算，不等同于管理人确认净值。`,
+      generatedAt: `${reportDate}T14:31:00+08:00`,
+      dataCutoffAt: `${reportDate}T14:30:00+08:00`,
+      quality: "ESTIMATED",
+      evidenceIds: ["evidence-fund"],
+      sections: [
+        {
+          id: `${tenantId}-fund-estimate`,
+          eyebrow: "估值偏离",
+          title: "易方达蓝筹精选混合",
+          body: "组合穿透数据存在披露滞后，当前估值仅用于比较日内方向，申赎决定需结合费率与持有期。",
+          tone: "INFO",
+          assetIds: ["asset-005827"],
+        },
+        {
+          id: `${tenantId}-fund-deadline`,
+          eyebrow: "时间窗口",
+          title: "确认申赎规则后再行动",
+          body: "不同渠道的确认份额、到账日和费率可能不同；当前原型不会自动提交申赎。",
+          tone: "WARNING",
+        },
+      ],
+    },
+    {
+      id: `${tenantId}-post`,
+      tenantId,
+      session: "POST_MARKET",
+      title: "盘后交互复盘",
+      summary: `${accountName} · 对照早盘计划复盘事实、判断和动作，结论确认后写入不可变决策流水。`,
+      generatedAt: `${reportDate}T16:10:00+08:00`,
+      dataCutoffAt: `${reportDate}T15:10:00+08:00`,
+      quality: "FRESH",
+      evidenceIds: ["evidence-exchange"],
+      sections: [
+        {
+          id: `${tenantId}-post-result`,
+          eyebrow: "计划对照",
+          title: "风险条件未触发，维持原计划",
+          body: "组合波动在预算内；盘中没有新增未确认动作。建议补记今日没有执行交易的原因。",
+          tone: "POSITIVE",
+        },
+        {
+          id: `${tenantId}-post-decision`,
+          eyebrow: "决策草案",
+          title: "明日继续观察数据有效性",
+          body: "若场内基金行情仍滞后，停止相关提醒；若恢复则重新计算组合暴露。",
+          tone: "INFO",
+          assetIds: ["asset-512100"],
+        },
+      ],
+    },
+  ]
+}
+
+export const reports: InvestmentReport[] = [
+  ...createReports(
+    "tenant-lin",
+    "林远航的核心账户",
+    "消费与宽基合计占比较高，避免把同一宏观判断重复下注。",
+  ),
+  ...createReports(
+    "tenant-zhou",
+    "周可盈的稳健账户",
+    "宽基与主动基金相关性上升，稳健账户今日不增加权益风险预算。",
+  ),
+  ...createReports(
+    "tenant-chen",
+    "陈望的成长账户",
+    "新能源与小盘因子共同放大波动，先检查最大回撤阈值。",
+  ),
+]
+
+export const watchlistAssetIdsByTenant: Record<string, string[]> = {
+  "tenant-lin": [
+    "asset-600519",
+    "asset-300750",
+    "asset-510300",
+    "asset-005827",
+  ],
+  "tenant-zhou": ["asset-510300", "asset-005827", "asset-600519"],
+  "tenant-chen": ["asset-300750", "asset-512100", "asset-510300"],
+}
