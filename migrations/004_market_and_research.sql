@@ -297,7 +297,45 @@ CREATE TABLE IF NOT EXISTS workflow.job_runs (
     UNIQUE (tenant_id, job_key)
 );
 
--- 15. 事务性可靠投递 Outbox 表 (Outbox)
+-- 15. 持久化人机交互请求。等待用户响应不是 decision；decision 只在用户
+-- 真正选择 ACCEPTED/IGNORED/DEFERRED 后追加。Token 仅保存带密钥摘要。
+CREATE TABLE IF NOT EXISTS workflow.interaction_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES identity.profiles(id) ON DELETE RESTRICT,
+    channel_binding_id UUID NOT NULL REFERENCES identity.channel_bindings(id) ON DELETE RESTRICT,
+    report_id UUID REFERENCES reporting.reports(id) ON DELETE RESTRICT,
+    recommendation_id UUID REFERENCES research.recommendations(id) ON DELETE RESTRICT,
+    request_type TEXT NOT NULL CHECK (request_type IN ('DECISION_PROMPT', 'FILL_CONFIRMATION', 'PORTFOLIO_CONFIRMATION')),
+    allowed_actions TEXT[] NOT NULL CHECK (
+        cardinality(allowed_actions) > 0
+        AND array_position(allowed_actions, NULL) IS NULL
+    ),
+    action_token_hash TEXT NOT NULL,
+    token_expires_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CONSUMED', 'EXPIRED', 'CANCELLED')),
+    consumed_action TEXT,
+    resolved_at TIMESTAMPTZ,
+    payload_schema_version INTEGER NOT NULL DEFAULT 1 CHECK (payload_schema_version > 0),
+    idempotency_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (token_expires_at > created_at),
+    CHECK (report_id IS NOT NULL OR recommendation_id IS NOT NULL),
+    CHECK (consumed_action IS NULL OR consumed_action = ANY (allowed_actions)),
+    CHECK (
+        (status = 'OPEN' AND consumed_action IS NULL AND resolved_at IS NULL)
+        OR (status = 'CONSUMED' AND consumed_action IS NOT NULL AND resolved_at IS NOT NULL)
+        OR (status IN ('EXPIRED', 'CANCELLED') AND consumed_action IS NULL AND resolved_at IS NOT NULL)
+    ),
+    UNIQUE (tenant_id, idempotency_key),
+    UNIQUE (tenant_id, action_token_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interaction_requests_open_expiry
+ON workflow.interaction_requests (tenant_id, token_expires_at)
+WHERE status = 'OPEN';
+
+-- 16. 事务性可靠投递 Outbox 表 (Outbox)
 CREATE TABLE IF NOT EXISTS workflow.outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
@@ -319,7 +357,7 @@ CREATE TABLE IF NOT EXISTS workflow.outbox (
     UNIQUE (tenant_id, topic, idempotency_key)
 );
 
--- 16. 统一不可变审计日志表 (Audit Log - Append-Only)
+-- 17. 统一不可变审计日志表 (Audit Log - Append-Only)
 CREATE TABLE IF NOT EXISTS audit.audit_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,

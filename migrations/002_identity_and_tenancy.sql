@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS identity.channel_bindings (
     channel_type TEXT NOT NULL CHECK (channel_type IN ('wecom', 'feishu', 'telegram', 'dingtalk', 'webpush')),
     external_user_hash TEXT NOT NULL, -- 外部用户ID加盐哈希，防止明文关联
     external_username TEXT,
-    binding_token_hash TEXT, -- 至少10个随机字符的一次性绑定码之带密钥摘要；不保存明文
+    binding_token_hash TEXT, -- 至少 128 bit 随机熵的一次性绑定码之带密钥摘要；不保存明文
     token_expires_at TIMESTAMPTZ,
     token_consumed_at TIMESTAMPTZ, -- 原子消费后写入，防止并发复用
     token_attempt_count INTEGER NOT NULL DEFAULT 0,

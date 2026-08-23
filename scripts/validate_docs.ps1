@@ -36,6 +36,13 @@ $forbiddenPatterns = [ordered]@{
     'obsolete mock delivery success' = 'MOCK_SENT'
     'incorrect RLS physical-isolation claim' = '(?:RLS\s*(?:\u884c\u7ea7)?\s*\u7269\u7406\u9694\u79bb|\u4e25\u683c\u7269\u7406\u9694\u79bb)'
     'obsolete Go worker requirement' = 'Go/Worker'
+    'nonexistent outbox_events table' = '(?:workflow\.)?outbox_events'
+    'invalid pending decision state' = 'decisions\s*\([^\r\n)]*PENDING'
+    'decision acceptance modeled as status mutation' = '(?:update|\u66f4\u65b0)\s+decisions\s*\(\s*ACCEPTED\s*\)'
+    'unsafe universal fund cutoff promise' = '(?:\u63d0\u793a|\u662f\u5426)[^\r\n]{0,40}15:00\s*\u524d[^\r\n]{0,30}(?:\u8865\u4ed3|\u5b9a\u6295|\u7533\u8d4e)'
+    'unsupported personal WeChat MVP promise' = '\u5f00\u542f\u5fae\u4fe1\u63d2\u4ef6\u8ba9\u4e2a\u4eba\u666e\u901a\u5fae\u4fe1'
+    'incorrect accounting-grade ledger name' = '\u53cc\u5f0f\u8d26\u672c'
+    'unsupported complete crash-safety claim' = '\u5b8c\u5168\u5d29\u6e83\u5b89\u5168'
 }
 
 foreach ($file in $documentFiles) {
@@ -81,6 +88,60 @@ foreach ($check in $repositorySecurityChecks) {
     }
     $securityContent = Get-Content -Raw -LiteralPath $check.Path -Encoding UTF8
     if ($securityContent -match $check.Pattern) {
+        Add-Failure $check.Message
+    }
+}
+
+$repositoryRequiredChecks = @(
+    @{
+        Path = $requiredDocs['02']
+        Pattern = '(?s)### 8\.3.*(?:Prompt|prompt).*feature flag'
+        Message = 'Architecture must retain explicit prompt-injection and feature-flag controls for L5 multi-agent experiments.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/002_identity_and_tenancy.sql'
+        Pattern = '128 bit'
+        Message = 'Binding-token schema guidance must require at least 128 bits of random entropy.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/004_market_and_research.sql'
+        Pattern = 'CREATE TABLE IF NOT EXISTS workflow\.interaction_requests'
+        Message = 'Canonical schema must persist pending HITL interaction requests separately from immutable decisions.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/005_rls_security_policies.sql'
+        Pattern = 'CREATE POLICY interaction_request_self_select'
+        Message = 'RLS migration must restrict interaction requests to the bound user, not every tenant member.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/005_rls_security_policies.sql'
+        Pattern = 'REVOKE SELECT ON workflow\.interaction_requests'
+        Message = 'Authenticated users must not receive table-wide access to interaction token hashes.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/007_security_and_integrity_hardening.sql'
+        Pattern = 'CREATE TABLE IF NOT EXISTS workflow\.interaction_requests'
+        Message = 'Upgrade migration must add workflow.interaction_requests to existing installations.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/007_security_and_integrity_hardening.sql'
+        Pattern = 'protect_interaction_request'
+        Message = 'Upgrade migration must protect interaction request identity and terminal states.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/007_security_and_integrity_hardening.sql'
+        Pattern = 'CREATE POLICY interaction_request_self_select'
+        Message = 'Upgrade migration must retain per-user RLS for interaction requests.'
+    }
+)
+
+foreach ($check in $repositoryRequiredChecks) {
+    if (-not (Test-Path -LiteralPath $check.Path)) {
+        Add-Failure "Required architecture target is missing: $($check.Path)."
+        continue
+    }
+    $requiredContent = Get-Content -Raw -LiteralPath $check.Path -Encoding UTF8
+    if ($requiredContent -notmatch $check.Pattern) {
         Add-Failure $check.Message
     }
 }
@@ -206,6 +267,10 @@ $canonicalTokens = @(
     'instrument_id',
     'ledger_events',
     'source_registry',
+    'interaction_requests',
+    'NFR-LLM-001',
+    'NFR-HITL-001',
+    'SEC-CBK-001',
     'expand'
 )
 

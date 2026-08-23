@@ -78,6 +78,7 @@ DECLARE
         'risk.alert_events',
         'workflow.jobs',
         'workflow.job_runs',
+        'workflow.interaction_requests',
         'workflow.outbox',
         'audit.audit_log'
     ];
@@ -92,6 +93,14 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+-- Pending interactions contain per-user capability metadata. Tenant membership
+-- alone must not reveal another member's request or token-derived state.
+DROP POLICY IF EXISTS tenant_member_select ON workflow.interaction_requests;
+CREATE POLICY interaction_request_self_select
+ON workflow.interaction_requests
+FOR SELECT TO authenticated
+USING (user_id = auth.uid() AND identity.is_tenant_member(tenant_id));
 
 -- Direct user writes are limited to mutable configuration/intent resources.
 -- Ledger, projections, reports, model runs, Outbox, and audit have no direct
@@ -190,8 +199,17 @@ GRANT SELECT ON
     research.theses, research.model_runs, research.recommendations, research.evidence_refs,
     reporting.reports, reporting.report_items, reporting.decisions,
     risk.investment_policies, risk.alert_rules, risk.alert_events,
-    workflow.jobs, workflow.job_runs, workflow.outbox, audit.audit_log
+    workflow.jobs, workflow.job_runs, workflow.interaction_requests,
+    workflow.outbox, audit.audit_log
 TO authenticated;
+
+-- Never expose token hashes or internal idempotency keys through the JWT role.
+REVOKE SELECT ON workflow.interaction_requests FROM authenticated;
+GRANT SELECT (
+    id, tenant_id, user_id, channel_binding_id, report_id, recommendation_id,
+    request_type, allowed_actions, token_expires_at, status, consumed_action,
+    resolved_at, payload_schema_version, created_at
+) ON workflow.interaction_requests TO authenticated;
 
 GRANT INSERT, UPDATE, DELETE ON
     identity.accounts, research.theses, risk.investment_policies, risk.alert_rules

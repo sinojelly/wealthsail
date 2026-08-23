@@ -141,6 +141,44 @@ CREATE TABLE IF NOT EXISTS ledger.trade_fills (
     UNIQUE (tenant_id, idempotency_key)
 );
 
+-- Pending HITL state is not a decision. Store a one-time, tenant-bound action
+-- request and append reporting.decisions only after the user actually acts.
+CREATE TABLE IF NOT EXISTS workflow.interaction_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES identity.profiles(id) ON DELETE RESTRICT,
+    channel_binding_id UUID NOT NULL REFERENCES identity.channel_bindings(id) ON DELETE RESTRICT,
+    report_id UUID REFERENCES reporting.reports(id) ON DELETE RESTRICT,
+    recommendation_id UUID REFERENCES research.recommendations(id) ON DELETE RESTRICT,
+    request_type TEXT NOT NULL CHECK (request_type IN ('DECISION_PROMPT', 'FILL_CONFIRMATION', 'PORTFOLIO_CONFIRMATION')),
+    allowed_actions TEXT[] NOT NULL CHECK (
+        cardinality(allowed_actions) > 0
+        AND array_position(allowed_actions, NULL) IS NULL
+    ),
+    action_token_hash TEXT NOT NULL,
+    token_expires_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CONSUMED', 'EXPIRED', 'CANCELLED')),
+    consumed_action TEXT,
+    resolved_at TIMESTAMPTZ,
+    payload_schema_version INTEGER NOT NULL DEFAULT 1 CHECK (payload_schema_version > 0),
+    idempotency_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (token_expires_at > created_at),
+    CHECK (report_id IS NOT NULL OR recommendation_id IS NOT NULL),
+    CHECK (consumed_action IS NULL OR consumed_action = ANY (allowed_actions)),
+    CHECK (
+        (status = 'OPEN' AND consumed_action IS NULL AND resolved_at IS NULL)
+        OR (status = 'CONSUMED' AND consumed_action IS NOT NULL AND resolved_at IS NOT NULL)
+        OR (status IN ('EXPIRED', 'CANCELLED') AND consumed_action IS NULL AND resolved_at IS NOT NULL)
+    ),
+    UNIQUE (tenant_id, idempotency_key),
+    UNIQUE (tenant_id, action_token_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interaction_requests_open_expiry
+ON workflow.interaction_requests (tenant_id, token_expires_at)
+WHERE status = 'OPEN';
+
 DO $$
 DECLARE
     table_name TEXT;
@@ -152,6 +190,7 @@ DECLARE
         'research.evidence_refs', 'reporting.reports', 'reporting.report_items',
         'reporting.decisions', 'risk.investment_policies', 'risk.alert_rules',
         'risk.alert_events', 'workflow.jobs', 'workflow.job_runs',
+        'workflow.interaction_requests',
         'workflow.outbox', 'audit.audit_log'
     ];
 BEGIN
@@ -169,6 +208,12 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+DROP POLICY IF EXISTS tenant_member_select ON workflow.interaction_requests;
+DROP POLICY IF EXISTS interaction_request_self_select ON workflow.interaction_requests;
+CREATE POLICY interaction_request_self_select
+ON workflow.interaction_requests FOR SELECT TO authenticated
+USING (user_id = auth.uid() AND identity.is_tenant_member(tenant_id));
 
 DO $$
 DECLARE
@@ -231,8 +276,15 @@ GRANT SELECT ON
     research.theses, research.model_runs, research.recommendations, research.evidence_refs,
     reporting.reports, reporting.report_items, reporting.decisions,
     risk.investment_policies, risk.alert_rules, risk.alert_events,
-    workflow.jobs, workflow.job_runs, workflow.outbox, audit.audit_log
+    workflow.jobs, workflow.job_runs, workflow.interaction_requests,
+    workflow.outbox, audit.audit_log
 TO authenticated;
+REVOKE SELECT ON workflow.interaction_requests FROM authenticated;
+GRANT SELECT (
+    id, tenant_id, user_id, channel_binding_id, report_id, recommendation_id,
+    request_type, allowed_actions, token_expires_at, status, consumed_action,
+    resolved_at, payload_schema_version, created_at
+) ON workflow.interaction_requests TO authenticated;
 GRANT INSERT, UPDATE, DELETE ON
     identity.accounts, research.theses, risk.investment_policies, risk.alert_rules
 TO authenticated;
@@ -257,6 +309,8 @@ ALTER TABLE reporting.reports
     ADD CONSTRAINT uq_reports_tenant_id UNIQUE (tenant_id, id);
 ALTER TABLE reporting.decisions
     ADD CONSTRAINT uq_decisions_tenant_id UNIQUE (tenant_id, id);
+ALTER TABLE identity.channel_bindings
+    ADD CONSTRAINT uq_channel_bindings_tenant_id UNIQUE (tenant_id, id);
 ALTER TABLE ledger.trade_fills
     ADD CONSTRAINT uq_trade_fills_tenant_id UNIQUE (tenant_id, id);
 ALTER TABLE risk.alert_rules
@@ -267,6 +321,8 @@ ALTER TABLE workflow.job_runs
     ADD CONSTRAINT uq_job_runs_tenant_id UNIQUE (tenant_id, id);
 ALTER TABLE workflow.outbox
     ADD CONSTRAINT uq_outbox_tenant_id UNIQUE (tenant_id, id);
+ALTER TABLE workflow.interaction_requests
+    ADD CONSTRAINT uq_interaction_requests_tenant_id UNIQUE (tenant_id, id);
 
 -- Composite foreign keys prevent a valid tenant row from referencing another
 -- tenant's valid account/event/report. Existing single-column FKs remain as a
@@ -347,6 +403,22 @@ ALTER TABLE reporting.decisions
     ADD CONSTRAINT fk_decisions_tenant_previous
     FOREIGN KEY (tenant_id, previous_decision_id)
     REFERENCES reporting.decisions(tenant_id, id) ON DELETE RESTRICT;
+ALTER TABLE workflow.interaction_requests
+    ADD CONSTRAINT fk_interaction_requests_tenant_user
+    FOREIGN KEY (tenant_id, user_id)
+    REFERENCES identity.tenant_members(tenant_id, user_id) ON DELETE RESTRICT;
+ALTER TABLE workflow.interaction_requests
+    ADD CONSTRAINT fk_interaction_requests_tenant_binding
+    FOREIGN KEY (tenant_id, channel_binding_id)
+    REFERENCES identity.channel_bindings(tenant_id, id) ON DELETE RESTRICT;
+ALTER TABLE workflow.interaction_requests
+    ADD CONSTRAINT fk_interaction_requests_tenant_report
+    FOREIGN KEY (tenant_id, report_id)
+    REFERENCES reporting.reports(tenant_id, id) ON DELETE RESTRICT;
+ALTER TABLE workflow.interaction_requests
+    ADD CONSTRAINT fk_interaction_requests_tenant_recommendation
+    FOREIGN KEY (tenant_id, recommendation_id)
+    REFERENCES research.recommendations(tenant_id, id) ON DELETE RESTRICT;
 ALTER TABLE ledger.trade_fills
     ADD CONSTRAINT fk_trade_fills_tenant_account
     FOREIGN KEY (tenant_id, account_id)
@@ -613,6 +685,46 @@ DROP TRIGGER IF EXISTS protect_decisions_trigger ON reporting.decisions;
 CREATE TRIGGER protect_decisions_trigger
 BEFORE UPDATE OR DELETE ON reporting.decisions
 FOR EACH ROW EXECUTE FUNCTION reporting.protect_decision();
+
+-- Interaction identity and capability binding never change. Only OPEN may
+-- transition once to a terminal state; retries observe the stored outcome.
+CREATE OR REPLACE FUNCTION workflow.protect_interaction_request()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = workflow, pg_catalog
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'interaction requests are historical workflow facts and cannot be deleted';
+    END IF;
+    IF OLD.status <> 'OPEN' THEN
+        RAISE EXCEPTION 'terminal interaction request status is immutable';
+    END IF;
+    IF ROW(
+        NEW.id, NEW.tenant_id, NEW.user_id, NEW.channel_binding_id,
+        NEW.report_id, NEW.recommendation_id, NEW.request_type,
+        NEW.allowed_actions, NEW.action_token_hash, NEW.token_expires_at,
+        NEW.payload_schema_version, NEW.idempotency_key, NEW.created_at
+    ) IS DISTINCT FROM ROW(
+        OLD.id, OLD.tenant_id, OLD.user_id, OLD.channel_binding_id,
+        OLD.report_id, OLD.recommendation_id, OLD.request_type,
+        OLD.allowed_actions, OLD.action_token_hash, OLD.token_expires_at,
+        OLD.payload_schema_version, OLD.idempotency_key, OLD.created_at
+    ) THEN
+        RAISE EXCEPTION 'interaction request identity and capability fields are immutable';
+    END IF;
+    IF NEW.status = 'OPEN' AND ROW(NEW.consumed_action, NEW.resolved_at)
+       IS DISTINCT FROM ROW(OLD.consumed_action, OLD.resolved_at) THEN
+        RAISE EXCEPTION 'open interaction request cannot contain a resolution';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS protect_interaction_requests_trigger ON workflow.interaction_requests;
+CREATE TRIGGER protect_interaction_requests_trigger
+BEFORE UPDATE OR DELETE ON workflow.interaction_requests
+FOR EACH ROW EXECUTE FUNCTION workflow.protect_interaction_request();
 
 DROP TRIGGER IF EXISTS protect_audit_log_trigger ON audit.audit_log;
 CREATE TRIGGER protect_audit_log_trigger
