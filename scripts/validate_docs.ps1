@@ -81,13 +81,18 @@ $repositorySecurityChecks = @(
     },
     @{
         Path = $requiredDocs['09']
-        Pattern = '(?:POST\s+/api/v1/identity/bindings/token|DELETE\s+/api/v1/identity/bindings|record_cash_in\s+与\s+record_buy|\u652f\u6301\u591a\u79df\u6237\u5207\u6362)'
+        Pattern = '(?:POST\s+/api/v1/identity/bindings/token|DELETE\s+/api/v1/identity/bindings|record_cash_in\s+\u4e0e\s+record_buy|\u652f\u6301\u591a\u79df\u6237\u5207\u6362)'
         Message = 'Web design must not restore the obsolete binding endpoint, cash-in/fill coupling, physical binding delete, or L1 in-page tenant switching.'
     },
     @{
         Path = $requiredDocs['09']
         Pattern = '(?:identity\.)?is_tenant_member\s+(?:\u7edf\u4e00\u63d0\u53d6|\u4ece\u53ef\u4fe1\u4f1a\u8bdd\u89e3\u6790)'
         Message = 'Web design must treat is_tenant_member as a predicate, not a tenant-context extractor.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '(?:Equity Curve\s+vs\s+\u6caa\u6df1\s*300|\u624b\u5de5\u6539\u8d26)'
+        Message = 'Web design must not hard-code CSI 300 as the active benchmark or imply direct manual ledger editing.'
     }
 )
 
@@ -212,6 +217,56 @@ $repositoryRequiredChecks = @(
         Path = $requiredDocs['09']
         Pattern = '(?s)VIEWER.*EDITOR.*ADMIN.*OWNER.*L1\s+DTO\s+\u4e0d\u542b\u53ef\u7f16\u8f91'
         Message = 'Web design must retain the complete role matrix and reject editable L4 allocation targets in L1.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '\u6295\u8d44\u671f\u9650[^\r\n]{0,160}investment_horizon_months'
+        Message = 'Web risk-policy design must retain the investment horizon and its canonical field mapping.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '\u6240\u6709\u767e\u5206\u6bd4\u5b57\u6bb5\u9ed8\u8ba4\u4e3a\u7a7a'
+        Message = 'Web risk-policy design must keep percentage fields empty until the user enters a policy.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'LEGACY_MIGRATED'
+        Message = 'Web risk-policy design must expose incomplete legacy confirmation provenance.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '412 VERSION_CONFLICT'
+        Message = 'Web risk-policy design must retain optimistic-concurrency conflict handling.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'report_item\s*/\s*evidence_ref'
+        Message = 'Web evidence design must retain item-level evidence references.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'published_at\s*/\s*as_of\s*/\s*retrieved_at'
+        Message = 'Web evidence design must distinguish source publication, fact, and retrieval times.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'Prompt/Skill/schema/method_version'
+        Message = 'Web evidence design must retain model, Skill, schema, and method versions.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '\u4e8b\u5b9e[^\r\n]{0,80}\u89e3\u91ca[^\r\n]{0,80}\u63a8\u65ad'
+        Message = 'Web evidence design must distinguish facts, explanations, and inferences.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'L5[^\r\n]*feature flag[^\r\n]*read-only scoped tools'
+        Message = 'Web multi-agent experiments must remain feature-flagged and read-only by default.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = 'Skill[^\r\n]*\u7981\u6b62\u5728\u7ebf\u81ea\u6539\u751f\u4ea7\u89c4\u5219'
+        Message = 'Web Skill experiments must not modify production rules online.'
     },
     @{
         Path = $requiredDocs['04']
