@@ -3,7 +3,12 @@
 from decimal import Decimal
 import pytest
 
-from modules.market_data.providers import MarketDataProvider, DataQualityStatus, MarketObservation
+from modules.market_data.providers import (
+    DataQualityStatus,
+    FundComponentReturn,
+    MarketDataProvider,
+    MarketObservation,
+)
 
 
 def test_commodity_ratio_calculation() -> None:
@@ -32,16 +37,54 @@ def test_commodity_ratio_zero_copper_error() -> None:
         )
 
 
-def test_market_observation_quality_defaults() -> None:
-    """Tests default properties of a MarketObservation."""
-    obs = MarketObservation(
+def test_market_observation_defaults_fail_closed_and_use_fresh_timestamps() -> None:
+    """Unclassified observations are unavailable and do not share import-time timestamps."""
+    first = MarketObservation(
         subject_code="600519",
         field_code="CLOSE",
         value=Decimal("1420.00"),
-        quality_status=DataQualityStatus.FRESH,
     )
-    assert obs.subject_code == "600519"
-    assert obs.field_code == "CLOSE"
-    assert obs.value == Decimal("1420.00")
-    assert obs.quality_status == DataQualityStatus.FRESH
-    assert obs.currency == "CNY"
+    second = MarketObservation(subject_code="510300", field_code="CLOSE")
+
+    assert first.quality_status is DataQualityStatus.UNAVAILABLE
+    assert first.observed_at is not second.observed_at
+    assert first.currency == "CNY"
+
+
+def test_fund_estimate_uses_component_weights_and_explicit_uncertainty() -> None:
+    """The estimated NAV must be derived from supplied holdings, not fixed multipliers."""
+    provider = MarketDataProvider()
+    estimate = provider.estimate_fund_nav_range(
+        fund_code="110011",
+        confirmed_nav=Decimal("1.0000"),
+        components=(
+            FundComponentReturn(weight=Decimal("0.40"), return_rate=Decimal("0.02")),
+            FundComponentReturn(weight=Decimal("0.30"), return_rate=Decimal("-0.01")),
+        ),
+        residual_benchmark_return=Decimal("0.00"),
+        uncertainty_rate=Decimal("0.002"),
+    )
+
+    assert estimate.quality_status is DataQualityStatus.ESTIMATED
+    assert estimate.value == Decimal("1.0050")
+    assert estimate.lower_value == Decimal("1.0030")
+    assert estimate.upper_value == Decimal("1.0070")
+    assert "70.00%" in estimate.memo
+
+
+def test_fund_estimate_abstains_when_holding_coverage_is_too_low() -> None:
+    """Sparse disclosures must not be converted into a confident intraday estimate."""
+    provider = MarketDataProvider()
+    estimate = provider.estimate_fund_nav_range(
+        fund_code="110011",
+        confirmed_nav=Decimal("1.0000"),
+        components=(
+            FundComponentReturn(weight=Decimal("0.20"), return_rate=Decimal("0.02")),
+        ),
+        residual_benchmark_return=Decimal("0.00"),
+        minimum_holding_coverage=Decimal("0.60"),
+    )
+
+    assert estimate.quality_status is DataQualityStatus.UNAVAILABLE
+    assert estimate.value is None
+    assert "覆盖率不足" in estimate.memo

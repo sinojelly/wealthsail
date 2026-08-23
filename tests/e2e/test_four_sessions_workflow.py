@@ -1,67 +1,122 @@
-"""End-to-end integration and workflow tests for the 4 daily reporting sessions."""
+"""Adapter and in-memory domain-flow tests; not a production four-session E2E."""
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import uuid
+
+import pytest
 
 from adapters.messaging.wecom_adapter import WeComAdapter
 from modules.ledger.service import LedgerService
 
 
 def test_wecom_token_verification_and_expiry() -> None:
-    """Tests 6-digit one-time binding token hashing, verification, and expiration."""
-    raw_token = "WS-8899"
-    token_hash = WeComAdapter.hash_binding_token(raw_token)
+    """Tests a high-entropy one-time token hash, verification, and expiration."""
+    raw_token = "WS-8K4P-9Q2M"
+    token_secret = "test-only-binding-secret"
+    token_hash = WeComAdapter.hash_binding_token(raw_token, token_secret)
 
     # Valid unexpired token
     future_time = datetime.now(timezone.utc) + timedelta(minutes=15)
-    assert WeComAdapter.verify_binding_token(raw_token, token_hash, future_time) is True
+    assert WeComAdapter.verify_binding_token(raw_token, token_hash, future_time, token_secret) is True
 
     # Wrong token
-    assert WeComAdapter.verify_binding_token("WS-0000", token_hash, future_time) is False
+    assert WeComAdapter.verify_binding_token("WS-0000-0000", token_hash, future_time, token_secret) is False
 
     # Expired token
     past_time = datetime.now(timezone.utc) - timedelta(minutes=1)
-    assert WeComAdapter.verify_binding_token(raw_token, token_hash, past_time) is False
+    assert WeComAdapter.verify_binding_token(raw_token, token_hash, past_time, token_secret) is False
+
+    # Ambiguous naive timestamps fail closed instead of being compared in the
+    # host machine's local timezone.
+    naive_future = datetime.now() + timedelta(minutes=15)
+    assert WeComAdapter.verify_binding_token(raw_token, token_hash, naive_future, token_secret) is False
+
+
+def test_wecom_rejects_missing_or_broadcast_recipient() -> None:
+    """A private financial message must never fall back to a broadcast target."""
+    adapter = WeComAdapter(corp_id="corp", corp_secret="secret", agent_id=1)
+
+    with pytest.raises(ValueError, match="收件人"):
+        adapter.send_markdown_message(content="private", to_user="")
+    with pytest.raises(ValueError, match="群发"):
+        adapter.send_markdown_message(content="private", to_user="@all")
+
+
+def test_wecom_missing_credentials_fail_closed_unless_dry_run() -> None:
+    """Missing credentials are configuration errors, not successful delivery."""
+    adapter = WeComAdapter(corp_id="", corp_secret="", agent_id=1)
+
+    result = adapter.send_markdown_message(content="private", to_user="user-1")
+    assert result["status"] == "CONFIG_ERROR"
+
+    dry_run = adapter.send_markdown_message(
+        content="private",
+        to_user="user-1",
+        idempotency_key="dry-run-1",
+        dry_run=True,
+    )
+    assert dry_run["status"] == "DRY_RUN"
+
+
+def test_wecom_transport_error_does_not_leak_credentials(monkeypatch, caplog) -> None:
+    """Transport failures must not echo Corp Secret into results or logs."""
+    secret = "never-print-this-corp-secret"
+    adapter = WeComAdapter(corp_id="corp", corp_secret=secret, agent_id=1)
+
+    def raise_transport_error(*_args, **_kwargs):
+        raise RuntimeError(f"request failed: corpsecret={secret}")
+
+    monkeypatch.setattr("adapters.messaging.wecom_adapter.requests.get", raise_transport_error)
+
+    result = adapter.send_markdown_message(content="private", to_user="user-1")
+    visible_output = f"{result} {caplog.text}"
+    assert result["status"] == "ERROR"
+    assert secret not in visible_output
 
 
 def test_wecom_idempotent_message_suppression() -> None:
-    """Tests that duplicate messages with same idempotency key are suppressed."""
+    """The prototype suppresses duplicate dry-run messages within one process."""
     adapter = WeComAdapter()
-    idem_key = "PRE_MARKET_REPORT_20260823_TENANT1"
+    idem_key = "PRE_MARKET_REPORT_20260824_TENANT1"
 
     # First send
     res1 = adapter.send_markdown_message(
         content="### 🌅 盘前操盘剧本",
+        to_user="tenant-1-user",
         idempotency_key=idem_key,
+        dry_run=True,
     )
-    assert res1["status"] in ("MOCK_SENT", "DELIVERED")
+    assert res1["status"] == "DRY_RUN"
 
     # Second send with same key
     res2 = adapter.send_markdown_message(
         content="### 🌅 盘前操盘剧本 (重发)",
+        to_user="tenant-1-user",
         idempotency_key=idem_key,
+        dry_run=True,
     )
     assert res2["status"] == "DUPLICATE_IGNORED"
 
 
-def test_four_sessions_complete_lifecycle() -> None:
-    """Simulates a complete 4-session daily lifecycle with ledger and reporting."""
+def test_confirmed_fill_updates_ledger_projection() -> None:
+    """A separately confirmed fill produces the expected ledger projection."""
     tenant_id = uuid.uuid4()
     account_id = uuid.uuid4()
     inst_id = uuid.uuid4()
     ledger = LedgerService(tenant_id=tenant_id, account_id=account_id)
 
-    # Session 1 (Pre-market): User has initial 500,000 cash and holds 300 shares @ 1400.00
-    ledger.record_cash_in(Decimal("500000.00"), date(2026, 8, 23), "DEP_E2E_01")
-    ledger.record_buy(inst_id, Decimal("300.0000"), Decimal("1400.00"), Decimal("0.00"), date(2026, 8, 23), "BUY_E2E_01")
+    # Opening facts: user has 500,000 cash and a confirmed 300-share fill.
+    ledger.record_cash_in(Decimal("500000.00"), date(2026, 8, 24), "DEP_E2E_01")
+    ledger.record_buy(inst_id, Decimal("300.0000"), Decimal("1400.00"), Decimal("0.00"), date(2026, 8, 24), "BUY_E2E_01")
 
     proj_pre = ledger.rebuild_projection()
     assert proj_pre.cash_balance == Decimal("80000.00")
     assert proj_pre.positions[inst_id].quantity == Decimal("300.0000")
 
-    # Session 2 (Intraday HITL): Price touches 1380.00 buy point, user confirms buy 50 shares
-    ledger.record_buy(inst_id, Decimal("50.0000"), Decimal("1380.00"), Decimal("0.00"), date(2026, 8, 23), "HITL_BUY_01")
+    # Accepting a recommendation is deliberately outside LedgerService. Only a
+    # separately confirmed fill reaches this deterministic ledger boundary.
+    ledger.record_buy(inst_id, Decimal("50.0000"), Decimal("1380.00"), Decimal("0.00"), date(2026, 8, 24), "CONFIRMED_FILL_01")
     proj_intra = ledger.rebuild_projection()
     # Cash: 80,000 - 69,000 = 11,000.00
     assert proj_intra.cash_balance == Decimal("11000.00")
@@ -69,8 +124,8 @@ def test_four_sessions_complete_lifecycle() -> None:
     assert proj_intra.positions[inst_id].quantity == Decimal("350.0000")
     assert proj_intra.positions[inst_id].avg_cost == Decimal("1397.1429")
 
-    # Session 3 (14:30 Fund Estimation): Tested in module unit test
-    # Session 4 (Post-market Review): Verified final reconciled position
+    # Rebuilding the projection is the prototype reconciliation check. Formal
+    # four-session scheduling/reporting/Outbox E2E remains NOT_RUN.
     proj_post = ledger.rebuild_projection()
     assert proj_post.cash_balance == Decimal("11000.00")
     assert proj_post.positions[inst_id].quantity == Decimal("350.0000")

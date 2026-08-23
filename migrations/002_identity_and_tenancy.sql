@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS identity.tenants (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 2. 用户画像表 (Profiles - 与认证系统映射)
+-- 2. 用户画像表 (Profiles - 与认证系统 subject 一一映射)
+-- Supabase profile.id MUST equal auth.users.id. The fixture rows in migration
+-- 006 are database-only examples and are not login-ready Auth identities.
 CREATE TABLE IF NOT EXISTS identity.profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE,
@@ -60,8 +62,9 @@ CREATE TABLE IF NOT EXISTS identity.channel_bindings (
     channel_type TEXT NOT NULL CHECK (channel_type IN ('wecom', 'feishu', 'telegram', 'dingtalk', 'webpush')),
     external_user_hash TEXT NOT NULL, -- 外部用户ID加盐哈希，防止明文关联
     external_username TEXT,
-    binding_token_hash TEXT, -- 一次性临时绑定码哈希 (如 'WS-8899' 的哈希)
+    binding_token_hash TEXT, -- 至少10个随机字符的一次性绑定码之带密钥摘要；不保存明文
     token_expires_at TIMESTAMPTZ,
+    token_consumed_at TIMESTAMPTZ, -- 原子消费后写入，防止并发复用
     token_attempt_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('PENDING_VERIFY', 'ACTIVE', 'REVOKED')),
     bound_at TIMESTAMPTZ DEFAULT now(),

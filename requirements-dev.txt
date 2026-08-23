@@ -1,0 +1,4 @@
+# Local prototype test dependencies. Runtime dependencies will be separated and
+# locked when the FastAPI/Worker implementation is introduced.
+pytest>=8.4,<9
+requests>=2.34,<3

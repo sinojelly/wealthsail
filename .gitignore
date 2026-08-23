@@ -12,6 +12,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.venv/
 
 # OS / IDE 临时文件
 .DS_Store

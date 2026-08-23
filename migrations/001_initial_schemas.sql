@@ -11,7 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- 2. 创建各业务领域隔离 Schema
 CREATE SCHEMA IF NOT EXISTS identity;   -- 租户、用户、账户与身份绑定
 CREATE SCHEMA IF NOT EXISTS reference;  -- 标的主数据、交易日历与数据源元数据
-CREATE SCHEMA IF NOT EXISTS ledger;     -- 不可变双式账本、批次与持仓/净值投影
+CREATE SCHEMA IF NOT EXISTS ledger;     -- 不可变投资事件、成交事实、批次与持仓/净值投影
 CREATE SCHEMA IF NOT EXISTS market;     -- 数据源抓取快照、市场指标观察与公司行动
 CREATE SCHEMA IF NOT EXISTS research;   -- 投资论点、模型执行记录、建议与证据引用
 CREATE SCHEMA IF NOT EXISTS reporting;  -- 四时段报告、条目、用户确认/纠正决策

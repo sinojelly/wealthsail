@@ -32,6 +32,10 @@ $forbiddenPatterns = [ordered]@{
     'hard-coded Brent production value' = 'brent_price\s*='
     'hard-coded WTI production value' = 'wti\s*='
     'hard-coded gold production value' = 'gold_spot\s*='
+    'obsolete short binding token example' = 'WS-8899'
+    'obsolete mock delivery success' = 'MOCK_SENT'
+    'incorrect RLS physical-isolation claim' = '(?:RLS\s*(?:\u884c\u7ea7)?\s*\u7269\u7406\u9694\u79bb|\u4e25\u683c\u7269\u7406\u9694\u79bb)'
+    'obsolete Go worker requirement' = 'Go/Worker'
 }
 
 foreach ($file in $documentFiles) {
@@ -40,6 +44,44 @@ foreach ($file in $documentFiles) {
         if ($content -match $pattern.Value) {
             Add-Failure "$($file.Name): $($pattern.Key)."
         }
+    }
+}
+
+# Security invariants span documentation, adapters, and executable migrations.
+# These checks intentionally target unsafe architectural patterns rather than
+# cosmetic wording so a future documentation rewrite cannot silently restore
+# a previously rejected trust boundary.
+$repositorySecurityChecks = @(
+    @{
+        Path = $requiredDocs['03']
+        Pattern = 'SUPABASE_SERVICE_ROLE_KEY'
+        Message = 'Hermes/quick-start documentation must not contain a Supabase service-role credential.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'adapters/messaging/wecom_adapter.py'
+        Pattern = 'to_user\s*:\s*str\s*=\s*["'']@all["'']'
+        Message = 'WeCom tenant-private delivery must not default to @all.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/005_rls_security_policies.sql'
+        Pattern = 'CREATE POLICY p_delete_tenant'
+        Message = 'RLS migration must not grant a generic member DELETE policy to every tenant table.'
+    },
+    @{
+        Path = $requiredDocs['01']
+        Pattern = 'FOR\s+ALL[\s\S]{0,160}identity\.is_tenant_member'
+        Message = 'PRD RLS examples must not turn membership into blanket write authorization.'
+    }
+)
+
+foreach ($check in $repositorySecurityChecks) {
+    if (-not (Test-Path -LiteralPath $check.Path)) {
+        Add-Failure "Security invariant target is missing: $($check.Path)."
+        continue
+    }
+    $securityContent = Get-Content -Raw -LiteralPath $check.Path -Encoding UTF8
+    if ($securityContent -match $check.Pattern) {
+        Add-Failure $check.Message
     }
 }
 
@@ -65,14 +107,70 @@ if ($requiredDocs.ContainsKey('01') -and $requiredDocs.ContainsKey('08')) {
         Add-Failure "Duplicate PRD requirement definition: $($duplicate.Name) ($($duplicate.Count) occurrences)."
     }
 
-    foreach ($id in ($mustIds | Sort-Object -Unique)) {
+    foreach ($id in ($definitionIds | Sort-Object -Unique)) {
         if ($traceContent -notmatch [regex]::Escape($id)) {
-            Add-Failure "L0/L1 Must requirement missing from traceability: $id."
+            Add-Failure "PRD requirement missing from traceability: $id."
         }
     }
 
     Write-Output "Requirement definitions: $($definitionIds.Count)"
     Write-Output "L0/L1 Must requirements: $(($mustIds | Sort-Object -Unique).Count)"
+}
+
+# Every test ID referenced by the traceability matrix must have one explicit
+# definition in document 04 or 05. Compact 001~006 and 001/002 notation is
+# expanded so a range cannot hide missing abnormal branches.
+if ($requiredDocs.ContainsKey('04') -and $requiredDocs.ContainsKey('05') -and $requiredDocs.ContainsKey('08')) {
+    $testDefinitionPattern = '^\|\s*((?:UT|CT|IT|WF|WEC|E2E|AI|NFR|L2|L3|L4|L5|FULL)-[A-Z0-9]+-\d{3})\s*\|'
+    $testDefinitions = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($testDocNumber in @('04', '05')) {
+        foreach ($line in (Get-Content -LiteralPath $requiredDocs[$testDocNumber] -Encoding UTF8)) {
+            if ($line -match $testDefinitionPattern) {
+                $testDefinitions.Add($Matches[1])
+            }
+        }
+    }
+
+    foreach ($duplicate in @($testDefinitions | Group-Object | Where-Object Count -gt 1)) {
+        Add-Failure "Duplicate test definition: $($duplicate.Name) ($($duplicate.Count) occurrences)."
+    }
+
+    $traceContent = Get-Content -Raw -LiteralPath $requiredDocs['08'] -Encoding UTF8
+    $testReferencePattern = '(?<prefix>(?:UT|CT|IT|WF|WEC|E2E|AI|NFR|L2|L3|L4|L5|FULL)-[A-Z0-9]+-)(?<start>\d{3})(?:(?<separator>[~/])(?<end>\d{3}))?'
+    $testReferences = [System.Collections.Generic.HashSet[string]]::new()
+
+    foreach ($match in [regex]::Matches($traceContent, $testReferencePattern)) {
+        $prefix = $match.Groups['prefix'].Value
+        $start = [int]$match.Groups['start'].Value
+        $endGroup = $match.Groups['end']
+        $end = if ($endGroup.Success) { [int]$endGroup.Value } else { $start }
+
+        if ($end -lt $start) {
+            Add-Failure "Descending test range in traceability: $($match.Value)."
+            continue
+        }
+
+        foreach ($number in $start..$end) {
+            [void]$testReferences.Add(('{0}{1:D3}' -f $prefix, $number))
+        }
+    }
+
+    $definitionSet = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($id in $testDefinitions) {
+        [void]$definitionSet.Add($id)
+    }
+    foreach ($id in ($testReferences | Sort-Object)) {
+        # Requirement IDs with AI-/NFR- prefixes can resemble test IDs in the
+        # first column of the matrix. They are not test references unless a
+        # matching test definition also exists.
+        if (-not $definitionSet.Contains($id) -and -not ($definitionIds -contains $id)) {
+            Add-Failure "Traceability references an undefined test: $id."
+        }
+    }
+
+    Write-Output "Test definitions: $($definitionSet.Count)"
+    Write-Output "Traceability test references: $($testReferences.Count)"
 }
 
 $localLinkCount = 0

@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- WealthSail Migration 003: Reference Master Data & Immutable Ledger
 -- Version: v2.0.0
--- Description: 标的主数据、交易日历、数据源及不可变双式记账体系
+-- Description: 标的主数据、交易日历、数据源及不可变投资事件账本
 -- ==============================================================================
 
 -- 1. 标的主数据表 (Instruments)
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS reference.trading_calendars (
     calendar_date DATE NOT NULL,
     is_trading_day BOOLEAN NOT NULL DEFAULT TRUE,
     is_half_day BOOLEAN NOT NULL DEFAULT FALSE,
-    fund_cutoff_time TIME DEFAULT '15:00:00',
+    fund_cutoff_time TIME, -- 仅可作 market/date 级回退，不代表所有基金/销售渠道统一截止
     timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
     PRIMARY KEY (market, calendar_date)
 );
@@ -54,6 +54,23 @@ CREATE TABLE IF NOT EXISTS reference.data_sources (
     priority INTEGER NOT NULL DEFAULT 100,
     status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RESTRICTED', 'DEPRECATED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 4.1 场外基金/销售渠道截止规则。14:30 报告必须按标的、渠道和
+-- 生效区间解析；没有可验证规则时不得回退为“所有产品 15:00”。
+CREATE TABLE IF NOT EXISTS reference.instrument_cutoff_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    instrument_id UUID NOT NULL REFERENCES reference.instruments(id) ON DELETE CASCADE,
+    sales_channel TEXT NOT NULL DEFAULT 'DEFAULT',
+    cutoff_time TIME NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    effective_from DATE NOT NULL,
+    effective_to DATE,
+    source_id UUID REFERENCES reference.data_sources(id),
+    rule_version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (effective_to IS NULL OR effective_to >= effective_from),
+    UNIQUE (instrument_id, sales_channel, effective_from, rule_version)
 );
 
 -- 5. 不可变经济事件事实表 (Ledger Events - 唯一经济事实源)
@@ -79,7 +96,7 @@ CREATE TABLE IF NOT EXISTS ledger.ledger_events (
     UNIQUE (tenant_id, idempotency_key)
 );
 
--- 6. 双式记账交易腿明细表 (Ledger Legs - 借贷守恒)
+-- 6. 事件分录明细表 (Ledger Legs - 支持多分录扩展；当前不宣称会计借贷平衡)
 CREATE TABLE IF NOT EXISTS ledger.ledger_legs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
@@ -127,7 +144,7 @@ CREATE TABLE IF NOT EXISTS ledger.position_snapshots (
     market_price NUMERIC(28, 10),
     market_value NUMERIC(28, 8),
     unrealized_pnl NUMERIC(28, 8),
-    data_quality_status TEXT NOT NULL DEFAULT 'FRESH' CHECK (data_quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
+    data_quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (data_quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
     source_ledger_cursor BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, account_id, instrument_id, as_of)
@@ -144,7 +161,7 @@ CREATE TABLE IF NOT EXISTS ledger.account_nav_snapshots (
     total_nav NUMERIC(28, 8) NOT NULL,
     daily_pnl NUMERIC(28, 8) DEFAULT 0.00,
     cumulative_pnl NUMERIC(28, 8) DEFAULT 0.00,
-    data_quality_status TEXT NOT NULL DEFAULT 'FRESH',
+    data_quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (data_quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, account_id, as_of)
 );

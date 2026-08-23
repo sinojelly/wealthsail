@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- WealthSail Migration 006: Mock Seed Data for 3 Isolated Pilot Tenants
 -- Version: v2.0.0
--- Description: 插入 3 个独立封闭试点租户的完整演示标的、双式账本、持仓与四时段报告
+-- Description: 插入 3 个独立封闭试点租户的确定性演示标的、投资事件、持仓与四时段报告
 -- ==============================================================================
 
 -- 1. 注册基础数据源
@@ -29,6 +29,7 @@ VALUES
 ON CONFLICT DO NOTHING;
 
 -- 3. 创建 3 个封闭试点租户与用户
+-- 注意：这些 profile 是数据库隔离 fixture，不会替代 Supabase Auth 用户创建流程。
 INSERT INTO identity.tenants (id, name, status, base_currency)
 VALUES
     ('00000000-0000-0000-0000-000000000001', '张明 (稳健全天候)', 'ACTIVE', 'CNY'),
@@ -54,7 +55,9 @@ ON CONFLICT DO NOTHING;
 INSERT INTO identity.accounts (id, tenant_id, account_type, name, base_currency)
 VALUES
     ('30000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'BROKERAGE', '华泰主证券账户', 'CNY'),
-    ('30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'FUND_PLATFORM', '天天基金账户', 'CNY')
+    ('30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'FUND_PLATFORM', '天天基金账户', 'CNY'),
+    ('30000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', 'BROKERAGE', '李华证券账户', 'CNY'),
+    ('30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000003', 'FUND_PLATFORM', '王芳基金账户', 'CNY')
 ON CONFLICT DO NOTHING;
 
 -- 插入入金与买入账本事件 (Event 1: 入金 500,000 元)
@@ -63,15 +66,16 @@ VALUES (
     '40000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
-    'CASH_IN', 'CONFIRMED', CURRENT_DATE, 'INIT_CASH_IN_ZM_001', '初始总本金入账'
+    'CASH_IN', 'CONFIRMED', DATE '2026-08-24', 'INIT_CASH_IN_ZM_001', '初始总本金入账'
 ) ON CONFLICT (tenant_id, idempotency_key) DO NOTHING;
 
-INSERT INTO ledger.ledger_legs (tenant_id, event_id, leg_type, currency, amount)
+INSERT INTO ledger.ledger_legs (id, tenant_id, event_id, leg_type, currency, amount)
 VALUES (
+    '41000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000001',
     'CASH', 'CNY', 500000.00
-) ON CONFLICT DO NOTHING;
+) ON CONFLICT (id) DO NOTHING;
 
 -- 插入买入事件 (Event 2: 买入 300 股贵州茅台，成交均价 1400.00，花费 420000 现金)
 INSERT INTO ledger.ledger_events (id, tenant_id, account_id, event_type, status, trade_date, idempotency_key, description)
@@ -79,22 +83,38 @@ VALUES (
     '40000000-0000-0000-0000-000000000002',
     '00000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
-    'BUY', 'CONFIRMED', CURRENT_DATE, 'BUY_600519_ZM_001', '建仓贵州茅台 300股'
+    'BUY', 'CONFIRMED', DATE '2026-08-24', 'BUY_600519_ZM_001', '建仓贵州茅台 300股'
 ) ON CONFLICT (tenant_id, idempotency_key) DO NOTHING;
 
-INSERT INTO ledger.ledger_legs (tenant_id, event_id, leg_type, instrument_id, quantity, unit_price)
+INSERT INTO ledger.ledger_legs (id, tenant_id, event_id, leg_type, instrument_id, quantity, unit_price)
 VALUES (
+    '41000000-0000-0000-0000-000000000002',
     '00000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000002',
     'INSTRUMENT', '20000000-0000-0000-0000-000000000001', 300.0000, 1400.00
-) ON CONFLICT DO NOTHING;
+) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO ledger.ledger_legs (tenant_id, event_id, leg_type, currency, amount)
+INSERT INTO ledger.ledger_legs (id, tenant_id, event_id, leg_type, currency, amount)
 VALUES (
+    '41000000-0000-0000-0000-000000000003',
     '00000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000002',
     'CASH', 'CNY', -420000.00
-) ON CONFLICT DO NOTHING;
+) ON CONFLICT (id) DO NOTHING;
+
+-- 为租户 2/3 提供最小独立账本 fixture，支持真实 A/B/C 隔离测试。
+INSERT INTO ledger.ledger_events
+    (id, tenant_id, account_id, event_type, status, trade_date, idempotency_key, description)
+VALUES
+    ('40000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', 'CASH_IN', 'CONFIRMED', DATE '2026-08-24', 'INIT_CASH_IN_LH_001', '李华初始本金'),
+    ('40000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', 'CASH_IN', 'CONFIRMED', DATE '2026-08-24', 'INIT_CASH_IN_WF_001', '王芳初始本金')
+ON CONFLICT (tenant_id, idempotency_key) DO NOTHING;
+
+INSERT INTO ledger.ledger_legs (id, tenant_id, event_id, leg_type, currency, amount)
+VALUES
+    ('41000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000003', 'CASH', 'CNY', 300000.00),
+    ('41000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004', 'CASH', 'CNY', 200000.00)
+ON CONFLICT (id) DO NOTHING;
 
 -- 5. 初始化持仓快照与净值投影 (可用现金 80,000 元，茅台市值 426,000 元，总净值 506,000 元)
 INSERT INTO ledger.position_snapshots (tenant_id, account_id, instrument_id, as_of, quantity, avg_cost, market_price, market_value, unrealized_pnl, data_quality_status)
@@ -102,14 +122,14 @@ VALUES (
     '00000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
     '20000000-0000-0000-0000-000000000001',
-    CURRENT_DATE, 300.0000, 1400.0000, 1420.0000, 426000.00, 6000.00, 'FRESH'
+    DATE '2026-08-24', 300.0000, 1400.0000, 1420.0000, 426000.00, 6000.00, 'FRESH'
 ) ON CONFLICT (tenant_id, account_id, instrument_id, as_of) DO UPDATE SET quantity = EXCLUDED.quantity;
 
 INSERT INTO ledger.account_nav_snapshots (tenant_id, account_id, as_of, cash_balance, positions_market_value, total_nav, daily_pnl, cumulative_pnl, data_quality_status)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
-    CURRENT_DATE, 80000.00, 426000.00, 506000.00, 6000.00, 6000.00, 'FRESH'
+    DATE '2026-08-24', 80000.00, 426000.00, 506000.00, 6000.00, 6000.00, 'FRESH'
 ) ON CONFLICT (tenant_id, account_id, as_of) DO UPDATE SET total_nav = EXCLUDED.total_nav;
 
 -- 6. 插入投资论点 (Thesis)

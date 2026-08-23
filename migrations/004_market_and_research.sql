@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS market.source_snapshots (
     retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     revised_at TIMESTAMPTZ,
     content_hash TEXT NOT NULL,
-    quality_status TEXT NOT NULL DEFAULT 'FRESH' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'CONFLICT', 'UNAVAILABLE', 'REVISED')),
+    quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'CONFLICT', 'UNAVAILABLE', 'REVISED')),
     payload_ref TEXT, -- 指向对象存储的只读引用，不存大 JSON
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS market.market_observations (
     observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     snapshot_id UUID REFERENCES market.source_snapshots(id),
     source_id UUID REFERENCES reference.data_sources(id),
-    quality_status TEXT NOT NULL DEFAULT 'FRESH' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'CONFLICT', 'UNAVAILABLE', 'REVISED')),
+    quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'CONFLICT', 'UNAVAILABLE', 'REVISED')),
     method_version TEXT,
     revision INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS research.recommendations (
     instrument_id UUID REFERENCES reference.instruments(id),
     thesis_id UUID REFERENCES research.theses(id),
     model_run_id UUID REFERENCES research.model_runs(id),
+    job_run_id UUID, -- migration 007 在 workflow.job_runs 创建后补充同租户复合外键
     recommendation_type TEXT NOT NULL CHECK (recommendation_type IN ('HOLD', 'OBSERVE', 'REVIEW', 'REDUCE_CANDIDATE', 'ADD_CANDIDATE', 'ABSTAIN')),
     summary TEXT NOT NULL,
     counter_case TEXT, -- 反方论点/空头挑刺
@@ -122,7 +123,7 @@ CREATE TABLE IF NOT EXISTS research.evidence_refs (
     claim_type TEXT NOT NULL CHECK (claim_type IN ('PRICE_STAT', 'VALUATION', 'NEWS_FACT', 'POLICY', 'EARNINGS')),
     as_of TIMESTAMPTZ NOT NULL,
     excerpt TEXT,
-    quality_status TEXT NOT NULL DEFAULT 'FRESH',
+    quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'CONFLICT', 'UNAVAILABLE', 'REVISED')),
     relevance_score NUMERIC(5, 4),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -136,9 +137,10 @@ CREATE TABLE IF NOT EXISTS reporting.reports (
     version INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT', 'VALIDATED', 'PUBLISHED', 'PARTIAL', 'ABSTAIN', 'EXPIRED', 'RETRACTED')),
     as_of TIMESTAMPTZ NOT NULL,
-    quality_status TEXT NOT NULL DEFAULT 'FRESH' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
+    quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
     summary TEXT NOT NULL,
     model_run_id UUID REFERENCES research.model_runs(id),
+    job_run_id UUID, -- 本文件末尾创建 workflow.job_runs 后由 migration 007 增加同租户复合外键
     policy_check_status TEXT NOT NULL DEFAULT 'PASSED',
     valid_until TIMESTAMPTZ NOT NULL,
     supersedes_report_id UUID REFERENCES reporting.reports(id),
@@ -157,7 +159,7 @@ CREATE TABLE IF NOT EXISTS reporting.report_items (
     title TEXT NOT NULL,
     body TEXT NOT NULL,
     action_plan JSONB, -- 包含 If-Then 结构化剧本
-    data_quality_status TEXT NOT NULL DEFAULT 'FRESH',
+    data_quality_status TEXT NOT NULL DEFAULT 'UNAVAILABLE' CHECK (data_quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')),
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -169,12 +171,42 @@ CREATE TABLE IF NOT EXISTS reporting.decisions (
     report_id UUID REFERENCES reporting.reports(id),
     recommendation_id UUID REFERENCES research.recommendations(id),
     user_id UUID NOT NULL REFERENCES identity.profiles(id),
-    status TEXT NOT NULL CHECK (status IN ('CONFIRMED', 'CORRECTED', 'NOT_EXECUTED')),
+    decision_action TEXT NOT NULL CHECK (decision_action IN ('ACCEPTED', 'IGNORED', 'DEFERRED')),
+    status TEXT NOT NULL DEFAULT 'RECORDED' CHECK (status IN ('RECORDED', 'RETRACTED', 'SUPERSEDED')),
     reason TEXT,
     correction TEXT,
-    confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     idempotency_key TEXT NOT NULL,
     previous_decision_id UUID REFERENCES reporting.decisions(id),
+    UNIQUE (tenant_id, idempotency_key)
+);
+
+-- 10.1 成交草稿与确认事实。用户采纳建议只写 decisions；只有独立确认的
+-- 成交记录才能关联 ledger_event_id。L1 支持用户确认/对账导入，券商回报为 L4。
+CREATE TABLE IF NOT EXISTS ledger.trade_fills (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL REFERENCES identity.accounts(id) ON DELETE RESTRICT,
+    instrument_id UUID NOT NULL REFERENCES reference.instruments(id),
+    decision_id UUID REFERENCES reporting.decisions(id) ON DELETE SET NULL,
+    side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+    quantity NUMERIC(28, 10) NOT NULL CHECK (quantity > 0),
+    unit_price NUMERIC(28, 10) NOT NULL CHECK (unit_price > 0),
+    fee NUMERIC(28, 8) NOT NULL DEFAULT 0 CHECK (fee >= 0),
+    trade_date DATE NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    source_type TEXT NOT NULL CHECK (source_type IN ('USER_CONFIRMED', 'STATEMENT_IMPORT', 'BROKER_FILL')),
+    external_fill_id TEXT,
+    status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'CONFIRMED', 'REJECTED', 'CANCELLED')),
+    ledger_event_id UUID REFERENCES ledger.ledger_events(id) ON DELETE RESTRICT,
+    created_by UUID NOT NULL REFERENCES identity.profiles(id),
+    idempotency_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    confirmed_at TIMESTAMPTZ,
+    CHECK (
+        (status = 'CONFIRMED' AND ledger_event_id IS NOT NULL AND confirmed_at IS NOT NULL)
+        OR (status <> 'CONFIRMED' AND ledger_event_id IS NULL AND confirmed_at IS NULL)
+    ),
     UNIQUE (tenant_id, idempotency_key)
 );
 
@@ -183,16 +215,35 @@ CREATE TABLE IF NOT EXISTS risk.investment_policies (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
     account_id UUID REFERENCES identity.accounts(id) ON DELETE CASCADE,
-    max_drawdown_limit NUMERIC(5, 2) DEFAULT 15.00,
-    single_position_limit NUMERIC(5, 2) DEFAULT 30.00, -- 单标的仓位上限(%)
-    equity_target_pct NUMERIC(5, 2) DEFAULT 50.00,
-    bond_target_pct NUMERIC(5, 2) DEFAULT 25.00,
-    gold_target_pct NUMERIC(5, 2) DEFAULT 15.00,
-    cash_target_pct NUMERIC(5, 2) DEFAULT 10.00,
-    rebalance_tolerance_pct NUMERIC(5, 2) DEFAULT 5.00,
+    max_drawdown_limit NUMERIC(5, 2),
+    single_position_limit NUMERIC(5, 2), -- 用户确认的单标的仓位上限(%)
+    equity_target_pct NUMERIC(5, 2),
+    bond_target_pct NUMERIC(5, 2),
+    gold_target_pct NUMERIC(5, 2),
+    cash_target_pct NUMERIC(5, 2),
+    rebalance_tolerance_pct NUMERIC(5, 2),
+    policy_status TEXT NOT NULL DEFAULT 'DRAFT',
     effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
     effective_to DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT investment_policies_status_check
+        CHECK (policy_status IN ('DRAFT', 'CONFIRMED', 'RETIRED')),
+    CONSTRAINT investment_policies_drawdown_check
+        CHECK (max_drawdown_limit IS NULL OR max_drawdown_limit > 0 AND max_drawdown_limit <= 100),
+    CONSTRAINT investment_policies_single_position_check
+        CHECK (single_position_limit IS NULL OR single_position_limit BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_equity_target_check
+        CHECK (equity_target_pct IS NULL OR equity_target_pct BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_bond_target_check
+        CHECK (bond_target_pct IS NULL OR bond_target_pct BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_gold_target_check
+        CHECK (gold_target_pct IS NULL OR gold_target_pct BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_cash_target_check
+        CHECK (cash_target_pct IS NULL OR cash_target_pct BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_rebalance_check
+        CHECK (rebalance_tolerance_pct IS NULL OR rebalance_tolerance_pct BETWEEN 0 AND 100),
+    CONSTRAINT investment_policies_effective_dates_check
+        CHECK (effective_to IS NULL OR effective_to >= effective_from)
 );
 
 -- 12. 触点风控告警规则表 (Alert Rules)
@@ -215,6 +266,7 @@ CREATE TABLE IF NOT EXISTS risk.alert_events (
     tenant_id UUID NOT NULL REFERENCES identity.tenants(id) ON DELETE CASCADE,
     rule_id UUID NOT NULL REFERENCES risk.alert_rules(id) ON DELETE CASCADE,
     fingerprint TEXT NOT NULL, -- 唯一防振荡指纹
+    dedupe_key TEXT, -- tenant + rule + time-window 的应用层稳定去重键
     triggered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'SUPPRESSED', 'DELIVERED', 'ACKNOWLEDGED', 'EXPIRED', 'CANCELLED')),
     suppress_reason TEXT,
@@ -259,6 +311,9 @@ CREATE TABLE IF NOT EXISTS workflow.outbox (
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'DEAD')),
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_error_class TEXT,
+    locked_at TIMESTAMPTZ,
+    locked_by TEXT,
+    external_message_id TEXT, -- 渠道回执 ID，用于超时后查证而非盲目重发
     sent_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, topic, idempotency_key)
