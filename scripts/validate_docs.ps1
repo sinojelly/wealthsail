@@ -12,7 +12,7 @@ function Add-Failure {
 }
 
 # Keep this script ASCII-only so Windows PowerShell 5 can parse it without a BOM.
-$requiredNumbers = @('01', '02', '03', '04', '05', '06', '07', '08')
+$requiredNumbers = @('01', '02', '03', '04', '05', '06', '07', '08', '09')
 $requiredDocs = @{}
 
 foreach ($number in $requiredNumbers) {
