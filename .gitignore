@@ -14,6 +14,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 
+# Node / 前端构建产物
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
 # OS / IDE 临时文件
 .DS_Store
 Thumbs.db
