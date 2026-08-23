@@ -78,6 +78,16 @@ $repositorySecurityChecks = @(
         Path = $requiredDocs['01']
         Pattern = 'FOR\s+ALL[\s\S]{0,160}identity\.is_tenant_member'
         Message = 'PRD RLS examples must not turn membership into blanket write authorization.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '(?:POST\s+/api/v1/identity/bindings/token|DELETE\s+/api/v1/identity/bindings|record_cash_in\s+与\s+record_buy|\u652f\u6301\u591a\u79df\u6237\u5207\u6362)'
+        Message = 'Web design must not restore the obsolete binding endpoint, cash-in/fill coupling, physical binding delete, or L1 in-page tenant switching.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '(?:identity\.)?is_tenant_member\s+(?:\u7edf\u4e00\u63d0\u53d6|\u4ece\u53ef\u4fe1\u4f1a\u8bdd\u89e3\u6790)'
+        Message = 'Web design must treat is_tenant_member as a predicate, not a tenant-context extractor.'
     }
 )
 
@@ -132,6 +142,81 @@ $repositoryRequiredChecks = @(
         Path = Join-Path $repoRoot 'migrations/007_security_and_integrity_hardening.sql'
         Pattern = 'CREATE POLICY interaction_request_self_select'
         Message = 'Upgrade migration must retain per-user RLS for interaction requests.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'CREATE TABLE identity\.binding_challenges'
+        Message = 'Migration 008 must separate pending binding challenges from verified channel bindings.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'CREATE TABLE ledger\.portfolio_import_batches[\s\S]+CREATE TABLE ledger\.portfolio_import_items'
+        Message = 'Migration 008 must persist atomic portfolio-import batches and items.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'ALTER TABLE identity\.binding_challenges ENABLE ROW LEVEL SECURITY[\s\S]+binding_challenge_self_select'
+        Message = 'Migration 008 must enable RLS and self-scoped reads for binding challenges.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'REVOKE INSERT, UPDATE ON identity\.channel_bindings FROM authenticated'
+        Message = 'Migration 008 must prevent browser JWT binding writes.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'REVOKE INSERT, UPDATE, DELETE ON risk\.investment_policies FROM authenticated'
+        Message = 'Migration 008 must prevent browser JWT investment-policy writes.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'REVOKE SELECT ON identity\.channel_bindings FROM authenticated'
+        Message = 'Migration 008 must hide verified binding hashes and deprecated token columns from browser JWTs.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = '(?s)REVOKE SELECT ON\s+identity\.secret_refs,\s+workflow\.jobs, workflow\.job_runs, workflow\.outbox,\s+audit\.audit_log\s+FROM authenticated'
+        Message = 'Migration 008 must force sensitive operations and secret-reference reads through the Domain API.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'operations_owner_admin_select'
+        Message = 'Migration 008 must restrict operational and audit reads to owner/admin.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'BEFORE INSERT OR UPDATE OR DELETE ON ledger\.portfolio_import_items'
+        Message = 'Migration 008 must prevent items from being inserted after an import batch becomes terminal.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = '(?s)ADD COLUMN import_batch_id UUID.*ADD COLUMN import_item_id UUID.*uq_ledger_events_import_item_effect'
+        Message = 'Migration 008 must link every opening-balance effect back to one reviewed import item.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = "confirmation_provenance = 'LEGACY_MIGRATED'"
+        Message = 'Migration 008 must preserve unknown legacy policy confirmation provenance without inventing an actor.'
+    },
+    @{
+        Path = Join-Path $repoRoot 'migrations/008_web_workbench_foundation.sql'
+        Pattern = 'migration 008 found duplicate current CONFIRMED policies'
+        Message = 'Migration 008 must stop before silently choosing among conflicting current policies.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '(?s)(?=.*FR-WEB-001)(?=.*NFR-FIN-001)(?=.*Idempotency-Key)(?=.*binding_challenges)(?=.*portfolio_import_batches)(?=.*ChartNumberAdapter)'
+        Message = 'Web design must retain requirement mapping, idempotency, separated workflow objects, and the chart precision boundary.'
+    },
+    @{
+        Path = $requiredDocs['09']
+        Pattern = '(?s)VIEWER.*EDITOR.*ADMIN.*OWNER.*L1\s+DTO\s+\u4e0d\u542b\u53ef\u7f16\u8f91'
+        Message = 'Web design must retain the complete role matrix and reject editable L4 allocation targets in L1.'
+    },
+    @{
+        Path = $requiredDocs['04']
+        Pattern = '(?s)(?=.*E2E-WEB-001)(?=.*E2E-WEB-005)(?=.*UT-FIN-001)(?=.*UT-FIN-006)(?=.*WEC-BND-005)'
+        Message = 'MVP test design must cover the Web journey, financial calculations, and binding-token leakage.'
     }
 )
 
@@ -271,6 +356,10 @@ $canonicalTokens = @(
     'NFR-LLM-001',
     'NFR-HITL-001',
     'SEC-CBK-001',
+    'FR-WEB-001',
+    'NFR-FIN-001',
+    'binding_challenges',
+    'portfolio_import_batches',
     'expand'
 )
 
