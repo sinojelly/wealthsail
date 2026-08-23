@@ -1,16 +1,10 @@
 # 敏感凭证与本地配置
 .env
 *.env
-supabase和企业微信信息.md
-supabase和企业微信信息.rar
-reference/supabase和企业微信信息.md
 reference/supabase和企业微信信息.rar
 
 # 敏感图片与资产原图
-reference/images/
-reference/images/奇点智能.jpg
-reference/images/WealthSail_Logo.jpg
-reference/images/output/
+reference/original_images/
 
 # Python 缓存
 __pycache__/
