@@ -1,0 +1,10 @@
+{
+  "description": "Offers a user-friendly, visually appealing web interface with a light theme for easy navigation and enhanced user experience based on document guidelines.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

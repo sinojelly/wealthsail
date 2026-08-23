@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --color-background: #FFFFFF;
+  --color-foreground: #0F172A;
+  --color-card: #F8FAFC;
+  --color-card-foreground: #0F172A;
+  --color-primary: #0D9488;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F1F5F9;
+  --color-secondary-foreground: #475569;
+  --color-muted: #F1F5F9;
+  --color-muted-foreground: #64748B;
+  --color-accent: #0EA5E9;
+  --color-accent-foreground: #FFFFFF;
+  --color-border: #E2E8F0;
+  --color-ring: #0D9488;
+  --color-destructive: #EF4444;
+  --color-warning: #F59E0B;
+  --color-success: #10B981;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+.font-mono { font-family: var(--font-mono) !important; }
+
+/* Quality badge styles */
+.badge-fresh { background: #DCFCE7; color: #166534; }
+.badge-estimated { background: #FEF9C3; color: #854D0E; }
+.badge-stale { background: #FEE2E2; color: #991B1B; }
+.badge-unavailable { background: #F1F5F9; color: #475569; }
