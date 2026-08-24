@@ -5,17 +5,21 @@ import {
   BookOpenCheck,
   ChevronLeft,
   ChevronRight,
+  Flame,
+  LogOut,
   Menu,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { canViewOperations, fixtureSession } from "../../app/auth-session";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { canViewOperations, logout, useAuthSession } from "../../app/auth-session";
+import ChatDrawer from "../../features/chat/ChatDrawer";
 
 const navItems = [
   { to: "/dashboard", label: "资产看板", icon: BarChart3 },
+  { to: "/market-hot", label: "市场热点", icon: Flame },
   { to: "/reports", label: "研报审计", icon: BookOpenCheck },
   { to: "/risk-policy", label: "风控政策", icon: ShieldCheck },
   { to: "/settings", label: "账号安全", icon: Settings },
@@ -30,6 +34,7 @@ const navItems = [
 const pageTitles: Record<string, string> = {
   "/dashboard": "资产看板",
   "/onboarding": "初始化导入",
+  "/market-hot": "市场热点",
   "/reports": "研报审计",
   "/risk-policy": "风控政策",
   "/settings": "账号安全",
@@ -40,9 +45,17 @@ export default function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const session = useAuthSession();
+
   const visibleItems = navItems.filter(
-    (item) => !item.admin || canViewOperations(fixtureSession),
+    (item) => !item.admin || canViewOperations(session),
   );
+
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <div className={`app-shell ${collapsed ? "is-collapsed" : ""}`}>
@@ -81,11 +94,19 @@ export default function AppShell() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar">李</div>
+          <div className="avatar">{session?.displayName.slice(0, 1) ?? "?"}</div>
           <div className="user-copy">
-            <strong>{fixtureSession.displayName}</strong>
-            <span>{fixtureSession.role}</span>
+            <strong>{session?.displayName ?? "未登录"}</strong>
+            <span>{session?.role ?? ""}</span>
           </div>
+          <button
+            className="icon-button logout-button"
+            aria-label="退出登录"
+            title="退出登录"
+            onClick={handleLogout}
+          >
+            <LogOut size={15} />
+          </button>
         </div>
         <button
           className="collapse-button"
@@ -117,7 +138,7 @@ export default function AppShell() {
             <strong>{pageTitles[location.pathname] ?? "资产看板"}</strong>
           </div>
           <div className="topbar-meta">
-            <span>2026年8月23日 · Asia/Shanghai</span>
+            <span>Asia/Shanghai</span>
             <button className="icon-button notification" aria-label="通知中心">
               <Bell size={18} />
               <i />
@@ -128,6 +149,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+      <ChatDrawer />
     </div>
   );
 }

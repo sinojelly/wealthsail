@@ -1,0 +1,15 @@
+# 构建上下文排除（根 .dockerignore，作用于 backend/Dockerfile 的 context: .）
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.env
+*.log
+.git
+.gitignore
+docs
+tests
+frontend/node_modules
+frontend/dist
+frontend/scripts
+backend/.env

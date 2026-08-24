@@ -2,9 +2,15 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import { formatMoney, formatSignedMoney } from "../../../domain/money";
-import type { Holding } from "../dashboard-data";
+import type { PositionDto } from "../../../api/types";
 
-export default function HoldingsTable({ rows }: { rows: Holding[] }) {
+export default function HoldingsTable({
+  rows,
+  loading,
+}: {
+  rows: PositionDto[];
+  loading?: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [type, setType] = useState("全部");
   const filtered = useMemo(
@@ -49,48 +55,56 @@ export default function HoldingsTable({ rows }: { rows: Holding[] }) {
         </div>
       </div>
       <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>标的</th>
-              <th>类型</th>
-              <th className="numeric">持有份额</th>
-              <th className="numeric">最新价/净值</th>
-              <th className="numeric">市值</th>
-              <th className="numeric">占比</th>
-              <th className="numeric">持仓收益</th>
-              <th>质量</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((row) => (
-              <tr key={row.symbol}>
-                <td>
-                  <div className="security-cell">
-                    <strong>{row.name}</strong>
-                    <span className="mono">{row.symbol}</span>
-                  </div>
-                </td>
-                <td>
-                  <span className="tag">{row.type}</span>
-                </td>
-                <td className="mono numeric">{row.quantity}</td>
-                <td className="mono numeric">{row.price}</td>
-                <td className="mono numeric">{formatMoney(row.marketValue)}</td>
-                <td className="mono numeric">{row.weight}%</td>
-                <td
-                  className={`mono numeric ${row.pnl.startsWith("-") ? "negative" : "positive"}`}
-                >
-                  <strong>{formatSignedMoney(row.pnl)}</strong>
-                  <small>{row.pnlRate}%</small>
-                </td>
-                <td>
-                  <QualityBadge quality={row.quality} />
-                </td>
+        {loading ? (
+          <div className="table-placeholder">加载中…</div>
+        ) : filtered.length === 0 ? (
+          <div className="table-placeholder">
+            {rows.length === 0 ? "暂无持仓，请先完成期初导入" : "无匹配持仓"}
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>标的</th>
+                <th>类型</th>
+                <th className="numeric">持有份额</th>
+                <th className="numeric">最新价/净值</th>
+                <th className="numeric">市值</th>
+                <th className="numeric">占比</th>
+                <th className="numeric">持仓收益</th>
+                <th>质量</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((row) => (
+                <tr key={`${row.symbol}-${row.accountId}`}>
+                  <td>
+                    <div className="security-cell">
+                      <strong>{row.name}</strong>
+                      <span className="mono">{row.symbol}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span className="tag">{row.type}</span>
+                  </td>
+                  <td className="mono numeric">{row.quantity}</td>
+                  <td className="mono numeric">{row.price ?? "—"}</td>
+                  <td className="mono numeric">{formatMoney(row.marketValue)}</td>
+                  <td className="mono numeric">{row.weight}%</td>
+                  <td
+                    className={`mono numeric ${row.pnl.startsWith("-") ? "negative" : "positive"}`}
+                  >
+                    <strong>{formatSignedMoney(row.pnl)}</strong>
+                    <small>{row.pnlRate}%</small>
+                  </td>
+                  <td>
+                    <QualityBadge quality={row.quality} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </section>
   );

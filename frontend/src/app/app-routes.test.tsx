@@ -2,6 +2,51 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppRoutes } from "./router";
 import { renderWithSession } from "../test/render-with-session";
+import {
+  meFixture,
+  policiesFixture,
+  rulesFixture,
+  summaryFixture,
+} from "../test/fixtures";
+import type { AuthSession } from "./auth-session";
+
+const testSession: AuthSession = {
+  userId: "usr-owner-001",
+  displayName: "张明",
+  email: "zhangming@example.com",
+  tenantId: "tenant-demo-001",
+  tenantName: "明远家庭账户",
+  role: "OWNER",
+  accessToken: "test-token",
+  expiresIn: 3600,
+};
+
+vi.mock("./auth-session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-session")>();
+  return {
+    ...actual,
+    useAuthSession: () => testSession,
+    getSession: () => testSession,
+  };
+});
+
+vi.mock("../api/hooks", () => ({
+  usePortfolioSummary: () => ({ data: summaryFixture, isLoading: false, isError: false, error: null }),
+  usePositions: () => ({ data: [], isLoading: false, isError: false, error: null }),
+  useNavTrend: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  usePolicies: () => ({ data: policiesFixture, isLoading: false, isError: false, error: null }),
+  useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null }),
+  useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
+  useCreateBindingCredential: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useConsumeBindingCredential: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useReportsList: () => ({ data: [], isLoading: false, isError: false, error: null }),
+  useReportDetail: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  useGenerateReport: () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null }),
+  useOpsJobs: () => ({ data: { jobs: [], runs: [] }, isLoading: false, isError: false, error: null }),
+  useOpsFreshness: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  useOpsOutbox: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  useOpsAudit: () => ({ data: [], isLoading: false, isError: false, error: null }),
+}));
 
 it("navigates between the main workspaces without losing the application shell", async () => {
   const user = userEvent.setup();
@@ -23,5 +68,5 @@ it("navigates between the main workspaces without losing the application shell",
       { timeout: 5_000 },
     ),
   ).toBeInTheDocument();
-  expect(screen.getByText("李明远")).toBeInTheDocument();
+  expect(screen.getByText("张明")).toBeInTheDocument();
 });

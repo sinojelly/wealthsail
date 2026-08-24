@@ -10,6 +10,7 @@ import {
   RadioTower,
   ShieldAlert,
 } from "lucide-react";
+import { useOpsAudit, useOpsFreshness, useOpsJobs, useOpsOutbox } from "../../api/hooks";
 import PageHeader from "../../components/layout/PageHeader";
 import AuditLogTable from "./components/AuditLogTable";
 import JobRunsTable from "./components/JobRunsTable";
@@ -18,6 +19,19 @@ type Tab = "jobs" | "audit";
 
 export default function OperationsPage() {
   const [tab, setTab] = useState<Tab>("jobs");
+  const jobs = useOpsJobs();
+  const freshness = useOpsFreshness();
+  const outbox = useOpsOutbox();
+  const audit = useOpsAudit(50);
+
+  const runs = jobs.data?.runs ?? [];
+  const completed = runs.filter((run) => run.status === "COMPLETED").length;
+  const successRate =
+    runs.length > 0 ? ((completed / runs.length) * 100).toFixed(1) : "—";
+  const pendingMessages =
+    (outbox.data?.counts.pending ?? 0) + (outbox.data?.counts.sending ?? 0);
+  const navFresh = freshness.data?.nav?.latestAsOf;
+
   return (
     <>
       <PageHeader
@@ -36,9 +50,13 @@ export default function OperationsPage() {
             <CheckCircle2 size={17} />
           </span>
           <div>
-            <span>今日作业成功率</span>
-            <strong className="mono">98.7%</strong>
-            <small>76 / 77 次成功</small>
+            <span>作业成功率</span>
+            <strong className="mono">
+              {successRate === "—" ? "—" : `${successRate}%`}
+            </strong>
+            <small>
+              {completed} / {runs.length} 次成功
+            </small>
           </div>
         </div>
         <div className="panel">
@@ -46,9 +64,14 @@ export default function OperationsPage() {
             <Clock3 size={17} />
           </span>
           <div>
-            <span>P95 作业耗时</span>
-            <strong className="mono">42.8s</strong>
-            <small>目标 ≤ 60s</small>
+            <span>最近作业耗时</span>
+            <strong className="mono">
+              {runs[0]?.durationSeconds !== null &&
+              runs[0]?.durationSeconds !== undefined
+                ? `${runs[0].durationSeconds}s`
+                : "—"}
+            </strong>
+            <small>按最近一次运行</small>
           </div>
         </div>
         <div className="panel">
@@ -56,29 +79,37 @@ export default function OperationsPage() {
             <DatabaseZap size={17} />
           </span>
           <div>
-            <span>行情数据新鲜度</span>
-            <strong className="mono">8s</strong>
-            <small>最后成功：16:00:08</small>
+            <span>净值快照新鲜度</span>
+            <strong className="mono">{navFresh ?? "—"}</strong>
+            <small>
+              FRESH {freshness.data?.nav?.freshCount ?? 0} /{" "}
+              {freshness.data?.nav?.total ?? 0}
+            </small>
           </div>
         </div>
         <div className="panel">
-          <span className="ops-icon warning">
+          <span
+            className={`ops-icon ${pendingMessages > 0 ? "warning" : "good"}`}
+          >
             <RadioTower size={17} />
           </span>
           <div>
             <span>消息待投递</span>
-            <strong className="mono">1</strong>
-            <small>企业微信网关重试中</small>
+            <strong className="mono">{pendingMessages}</strong>
+            <small>
+              已投递 {outbox.data?.counts.sent ?? 0} · DEAD{" "}
+              {outbox.data?.counts.dead ?? 0}
+            </small>
           </div>
         </div>
       </section>
       <div className="alert alert-warning">
         <ShieldAlert size={16} />
         <div>
-          <strong>盘前简报有 1 个降级数据源</strong>
+          <strong>运维视图为脱敏数据</strong>
           <p>
-            海外宏观源超过 30 秒超时，作业使用上次成功快照并标记
-            STALE；报告未把旧数据伪装成新数据。
+            作业错误类别、消息队列状态与审计动作由 Domain API 清洗后返回，
+            payload 与审计详情不经过浏览器。
           </p>
         </div>
       </div>
@@ -103,11 +134,15 @@ export default function OperationsPage() {
             审计日志
           </button>
         </div>
-        {tab === "jobs" ? <JobRunsTable /> : <AuditLogTable />}
+        {tab === "jobs" ? (
+          <JobRunsTable jobs={jobs.data?.jobs ?? []} runs={runs} />
+        ) : (
+          <AuditLogTable rows={audit.data ?? []} />
+        )}
       </section>
       <footer className="ops-footer">
         <Activity size={14} />
-        <span>监控数据最后刷新：2026-08-23 23:10:08 · 自动刷新间隔 30 秒</span>
+        <span>监控数据来自后端 Domain API · 自动刷新间隔 30 秒</span>
       </footer>
     </>
   );

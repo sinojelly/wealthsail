@@ -5,48 +5,71 @@ import {
   TrendingUp,
   WalletCards,
 } from "lucide-react";
+import Decimal from "decimal.js";
+import { formatMoney, formatSignedMoney } from "../../../domain/money";
+import type { PortfolioSummary } from "../../../api/types";
 
-const metrics = [
-  {
-    label: "总资产",
-    value: "¥1,921,840",
-    hint: "16:00 估值快照",
-    icon: Landmark,
-    tone: "teal",
-  },
-  {
-    label: "可用现金",
-    value: "¥201,382",
-    hint: "占总资产 10.5%",
-    icon: Banknote,
-    tone: "blue",
-  },
-  {
-    label: "持仓市值",
-    value: "¥1,720,458",
-    hint: "股票 + 场内/场外基金",
-    icon: WalletCards,
-    tone: "purple",
-  },
-  {
-    label: "当日收益",
-    value: "+¥12,384",
-    hint: "+0.65% · 沪深300 +0.39%",
-    icon: TrendingUp,
-    tone: "green",
-    positive: true,
-  },
-  {
-    label: "累计收益",
-    value: "+¥152,800",
-    hint: "+19.4% TWR · 超基准 +10.7%",
-    icon: LineChart,
-    tone: "amber",
-    positive: true,
-  },
-];
+export default function MetricCards({
+  summary,
+  loading,
+}: {
+  summary?: PortfolioSummary;
+  loading?: boolean;
+}) {
+  const total = summary?.totalAsset;
+  const cashPct = summary
+    ? new Decimal(summary.cashBalance)
+        .div(summary.totalAsset)
+        .mul(100)
+        .toFixed(1)
+    : null;
 
-export default function MetricCards() {
+  const metrics = [
+    {
+      label: "总资产",
+      value: total ? formatMoney(total) : "—",
+      hint: loading ? "加载中…" : "最新估值快照",
+      icon: Landmark,
+      tone: "teal",
+    },
+    {
+      label: "可用现金",
+      value: summary?.cashBalance ? formatMoney(summary.cashBalance) : "—",
+      hint: cashPct ? `占总资产 ${cashPct}%` : "—",
+      icon: Banknote,
+      tone: "blue",
+    },
+    {
+      label: "持仓市值",
+      value: summary?.positionsMarketValue
+        ? formatMoney(summary.positionsMarketValue)
+        : "—",
+      hint: `${summary?.positionCount ?? 0} 个持仓标的`,
+      icon: WalletCards,
+      tone: "purple",
+    },
+    {
+      label: "当日收益",
+      value: summary?.dailyPnl ? formatSignedMoney(summary.dailyPnl) : "—",
+      hint: summary?.dailyPnlRate ? `${summary.dailyPnlRate}%` : "—",
+      icon: TrendingUp,
+      tone: "green",
+      positive: summary ? !summary.dailyPnl.startsWith("-") : false,
+    },
+    {
+      label: "累计收益",
+      value: summary?.cumulativePnl
+        ? formatSignedMoney(summary.cumulativePnl)
+        : "—",
+      hint: summary?.cumulativePnlRate
+        ? `${summary.cumulativePnlRate}% TWR`
+        : "—",
+      icon: LineChart,
+      tone: "amber",
+      positive: summary ? !summary.cumulativePnl.startsWith("-") : false,
+    },
+  ];
+
   return (
     <section className="metric-grid" aria-label="资产指标">
       {metrics.map(({ label, value, hint, icon: Icon, tone, positive }) => (

@@ -7,17 +7,25 @@ import {
   Upload,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { SettlementPreviewDto } from "../../api/generated/types";
+import type { SettlementPreviewDto } from "../../api/types";
 import { previewSettlement } from "../../api/portfolio";
+import {
+  useNavTrend,
+  usePortfolioSummary,
+  usePositions,
+} from "../../api/hooks";
 import PageHeader from "../../components/layout/PageHeader";
 import AssetDonutChart from "./components/AssetDonutChart";
 import EquityCurveChart from "./components/EquityCurveChart";
 import HoldingsTable from "./components/HoldingsTable";
 import MetricCards from "./components/MetricCards";
 import TradeFillConfirmModal from "./components/TradeFillConfirmModal";
-import { holdings, pendingFills } from "./dashboard-data";
+import { pendingFills } from "./pending-fills";
 
 export default function DashboardPage() {
+  const summary = usePortfolioSummary();
+  const positions = usePositions();
+  const navTrend = useNavTrend(30);
   const [fills, setFills] = useState(pendingFills);
   const [modalOpen, setModalOpen] = useState(false);
   const [previews, setPreviews] = useState<Map<string, SettlementPreviewDto>>(
@@ -34,11 +42,16 @@ export default function DashboardPage() {
     );
   }
 
+  const dataUnavailable =
+    summary.error &&
+    summary.error instanceof Error &&
+    summary.error.message;
+
   return (
     <>
       <PageHeader
         title="资产看板"
-        description="股票、场内基金与场外基金的统一资产视图 · 数据截至 2026-08-23 16:00"
+        description="股票、场内基金与场外基金的统一资产视图 · 实时接入后端数据"
         actions={
           <>
             <Link className="btn-secondary" to="/onboarding">
@@ -52,21 +65,27 @@ export default function DashboardPage() {
           </>
         }
       />
-      <div className="alert alert-warning">
-        <AlertTriangle size={16} />
-        <div>
-          <strong>2 只场外基金使用盘中估值</strong>
-          <p>
-            估值不等于最终净值。相关指标已标记“估值”，最终结果将在基金公司披露后自动回补并保留版本。
-          </p>
+      {dataUnavailable ? (
+        <div className="alert alert-warning">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>资产数据暂不可用</strong>
+            <p>{dataUnavailable}</p>
+          </div>
         </div>
-      </div>
-      <MetricCards />
+      ) : null}
+      <MetricCards summary={summary.data} loading={summary.isLoading} />
       <div className="dashboard-chart-grid">
-        <EquityCurveChart />
-        <AssetDonutChart />
+        <EquityCurveChart
+          points={navTrend.data?.points ?? []}
+          loading={navTrend.isLoading}
+        />
+        <AssetDonutChart
+          allocation={summary.data?.allocation ?? []}
+          loading={summary.isLoading}
+        />
       </div>
-      <HoldingsTable rows={holdings} />
+      <HoldingsTable rows={positions.data ?? []} loading={positions.isLoading} />
       <div className="dashboard-actions panel">
         <div>
           <strong>资产事实维护</strong>

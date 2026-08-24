@@ -2,6 +2,33 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsPage from "./SettingsPage";
 import { renderWithSession } from "../../test/render-with-session";
+import { meFixture } from "../../test/fixtures";
+
+vi.mock("../../api/hooks", () => ({
+  useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
+  useCreateBindingCredential: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({
+      token: "WS-TEST-1234",
+      expiresInSeconds: 900,
+      channelType: "wecom",
+    }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useConsumeBindingCredential: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({
+      bindingId: "binding-001",
+      status: "ACTIVE",
+      channelType: "wecom",
+    }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+}));
 
 it("completes the enterprise WeCom binding lifecycle and supports soft revocation", async () => {
   const user = userEvent.setup();

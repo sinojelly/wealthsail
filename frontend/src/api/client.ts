@@ -1,12 +1,13 @@
-import type { ApiEnvelope } from "./generated/types";
+import type { ApiEnvelope, ApiMeta } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 let accessToken: string | null = null;
 
 export class HttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
     readonly requestId?: string,
   ) {
     super(message);
@@ -15,6 +16,10 @@ export class HttpError extends Error {
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
+}
+
+export function getAccessToken(): string | null {
+  return accessToken;
 }
 
 export async function request<T>(
@@ -31,13 +36,20 @@ export async function request<T>(
     headers,
     credentials: "include",
   });
-  const body = (await response.json()) as ApiEnvelope<T> & { message?: string };
+  const body = (await response.json()) as {
+    data?: T;
+    meta?: ApiMeta;
+    error?: { code?: string; message?: string; fieldErrors?: unknown };
+    requestId?: string;
+    message?: string;
+  };
   if (!response.ok) {
     throw new HttpError(
-      body.message ?? "请求失败",
+      body.error?.message ?? body.message ?? "请求失败",
       response.status,
+      body.error?.code,
       body.requestId,
     );
   }
-  return body;
+  return body as ApiEnvelope<T>;
 }

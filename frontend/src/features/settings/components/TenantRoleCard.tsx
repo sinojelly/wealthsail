@@ -1,59 +1,72 @@
-import { Crown, Eye, ShieldCheck, Users } from "lucide-react";
+import { Crown, Eye, ShieldCheck, UserRound, Users } from "lucide-react";
+import type { MeTenant } from "../../../api/types";
 
-const members = [
-  {
-    name: "李明远",
-    identity: "limingyuan",
-    role: "OWNER",
-    state: "当前用户",
-    icon: Crown,
-  },
-  {
-    name: "王晓雯",
-    identity: "wangxiaowen",
-    role: "MEMBER",
-    state: "已启用",
-    icon: Users,
-  },
-  {
-    name: "家庭观察员",
-    identity: "viewer-01",
-    role: "READ_ONLY",
-    state: "已启用",
-    icon: Eye,
-  },
-];
+const ROLE_ICON: Record<string, typeof Crown> = {
+  OWNER: Crown,
+  ADMIN: ShieldCheck,
+  EDITOR: Users,
+  VIEWER: Eye,
+};
 
-export default function TenantRoleCard() {
+export default function TenantRoleCard({
+  tenants,
+  activeTenantId,
+  activeRole,
+}: {
+  tenants: MeTenant[];
+  activeTenantId: string;
+  activeRole: string;
+}) {
+  const activeTenant =
+    tenants.find((tenant) => tenant.tenantId === activeTenantId) ?? tenants[0];
+
   return (
     <section className="panel tenant-card">
       <div className="panel-header">
         <div>
           <h2>租户与角色</h2>
-          <p>2–3 人 MVP 的最小权限边界</p>
+          <p>当前用户的活动租户与角色边界</p>
         </div>
-        <span className="status-pill tenant-pill">明远家庭账户</span>
+        <span className="status-pill tenant-pill">
+          {activeTenant?.name ?? "—"}
+        </span>
       </div>
       <div className="member-list">
-        {members.map(({ name, identity, role, state, icon: Icon }) => (
-          <div className="member-row" key={identity}>
+        {tenants.map((tenant) => {
+          const Icon = ROLE_ICON[tenant.role] ?? UserRound;
+          const isActive = tenant.tenantId === activeTenantId;
+          return (
+            <div className="member-row" key={tenant.tenantId}>
+              <div className="member-avatar">
+                <Icon size={15} />
+              </div>
+              <div>
+                <strong>{tenant.name}</strong>
+                <span className="mono">{tenant.tenantId.slice(0, 8)}</span>
+              </div>
+              <span className="role-chip">{tenant.role}</span>
+              <small>{isActive ? "当前租户" : tenant.status}</small>
+            </div>
+          );
+        })}
+        {tenants.length === 0 ? (
+          <div className="member-row">
             <div className="member-avatar">
-              <Icon size={15} />
+              <UserRound size={15} />
             </div>
             <div>
-              <strong>{name}</strong>
-              <span className="mono">{identity}</span>
+              <strong>暂无租户成员关系</strong>
             </div>
-            <span className="role-chip">{role}</span>
-            <small>{state}</small>
+            <span className="role-chip">—</span>
+            <small>—</small>
           </div>
-        ))}
+        ) : null}
       </div>
       <footer className="tenant-footer">
         <ShieldCheck size={14} />
         <span>
-          所有查询和写入均携带
-          tenant_id；前端角色只用于体验控制，后端必须再次鉴权。
+          当前角色 {activeRole}；所有查询和写入均携带 tenant_id，后端 RLS
+          再次鉴权。
         </span>
       </footer>
     </section>

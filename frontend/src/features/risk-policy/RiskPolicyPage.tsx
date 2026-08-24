@@ -5,21 +5,34 @@ import {
   Clock3,
   FileCheck2,
   LockKeyhole,
+  ScrollText,
   ShieldCheck,
 } from "lucide-react";
-import type { RiskPreviewDto } from "../../api/generated/types";
+import type { RiskPreviewDto } from "../../api/types";
 import { previewRiskPolicy } from "../../api/risk";
+import { usePolicies, useRules } from "../../api/hooks";
 import Dialog from "../../components/accessibility/Dialog";
 import PageHeader from "../../components/layout/PageHeader";
 import RiskBudgetForm from "./components/RiskBudgetForm";
 import type { RiskBudgetValues } from "./risk-budget-schema";
 
+const CHECK_TONE: Record<string, string> = {
+  OK: "check-ok",
+  WARNING: "check-warning",
+  VIOLATION: "check-violation",
+};
+
 export default function RiskPolicyPage() {
+  const policies = usePolicies();
+  const rules = useRules();
   const [preview, setPreview] = useState<RiskPreviewDto | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reauth, setReauth] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [policyVersion, setPolicyVersion] = useState(3);
+
+  const current = policies.data?.current ?? null;
+  const budget = policies.data?.budget;
 
   async function handlePreview(values: RiskBudgetValues) {
     setConfirmed(false);
@@ -34,6 +47,8 @@ export default function RiskPolicyPage() {
     setPolicyVersion((version) => version + 1);
     setReauth("");
   }
+
+  const currentVersion = confirmed ? policyVersion : current?.version;
 
   return (
     <>
@@ -64,31 +79,68 @@ export default function RiskPolicyPage() {
           <section className="panel policy-state">
             <div className="panel-header">
               <h2>当前生效政策</h2>
-              <span className="status-pill confirmed">生效中</span>
+              <span className="status-pill confirmed">
+                {current?.status === "CONFIRMED" ? "生效中" : "未配置"}
+              </span>
             </div>
             <div className="panel-body">
-              <dl>
+              {current ? (
+                <dl>
+                  <div>
+                    <dt>版本</dt>
+                    <dd className="mono">v{currentVersion}</dd>
+                  </div>
+                  <div>
+                    <dt>确认人</dt>
+                    <dd>{current.confirmedBy ?? "系统迁移"}</dd>
+                  </div>
+                  <div>
+                    <dt>生效日期</dt>
+                    <dd className="mono">{current.effectiveFrom}</dd>
+                  </div>
+                  <div>
+                    <dt>策略哈希</dt>
+                    <dd className="mono policy-hash">{current.policyHash}</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="muted">当前租户尚未配置已确认的投资政策。</p>
+              )}
+            </div>
+          </section>
+          <section className="panel guardrail-card">
+            <div className="panel-header">
+              <h2>风险预算</h2>
+            </div>
+            <div className="panel-body">
+              <div className="budget-rows">
                 <div>
-                  <dt>版本</dt>
-                  <dd className="mono">v{policyVersion}</dd>
+                  <span>单一标的最大仓位</span>
+                  <strong className="mono">
+                    {budget?.singlePositionLimit ?? "—"}%
+                  </strong>
                 </div>
                 <div>
-                  <dt>确认人</dt>
-                  <dd>李明远 · OWNER</dd>
+                  <span>组合最大回撤</span>
+                  <strong className="mono">
+                    {budget?.maxDrawdownLimit ?? "—"}%
+                  </strong>
                 </div>
                 <div>
-                  <dt>确认时间</dt>
-                  <dd className="mono">
-                    {confirmed ? "2026-08-23 23:07" : "2026-07-15 09:26"}
-                  </dd>
+                  <span>最低现金比例</span>
+                  <strong className="mono">
+                    {budget?.minCashRatio ?? "—"}%
+                  </strong>
                 </div>
                 <div>
-                  <dt>策略哈希</dt>
-                  <dd className="mono">
-                    {confirmed ? "sha256:demo-2500" : "sha256:4e78…01a9"}
-                  </dd>
+                  <span>目标配置</span>
+                  <strong className="mono">
+                    股 {budget?.equityTargetPct ?? "—"} · 债{" "}
+                    {budget?.bondTargetPct ?? "—"} · 金{" "}
+                    {budget?.goldTargetPct ?? "—"}
+                  </strong>
                 </div>
-              </dl>
+              </div>
             </div>
           </section>
           <section className="panel guardrail-card">
@@ -121,6 +173,76 @@ export default function RiskPolicyPage() {
           </section>
         </aside>
       </div>
+
+      <section className="panel rules-panel">
+        <div className="panel-header">
+          <div>
+            <h2>风险规则与合规检查</h2>
+            <p>规则触点列表 + 基于当前组合状态的预算合规判定</p>
+          </div>
+          <ScrollText size={17} />
+        </div>
+        <div className="checks-grid">
+          {(rules.data?.checks ?? []).map((check) => (
+            <div
+              key={check.check}
+              className={`check-card ${CHECK_TONE[check.status] ?? "check-ok"}`}
+            >
+              <span className="check-status">{check.status}</span>
+              <strong>{check.name}</strong>
+              <p>{check.message}</p>
+              <small className="mono">
+                当前 {check.current}% / 上限 {check.limit}%
+              </small>
+            </div>
+          ))}
+        </div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>规则</th>
+                <th>类型</th>
+                <th className="numeric">静默窗口</th>
+                <th>状态</th>
+                <th>最近触发</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(rules.data?.rules ?? []).map((rule) => (
+                <tr key={rule.id}>
+                  <td>
+                    <strong>{rule.name}</strong>
+                    <small className="mono">{rule.id.slice(0, 8)}</small>
+                  </td>
+                  <td>
+                    <span className="tag">{rule.ruleType}</span>
+                  </td>
+                  <td className="mono numeric">{rule.silenceWindowMinutes} 分钟</td>
+                  <td>
+                    <span className={`status-pill ${rule.status === "ACTIVE" ? "active" : ""}`}>
+                      {rule.status}
+                    </span>
+                  </td>
+                  <td className="mono">
+                    {rule.lastTriggeredAt
+                      ? rule.lastTriggeredAt.replace("T", " ").slice(0, 16)
+                      : "从未触发"}
+                  </td>
+                </tr>
+              ))}
+              {(rules.data?.rules ?? []).length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    暂无风控规则
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {preview ? (
         <section className="preview-panel panel" aria-live="polite">
           <div className="preview-heading">
@@ -157,10 +279,7 @@ export default function RiskPolicyPage() {
             <button className="btn-secondary" onClick={() => setPreview(null)}>
               放弃预览
             </button>
-            <button
-              className="btn-primary"
-              onClick={() => setConfirmOpen(true)}
-            >
+            <button className="btn-primary" onClick={() => setConfirmOpen(true)}>
               确认并启用
             </button>
           </div>

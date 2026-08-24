@@ -1,0 +1,74 @@
+# WealthSail 全栈编排（docs/10 §7：Nginx + API + Worker）
+# 数据库使用外部 Supabase（Session Pooler 端口 6543），见 .env 的
+# SUPABASE_POOLER_DATABASE_URL / SUPABASE_POOLER_WORKER_DATABASE_URL。
+#
+# 前置：先在目标库执行 scripts/local_supabase_compat.sql 与 migrations/*.sql
+#       （容器不内置迁移步骤；一次性部署动作，避免幂等问题混入容器生命周期）。
+#
+# 启动：docker compose up -d --build
+# 访问：http://localhost:8080 （nginx 静态托管 + /api 反代）
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: wealthsail-backend:latest
+    container_name: wealthsail-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Session Pooler (PgBouncer 事务模式)：
+      #   - 端口 6543
+      #   - statement_cache_size=0（禁用 asyncpg Prepared Statements）
+      DATABASE_URL: ${SUPABASE_POOLER_DATABASE_URL:?需要在 .env 配置 Supabase Session Pooler 连接串}
+      APP_ENV: production
+      AUTH_DEV_MODE: "false"
+    ports:
+      - "8000:8000"
+    networks:
+      - wealthsail
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: wealthsail-backend:latest
+    container_name: wealthsail-worker
+    restart: unless-stopped
+    command: ["python", "-m", "backend.worker"]
+    env_file:
+      - .env
+    environment:
+      WORKER_DATABASE_URL: ${SUPABASE_POOLER_WORKER_DATABASE_URL:-${SUPABASE_POOLER_DATABASE_URL}}
+      APP_ENV: production
+      AUTH_DEV_MODE: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - wealthsail
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    image: wealthsail-frontend:latest
+    container_name: wealthsail-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    networks:
+      - wealthsail
+
+networks:
+  wealthsail:
+    driver: bridge
