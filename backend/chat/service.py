@@ -18,6 +18,7 @@ import httpx
 
 from backend.config import Settings
 from backend.integrations.market_data import Q_UNAVAILABLE, get_quote
+from backend.integrations.news_api import fetch_news
 
 logger = logging.getLogger("wealthsail.chat_service")
 
@@ -52,7 +53,12 @@ _QUERY_NOISE_WORDS = (
     "情绪", "风险", "收益", "估值", "基本面", "技术面",
     "今日", "今天", "昨天", "昨日", "明天", "明日", "本周", "上周",
     "下周", "本月", "上月", "近期", "最近", "最新", "近期", "后市",
+    "什么", "有", "相关", "有关", "新闻", "消息", "公告", "资讯",
+    "报道", "快讯", "动态", "情况", "表现", "状态",
 )
+
+# 新闻/资讯意图触发词（命中且消息含标的 → 注入相关新闻）
+_NEWS_INTENT_WORDS = ("新闻", "消息", "公告", "资讯", "报道", "快讯", "动态")
 
 
 def _extract_symbol(message: str) -> tuple[str | None, str | None]:
@@ -160,10 +166,43 @@ class ChatService:
                 quote_ctx = await self._quote_context(message)
                 if quote_ctx:
                     context_parts.append(f"\n## 实时行情\n{quote_ctx}")
+
+            # 相关新闻/公告（用户消息含新闻意图且提及标的时）
+            if message:
+                news_ctx = await self._news_context(message)
+                if news_ctx:
+                    context_parts.append(f"\n## 相关新闻与公告\n{news_ctx}")
         except Exception:
             logger.warning("chat context fetch failed, using default prompt", exc_info=True)
 
         return "\n".join(context_parts)
+
+    async def _news_context(self, message: str) -> str | None:
+        """检测新闻意图 + 标的，拉取新闻并格式化为上下文文本。"""
+        if not any(word in (message or "") for word in _NEWS_INTENT_WORDS):
+            return None
+        _, value = _extract_symbol(message)
+        if value is None:
+            return None
+        try:
+            rows = await fetch_news(value, limit=5)
+        except Exception:  # noqa: BLE001 — 新闻失败不影响对话
+            logger.warning("fetch_news failed for %s", value, exc_info=True)
+            return None
+        if not rows:
+            return f"未找到与 {value} 相关的近期新闻与公告。"
+        lines = []
+        for index, item in enumerate(rows, 1):
+            url = item.get("url") or ""
+            line = (
+                f"{index}. 《{item.get('title', '')}》"
+                f"（来源：{item.get('source') or '未知'}，"
+                f"时间：{item.get('time') or '未知'}）"
+            )
+            if url:
+                line += f" {url}"
+            lines.append(line)
+        return "\n".join(lines)
 
     async def _quote_context(self, message: str) -> str | None:
         """解析用户消息中的标的，拉取实时行情并格式化为上下文文本。"""

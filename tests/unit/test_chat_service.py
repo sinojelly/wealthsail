@@ -176,6 +176,63 @@ async def test_quote_context_skips_without_symbol(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _news_context（mock fetch_news）
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_news_context_skips_without_intent(monkeypatch) -> None:
+    async def fake_fetch_news(value: str, limit: int) -> list[dict]:
+        raise AssertionError("不应调用 fetch_news")
+
+    monkeypatch.setattr("backend.chat.service.fetch_news", fake_fetch_news)
+    svc = ChatService(_settings())
+    # 无新闻意图词 → 不查询
+    assert await svc._news_context("中际旭创现在多少") is None
+
+
+@pytest.mark.asyncio
+async def test_news_context_injects_titles_and_sources(monkeypatch) -> None:
+    async def fake_fetch_news(value: str, limit: int) -> list[dict]:
+        assert value == "中际旭创"
+        assert limit == 5
+        return [
+            {
+                "title": "中际旭创:投资者关系活动记录表",
+                "time": "2026-08-23",
+                "source": "东方财富公告",
+                "summary": "…",
+                "url": "https://example.com/1",
+            },
+            {
+                "title": "中际旭创:2026年半年度报告",
+                "time": "2026-08-22",
+                "source": "东方财富公告",
+                "summary": "…",
+                "url": None,
+            },
+        ]
+
+    monkeypatch.setattr("backend.chat.service.fetch_news", fake_fetch_news)
+    svc = ChatService(_settings())
+    ctx = await svc._news_context("中际旭创最近有什么新闻")
+    assert ctx is not None
+    assert "《中际旭创:投资者关系活动记录表》" in ctx
+    assert "来源：东方财富公告" in ctx
+    assert "https://example.com/1" in ctx
+    assert "《中际旭创:2026年半年度报告》" in ctx
+
+
+@pytest.mark.asyncio
+async def test_news_context_empty_result(monkeypatch) -> None:
+    async def fake_fetch_news(value: str, limit: int) -> list[dict]:
+        return []
+
+    monkeypatch.setattr("backend.chat.service.fetch_news", fake_fetch_news)
+    svc = ChatService(_settings())
+    ctx = await svc._news_context("茅台最近有什么公告")
+    assert ctx is not None and "未找到" in ctx
+
+
+# ---------------------------------------------------------------------------
 # _sse encoding
 # ---------------------------------------------------------------------------
 def test_sse_encodes_delta_and_done() -> None:
