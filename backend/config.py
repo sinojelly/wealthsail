@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     wecom_corp_id: str = Field(default="ww-dev-corp-id")
     wecom_corp_secret: str = Field(default="")
     wecom_agent_id: str = Field(default="1000002")
+    # 智能机器人（API模式·长连接）：配置后 send_message 优先走机器人推送
+    wecom_bot_id: str = Field(default="")
+    wecom_bot_secret: str = Field(default="")
     # Salt/key for HMAC-SHA256 of one-time binding tokens (never store plaintext).
     binding_hmac_key: str = Field(default="dev-binding-hmac-key-change-me")
     binding_token_ttl_seconds: int = Field(default=900)

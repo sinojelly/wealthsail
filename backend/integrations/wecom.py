@@ -25,6 +25,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Any
 
+import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, Response
@@ -40,6 +41,112 @@ logger = logging.getLogger("wealthsail.wecom")
 router = APIRouter(prefix="/adapters/wecom", tags=["wecom"])
 
 REPLAY_WINDOW_SECONDS = 300
+
+WECOM_API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
+
+# corp_secret -> (access_token, expires_at_unix)；进程内缓存，有效期 7200s
+_token_cache: dict[str, tuple[str, float]] = {}
+
+
+# ---------------------------------------------------------------------------
+# 主动推送（outbox 消费者 / 运营接口调用）
+# ---------------------------------------------------------------------------
+async def get_access_token(settings: Settings) -> str:
+    """获取企业微信 access_token（进程内缓存，提前 300s 刷新）。
+
+    Raises RuntimeError: 凭据无效或接口异常。
+    """
+    cached = _token_cache.get(settings.wecom_corp_secret)
+    if cached and cached[1] > time.time() + 300:
+        return cached[0]
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{WECOM_API_BASE}/gettoken",
+            params={
+                "corpid": settings.wecom_corp_id,
+                "corpsecret": settings.wecom_corp_secret,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("errcode") != 0:
+        raise RuntimeError(f"wecom gettoken failed: errcode={data.get('errcode')} {data.get('errmsg')}")
+    token = str(data["access_token"])
+    expires_in = int(data.get("expires_in", 7200))
+    _token_cache[settings.wecom_corp_secret] = (token, time.time() + expires_in)
+    logger.info("wecom access_token acquired (expires_in=%ss)", expires_in)
+    return token
+
+
+async def send_message(
+    settings: Settings,
+    user_id: str,
+    content: str,
+    *,
+    msg_type: str = "text",
+) -> str:
+    """推送消息到企微成员。
+
+    优先使用自建应用（gettoken + message/send，agent_id 发送）；
+    失败时回退到智能机器人（API 模式·长连接，markdown 主动推送，
+    仅在配置了 WECOM_BOT_ID / WECOM_BOT_SECRET 时可用）。
+
+    Args:
+        user_id: 企微通讯录成员 userid（touser / 单聊 chatid）。
+        content: 消息文本（UTF-8，企微限制 2048 字节）。
+        msg_type: 自建应用消息类型（默认 text）。
+
+    Returns:
+        msgid（自建应用）或 req_id（智能机器人）。
+
+    Raises:
+        RuntimeError: 两种通道均失败（最后一次异常上抛）。
+    """
+    try:
+        return await _send_app_message(settings, user_id, content, msg_type=msg_type)
+    except Exception as exc:  # noqa: BLE001 — 自建应用失败尝试机器人回退
+        logger.warning("wecom app push failed (%s), trying bot fallback", exc)
+        if not (settings.wecom_bot_id and settings.wecom_bot_secret):
+            raise
+    from backend.integrations.wecom_bot import get_bot_client
+
+    client = get_bot_client(settings.wecom_bot_id, settings.wecom_bot_secret)
+    return await client.send_msg(user_id, content)
+
+
+async def _send_app_message(
+    settings: Settings,
+    user_id: str,
+    content: str,
+    *,
+    msg_type: str = "text",
+) -> str:
+    """自建应用（message/send）推送：gettoken + 发送。"""
+    token = await get_access_token(settings)
+    body: dict[str, Any] = {
+        "touser": user_id,
+        "msgtype": msg_type,
+        "agentid": int(settings.wecom_agent_id),
+    }
+    if msg_type == "text":
+        body["text"] = {"content": content}
+    else:
+        body[msg_type] = {"content": content}
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{WECOM_API_BASE}/message/send",
+            params={"access_token": token},
+            json=body,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("errcode") != 0:
+        raise RuntimeError(
+            f"wecom message/send failed: errcode={data.get('errcode')} {data.get('errmsg')}"
+        )
+    msgid = str(data.get("msgid", ""))
+    logger.info("wecom app message sent to %s (msgid=%s)", user_id, msgid)
+    return msgid
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +256,47 @@ async def wecom_url_verify(
         ):
             return PlainTextResponse("signature mismatch", status_code=403)
         plaintext = wecom_decrypt(echostr, settings.wecom_callback_aes_key, settings.wecom_corp_id)
+
+
     except (ValueError, ET.ParseError) as exc:
         logger.warning("wecom URL verify failed: %s", exc)
         return PlainTextResponse("verify failed", status_code=403)
+    return PlainTextResponse(plaintext)
+
+
+@router.get("/verify")
+async def wecom_verify(
+    msg_signature: str = Query(default=""),
+    timestamp: str = Query(default=""),
+    nonce: str = Query(default=""),
+    echostr: str = Query(default=""),
+    settings: Settings = Depends(get_settings_dep),
+) -> Response:
+    """企业微信后台 URL 验证专用接口（公开、无 JWT、无数据库访问，<1s）。
+
+    流程：SHA1 签名校验（token+timestamp+nonce+echostr 字典序）→
+    AES-256-CBC 解密（IV=密钥前 16 字节，PKCS7 去填充）→
+    解析 16 字节随机串 + 4 字节大端长度 + 消息内容 + 校验尾部 CorpID →
+    返回明文（text/plain，无引号无换行）。
+    """
+    logger.info(
+        "wecom verify request: ts=%s nonce=%s sig_len=%d echostr_len=%d",
+        timestamp, nonce, len(msg_signature), len(echostr),
+    )
+    try:
+        _check_timestamp(timestamp)
+        if not verify_signature(
+            settings.wecom_callback_token, timestamp, nonce, echostr, msg_signature
+        ):
+            logger.warning("wecom verify rejected: signature mismatch")
+            return PlainTextResponse("signature mismatch", status_code=403)
+        plaintext = wecom_decrypt(
+            echostr, settings.wecom_callback_aes_key, settings.wecom_corp_id
+        )
+    except (ValueError, ET.ParseError) as exc:
+        logger.warning("wecom verify failed: %s", exc)
+        return PlainTextResponse("verify failed", status_code=403)
+    logger.info("wecom verify OK: plaintext_len=%d", len(plaintext))
     return PlainTextResponse(plaintext)
 
 

@@ -17,11 +17,28 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
+from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
 from asyncpg.pool import Pool
 
 RLS_ROLE = "authenticated"
+
+
+def _dsn_statement_cache_size(dsn: str) -> int | None:
+    """Read ``statement_cache_size`` from the DSN query string, if present.
+
+    asyncpg does NOT parse this non-PostgreSQL parameter from the URL itself,
+    so callers writing ``?statement_cache_size=0`` in a pooler DSN must pass it
+    explicitly. Returns None when absent or unparsable.
+    """
+    try:
+        values = parse_qs(urlsplit(dsn).query).get("statement_cache_size")
+        if values:
+            return int(values[0])
+    except (ValueError, TypeError):
+        return None
+    return None
 
 
 async def create_pool(
@@ -36,10 +53,12 @@ async def create_pool(
 
     When connecting through a transaction pooler (PgBouncer, e.g. Supabase
     Session Pooler port 6543) the DSN itself carries
-    ``statement_cache_size=0`` — asyncpg parses connection params from the
-    DSN query string. Leave ``statement_cache_size`` as None so the DSN wins;
-    pass an explicit int only to override a direct-connection default.
+    ``statement_cache_size=0`` — asyncpg does not read it from the URL, so it
+    is parsed here and passed explicitly. An explicit ``statement_cache_size``
+    argument always wins over the DSN value.
     """
+    if statement_cache_size is None:
+        statement_cache_size = _dsn_statement_cache_size(dsn)
     pool_args: dict[str, Any] = {
         "dsn": dsn,
         "min_size": min_size,

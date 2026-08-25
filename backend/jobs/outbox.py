@@ -11,6 +11,7 @@ poll concurrently without double-delivery.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -76,15 +77,42 @@ async def deliver_batch(pool: Pool, settings: Settings, limit: int = 20) -> int:
 async def _deliver(row, settings: Settings) -> str:
     """Deliver one message. Returns the external channel receipt id.
 
-    Raises NotImplementedError when no delivery channel is configured — the
-    row then follows the backoff/DEAD path instead of a fabricated success.
+    Route: WeCom active message. The recipient (``touser``) and optional
+    ``content`` come from the row payload; without credentials or a touser the
+    row follows the backoff/DEAD path instead of a fabricated success.
     """
     if not settings.wecom_corp_secret:
         raise NotImplementedError("WECOM_CORP_SECRET 未配置，无可用投递通道")
-    # TODO(integration): route by topic to the WeCom active-message adapter
-    # (docs/10 §3.3 envelope-decrypted routing). Until credentials exist, rows
-    # retry with backoff and eventually move to DEAD with a clear error class.
-    raise NotImplementedError("WeCom active-message adapter not configured")
+    from backend.integrations.wecom import send_message
+
+    payload = _payload_dict(row)
+    touser = payload.get("touser")
+    if not touser:
+        raise RuntimeError("outbox payload 缺少 touser（企微成员 userid）")
+    content = payload.get("content") or _default_content(row, payload)
+    return await send_message(settings, touser, content)
+
+
+def _payload_dict(row) -> dict:
+    raw = row["payload"]
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return {"_raw": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _default_content(row, payload: dict) -> str:
+    """按 topic 生成默认文案（payload 未显式提供 content 时）。"""
+    topic = row["topic"]
+    if topic == "REPORT_PUBLISHED":
+        return f"📊 您的研报已发布（{payload.get('session', '?')}），请前往 WealthSail 查看。"
+    if topic == "ALERT_EVENT":
+        return "⚠️ WealthSail 风控告警触发，请及时查看。"
+    return f"🔔 WealthSail 新消息（{topic}）"
 
 
 async def _mark_retry_or_dead(conn, outbox_id: str, settings: Settings, exc: Exception) -> None:

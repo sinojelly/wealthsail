@@ -16,3 +16,4 @@ tenacity==9.0.0
 akshare>=1.18.0
 pytest==8.3.4
 pytest-asyncio==0.24.0
+websockets==17.0.1
