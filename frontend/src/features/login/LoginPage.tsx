@@ -6,6 +6,7 @@ import {
   LockKeyhole,
   LogIn,
   Mail,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   UserRound,
@@ -14,6 +15,7 @@ import { login } from "../../app/auth-session";
 import { register } from "../../api/identity";
 
 type Mode = "login" | "invited-register";
+const MIN_REGISTRATION_PASSWORD_LENGTH = 8;
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -25,9 +27,23 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const isRegistration = mode === "invited-register";
+  const passwordLength = Array.from(password).length;
+  const registrationPasswordValid =
+    passwordLength >= MIN_REGISTRATION_PASSWORD_LENGTH;
+  const passwordRequirementText =
+    passwordLength === 0
+      ? `密码要求：至少 ${MIN_REGISTRATION_PASSWORD_LENGTH} 个字符`
+      : registrationPasswordValid
+        ? `已满足：至少 ${MIN_REGISTRATION_PASSWORD_LENGTH} 个字符`
+        : `还需 ${MIN_REGISTRATION_PASSWORD_LENGTH - passwordLength} 个字符（至少 ${MIN_REGISTRATION_PASSWORD_LENGTH} 个字符）`;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (isRegistration && !registrationPasswordValid) {
+      setError(`登录口令至少 ${MIN_REGISTRATION_PASSWORD_LENGTH} 个字符`);
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -54,7 +70,6 @@ export default function LoginPage() {
     }
   }
 
-  const isRegistration = mode === "invited-register";
   return (
     <div className="login-page">
       <div className="login-glow login-glow-a" />
@@ -149,14 +164,36 @@ export default function LoginPage() {
                 <input
                   type="password"
                   autoComplete={isRegistration ? "new-password" : "current-password"}
+                  aria-describedby={
+                    isRegistration ? "registration-password-requirement" : undefined
+                  }
+                  aria-invalid={
+                    isRegistration && passwordLength > 0
+                      ? !registrationPasswordValid
+                      : undefined
+                  }
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   placeholder={isRegistration ? "至少 8 个字符" : "输入口令"}
                   required
-                  minLength={isRegistration ? 8 : 1}
+                  minLength={isRegistration ? MIN_REGISTRATION_PASSWORD_LENGTH : 1}
                 />
               </div>
             </label>
+            {isRegistration ? (
+              <small
+                id="registration-password-requirement"
+                className={`password-requirement ${registrationPasswordValid ? "valid" : "invalid"}`}
+                aria-live="polite"
+              >
+                {registrationPasswordValid ? (
+                  <ShieldCheck size={13} />
+                ) : (
+                  <ShieldAlert size={13} />
+                )}
+                <span>{passwordRequirementText}</span>
+              </small>
+            ) : null}
 
             {error ? (
               <div className="alert alert-danger login-alert" role="alert">
@@ -171,7 +208,11 @@ export default function LoginPage() {
               </div>
             ) : null}
 
-            <button type="submit" className="btn-primary login-submit" disabled={busy}>
+            <button
+              type="submit"
+              className="btn-primary login-submit"
+              disabled={busy || (isRegistration && !registrationPasswordValid)}
+            >
               {busy ? (
                 <LoaderCircle size={15} className="spin" />
               ) : isRegistration ? (
