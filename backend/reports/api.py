@@ -29,7 +29,11 @@ class GenerateRequest(BaseModel):
 
 @router.get("/list")
 async def reports_list(
-    trade_date: date | None = Query(default=None, description="交易日期，缺省取最新"),
+    trade_date: date | None = Query(
+        default=None,
+        alias="tradeDate",
+        description="交易日期，缺省取最新",
+    ),
     session: str | None = Query(default=None),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),

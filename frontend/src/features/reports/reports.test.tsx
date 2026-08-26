@@ -35,5 +35,6 @@ it("opens a report evidence record with traceable provenance metadata", async ()
   await user.click(screen.getByRole("button", { name: /查看证据/ }));
   const drawer = screen.getByRole("complementary", { name: "证据链溯源" });
   expect(drawer).toHaveTextContent("SHA-256");
-  expect(drawer).toHaveTextContent("采集时间");
+  expect(drawer).toHaveTextContent("源快照");
+  expect(drawer).toHaveTextContent("WealthSail-Fund-Estimator");
 });

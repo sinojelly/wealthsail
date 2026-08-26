@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import type { EvidenceRecord } from "../report-data";
-import type { ReportDetail, ReportItem } from "../../../api/types";
+import type { ReportDetail, ReportEvidence, ReportItem } from "../../../api/types";
 
 const ITEM_TYPE_META: Record<string, { label: string; icon: typeof Info }> = {
   FACT: { label: "事实", icon: BookOpen },
@@ -22,22 +22,22 @@ const ITEM_TYPE_META: Record<string, { label: string; icon: typeof Info }> = {
   ALERT: { label: "告警", icon: AlertTriangle },
 };
 
-function itemToEvidence(item: ReportItem, report: ReportDetail): EvidenceRecord {
+function itemToEvidence(item: ReportItem, evidence: ReportEvidence): EvidenceRecord {
   return {
-    id: item.id,
+    id: evidence.id,
     type: ITEM_TYPE_META[item.itemType]?.label ?? item.itemType,
     title: item.title,
-    content: item.body,
-    source: "研报条目 · 模型生成",
-    sourceUrl: "#",
-    asOf: report.asOf,
-    publishedAt: report.asOf,
-    retrievedAt: report.asOf,
-    retrievalMethod: "report-api/v1",
-    schemaVersion: "report.item.v1",
-    modelRunId: report.modelRun?.model ?? undefined,
-    quality: item.quality,
-    hash: item.id,
+    content: evidence.excerpt || item.body,
+    source: evidence.sourceName || "来源未命名",
+    sourceUrl:
+      evidence.originUri && !evidence.originUri.startsWith("internal:")
+        ? evidence.originUri
+        : undefined,
+    asOf: evidence.asOf,
+    claimType: evidence.claimType,
+    sourceSnapshotId: evidence.sourceSnapshotId || undefined,
+    quality: evidence.quality,
+    hash: evidence.contentHash || undefined,
   };
 }
 
@@ -121,14 +121,18 @@ export default function ReportViewer({
                       {JSON.stringify(item.actionPlan)}
                     </code>
                   ) : null}
-                  <button
-                    className="evidence-link"
-                    aria-label={`查看证据 ${item.id}`}
-                    onClick={() => onEvidence(itemToEvidence(item, report))}
-                  >
-                    <ExternalLink size={11} />
-                    {item.id.slice(0, 8)}
-                  </button>
+                  {item.evidence.length > 0 ? (
+                    <button
+                      className="evidence-link"
+                      aria-label={`查看证据 ${item.evidence[0].id}`}
+                      onClick={() => onEvidence(itemToEvidence(item, item.evidence[0]))}
+                    >
+                      <ExternalLink size={11} />
+                      {item.evidence[0].id.slice(0, 8)}
+                    </button>
+                  ) : (
+                    <span className="muted">未关联可核验源快照</span>
+                  )}
                 </article>
               );
             })}
@@ -197,8 +201,8 @@ export default function ReportViewer({
           <div>
             <strong>证据与版本说明</strong>
             <p>
-              每条目对应一条证据记录；修订产生新版本并以 supersedes
-              链接旧版本，旧版本永不删除。
+              只有已关联源快照的条目才展示证据入口；模型解释不会被伪装成
+              外部事实。修订产生新版本并链接旧版本，旧版本永不删除。
             </p>
           </div>
         </div>

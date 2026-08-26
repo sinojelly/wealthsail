@@ -16,6 +16,9 @@ import type {
 
 export const summaryFixture: PortfolioSummary = {
   totalAsset: "1921840.00",
+  knownValue: "1921840.00",
+  valuationCoveragePct: "100.00",
+  unpricedPositionCount: 0,
   currency: "CNY",
   cashBalance: "201382.00",
   positionsMarketValue: "1720458.00",
@@ -132,6 +135,19 @@ export const reportDetailFixture: ReportDetail = {
       body: "盘前计划：若银行板块放量并站稳观察位，保留仓位。用户 10:12 回复“继续持有”，当日无成交。",
       actionPlan: null,
       quality: "FRESH",
+      evidence: [
+        {
+          id: "8af640d8-c0a3-4db6-b932-bf82f81f893a",
+          claimType: "FACT",
+          sourceSnapshotId: "37e6afe0-e420-4f85-8d06-9010bb488e4f",
+          sourceName: "WealthSail-Fund-Estimator",
+          originUri: "internal:worker:market",
+          asOf: "2026-08-23T14:30:00+08:00",
+          excerpt: "基金估值区间及披露覆盖率",
+          quality: "ESTIMATED",
+          contentHash: "sha256:8d6339f128bcf219c23eb7ad99fcebc3",
+        },
+      ],
     },
   ],
   versionHistory: [

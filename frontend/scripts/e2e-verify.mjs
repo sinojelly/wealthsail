@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 // WealthSail 前端端到端浏览器验证（playwright chromium headless）。
 // 运行：node scripts/e2e-verify.mjs
 // 前置：后端 uvicorn :8000 + 前端 vite dev :5173 均在运行。

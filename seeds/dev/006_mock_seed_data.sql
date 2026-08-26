@@ -1,5 +1,5 @@
 -- ==============================================================================
--- WealthSail Migration 006: Mock Seed Data for 3 Isolated Pilot Tenants
+-- WealthSail development seed: Mock Data for 3 Isolated Pilot Tenants
 -- Version: v2.0.0
 -- Description: 插入 3 个独立封闭试点租户的确定性演示标的、投资事件、持仓与四时段报告
 -- ==============================================================================
@@ -123,14 +123,14 @@ VALUES (
     '30000000-0000-0000-0000-000000000001',
     '20000000-0000-0000-0000-000000000001',
     DATE '2026-08-24', 300.0000, 1400.0000, 1420.0000, 426000.00, 6000.00, 'FRESH'
-) ON CONFLICT (tenant_id, account_id, instrument_id, as_of) DO UPDATE SET quantity = EXCLUDED.quantity;
+) ON CONFLICT (tenant_id, account_id, instrument_id, as_of) DO NOTHING;
 
 INSERT INTO ledger.account_nav_snapshots (tenant_id, account_id, as_of, cash_balance, positions_market_value, total_nav, daily_pnl, cumulative_pnl, data_quality_status)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
     DATE '2026-08-24', 80000.00, 426000.00, 506000.00, 6000.00, 6000.00, 'FRESH'
-) ON CONFLICT (tenant_id, account_id, as_of) DO UPDATE SET total_nav = EXCLUDED.total_nav;
+) ON CONFLICT (tenant_id, account_id, as_of) DO NOTHING;
 
 -- 6. 插入投资论点 (Thesis)
 INSERT INTO research.theses (id, tenant_id, account_id, instrument_id, summary, horizon, invalidation_conditions, target_price)

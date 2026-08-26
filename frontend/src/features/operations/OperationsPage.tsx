@@ -31,6 +31,9 @@ export default function OperationsPage() {
   const pendingMessages =
     (outbox.data?.counts.pending ?? 0) + (outbox.data?.counts.sending ?? 0);
   const navFresh = freshness.data?.nav?.latestAsOf;
+  const errors = [jobs.error, freshness.error, outbox.error, audit.error]
+    .filter((error): error is Error => error instanceof Error)
+    .map((error) => error.message);
 
   return (
     <>
@@ -38,12 +41,21 @@ export default function OperationsPage() {
         title="运维监控"
         description="作业运行、数据新鲜度、消息投递与不可变审计事件"
         actions={
-          <button className="btn-secondary">
+          <button className="btn-secondary" disabled title="审计导出接口尚未接入">
             <Download size={14} />
             导出审计
           </button>
         }
       />
+      {errors.length > 0 ? (
+        <div className="alert alert-danger" role="alert">
+          <ShieldAlert size={16} />
+          <div>
+            <strong>部分运维数据加载失败</strong>
+            <p>{[...new Set(errors)].join("；")}</p>
+          </div>
+        </div>
+      ) : null}
       <section className="ops-metrics">
         <div className="panel">
           <span className="ops-icon good">

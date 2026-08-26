@@ -294,9 +294,10 @@ async def test_build_system_context_degrades_gracefully() -> None:
 async def test_stream_completion_without_api_key(monkeypatch) -> None:
     svc = ChatService(_settings(model_api_key=None))
     chunks = [
-        c async for c in svc.stream_completion(FakeConn([], None, []), ChatRequest(
-            user_id="u1", tenant_id="t1", message="你好",
-        ))
+        c async for c in svc.stream_completion(
+            ChatRequest(user_id="u1", tenant_id="t1", message="你好"),
+            "system context",
+        )
     ]
     assert chunks[0].startswith("data: ")
     assert "未配置" in chunks[0]
@@ -347,9 +348,10 @@ async def test_stream_completion_parses_openai_sse_chunks(monkeypatch) -> None:
         "backend.chat.service.httpx.AsyncClient", FakeClient
     )
     chunks = [
-        c async for c in svc.stream_completion(FakeConn([], None, []), ChatRequest(
-            user_id="u1", tenant_id="t1", message="你好",
-        ))
+        c async for c in svc.stream_completion(
+            ChatRequest(user_id="u1", tenant_id="t1", message="你好"),
+            "system context",
+        )
     ]
     assert chunks == [
         _sse({"delta": "你"}),

@@ -1,17 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   Clipboard,
   Clock3,
   KeyRound,
   MessageSquare,
-  QrCode,
   RefreshCw,
   ShieldOff,
 } from "lucide-react";
 import {
-  useConsumeBindingCredential,
   useCreateBindingCredential,
+  useRevokeBinding,
 } from "../../../api/hooks";
 import type { MeBinding } from "../../../api/types";
 import Dialog from "../../../components/accessibility/Dialog";
@@ -27,20 +26,35 @@ export default function WeComBindingCard({
 }) {
   const existing = bindings.find((binding) => binding.status === "ACTIVE");
   const create = useCreateBindingCredential();
-  const consume = useConsumeBindingCredential();
-  const [state, setState] = useState<BindingState>(
-    existing ? "active" : "idle",
-  );
+  const revoke = useRevokeBinding();
+  const [state, setState] = useState<BindingState>(existing ? "active" : "idle");
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
+  const [reauth, setReauth] = useState("");
+  const displayState: BindingState =
+    state === "revoked"
+      ? "revoked"
+      : existing
+        ? "active"
+        : state === "active"
+          ? "idle"
+          : state;
 
-  const busy = create.isPending || consume.isPending;
+  // Only the verified WeCom callback can activate a binding. While waiting,
+  // periodically refresh /me; the browser never supplies an external user id.
+  useEffect(() => {
+    if (displayState !== "pending" || !onBound) return;
+    const timer = window.setInterval(onBound, 5_000);
+    return () => window.clearInterval(timer);
+  }, [displayState, onBound]);
+
+  const busy = create.isPending || revoke.isPending;
   const bindingError =
     create.error instanceof Error
       ? create.error.message
-      : consume.error instanceof Error
-        ? consume.error.message
+      : revoke.error instanceof Error
+        ? revoke.error.message
         : null;
 
   async function generate() {
@@ -56,23 +70,20 @@ export default function WeComBindingCard({
 
   async function copyCommand() {
     const command = `/bind ${token}`;
-    if (navigator.clipboard?.writeText)
-      await navigator.clipboard.writeText(command);
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
     setCopied(true);
   }
 
-  /** 模拟企业微信确认：消费一次性口令并绑定当前用户。 */
-  async function simulateConfirm() {
+  async function confirmRevoke() {
+    if (!existing || !reauth) return;
     try {
-      await consume.mutateAsync({
-        token,
-        externalUserId: `demo_wecom_${Date.now() % 100000}`,
-        externalUsername: "演示企微员工",
-      });
-      setState("active");
+      await revoke.mutateAsync({ bindingId: existing.id, password: reauth });
+      setRevokeOpen(false);
+      setReauth("");
+      setState("revoked");
       onBound?.();
     } catch {
-      // error 由 bindingError 展示
+      // mutation error remains visible in the card and dialog stays open
     }
   }
 
@@ -87,172 +98,92 @@ export default function WeComBindingCard({
           <MessageSquare size={17} />
         </div>
         <div className="panel-body">
-          {state === "idle" || state === "revoked" ? (
+          {displayState === "idle" || displayState === "revoked" ? (
             <div className="binding-empty">
               <div className="binding-hero-icon">
-                {state === "revoked" ? (
-                  <ShieldOff size={25} />
-                ) : (
-                  <MessageSquare size={25} />
-                )}
+                {displayState === "revoked" ? <ShieldOff size={25} /> : <MessageSquare size={25} />}
               </div>
-              <strong>
-                {state === "revoked" ? "已撤销" : "尚未绑定企业微信"}
-              </strong>
+              <strong>{displayState === "revoked" ? "已撤销" : "尚未绑定企业微信"}</strong>
               <p>
-                {state === "revoked"
-                  ? "旧凭证与旧绑定关系仍保留审计记录，但已不能接收或发送消息。"
-                  : "生成 15 分钟有效的一次性凭证，在企业微信中完成员工身份确认。"}
+                {displayState === "revoked"
+                  ? "旧绑定保留审计记录，但已不能作为消息路由目标。"
+                  : "生成 15 分钟有效的一次性凭证，再从企业微信向已配置的应用发送绑定命令。"}
               </p>
-              {bindingError ? (
-                <div className="alert alert-danger">{bindingError}</div>
-              ) : null}
-              <button className="btn-primary" onClick={generate}>
-                {state === "revoked" ? (
-                  <RefreshCw size={14} />
-                ) : (
-                  <KeyRound size={14} />
-                )}
-                {state === "revoked"
-                  ? "重新生成绑定凭证"
-                  : "生成一次性绑定凭证"}
+              {bindingError ? <div className="alert alert-danger">{bindingError}</div> : null}
+              <button className="btn-primary" disabled={busy} onClick={() => void generate()}>
+                {displayState === "revoked" ? <RefreshCw size={14} /> : <KeyRound size={14} />}
+                {displayState === "revoked" ? "重新生成绑定凭证" : "生成一次性绑定凭证"}
               </button>
             </div>
           ) : null}
-          {state === "generating" ? (
+          {displayState === "generating" ? (
             <div className="binding-empty">
               <div className="binding-loader" />
               <strong>正在生成安全凭证</strong>
-              <p>凭证仅保存哈希，明文只在当前页面短暂展示。</p>
+              <p>凭证仅保存带密钥摘要，明文只在当前页面短暂展示。</p>
             </div>
           ) : null}
-          {state === "pending" ? (
+          {displayState === "pending" ? (
             <div className="binding-pending">
               <div className="pending-heading">
                 <div>
-                  <span className="status-pill pending">
-                    <Clock3 size={10} />
-                    等待员工确认
-                  </span>
-                  <strong>请在 15 分钟内完成绑定</strong>
+                  <span className="status-pill pending"><Clock3 size={10} />等待企业微信回调确认</span>
+                  <strong>请在凭证过期前完成绑定</strong>
                 </div>
-                <div className="countdown mono">15:00</div>
               </div>
-              <div className="binding-methods">
-                <div className="qr-placeholder">
-                  <QrCode size={68} />
-                  <span>企业微信扫码</span>
-                  <small>二维码仅绑定当前租户与用户</small>
-                </div>
-                <div className="command-box">
-                  <span>或向机器人发送命令</span>
-                  <code>/bind {token}</code>
-                  <button className="btn-secondary" onClick={copyCommand}>
-                    {copied ? <Check size={13} /> : <Clipboard size={13} />}
-                    {copied ? "已复制" : "复制命令"}
-                  </button>
-                  <button
-                    className="btn-primary simulate-button"
-                    disabled={busy}
-                    onClick={simulateConfirm}
-                  >
-                    {busy ? "绑定中…" : "模拟企业微信确认"}
-                  </button>
-                </div>
+              <div className="command-box">
+                <span>向 WealthSail 企业微信应用发送</span>
+                <code>/bind {token}</code>
+                <button className="btn-secondary" onClick={() => void copyCommand()}>
+                  {copied ? <Check size={13} /> : <Clipboard size={13} />}
+                  {copied ? "已复制" : "复制命令"}
+                </button>
+                <small>页面会轮询绑定状态；只有签名、时效和 CorpID 校验通过的回调才能激活。</small>
               </div>
               <div className="credential-note">
                 <KeyRound size={14} />
                 <p>
                   <strong>一次性凭证规则</strong>
-                  <span>
-                    单次使用、15
-                    分钟过期、仅保存哈希；重复使用与跨租户使用都会被拒绝并记审计。
-                  </span>
+                  <span>单次使用、限时有效、明文不落库；重复或跨租户消费会被拒绝并记审计。</span>
                 </p>
               </div>
             </div>
           ) : null}
-          {state === "active" ? (
+          {displayState === "active" && existing ? (
             <div className="binding-active">
-              <div className="active-mark">
-                <Check size={23} />
-              </div>
+              <div className="active-mark"><Check size={23} /></div>
               <div className="active-copy">
                 <span className="status-pill active">已绑定</span>
-                <h3>WealthSail · {existing?.externalUsername ?? "已绑定"}</h3>
+                <h3>WealthSail · {existing.externalUsername ?? "已验证员工"}</h3>
                 <dl>
-                  <div>
-                    <dt>渠道</dt>
-                    <dd className="mono">
-                      {existing?.channelType ?? "wecom"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>绑定时间</dt>
-                    <dd className="mono">
-                      {existing?.boundAt
-                        ? existing.boundAt.replace("T", " ").slice(0, 16)
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>最近活动</dt>
-                    <dd className="mono">
-                      {existing?.lastUsedAt
-                        ? existing.lastUsedAt.replace("T", " ").slice(0, 16)
-                        : "—"}
-                    </dd>
-                  </div>
+                  <div><dt>渠道</dt><dd className="mono">{existing.channelType}</dd></div>
+                  <div><dt>绑定时间</dt><dd className="mono">{existing.boundAt ? existing.boundAt.replace("T", " ").slice(0, 16) : "—"}</dd></div>
+                  <div><dt>最近活动</dt><dd className="mono">{existing.lastUsedAt ? existing.lastUsedAt.replace("T", " ").slice(0, 16) : "—"}</dd></div>
                 </dl>
               </div>
-              <button
-                className="btn-danger"
-                onClick={() => setRevokeOpen(true)}
-              >
-                解除绑定
-              </button>
+              <button className="btn-danger" onClick={() => setRevokeOpen(true)}>解除绑定</button>
             </div>
           ) : null}
         </div>
       </section>
-      <Dialog
-        open={revokeOpen}
-        title="解除企业微信绑定"
-        size="md"
-        onClose={() => setRevokeOpen(false)}
-      >
+      <Dialog open={revokeOpen} title="解除企业微信绑定" size="md" onClose={() => setRevokeOpen(false)}>
         <div className="dialog-content">
           <div className="alert alert-danger">
             <ShieldOff size={16} />
             <div>
               <strong>解除后立即停止消息路由</strong>
-              <p>
-                历史消息、决策事件和审计日志不会删除。重新绑定将创建新的
-                binding_id。
-              </p>
+              <p>历史消息、决策事件和审计日志不会删除；重新绑定会创建新的 binding_id。</p>
             </div>
           </div>
-          <p className="dialog-copy">
-            确认解除当前企业微信员工与当前租户的绑定关系？
-          </p>
+          <div className="field">
+            <label htmlFor="binding-reauth">重新验证口令</label>
+            <input id="binding-reauth" aria-label="解除绑定重新验证口令" type="password" className="input" value={reauth} onChange={(event) => setReauth(event.target.value)} autoComplete="current-password" />
+          </div>
+          {bindingError ? <div className="alert alert-danger">{bindingError}</div> : null}
         </div>
         <footer className="dialog-footer">
-          <button
-            className="btn-secondary"
-            onClick={() => setRevokeOpen(false)}
-          >
-            取消
-          </button>
-          <button
-            className="btn-danger"
-            onClick={() => {
-              setRevokeOpen(false);
-              setState("revoked");
-              onBound?.();
-            }}
-          >
-            确认解除绑定
-          </button>
+          <button className="btn-secondary" onClick={() => setRevokeOpen(false)}>取消</button>
+          <button className="btn-danger" disabled={!reauth || busy} onClick={() => void confirmRevoke()}>确认解除绑定</button>
         </footer>
       </Dialog>
     </>

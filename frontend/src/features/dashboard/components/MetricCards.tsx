@@ -17,7 +17,7 @@ export default function MetricCards({
   loading?: boolean;
 }) {
   const total = summary?.totalAsset;
-  const cashPct = summary
+  const cashPct = summary?.totalAsset && !new Decimal(summary.totalAsset).isZero()
     ? new Decimal(summary.cashBalance)
         .div(summary.totalAsset)
         .mul(100)
@@ -54,7 +54,7 @@ export default function MetricCards({
       hint: summary?.dailyPnlRate ? `${summary.dailyPnlRate}%` : "—",
       icon: TrendingUp,
       tone: "green",
-      positive: summary ? !summary.dailyPnl.startsWith("-") : false,
+      positive: summary?.dailyPnl ? !summary.dailyPnl.startsWith("-") : false,
     },
     {
       label: "累计收益",
@@ -66,7 +66,9 @@ export default function MetricCards({
         : "—",
       icon: LineChart,
       tone: "amber",
-      positive: summary ? !summary.cumulativePnl.startsWith("-") : false,
+      positive: summary?.cumulativePnl
+        ? !summary.cumulativePnl.startsWith("-")
+        : false,
     },
   ];
 

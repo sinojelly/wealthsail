@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS identity.channel_bindings (
     user_id UUID NOT NULL REFERENCES identity.profiles(id) ON DELETE CASCADE,
     channel_type TEXT NOT NULL CHECK (channel_type IN ('wecom', 'feishu', 'telegram', 'dingtalk', 'webpush')),
     external_user_hash TEXT NOT NULL, -- 外部用户ID加盐哈希，防止明文关联
+    external_user_ciphertext TEXT, -- Worker-only envelope ciphertext; API/浏览器不得读取
     external_username TEXT,
     binding_token_hash TEXT, -- 至少 128 bit 随机熵的一次性绑定码之带密钥摘要；不保存明文
     token_expires_at TIMESTAMPTZ,

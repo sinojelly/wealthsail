@@ -4,7 +4,7 @@ import PageHeader from "../../components/layout/PageHeader";
 import { fmtTurnoverYuan, fmtVolumeHands, getMarketHot } from "../../api/market";
 
 /** 触发全局对话窗口查询某标的（ChatDrawer 监听同名事件）。 */
-export function askChatAboutStock(symbol: string, name: string) {
+function askChatAboutStock(symbol: string, name: string) {
   window.dispatchEvent(
     new CustomEvent("wealthsail:chat-ask", {
       detail: { message: `帮我分析下 ${name}（${symbol}）的实时行情和风险` },
@@ -85,6 +85,15 @@ export default function MarketHot() {
                     key={item.symbol}
                     className="hot-row"
                     onClick={() => askChatAboutStock(item.symbol, item.name)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        askChatAboutStock(item.symbol, item.name);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`询问 AI：${item.name}（${item.symbol}）`}
                     title={`点击询问 AI：${item.name}（${item.symbol}）`}
                   >
                     <td>{index + 1}</td>

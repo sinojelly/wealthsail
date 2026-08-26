@@ -12,9 +12,12 @@ import secrets
 import time
 import uuid
 from datetime import timedelta
+from io import BytesIO
+import os
 from pathlib import Path
 
 import asyncpg
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from backend.common.auth import (
     create_access_token,
@@ -22,12 +25,13 @@ from backend.common.auth import (
     verify_password,
 )
 from backend.common.database import Pool, system_connection, tenant_transaction
-from backend.common.security import generate_token, hmac_digest
+from backend.common.security import envelope_encrypt, generate_token, hmac_digest
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.dependencies import now_shanghai, write_audit
 from backend.errors import (
     AuthRequiredError,
+    ForbiddenError,
     IdempotencyConflictError,
     NotFoundError,
     ValidationError_,
@@ -36,9 +40,110 @@ from backend.errors import (
 _BINDING_CHANNEL = "wecom"
 
 
+def credentials_are_valid(
+    password: str, password_hash: str | None, *, auth_dev_mode: bool
+) -> bool:
+    """Validate a password, with a narrow opt-in for passwordless dev seeds.
+
+    ``AUTH_DEV_MODE`` is rejected during production startup.  The fallback is
+    deliberately limited to rows that do not have a password hash: once a
+    password has been configured, even a development instance must verify it.
+    """
+    if verify_password(password, password_hash):
+        return True
+    return bool(auth_dev_mode and password and not password_hash)
+
+
+def refresh_token_hash(settings: Settings, token: str) -> str:
+    """Return the non-reversible database representation of a refresh token."""
+    return hmac_digest(settings.refresh_token_hmac_key, token)
+
+
+async def _create_refresh_session(
+    pool: Pool,
+    settings: Settings,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> str:
+    token = generate_token(32)
+    expires_at = now_shanghai() + timedelta(days=settings.refresh_token_ttl_days)
+    async with system_connection(pool) as conn:
+        await conn.execute(
+            """
+            INSERT INTO identity.refresh_sessions
+                (user_id, tenant_id, token_hash, expires_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            user_id,
+            tenant_id,
+            refresh_token_hash(settings, token),
+            expires_at,
+        )
+    return token
+
+
+def _login_response(row, settings: Settings, tenant_id: str | None = None) -> dict:
+    active_tenant = tenant_id or str(row["tenant_id"])
+    token, expires_in = create_access_token(
+        user_id=str(row["user_id"]),
+        tenant_id=active_tenant,
+        email=row["email"],
+        nickname=row["nickname"],
+        tenant_role=row["tenant_role"],
+        jwt_secret=settings.jwt_secret,
+        ttl_seconds=settings.access_token_ttl_seconds,
+        algorithm=settings.jwt_algorithm,
+    )
+    return {
+        "accessToken": token,
+        "tokenType": "bearer",
+        "expiresIn": expires_in,
+        "user": {
+            "id": str(row["user_id"]),
+            "email": row["email"],
+            "nickname": row["nickname"],
+            "tenantId": active_tenant,
+            "tenantName": row["tenant_name"],
+            "role": row["tenant_role"],
+        },
+    }
+
+
+def protect_routing_value(settings: Settings, external_user_id: str) -> tuple[str, str]:
+    """Return the lookup HMAC and Worker-decryptable routing ciphertext."""
+    return (
+        hmac_digest(settings.binding_hmac_key, external_user_id),
+        envelope_encrypt(settings.routing_encryption_key, external_user_id),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Login
 # ---------------------------------------------------------------------------
+async def load_login_identity(conn: asyncpg.Connection, email: str):
+    """Load login material through the private API database role.
+
+    The query is intentionally not exposed as a SECURITY DEFINER RPC.  Its
+    column grants belong only to ``wealthsail_api``; browser/``authenticated``
+    roles cannot request password hashes for arbitrary email addresses.
+    """
+    return await conn.fetch(
+        """
+        SELECT p.id AS user_id, p.email, p.nickname, p.password_hash,
+               tm.tenant_id, t.name AS tenant_name, tm.role AS tenant_role
+        FROM identity.profiles p
+        JOIN identity.tenant_members tm
+          ON tm.user_id = p.id AND tm.status = 'ACTIVE'
+        JOIN identity.tenants t
+          ON t.id = tm.tenant_id AND t.status = 'ACTIVE'
+        WHERE lower(p.email) = lower($1)
+        ORDER BY tm.created_at ASC
+        """,
+        email,
+    )
+
+
 async def login(
     pool: Pool,
     settings: Settings,
@@ -57,15 +162,15 @@ async def login(
         )
 
     async with system_connection(pool) as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM identity.authenticate_credentials($1)", email
-        )
+        rows = await load_login_identity(conn, email)
 
     if not rows:
         raise AuthRequiredError("邮箱或口令不正确")
 
     row = rows[0]
-    if not verify_password(password, row["password_hash"]):
+    if not credentials_are_valid(
+        password, row["password_hash"], auth_dev_mode=settings.auth_dev_mode
+    ):
         # 用户存在但口令错误 → 同样按认证失败处理（不泄露账号是否存在）
         raise AuthRequiredError("邮箱或口令不正确")
 
@@ -73,19 +178,6 @@ async def login(
     # later switch via X-Tenant-Id, which RLS re-validates on every query).
     user_id = str(row["user_id"])
     tenant_id = str(row["tenant_id"])
-    nickname = row["nickname"]
-    tenant_role = row["tenant_role"]
-
-    token, expires_in = create_access_token(
-        user_id=user_id,
-        tenant_id=tenant_id,
-        email=email,
-        nickname=nickname,
-        tenant_role=tenant_role,
-        jwt_secret=settings.jwt_secret,
-        ttl_seconds=settings.access_token_ttl_seconds,
-        algorithm=settings.jwt_algorithm,
-    )
 
     async with tenant_transaction(pool, user_id, tenant_id) as conn:
         await write_audit(
@@ -99,19 +191,11 @@ async def login(
             details={"method": "password"},
         )
 
-    return {
-        "accessToken": token,
-        "tokenType": "bearer",
-        "expiresIn": expires_in,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "nickname": nickname,
-            "tenantId": tenant_id,
-            "tenantName": row["tenant_name"],
-            "role": tenant_role,
-        },
-    }
+    result = _login_response(row, settings)
+    result["_refreshToken"] = await _create_refresh_session(
+        pool, settings, user_id=user_id, tenant_id=tenant_id
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +207,13 @@ async def register(
     *,
     email: str,
     password: str,
+    invitation_token: str,
     nickname: str | None = None,
 ) -> dict:
-    """Create a local user with a bcrypt password hash and a default tenant.
+    """Accept a one-time, tenant-bound invitation and create the pilot user.
 
-    Idempotency: a second registration with the same email is rejected with
-    IDEMPOTENCY_CONFLICT (409). The new tenant gets one OWNER membership and a
-    default investment account so the workbench renders immediately.
+    Public tenant creation is intentionally absent from the MVP.  The database
+    helper validates token digest, email, expiry and one-time status atomically.
     """
     email = (email or "").strip().lower()
     if not email or "@" not in email or "." not in email.split("@")[-1]:
@@ -140,76 +224,193 @@ async def register(
         raise ValidationError_(
             "口令至少 8 个字符", field_errors=[{"field": "password", "message": "至少 8 个字符"}]
         )
+    if not invitation_token or len(invitation_token.strip()) < 16:
+        raise ValidationError_(
+            "邀请令牌无效",
+            field_errors=[{"field": "invitationToken", "message": "必填"}],
+        )
     display_name = (nickname or "").strip() or email.split("@")[0]
+    invitation_hash = hmac_digest(
+        settings.binding_hmac_key, invitation_token.strip()
+    )
+    async with system_connection(pool) as conn:
+        try:
+            row = await conn.fetchrow(
+                "SELECT * FROM identity.accept_invitation($1, $2, $3, $4)",
+                invitation_hash,
+                email,
+                display_name,
+                hash_password(password),
+            )
+        except asyncpg.PostgresError as exc:
+            message = str(exc)
+            if "INVITATION_INVALID" in message:
+                raise NotFoundError("邀请令牌无效、已使用或已过期") from exc
+            if "EMAIL_ALREADY_REGISTERED" in message:
+                raise IdempotencyConflictError("该邮箱已注册，请直接登录") from exc
+            raise
 
-    # 注册是系统级引导操作（无会话/JWT），经 worker 角色直连完成：
-    # API 池角色（wealthsail_user）对 identity 元表无写权限，也不应持有。
-    conn = await asyncpg.connect(settings.worker_database_url)
-    try:
-        async with conn.transaction():
-            existing = await conn.fetchval(
-                "SELECT 1 FROM identity.profiles WHERE lower(email) = $1", email
-            )
-            if existing:
-                raise IdempotencyConflictError("该邮箱已注册")
-
-            user_id = str(
-                await conn.fetchval(
-                    """
-                    INSERT INTO identity.profiles (email, nickname, password_hash)
-                    VALUES ($1, $2, $3)
-                    RETURNING id
-                    """,
-                    email,
-                    display_name,
-                    hash_password(password),
-                )
-            )
-            tenant_id = str(
-                await conn.fetchval(
-                    """
-                    INSERT INTO identity.tenants (name, status, base_currency)
-                    VALUES ($1, 'ACTIVE', 'CNY')
-                    RETURNING id
-                    """,
-                    f"{display_name} 的家庭账户",
-                )
-            )
-            await conn.execute(
-                """
-                INSERT INTO identity.tenant_members (tenant_id, user_id, role, status)
-                VALUES ($1, $2, 'OWNER', 'ACTIVE')
-                """,
-                tenant_id,
-                user_id,
-            )
-            await conn.execute(
-                """
-                INSERT INTO identity.accounts (tenant_id, name, account_type, status)
-                VALUES ($1, '默认投资账户', 'FUND_PLATFORM', 'ACTIVE')
-                """,
-                tenant_id,
-            )
-            await write_audit(
-                conn,
-                tenant_id=tenant_id,
-                actor_type="USER",
-                actor_id=user_id,
-                action="USER_REGISTER",
-                resource_type="identity.profile",
-                resource_id=user_id,
-                details={"method": "local-bcrypt"},
-            )
-    finally:
-        await conn.close()
+    if row is None:
+        raise NotFoundError("邀请令牌无效、已使用或已过期")
+    user_id = str(row["out_user_id"])
+    tenant_id = str(row["out_tenant_id"])
 
     return {
         "userId": user_id,
         "email": email,
         "nickname": display_name,
         "tenantId": tenant_id,
-        "tenantName": f"{display_name} 的家庭账户",
+        "tenantName": row["out_tenant_name"],
     }
+
+
+async def create_invitation(
+    pool: Pool,
+    settings: Settings,
+    ctx: TenantContext,
+    *,
+    email: str,
+    role: str,
+) -> dict:
+    """Create a one-time invite for an existing pilot tenant (OWNER/ADMIN only)."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValidationError_("邮箱格式不正确")
+    if role not in {"ADMIN", "EDITOR", "VIEWER"}:
+        raise ValidationError_("邀请角色无效")
+    if ctx.tenant_role not in {"OWNER", "ADMIN"}:
+        raise ForbiddenError("只有所有者或管理员可以邀请成员")
+
+    token = generate_token(32)
+    token_hash = hmac_digest(settings.binding_hmac_key, token)
+    expires_at = now_shanghai() + timedelta(days=7)
+    async with system_connection(pool) as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM identity.create_invitation($1, $2, $3, $4, $5, $6)",
+            ctx.user_id,
+            ctx.tenant_id,
+            email,
+            role,
+            token_hash,
+            expires_at,
+        )
+    if row is None:
+        raise ForbiddenError("邀请创建失败")
+    return {
+        "invitationId": str(row["out_invitation_id"]),
+        "token": token,
+        "email": email,
+        "role": role,
+        "expiresAt": expires_at,
+    }
+
+
+async def refresh_session(pool: Pool, settings: Settings, refresh_token: str) -> dict:
+    """Rotate a refresh token and mint access claims from current membership."""
+    if not refresh_token:
+        raise AuthRequiredError("刷新会话不存在")
+    old_hash = refresh_token_hash(settings, refresh_token)
+    new_token = generate_token(32)
+    new_hash = refresh_token_hash(settings, new_token)
+    expires_at = now_shanghai() + timedelta(days=settings.refresh_token_ttl_days)
+
+    async with system_connection(pool) as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT rs.id AS refresh_session_id, rs.user_id, rs.tenant_id,
+                       p.email, p.nickname, t.name AS tenant_name,
+                       tm.role AS tenant_role
+                FROM identity.refresh_sessions rs
+                JOIN identity.profiles p ON p.id = rs.user_id
+                JOIN identity.tenants t ON t.id = rs.tenant_id AND t.status = 'ACTIVE'
+                JOIN identity.tenant_members tm
+                  ON tm.user_id = rs.user_id AND tm.tenant_id = rs.tenant_id
+                 AND tm.status = 'ACTIVE'
+                WHERE rs.token_hash = $1 AND rs.revoked_at IS NULL
+                  AND rs.expires_at > now()
+                FOR UPDATE OF rs
+                """,
+                old_hash,
+            )
+            if row is None:
+                raise AuthRequiredError("刷新会话无效或已过期")
+            await conn.execute(
+                "UPDATE identity.refresh_sessions SET revoked_at=now(), rotated_at=now() WHERE id=$1",
+                row["refresh_session_id"],
+            )
+            await conn.execute(
+                """
+                INSERT INTO identity.refresh_sessions
+                    (user_id, tenant_id, token_hash, expires_at, parent_session_id)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                row["user_id"],
+                row["tenant_id"],
+                new_hash,
+                expires_at,
+                row["refresh_session_id"],
+            )
+    result = _login_response(row, settings)
+    result["_refreshToken"] = new_token
+    return result
+
+
+async def revoke_refresh_session(
+    pool: Pool, settings: Settings, refresh_token: str | None
+) -> None:
+    if not refresh_token:
+        return
+    async with system_connection(pool) as conn:
+        await conn.execute(
+            """
+            UPDATE identity.refresh_sessions
+               SET revoked_at = COALESCE(revoked_at, now())
+             WHERE token_hash = $1
+            """,
+            refresh_token_hash(settings, refresh_token),
+        )
+
+
+async def switch_tenant(
+    pool: Pool,
+    settings: Settings,
+    ctx: TenantContext,
+    *,
+    tenant_id: str,
+    refresh_token: str | None,
+) -> dict:
+    """Issue a new tenant-bound token after re-reading active membership."""
+    async with system_connection(pool) as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT p.id AS user_id, p.email, p.nickname,
+                   tm.tenant_id, tm.role AS tenant_role, t.name AS tenant_name
+            FROM identity.profiles p
+            JOIN identity.tenant_members tm ON tm.user_id=p.id AND tm.status='ACTIVE'
+            JOIN identity.tenants t ON t.id=tm.tenant_id AND t.status='ACTIVE'
+            WHERE p.id=$1 AND tm.tenant_id=$2
+            """,
+            ctx.user_id,
+            tenant_id,
+        )
+        if row is None:
+            raise ForbiddenError("目标租户成员关系不存在或已停用")
+        if refresh_token:
+            updated = await conn.execute(
+                """
+                UPDATE identity.refresh_sessions
+                   SET tenant_id=$1
+                 WHERE token_hash=$2 AND user_id=$3
+                   AND revoked_at IS NULL AND expires_at > now()
+                """,
+                tenant_id,
+                refresh_token_hash(settings, refresh_token),
+                ctx.user_id,
+            )
+            if updated.endswith("0"):
+                raise AuthRequiredError("刷新会话无效，请重新登录")
+    return _login_response(row, settings)
 
 
 # ---------------------------------------------------------------------------
@@ -293,14 +494,17 @@ async def consume_binding_challenge(
         raise ValidationError_("绑定令牌或外部用户标识缺失")
 
     token_hash = hmac_digest(settings.binding_hmac_key, token.strip())
-    external_hash = hmac_digest(settings.binding_hmac_key, external_user_id)
+    external_hash, external_ciphertext = protect_routing_value(
+        settings, external_user_id
+    )
 
     async with system_connection(pool) as conn:
         try:
             binding = await conn.fetchrow(
-                "SELECT * FROM identity.consume_binding_challenge($1, $2, $3)",
+                "SELECT * FROM identity.consume_binding_challenge($1, $2, $3, $4)",
                 token_hash,
                 external_hash,
+                external_ciphertext,
                 external_username,
             )
         except asyncpg.PostgresError as exc:
@@ -334,6 +538,45 @@ async def consume_binding_challenge(
         "channelType": binding["out_channel_type"],
         "tenantId": str(binding["out_tenant_id"]),
     }
+
+
+async def revoke_binding(
+    conn: asyncpg.Connection,
+    ctx: TenantContext,
+    *,
+    binding_id: str,
+    password: str,
+) -> dict:
+    """Soft-revoke a same-user/same-tenant binding after password reauth."""
+    password_hash = await conn.fetchval(
+        "SELECT password_hash FROM identity.profiles WHERE id=$1", ctx.user_id
+    )
+    if not verify_password(password, password_hash):
+        raise AuthRequiredError("重新验证口令失败")
+    row = await conn.fetchrow(
+        """
+        UPDATE identity.channel_bindings
+           SET status='REVOKED', revoked_at=now(), version=version+1
+         WHERE id=$1 AND tenant_id=$2 AND user_id=$3 AND status='ACTIVE'
+        RETURNING id, status, channel_type
+        """,
+        binding_id,
+        ctx.tenant_id,
+        ctx.user_id,
+    )
+    if row is None:
+        raise NotFoundError("活动绑定不存在或已撤销")
+    await write_audit(
+        conn,
+        tenant_id=ctx.tenant_id,
+        actor_type="USER",
+        actor_id=ctx.user_id,
+        action="WECOM_BINDING_REVOKED",
+        resource_type="identity.channel_bindings",
+        resource_id=str(row["id"]),
+        details={"channel_type": row["channel_type"]},
+    )
+    return {"bindingId": str(row["id"]), "status": row["status"]}
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +717,42 @@ async def update_profile(
 
 # 头像上传约束
 AVATAR_MAX_BYTES = 2 * 1024 * 1024  # 2 MiB
-AVATAR_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
+AVATAR_MAX_PIXELS = 16_000_000
+AVATAR_MAX_DIMENSION = 1024
+AVATAR_ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "GIF"}
+
+
+def normalize_avatar_image(data: bytes, content_type: str | None) -> tuple[bytes, str]:
+    """Decode, bound and re-encode untrusted image bytes.
+
+    File names, extensions and client MIME values are never trusted. Re-encoding
+    strips active/unknown payloads, metadata and animation before persistence.
+    """
+    if not data:
+        raise ValidationError_("文件内容为空")
+    if len(data) > AVATAR_MAX_BYTES:
+        raise ValidationError_("头像文件不能超过 2 MiB")
+    if content_type and not content_type.startswith("image/"):
+        raise ValidationError_("文件类型必须为图片")
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.format not in AVATAR_ALLOWED_FORMATS:
+                raise ValidationError_("不支持的图片编码")
+            if source.width * source.height > AVATAR_MAX_PIXELS:
+                raise ValidationError_("图片像素数过大")
+            source.seek(0)
+            frame = ImageOps.exif_transpose(source.convert("RGBA" if source.mode in {"RGBA", "LA"} else "RGB"))
+            frame.thumbnail((AVATAR_MAX_DIMENSION, AVATAR_MAX_DIMENSION))
+            output = BytesIO()
+            frame.save(output, format="WEBP", quality=88, method=6)
+    except ValidationError_:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise ValidationError_("图片无法解码或内容已损坏") from exc
+    encoded = output.getvalue()
+    if len(encoded) > AVATAR_MAX_BYTES:
+        raise ValidationError_("重编码后的头像仍超过 2 MiB")
+    return encoded, "webp"
 
 
 async def save_avatar(
@@ -486,47 +764,50 @@ async def save_avatar(
     data: bytes,
 ) -> dict:
     """保存头像文件并更新 profiles.avatar_url（同一请求内完成）。"""
-    ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
-    if ext not in AVATAR_ALLOWED_EXTENSIONS:
-        raise ValidationError_(
-            f"仅支持 {'/'.join(sorted(AVATAR_ALLOWED_EXTENSIONS))} 格式",
-            field_errors=[{"field": "file", "message": "不支持的图片格式"}],
-        )
-    if content_type and not content_type.startswith("image/"):
-        raise ValidationError_(
-            "文件类型必须为图片",
-            field_errors=[{"field": "file", "message": "非图片文件"}],
-        )
-    if not data:
-        raise ValidationError_(
-            "文件内容为空", field_errors=[{"field": "file", "message": "空文件"}]
-        )
-    if len(data) > AVATAR_MAX_BYTES:
-        raise ValidationError_(
-            f"头像文件不能超过 {AVATAR_MAX_BYTES // 1024 // 1024} MiB",
-            field_errors=[{"field": "file", "message": "文件过大"}],
-        )
+    del filename  # untrusted client name is intentionally ignored
+    encoded, ext = normalize_avatar_image(data, content_type)
 
     avatars_dir = Path(__file__).resolve().parent.parent / "static" / "avatars"
     avatars_dir.mkdir(parents=True, exist_ok=True)
-    object_name = f"{ctx.user_id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
-    (avatars_dir / object_name).write_bytes(data)
+    object_name = f"{ctx.user_id}_{int(time.time())}_{secrets.token_hex(16)}.{ext}"
+    final_path = avatars_dir / object_name
+    temporary_path = avatars_dir / f".{object_name}.tmp"
+    with temporary_path.open("xb") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, final_path)
 
     avatar_url = f"/static/avatars/{object_name}"
-    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        await conn.execute(
-            "UPDATE identity.profiles SET avatar_url = $1, updated_at = now() WHERE id = $2",
-            avatar_url,
-            ctx.user_id,
-        )
-        await write_audit(
-            conn,
-            tenant_id=ctx.tenant_id,
-            actor_type="USER",
-            actor_id=ctx.user_id,
-            action="AVATAR_UPDATED",
-            resource_type="identity.profiles",
-            resource_id=ctx.user_id,
-            details={"avatar_url": avatar_url, "bytes": len(data)},
-        )
+    old_url: str | None = None
+    try:
+        async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+            old_url = await conn.fetchval(
+                "SELECT avatar_url FROM identity.profiles WHERE id=$1", ctx.user_id
+            )
+            await conn.execute(
+                "UPDATE identity.profiles SET avatar_url = $1, updated_at = now() WHERE id = $2",
+                avatar_url,
+                ctx.user_id,
+            )
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="AVATAR_UPDATED",
+                resource_type="identity.profiles",
+                resource_id=ctx.user_id,
+                details={"avatar_url": avatar_url, "bytes": len(encoded)},
+            )
+    except Exception:
+        final_path.unlink(missing_ok=True)
+        raise
+
+    prefix = "/static/avatars/"
+    if old_url and old_url.startswith(prefix):
+        old_name = old_url.removeprefix(prefix)
+        old_path = (avatars_dir / old_name).resolve()
+        if old_path.parent == avatars_dir.resolve() and old_path != final_path.resolve():
+            old_path.unlink(missing_ok=True)
     return {"avatarUrl": avatar_url}

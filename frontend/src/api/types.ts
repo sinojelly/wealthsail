@@ -42,33 +42,39 @@ export interface ApiErrorBody {
 export interface AllocationItem {
   category: string;
   amount: DecimalString;
-  value: DecimalString; // 百分比
-}
-
-export interface SettlementPreviewDto {
-  fillId: string;
-  cashBefore: DecimalString;
-  cashDelta: DecimalString;
-  cashAfter: DecimalString;
+  value: DecimalString | null; // 百分比；总资产不完整时不可计算
 }
 
 export interface RiskPreviewDto {
-  previousMaxPosition: DecimalString;
+  draftId: string;
+  expectedVersion: number;
+  previousMaxPosition: DecimalString | null;
   nextMaxPosition: DecimalString;
   impactedHoldings: number;
   newAlerts: number;
   policyHash: string;
+  status: "PREVIEW";
+}
+
+export interface RiskConfirmDto {
+  id: string;
+  version: number;
+  status: "CONFIRMED";
+  policyHash: string;
 }
 
 export interface PortfolioSummary {
-  totalAsset: DecimalString;
+  totalAsset: DecimalString | null;
+  knownValue: DecimalString;
+  valuationCoveragePct: DecimalString;
+  unpricedPositionCount: number;
   currency: string;
   cashBalance: DecimalString;
-  positionsMarketValue: DecimalString;
-  dailyPnl: DecimalString;
-  dailyPnlRate: DecimalString;
-  cumulativePnl: DecimalString;
-  cumulativePnlRate: DecimalString;
+  positionsMarketValue: DecimalString | null;
+  dailyPnl: DecimalString | null;
+  dailyPnlRate: DecimalString | null;
+  cumulativePnl: DecimalString | null;
+  cumulativePnlRate: DecimalString | null;
   allocation: AllocationItem[];
   qualityStatus: QualityCode;
   asOf: string;
@@ -81,18 +87,18 @@ export interface PositionDto {
   type: string; // A股 / 场内ETF / 场外基金 / 现金 …
   quantity: string;
   price: DecimalString | null;
-  marketValue: DecimalString;
-  weight: DecimalString;
-  pnl: DecimalString;
-  pnlRate: DecimalString;
+  marketValue: DecimalString | null;
+  weight: DecimalString | null;
+  pnl: DecimalString | null;
+  pnlRate: DecimalString | null;
   quality: QualityCode;
   accountId: string;
 }
 
 export interface NavPoint {
   date: string;
-  totalNav: DecimalString;
-  dailyPnl: DecimalString;
+  totalNav: DecimalString | null;
+  dailyPnl: DecimalString | null;
   cashBalance: DecimalString;
 }
 
@@ -126,6 +132,19 @@ export interface ReportItem {
   body: string;
   actionPlan: unknown;
   quality: QualityCode;
+  evidence: ReportEvidence[];
+}
+
+export interface ReportEvidence {
+  id: string;
+  claimType: "FACT" | "INFERENCE" | "OPINION";
+  sourceSnapshotId: string | null;
+  sourceName: string | null;
+  originUri: string | null;
+  asOf: string;
+  excerpt: string | null;
+  quality: QualityCode;
+  contentHash: string | null;
 }
 
 export interface ReportVersionRef {

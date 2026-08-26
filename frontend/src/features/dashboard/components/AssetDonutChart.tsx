@@ -19,9 +19,9 @@ export default function AssetDonutChart({
   allocation: AllocationItem[];
   loading?: boolean;
 }) {
-  const chartData = allocation.map((item) => ({
+  const chartData = allocation.filter((item) => item.value !== null).map((item) => ({
     name: item.category,
-    value: toChartNumber(item.value),
+    value: toChartNumber(item.value as string),
     color: CATEGORY_COLOR[item.category] ?? "#94a3b8",
     amount: item.amount,
   }));

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.common.database import Pool, tenant_transaction
@@ -15,7 +15,7 @@ from backend.dependencies import (
     get_tenant_context,
     now_shanghai,
 )
-from backend.errors import ok
+from backend.errors import ValidationError_, ok
 from backend.identity import service
 
 router = APIRouter(prefix="/auth", tags=["identity"])
@@ -30,12 +30,24 @@ class RegisterRequest(BaseModel):
     email: str = Field(description="注册邮箱")
     password: str = Field(min_length=8, description="登录口令（至少 8 个字符）")
     nickname: str | None = Field(default=None, description="显示昵称（缺省取邮箱前缀）")
+    invitationToken: str = Field(min_length=16, description="一次性受邀注册令牌")
+
+
+class InvitationRequest(BaseModel):
+    email: str = Field(description="被邀请邮箱")
+    role: str = Field(default="VIEWER", description="ADMIN | EDITOR | VIEWER")
+
+
+class SwitchTenantRequest(BaseModel):
+    tenantId: str = Field(description="目标活动租户 ID")
 
 
 class WeComBindingRequest(BaseModel):
-    token: str | None = Field(default=None, description="一次性绑定口令（企微回调消费）")
-    externalUserId: str | None = Field(default=None, description="企微外部用户 ID（仅回调使用）")
-    externalUsername: str | None = Field(default=None)
+    """Reserved request body; external identity is accepted only from verified callback."""
+
+
+class RevokeBindingRequest(BaseModel):
+    password: str = Field(min_length=1, description="高风险操作二次认证口令")
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -50,10 +62,15 @@ async def register(
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """注册本地用户（bcrypt 口令哈希 + 默认租户与投资账户）。"""
+    """使用一次性、租户绑定的邀请令牌注册封闭试点用户。"""
     as_of = now_shanghai()
     data = await service.register(
-        pool, settings, email=body.email, password=body.password, nickname=body.nickname
+        pool,
+        settings,
+        email=body.email,
+        password=body.password,
+        nickname=body.nickname,
+        invitation_token=body.invitationToken,
     )
     return ok(data, request_id=request_id, as_of=as_of)
 
@@ -61,6 +78,7 @@ async def register(
 @router.post("/login")
 async def login(
     body: LoginRequest,
+    response: Response,
     pool: Pool = Depends(get_pool),
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
@@ -70,7 +88,92 @@ async def login(
     data = await service.login(
         pool, settings, email=body.email, password=body.password
     )
+    _set_refresh_cookie(response, settings, data.pop("_refreshToken"))
     return ok(data, request_id=request_id, as_of=as_of)
+
+
+def _set_refresh_cookie(response: Response, settings: Settings, token: str) -> None:
+    response.set_cookie(
+        key=settings.refresh_cookie_name,
+        value=token,
+        max_age=settings.refresh_token_ttl_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="strict",
+        path=f"{settings.api_prefix}/auth",
+    )
+
+
+@router.post("/refresh")
+async def refresh(
+    response: Response,
+    request: Request,
+    pool: Pool = Depends(get_pool),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """轮换 HttpOnly refresh cookie，并签发新的短期访问令牌。"""
+    token = request.cookies.get(settings.refresh_cookie_name, "")
+    data = await service.refresh_session(pool, settings, token)
+    _set_refresh_cookie(response, settings, data.pop("_refreshToken"))
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/logout")
+async def logout(
+    response: Response,
+    request: Request,
+    pool: Pool = Depends(get_pool),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """服务端撤销当前刷新会话；重复注销保持幂等。"""
+    await service.revoke_refresh_session(
+        pool, settings, request.cookies.get(settings.refresh_cookie_name)
+    )
+    response.delete_cookie(
+        settings.refresh_cookie_name,
+        path=f"{settings.api_prefix}/auth",
+        secure=settings.is_production,
+        httponly=True,
+        samesite="strict",
+    )
+    return ok({"revoked": True}, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/switch-tenant")
+async def switch_tenant(
+    body: SwitchTenantRequest,
+    request: Request,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """重新验证成员关系并签发绑定到目标租户的新访问令牌。"""
+    data = await service.switch_tenant(
+        pool,
+        settings,
+        ctx,
+        tenant_id=body.tenantId,
+        refresh_token=request.cookies.get(settings.refresh_cookie_name),
+    )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/invitations")
+async def create_invitation(
+    body: InvitationRequest,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """为当前租户生成一次性邀请；令牌明文只在本响应出现一次。"""
+    data = await service.create_invitation(
+        pool, settings, ctx, email=body.email, role=body.role
+    )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
 @router.post("/wecom/binding")
@@ -81,22 +184,26 @@ async def wecom_binding(
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """创建企业微信一次性绑定口令（仅返回一次，库中只存 HMAC 摘要）。
-
-    若携带 token + externalUserId，则执行回调侧的原子消费（供适配器复用）。
-    """
+    """创建企业微信一次性绑定口令（仅返回一次，库中只存 HMAC 摘要）。"""
     as_of = now_shanghai()
-    if body.token and body.externalUserId:
-        data = await service.consume_binding_challenge(
-            pool,
-            settings,
-            token=body.token,
-            external_user_id=body.externalUserId,
-            external_username=body.externalUsername,
-        )
-    else:
-        data = await service.create_binding_challenge(pool, ctx, settings)
+    data = await service.create_binding_challenge(pool, ctx, settings)
     return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.post("/wecom/bindings/{binding_id}/revoke")
+async def revoke_wecom_binding(
+    binding_id: str,
+    body: RevokeBindingRequest,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """二次认证后软撤销本人、当前租户的绑定，历史审计仍保留。"""
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.revoke_binding(
+            conn, ctx, binding_id=binding_id, password=body.password
+        )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
 @router.patch("/profile")
@@ -125,14 +232,22 @@ async def upload_avatar(
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """上传头像：保存到 static/avatars/ 并更新用户 avatar_url。"""
+    """流式限额读取头像，解码/重编码后更新用户 avatar_url。"""
     as_of = now_shanghai()
+    chunks = bytearray()
+    try:
+        while chunk := await file.read(64 * 1024):
+            chunks.extend(chunk)
+            if len(chunks) > service.AVATAR_MAX_BYTES:
+                raise ValidationError_("头像文件不能超过 2 MiB")
+    finally:
+        await file.close()
     data = await service.save_avatar(
         pool,
         ctx,
         filename=file.filename or "",
         content_type=file.content_type,
-        data=await file.read(),
+        data=bytes(chunks),
     )
     return ok(data, request_id=request_id, as_of=as_of)
 

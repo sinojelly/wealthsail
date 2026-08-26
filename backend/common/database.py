@@ -2,14 +2,14 @@
 
 Every business transaction that touches tenant-scoped data MUST run through
 ``tenant_transaction``: it acquires a pooled connection, opens a transaction,
-switches to the restricted ``authenticated`` role and injects the JWT claims
+switches to the restricted ``wealthsail_api`` role and injects the JWT claims
 via ``set_config('request.jwt.claims', ..., is_local=true)``. PostgreSQL then
 enforces row isolation through the ``identity.is_tenant_member()`` policies —
 even if application code mis-scopes a query, RLS is the final boundary.
 
-The background Worker uses ``system_connection`` with its own BYPASSRLS role
-(service-role semantics): it processes rows for ALL tenants and enforces
-tenant_id in application code instead.
+The background Worker pool explicitly switches to the ``wealthsail_worker``
+BYPASSRLS role. PostgreSQL role attributes are not inherited merely through
+membership, so this switch is part of the trust boundary.
 """
 
 from __future__ import annotations
@@ -17,28 +17,41 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import asyncpg
 from asyncpg.pool import Pool
 
-RLS_ROLE = "authenticated"
+# The browser-facing Supabase ``authenticated`` role is deliberately read-only.
+# Domain commands run as a separate NOLOGIN role that deployment login roles
+# inherit; this prevents direct Data API clients from acquiring write policies.
+RLS_ROLE = "wealthsail_api"
 
 
-def _dsn_statement_cache_size(dsn: str) -> int | None:
-    """Read ``statement_cache_size`` from the DSN query string, if present.
+def normalize_asyncpg_dsn(dsn: str) -> tuple[str, dict[str, int]]:
+    """Separate asyncpg-only connection options from a PostgreSQL DSN.
 
-    asyncpg does NOT parse this non-PostgreSQL parameter from the URL itself,
-    so callers writing ``?statement_cache_size=0`` in a pooler DSN must pass it
-    explicitly. Returns None when absent or unparsable.
+    ``statement_cache_size`` is an asyncpg client option, not a PostgreSQL
+    startup parameter.  Leaving it in the URL makes PgBouncer/Supabase pass it
+    to PostgreSQL and can fail the connection before asyncpg applies the
+    explicit option.  The original encoded authority is preserved while only
+    that client-only query key is removed.
     """
-    try:
-        values = parse_qs(urlsplit(dsn).query).get("statement_cache_size")
-        if values:
-            return int(values[0])
-    except (ValueError, TypeError):
-        return None
-    return None
+    parts = urlsplit(dsn)
+    kept: list[tuple[str, str]] = []
+    options: dict[str, int] = {}
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key == "statement_cache_size":
+            try:
+                options[key] = int(value)
+            except ValueError as exc:
+                raise ValueError("statement_cache_size must be an integer") from exc
+        else:
+            kept.append((key, value))
+    clean_dsn = urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment)
+    )
+    return clean_dsn, options
 
 
 async def create_pool(
@@ -47,6 +60,7 @@ async def create_pool(
     min_size: int = 2,
     max_size: int = 10,
     statement_cache_size: int | None = None,
+    runtime_role: str | None = None,
     **pool_kwargs: Any,
 ) -> Pool:
     """Create an asyncpg pool.
@@ -57,8 +71,9 @@ async def create_pool(
     is parsed here and passed explicitly. An explicit ``statement_cache_size``
     argument always wins over the DSN value.
     """
+    dsn, dsn_options = normalize_asyncpg_dsn(dsn)
     if statement_cache_size is None:
-        statement_cache_size = _dsn_statement_cache_size(dsn)
+        statement_cache_size = dsn_options.get("statement_cache_size")
     pool_args: dict[str, Any] = {
         "dsn": dsn,
         "min_size": min_size,
@@ -67,6 +82,17 @@ async def create_pool(
     }
     if statement_cache_size is not None:
         pool_args["statement_cache_size"] = statement_cache_size
+    if runtime_role is not None:
+        if runtime_role not in {"wealthsail_api", "wealthsail_worker"}:
+            raise ValueError("unsupported database runtime role")
+        if "init" in pool_kwargs:
+            raise ValueError("runtime_role cannot be combined with a custom pool init")
+
+        async def initialize_runtime_role(conn: asyncpg.Connection) -> None:
+            # The identifier comes from the closed allowlist above.
+            await conn.execute(f"SET ROLE {runtime_role};")
+
+        pool_args["init"] = initialize_runtime_role
     return await asyncpg.create_pool(**pool_args, **pool_kwargs)
 
 

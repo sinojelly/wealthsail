@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Crown, Eye, ShieldCheck, UserRound, Users } from "lucide-react";
 import type { MeTenant } from "../../../api/types";
+import { switchTenant } from "../../../app/auth-session";
 
 const ROLE_ICON: Record<string, typeof Crown> = {
   OWNER: Crown,
@@ -19,6 +21,20 @@ export default function TenantRoleCard({
 }) {
   const activeTenant =
     tenants.find((tenant) => tenant.tenantId === activeTenantId) ?? tenants[0];
+  const [pendingTenantId, setPendingTenantId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSwitch(tenantId: string) {
+    setPendingTenantId(tenantId);
+    setError(null);
+    try {
+      await switchTenant(tenantId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "租户切换失败");
+    } finally {
+      setPendingTenantId(null);
+    }
+  }
 
   return (
     <section className="panel tenant-card">
@@ -45,7 +61,19 @@ export default function TenantRoleCard({
                 <span className="mono">{tenant.tenantId.slice(0, 8)}</span>
               </div>
               <span className="role-chip">{tenant.role}</span>
-              <small>{isActive ? "当前租户" : tenant.status}</small>
+              {isActive ? (
+                <small>当前租户</small>
+              ) : tenant.status === "ACTIVE" ? (
+                <button
+                  className="btn-ghost"
+                  disabled={pendingTenantId !== null}
+                  onClick={() => void handleSwitch(tenant.tenantId)}
+                >
+                  {pendingTenantId === tenant.tenantId ? "切换中…" : "切换"}
+                </button>
+              ) : (
+                <small>{tenant.status}</small>
+              )}
             </div>
           );
         })}
@@ -62,6 +90,7 @@ export default function TenantRoleCard({
           </div>
         ) : null}
       </div>
+      {error ? <p className="field-error" role="alert">{error}</p> : null}
       <footer className="tenant-footer">
         <ShieldCheck size={14} />
         <span>

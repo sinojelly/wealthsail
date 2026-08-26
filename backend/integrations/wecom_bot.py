@@ -13,12 +13,14 @@
   * 用户必须先与该机器人会话过，机器人才能主动推送
   * 频率限制 30 条/分钟、1000 条/小时（每个会话）
 
-连接由模块级单例懒创建并缓存：首次 send 时建连，断线自动指数退避重连。
+该通道仅供后续隔离试验，生产发送链路默认不调用。客户端按机器人身份与
+凭据版本注册；断线后的未知投递不会自动重发，由上层显式重新建立连接。
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -32,10 +34,15 @@ WECOM_BOT_WS_URL = "wss://openws.work.weixin.qq.com"
 
 _HEARTBEAT_INTERVAL = 30.0
 _SEND_TIMEOUT = 10.0
-_RECONNECT_BASE = 2.0
-_RECONNECT_MAX = 60.0
+_MAX_FRAME_SIZE = 1024 * 1024
+_MAX_MARKDOWN_BYTES = 4096
+_MAX_REGISTERED_CLIENTS = 8
 
-_client: "WeComBotClient | None" = None
+_clients: dict[tuple[str, str], "WeComBotClient"] = {}
+
+
+class BotDeliveryUnknownError(RuntimeError):
+    """The connection ended after send, so provider acceptance is unknown."""
 
 
 class WeComBotClient:
@@ -60,7 +67,13 @@ class WeComBotClient:
             await self._connect_once()
 
     async def _connect_once(self) -> None:
-        ws = await websockets.connect(WECOM_BOT_WS_URL, ping_interval=None, max_size=None)
+        ws = await websockets.connect(
+            WECOM_BOT_WS_URL,
+            ping_interval=None,
+            max_size=_MAX_FRAME_SIZE,
+            open_timeout=_SEND_TIMEOUT,
+            close_timeout=_SEND_TIMEOUT,
+        )
         req_id = uuid.uuid4().hex
         await ws.send(
             json.dumps(
@@ -75,46 +88,54 @@ class WeComBotClient:
         if resp.get("errcode") != 0:
             await ws.close()
             raise RuntimeError(
-                f"aibot_subscribe failed: errcode={resp.get('errcode')} {resp.get('errmsg')}"
+                f"aibot_subscribe failed: errcode={resp.get('errcode')}"
             )
         self._ws = ws
         self._pending.clear()
         self._reader_task = asyncio.create_task(self._reader_loop())
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        logger.info("wecom bot connected (bot_id=%s)", self._bot_id)
+        logger.info("wecom bot connected (bot_ref=%s)", _short_ref(self._bot_id))
 
     async def close(self) -> None:
-        for task in (self._reader_task, self._heartbeat_task):
-            if task is not None:
-                task.cancel()
+        tasks = [
+            task
+            for task in (self._reader_task, self._heartbeat_task)
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._fail_pending(BotDeliveryUnknownError("wecom bot connection closed"))
         if self._ws is not None:
             await self._ws.close()
         self._ws = None
+        self._reader_task = None
+        self._heartbeat_task = None
 
     # ------------------------------------------------------------------ 读循环
     async def _reader_loop(self) -> None:
-        backoff = _RECONNECT_BASE
         while True:
             try:
                 raw = await self._ws.recv()
-                backoff = _RECONNECT_BASE
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 连接断开进入重连
-                logger.warning("wecom bot connection lost: %s", exc)
-                await self._teardown()
-                try:
-                    await asyncio.sleep(backoff)
-                    await self._connect_once()
-                except Exception:  # noqa: BLE001
-                    backoff = min(backoff * 2, _RECONNECT_MAX)
-                    continue
-                backoff = _RECONNECT_BASE
-                continue
+                logger.warning(
+                    "wecom bot connection lost error_class=%s",
+                    type(exc).__name__,
+                )
+                self._ws = None
+                self._fail_pending(
+                    BotDeliveryUnknownError("wecom bot connection lost")
+                )
+                if self._heartbeat_task is not None:
+                    self._heartbeat_task.cancel()
+                return
             try:
                 data = json.loads(raw)
             except (ValueError, TypeError):
-                logger.warning("wecom bot non-json frame: %r", raw[:200])
+                logger.warning("wecom bot non-json frame bytes=%s", len(raw))
                 continue
             req_id = (data.get("headers") or {}).get("req_id")
             if req_id and req_id in self._pending:
@@ -124,24 +145,23 @@ class WeComBotClient:
             elif data.get("cmd") in ("aibot_msg_callback", "aibot_event_callback"):
                 # 接收回调：记录日志；后续可接入 chat 服务
                 logger.info(
-                    "wecom bot callback: cmd=%s type=%s from=%s",
+                    "wecom bot callback: cmd=%s type=%s sender_ref=%s",
                     data.get("cmd"),
                     (data.get("body") or {}).get("msgtype"),
-                    ((data.get("body") or {}).get("from") or {}).get("userid"),
+                    _short_ref(
+                        str(
+                            ((data.get("body") or {}).get("from") or {}).get(
+                                "userid", ""
+                            )
+                        )
+                    ),
                 )
 
-    async def _teardown(self) -> None:
-        for task in (self._reader_task, self._heartbeat_task):
-            if task is not None and not task.done():
-                task.cancel()
-        self._reader_task = None
-        self._heartbeat_task = None
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:  # noqa: BLE001
-                pass
-        self._ws = None
+    def _fail_pending(self, exc: Exception) -> None:
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(exc)
+        self._pending.clear()
 
     # ------------------------------------------------------------------ 心跳
     async def _heartbeat_loop(self) -> None:
@@ -157,11 +177,21 @@ class WeComBotClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 心跳失败交给 reader 重连
-                logger.warning("wecom bot heartbeat failed: %s", exc)
+                logger.warning(
+                    "wecom bot heartbeat failed error_class=%s",
+                    type(exc).__name__,
+                )
+                return
 
     # ------------------------------------------------------------------ 发送
     async def send_msg(self, userid: str, content: str) -> str:
         """主动推送 markdown 消息到单聊会话（chatid=userid）。返回 req_id。"""
+        if not userid.strip():
+            raise ValueError("wecom bot recipient must not be empty")
+        if len(content.encode("utf-8")) > _MAX_MARKDOWN_BYTES:
+            raise ValueError(
+                f"wecom bot markdown exceeds {_MAX_MARKDOWN_BYTES} UTF-8 bytes"
+            )
         await self._ensure_connected()
         async with self._lock:
             req_id = uuid.uuid4().hex
@@ -182,20 +212,50 @@ class WeComBotClient:
                         }
                     )
                 )
-                resp = await asyncio.wait_for(fut, timeout=_SEND_TIMEOUT)
+                try:
+                    resp = await asyncio.wait_for(fut, timeout=_SEND_TIMEOUT)
+                except asyncio.TimeoutError as exc:
+                    raise BotDeliveryUnknownError(
+                        "wecom bot delivery result is unknown"
+                    ) from exc
             finally:
                 self._pending.pop(req_id, None)
         if resp.get("errcode") != 0:
             raise RuntimeError(
-                f"aibot_send_msg failed: errcode={resp.get('errcode')} {resp.get('errmsg')}"
+                f"aibot_send_msg failed: errcode={resp.get('errcode')}"
             )
-        logger.info("wecom bot message sent to %s (req=%s)", userid, req_id)
+        logger.info(
+            "wecom bot message accepted recipient_ref=%s (req=%s)",
+            _short_ref(userid),
+            req_id,
+        )
         return req_id
 
 
-def get_bot_client(bot_id: str, secret: str) -> WeComBotClient:
-    """模块级单例（同一机器人同时只能一个长连接）。"""
-    global _client
-    if _client is None:
-        _client = WeComBotClient(bot_id, secret)
-    return _client
+def _short_ref(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def get_bot_client(
+    bot_id: str,
+    secret: str,
+    credential_version: str = "v1",
+) -> WeComBotClient:
+    """Return a bounded client keyed by non-secret identity and key version."""
+    key = (_short_ref(bot_id), credential_version)
+    client = _clients.get(key)
+    if client is not None:
+        return client
+    if len(_clients) >= _MAX_REGISTERED_CLIENTS:
+        raise RuntimeError("wecom bot client registry is full")
+    client = WeComBotClient(bot_id, secret)
+    _clients[key] = client
+    return client
+
+
+async def close_bot_clients() -> None:
+    """Close every experimental client during an owning process shutdown."""
+    clients = list(_clients.values())
+    _clients.clear()
+    if clients:
+        await asyncio.gather(*(client.close() for client in clients))

@@ -8,8 +8,8 @@ import {
   ScrollText,
   ShieldCheck,
 } from "lucide-react";
-import type { RiskPreviewDto } from "../../api/types";
-import { previewRiskPolicy } from "../../api/risk";
+import type { RiskConfirmDto, RiskPreviewDto } from "../../api/types";
+import { confirmRiskPolicy, previewRiskPolicy } from "../../api/risk";
 import { usePolicies, useRules } from "../../api/hooks";
 import Dialog from "../../components/accessibility/Dialog";
 import PageHeader from "../../components/layout/PageHeader";
@@ -28,27 +28,61 @@ export default function RiskPolicyPage() {
   const [preview, setPreview] = useState<RiskPreviewDto | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reauth, setReauth] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [policyVersion, setPolicyVersion] = useState(3);
+  const [confirmed, setConfirmed] = useState<RiskConfirmDto | null>(null);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const current = policies.data?.current ?? null;
   const budget = policies.data?.budget;
 
   async function handlePreview(values: RiskBudgetValues) {
-    setConfirmed(false);
-    setPreview(await previewRiskPolicy(values.maxPosition));
+    setConfirmed(null);
+    setCommandError(null);
+    setSubmitting(true);
+    try {
+      setPreview(await previewRiskPolicy({
+        benchmark: values.benchmark,
+        horizonMonths: Number(values.horizonMonths),
+        maxPosition: values.maxPosition,
+        maxDrawdown: values.maxDrawdown,
+        minCash: values.minCash,
+        maxAlertsPerDay: Number(values.maxAlertsPerDay),
+        silenceMinutes: Number(values.silenceMinutes),
+      }));
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : "策略预览失败");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function confirmPolicy() {
-    if (!reauth.trim()) return;
-    setConfirmOpen(false);
-    setPreview(null);
-    setConfirmed(true);
-    setPolicyVersion((version) => version + 1);
-    setReauth("");
+  async function confirmPolicy() {
+    if (!reauth.trim() || !preview) return;
+    setSubmitting(true);
+    setCommandError(null);
+    try {
+      const result = await confirmRiskPolicy({
+        draftId: preview.draftId,
+        expectedVersion: preview.expectedVersion,
+        policyHash: preview.policyHash,
+        password: reauth,
+      });
+      setConfirmOpen(false);
+      setPreview(null);
+      setConfirmed(result);
+      setReauth("");
+      await Promise.all([policies.refetch(), rules.refetch()]);
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : "策略确认失败");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  const currentVersion = confirmed ? policyVersion : current?.version;
+  const currentVersion = confirmed?.version ?? current?.version;
+  const queryErrors = [policies.error, rules.error]
+    .filter((error): error is Error => error instanceof Error)
+    .map((error) => error.message);
 
   return (
     <>
@@ -56,12 +90,21 @@ export default function RiskPolicyPage() {
         title="风控政策"
         description="风险规则的草稿、预览、确认与版本审计 · 不连接自动交易"
         actions={
-          <button className="btn-secondary">
+          <button className="btn-secondary" disabled title="版本历史已在当前页展示">
             <Clock3 size={14} />
             查看历史版本
           </button>
         }
       />
+      {queryErrors.length > 0 ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>风控数据加载失败</strong>
+            <p>{[...new Set(queryErrors)].join("；")}</p>
+          </div>
+        </div>
+      ) : null}
       {confirmed ? (
         <div className="alert risk-success">
           <CheckCircle2 size={16} />
@@ -71,9 +114,15 @@ export default function RiskPolicyPage() {
           </div>
         </div>
       ) : null}
+      {commandError ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertTriangle size={16} />
+          <div><strong>策略命令未完成</strong><p>{commandError}</p></div>
+        </div>
+      ) : null}
       <div className="risk-layout">
         <div className="panel">
-          <RiskBudgetForm key={policyVersion} onPreview={handlePreview} />
+          <RiskBudgetForm key={currentVersion ?? 0} onPreview={handlePreview} />
         </div>
         <aside className="risk-aside">
           <section className="panel policy-state">
@@ -133,12 +182,8 @@ export default function RiskPolicyPage() {
                   </strong>
                 </div>
                 <div>
-                  <span>目标配置</span>
-                  <strong className="mono">
-                    股 {budget?.equityTargetPct ?? "—"} · 债{" "}
-                    {budget?.bondTargetPct ?? "—"} · 金{" "}
-                    {budget?.goldTargetPct ?? "—"}
-                  </strong>
+                  <span>L1 资产预算</span>
+                  <strong className="mono">股票/基金仓位上限 + 现金下限</strong>
                 </div>
               </div>
             </div>
@@ -259,7 +304,7 @@ export default function RiskPolicyPage() {
             <div>
               <span>单标的最大仓位</span>
               <strong className="mono">
-                {preview.previousMaxPosition}% → {preview.nextMaxPosition}%
+                {preview.previousMaxPosition ?? "未配置"}% → {preview.nextMaxPosition}%
               </strong>
             </div>
             <div>
@@ -279,7 +324,7 @@ export default function RiskPolicyPage() {
             <button className="btn-secondary" onClick={() => setPreview(null)}>
               放弃预览
             </button>
-            <button className="btn-primary" onClick={() => setConfirmOpen(true)}>
+            <button className="btn-primary" disabled={submitting} onClick={() => setConfirmOpen(true)}>
               确认并启用
             </button>
           </div>
@@ -313,7 +358,7 @@ export default function RiskPolicyPage() {
               autoComplete="current-password"
             />
             <span className="help-text">
-              演示环境接受任意非空口令；TARGET 接入服务端二次认证挑战。
+              口令只发送到认证边界做一次校验，不写入政策、日志或审计详情。
             </span>
           </div>
         </div>
@@ -326,8 +371,8 @@ export default function RiskPolicyPage() {
           </button>
           <button
             className="btn-primary"
-            disabled={!reauth.trim()}
-            onClick={confirmPolicy}
+            disabled={!reauth.trim() || submitting}
+            onClick={() => void confirmPolicy()}
           >
             确认启用策略
           </button>

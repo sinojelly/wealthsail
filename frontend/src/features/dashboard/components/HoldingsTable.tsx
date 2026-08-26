@@ -89,13 +89,17 @@ export default function HoldingsTable({
                   </td>
                   <td className="mono numeric">{row.quantity}</td>
                   <td className="mono numeric">{row.price ?? "—"}</td>
-                  <td className="mono numeric">{formatMoney(row.marketValue)}</td>
-                  <td className="mono numeric">{row.weight}%</td>
+                  <td className="mono numeric">
+                    {row.marketValue ? formatMoney(row.marketValue) : "—"}
+                  </td>
+                  <td className="mono numeric">
+                    {row.weight ? `${row.weight}%` : "—"}
+                  </td>
                   <td
-                    className={`mono numeric ${row.pnl.startsWith("-") ? "negative" : "positive"}`}
+                    className={`mono numeric ${row.pnl?.startsWith("-") ? "negative" : row.pnl ? "positive" : ""}`}
                   >
-                    <strong>{formatSignedMoney(row.pnl)}</strong>
-                    <small>{row.pnlRate}%</small>
+                    <strong>{row.pnl ? formatSignedMoney(row.pnl) : "—"}</strong>
+                    <small>{row.pnlRate ? `${row.pnlRate}%` : "—"}</small>
                   </td>
                   <td>
                     <QualityBadge quality={row.quality} />

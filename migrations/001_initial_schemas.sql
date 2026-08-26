@@ -8,6 +8,39 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Supabase provides the authenticated role and auth.uid(). A plain PostgreSQL
+-- deployment needs the same narrow compatibility surface because the Domain
+-- API injects verified JWT claims into request.jwt.claims before RLS queries.
+-- Never create LOGIN credentials here; deployment login roles are provisioned
+-- outside schema migrations.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        CREATE ROLE authenticated NOLOGIN INHERIT NOBYPASSRLS;
+    END IF;
+END $$;
+CREATE SCHEMA IF NOT EXISTS auth;
+DO $$
+BEGIN
+    IF to_regprocedure('auth.uid()') IS NULL THEN
+        EXECUTE $function$
+            CREATE FUNCTION auth.uid()
+            RETURNS UUID
+            LANGUAGE sql
+            STABLE
+            SET search_path = pg_catalog
+            AS $body$
+              SELECT (
+                NULLIF(current_setting('request.jwt.claims', true), '')::jsonb
+                ->> 'sub'
+              )::uuid
+            $body$
+        $function$;
+    END IF;
+END $$;
+GRANT USAGE ON SCHEMA auth TO authenticated;
+GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;
+
 -- 2. 创建各业务领域隔离 Schema
 CREATE SCHEMA IF NOT EXISTS identity;   -- 租户、用户、账户与身份绑定
 CREATE SCHEMA IF NOT EXISTS reference;  -- 标的主数据、交易日历与数据源元数据

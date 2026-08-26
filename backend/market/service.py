@@ -14,7 +14,9 @@ quality beyond what the source reported.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -23,24 +25,29 @@ from backend.config import Settings
 from backend.dependencies import now_shanghai
 from backend.integrations import market_data as md
 from backend.market import repository
+from backend.market.fund_estimator import FundComponentReturn, estimate_fund_nav
 
 logger = logging.getLogger("wealthsail.market")
 
 # field_code priority when an instrument has multiple observations (best wins)
 _FIELD_PRIORITY = {
     md.F_CLOSE: 0,
-    md.F_NAV: 0,
+    md.F_ESTIMATED_NAV: 0,
+    md.F_NAV: 1,
 }
 _QUALITY_PRIORITY = {
     md.Q_FRESH: 0,
+    md.Q_ESTIMATED: 1,
     md.Q_STALE: 2,
     md.Q_UNAVAILABLE: 3,
 }
 
-SOURCE_NAME_BY_TYPE = {
-    "INSTRUMENT": md.AKSOURCE_NAME,
-    "FUND": md.FUNDSOURCE_NAME,
-}
+def _source_name(observation: md.Observation) -> str:
+    if observation.field_code == md.F_ESTIMATED_NAV:
+        return md.ESTIMATOR_SOURCE_NAME
+    if observation.subject_type == "FUND":
+        return md.FUNDSOURCE_NAME
+    return md.AKSOURCE_NAME
 
 
 async def refresh_market(
@@ -53,14 +60,21 @@ async def refresh_market(
     result: dict = {"session": session, "startedAt": started}
 
     async with system_connection(pool) as conn:
-        await repository.upsert_data_source(
-            conn, name=md.FUNDSOURCE_NAME, source_type="MARKET_DATA"
-        )
+        for source_name in md.source_names():
+            await repository.upsert_data_source(
+                conn,
+                name=source_name,
+                source_type=(
+                    "FUND_NAV"
+                    if source_name == md.ESTIMATOR_SOURCE_NAME
+                    else "MARKET_DATA"
+                ),
+            )
         instruments = await repository.get_active_instruments(conn)
         holdings = await repository.get_holdings_for_refresh(conn)
         source_ids = {
-            md.AKSOURCE_NAME: await repository.get_source_id(conn, md.AKSOURCE_NAME),
-            md.FUNDSOURCE_NAME: await repository.get_source_id(conn, md.FUNDSOURCE_NAME),
+            name: await repository.get_source_id(conn, name)
+            for name in md.source_names()
         }
 
     if not instruments:
@@ -86,13 +100,69 @@ async def refresh_market(
         stock_symbols &= held
         etf_symbols &= held
         fund_symbols &= held
-    elif session == "FUND_1430":
-        stock_symbols = set()
-        etf_symbols = set()
+    fund_disclosures: list[dict] = []
+    if session == "FUND_1430":
+        held_ids = {str(h["instrument_id"]) for h in holdings}
+        held_funds = {
+            str(i["instrument_id"]): i["ticker"]
+            for i in instruments
+            if i["asset_type"] == "OFF_EXCHANGE_FUND"
+            and str(i["instrument_id"]) in held_ids
+            and i["ticker"]
+        }
+        fund_symbols = set(held_funds.values())
+        fetched_disclosures = await md.fetch_fund_disclosures(list(fund_symbols))
+        async with system_connection(pool) as conn:
+            await repository.upsert_fund_disclosures(
+                conn,
+                [
+                    (
+                        ticker_to_id[item.fund_symbol],
+                        item.component_symbol,
+                        item.component_name,
+                        item.weight,
+                        item.disclosed_on,
+                        item.disclosure_label,
+                        source_ids[md.FUNDSOURCE_NAME],
+                    )
+                    for item in fetched_disclosures
+                    if item.fund_symbol in ticker_to_id
+                ],
+            )
+            stored = await repository.get_latest_fund_disclosures(
+                conn, list(held_funds)
+            )
+        fund_disclosures = [dict(row) for row in stored]
+
+        # Price only the disclosed components understood by the instrument
+        # master.  Unsupported/HK components remain in disclosure metadata and
+        # reduce coverage instead of silently disappearing.
+        component_codes = {
+            row["component_code"] for row in fund_disclosures
+            if row["component_code"] in ticker_to_id
+        }
+        stock_symbols = {
+            code for code in component_codes
+            if by_id[ticker_to_id[code]]["asset_type"] == "CN_STOCK"
+        }
+        etf_symbols = {
+            code for code in component_codes
+            if by_id[ticker_to_id[code]]["asset_type"] == "EXCHANGE_FUND"
+        }
 
     observations = await md.fetch_all(
         list(stock_symbols), list(etf_symbols), list(fund_symbols)
     )
+    if session == "FUND_1430":
+        observations.extend(
+            _build_fund_estimates(
+                observations=observations,
+                disclosures=fund_disclosures,
+                fund_instrument_ids=set(held_funds),
+                by_id=by_id,
+                as_of=started,
+            )
+        )
     result["fetched"] = len(observations)
     usable = [o for o in observations if o.quality_status != md.Q_UNAVAILABLE]
     result["usable"] = len(usable)
@@ -107,8 +177,8 @@ async def refresh_market(
             md.Q_STALE if any(o.quality_status == md.Q_STALE for o in observations) else md.Q_UNAVAILABLE
         )
         retrieval_key = f"{session}:{started.strftime('%Y%m%d%H%M%S')}"
-        for source_name in (md.AKSOURCE_NAME, md.FUNDSOURCE_NAME):
-            batch = [o for o in observations if SOURCE_NAME_BY_TYPE.get(o.subject_type) == source_name]
+        for source_name in md.source_names():
+            batch = [o for o in observations if _source_name(o) == source_name]
             source_id = source_ids.get(source_name)
             if not batch or not source_id:
                 continue
@@ -126,6 +196,8 @@ async def refresh_market(
                     ticker_to_id.get(o.symbol),  # subject_id (instrument uuid)
                     o.field_code,
                     o.value,
+                    o.lower_value,
+                    o.upper_value,
                     o.unit,
                     o.currency,
                     o.as_of,
@@ -134,6 +206,7 @@ async def refresh_market(
                     source_id,
                     o.quality_status,
                     o.method_version,
+                    json.dumps(o.metadata or {}, ensure_ascii=False, default=str),
                 )
                 for o in batch
                 if o.symbol in ticker_to_id
@@ -191,6 +264,108 @@ async def refresh_market(
     return result
 
 
+def _build_fund_estimates(
+    *,
+    observations: list[md.Observation],
+    disclosures: list[dict],
+    fund_instrument_ids: set[str],
+    by_id: dict[str, object],
+    as_of: datetime,
+) -> list[md.Observation]:
+    """Join official NAV, dated disclosures and live component returns."""
+    nav_by_symbol = {
+        obs.symbol: obs
+        for obs in observations
+        if obs.field_code == md.F_NAV
+        and obs.quality_status != md.Q_UNAVAILABLE
+        and obs.value is not None
+    }
+    returns_by_symbol = {
+        obs.symbol: obs.return_rate
+        for obs in observations
+        if obs.return_rate is not None and obs.quality_status == md.Q_FRESH
+    }
+    by_fund: dict[str, list[dict]] = defaultdict(list)
+    for row in disclosures:
+        by_fund[str(row["fund_instrument_id"])].append(row)
+
+    estimates: list[md.Observation] = []
+    for fund_id in fund_instrument_ids:
+        rows = by_fund.get(fund_id, [])
+        fund = by_id.get(fund_id)
+        fund_symbol = fund["ticker"] if fund else None
+        if not fund_symbol:
+            continue
+        nav = nav_by_symbol.get(fund_symbol)
+        disclosure_date = max((row["disclosed_on"] for row in rows), default=None)
+        disclosure_label = rows[0]["disclosure_label"] if rows else None
+        if nav is None or not rows:
+            reason = (
+                "最近正式净值不可用，系统已弃权。"
+                if nav is None
+                else "未取得基金持仓披露，系统已弃权。"
+            )
+            estimates.append(
+                md.Observation(
+                    symbol=fund_symbol,
+                    subject_type="FUND",
+                    field_code=md.F_ESTIMATED_NAV,
+                    value=None,
+                    as_of=as_of,
+                    quality_status=md.Q_UNAVAILABLE,
+                    method_version="weighted-disclosed-holdings/v1",
+                    metadata={
+                        "coveragePct": "0.00",
+                        "disclosedOn": str(disclosure_date),
+                        "disclosureLabel": disclosure_label,
+                        "explanation": reason,
+                    },
+                )
+            )
+            continue
+        components = tuple(
+            FundComponentReturn(
+                instrument_code=row["component_code"],
+                weight=Decimal(str(row["weight"])),
+                return_rate=returns_by_symbol[row["component_code"]],
+            )
+            for row in rows
+            if row["component_code"] in returns_by_symbol
+        )
+        estimate = estimate_fund_nav(
+            fund_code=fund_symbol,
+            confirmed_nav=nav.value,
+            components=components,
+            residual_benchmark_return=Decimal("0"),
+            as_of=as_of,
+        )
+        estimates.append(
+            md.Observation(
+                symbol=fund_symbol,
+                subject_type="FUND",
+                field_code=md.F_ESTIMATED_NAV,
+                value=estimate.value,
+                lower_value=estimate.lower_value,
+                upper_value=estimate.upper_value,
+                as_of=as_of,
+                quality_status=estimate.quality_status,
+                unit="元/份",
+                method_version=estimate.method_version,
+                origin_uri="internal:fund-estimator",
+                metadata={
+                    "coveragePct": str(estimate.coverage_pct),
+                    "disclosedOn": str(disclosure_date),
+                    "disclosureLabel": disclosure_label,
+                    "confirmedNav": str(nav.value),
+                    "confirmedNavAsOf": nav.as_of.isoformat(),
+                    "residualBenchmarkReturn": "0",
+                    "explanation": estimate.explanation,
+                },
+            )
+        )
+    return estimates
+
+
 def _quality_to_snapshot(quality: str) -> str:
     """Observation quality → position_snapshot data_quality_status."""
     return quality if quality in ("FRESH", "ESTIMATED", "STALE", "UNAVAILABLE") else "UNAVAILABLE"
@@ -217,7 +392,6 @@ async def fill_trading_calendar(pool: Pool) -> int:
     """
     import asyncio
 
-    from backend.integrations import market_data as _md
 
     def _fetch_dates() -> set[str]:
         import akshare

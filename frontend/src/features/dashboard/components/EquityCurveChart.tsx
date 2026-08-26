@@ -17,9 +17,9 @@ export default function EquityCurveChart({
   points: NavPoint[];
   loading?: boolean;
 }) {
-  const chartData = points.map((point) => ({
+  const chartData = points.filter((point) => point.totalNav !== null).map((point) => ({
     date: point.date.slice(5), // ISO → MM-DD
-    portfolioChart: toChartNumber(point.totalNav),
+    portfolioChart: toChartNumber(point.totalNav as string),
     totalNav: point.totalNav,
   }));
 

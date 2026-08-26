@@ -46,13 +46,16 @@ def resolve_tenant_context(
 ) -> TenantContext:
     """Build the active TenantContext.
 
-    RLS enforces actual membership; here we only fail on malformed input.
+    The token is bound to exactly one tenant and role. Tenant switching must
+    obtain a newly signed token after the server revalidates membership.
     """
     if not user_id or not tenant_id:
         raise AuthRequiredError("缺少用户或租户上下文")
     active_tenant = (header_tenant_id or tenant_id).strip()
     if not active_tenant:
         raise AuthRequiredError("缺少活动租户")
+    if active_tenant != tenant_id:
+        raise ForbiddenError("活动租户与访问令牌不匹配，请重新切换租户")
     return TenantContext(
         user_id=user_id,
         tenant_id=active_tenant,

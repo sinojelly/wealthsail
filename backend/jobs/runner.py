@@ -1,19 +1,19 @@
-"""Job lease runner: atomic lease acquisition and the run state machine.
+"""Persistent JobRun lease state machine for the four report sessions.
 
-Lease semantics (per docs/10 §6 and migration 004 workflow.job_runs):
-  * ``UNIQUE (tenant_id, job_key)`` makes acquisition atomic — the INSERT with
-    ON CONFLICT DO NOTHING either claims the lease or observes a prior claim
-    (idempotent replay across crashed workers);
-  * stale PENDING/RUNNING runs older than the lease timeout are failed with
-    ``LeaseTimeoutRecovery`` so the next tick can re-run them;
-  * the runner executes report generation through the reports service inside
-    per-tenant RLS transactions.
+One stable business key represents one tenant/job/trade-date/session.  A single
+upsert atomically creates a run or recovers an expired lease; completion and
+failure use the lease token as a compare-and-set guard so a stale worker cannot
+overwrite the new owner.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime, timedelta
+import os
+import socket
+from dataclasses import dataclass
+from datetime import datetime
 
 import asyncpg
 
@@ -25,29 +25,150 @@ from backend.reports.service import generate_report
 logger = logging.getLogger("wealthsail.runner")
 
 
-def _job_key(job_name: str, now: datetime) -> str:
-    return f"{job_name}:{now.strftime('%Y-%m-%d:%H%M%S')}"
+@dataclass(frozen=True)
+class JobLease:
+    run_id: str
+    lease_token: str
+
+
+def business_job_key(job_id: str, session: str, now: datetime) -> str:
+    """Stable idempotency key for one job's business session and trade date."""
+    return f"job:{job_id}:{now.date().isoformat()}:{session}"
+
+
+def worker_owner() -> str:
+    """Operational owner label only; authority is the unguessable lease token."""
+    return f"{socket.gethostname()}:{os.getpid()}"
 
 
 async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
-    """Fail runs stuck beyond the lease timeout so they can be retried."""
-    cutoff = datetime.now() - timedelta(seconds=settings.job_lease_timeout_seconds)
+    """Make expired RUNNING leases recoverable without inventing a new job key."""
+    del settings  # the authoritative expiry is persisted in lease_until
     async with system_connection(pool) as conn:
         result = await conn.execute(
             """
             UPDATE workflow.job_runs
-               SET status = 'FAILED',
+               SET status = 'PENDING',
                    error_class = 'LeaseTimeoutRecovery',
-                   finished_at = now()
-             WHERE status IN ('PENDING', 'RUNNING')
-               AND started_at < $1
-            """,
-            cutoff,
+                   lease_token = NULL,
+                   lease_owner = NULL,
+                   lease_until = NULL,
+                   next_retry_at = now(),
+                   finished_at = NULL
+             WHERE status = 'RUNNING'
+               AND lease_until < now()
+            """
         )
     recovered = int(result.split()[-1]) if result else 0
     if recovered:
-        logger.warning("recovered %d stale job runs", recovered)
+        logger.warning("made %d expired job leases recoverable", recovered)
     return recovered
+
+
+async def claim_job_run(
+    pool: Pool,
+    job,
+    key: str,
+    *,
+    owner: str,
+    lease_seconds: int,
+) -> JobLease | None:
+    """Atomically create or recover a run and return its compare-and-set token."""
+    async with system_connection(pool) as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO workflow.job_runs
+                (tenant_id, job_id, job_key, status, started_at,
+                 lease_token, lease_owner, lease_until, heartbeat_at, attempt_count)
+            VALUES
+                ($1, $2, $3, 'RUNNING', now(), gen_random_uuid(), $4,
+                 now() + make_interval(secs => $5), now(), 1)
+            ON CONFLICT (tenant_id, job_key) DO UPDATE
+               SET status = 'RUNNING',
+                   started_at = now(),
+                   finished_at = NULL,
+                   error_class = NULL,
+                   lease_token = gen_random_uuid(),
+                   lease_owner = EXCLUDED.lease_owner,
+                   lease_until = EXCLUDED.lease_until,
+                   heartbeat_at = now(),
+                   attempt_count = workflow.job_runs.attempt_count + 1,
+                   next_retry_at = NULL
+             WHERE workflow.job_runs.status NOT IN ('COMPLETED', 'ABSTAINED', 'SKIPPED')
+               AND (
+                    (workflow.job_runs.status = 'RUNNING'
+                     AND workflow.job_runs.lease_until < now())
+                    OR
+                    (workflow.job_runs.status IN ('PENDING', 'FAILED')
+                     AND COALESCE(workflow.job_runs.next_retry_at, now()) <= now())
+               )
+            RETURNING id, lease_token
+            """,
+            job["tenant_id"],
+            job["id"],
+            key,
+            owner,
+            lease_seconds,
+        )
+    if row is None:
+        return None
+    return JobLease(str(row["id"]), str(row["lease_token"]))
+
+
+async def heartbeat_job_run(
+    pool: Pool, run_id: str, lease_token: str, lease_seconds: int
+) -> bool:
+    async with system_connection(pool) as conn:
+        result = await conn.execute(
+            """
+            UPDATE workflow.job_runs
+               SET heartbeat_at=now(),
+                   lease_until=now() + make_interval(secs => $3)
+             WHERE id=$1 AND lease_token=$2 AND status='RUNNING'
+            """,
+            run_id,
+            lease_token,
+            lease_seconds,
+        )
+    return result.endswith("1")
+
+
+async def finish_job_run(
+    pool: Pool,
+    run_id: str,
+    lease_token: str,
+    *,
+    status: str,
+    error_class: str | None = None,
+) -> bool:
+    if status not in {"COMPLETED", "FAILED", "ABSTAINED", "SKIPPED"}:
+        raise ValueError(f"invalid terminal job status: {status}")
+    async with system_connection(pool) as conn:
+        result = await conn.execute(
+            """
+            UPDATE workflow.job_runs
+               SET status=$3, finished_at=now(), error_class=$4,
+                   lease_token=NULL, lease_owner=NULL, lease_until=NULL
+             WHERE id=$1 AND lease_token = $2 AND status = 'RUNNING'
+            """,
+            run_id,
+            lease_token,
+            status,
+            error_class,
+        )
+    return result.endswith("1")
+
+
+async def _heartbeat_loop(
+    pool: Pool, lease: JobLease, lease_seconds: int
+) -> None:
+    interval = max(1.0, lease_seconds / 3)
+    while True:
+        await asyncio.sleep(interval)
+        if not await heartbeat_job_run(
+            pool, lease.run_id, lease.lease_token, lease_seconds
+        ):
+            raise RuntimeError("job lease ownership lost")
 
 
 async def run_session(
@@ -56,11 +177,7 @@ async def run_session(
     session: str,
     now: datetime,
 ) -> dict:
-    """Execute a session for every enabled tenant job.
-
-    Returns a per-tenant summary; each tenant is isolated by its own lease and
-    its own RLS transaction during report generation.
-    """
+    """Execute a due session for every enabled tenant job."""
     async with system_connection(pool) as conn:
         jobs = await conn.fetch(
             """
@@ -74,12 +191,12 @@ async def run_session(
     outcomes: dict[str, str] = {}
     for job in jobs:
         tenant_id = str(job["tenant_id"])
-        key = _job_key(job["job_name"], now)
+        key = business_job_key(str(job["id"]), session, now)
         try:
             outcomes[tenant_id] = await _execute_with_lease(
                 pool, settings, job, key, session
             )
-        except Exception as exc:  # noqa: BLE001 — per-tenant isolation
+        except Exception as exc:  # noqa: BLE001 -- isolate tenants
             logger.exception("job failed for tenant %s: %s", tenant_id, session)
             outcomes[tenant_id] = f"FAILED:{exc.__class__.__name__}"
     return outcomes
@@ -92,56 +209,55 @@ async def _execute_with_lease(
     key: str,
     session: str,
 ) -> str:
-    async with system_connection(pool) as conn:
-        run_id = await conn.fetchval(
-            """
-            INSERT INTO workflow.job_runs (tenant_id, job_id, job_key, status)
-            VALUES ($1, $2, $3, 'PENDING')
-            ON CONFLICT (tenant_id, job_key) DO NOTHING
-            RETURNING id
-            """,
-            job["tenant_id"],
-            job["id"],
-            key,
-        )
-    if run_id is None:
-        return "SKIPPED:already-ran"
+    lease = await claim_job_run(
+        pool,
+        job,
+        key,
+        owner=worker_owner(),
+        lease_seconds=settings.job_lease_timeout_seconds,
+    )
+    if lease is None:
+        return "SKIPPED:already-running-or-terminal"
 
-    async with system_connection(pool) as conn:
-        await conn.execute(
-            "UPDATE workflow.job_runs SET status = 'RUNNING' WHERE id = $1", run_id
-        )
-
+    heartbeat = asyncio.create_task(
+        _heartbeat_loop(pool, lease, settings.job_lease_timeout_seconds),
+        name=f"job-heartbeat:{lease.run_id}",
+    )
     try:
-        # Acting user for RLS claims: the tenant's OWNER (the worker has no
-        # human session). RLS still constrains every query to this tenant.
         acting_user = await _tenant_owner_user(pool, str(job["tenant_id"]))
         ctx = TenantContext(
-            user_id=acting_user, tenant_id=str(job["tenant_id"]), tenant_role="OWNER"
+            user_id=acting_user,
+            tenant_id=str(job["tenant_id"]),
+            tenant_role="OWNER",
         )
-        report = await generate_report(pool, ctx, settings, session)
-        async with system_connection(pool) as conn:
-            await conn.execute(
-                """
-                UPDATE workflow.job_runs
-                   SET status = 'COMPLETED', finished_at = now()
-                 WHERE id = $1
-                """,
-                run_id,
-            )
+        report = await generate_report(
+            pool,
+            ctx,
+            settings,
+            session,
+            job_run_id=lease.run_id,
+            actor_type="SYSTEM_WORKER",
+        )
+        if not await finish_job_run(
+            pool, lease.run_id, lease.lease_token, status="COMPLETED"
+        ):
+            raise RuntimeError("job lease lost before completion")
         return f"COMPLETED:report={report['id']}"
-    except Exception as exc:  # noqa: BLE001 — record failure and re-raise
-        async with system_connection(pool) as conn:
-            await conn.execute(
-                """
-                UPDATE workflow.job_runs
-                   SET status = 'FAILED', finished_at = now(), error_class = $2
-                 WHERE id = $1
-                """,
-                run_id,
-                exc.__class__.__name__,
-            )
+    except Exception as exc:  # noqa: BLE001 -- persist classified failure
+        await finish_job_run(
+            pool,
+            lease.run_id,
+            lease.lease_token,
+            status="FAILED",
+            error_class=exc.__class__.__name__,
+        )
         raise
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
 
 
 async def _tenant_owner_user(pool: Pool, tenant_id: str) -> str:

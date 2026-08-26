@@ -1,6 +1,9 @@
 # 敏感凭证与本地配置
-.env
+# 默认忽略所有环境配置及人工备份；只允许提交脱敏模板。
+.env*
 *.env
+!.env.example
+!*.env.example
 reference/supabase和企业微信信息.rar
 
 # 敏感图片与资产原图
@@ -28,3 +31,18 @@ Thumbs.db
 
 temp/
 figma/v2-ui-images/
+
+# 运行时/运维产物
+nohup.out
+backend/static/avatars/*
+!backend/static/avatars/.gitkeep
+*.log
+*.pid
+*.bak
+*.bak.*
+*.zip.*
+
+# 本地下载的隧道工具必须由受控安装流程获取，不进入源码仓库
+/ngrok
+/ngrok-*.zip
+/cloudflared-*

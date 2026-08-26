@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Iterable, Sequence
+from typing import Iterable
 
 # Quality severity order: higher wins when merging rows.
 QUALITY_SEVERITY = {

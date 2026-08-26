@@ -18,6 +18,7 @@ PKCS7 padded, AES-256-CBC.
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import logging
 import struct
@@ -41,11 +42,51 @@ logger = logging.getLogger("wealthsail.wecom")
 router = APIRouter(prefix="/adapters/wecom", tags=["wecom"])
 
 REPLAY_WINDOW_SECONDS = 300
+MAX_WECOM_TEXT_BYTES = 2048
+INVALID_ACCESS_TOKEN_ERRCODES = frozenset({40001, 40014, 42001})
 
 WECOM_API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
 
-# corp_secret -> (access_token, expires_at_unix)；进程内缓存，有效期 7200s
-_token_cache: dict[str, tuple[str, float]] = {}
+# (tenant credential identity/version) -> token. Secrets are never cache keys.
+_token_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_token_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_shared_http_client: httpx.AsyncClient | None = None
+_http_client_lock = asyncio.Lock()
+
+
+def _credential_key(settings: Settings) -> tuple[str, str]:
+    return settings.wecom_corp_id, settings.wecom_credential_version
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        async with _http_client_lock:
+            if _shared_http_client is None or _shared_http_client.is_closed:
+                _shared_http_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(15.0, connect=5.0),
+                    limits=httpx.Limits(
+                        max_connections=20,
+                        max_keepalive_connections=10,
+                    ),
+                )
+    return _shared_http_client
+
+
+async def close_http_client() -> None:
+    global _shared_http_client
+    async with _http_client_lock:
+        if _shared_http_client is not None:
+            await _shared_http_client.aclose()
+        _shared_http_client = None
+
+
+class DeliveryUnknownError(RuntimeError):
+    """The request may have reached WeCom; automatic retry can duplicate it."""
+
+
+class DeliveryRejectedError(RuntimeError):
+    """WeCom definitively rejected the request before accepting the message."""
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +97,16 @@ async def get_access_token(settings: Settings) -> str:
 
     Raises RuntimeError: 凭据无效或接口异常。
     """
-    cached = _token_cache.get(settings.wecom_corp_secret)
+    key = _credential_key(settings)
+    cached = _token_cache.get(key)
     if cached and cached[1] > time.time() + 300:
         return cached[0]
-    async with httpx.AsyncClient(timeout=15) as client:
+    lock = _token_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        cached = _token_cache.get(key)
+        if cached and cached[1] > time.time() + 300:
+            return cached[0]
+        client = await get_http_client()
         resp = await client.get(
             f"{WECOM_API_BASE}/gettoken",
             params={
@@ -69,11 +116,11 @@ async def get_access_token(settings: Settings) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-    if data.get("errcode") != 0:
-        raise RuntimeError(f"wecom gettoken failed: errcode={data.get('errcode')} {data.get('errmsg')}")
-    token = str(data["access_token"])
-    expires_in = int(data.get("expires_in", 7200))
-    _token_cache[settings.wecom_corp_secret] = (token, time.time() + expires_in)
+        if data.get("errcode") != 0:
+            raise RuntimeError(f"wecom gettoken failed: errcode={data.get('errcode')}")
+        token = str(data["access_token"])
+        expires_in = int(data.get("expires_in", 7200))
+        _token_cache[key] = (token, time.time() + expires_in)
     logger.info("wecom access_token acquired (expires_in=%ss)", expires_in)
     return token
 
@@ -87,9 +134,9 @@ async def send_message(
 ) -> str:
     """推送消息到企微成员。
 
-    优先使用自建应用（gettoken + message/send，agent_id 发送）；
-    失败时回退到智能机器人（API 模式·长连接，markdown 主动推送，
-    仅在配置了 WECOM_BOT_ID / WECOM_BOT_SECRET 时可用）。
+    MVP 使用自建应用（gettoken + message/send，agent_id 发送）。Bot 是
+    独立、默认关闭的实验通道，不能在超时等不确定结果后自动回退，
+    否则同一报告可能被两个通道重复发送。
 
     Args:
         user_id: 企微通讯录成员 userid（touser / 单聊 chatid）。
@@ -97,21 +144,32 @@ async def send_message(
         msg_type: 自建应用消息类型（默认 text）。
 
     Returns:
-        msgid（自建应用）或 req_id（智能机器人）。
+        自建应用返回的 msgid。
 
     Raises:
-        RuntimeError: 两种通道均失败（最后一次异常上抛）。
+        DeliveryRejectedError: 参数或 Provider 明确拒绝。
+        DeliveryUnknownError: 超时/网络故障导致投递结果未知，禁止自动换通道重发。
     """
+    if not user_id.strip():
+        raise DeliveryRejectedError("WeCom recipient must not be empty")
+    if msg_type == "text" and len(content.encode("utf-8")) > MAX_WECOM_TEXT_BYTES:
+        raise DeliveryRejectedError(
+            f"WeCom text exceeds the {MAX_WECOM_TEXT_BYTES}-byte UTF-8 limit"
+        )
     try:
         return await _send_app_message(settings, user_id, content, msg_type=msg_type)
-    except Exception as exc:  # noqa: BLE001 — 自建应用失败尝试机器人回退
-        logger.warning("wecom app push failed (%s), trying bot fallback", exc)
-        if not (settings.wecom_bot_id and settings.wecom_bot_secret):
-            raise
-    from backend.integrations.wecom_bot import get_bot_client
-
-    client = get_bot_client(settings.wecom_bot_id, settings.wecom_bot_secret)
-    return await client.send_msg(user_id, content)
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        raise DeliveryUnknownError("WeCom delivery result is unknown") from exc
+    except DeliveryRejectedError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        if 400 <= exc.response.status_code < 500:
+            raise DeliveryRejectedError(
+                f"WeCom HTTP rejection: {exc.response.status_code}"
+            ) from exc
+        raise DeliveryUnknownError(
+            f"WeCom HTTP result is unknown: {exc.response.status_code}"
+        ) from exc
 
 
 async def _send_app_message(
@@ -122,7 +180,6 @@ async def _send_app_message(
     msg_type: str = "text",
 ) -> str:
     """自建应用（message/send）推送：gettoken + 发送。"""
-    token = await get_access_token(settings)
     body: dict[str, Any] = {
         "touser": user_id,
         "msgtype": msg_type,
@@ -132,7 +189,9 @@ async def _send_app_message(
         body["text"] = {"content": content}
     else:
         body[msg_type] = {"content": content}
-    async with httpx.AsyncClient(timeout=15) as client:
+    client = await get_http_client()
+    for attempt in range(2):
+        token = await get_access_token(settings)
         resp = await client.post(
             f"{WECOM_API_BASE}/message/send",
             params={"access_token": token},
@@ -140,13 +199,25 @@ async def _send_app_message(
         )
         resp.raise_for_status()
         data = resp.json()
-    if data.get("errcode") != 0:
-        raise RuntimeError(
-            f"wecom message/send failed: errcode={data.get('errcode')} {data.get('errmsg')}"
+        errcode = int(data.get("errcode", -1))
+        if errcode == 0:
+            msgid = str(data.get("msgid", ""))
+            recipient_ref = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
+            logger.info(
+                "wecom app message accepted recipient_ref=%s (msgid=%s)",
+                recipient_ref,
+                msgid,
+            )
+            return msgid
+        if errcode in INVALID_ACCESS_TOKEN_ERRCODES and attempt == 0:
+            # The provider definitively rejected this request before accepting a
+            # message, so refreshing the token and retrying exactly once is safe.
+            _token_cache.pop(_credential_key(settings), None)
+            continue
+        raise DeliveryRejectedError(
+            f"wecom message/send failed: errcode={errcode}"
         )
-    msgid = str(data.get("msgid", ""))
-    logger.info("wecom app message sent to %s (msgid=%s)", user_id, msgid)
-    return msgid
+    raise DeliveryRejectedError("wecom message/send exhausted token refresh")
 
 
 # ---------------------------------------------------------------------------
@@ -264,42 +335,6 @@ async def wecom_url_verify(
     return PlainTextResponse(plaintext)
 
 
-@router.get("/verify")
-async def wecom_verify(
-    msg_signature: str = Query(default=""),
-    timestamp: str = Query(default=""),
-    nonce: str = Query(default=""),
-    echostr: str = Query(default=""),
-    settings: Settings = Depends(get_settings_dep),
-) -> Response:
-    """企业微信后台 URL 验证专用接口（公开、无 JWT、无数据库访问，<1s）。
-
-    流程：SHA1 签名校验（token+timestamp+nonce+echostr 字典序）→
-    AES-256-CBC 解密（IV=密钥前 16 字节，PKCS7 去填充）→
-    解析 16 字节随机串 + 4 字节大端长度 + 消息内容 + 校验尾部 CorpID →
-    返回明文（text/plain，无引号无换行）。
-    """
-    logger.info(
-        "wecom verify request: ts=%s nonce=%s sig_len=%d echostr_len=%d",
-        timestamp, nonce, len(msg_signature), len(echostr),
-    )
-    try:
-        _check_timestamp(timestamp)
-        if not verify_signature(
-            settings.wecom_callback_token, timestamp, nonce, echostr, msg_signature
-        ):
-            logger.warning("wecom verify rejected: signature mismatch")
-            return PlainTextResponse("signature mismatch", status_code=403)
-        plaintext = wecom_decrypt(
-            echostr, settings.wecom_callback_aes_key, settings.wecom_corp_id
-        )
-    except (ValueError, ET.ParseError) as exc:
-        logger.warning("wecom verify failed: %s", exc)
-        return PlainTextResponse("verify failed", status_code=403)
-    logger.info("wecom verify OK: plaintext_len=%d", len(plaintext))
-    return PlainTextResponse(plaintext)
-
-
 @router.post("/callback")
 async def wecom_callback(
     request: Request,
@@ -311,6 +346,8 @@ async def wecom_callback(
 ) -> Response:
     """加密消息回调：验签 → 解密 → 消费 /bind 绑定口令 → 加密被动回复。"""
     body_bytes = await request.body()
+    if len(body_bytes) > 64 * 1024:
+        return PlainTextResponse("payload too large", status_code=413)
     body = body_bytes.decode("utf-8", errors="replace")
 
     try:
@@ -351,8 +388,8 @@ async def wecom_callback(
             )
             reply_content = "✅ 身份绑定成功"
         except Exception as exc:  # noqa: BLE001 — reply failure to the user, never 5xx
-            logger.warning("wecom binding consume failed: %s", exc)
-            reply_content = f"❌ 绑定失败：{getattr(exc, 'message', str(exc))}"
+            logger.warning("wecom binding consume failed class=%s", exc.__class__.__name__)
+            reply_content = "❌ 绑定失败：凭证无效、已过期或已被使用"
 
     reply = _build_encrypted_reply(
         reply_content, settings=settings, timestamp=timestamp, nonce=nonce

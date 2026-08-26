@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Fingerprint,
   KeyRound,
   LockKeyhole,
@@ -22,6 +23,12 @@ export default function SettingsPage() {
         title="账号安全"
         description="用户、租户角色、企业微信身份与高风险操作认证"
       />
+      {me.error instanceof Error ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertTriangle size={16} />
+          <div><strong>账号信息加载失败</strong><p>{me.error.message}</p></div>
+        </div>
+      ) : null}
       <div className="settings-grid">
         <div className="settings-main">
           {data ? (
@@ -53,7 +60,7 @@ export default function SettingsPage() {
                 </span>
                 <p>
                   <strong>登录口令</strong>
-                  <small>开发模式 · 环境变量接管</small>
+                  <small>服务端验证 · 密码哈希不离开认证边界</small>
                 </p>
                 <span className="status-pill active">正常</span>
               </div>
@@ -75,7 +82,7 @@ export default function SettingsPage() {
                   <strong>可信设备</strong>
                   <small>由后端设备管理接管（未接入）</small>
                 </p>
-                <button className="btn-ghost">管理</button>
+                <button className="btn-ghost" disabled title="可信设备管理尚未接入">管理</button>
               </div>
             </div>
           </section>

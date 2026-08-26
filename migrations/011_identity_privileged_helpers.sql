@@ -8,40 +8,23 @@
 --              migrations applied by `postgres`). The API never reads raw
 --              credential material through RLS.
 --
---              authenticate_credentials: email → profile + active tenants.
 --              consume_binding_challenge: atomic single-use challenge
 --              consumption + channel_binding upsert (attempt-capped,
 --              forward-only, trigger-guarded).
 -- ==============================================================================
 
-CREATE OR REPLACE FUNCTION identity.authenticate_credentials(p_email TEXT)
-RETURNS TABLE (
-    user_id UUID,
-    email TEXT,
-    nickname TEXT,
-    tenant_id UUID,
-    tenant_name TEXT,
-    tenant_role TEXT
-)
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = identity, pg_catalog
-AS $$
-    SELECT p.id, p.email, p.nickname,
-           tm.tenant_id, t.name, tm.role
-    FROM identity.profiles p
-    JOIN identity.tenant_members tm
-      ON tm.user_id = p.id AND tm.status = 'ACTIVE'
-    JOIN identity.tenants t ON t.id = tm.tenant_id
-    WHERE lower(p.email) = lower(p_email)
-$$;
+DROP FUNCTION IF EXISTS identity.authenticate_credentials(TEXT);
+
+ALTER TABLE identity.channel_bindings
+    ADD COLUMN IF NOT EXISTS external_user_ciphertext TEXT;
 
 -- Re-creatable: the OUT-parameter row type may change between revisions.
 DROP FUNCTION IF EXISTS identity.consume_binding_challenge(TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS identity.consume_binding_challenge(TEXT, TEXT, TEXT, TEXT);
 CREATE FUNCTION identity.consume_binding_challenge(
     p_token_hash TEXT,
     p_external_user_hash TEXT,
+    p_external_user_ciphertext TEXT,
     p_external_username TEXT
 )
 RETURNS TABLE (
@@ -86,13 +69,16 @@ BEGIN
 
     -- Upsert the verified channel binding (hash is the lookup key).
     INSERT INTO identity.channel_bindings
-        (tenant_id, user_id, channel_type, external_user_hash,
+        (tenant_id, user_id, channel_type, external_user_hash, external_user_ciphertext,
          external_username, status, bound_at)
     VALUES
         (v_challenge.tenant_id, v_challenge.user_id, v_challenge.channel_type,
-         p_external_user_hash, p_external_username, 'ACTIVE', now())
+         p_external_user_hash, p_external_user_ciphertext,
+         p_external_username, 'ACTIVE', now())
     ON CONFLICT (channel_type, external_user_hash) DO UPDATE
-        SET status = 'ACTIVE', bound_at = now(), last_used_at = now(),
+        SET status = 'ACTIVE',
+            external_user_ciphertext = EXCLUDED.external_user_ciphertext,
+            bound_at = now(), last_used_at = now(),
             version = channel_bindings.version + 1
     RETURNING id INTO v_binding_id;
 
@@ -111,14 +97,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION identity.authenticate_credentials(TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION identity.authenticate_credentials(TEXT)
-    TO authenticated, wealthsail_user;
-GRANT EXECUTE ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT)
-    TO authenticated, wealthsail_user;
+REVOKE ALL ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT, TEXT)
+    TO wealthsail_api;
 
-COMMENT ON FUNCTION identity.authenticate_credentials(TEXT) IS
-    'Privileged email lookup for the login service; returns active tenant memberships.';
-COMMENT ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT) IS
+COMMENT ON FUNCTION identity.consume_binding_challenge(TEXT, TEXT, TEXT, TEXT) IS
     'Atomically consumes a one-time binding challenge and upserts the channel binding.';

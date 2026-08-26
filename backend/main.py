@@ -21,11 +21,11 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
 from backend.common.database import Pool, create_pool
-from backend.config import Settings, get_settings
+from backend.config import Settings, get_settings, validate_runtime_settings
 from backend.errors import MoneyJSONResponse, register_exception_handlers, request_id_of
 from backend.chat.api import router as chat_router
 from backend.identity.api import router as identity_router
-from backend.integrations.wecom import router as wecom_router
+from backend.integrations.wecom import close_http_client, router as wecom_router
 from backend.market.api import router as market_router
 from backend.operations.api import router as operations_router
 from backend.portfolio.api import router as portfolio_router
@@ -52,12 +52,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await close_http_client()
         await pool.close()
         logger.info("database pool closed")
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
+    settings = validate_runtime_settings(get_settings(), process="api")
     app = FastAPI(
         title="WealthSail API",
         version=__version__,

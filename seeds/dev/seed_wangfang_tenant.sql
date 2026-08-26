@@ -4,7 +4,7 @@
 --   → 本脚本追加 CASH_IN 300,000（"补充本金"），本金合计 500,000；
 --   3 笔 BUY（现金流出 450,000）→ 现金余额 = 50,000；
 --   投影快照以成本价锚定（upsert），随后 refresh_market 用真实行情重算市值。
--- 幂等：全部走 DO 块条件插入，可重复执行。
+-- 严格幂等：固定事实日期、固定 idempotency key；重复执行必须是 no-op。
 -- 执行角色：lenovo（超级用户，绕过 RLS，与 010 种子一致）。
 
 BEGIN;
@@ -26,8 +26,7 @@ ON CONFLICT (alias_type, alias_value, market, effective_from) DO NOTHING;
 DO $$
 BEGIN
     -- 本金口径：目标 500,000。
-    -- 分支 A（全新环境）：010 种子 200,000 + 本脚本补充 CASH_IN 300,000；
-    -- 分支 B（本脚本曾以 500,000 入金的环境）：追加 CASH_OUT 200,000 冲正。
+    -- 010 种子 200,000 + 本脚本补充 CASH_IN 300,000。
     IF NOT EXISTS (SELECT 1 FROM ledger.ledger_events
                    WHERE id = '40000000-0000-0000-0000-000000000101') THEN
         INSERT INTO ledger.ledger_events
@@ -35,27 +34,13 @@ BEGIN
              idempotency_key, description, schema_version)
         VALUES
             ('40000000-0000-0000-0000-000000000101', '00000000-0000-0000-0000-000000000003',
-             '30000000-0000-0000-0000-000000000004', 'CASH_IN', 'CONFIRMED', CURRENT_DATE, now(),
+             '30000000-0000-0000-0000-000000000004', 'CASH_IN', 'CONFIRMED', DATE '2026-08-24', TIMESTAMPTZ '2026-08-24 09:00:00+08',
              'wangfang-seed-topup-20260824', '补充本金至 500,000', 1);
         INSERT INTO ledger.ledger_legs
             (tenant_id, event_id, leg_type, instrument_id, quantity, amount, unit_price)
         VALUES
             ('00000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000101',
              'CASH', NULL, NULL, 300000.00, NULL);
-    ELSIF NOT EXISTS (SELECT 1 FROM ledger.ledger_events
-                      WHERE id = '40000000-0000-0000-0000-000000000105') THEN
-        INSERT INTO ledger.ledger_events
-            (id, tenant_id, account_id, event_type, status, trade_date, occurred_at,
-             idempotency_key, description, schema_version)
-        VALUES
-            ('40000000-0000-0000-0000-000000000105', '00000000-0000-0000-0000-000000000003',
-             '30000000-0000-0000-0000-000000000004', 'CASH_OUT', 'CONFIRMED', CURRENT_DATE, now(),
-             'wangfang-seed-reverse-topup-20260824', '冲正超额入金，本金修正为 500,000', 1);
-        INSERT INTO ledger.ledger_legs
-            (tenant_id, event_id, leg_type, instrument_id, quantity, amount, unit_price)
-        VALUES
-            ('00000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000105',
-             'CASH', NULL, NULL, -200000.00, NULL);
     END IF;
 
     -- 三笔买入
@@ -66,13 +51,13 @@ BEGIN
              idempotency_key, description, schema_version)
         VALUES
             ('40000000-0000-0000-0000-000000000102', '00000000-0000-0000-0000-000000000003',
-             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', CURRENT_DATE, now(),
+             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', DATE '2026-08-24', TIMESTAMPTZ '2026-08-24 09:05:00+08',
              'wangfang-seed-buy-pab-20260824', '期初买入 平安银行 1000 股 @11.00', 1),
             ('40000000-0000-0000-0000-000000000103', '00000000-0000-0000-0000-000000000003',
-             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', CURRENT_DATE, now(),
+             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', DATE '2026-08-24', TIMESTAMPTZ '2026-08-24 09:06:00+08',
              'wangfang-seed-buy-moutai-20260824', '期初买入 贵州茅台 200 股 @2080.00', 1),
             ('40000000-0000-0000-0000-000000000104', '00000000-0000-0000-0000-000000000003',
-             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', CURRENT_DATE, now(),
+             '30000000-0000-0000-0000-000000000004', 'BUY', 'CONFIRMED', DATE '2026-08-24', TIMESTAMPTZ '2026-08-24 09:07:00+08',
              'wangfang-seed-buy-etf-20260824', '期初买入 沪深300ETF 5000 份 @4.60', 1);
         INSERT INTO ledger.ledger_legs
             (tenant_id, event_id, leg_type, instrument_id, quantity, amount, unit_price)
@@ -92,26 +77,20 @@ BEGIN
     END IF;
 END $$;
 
--- 3. 持仓投影锚点（upsert，as_of=今日；refresh_market 将以真实行情覆盖市值）
+-- 3. 固定日期的持仓投影锚点；同一脚本重复执行不会创建新的日期事实。
 INSERT INTO ledger.position_snapshots
     (tenant_id, account_id, instrument_id, as_of, quantity, avg_cost,
      market_price, market_value, unrealized_pnl, data_quality_status)
 VALUES
     ('00000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004',
-     '20000000-0000-0000-0000-000000000004', CURRENT_DATE, 1000, 11.00,
+     '20000000-0000-0000-0000-000000000004', DATE '2026-08-24', 1000, 11.00,
      11.00, 11000.00, 0.00, 'STALE'),
     ('00000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004',
-     '20000000-0000-0000-0000-000000000001', CURRENT_DATE, 200, 2080.00,
+     '20000000-0000-0000-0000-000000000001', DATE '2026-08-24', 200, 2080.00,
      2080.00, 416000.00, 0.00, 'STALE'),
     ('00000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004',
-     '20000000-0000-0000-0000-000000000002', CURRENT_DATE, 5000, 4.60,
+     '20000000-0000-0000-0000-000000000002', DATE '2026-08-24', 5000, 4.60,
      4.60, 23000.00, 0.00, 'STALE')
-ON CONFLICT (tenant_id, account_id, instrument_id, as_of) DO UPDATE
-SET quantity = EXCLUDED.quantity,
-    avg_cost = EXCLUDED.avg_cost,
-    market_price = EXCLUDED.market_price,
-    market_value = EXCLUDED.market_value,
-    unrealized_pnl = EXCLUDED.unrealized_pnl,
-    data_quality_status = EXCLUDED.data_quality_status;
+ON CONFLICT (tenant_id, account_id, instrument_id, as_of) DO NOTHING;
 
 COMMIT;

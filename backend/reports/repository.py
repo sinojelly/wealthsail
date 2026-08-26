@@ -61,11 +61,34 @@ async def get_report_items(
 ) -> list[asyncpg.Record]:
     return await conn.fetch(
         """
-        SELECT id, item_type, subject_id, severity, title, body, action_plan,
-               data_quality_status, sort_order
-        FROM reporting.report_items
-        WHERE tenant_id = $1 AND report_id = $2
-        ORDER BY sort_order ASC, created_at ASC
+        SELECT ri.id, ri.item_type, ri.subject_id, ri.severity, ri.title,
+               ri.body, ri.action_plan, ri.data_quality_status, ri.sort_order,
+               COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'id', er.id,
+                           'claimType', rie.claim_type,
+                           'sourceSnapshotId', er.source_snapshot_id,
+                           'sourceName', ds.name,
+                           'originUri', ss.origin_uri,
+                           'asOf', er.as_of,
+                           'excerpt', er.excerpt,
+                           'quality', er.quality_status,
+                           'contentHash', ss.content_hash
+                       ) ORDER BY er.created_at
+                   ) FILTER (WHERE er.id IS NOT NULL),
+                   '[]'::jsonb
+               ) AS evidence
+        FROM reporting.report_items ri
+        LEFT JOIN reporting.report_item_evidence rie
+          ON rie.tenant_id=ri.tenant_id AND rie.report_item_id=ri.id
+        LEFT JOIN research.evidence_refs er
+          ON er.tenant_id=rie.tenant_id AND er.id=rie.evidence_ref_id
+        LEFT JOIN market.source_snapshots ss ON ss.id=er.source_snapshot_id
+        LEFT JOIN reference.data_sources ds ON ds.id=ss.source_id
+        WHERE ri.tenant_id = $1 AND ri.report_id = $2
+        GROUP BY ri.id
+        ORDER BY ri.sort_order ASC, ri.created_at ASC
         """,
         tenant_id,
         report_id,
@@ -209,12 +232,13 @@ async def insert_report_items(
     items: list[dict],
 ) -> None:
     for index, item in enumerate(items, start=1):
-        await conn.execute(
+        report_item_id = await conn.fetchval(
             """
             INSERT INTO reporting.report_items
                 (report_id, tenant_id, item_type, subject_id, severity,
                  title, body, action_plan, data_quality_status, sort_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id
             """,
             report_id,
             tenant_id,
@@ -226,6 +250,35 @@ async def insert_report_items(
             json.dumps(item["action_plan"], ensure_ascii=False) if item.get("action_plan") else None,
             item.get("quality", "FRESH"),
             index * 10,
+        )
+        evidence = item.get("_evidence")
+        if not evidence:
+            continue
+        evidence_ref_id = await conn.fetchval(
+            """
+            INSERT INTO research.evidence_refs
+                (tenant_id, source_snapshot_id, claim_type, as_of, excerpt,
+                 quality_status, relevance_score)
+            VALUES ($1, $2, $3, $4, $5, $6, 1.0000)
+            RETURNING id
+            """,
+            tenant_id,
+            evidence["source_snapshot_id"],
+            evidence["claim_type"],
+            evidence["as_of"],
+            evidence["excerpt"],
+            evidence.get("quality", "UNAVAILABLE"),
+        )
+        await conn.execute(
+            """
+            INSERT INTO reporting.report_item_evidence
+                (tenant_id, report_item_id, evidence_ref_id, claim_type)
+            VALUES ($1, $2, $3, $4)
+            """,
+            tenant_id,
+            report_item_id,
+            evidence_ref_id,
+            evidence.get("link_claim_type", "FACT"),
         )
 
 
@@ -257,3 +310,52 @@ async def insert_outbox(
             idempotency_key,
         )
     )
+
+
+async def insert_report_outbox_deliveries(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    report_id: str,
+    session: str,
+    version: int,
+    trade_date: object,
+) -> int:
+    """Expand a report intent into one independently tracked user delivery."""
+    bindings = await conn.fetch(
+        """
+        SELECT id, user_id
+        FROM identity.channel_bindings
+        WHERE tenant_id = $1 AND channel_type = 'wecom' AND status = 'ACTIVE'
+        ORDER BY user_id, id
+        """,
+        tenant_id,
+    )
+    rows = [
+        (
+            tenant_id,
+            str(binding["id"]),
+            report_id,
+            "REPORT_PUBLISHED",
+            "reporting.reports",
+            json.dumps(
+                {"report_id": report_id, "session": session, "version": version},
+                ensure_ascii=False,
+            ),
+            f"{session}:{trade_date}:{version}:binding:{binding['id']}",
+        )
+        for binding in bindings
+    ]
+    if not rows:
+        return 0
+    await conn.executemany(
+        """
+        INSERT INTO workflow.outbox
+            (tenant_id, channel_binding_id, aggregate_id, topic,
+             aggregate_type, payload, schema_version, idempotency_key)
+        VALUES ($1, $2, $3, $4, $5, $6, 2, $7)
+        ON CONFLICT (tenant_id, topic, idempotency_key) DO NOTHING
+        """,
+        rows,
+    )
+    return len(rows)

@@ -1,5 +1,7 @@
-# Local prototype test dependencies. Runtime dependencies will be separated and
-# locked when the FastAPI/Worker implementation is introduced.
-pytest>=8.4,<9
-requests>=2.34,<3
-pydantic>=2.11,<3
+-r requirements.txt
+
+# Test, smoke and static-quality tooling; never installed by the runtime image.
+pytest==8.3.4
+pytest-asyncio==0.24.0
+requests==2.32.3
+ruff==0.9.10

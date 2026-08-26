@@ -1,12 +1,7 @@
-# WealthSail 全栈编排（docs/10 §7：Nginx + API + Worker）
-# 数据库使用外部 Supabase（Session Pooler 端口 6543），见 .env 的
-# SUPABASE_POOLER_DATABASE_URL / SUPABASE_POOLER_WORKER_DATABASE_URL。
-#
-# 前置：先在目标库执行 scripts/local_supabase_compat.sql 与 migrations/*.sql
-#       （容器不内置迁移步骤；一次性部署动作，避免幂等问题混入容器生命周期）。
-#
-# 启动：docker compose up -d --build
-# 访问：http://localhost:8080 （nginx 静态托管 + /api 反代）
+# WealthSail MVP runtime topology.
+# A TLS reverse proxy terminates HTTPS in front of 127.0.0.1:8080. The API is
+# reachable only from the private Compose network; API/Worker secrets are read
+# from different, git-ignored files under deployment/env/.
 
 services:
   api:
@@ -14,19 +9,21 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     image: wealthsail-backend:latest
-    container_name: wealthsail-api
     restart: unless-stopped
     env_file:
-      - .env
+      - ${API_ENV_FILE:-deployment/env/api.env}
     environment:
-      # Session Pooler (PgBouncer 事务模式)：
-      #   - 端口 6543
-      #   - statement_cache_size=0（禁用 asyncpg Prepared Statements）
-      DATABASE_URL: ${SUPABASE_POOLER_DATABASE_URL:?需要在 .env 配置 Supabase Session Pooler 连接串}
       APP_ENV: production
       AUTH_DEV_MODE: "false"
-    ports:
-      - "8000:8000"
+      # Explicitly erase development defaults and Worker authority.
+      WORKER_DATABASE_URL: ""
+      MODEL_API_KEY: ""
+      WECOM_CORP_SECRET: ""
+      WECOM_BOT_SECRET: ""
+    expose:
+      - "8000"
+    volumes:
+      - avatar_data:/app/backend/static/avatars
     networks:
       - wealthsail
     healthcheck:
@@ -40,15 +37,19 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     image: wealthsail-backend:latest
-    container_name: wealthsail-worker
     restart: unless-stopped
     command: ["python", "-m", "backend.worker"]
     env_file:
-      - .env
+      - ${WORKER_ENV_FILE:-deployment/env/worker.env}
     environment:
-      WORKER_DATABASE_URL: ${SUPABASE_POOLER_WORKER_DATABASE_URL:-${SUPABASE_POOLER_DATABASE_URL}}
       APP_ENV: production
       AUTH_DEV_MODE: "false"
+      # Worker cannot mint/validate browser sessions and has no API DSN.
+      DATABASE_URL: ""
+      JWT_SECRET: ""
+      REFRESH_TOKEN_HMAC_KEY: ""
+      WECOM_CALLBACK_TOKEN: ""
+      WECOM_CALLBACK_AES_KEY: ""
     depends_on:
       api:
         condition: service_healthy
@@ -60,14 +61,16 @@ services:
       context: frontend
       dockerfile: Dockerfile
     image: wealthsail-frontend:latest
-    container_name: wealthsail-frontend
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       - api
     networks:
       - wealthsail
+
+volumes:
+  avatar_data:
 
 networks:
   wealthsail:

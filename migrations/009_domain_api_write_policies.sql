@@ -1,22 +1,30 @@
 -- ==============================================================================
 -- WealthSail Migration 009: Domain API Write & Operations-Read Policies
--- Version: v2.2.0 (local MVP bridge)
--- Description: The v2.2 Domain API executes business transactions under the
---              `authenticated` role (SET LOCAL ROLE authenticated) so that
+-- Version: v2.2.1 (dedicated Domain API trust boundary)
+-- Description: The Domain API executes business transactions under the
+--              `wealthsail_api` role (SET LOCAL ROLE wealthsail_api) so that
 --              tenant RLS is the isolation boundary even for application code.
 --              Migrations 005/007/008 intentionally grant only SELECT to
 --              `authenticated`; trusted application writes (reports, model
 --              runs, outbox, audit, binding challenges, job runs) therefore
 --              need explicit, tenant-scoped INSERT/UPDATE policies plus the
---              corresponding table/column privileges.
---
---              Every write policy is scoped WITH CHECK
---              (identity.is_tenant_member(tenant_id)): the Domain API can only
---              create or mutate rows inside a tenant the acting user belongs
---              to. In Supabase production this file is a no-op for the
---              browser-facing role and the Domain API would run under a
---              dedicated service role instead.
+--              corresponding table/column privileges.  The browser-facing
+--              `authenticated` role remains read-only for system facts.
 -- ==============================================================================
+
+-- Roles contain no LOGIN and no password. Deployment creates secret-backed
+-- login roles and grants them membership; credentials never belong in SQL.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wealthsail_api') THEN
+        CREATE ROLE wealthsail_api NOLOGIN INHERIT NOBYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wealthsail_worker') THEN
+        CREATE ROLE wealthsail_worker NOLOGIN INHERIT BYPASSRLS;
+    END IF;
+END $$;
+
+GRANT authenticated TO wealthsail_api;
 
 -- 1. Tenant-scoped INSERT policies for Domain API writes.
 DO $$
@@ -33,7 +41,8 @@ DECLARE
         'identity.binding_challenges',
         'identity.channel_bindings',
         -- Derived projections are recomputed by the market pipeline inside
-        -- the per-tenant RLS transaction (worker role); see migrations 010.
+        -- a per-tenant RLS transaction; migration 013 completes delete and
+        -- valuation-completeness privileges for that forward path.
         'ledger.position_snapshots',
         'ledger.account_nav_snapshots'
     ];
@@ -41,7 +50,7 @@ BEGIN
     FOREACH t IN ARRAY insert_tables LOOP
         EXECUTE format('DROP POLICY IF EXISTS domain_api_insert ON %s', t);
         EXECUTE format(
-            'CREATE POLICY domain_api_insert ON %s FOR INSERT TO authenticated
+            'CREATE POLICY domain_api_insert ON %s FOR INSERT TO wealthsail_api
              WITH CHECK (identity.is_tenant_member(tenant_id))',
             t
         );
@@ -66,7 +75,7 @@ BEGIN
     FOREACH t IN ARRAY update_tables LOOP
         EXECUTE format('DROP POLICY IF EXISTS domain_api_update ON %s', t);
         EXECUTE format(
-            'CREATE POLICY domain_api_update ON %s FOR UPDATE TO authenticated
+            'CREATE POLICY domain_api_update ON %s FOR UPDATE TO wealthsail_api
              USING (identity.is_tenant_member(tenant_id))
              WITH CHECK (identity.is_tenant_member(tenant_id))',
             t
@@ -87,23 +96,23 @@ GRANT INSERT ON
     identity.channel_bindings,
     ledger.position_snapshots,
     ledger.account_nav_snapshots
-TO authenticated;
+TO wealthsail_api;
 
 -- Only the state columns a worker/runner may transition.
-GRANT UPDATE (status, finished_at, error_class) ON workflow.job_runs TO authenticated;
+GRANT UPDATE (status, finished_at, error_class) ON workflow.job_runs TO wealthsail_api;
 GRANT UPDATE (status, attempt_count, last_error_class, locked_at, locked_by,
-              external_message_id, sent_at) ON workflow.outbox TO authenticated;
+              external_message_id, sent_at) ON workflow.outbox TO wealthsail_api;
 GRANT UPDATE (status, consumed_at, resolved_at, binding_id, attempt_count, version)
-    ON identity.binding_challenges TO authenticated;
+    ON identity.binding_challenges TO wealthsail_api;
 GRANT UPDATE (status, bound_at, revoked_at, last_used_at, version)
-    ON identity.channel_bindings TO authenticated;
+    ON identity.channel_bindings TO wealthsail_api;
 -- Projection columns recomputed by the market pipeline (quantities and cost
 -- basis are immutable; only market-derived values may change).
 GRANT UPDATE (market_price, market_value, unrealized_pnl, data_quality_status)
-    ON ledger.position_snapshots TO authenticated;
+    ON ledger.position_snapshots TO wealthsail_api;
 GRANT UPDATE (cash_balance, positions_market_value, total_nav, daily_pnl,
               cumulative_pnl, data_quality_status)
-    ON ledger.account_nav_snapshots TO authenticated;
+    ON ledger.account_nav_snapshots TO wealthsail_api;
 
 -- 4. Operations pages are served by the sanitizing Domain API: restore
 --    tenant-scoped SELECT (OWNER/ADMIN only, matching migration 008) on the

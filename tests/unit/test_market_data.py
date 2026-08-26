@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
 
 from backend.integrations.market_data import (
-    F_CLOSE,
     F_NAV,
     Q_FRESH,
     Q_STALE,

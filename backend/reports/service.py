@@ -14,6 +14,7 @@ report never fabricates market facts it cannot source.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import uuid
 from datetime import date, datetime, timedelta
@@ -22,7 +23,7 @@ from decimal import Decimal
 import asyncpg
 
 from backend.common.database import Pool, tenant_transaction
-from backend.common.formatting import fmt_money, fmt_qty, merge_quality, pct
+from backend.common.formatting import fmt_money
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.dependencies import now_shanghai, write_audit
@@ -44,6 +45,21 @@ SESSION_META: dict[str, dict[str, str]] = {
     "FUND_1430": {"title": "基金 2:30 报告", "subtitle": "场外基金估值、覆盖率与截止时间"},
     "POST_MARKET": {"title": "盘后交互复盘", "subtitle": "计划—决策—执行闭环与证据回看"},
 }
+
+_ALLOWED_ITEM_TYPES = {"FACT", "RISK", "ACTION_PLAN", "TODO", "FUND_ESTIMATE", "ALERT"}
+_ALLOWED_SEVERITIES = {"INFO", "WARNING", "CRITICAL"}
+
+
+def canonical_context_hash(context: dict) -> str:
+    """Content-address a report input snapshot using canonical JSON."""
+    payload = json.dumps(
+        context,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 # Idempotent replay window: a generate request for the same (session, trade_date)
 # within this window returns the existing report instead of minting a new version.
@@ -145,6 +161,7 @@ async def get_report_detail(
                 "body": it["body"],
                 "actionPlan": it["action_plan"],
                 "quality": it["data_quality_status"],
+                "evidence": _parse_json_list(it["evidence"]),
             }
             for it in items
         ],
@@ -171,6 +188,9 @@ async def generate_report(
     ctx: TenantContext,
     settings: Settings,
     session: str,
+    *,
+    job_run_id: str | None = None,
+    actor_type: str = "USER",
 ) -> dict:
     if session not in SESSION_META:
         raise ValidationError_(
@@ -208,6 +228,7 @@ async def generate_report(
         logger.warning("report generation degraded for %s: %s", session, exc)
         error_class = exc.__class__.__name__
         draft = _fallback_draft(session, context)
+    draft = _attach_deterministic_fund_items(session, draft, context)
 
     # Phase 3: write with version-conflict retry.
     last_error: Exception | None = None
@@ -224,6 +245,8 @@ async def generate_report(
                     draft=draft,
                     model_result=model_result,
                     error_class=error_class,
+                    job_run_id=job_run_id,
+                    actor_type=actor_type,
                 )
         except asyncpg.UniqueViolationError as exc:
             last_error = exc
@@ -252,11 +275,70 @@ async def _build_context(
         """,
         tenant_id,
     )
+    fund_estimates: list[dict] = []
+    if session == "FUND_1430":
+        rows = await conn.fetch(
+            """
+            WITH latest_positions AS (
+                SELECT DISTINCT ON (account_id, instrument_id)
+                    account_id, instrument_id, quantity
+                FROM ledger.position_snapshots
+                WHERE tenant_id = $1
+                ORDER BY account_id, instrument_id, as_of DESC
+            ), held_funds AS (
+                SELECT instrument_id
+                FROM latest_positions
+                GROUP BY instrument_id
+                HAVING sum(quantity) > 0
+            )
+            SELECT DISTINCT ON (o.subject_id)
+                o.subject_id AS instrument_id, COALESCE(a.ticker, '') AS symbol,
+                i.canonical_name AS name, o.value, o.lower_value, o.upper_value,
+                o.quality_status, o.as_of, o.snapshot_id, o.metadata
+            FROM market.market_observations o
+            JOIN held_funds h ON h.instrument_id = o.subject_id
+            JOIN reference.instruments i ON i.id = o.subject_id
+            LEFT JOIN LATERAL (
+                SELECT alias_value AS ticker
+                FROM reference.instrument_aliases
+                WHERE instrument_id=o.subject_id AND alias_type='TICKER'
+                  AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+                ORDER BY effective_from DESC LIMIT 1
+            ) a ON TRUE
+            WHERE o.field_code = 'ESTIMATED_NAV'
+            ORDER BY o.subject_id, o.as_of DESC, o.observed_at DESC
+            """,
+            tenant_id,
+        )
+        fund_estimates = [
+            {
+                "instrumentId": str(row["instrument_id"]),
+                "symbol": row["symbol"],
+                "name": row["name"],
+                "value": str(row["value"]) if row["value"] is not None else None,
+                "lowerValue": (
+                    str(row["lower_value"])
+                    if row["lower_value"] is not None
+                    else None
+                ),
+                "upperValue": (
+                    str(row["upper_value"])
+                    if row["upper_value"] is not None
+                    else None
+                ),
+                "quality": row["quality_status"],
+                "asOf": row["as_of"],
+                "snapshotId": str(row["snapshot_id"]) if row["snapshot_id"] else None,
+                "metadata": _parse_jsonb(row["metadata"]),
+            }
+            for row in rows
+        ]
     return {
         "session": session,
         "summary": summary,
         "positions": positions,
         "policy": dict(policy) if policy else None,
+        "fundEstimates": fund_estimates,
     }
 
 
@@ -294,19 +376,33 @@ def _parse_llm_draft(content: str, session: str) -> dict:
     items = payload.get("items") or []
     normalized: list[dict] = []
     for item in items[:8]:
+        item_type = str(item.get("item_type", "FACT"))
+        severity = str(item.get("severity", "INFO"))
+        if item_type not in _ALLOWED_ITEM_TYPES:
+            raise ValueError(f"LLM item_type 非法: {item_type}")
+        if severity not in _ALLOWED_SEVERITIES:
+            raise ValueError(f"LLM severity 非法: {severity}")
         normalized.append(
             {
-                "item_type": str(item.get("item_type", "FACT")),
-                "severity": str(item.get("severity", "INFO")),
+                "item_type": item_type,
+                "severity": severity,
                 "title": str(item.get("title", "")).strip(),
                 "body": str(item.get("body", "")).strip(),
-                "quality": "FRESH",
+                # Model text is an interpretation until mapped to persisted
+                # evidence_refs; never promote it to a fresh market fact.
+                "quality": "UNAVAILABLE",
             }
         )
     normalized = [it for it in normalized if it["title"] and it["body"]]
     if not normalized:
         raise ValueError("LLM 输出缺少 items")
-    return {"summary": summary, "items": normalized}
+    return {
+        "summary": summary,
+        "items": normalized,
+        "quality": "UNAVAILABLE",
+        "status": "PARTIAL",
+        "policy_check_status": "WARNING",
+    }
 
 
 def _fallback_draft(session: str, context: dict) -> dict:
@@ -318,16 +414,51 @@ def _fallback_draft(session: str, context: dict) -> dict:
     summary = context["summary"]
     positions = context["positions"]
     policy = context["policy"]
+    context_quality = summary.get("qualityStatus", "UNAVAILABLE")
 
-    lines = [
-        f"当前组合总资产 {summary['totalAsset']} 元，可用现金 {summary['cashBalance']} 元，"
-        f"持仓市值 {summary['positionsMarketValue']} 元，当日收益 {summary['dailyPnl']} 元。",
-    ]
+    total_asset = summary.get("totalAsset")
+    known_value = summary.get("knownValue")
+    if total_asset is None:
+        known_suffix = f"（已知价值 {known_value} 元）" if known_value is not None else ""
+        total_text = f"当前组合总资产不可完整估值{known_suffix}"
+    else:
+        total_text = f"当前组合总资产 {total_asset} 元"
+    cash_text = (
+        f"可用现金 {summary['cashBalance']} 元"
+        if summary.get("cashBalance") is not None
+        else "可用现金暂不可用"
+    )
+    market_value_text = (
+        f"持仓市值 {summary['positionsMarketValue']} 元"
+        if summary.get("positionsMarketValue") is not None
+        else "持仓市值暂不可完整估值"
+    )
+    daily_pnl_text = (
+        f"当日收益 {summary['dailyPnl']} 元"
+        if summary.get("dailyPnl") is not None
+        else "当日收益暂不可用"
+    )
+    lines = [f"{total_text}，{cash_text}，{market_value_text}，{daily_pnl_text}。"]
     if positions:
         top = positions[0]
+        top_market_value = (
+            f"市值 {top['marketValue']} 元"
+            if top.get("marketValue") is not None
+            else "市值暂不可用"
+        )
+        top_weight = (
+            f"占组合 {top['weight']}%"
+            if top.get("weight") is not None
+            else "占比暂不可计算"
+        )
+        top_pnl = (
+            f"持仓收益 {top['pnl']} 元"
+            if top.get("pnl") is not None
+            else "持仓收益暂不可计算"
+        )
         lines.append(
-            f"第一大持仓 {top['name']}（{top['symbol']}）市值 {top['marketValue']} 元，"
-            f"占组合 {top['weight']}%，持仓收益 {top['pnl']} 元。"
+            f"第一大持仓 {top['name']}（{top['symbol']}）{top_market_value}，"
+            f"{top_weight}，{top_pnl}。"
         )
     else:
         lines.append("当前无持仓，组合全部为现金。")
@@ -338,13 +469,16 @@ def _fallback_draft(session: str, context: dict) -> dict:
             "severity": "INFO",
             "title": "组合概况",
             "body": " ".join(lines),
-            "quality": summary["qualityStatus"],
+            "quality": context_quality,
         }
     ]
-    if positions and policy and policy["single_position_limit"] is not None:
-        max_weight = max(
-            (Decimal(p["weight"]) for p in positions), default=ZERO
-        )
+    known_weights = [
+        Decimal(p["weight"])
+        for p in positions
+        if p.get("weight") is not None
+    ]
+    if known_weights and policy and policy["single_position_limit"] is not None:
+        max_weight = max(known_weights, default=ZERO)
         limit = Decimal(policy["single_position_limit"])
         if max_weight > limit:
             items.append(
@@ -356,7 +490,7 @@ def _fallback_draft(session: str, context: dict) -> dict:
                         f"当前最大单一持仓占比 {fmt_money(max_weight)}%，"
                         f"超过政策上限 {fmt_money(limit)}%，请评估是否触发调仓预案。"
                     ),
-                    "quality": "FRESH",
+                    "quality": context_quality,
                 }
             )
     items.append(
@@ -365,10 +499,87 @@ def _fallback_draft(session: str, context: dict) -> dict:
             "severity": "INFO",
             "title": "后续动作",
             "body": "跟踪持仓标的价格与政策合规状态；模型网关恢复后自动生成完整研报。",
-            "quality": "FRESH",
+            "quality": context_quality,
         }
     )
-    return {"summary": "；".join(lines), "items": items}
+    return {
+        "summary": "；".join(lines),
+        "items": items,
+        "quality": context_quality,
+        "status": "ABSTAIN" if context_quality == "UNAVAILABLE" else "PARTIAL",
+        "policy_check_status": "WARNING",
+    }
+
+
+def _attach_deterministic_fund_items(
+    session: str, draft: dict, context: dict
+) -> dict:
+    """Replace model-authored fund estimates with persisted calculator output."""
+    if session != "FUND_1430":
+        return draft
+    items = [
+        item for item in draft.get("items", [])
+        if item.get("item_type") != "FUND_ESTIMATE"
+    ]
+    estimates = context.get("fundEstimates") or []
+    if not estimates:
+        items.append(
+            {
+                "item_type": "FUND_ESTIMATE",
+                "severity": "WARNING",
+                "title": "基金估值数据不可用",
+                "body": "当前没有可审计的 14:30 估值观测，系统未生成基金净值预测。",
+                "quality": "UNAVAILABLE",
+            }
+        )
+    for estimate in estimates:
+        metadata = estimate.get("metadata") or {}
+        quality = estimate.get("quality") or "UNAVAILABLE"
+        name = estimate.get("name") or estimate.get("symbol") or "场外基金"
+        symbol = estimate.get("symbol") or "--"
+        if quality == "ESTIMATED" and estimate.get("value") is not None:
+            body = (
+                f"估值 {estimate['value']}，区间 {estimate.get('lowerValue')}–"
+                f"{estimate.get('upperValue')} 元；可用披露持仓与实时行情覆盖率 "
+                f"{metadata.get('coveragePct', '--')}%，持仓披露日 "
+                f"{metadata.get('disclosedOn', '--')}，最近正式净值 "
+                f"{metadata.get('confirmedNav', '--')}。{metadata.get('explanation', '')}"
+            )
+            severity = "INFO"
+        else:
+            body = metadata.get("explanation") or (
+                "正式净值、持仓披露或成分行情不足，系统已弃权。"
+            )
+            severity = "WARNING"
+        item = {
+            "item_type": "FUND_ESTIMATE",
+            "subject_id": estimate.get("instrumentId"),
+            "severity": severity,
+            "title": f"{name}（{symbol}）14:30 估值",
+            "body": body,
+            "quality": quality,
+        }
+        if estimate.get("snapshotId"):
+            item["_evidence"] = {
+                "source_snapshot_id": estimate["snapshotId"],
+                "claim_type": "VALUATION",
+                "link_claim_type": "FACT",
+                "as_of": estimate["asOf"],
+                "excerpt": body,
+                "quality": quality,
+            }
+        items.append(item)
+
+    result = {**draft, "items": items}
+    result["quality"] = _database_quality(result.get("quality"))
+    if any(item.get("quality") == "UNAVAILABLE" for item in items):
+        result["status"] = "PARTIAL" if estimates else "ABSTAIN"
+    return result
+
+
+def _database_quality(value: object) -> str:
+    quality = str(value or "UNAVAILABLE").upper()
+    return quality if quality in {"FRESH", "ESTIMATED", "STALE"} else "UNAVAILABLE"
 
 
 async def _persist_generation(
@@ -382,6 +593,8 @@ async def _persist_generation(
     draft: dict,
     model_result: ModelResult | None,
     error_class: str | None,
+    job_run_id: str | None,
+    actor_type: str,
 ) -> dict:
     latest = await repository.latest_report(conn, ctx.tenant_id, trade_date, session)
     version = (latest["version"] + 1) if latest else 1
@@ -398,7 +611,7 @@ async def _persist_generation(
             model=model_result.model,
             prompt_template_version=f"report.{session.lower()}.v1",
             input_snapshot_hashes={
-                "positions": f"sha256:ctx-{len(context.get('positions', []))}",
+                "context": canonical_context_hash(context),
             },
             token_usage=model_result.usage,
             cost_cny=model_result.cost_cny,
@@ -432,13 +645,13 @@ async def _persist_generation(
         session=session,
         trade_date=trade_date,
         version=version,
-        status="PUBLISHED",
+        status=draft.get("status", "PARTIAL"),
         as_of=finished_at,
-        quality_status=draft.get("quality", "FRESH"),
+        quality_status=_database_quality(draft.get("quality")),
         summary=draft["summary"],
         model_run_id=model_run_id,
-        job_run_id=None,
-        policy_check_status=draft.get("policy_check_status", "PASSED"),
+        job_run_id=job_run_id,
+        policy_check_status=draft.get("policy_check_status", "WARNING"),
         valid_until=valid_until,
         supersedes_report_id=supersedes,
     )
@@ -448,20 +661,19 @@ async def _persist_generation(
         report_id=report_id,
         items=draft["items"],
     )
-    await repository.insert_outbox(
+    await repository.insert_report_outbox_deliveries(
         conn,
         tenant_id=ctx.tenant_id,
-        topic="REPORT_PUBLISHED",
-        aggregate_type="reporting.reports",
-        aggregate_id=report_id,
-        payload={"report_id": report_id, "session": session, "version": version},
-        idempotency_key=f"{session}:{trade_date.isoformat()}:{version}",
+        report_id=report_id,
+        session=session,
+        version=version,
+        trade_date=trade_date.isoformat(),
     )
     await write_audit(
         conn,
         tenant_id=ctx.tenant_id,
-        actor_type="USER" if ctx.user_id else "SYSTEM_WORKER",
-        actor_id=ctx.user_id,
+        actor_type=actor_type,
+        actor_id=ctx.user_id if actor_type == "USER" else (job_run_id or "worker"),
         action="REPORT_GENERATED",
         resource_type="reporting.reports",
         resource_id=report_id,
@@ -481,6 +693,18 @@ def _parse_jsonb(value: object) -> dict:
         except (ValueError, TypeError):
             return {}
     return {}
+
+
+def _parse_json_list(value: object) -> list[dict]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
 
 
 def _valid_until(session: str, as_of: datetime) -> datetime:

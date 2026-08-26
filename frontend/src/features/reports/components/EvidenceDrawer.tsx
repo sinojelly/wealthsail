@@ -66,42 +66,34 @@ export default function EvidenceDrawer({
               </dd>
             </div>
             <div>
-              <dt>源发布时间</dt>
-              <dd className="mono">{evidence.publishedAt}</dd>
+              <dt>声明类型</dt>
+              <dd className="mono">{evidence.claimType}</dd>
             </div>
-            <div>
-              <dt>采集时间</dt>
-              <dd className="mono">{evidence.retrievedAt}</dd>
-            </div>
-            <div>
-              <dt>采集方法</dt>
-              <dd className="mono">{evidence.retrievalMethod}</dd>
-            </div>
-            <div>
-              <dt>结构版本</dt>
-              <dd className="mono">{evidence.schemaVersion}</dd>
-            </div>
-            {evidence.modelRunId ? (
+            {evidence.sourceSnapshotId ? (
               <div>
-                <dt>模型运行</dt>
-                <dd className="mono">{evidence.modelRunId}</dd>
+                <dt>源快照</dt>
+                <dd className="mono">{evidence.sourceSnapshotId}</dd>
               </div>
             ) : null}
           </dl>
-          <section className="hash-block">
-            <label>SHA-256 内容哈希</label>
-            <code>{evidence.hash}</code>
-            <p>用于验证当前展示内容与归档证据未被替换。</p>
-          </section>
-          <a
-            className="btn-secondary full-width"
-            href={evidence.sourceUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLink size={13} />
-            打开来源定位
-          </a>
+          {evidence.hash ? (
+            <section className="hash-block">
+              <label>SHA-256 内容哈希</label>
+              <code>{evidence.hash}</code>
+              <p>用于验证当前展示内容与归档源快照未被替换。</p>
+            </section>
+          ) : null}
+          {evidence.sourceUrl ? (
+            <a
+              className="btn-secondary full-width"
+              href={evidence.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ExternalLink size={13} />
+              打开来源定位
+            </a>
+          ) : null}
         </div>
       </aside>
     </>

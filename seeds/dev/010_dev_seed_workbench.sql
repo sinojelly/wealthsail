@@ -1,5 +1,5 @@
 -- ==============================================================================
--- WealthSail Migration 010: Local Dev Seed for Web Workbench Demo
+-- WealthSail development seed: Local Web Workbench Demo
 -- Version: v2.2.0 (dev-only; do NOT ship to production tenants)
 -- Description: Backfills deterministic demo data for pilot tenant 1 (张明) so
 --              the Web workbench pages render real API data:

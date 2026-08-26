@@ -6,12 +6,10 @@ export default function BatchPreviewModal({
   open,
   rows,
   onClose,
-  onCommit,
 }: {
   open: boolean;
   rows: ImportRow[];
   onClose: () => void;
-  onCommit: (count: number) => void;
 }) {
   const validCount = rows.filter((row) => row.valid).length;
   const invalidCount = rows.length - validCount;
@@ -84,7 +82,8 @@ export default function BatchPreviewModal({
           <p>
             <strong>提交边界</strong>
             <span>
-              导入只创建初始持仓事实与导入审计事件，不反推历史成交，也不会覆盖同标的现有事实。
+              当前仅执行浏览器本地格式预览，不写入账本。正式导入命令接入后，
+              将采用单租户事务、幂等批次和逐行审计结果。
             </span>
           </p>
         </div>
@@ -92,17 +91,17 @@ export default function BatchPreviewModal({
       <footer className="dialog-footer">
         <span className="commit-note">
           <Database size={12} />
-          将写入 {validCount} 条事实记录
+          可预览 {validCount} 条有效记录 · 当前不会写入
         </span>
         <button className="btn-secondary" onClick={onClose}>
           返回修正
         </button>
         <button
           className="btn-primary"
-          disabled={validCount === 0}
-          onClick={() => onCommit(validCount)}
+          disabled
+          title="后端导入命令尚未接入"
         >
-          导入有效记录
+          导入命令尚未接入
         </button>
       </footer>
     </Dialog>

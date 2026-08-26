@@ -82,7 +82,7 @@ async def chat_completion(
         async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
             response = await _post_with_retry(client, url, payload)
     except httpx.HTTPStatusError as exc:
-        logger.error("model gateway HTTP %s: %s", exc.response.status_code, exc.response.text[:300])
+        logger.error("model gateway rejected request: status=%s", exc.response.status_code)
         raise ModelCallError(f"模型服务返回 {exc.response.status_code}") from exc
     except httpx.HTTPError as exc:
         logger.error("model gateway transport error: %s", exc)

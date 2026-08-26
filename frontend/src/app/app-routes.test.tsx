@@ -38,7 +38,7 @@ vi.mock("../api/hooks", () => ({
   useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null }),
   useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
   useCreateBindingCredential: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useConsumeBindingCredential: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useRevokeBinding: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
   useReportsList: () => ({ data: [], isLoading: false, isError: false, error: null }),
   useReportDetail: () => ({ data: null, isLoading: false, isError: false, error: null }),
   useGenerateReport: () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null }),
@@ -47,6 +47,10 @@ vi.mock("../api/hooks", () => ({
   useOpsOutbox: () => ({ data: null, isLoading: false, isError: false, error: null }),
   useOpsAudit: () => ({ data: [], isLoading: false, isError: false, error: null }),
 }));
+
+afterEach(() => {
+  testSession.role = "OWNER";
+});
 
 it("navigates between the main workspaces without losing the application shell", async () => {
   const user = userEvent.setup();
@@ -69,4 +73,14 @@ it("navigates between the main workspaces without losing the application shell",
     ),
   ).toBeInTheDocument();
   expect(screen.getByText("张明")).toBeInTheDocument();
+});
+
+it("blocks a viewer who enters the operations URL directly", async () => {
+  testSession.role = "VIEWER";
+  renderWithSession(<AppRoutes />, "/operations");
+
+  expect(
+    await screen.findByRole("heading", { name: "无权访问运维页面" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "运维中心" })).not.toBeInTheDocument();
 });

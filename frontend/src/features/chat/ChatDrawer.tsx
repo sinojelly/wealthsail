@@ -45,8 +45,7 @@ async function* streamChat(
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`对话请求失败 (${resp.status}): ${text.slice(0, 200)}`);
+    throw new Error(`对话请求失败（HTTP ${resp.status}），请稍后重试`);
   }
 
   const reader = resp.body?.getReader();
@@ -90,6 +89,7 @@ export default function ChatDrawer() {
     useState<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -102,6 +102,19 @@ export default function ChatDrawer() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        abortController?.abort();
+        setOpen(false);
+        toggleRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [abortController, open]);
 
   const sendText = useCallback(
     async (text: string) => {
@@ -192,6 +205,7 @@ export default function ChatDrawer() {
     <>
       {/* Floating toggle button */}
       <button
+        ref={toggleRef}
         className="chat-fab"
         onClick={() => setOpen((v) => !v)}
         aria-label={open ? "关闭对话" : "打开 AI 对话"}
@@ -202,7 +216,12 @@ export default function ChatDrawer() {
 
       {/* Drawer panel */}
       {open && (
-        <div className="chat-drawer">
+        <div
+          className="chat-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="WealthSail 投研助手"
+        >
           {/* Header */}
           <div className="chat-header">
             <Bot size={20} />
@@ -217,7 +236,7 @@ export default function ChatDrawer() {
           </div>
 
           {/* Messages area */}
-          <div className="chat-messages">
+          <div className="chat-messages" aria-live="polite" aria-busy={streaming}>
             {messages.length === 0 && (
               <div className="chat-welcome">
                 <Bot size={32} />
@@ -255,6 +274,7 @@ export default function ChatDrawer() {
             <input
               ref={inputRef}
               className="chat-input"
+              aria-label="向投研助手提问"
               placeholder="输入你的问题…"
               value={input}
               onChange={(e) => setInput(e.target.value)}

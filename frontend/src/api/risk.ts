@@ -1,10 +1,20 @@
-import Decimal from "decimal.js";
 import { request } from "./client";
 import type {
   PoliciesResponse,
+  RiskConfirmDto,
   RiskPreviewDto,
   RulesResponse,
 } from "./types";
+
+export interface RiskPolicyInput {
+  benchmark: string;
+  horizonMonths: number;
+  maxPosition: string;
+  maxDrawdown: string;
+  minCash: string;
+  maxAlertsPerDay: number;
+  silenceMinutes: number;
+}
 
 export async function getPolicies(): Promise<PoliciesResponse> {
   const envelope = await request<PoliciesResponse>("/v1/risk/policies");
@@ -16,16 +26,26 @@ export async function getRules(): Promise<RulesResponse> {
   return envelope.data;
 }
 
-// TARGET: 替换为服务端 policy preview，前端只展示确定性结果和 policy_hash。
 export async function previewRiskPolicy(
-  nextMaxPosition: string,
+  input: RiskPolicyInput,
 ): Promise<RiskPreviewDto> {
-  const next = new Decimal(nextMaxPosition);
-  return {
-    previousMaxPosition: "30.00",
-    nextMaxPosition: next.toFixed(2),
-    impactedHoldings: next.lt(30) ? 1 : 0,
-    newAlerts: next.lt(25) ? 2 : 0,
-    policyHash: `sha256:demo-${next.toFixed(2).replace(".", "")}`,
-  };
+  const envelope = await request<RiskPreviewDto>("/v1/risk/policies/preview", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function confirmRiskPolicy(input: {
+  draftId: string;
+  expectedVersion: number;
+  policyHash: string;
+  password: string;
+}): Promise<RiskConfirmDto> {
+  const envelope = await request<RiskConfirmDto>("/v1/risk/policies/confirm", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
 }

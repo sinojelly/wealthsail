@@ -1,11 +1,14 @@
 import { request } from "./client";
 import type { ReportDetail, ReportSession, ReportSummary } from "./types";
+import type { AuthSession } from "../app/auth-session";
+import { privateQueryKey } from "../app/auth-session";
 
 export const reportQueryKeys = {
-  all: ["reports"] as const,
-  list: (tradeDate?: string, session?: string) =>
-    ["reports", "list", tradeDate ?? "", session ?? ""] as const,
-  detail: (id: string) => ["reports", id] as const,
+  all: (auth: AuthSession | null) => privateQueryKey(auth, "reports"),
+  list: (auth: AuthSession | null, tradeDate?: string, session?: string) =>
+    privateQueryKey(auth, "reports", "list", tradeDate ?? "", session ?? ""),
+  detail: (auth: AuthSession | null, id: string) =>
+    privateQueryKey(auth, "reports", "detail", id),
 };
 
 export async function listReports(params?: {

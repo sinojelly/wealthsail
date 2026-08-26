@@ -20,11 +20,13 @@ import signal
 from datetime import datetime
 
 from backend.common.database import create_pool
-from backend.config import get_settings
+from backend.config import get_settings, validate_runtime_settings
 from backend.jobs import runner
 from backend.jobs.outbox import OutboxConsumer
 from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
+from backend.jobs.scheduler import is_trading_day
+from backend.integrations.wecom import close_http_client
 
 logger = logging.getLogger("wealthsail.worker")
 
@@ -42,7 +44,7 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
 
 
 async def main() -> None:
-    settings = get_settings()
+    settings = validate_runtime_settings(get_settings(), process="worker")
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -51,6 +53,7 @@ async def main() -> None:
         settings.worker_database_url,
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
+        runtime_role="wealthsail_worker",
     )
     logger.info("worker connected: %s", settings.worker_database_url.split("@")[-1])
 
@@ -60,8 +63,14 @@ async def main() -> None:
     except Exception:  # noqa: BLE001
         logger.exception("stale-run recovery failed (continuing)")
 
+    async def _calendar_check(now: datetime) -> bool:
+        async with pool.acquire() as conn:
+            return await is_trading_day(conn, now)
+
     scheduler = Scheduler(
-        settings, lambda session, now: _execute_session(pool, settings, session, now)
+        settings,
+        lambda session, now: _execute_session(pool, settings, session, now),
+        trading_day_check=_calendar_check,
     )
     consumer = OutboxConsumer(pool, settings)
     scheduler.start()
@@ -84,6 +93,7 @@ async def main() -> None:
     logger.info("shutting down worker…")
     await scheduler.stop()
     await consumer.stop()
+    await close_http_client()
     await pool.close()
     logger.info("worker stopped")
 

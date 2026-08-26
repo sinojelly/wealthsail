@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="dev-only-jwt-secret-change-me")
     jwt_algorithm: str = Field(default="HS256")
     access_token_ttl_seconds: int = Field(default=3600)
+    refresh_token_hmac_key: str = Field(default="dev-refresh-hmac-key-change-me")
+    refresh_token_ttl_days: int = Field(default=30, ge=1, le=90)
+    refresh_cookie_name: str = Field(default="wealthsail_refresh")
     # When true, POST /api/v1/auth/login accepts any non-empty password for the
     # seeded pilot profiles (local development only; Supabase Auth owns login in
     # production).
@@ -71,9 +74,12 @@ class Settings(BaseSettings):
     wecom_corp_id: str = Field(default="ww-dev-corp-id")
     wecom_corp_secret: str = Field(default="")
     wecom_agent_id: str = Field(default="1000002")
-    # 智能机器人（API模式·长连接）：配置后 send_message 优先走机器人推送
+    wecom_credential_version: str = Field(default="v1")
+    # 智能机器人（API 模式·长连接）是默认关闭的隔离试验通道；MVP 的
+    # send_message 只使用自建应用，禁止在结果未知时自动跨通道回退。
     wecom_bot_id: str = Field(default="")
     wecom_bot_secret: str = Field(default="")
+    wecom_bot_enabled: bool = Field(default=False)
     # Salt/key for HMAC-SHA256 of one-time binding tokens (never store plaintext).
     binding_hmac_key: str = Field(default="dev-binding-hmac-key-change-me")
     binding_token_ttl_seconds: int = Field(default=900)
@@ -85,12 +91,71 @@ class Settings(BaseSettings):
     job_lease_timeout_seconds: int = Field(default=900)
     outbox_max_attempts: int = Field(default=5)
     outbox_base_backoff_seconds: int = Field(default=2)
+    outbox_lease_seconds: int = Field(default=60)
     outbox_poll_interval_seconds: float = Field(default=15.0)
+    outbox_delivery_concurrency: int = Field(default=4, ge=1, le=20)
     scheduler_tick_seconds: float = Field(default=20.0)
 
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
+
+
+_DEVELOPMENT_SECRET_MARKERS = ("dev-", "dev_", "change-me", "demo")
+
+
+def _is_development_secret(value: str | None) -> bool:
+    normalized = (value or "").strip().lower()
+    return not normalized or any(marker in normalized for marker in _DEVELOPMENT_SECRET_MARKERS)
+
+
+def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
+    """Fail closed when a production process receives the wrong authority.
+
+    Compose/secret stores remain responsible for injecting values.  This
+    function enforces the process boundary at runtime so a shared or stale env
+    file cannot silently give API and Worker each other's credentials.
+    """
+    if process not in {"api", "worker"}:
+        raise ValueError(f"unknown process type: {process}")
+    if not settings.is_production:
+        return settings
+    if settings.auth_dev_mode:
+        raise ValueError("AUTH_DEV_MODE must be false in production")
+
+    if process == "api":
+        if _is_development_secret(settings.jwt_secret):
+            raise ValueError("JWT_SECRET must be a production secret")
+        if _is_development_secret(settings.refresh_token_hmac_key):
+            raise ValueError("REFRESH_TOKEN_HMAC_KEY must be a production secret")
+        if not settings.database_url.strip():
+            raise ValueError("DATABASE_URL is required for the API")
+        if _is_development_secret(settings.binding_hmac_key):
+            raise ValueError("BINDING_HMAC_KEY must be a production secret")
+        if _is_development_secret(settings.routing_encryption_key):
+            raise ValueError("ROUTING_ENCRYPTION_KEY must be a production secret")
+        if _is_development_secret(settings.wecom_callback_token):
+            raise ValueError("WECOM_CALLBACK_TOKEN must be a production secret")
+        if settings.worker_database_url.strip():
+            raise ValueError("WORKER_DATABASE_URL must not be provided to the API")
+        if settings.wecom_corp_secret or settings.wecom_bot_secret or settings.model_api_key:
+            raise ValueError("Worker/model sending credentials must not be provided to the API")
+    else:
+        if settings.jwt_secret.strip():
+            raise ValueError("JWT_SECRET must not be provided to the Worker")
+        if settings.database_url.strip():
+            raise ValueError("DATABASE_URL must not be provided to the Worker")
+        if not settings.worker_database_url.strip():
+            raise ValueError("WORKER_DATABASE_URL is required for the Worker")
+        if _is_development_secret(settings.routing_encryption_key):
+            raise ValueError("ROUTING_ENCRYPTION_KEY must be a production secret")
+        if not settings.wecom_corp_id.strip() or not settings.wecom_corp_secret.strip():
+            raise ValueError("WECOM_CORP_ID and WECOM_CORP_SECRET are required for the Worker")
+        if settings.wecom_bot_enabled and not (
+            settings.wecom_bot_id.strip() and settings.wecom_bot_secret.strip()
+        ):
+            raise ValueError("WECOM_BOT_ENABLED requires bot id and secret")
+    return settings
 
 
 @lru_cache

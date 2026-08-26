@@ -20,8 +20,9 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from typing import Any
 
 import httpx
 
@@ -32,15 +33,18 @@ DEFAULT_TIMEOUT = 10.0  # seconds (httpx constraint from the spec)
 # field_code vocabulary (aligns with market.market_observations.field_code)
 F_CLOSE = "CLOSE"
 F_NAV = "NAV"
+F_ESTIMATED_NAV = "ESTIMATED_NAV"
 
 # quality vocabulary (aligns with market.source_snapshots.quality_status)
 Q_FRESH = "FRESH"
+Q_ESTIMATED = "ESTIMATED"
 Q_STALE = "STALE"
 Q_UNAVAILABLE = "UNAVAILABLE"
 
 AKSOURCE_NAME = "AkShare-OpenSource"
 FUNDSOURCE_NAME = "TiantianFund-EastMoney"
 SINASOURCE_NAME = "Sina-Finance-Quote"
+ESTIMATOR_SOURCE_NAME = "WealthSail-Fund-Estimator"
 
 _SINA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -52,22 +56,40 @@ class Observation:
     symbol: str  # ticker / fund code as seen by the source
     subject_type: str  # INSTRUMENT | FUND
     field_code: str  # CLOSE | NAV
-    value: Decimal
+    value: Decimal | None
     as_of: datetime  # observation timestamp (source time)
     quality_status: str
+    lower_value: Decimal | None = None
+    upper_value: Decimal | None = None
+    return_rate: Decimal | None = None
     unit: str | None = None
     currency: str = "CNY"
     method_version: str = "v1"
     origin_uri: str | None = None
+    metadata: dict[str, Any] | None = None
 
     def to_payload(self) -> dict:
         return {
             "symbol": self.symbol,
             "field_code": self.field_code,
             "value": str(self.value),
+            "lower_value": str(self.lower_value) if self.lower_value is not None else None,
+            "upper_value": str(self.upper_value) if self.upper_value is not None else None,
             "quality_status": self.quality_status,
             "as_of": self.as_of.isoformat(),
+            "method_version": self.method_version,
+            "metadata": self.metadata or {},
         }
+
+
+@dataclass(frozen=True)
+class FundDisclosure:
+    fund_symbol: str
+    component_symbol: str
+    component_name: str
+    weight: Decimal  # fraction: 0.10 means 10%
+    disclosed_on: date
+    disclosure_label: str
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +147,12 @@ def _parse_ak_spot(df, symbols: list[str], label: str) -> list[Observation]:
                 subject_type="INSTRUMENT",
                 field_code=F_CLOSE,
                 value=_decimal(price),
+                return_rate=(
+                    _decimal(row["涨跌幅"]) / Decimal("100")
+                    if "涨跌幅" in columns and row["涨跌幅"] is not None
+                    and not (isinstance(row["涨跌幅"], float) and row["涨跌幅"] != row["涨跌幅"])
+                    else None
+                ),
                 as_of=now,
                 quality_status=Q_FRESH,
                 method_version="akshare/spot-em",
@@ -175,6 +203,7 @@ async def _fetch_sina_quotes(
                         subject_type=subject_type,
                         field_code=field_code,
                         value=_decimal(prev_close),
+                        return_rate=Decimal("0"),
                         as_of=datetime.now(),
                         quality_status=Q_STALE,
                         method_version="sina/hq-prevclose",
@@ -190,6 +219,9 @@ async def _fetch_sina_quotes(
                 subject_type=subject_type,
                 field_code=field_code,
                 value=_decimal(current),
+                return_rate=(Decimal(current) - Decimal(fields[2])) / Decimal(fields[2])
+                if fields[2] and Decimal(fields[2]) != 0
+                else None,
                 as_of=datetime.now(),
                 quality_status=Q_FRESH,
                 method_version="sina/hq",
@@ -633,6 +665,78 @@ async def fetch_fund_observations(symbols: list[str]) -> list[Observation]:
     return observations
 
 
+async def fetch_fund_disclosures(symbols: list[str]) -> list[FundDisclosure]:
+    """Fetch the latest disclosed fund holdings with bounded concurrency.
+
+    AkShare exposes EastMoney's public fund archive.  The result is disclosure
+    data, not a live portfolio: downstream code must show the disclosure date
+    and must not treat undisclosed residual assets as known.
+    """
+    semaphore = asyncio.Semaphore(4)
+
+    async def one(symbol: str) -> list[FundDisclosure]:
+        async with semaphore:
+            return await asyncio.to_thread(_fetch_one_fund_disclosure, symbol)
+
+    batches = await asyncio.gather(*(one(symbol) for symbol in symbols))
+    return [row for batch in batches for row in batch]
+
+
+def _fetch_one_fund_disclosure(symbol: str) -> list[FundDisclosure]:
+    current_year = date.today().year
+    df = None
+    for year in (current_year, current_year - 1):
+        try:
+            candidate = _ak_import().fund_portfolio_hold_em(
+                symbol=symbol, date=str(year)
+            )
+        except Exception as exc:  # noqa: BLE001 — provider failure degrades
+            logger.debug("基金 %s 的 %s 持仓披露抓取失败: %s", symbol, year, exc)
+            continue
+        if candidate is not None and not candidate.empty:
+            df = candidate
+            break
+    if df is None or df.empty:
+        return []
+    required = {"股票代码", "股票名称", "占净值比例", "季度"}
+    if not required.issubset(set(df.columns)):
+        logger.warning("基金持仓披露列结构变化: %s", list(df.columns))
+        return []
+
+    latest_label = str(df.iloc[0]["季度"])
+    latest = df[df["季度"].astype(str) == latest_label]
+    disclosed_on = _quarter_end(latest_label)
+    rows: list[FundDisclosure] = []
+    for _, item in latest.iterrows():
+        code = str(item["股票代码"]).strip().zfill(6)
+        try:
+            weight = _decimal(item["占净值比例"]) / Decimal("100")
+        except (TypeError, ValueError, ArithmeticError):
+            continue
+        if not code or weight <= 0 or weight > 1:
+            continue
+        rows.append(
+            FundDisclosure(
+                fund_symbol=symbol,
+                component_symbol=code,
+                component_name=str(item["股票名称"]).strip(),
+                weight=weight,
+                disclosed_on=disclosed_on,
+                disclosure_label=latest_label,
+            )
+        )
+    return rows
+
+
+def _quarter_end(label: str) -> date:
+    match = re.search(r"(20\d{2}).*?([1-4])\s*季度", label)
+    if not match:
+        return date.today()
+    year, quarter = int(match.group(1)), int(match.group(2))
+    month_day = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}[quarter]
+    return date(year, *month_day)
+
+
 async def _fetch_fund_nav(client: httpx.AsyncClient, symbol: str) -> Observation | None:
     """最近披露净值。披露日=今日 → FRESH，否则 STALE。"""
     url = (
@@ -673,7 +777,9 @@ async def _fetch_fund_nav(client: httpx.AsyncClient, symbol: str) -> Observation
         subject_type="FUND",
         field_code=F_NAV,
         value=_decimal(nav),
-        as_of=datetime.now(),
+        as_of=datetime.combine(
+            published or date.today(), time.min, tzinfo=timezone.utc
+        ),
         quality_status=quality,
         unit="元/份",
         method_version="eastmoney/f10-lsjz",
@@ -699,8 +805,8 @@ def _unavailable(symbol: str, subject_type: str, field_code: str, method: str) -
         symbol=symbol,
         subject_type=subject_type,
         field_code=field_code,
-        value=Decimal("0"),
-        as_of=datetime.now(),
+        value=None,
+        as_of=datetime.now(timezone.utc),
         quality_status=Q_UNAVAILABLE,
         method_version=method,
     )
@@ -725,8 +831,8 @@ async def fetch_all(
     return [obs for batch in results for obs in batch]
 
 
-def source_names() -> tuple[str, str]:
-    return AKSOURCE_NAME, FUNDSOURCE_NAME
+def source_names() -> tuple[str, str, str]:
+    return AKSOURCE_NAME, FUNDSOURCE_NAME, ESTIMATOR_SOURCE_NAME
 
 
 _ak_module = None

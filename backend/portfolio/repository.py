@@ -12,7 +12,8 @@ import asyncpg
 
 _SELECT_NAV_COLUMNS = """
     account_id, as_of, cash_balance, positions_market_value,
-    total_nav, daily_pnl, cumulative_pnl, data_quality_status
+    total_nav, daily_pnl, cumulative_pnl, data_quality_status,
+    known_value, valuation_coverage_pct, unpriced_position_count
 """
 
 _SELECT_POSITION_COLUMNS = """
@@ -45,10 +46,12 @@ async def nav_history(
     """Chronological daily NAV history (aggregated across accounts)."""
     if since is not None:
         rows = await conn.fetch(
-            f"""
+            """
             SELECT as_of,
-                   SUM(total_nav) AS total_nav,
-                   SUM(daily_pnl) AS daily_pnl,
+                   CASE WHEN COUNT(*) = COUNT(total_nav)
+                        THEN SUM(total_nav) END AS total_nav,
+                   CASE WHEN COUNT(*) = COUNT(daily_pnl)
+                        THEN SUM(daily_pnl) END AS daily_pnl,
                    SUM(cash_balance) AS cash_balance
             FROM ledger.account_nav_snapshots
             WHERE tenant_id = $1 AND as_of >= $2
@@ -60,10 +63,12 @@ async def nav_history(
         )
     else:
         rows = await conn.fetch(
-            f"""
+            """
             SELECT as_of,
-                   SUM(total_nav) AS total_nav,
-                   SUM(daily_pnl) AS daily_pnl,
+                   CASE WHEN COUNT(*) = COUNT(total_nav)
+                        THEN SUM(total_nav) END AS total_nav,
+                   CASE WHEN COUNT(*) = COUNT(daily_pnl)
+                        THEN SUM(daily_pnl) END AS daily_pnl,
                    SUM(cash_balance) AS cash_balance
             FROM ledger.account_nav_snapshots
             WHERE tenant_id = $1
@@ -78,10 +83,10 @@ async def nav_history(
 async def latest_positions(
     conn: asyncpg.Connection, tenant_id: str
 ) -> list[asyncpg.Record]:
-    """Latest position snapshot per instrument with instrument metadata + ticker."""
+    """Latest position snapshot per account+instrument with metadata."""
     return await conn.fetch(
         f"""
-        SELECT DISTINCT ON (ps.instrument_id)
+        SELECT DISTINCT ON (ps.account_id, ps.instrument_id)
             {_SELECT_POSITION_COLUMNS}
         FROM ledger.position_snapshots ps
         JOIN reference.instruments i ON i.id = ps.instrument_id
@@ -95,7 +100,7 @@ async def latest_positions(
             LIMIT 1
         ) a ON TRUE
         WHERE ps.tenant_id = $1
-        ORDER BY ps.instrument_id, ps.as_of DESC
+        ORDER BY ps.account_id, ps.instrument_id, ps.as_of DESC
         """,
         tenant_id,
     )

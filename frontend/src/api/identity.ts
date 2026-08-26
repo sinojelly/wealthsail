@@ -20,6 +20,7 @@ export async function login(
 export async function register(input: {
   email: string;
   password: string;
+  invitationToken: string;
   nickname?: string;
 }): Promise<{ userId: string; email: string; nickname: string; tenantId: string; tenantName: string }> {
   const envelope = await request<{
@@ -31,6 +32,25 @@ export async function register(input: {
   }>("/v1/auth/register", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function refreshSession(): Promise<LoginResponse> {
+  const envelope = await request<LoginResponse>("/v1/auth/refresh", {
+    method: "POST",
+  });
+  return envelope.data;
+}
+
+export async function logoutSession(): Promise<void> {
+  await request<{ revoked: boolean }>("/v1/auth/logout", { method: "POST" });
+}
+
+export async function switchTenant(tenantId: string): Promise<LoginResponse> {
+  const envelope = await request<LoginResponse>("/v1/auth/switch-tenant", {
+    method: "POST",
+    body: JSON.stringify({ tenantId }),
   });
   return envelope.data;
 }
@@ -85,19 +105,17 @@ export async function createBindingCredential(): Promise<BindingCredential> {
   return envelope.data;
 }
 
-/** 消费一次性绑定口令（企微回调/模拟确认路径）。 */
-export async function consumeBindingCredential(input: {
-  token: string;
-  externalUserId: string;
-  externalUsername?: string;
-}): Promise<{ bindingId: string; status: string; channelType: string }> {
-  const envelope = await request<{
-    bindingId: string;
-    status: string;
-    channelType: string;
-  }>("/v1/auth/wecom/binding", {
+/** 二次认证后软撤销本人当前租户的企业微信绑定。 */
+export async function revokeBinding(
+  bindingId: string,
+  password: string,
+): Promise<{ bindingId: string; status: string }> {
+  const envelope = await request<{ bindingId: string; status: string }>(
+    `/v1/auth/wecom/bindings/${bindingId}/revoke`,
+    {
     method: "POST",
-    body: JSON.stringify(input),
-  });
+      body: JSON.stringify({ password }),
+    },
+  );
   return envelope.data;
 }

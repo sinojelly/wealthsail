@@ -1,7 +1,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
-import { useAuthSession } from "./auth-session";
+import { canViewOperations, useAuthSession } from "./auth-session";
 
 const DashboardPage = lazy(() => import("../features/dashboard/DashboardPage"));
 const OnboardingPage = lazy(
@@ -32,10 +32,27 @@ function LazyPage({ children }: { children: ReactNode }) {
   );
 }
 
-/** 未登录访问受保护路由 → 登录页。 */
+/** 未登录访问受保护路由时回到登录页。 */
 function RequireSession({ children }: { children: ReactNode }) {
   const session = useAuthSession();
   if (!session) return <Navigate replace to="/login" />;
+  return <>{children}</>;
+}
+
+/**
+ * 运维接口仍会执行服务端 RBAC；此处同时阻止普通成员手工输入 URL 进入页面，
+ * 避免只隐藏导航而留下前端直接访问路径。
+ */
+function RequireOperationsRole({ children }: { children: ReactNode }) {
+  const session = useAuthSession();
+  if (!canViewOperations(session)) {
+    return (
+      <section className="empty-state" role="alert">
+        <h1>无权访问运维页面</h1>
+        <p>该页面仅向家庭账户所有者和管理员开放。</p>
+      </section>
+    );
+  }
   return <>{children}</>;
 }
 
@@ -102,9 +119,11 @@ export function AppRoutes() {
         <Route
           path="operations"
           element={
-            <LazyPage>
-              <OperationsPage />
-            </LazyPage>
+            <RequireOperationsRole>
+              <LazyPage>
+                <OperationsPage />
+              </LazyPage>
+            </RequireOperationsRole>
           }
         />
       </Route>

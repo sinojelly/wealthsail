@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime
 from typing import Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from backend.config import Settings
 
@@ -83,9 +84,15 @@ class Scheduler:
         self,
         settings: Settings,
         execute: Callable[[str, datetime], Awaitable[None]],
+        *,
+        trading_day_check: Callable[[datetime], Awaitable[bool]] | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._settings = settings
         self._execute = execute
+        self._trading_day_check = trading_day_check
+        timezone = ZoneInfo(settings.timezone)
+        self._now_provider = now_provider or (lambda: datetime.now(timezone))
         self._task: asyncio.Task | None = None
         self._last_fired: set[tuple[str, str]] = set()
 
@@ -115,10 +122,16 @@ class Scheduler:
             await asyncio.sleep(self._settings.scheduler_tick_seconds)
 
     async def _tick(self) -> None:
-        now = datetime.now()
-        for schedule in SCHEDULES:
-            if not is_due(schedule, now):
-                continue
+        now = self._now_provider()
+        if now.tzinfo is None:
+            raise ValueError("scheduler clock must return a timezone-aware datetime")
+        due = [schedule for schedule in SCHEDULES if is_due(schedule, now)]
+        if not due:
+            return
+        if self._trading_day_check is not None and not await self._trading_day_check(now):
+            logger.info("calendar marks %s as non-trading; sessions skipped", now.date())
+            return
+        for schedule in due:
             key = (schedule.session, now.strftime("%Y%m%d%H%M"))
             if key in self._last_fired:
                 continue

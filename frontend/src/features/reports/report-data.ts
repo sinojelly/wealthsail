@@ -6,13 +6,10 @@ export interface EvidenceRecord {
   title: string;
   content: string;
   source: string;
-  sourceUrl: string;
+  sourceUrl?: string;
   asOf: string;
-  publishedAt: string;
-  retrievedAt: string;
-  retrievalMethod: string;
-  schemaVersion: string;
-  modelRunId?: string;
+  claimType: string;
+  sourceSnapshotId?: string;
   quality: QualityCode;
-  hash: string;
+  hash?: string;
 }

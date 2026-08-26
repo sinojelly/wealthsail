@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import OnboardingPage from "./OnboardingPage";
 import { renderWithSession } from "../../test/render-with-session";
 
-it("previews an import batch and commits only validated rows", async () => {
+it("previews an import batch without fabricating a successful ledger write", async () => {
   const user = userEvent.setup();
   renderWithSession(<OnboardingPage />);
 
@@ -17,8 +17,8 @@ it("previews an import batch and commits only validated rows", async () => {
   const dialog = screen.getByRole("dialog", { name: "批次导入预览" });
   expect(within(dialog).getByText("1 条可导入")).toBeInTheDocument();
   expect(within(dialog).getByText("1 条需修正")).toBeInTheDocument();
-  await user.click(
-    within(dialog).getByRole("button", { name: "导入有效记录" }),
-  );
-  expect(await screen.findByText("已导入 1 条有效记录")).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("button", { name: "导入命令尚未接入" }),
+  ).toBeDisabled();
+  expect(screen.queryByText(/已导入 .* 条有效记录/)).not.toBeInTheDocument();
 });

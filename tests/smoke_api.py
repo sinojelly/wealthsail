@@ -1,7 +1,7 @@
 """WealthSail API smoke test — exercises every required endpoint end-to-end.
 
 Run from the repo root:  .venv/bin/python tests/smoke_api.py
-Requires: local API on 127.0.0.1:8000, local Postgres seeded (migrations 001-011).
+Requires: local API on 127.0.0.1:8000, local Postgres seeded (migrations 001-013).
 """
 
 from __future__ import annotations
@@ -67,15 +67,21 @@ def main() -> int:
         check("nav-trend last=506000", points[-1]["totalNav"] == "506000.00", str(points[-1]))
 
     # ---- reports ----------------------------------------------------------
-    r = client.get("/reports/list", headers=headers)
-    check("reports/list 200", r.status_code == 200, r.text[:200])
+    # Query the deterministic seed date explicitly so this smoke test remains
+    # rerunnable after it generates reports for the current trade date.
+    seed_trade_date = "2026-08-24"
+    r = client.get(f"/reports/list?tradeDate={seed_trade_date}", headers=headers)
+    check("reports/list seeded date 200", r.status_code == 200, r.text[:200])
     if r.status_code == 200:
         reps = r.json()["data"]
         check("reports/list 4 sessions", len(reps) == 4, str(len(reps)))
         sessions = {x["session"] for x in reps}
         check("reports sessions complete", sessions == {"PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET"}, str(sessions))
 
-    r = client.get("/reports/list?session=PRE_MARKET", headers=headers)
+    r = client.get(
+        f"/reports/list?tradeDate={seed_trade_date}&session=PRE_MARKET",
+        headers=headers,
+    )
     check("reports/list filter PRE_MARKET", r.status_code == 200 and len(r.json()["data"]) == 1)
 
     r = client.get("/reports/72000000-0000-0000-0000-000000000002", headers=headers)
@@ -106,7 +112,10 @@ def main() -> int:
     check("reports/generate FUND_1430 200", r.status_code == 200, r.text[:300])
     if r.status_code == 200:
         gen = r.json()["data"]
-        check("generate new version", gen["version"] >= 2, str(gen.get("version")))
+        # A seed may belong to a different trade date.  In that case today's
+        # report correctly starts at v1; version increments are scoped to the
+        # tenant + session + trade-date chain, not global history.
+        check("generate has valid positive version", gen["version"] >= 1, str(gen.get("version")))
 
     r = client.post("/reports/generate", json={"session": "BAD_SESSION"}, headers=headers)
     check("reports/generate invalid session → 400", r.status_code == 400 and r.json()["error"]["code"] == "VALIDATION_ERROR")
@@ -137,25 +146,11 @@ def main() -> int:
 
     r = client.post("/auth/wecom/binding", json={}, headers=headers)
     check("wecom/binding challenge 200", r.status_code == 200, r.text[:200])
-    challenge_token = None
     if r.status_code == 200:
         b = r.json()["data"]
         check("binding token WS- format", b["token"].startswith("WS-"), b["token"])
         check("binding expiresIn=900", b["expiresInSeconds"] == 900, str(b["expiresInSeconds"]))
-        challenge_token = b["token"]
-
-    if challenge_token:
-        r = client.post("/auth/wecom/binding",
-                        json={"token": challenge_token, "externalUserId": "zhangming_wecom_001", "externalUsername": "张明(企微)"},
-                        headers=headers)
-        check("wecom/binding consume 200", r.status_code == 200, r.text[:300])
-        if r.status_code == 200:
-            check("binding consumed ACTIVE", r.json()["data"]["status"] == "ACTIVE")
-
-        r = client.post("/auth/wecom/binding",
-                        json={"token": challenge_token, "externalUserId": "replay_attempt"},
-                        headers=headers)
-        check("binding replay rejected → 404", r.status_code == 404, r.text[:200])
+        check("binding cannot be browser-consumed", "externalUserId" not in b)
 
     # ---- operations (OWNER only) ------------------------------------------
     for path in ("/operations/jobs", "/operations/freshness", "/operations/outbox", "/operations/audit?limit=10"):
@@ -197,7 +192,7 @@ def main() -> int:
     # ---- WeCom GET callback verification -----------------------------------
     token_w = "dev-wecom-callback-token"
     aes_key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
-    from backend.integrations.wecom import wecom_encrypt, verify_signature
+    from backend.integrations.wecom import wecom_encrypt
 
     ts = str(int(time.time()))
     nonce = "abc123"

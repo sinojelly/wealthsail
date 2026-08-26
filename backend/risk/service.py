@@ -9,13 +9,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
 from decimal import Decimal
 
 import asyncpg
 
-from backend.common.formatting import fmt_money, merge_quality, pct
-from backend.errors import DataUnavailableError
+from backend.common.auth import verify_password
+from backend.common.formatting import fmt_money, pct
+from backend.common.tenancy import TenantContext
+from backend.dependencies import write_audit
+from backend.errors import (
+    AuthRequiredError,
+    DataUnavailableError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError_,
+    VersionConflictError,
+)
 from backend.portfolio import repository as portfolio_repo
 from backend.portfolio.service import ZERO, _d
 
@@ -31,6 +40,265 @@ POLICY_FIELDS = (
     "cash_need_amount",
     "alert_budget_per_day",
 )
+
+L1_POLICY_FIELDS = (
+    "benchmark",
+    "horizonMonths",
+    "maxPosition",
+    "maxDrawdown",
+    "minCash",
+    "maxAlertsPerDay",
+    "silenceMinutes",
+)
+
+
+def _canonical_decimal(value: object) -> str:
+    decimal = Decimal(str(value))
+    if not decimal.is_finite():
+        raise ValidationError_("风险预算必须是有限数值")
+    return format(decimal.normalize(), "f")
+
+
+def canonical_policy_hash(values: dict) -> str:
+    """Hash every L1 field that can affect preview/confirmation semantics."""
+    missing = [field for field in L1_POLICY_FIELDS if field not in values]
+    if missing:
+        raise ValidationError_(f"风险政策缺少字段: {', '.join(missing)}")
+    canonical = {
+        "benchmark": str(values["benchmark"]).strip().upper(),
+        "horizonMonths": int(values["horizonMonths"]),
+        "maxPosition": _canonical_decimal(values["maxPosition"]),
+        "maxDrawdown": _canonical_decimal(values["maxDrawdown"]),
+        "minCash": _canonical_decimal(values["minCash"]),
+        "maxAlertsPerDay": int(values["maxAlertsPerDay"]),
+        "silenceMinutes": int(values["silenceMinutes"]),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validate_l1_policy(values: dict) -> dict:
+    policy_hash = canonical_policy_hash(values)
+    normalized = {
+        "benchmark": str(values["benchmark"]).strip().upper(),
+        "horizonMonths": int(values["horizonMonths"]),
+        "maxPosition": Decimal(str(values["maxPosition"])),
+        "maxDrawdown": Decimal(str(values["maxDrawdown"])),
+        "minCash": Decimal(str(values["minCash"])),
+        "maxAlertsPerDay": int(values["maxAlertsPerDay"]),
+        "silenceMinutes": int(values["silenceMinutes"]),
+        "policyHash": policy_hash,
+    }
+    ranges = (
+        ("maxPosition", normalized["maxPosition"], Decimal("1"), Decimal("100")),
+        ("maxDrawdown", normalized["maxDrawdown"], Decimal("1"), Decimal("80")),
+        ("minCash", normalized["minCash"], Decimal("0"), Decimal("100")),
+    )
+    for field, value, lower, upper in ranges:
+        if value < lower or value > upper:
+            raise ValidationError_(f"{field} 超出允许范围")
+    if not 3 <= normalized["horizonMonths"] <= 120:
+        raise ValidationError_("horizonMonths 超出允许范围")
+    if not 1 <= normalized["maxAlertsPerDay"] <= 20:
+        raise ValidationError_("maxAlertsPerDay 超出允许范围")
+    if not 5 <= normalized["silenceMinutes"] <= 1440:
+        raise ValidationError_("silenceMinutes 超出允许范围")
+    return normalized
+
+
+async def preview_policy(
+    conn: asyncpg.Connection,
+    ctx: TenantContext,
+    values: dict,
+    *,
+    idempotency_key: str,
+) -> dict:
+    """Persist an auditable PREVIEW row; it has no effect on risk checks."""
+    if ctx.tenant_role not in {"OWNER", "ADMIN", "EDITOR"}:
+        raise ForbiddenError("当前角色不能编辑风险政策")
+    if not idempotency_key:
+        raise ValidationError_("缺少 Idempotency-Key")
+    normalized = _validate_l1_policy(values)
+    existing = await conn.fetchrow(
+        """
+        SELECT id, version, policy_hash, single_position_limit
+          FROM risk.investment_policies
+         WHERE tenant_id=$1 AND idempotency_key=$2
+        """,
+        ctx.tenant_id,
+        idempotency_key,
+    )
+    if existing:
+        if existing["policy_hash"] != normalized["policyHash"]:
+            raise VersionConflictError("同一幂等键对应了不同政策内容")
+        return await _preview_dto(conn, ctx.tenant_id, existing)
+
+    next_version = int(
+        await conn.fetchval(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM risk.investment_policies WHERE tenant_id=$1",
+            ctx.tenant_id,
+        )
+    )
+    row = await conn.fetchrow(
+        """
+        INSERT INTO risk.investment_policies
+            (tenant_id, max_drawdown_limit, single_position_limit,
+             cash_target_pct, investment_horizon_months, alert_budget_per_day,
+             benchmark_code, default_silence_minutes, policy_status, version,
+             policy_hash, previewed_at, idempotency_key)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PREVIEW',$9,$10,now(),$11)
+        RETURNING id, version, policy_hash, single_position_limit
+        """,
+        ctx.tenant_id,
+        normalized["maxDrawdown"],
+        normalized["maxPosition"],
+        normalized["minCash"],
+        normalized["horizonMonths"],
+        normalized["maxAlertsPerDay"],
+        normalized["benchmark"],
+        normalized["silenceMinutes"],
+        next_version,
+        normalized["policyHash"],
+        idempotency_key,
+    )
+    await write_audit(
+        conn,
+        tenant_id=ctx.tenant_id,
+        actor_type="USER",
+        actor_id=ctx.user_id,
+        action="RISK_POLICY_PREVIEWED",
+        resource_type="risk.investment_policies",
+        resource_id=str(row["id"]),
+        details={"version": next_version, "policy_hash": normalized["policyHash"]},
+    )
+    return await _preview_dto(conn, ctx.tenant_id, row)
+
+
+async def _preview_dto(conn, tenant_id: str, row) -> dict:
+    current_limit = await conn.fetchval(
+        """
+        SELECT single_position_limit FROM risk.investment_policies
+         WHERE tenant_id=$1 AND policy_status='CONFIRMED'
+         ORDER BY version DESC LIMIT 1
+        """,
+        tenant_id,
+    )
+    impacted = await conn.fetchval(
+        """
+        WITH latest_nav AS (
+            SELECT CASE WHEN COUNT(*) = COUNT(total_nav)
+                        THEN SUM(total_nav) END total_nav
+              FROM (
+                SELECT DISTINCT ON (account_id) account_id,total_nav
+                  FROM ledger.account_nav_snapshots
+                 WHERE tenant_id=$1 ORDER BY account_id,as_of DESC
+            ) n
+        ), latest_positions AS (
+            SELECT DISTINCT ON (account_id,instrument_id) market_value
+              FROM ledger.position_snapshots
+             WHERE tenant_id=$1 ORDER BY account_id,instrument_id,as_of DESC
+        )
+        SELECT COUNT(*) FROM latest_positions, latest_nav
+         WHERE market_value IS NOT NULL AND total_nav > 0
+           AND market_value / total_nav * 100 > $2
+        """,
+        tenant_id,
+        row["single_position_limit"],
+    )
+    impacted_count = int(impacted or 0)
+    return {
+        "draftId": str(row["id"]),
+        "expectedVersion": int(row["version"]),
+        "previousMaxPosition": fmt_money(current_limit) if current_limit is not None else None,
+        "nextMaxPosition": fmt_money(row["single_position_limit"]),
+        "impactedHoldings": impacted_count,
+        "newAlerts": impacted_count,
+        "policyHash": row["policy_hash"],
+        "status": "PREVIEW",
+    }
+
+
+async def confirm_policy(
+    conn: asyncpg.Connection,
+    ctx: TenantContext,
+    *,
+    draft_id: str,
+    expected_version: int,
+    policy_hash: str,
+    password: str,
+) -> dict:
+    """Reauthenticate and atomically promote a PREVIEW to CONFIRMED."""
+    if ctx.tenant_role not in {"OWNER", "ADMIN"}:
+        raise ForbiddenError("只有所有者或管理员可以确认风险政策")
+    draft = await conn.fetchrow(
+        "SELECT * FROM risk.investment_policies WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+        ctx.tenant_id,
+        draft_id,
+    )
+    if draft is None:
+        raise NotFoundError("风险政策预览不存在")
+    if draft["policy_status"] == "CONFIRMED":
+        if draft["policy_hash"] != policy_hash:
+            raise VersionConflictError("政策哈希不匹配")
+        return {"id": str(draft["id"]), "version": draft["version"], "status": "CONFIRMED", "policyHash": draft["policy_hash"]}
+    if (
+        draft["policy_status"] != "PREVIEW"
+        or draft["version"] != expected_version
+        or draft["policy_hash"] != policy_hash
+    ):
+        raise VersionConflictError("政策预览已变化，请重新预览")
+    password_hash = await conn.fetchval(
+        "SELECT password_hash FROM identity.profiles WHERE id=$1", ctx.user_id
+    )
+    if not verify_password(password, password_hash):
+        raise AuthRequiredError("重新验证口令失败")
+
+    current = await conn.fetchrow(
+        """
+        SELECT id, version FROM risk.investment_policies
+         WHERE tenant_id=$1 AND policy_status='CONFIRMED'
+         ORDER BY version DESC LIMIT 1 FOR UPDATE
+        """,
+        ctx.tenant_id,
+    )
+    if current:
+        await conn.execute(
+            """
+            UPDATE risk.investment_policies
+               SET policy_status='RETIRED', effective_to=CURRENT_DATE,
+                   version=version+1
+             WHERE id=$1
+            """,
+            current["id"],
+        )
+    row = await conn.fetchrow(
+        """
+        UPDATE risk.investment_policies
+           SET policy_status='CONFIRMED', version=version+1,
+               confirmed_at=now(), confirmed_by=$2,
+               confirmation_provenance='USER_CONFIRMED'
+         WHERE id=$1
+        RETURNING id, version, policy_status, policy_hash
+        """,
+        draft_id,
+        ctx.user_id,
+    )
+    await write_audit(
+        conn,
+        tenant_id=ctx.tenant_id,
+        actor_type="USER",
+        actor_id=ctx.user_id,
+        action="RISK_POLICY_CONFIRMED",
+        resource_type="risk.investment_policies",
+        resource_id=str(row["id"]),
+        details={"version": row["version"], "policy_hash": row["policy_hash"]},
+    )
+    return {
+        "id": str(row["id"]),
+        "version": row["version"],
+        "status": row["policy_status"],
+        "policyHash": row["policy_hash"],
+    }
 
 
 def _policy_hash(row: asyncpg.Record) -> str:
@@ -202,6 +470,11 @@ async def _compute_checks(
     navs = await portfolio_repo.latest_nav_per_account(conn, tenant_id)
     if not navs:
         raise DataUnavailableError("暂无资产快照，无法计算风控检查", retryable=False)
+    if any(row["total_nav"] is None for row in navs):
+        raise DataUnavailableError(
+            "组合估值不完整，无法安全计算仓位、现金比例和回撤检查",
+            retryable=False,
+        )
     total_asset = sum((_d(r["total_nav"]) for r in navs), ZERO)
     cash = sum((_d(r["cash_balance"]) for r in navs), ZERO)
     positions = await portfolio_repo.latest_positions(conn, tenant_id)
@@ -233,10 +506,15 @@ async def _compute_checks(
     # 2. 组合最大回撤（近 60 个交易日峰值回撤）
     drawdown_limit = _d(policy["max_drawdown_limit"])
     history = await portfolio_repo.nav_history(conn, tenant_id, limit=60)
-    if drawdown_limit and len(history) >= 2:
+    complete_history = [row for row in history if row["total_nav"] is not None]
+    if (
+        drawdown_limit
+        and len(complete_history) == len(history)
+        and len(complete_history) >= 2
+    ):
         peak = Decimal("-inf")
         max_drawdown = Decimal("0.00")
-        for row in history:
+        for row in complete_history:
             nav = _d(row["total_nav"])
             peak = max(peak, nav)
             if peak > 0:

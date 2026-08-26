@@ -20,7 +20,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from backend.common.auth import AuthSession, decode_access_token
 from backend.common.database import Pool, create_pool
 from backend.common.tenancy import TenantContext, resolve_tenant_context
-from backend.config import Settings, get_settings
+from backend.config import Settings
 from backend.errors import AuthRequiredError
 
 logger = logging.getLogger("wealthsail.dependencies")

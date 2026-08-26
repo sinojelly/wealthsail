@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   ArrowLeft,
-  CheckCircle2,
   Clock3,
   Database,
   FileCheck2,
@@ -16,11 +15,9 @@ import { parseImportRows, type ImportRow } from "./import-parser";
 export default function OnboardingPage() {
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [importedCount, setImportedCount] = useState<number | null>(null);
   function preview(source: string) {
     setRows(parseImportRows(source));
     setPreviewOpen(true);
-    setImportedCount(null);
   }
   return (
     <>
@@ -34,17 +31,6 @@ export default function OnboardingPage() {
           </Link>
         }
       />
-      {importedCount !== null ? (
-        <div className="alert import-success">
-          <CheckCircle2 size={16} />
-          <div>
-            <strong>已导入 {importedCount} 条有效记录</strong>
-            <p>
-              导入批次、原始输入哈希和逐行结果已写入审计日志；无效行未写入。
-            </p>
-          </div>
-        </div>
-      ) : null}
       <div className="onboarding-layout">
         <ImportBatchForm onPreview={preview} />
         <aside className="onboarding-aside">
@@ -96,16 +82,10 @@ export default function OnboardingPage() {
               <h2>最近导入</h2>
             </div>
             <div className="panel-body">
-              <div>
-                <strong className="mono">BATCH-20260715-01</strong>
-                <span>2026-07-15 08:42</span>
-                <small>6 条成功 · 0 条失败</small>
-              </div>
-              <div>
-                <strong className="mono">BATCH-20260702-02</strong>
-                <span>2026-07-02 20:18</span>
-                <small>2 条成功 · 1 条跳过</small>
-              </div>
+              <p className="muted">
+                后端导入命令与批次历史尚未接入；本页当前只做本地格式校验和预览，
+                不会写入账本。
+              </p>
             </div>
           </section>
         </aside>
@@ -114,10 +94,6 @@ export default function OnboardingPage() {
         open={previewOpen}
         rows={rows}
         onClose={() => setPreviewOpen(false)}
-        onCommit={(count) => {
-          setImportedCount(count);
-          setPreviewOpen(false);
-        }}
       />
     </>
   );
