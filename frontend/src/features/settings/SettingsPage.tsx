@@ -10,6 +10,7 @@ import {
 import { useMe } from "../../api/hooks";
 import PageHeader from "../../components/layout/PageHeader";
 import ProfileCard from "./components/ProfileCard";
+import InvitationCard from "./components/InvitationCard";
 import TenantRoleCard from "./components/TenantRoleCard";
 import WeComBindingCard from "./components/WeComBindingCard";
 
@@ -42,6 +43,12 @@ export default function SettingsPage() {
             tenants={data?.tenants ?? []}
             activeTenantId={data?.activeTenantId ?? ""}
             activeRole={data?.activeRole ?? "VIEWER"}
+          />
+          <InvitationCard
+            activeRole={data?.activeRole ?? "VIEWER"}
+            tenantName={
+              data?.tenants.find((tenant) => tenant.tenantId === data.activeTenantId)?.name ?? ""
+            }
           />
         </div>
         <aside className="settings-aside">

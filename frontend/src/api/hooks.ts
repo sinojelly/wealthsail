@@ -22,6 +22,8 @@ import type {
   BindingCredential,
   FreshnessResponse,
   InstrumentSearchResult,
+  InvitationCredential,
+  InvitableTenantRole,
   LoginResponse,
   MeResponse,
   NavTrend,
@@ -224,6 +226,16 @@ export function useCreateBindingCredential() {
   return useMutation({
     mutationFn: (): Promise<BindingCredential> =>
       identityApi.createBindingCredential(),
+    onError: onAuthFailure,
+  });
+}
+
+export function useCreateInvitation() {
+  return useMutation({
+    mutationFn: (input: {
+      email: string;
+      role: InvitableTenantRole;
+    }): Promise<InvitationCredential> => identityApi.createInvitation(input),
     onError: onAuthFailure,
   });
 }

@@ -2518,6 +2518,113 @@ button:disabled {
   font-size: 8px;
   line-height: 1.45;
 }
+.invitation-card .panel-header > svg {
+  color: var(--teal);
+}
+.invitation-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+.invitation-form {
+  display: grid;
+  gap: 12px;
+}
+.invitation-form .field {
+  display: grid;
+  gap: 6px;
+}
+.invitation-form label {
+  color: var(--slate-700);
+  font-size: 9px;
+  font-weight: 650;
+}
+.invitation-role-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.invitation-role-note > svg {
+  color: var(--teal);
+}
+.invitation-admin-warning {
+  margin: 0;
+}
+.invitation-submit {
+  justify-self: start;
+}
+.invitation-result {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #99f6e4;
+  border-radius: 10px;
+  background: #f0fdfa;
+}
+.invitation-result-heading {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.invitation-result-heading > div {
+  display: grid;
+  gap: 3px;
+}
+.invitation-result-heading strong {
+  color: #0f766e;
+  font-size: 11px;
+}
+.invitation-result-heading p {
+  margin: 0;
+  color: var(--slate-500);
+  font-size: 8px;
+  line-height: 1.5;
+}
+.invitation-result-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--teal);
+  background: #ccfbf1;
+}
+.invitation-result > code {
+  overflow-wrap: anywhere;
+  padding: 11px;
+  border: 1px solid #5eead4;
+  border-radius: 7px;
+  color: var(--navy);
+  background: white;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.invitation-result dl {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+.invitation-result dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.invitation-result dt,
+.invitation-result dd {
+  margin: 0;
+  font-size: 8px;
+}
+.invitation-result dt {
+  color: var(--slate-500);
+}
+.invitation-result dd {
+  color: var(--slate-700);
+  font-family: var(--font-mono);
+}
 .security-list {
   display: grid;
 }
@@ -2617,6 +2724,9 @@ button:disabled {
   .member-row > small {
     grid-column: 2;
     text-align: left;
+  }
+  .invitation-body {
+    grid-template-columns: 1fr;
   }
 }
 

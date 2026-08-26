@@ -13,8 +13,6 @@ sys.path.insert(0, "/home/lenovo/wealthsail")
 
 import asyncpg
 
-from backend.config import get_settings
-
 IDEM = "push-1800-test-20260826"
 
 

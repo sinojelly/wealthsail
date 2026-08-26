@@ -27,7 +27,6 @@ from backend.common.auth import (
 from backend.common.database import (
     Pool,
     api_system_transaction,
-    system_connection,
     tenant_transaction,
 )
 from backend.common.security import (

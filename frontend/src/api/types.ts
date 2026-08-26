@@ -5,6 +5,7 @@ export type DecimalString = string;
 export type QualityCode = "FRESH" | "ESTIMATED" | "STALE" | "MISSING";
 export type ReportSession = "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
 export type TenantRole = "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
+export type InvitableTenantRole = Exclude<TenantRole, "OWNER">;
 
 // ---------------------------------------------------------------------------
 // 统一信封
@@ -310,6 +311,14 @@ export interface BindingCredential {
   token: string;
   expiresInSeconds: number;
   channelType: string;
+}
+
+export interface InvitationCredential {
+  invitationId: string;
+  token: string;
+  email: string;
+  role: InvitableTenantRole;
+  expiresAt: string;
 }
 
 export interface MeProfile {

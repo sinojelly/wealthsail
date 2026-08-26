@@ -5,7 +5,14 @@ import WeComBindingCard from "./components/WeComBindingCard";
 import { renderWithSession } from "../../test/render-with-session";
 import { meFixture } from "../../test/fixtures";
 
-const { revokeBinding } = vi.hoisted(() => ({
+const { createInvitation, revokeBinding } = vi.hoisted(() => ({
+  createInvitation: vi.fn().mockResolvedValue({
+    invitationId: "invite-001",
+    token: "INVITE-OWNER-ONLY-TEST-TOKEN",
+    email: "new.admin@example.com",
+    role: "ADMIN",
+    expiresAt: "2026-09-02T09:30:00+08:00",
+  }),
   revokeBinding: vi.fn().mockResolvedValue({ bindingId: "binding-001", status: "REVOKED" }),
 }));
 
@@ -29,7 +36,41 @@ vi.mock("../../api/hooks", () => ({
     isError: false,
     error: null,
   }),
+  useCreateInvitation: () => ({
+    mutateAsync: createInvitation,
+    isPending: false,
+    error: null,
+  }),
 }));
+
+afterEach(() => {
+  meFixture.activeRole = "OWNER";
+  vi.clearAllMocks();
+});
+
+it("lets an owner create a one-time administrator invitation", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<SettingsPage />);
+
+  await user.type(screen.getByLabelText("受邀邮箱"), "new.admin@example.com");
+  await user.selectOptions(screen.getByLabelText("成员角色"), "ADMIN");
+  await user.click(screen.getByRole("button", { name: "生成邀请码" }));
+
+  expect(createInvitation).toHaveBeenCalledWith({
+    email: "new.admin@example.com",
+    role: "ADMIN",
+  });
+  expect(await screen.findByText("INVITE-OWNER-ONLY-TEST-TOKEN")).toBeInTheDocument();
+  expect(screen.getByText("邀请码只显示一次")).toBeInTheDocument();
+});
+
+it("does not render invitation controls for a viewer", () => {
+  meFixture.activeRole = "VIEWER";
+  renderWithSession(<SettingsPage />);
+
+  expect(screen.queryByRole("heading", { name: "邀请成员" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "生成邀请码" })).not.toBeInTheDocument();
+});
 
 it("waits for a verified WeCom callback instead of simulating an external identity", async () => {
   const user = userEvent.setup();

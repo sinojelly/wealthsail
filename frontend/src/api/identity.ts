@@ -1,6 +1,8 @@
 import { API_BASE_URL, getAccessToken, request } from "./client";
 import type {
   BindingCredential,
+  InvitationCredential,
+  InvitableTenantRole,
   LoginResponse,
   MeProfile,
   MeResponse,
@@ -30,6 +32,17 @@ export async function register(input: {
     tenantId: string;
     tenantName: string;
   }>("/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function createInvitation(input: {
+  email: string;
+  role: InvitableTenantRole;
+}): Promise<InvitationCredential> {
+  const envelope = await request<InvitationCredential>("/v1/auth/invitations", {
     method: "POST",
     body: JSON.stringify(input),
   });

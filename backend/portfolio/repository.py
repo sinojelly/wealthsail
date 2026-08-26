@@ -6,7 +6,7 @@ queries still carry an explicit ``tenant_id`` predicate as defense in depth.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 import asyncpg
