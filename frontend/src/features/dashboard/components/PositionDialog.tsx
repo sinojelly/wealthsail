@@ -1,63 +1,83 @@
-import { useState } from "react";
-import { Loader2, Plus, Save, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle2, Loader2, Plus, Search, ShieldCheck, X } from "lucide-react";
 import Dialog from "../../../components/accessibility/Dialog";
 import {
   useAddPosition,
+  useConfirmPositionImport,
   useInstrumentSearch,
-  useUpdatePosition,
 } from "../../../api/hooks";
 import type {
   InstrumentSearchResult,
-  PositionDto,
+  PositionImportDraft,
 } from "../../../api/types";
 
 interface PositionDialogProps {
   open: boolean;
-  mode: "add" | "edit";
-  initial?: PositionDto | null;
   onClose: () => void;
 }
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+/** Return the user's local calendar day; UTC conversion can otherwise shift China dates. */
+function todayLocalIso(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function isValidNumber(value: string): boolean {
   return /^\d+(\.\d+)?$/.test(value.trim());
 }
 
-export default function PositionDialog({
-  open,
-  mode,
-  initial,
-  onClose,
-}: PositionDialogProps) {
-  const isAdd = mode === "add";
-  // 组件由父级以 key 重挂载（每次打开重置状态），此处直接以 props 初始化。
+export default function PositionDialog({ open, onClose }: PositionDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selected, setSelected] = useState<InstrumentSearchResult | null>(null);
-  const [quantity, setQuantity] = useState(initial ? initial.quantity : "");
-  const [avgCost, setAvgCost] = useState(initial ? initial.avgCost : "");
-  const [buyDate, setBuyDate] = useState(todayIso());
+  const [quantity, setQuantity] = useState("");
+  const [avgCost, setAvgCost] = useState("");
+  const [baselineDate, setBaselineDate] = useState(todayLocalIso());
+  const [draft, setDraft] = useState<PositionImportDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A retry of the same user intent must reuse its key. A new dialog mount gets new keys.
+  const [draftKey] = useState(() => crypto.randomUUID());
+  const [confirmKey] = useState(() => crypto.randomUUID());
 
-  const addMutation = useAddPosition();
-  const updateMutation = useUpdatePosition();
+  const createMutation = useAddPosition();
+  const confirmMutation = useConfirmPositionImport();
   const search = useInstrumentSearch(
-    searchQuery,
-    isAdd && !selected && open,
+    debouncedQuery,
+    !selected && !draft && open,
   );
 
-  const submitting = addMutation.isPending || updateMutation.isPending;
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedQuery(searchQuery.trim()),
+      300,
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const submitting = createMutation.isPending || confirmMutation.isPending;
+  const formValid =
+    selected !== null &&
+    isValidNumber(quantity) &&
+    Number(quantity) > 0 &&
+    isValidNumber(avgCost) &&
+    Number(avgCost) >= 0;
 
   function pickInstrument(item: InstrumentSearchResult) {
     setSelected(item);
     setSearchQuery("");
+    setDebouncedQuery("");
     setError(null);
   }
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
+    if (!selected) {
+      setError("请先搜索并选择标的");
+      return;
+    }
     if (!isValidNumber(quantity) || Number(quantity) <= 0) {
       setError("数量必须为大于 0 的数字");
       return;
@@ -66,66 +86,87 @@ export default function PositionDialog({
       setError("成本价必须为不小于 0 的数字");
       return;
     }
+
     setError(null);
     try {
-      if (isAdd) {
-        if (!selected) {
-          setError("请先搜索并选择标的");
-          return;
-        }
-        await addMutation.mutateAsync({
+      const created = await createMutation.mutateAsync({
+        payload: {
           symbol: selected.symbol,
           name: selected.name,
           assetType: selected.type,
           quantity: quantity.trim(),
           avgCost: avgCost.trim(),
-          buyDate: buyDate || undefined,
-          idempotencyKey: crypto.randomUUID(),
-        });
-      } else if (initial) {
-        await updateMutation.mutateAsync({
-          symbol: initial.symbol,
-          payload: {
-            quantity: quantity.trim(),
-            avgCost: avgCost.trim(),
-            buyDate: buyDate || undefined,
-            idempotencyKey: crypto.randomUUID(),
-          },
-        });
-      }
-      onClose();
+          buyDate: baselineDate || undefined,
+        },
+        idempotencyKey: draftKey,
+      });
+      setDraft(created);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败，请稍后重试");
+      setError(err instanceof Error ? err.message : "创建草稿失败，请稍后重试");
     }
   }
 
-  const title = isAdd ? "添加持仓" : `编辑持仓 · ${initial?.symbol ?? ""}`;
+  async function handleConfirm() {
+    if (!draft) return;
+    setError(null);
+    try {
+      await confirmMutation.mutateAsync({
+        batchId: draft.batchId,
+        idempotencyKey: confirmKey,
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "确认失败，请稍后重试");
+    }
+  }
 
   return (
-    <Dialog open={open} title={title} onClose={onClose} size="md">
-      <form className="dialog-content" onSubmit={handleSubmit}>
-        {isAdd && (
+    <Dialog open={open} title="初始化一笔持仓" onClose={onClose} size="md">
+      {draft ? (
+        <div className="dialog-content">
+          <div className="alert alert-info" role="status">
+            <ShieldCheck size={16} />
+            <div>
+              <strong>草稿已创建，尚未写入事实账本</strong>
+              <p>请再次核对。确认后只建立期初组合基线，不会伪造买入或出入金。</p>
+            </div>
+          </div>
+          <dl className="detail-list">
+            <div><dt>标的</dt><dd>{draft.item.name}（{draft.item.symbol}）</dd></div>
+            <div><dt>类型</dt><dd>{draft.item.assetType}</dd></div>
+            <div><dt>数量 / 份额</dt><dd className="mono">{draft.item.quantity}</dd></div>
+            <div><dt>单位成本</dt><dd className="mono">{draft.item.unitCost}</dd></div>
+            <div><dt>基线日期</dt><dd className="mono">{draft.item.tradeDate}</dd></div>
+          </dl>
+          {error ? <div className="alert alert-danger" role="alert">{error}</div> : null}
+          <div className="dialog-actions">
+            <button className="btn-secondary" type="button" disabled={submitting} onClick={onClose}>
+              稍后处理
+            </button>
+            <button className="btn-primary" type="button" disabled={submitting} onClick={() => void handleConfirm()}>
+              {confirmMutation.isPending ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />}
+              确认期初持仓
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form className="dialog-content" onSubmit={handleCreate}>
+          <div className="alert alert-info">
+            <ShieldCheck size={16} />
+            <div>
+              <strong>这是期初组合初始化，不是成交补录</strong>
+              <p>提交后先生成草稿预览；只有再次确认才会建立期初 ADJUSTMENT 基线。</p>
+            </div>
+          </div>
           <div className="field">
             <label htmlFor="position-search">搜索标的（代码或名称）</label>
             {selected ? (
               <div className="security-cell selected-security">
                 <div>
                   <strong>{selected.name}</strong>
-                  <span className="mono">
-                    {selected.symbol} · {selected.market} ·{" "}
-                    {selected.type === "STOCK"
-                      ? "股票"
-                      : selected.type === "ETF"
-                        ? "场内ETF"
-                        : "场外基金"}
-                  </span>
+                  <span className="mono">{selected.symbol} · {selected.market}</span>
                 </div>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="重新选择标的"
-                  onClick={() => setSelected(null)}
-                >
+                <button className="icon-button" type="button" aria-label="重新选择标的" onClick={() => setSelected(null)}>
                   <X size={14} />
                 </button>
               </div>
@@ -136,21 +177,22 @@ export default function PositionDialog({
                   <input
                     id="position-search"
                     value={searchQuery}
-                    placeholder="例如：茅台 / 600519 / 510300"
+                    placeholder="至少输入 2 个字符，例如 600519 / 茅台"
+                    aria-controls="position-search-results"
+                    aria-autocomplete="list"
                     onChange={(event) => setSearchQuery(event.target.value)}
                     autoFocus
                   />
                 </label>
-                {searchQuery.trim().length >= 1 && (
-                  <div className="search-results" role="listbox">
+                {searchQuery.trim().length > 0 && searchQuery.trim().length < 2 ? (
+                  <span className="help-text">请至少输入 2 个字符，避免触发无效全市场查询</span>
+                ) : null}
+                {debouncedQuery.length >= 2 ? (
+                  <div className="search-results" id="position-search-results" role="listbox" aria-label="标的搜索结果">
                     {search.isLoading ? (
-                      <div className="search-result-hint">
-                        <Loader2 className="spin" size={13} /> 搜索中…
-                      </div>
+                      <div className="search-result-hint"><Loader2 className="spin" size={13} /> 搜索中…</div>
                     ) : search.error ? (
-                      <div className="search-result-hint">
-                        搜索服务暂不可用，请稍后重试
-                      </div>
+                      <div className="search-result-hint">搜索服务暂不可用，请稍后重试</div>
                     ) : (search.data ?? []).length === 0 ? (
                       <div className="search-result-hint">未找到匹配标的</div>
                     ) : (
@@ -158,104 +200,45 @@ export default function PositionDialog({
                         <button
                           type="button"
                           role="option"
+                          aria-selected="false"
                           className="search-result-row"
-                          key={`${item.symbol}-${item.type}`}
+                          key={`${item.market}-${item.symbol}-${item.type}`}
                           onClick={() => pickInstrument(item)}
                         >
-                          <span className="security-cell">
-                            <strong>{item.name}</strong>
-                            <span className="mono">{item.symbol}</span>
-                          </span>
-                          <span className="tag">
-                            {item.type === "STOCK"
-                              ? "股票"
-                              : item.type === "ETF"
-                                ? "ETF"
-                                : "基金"}
-                          </span>
+                          <span className="security-cell"><strong>{item.name}</strong><span className="mono">{item.symbol}</span></span>
+                          <span className="tag">{item.type}</span>
                         </button>
                       ))
                     )}
                   </div>
-                )}
+                ) : null}
               </>
             )}
           </div>
-        )}
-
-        {!isAdd && initial && (
-          <div className="security-cell selected-security static">
-            <div>
-              <strong>{initial.name}</strong>
-              <span className="mono">{initial.symbol}</span>
+          <div className="form-grid">
+            <div className="field">
+              <label htmlFor="position-quantity">数量 / 份额 *</label>
+              <input id="position-quantity" className="input" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="position-avg-cost">成本价（每股/每份）*</label>
+              <input id="position-avg-cost" className="input" inputMode="decimal" value={avgCost} onChange={(event) => setAvgCost(event.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="position-buy-date">期初基线日期</label>
+              <input id="position-buy-date" className="input" type="date" value={baselineDate} max={todayLocalIso()} onChange={(event) => setBaselineDate(event.target.value)} />
             </div>
           </div>
-        )}
-
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="position-quantity">数量 / 份额 *</label>
-            <input
-              id="position-quantity"
-              className="input"
-              inputMode="decimal"
-              value={quantity}
-              placeholder="例如 100"
-              onChange={(event) => setQuantity(event.target.value)}
-            />
+          {error ? <div className="alert alert-danger" role="alert">{error}</div> : null}
+          <div className="dialog-actions">
+            <button className="btn-secondary" type="button" disabled={submitting} onClick={onClose}>取消</button>
+            <button className="btn-primary" type="submit" disabled={submitting || !formValid}>
+              {submitting ? <Loader2 className="spin" size={14} /> : <Plus size={14} />}
+              创建草稿并预览
+            </button>
           </div>
-          <div className="field">
-            <label htmlFor="position-avg-cost">成本价（每股/每份）*</label>
-            <input
-              id="position-avg-cost"
-              className="input"
-              inputMode="decimal"
-              value={avgCost}
-              placeholder="例如 1500.00"
-              onChange={(event) => setAvgCost(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="position-buy-date">买入日期（可选）</label>
-            <input
-              id="position-buy-date"
-              className="input"
-              type="date"
-              value={buyDate}
-              max={todayIso()}
-              onChange={(event) => setBuyDate(event.target.value)}
-            />
-          </div>
-        </div>
-
-        {error ? <div className="alert alert-danger">{error}</div> : null}
-
-        <div className="dialog-actions">
-          <button
-            className="btn-secondary"
-            type="button"
-            disabled={submitting}
-            onClick={onClose}
-          >
-            取消
-          </button>
-          <button className="btn-primary" type="submit" disabled={submitting}>
-            {submitting ? (
-              <>
-                <Loader2 className="spin" size={14} /> 提交中…
-              </>
-            ) : isAdd ? (
-              <>
-                <Plus size={14} /> 确认添加
-              </>
-            ) : (
-              <>
-                <Save size={14} /> 保存修改
-              </>
-            )}
-          </button>
-        </div>
-      </form>
+        </form>
+      )}
     </Dialog>
   );
 }

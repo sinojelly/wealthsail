@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
-from backend.common.database import Pool, create_pool
+from backend.common.database import Pool, create_pool, verify_runtime_login_boundary
 from backend.config import Settings, get_settings, validate_runtime_settings
 from backend.errors import MoneyJSONResponse, register_exception_handlers, request_id_of
 from backend.chat.api import router as chat_router
@@ -30,6 +30,7 @@ from backend.market.api import router as market_router
 from backend.operations.api import router as operations_router
 from backend.portfolio.api import router as portfolio_router
 from backend.reports.api import router as reports_router
+from backend.research.api import router as research_router
 from backend.risk.api import router as risk_router
 
 logger = logging.getLogger("wealthsail.main")
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
     )
+    await verify_runtime_login_boundary(pool, process="api")
     app.state.db_pool = pool
     logger.info("database pool ready (env=%s)", settings.app_env)
     try:
@@ -128,6 +130,7 @@ def create_app() -> FastAPI:
     prefix = settings.api_prefix
     app.include_router(portfolio_router, prefix=prefix)
     app.include_router(reports_router, prefix=prefix)
+    app.include_router(research_router, prefix=prefix)
     app.include_router(risk_router, prefix=prefix)
     app.include_router(identity_router, prefix=prefix)
     app.include_router(operations_router, prefix=prefix)

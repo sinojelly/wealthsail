@@ -316,28 +316,25 @@ async def insert_report_outbox_deliveries(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
-    user_id: str,
     report_id: str,
     session: str,
     version: int,
     trade_date: object,
 ) -> int:
-    """Expand a report intent into one independently tracked user delivery.
+    """Expand one tenant report into one independent delivery per active binding.
 
-    Only the report's own user (the acting user, e.g. the tenant OWNER for
-    scheduled sessions) receives the push — a report never fans out to every
-    ACTIVE binding in the tenant.
+    Delivery status and idempotency remain binding-scoped, so one unavailable
+    recipient cannot block or duplicate another recipient's message.
     """
     bindings = await conn.fetch(
         """
         SELECT id, user_id
         FROM identity.channel_bindings
-        WHERE tenant_id = $1 AND user_id = $2
+        WHERE tenant_id = $1
           AND channel_type = 'wecom' AND status = 'ACTIVE'
         ORDER BY user_id, id
         """,
         tenant_id,
-        user_id,
     )
     rows = [
         (

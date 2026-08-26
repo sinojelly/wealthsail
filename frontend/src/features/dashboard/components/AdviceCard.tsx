@@ -2,8 +2,8 @@ import { RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
 import type { AiAdvice } from "../../../api/hooks";
 
 function actionClass(action: string): string {
-  if (action === "减仓" || action === "加仓") return "status-pill active";
-  if (action === "关注") return "status-pill pending";
+  if (action === "减仓候选" || action === "加仓候选") return "status-pill active";
+  if (action === "复核") return "status-pill pending";
   return "status-pill";
 }
 
@@ -17,11 +17,13 @@ export default function AdviceCard({
   advice,
   loading,
   refreshing,
+  error,
   onRefresh,
 }: {
   advice?: AiAdvice;
   loading?: boolean;
   refreshing?: boolean;
+  error?: string | null;
   onRefresh?: () => void;
 }) {
   const items = advice?.items ?? [];
@@ -29,23 +31,24 @@ export default function AdviceCard({
     <section className="panel advice-card">
       <div className="panel-header">
         <div>
-          <h2>AI 操作建议</h2>
-          <p>基于当前持仓、研报与市场行情生成 · 仅供操作参考</p>
+          <h2>投研候选建议</h2>
+          <p>仅展示已通过证据、有效期与风险政策门禁的持久化结果</p>
         </div>
         <div className="panel-header-actions">
           <button
             className="btn-secondary"
             disabled={loading || refreshing}
             onClick={() => onRefresh?.()}
-            title="重新生成建议"
+            title="刷新已发布建议"
           >
             <RefreshCw size={13} className={refreshing ? "spin" : ""} />
-            重新生成
+            刷新结果
           </button>
           <Sparkles size={17} />
         </div>
       </div>
       <div className="panel-body">
+        {error ? <div className="alert alert-warning" role="alert">{error}</div> : null}
         {loading ? (
           <div className="binding-loader" />
         ) : items.length === 0 ? (
@@ -53,14 +56,14 @@ export default function AdviceCard({
             <div className="binding-hero-icon">
               <Sparkles size={22} />
             </div>
-            <strong>暂无可用建议</strong>
-            <p>需要持仓、研报或行情数据才能生成；请先完成初始化导入。</p>
+            <strong>当前选择暂不建议</strong>
+            <p>没有同时满足证据、风控与有效期要求的已发布 recommendation。</p>
           </div>
         ) : (
           <>
             <ul className="advice-list">
               {items.map((item, index) => (
-                <li className="advice-item" key={`${item.title}-${index}`}>
+                <li className="advice-item" key={item.id ?? `${item.title}-${index}`}>
                   <span className={actionClass(item.action)}>{item.action}</span>
                   <div className="advice-copy">
                     <div className="advice-title">
@@ -70,6 +73,11 @@ export default function AdviceCard({
                       </span>
                     </div>
                     <p>{item.detail}</p>
+                    <small>
+                      证据 {item.evidenceCount} 条 · 质量 {item.evidenceQuality} ·
+                      风控 {item.policyCheckStatus === "PASSED" ? "通过" : "警告"}
+                    </small>
+                    {item.counterCase ? <p className="text-muted">反方论点：{item.counterCase}</p> : null}
                   </div>
                 </li>
               ))}

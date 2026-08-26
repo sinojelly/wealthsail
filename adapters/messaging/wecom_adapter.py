@@ -132,7 +132,7 @@ class WeComAdapter:
 
         Args:
             token: Raw high-entropy one-time token (for example,
-                ``WS-8K4P-9Q2M``). Length/attempt limits are enforced by the
+                ``WS-8K4P-9Q2M-7T6D-3J5R-W9XC-2A``). Length/attempt limits are enforced by the
                 binding application service, not this hash primitive.
             secret: Server-side binding secret supplied by the trusted API.
 
@@ -151,7 +151,7 @@ class WeComAdapter:
         expires_at: datetime,
         secret: str,
     ) -> bool:
-        """Verifies a user-submitted one-time binding code against hash and expiration.
+        """Verifies a pasted one-time binding capability against hash and expiration.
 
         Args:
             input_token: Raw code entered by user.

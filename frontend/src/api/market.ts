@@ -43,7 +43,12 @@ export interface MarketSentiment {
   turnover: string | null; // 亿元
   northFlow: string | null; // 亿元
   sentimentScore: string | null; // 0-100
-  source: "live" | "db" | "unavailable";
+  source: string;
+  sourceAsOf: string | null;
+  retrievedAt: string | null;
+  qualityStatus: "FRESH" | "ESTIMATED" | "STALE" | "UNAVAILABLE";
+  coveragePct: string | null;
+  methodVersion: string | null;
   updatedAt: string | null;
 }
 

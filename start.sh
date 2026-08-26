@@ -11,6 +11,7 @@
 #       .env（DATABASE_URL / WORKER_DATABASE_URL 等，已配置 Supabase 直连）
 # 日志：logs/api.log · logs/worker.log · logs/frontend.log
 # PID ：.run/*.pid（stop/status 依据）
+# 安全边界：仅用于本机开发，默认只监听 127.0.0.1；生产请使用 deployment/。
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,6 +19,8 @@ cd "$(dirname "$0")"
 PY="$PWD/.venv/bin/python"
 API_PORT="${WS_API_PORT:-8000}"
 FRONT_PORT="${WS_FRONT_PORT:-5173}"
+API_HOST="${WS_API_HOST:-127.0.0.1}"
+FRONT_HOST="${WS_FRONT_HOST:-127.0.0.1}"
 LOG_DIR="$PWD/logs"
 PID_DIR="$PWD/.run"
 mkdir -p "$LOG_DIR" "$PID_DIR"
@@ -41,6 +44,18 @@ finally:
 PY
 }
 
+api_healthy() {
+  python3 - "$API_PORT" <<'PY'
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/healthz", timeout=1) as response:
+        body = json.load(response)
+    print("yes" if response.status == 200 and body.get("status") == "ok" and body.get("db") == "up" else "no")
+except Exception:
+    print("no")
+PY
+}
+
 cmd_start() {
   echo "▶ 启动 WealthSail（API + Worker + 前端）"
 
@@ -49,7 +64,7 @@ cmd_start() {
   elif [ "$(port_open "$API_PORT")" = "open" ]; then
     echo "  ⚠ API 端口 $API_PORT 已被其他进程占用，跳过启动（可先 ./start.sh stop 或关掉占用进程）"
   else
-    nohup "$PY" -m uvicorn backend.main:app --host 0.0.0.0 --port "$API_PORT" \
+    nohup "$PY" -m uvicorn backend.main:app --host "$API_HOST" --port "$API_PORT" \
       > "$LOG_DIR/api.log" 2>&1 &
     echo $! > "$PID_DIR/api.pid"
     echo "  · API 启动 → http://localhost:$API_PORT （logs/api.log）"
@@ -69,7 +84,7 @@ cmd_start() {
     elif [ "$(port_open "$FRONT_PORT")" = "open" ]; then
       echo "  ⚠ 前端端口 $FRONT_PORT 已被其他进程占用，跳过启动"
     else
-      nohup sh -c 'cd frontend && exec ./node_modules/.bin/vite --host 0.0.0.0' \
+      nohup sh -c "cd frontend && exec ./node_modules/.bin/vite --host '$FRONT_HOST' --port '$FRONT_PORT'" \
         > "$LOG_DIR/frontend.log" 2>&1 &
       echo $! > "$PID_DIR/front.pid"
       echo "  · 前端启动 → http://localhost:$FRONT_PORT （logs/frontend.log）"
@@ -80,13 +95,13 @@ cmd_start() {
 
   echo "▶ 健康检查…"
   for _ in $(seq 1 15); do
-    [ "$(port_open "$API_PORT")" = "open" ] && break
+    [ "$(api_healthy)" = "yes" ] && break
     sleep 1
   done
-  if [ "$(port_open "$API_PORT")" = "open" ]; then
-    echo "  ✔ API 端口 $API_PORT 就绪"
+  if [ "$(api_healthy)" = "yes" ]; then
+    echo "  ✔ API /healthz 与数据库均就绪"
   else
-    echo "  ✘ API 端口 $API_PORT 未就绪，详见 logs/api.log"
+    echo "  ✘ API 或数据库未就绪，详见 logs/api.log"
     exit 1
   fi
   [ "$(port_open "$FRONT_PORT")" = "open" ] \

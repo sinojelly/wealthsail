@@ -38,6 +38,7 @@ vi.mock("../../api/hooks", () => ({
       northFlow: null,
       sentimentScore: null,
       source: "unavailable",
+      qualityStatus: "UNAVAILABLE",
       updatedAt: null,
     },
     isLoading: false,
@@ -59,8 +60,7 @@ vi.mock("../../api/hooks", () => ({
     error: null,
   }),
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdatePosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeletePosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 it("never presents hard-coded fill drafts as confirmed financial facts", () => {

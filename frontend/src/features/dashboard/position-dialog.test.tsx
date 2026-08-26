@@ -2,28 +2,32 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PositionDialog from "./components/PositionDialog";
 import { renderWithSession } from "../../test/render-with-session";
-import { positionsFixture } from "../../test/fixtures";
 
 const addMutate = vi.fn<(payload: unknown) => Promise<unknown>>(async () => ({
-  position: {
-    ...positionsFixture[0],
-    avgCost: "1500.00",
-    buyDate: "2026-08-26",
-    eventId: "evt-1",
+  batchId: "batch-1",
+  status: "DRAFT",
+  version: 1,
+  item: {
+    itemId: "item-1",
+    symbol: "600519",
+    name: "贵州茅台",
+    assetType: "STOCK",
+    quantity: "100",
+    unitCost: "1500.00",
+    tradeDate: "2026-08-26",
+    accountId: "account-1",
+    validationStatus: "VALID",
   },
 }));
-const updateMutate = vi.fn<(input: unknown) => Promise<unknown>>(async () => ({
-  position: {
-    ...positionsFixture[0],
-    avgCost: "1400.00",
-    buyDate: "2026-08-26",
-    eventId: "evt-2",
-  },
+const confirmMutate = vi.fn<(input: unknown) => Promise<unknown>>(async () => ({
+  batchId: "batch-1",
+  status: "CONFIRMED",
+  version: 2,
+  eventId: "event-1",
 }));
-
 vi.mock("../../api/hooks", () => ({
   useAddPosition: () => ({ mutateAsync: addMutate, isPending: false }),
-  useUpdatePosition: () => ({ mutateAsync: updateMutate, isPending: false }),
+  useConfirmPositionImport: () => ({ mutateAsync: confirmMutate, isPending: false }),
   useInstrumentSearch: (keyword: string) => ({
     data:
       keyword.includes("600519") || keyword.includes("茅台")
@@ -38,17 +42,17 @@ vi.mock("../../api/hooks", () => ({
 describe("PositionDialog", () => {
   beforeEach(() => {
     addMutate.mockClear();
-    updateMutate.mockClear();
+    confirmMutate.mockClear();
   });
 
-  it("添加模式：搜索 → 选择标的 → 填写表单 → 提交添加接口", async () => {
+  it("添加模式：先创建草稿预览，再由用户确认期初持仓", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     renderWithSession(
-      <PositionDialog open mode="add" initial={null} onClose={onClose} />,
+      <PositionDialog open onClose={onClose} />,
     );
 
-    expect(screen.getByRole("dialog", { name: "添加持仓" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "初始化一笔持仓" })).toBeInTheDocument();
 
     // 中文关键词用 change 直接注入（userEvent 逐键模拟对 IME 不可靠）
     fireEvent.change(screen.getByLabelText(/搜索标的/), {
@@ -63,59 +67,45 @@ describe("PositionDialog", () => {
     fireEvent.change(screen.getByLabelText(/成本价/), {
       target: { value: "1500.00" },
     });
-    await user.click(screen.getByRole("button", { name: /确认添加/ }));
+    await user.click(screen.getByRole("button", { name: /创建草稿并预览/ }));
 
     await waitFor(() => expect(addMutate).toHaveBeenCalled());
-    const payload = addMutate.mock.calls[0]?.[0] as unknown as {
-      symbol: string;
-      assetType: string;
-      quantity: string;
-      avgCost: string;
+    const command = addMutate.mock.calls[0]?.[0] as unknown as {
+      payload: {
+        symbol: string;
+        assetType: string;
+        quantity: string;
+        avgCost: string;
+      };
+      idempotencyKey: string;
     };
-    expect(payload).toMatchObject({
+    expect(command.payload).toMatchObject({
       symbol: "600519",
       assetType: "STOCK",
       quantity: "100",
       avgCost: "1500.00",
     });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
+    expect(command.idempotencyKey).toMatch(/[0-9a-f-]{20,}/i);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/尚未写入事实账本/)).toBeInTheDocument();
 
-  it("编辑模式：预填当前数量/成本，提交更新接口", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    renderWithSession(
-      <PositionDialog open mode="edit" initial={positionsFixture[0]} onClose={onClose} />,
+    await user.click(screen.getByRole("button", { name: /确认期初持仓/ }));
+    await waitFor(() =>
+      expect(confirmMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ batchId: "batch-1" }),
+      ),
     );
-
-    expect(
-      screen.getByRole("dialog", { name: /编辑持仓/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText(/数量/)).toHaveValue("8500");
-    expect(screen.getByLabelText(/成本价/)).toHaveValue("28.25");
-
-    fireEvent.change(screen.getByLabelText(/数量/), { target: { value: "9000" } });
-    await user.click(screen.getByRole("button", { name: /保存修改/ }));
-
-    await waitFor(() => expect(updateMutate).toHaveBeenCalled());
-    const call = updateMutate.mock.calls[0]?.[0] as unknown as {
-      symbol: string;
-      payload: { quantity: string; avgCost: string };
-    };
-    expect(call.symbol).toBe("600036");
-    expect(call.payload).toMatchObject({ quantity: "9000", avgCost: "28.25" });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("数量非法时拒绝提交并提示", async () => {
     const user = userEvent.setup();
     renderWithSession(
-      <PositionDialog open mode="add" initial={null} onClose={vi.fn()} />,
+      <PositionDialog open onClose={vi.fn()} />,
     );
     await user.type(screen.getByLabelText(/数量/), "0");
     await user.type(screen.getByLabelText(/成本价/), "100");
-    await fireEvent.click(screen.getByRole("button", { name: /确认添加/ }));
-    expect(screen.getByText(/数量必须为大于 0 的数字/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /创建草稿并预览/ })).toBeDisabled();
     expect(addMutate).not.toHaveBeenCalled();
   });
 });

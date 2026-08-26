@@ -115,23 +115,31 @@ async def latest_positions(
 
 
 # ---------------------------------------------------------------------------
-# 手动添加持仓：标的主数据 / 账户 / 不可变账本 / 行情 quotes
+# 期初组合导入：经核验的标的主数据、账户与两阶段命令
 # ---------------------------------------------------------------------------
 async def find_instrument_by_ticker(
-    conn: asyncpg.Connection, ticker: str
+    conn: asyncpg.Connection,
+    ticker: str,
+    *,
+    primary_market: str | None = None,
+    asset_type: str | None = None,
 ) -> asyncpg.Record | None:
-    """Resolve an instrument by its current TICKER alias."""
+    """Resolve a current ticker without collapsing cross-market identities."""
     return await conn.fetchrow(
         """
         SELECT i.id, i.asset_type, i.primary_market, i.canonical_name
         FROM reference.instruments i
         JOIN reference.instrument_aliases a ON a.instrument_id = i.id
         WHERE a.alias_type = 'TICKER' AND a.alias_value = $1
+          AND ($2::text IS NULL OR a.market = $2)
+          AND ($3::text IS NULL OR i.asset_type = $3)
           AND (a.effective_to IS NULL OR a.effective_to >= CURRENT_DATE)
         ORDER BY a.effective_from DESC
         LIMIT 1
         """,
         ticker,
+        primary_market,
+        asset_type,
     )
 
 
@@ -145,67 +153,94 @@ async def upsert_instrument(
 ) -> str:
     """Create instrument + TICKER alias idempotently; return its stable id.
 
-    ``reference.instruments`` has no natural unique key, so the alias table
-    (UNIQUE on alias_type/alias_value/market/effective_from) is the dedupe
-    anchor: whichever request wins the race creates the row, the others
-    resolve to the same instrument id afterwards.
+    ``reference.instruments`` has no natural unique key. A transaction-level
+    advisory lock serializes creation for one market+ticker before the alias
+    unique key is checked, avoiding both duplicate aliases and orphan
+    instrument rows under concurrent requests.
     """
     await conn.execute(
+        """
+        SELECT pg_advisory_xact_lock(
+            hashtextextended('instrument:' || $1 || ':' || $2, 0)
+        )
+        """,
+        primary_market,
+        ticker,
+    )
+    instrument_id = await conn.fetchval(
+        """
+        SELECT i.id
+        FROM reference.instruments i
+        JOIN reference.instrument_aliases a ON a.instrument_id = i.id
+        WHERE a.alias_type = 'TICKER'
+          AND a.alias_value = $1
+          AND a.market = $2
+          AND (a.effective_to IS NULL OR a.effective_to >= CURRENT_DATE)
+        ORDER BY a.effective_from DESC
+        LIMIT 1
+        """,
+        ticker,
+        primary_market,
+    )
+    if instrument_id is not None:
+        return str(instrument_id)
+
+    instrument_id = await conn.fetchval(
         """
         INSERT INTO reference.instruments
             (asset_type, primary_market, canonical_name, lifecycle_status)
         VALUES ($1, $2, $3, 'ACTIVE')
-        ON CONFLICT DO NOTHING
+        RETURNING id
         """,
         asset_type,
         primary_market,
         name,
     )
-    instrument_id = await conn.fetchval(
-        """
-        SELECT id FROM reference.instruments
-        WHERE canonical_name = $1 AND asset_type = $2
-        ORDER BY created_at LIMIT 1
-        """,
-        name,
-        asset_type,
-    )
-    if instrument_id is None:  # pragma: no cover — dedupe anchor raced nothing
-        instrument_id = await conn.fetchval(
-            """
-            INSERT INTO reference.instruments
-                (asset_type, primary_market, canonical_name, lifecycle_status)
-            VALUES ($1, $2, $3, 'ACTIVE')
-            RETURNING id
-            """,
-            asset_type,
-            primary_market,
-            name,
-        )
     await conn.execute(
         """
         INSERT INTO reference.instrument_aliases
             (instrument_id, alias_type, alias_value, market, effective_from)
         VALUES ($1, 'TICKER', $2, $3, CURRENT_DATE)
-        ON CONFLICT (alias_type, alias_value, market, effective_from)
-        DO NOTHING
         """,
         instrument_id,
         ticker,
         primary_market,
     )
-    resolved = await conn.fetchval(
+    return str(instrument_id)
+
+
+async def find_position_import_by_idempotency_key(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+) -> asyncpg.Record | None:
+    """Load the original single-position import response for safe command replay."""
+    return await conn.fetchrow(
         """
-        SELECT i.id
-        FROM reference.instruments i
-        JOIN reference.instrument_aliases a ON a.instrument_id = i.id
-        WHERE a.alias_type = 'TICKER' AND a.alias_value = $1
-        ORDER BY a.effective_from DESC
+        SELECT b.id AS batch_id, b.source_content_hash, b.account_id,
+               item.id AS item_id, item.quantity, item.unit_cost,
+               item.trade_date, item.validation_status,
+               instrument.canonical_name, instrument.asset_type,
+               alias.alias_value AS ticker
+        FROM ledger.portfolio_import_batches b
+        JOIN ledger.portfolio_import_items item
+          ON item.tenant_id = b.tenant_id AND item.batch_id = b.id
+        JOIN reference.instruments instrument ON instrument.id = item.instrument_id
+        LEFT JOIN LATERAL (
+            SELECT alias_value
+            FROM reference.instrument_aliases
+            WHERE instrument_id = instrument.id AND alias_type = 'TICKER'
+              AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+            ORDER BY effective_from DESC LIMIT 1
+        ) alias ON TRUE
+        WHERE b.tenant_id = $1 AND b.idempotency_key = $2
+        ORDER BY item.source_row NULLS LAST, item.id
         LIMIT 1
         """,
-        ticker,
+        tenant_id,
+        idempotency_key,
     )
-    return str(resolved if resolved is not None else instrument_id)
 
 
 async def pick_or_create_account(
@@ -244,218 +279,197 @@ async def pick_or_create_account(
     )
 
 
-async def insert_buy_event(
+async def create_import_draft(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
     account_id: str,
+    created_by: str,
     instrument_id: str,
     quantity: Decimal,
-    avg_cost: Decimal,
+    unit_cost: Decimal,
     trade_date: date,
     idempotency_key: str,
-) -> str:
-    """Append a CONFIRMED BUY event with INSTRUMENT + CASH legs."""
-    event_id = str(
+    source_content_hash: str,
+) -> dict[str, str]:
+    """Persist one reviewed initialization row without changing economic facts.
+
+    The batch and item remain ``DRAFT``.  A separate confirmation command is
+    the only path that may create an opening ledger adjustment.
+    """
+    batch_id = str(
         await conn.fetchval(
             """
-            INSERT INTO ledger.ledger_events
-                (tenant_id, account_id, event_type, status, trade_date,
-                 idempotency_key, schema_version)
-            VALUES ($1, $2, 'BUY', 'CONFIRMED', $3, $4, 1)
+            INSERT INTO ledger.portfolio_import_batches
+                (tenant_id, account_id, created_by, source_type,
+                 source_content_hash, status, idempotency_key)
+            VALUES ($1, $2, $3, 'MANUAL', $4, 'DRAFT', $5)
             RETURNING id
             """,
             tenant_id,
             account_id,
-            trade_date,
+            created_by,
+            source_content_hash,
             idempotency_key,
         )
     )
-    cash_amount = -(quantity * avg_cost).quantize(Decimal("0.00000001"))
-    await conn.executemany(
-        """
-        INSERT INTO ledger.ledger_legs
-            (tenant_id, event_id, leg_type, instrument_id, currency,
-             quantity, amount, unit_price)
-        VALUES ($1, $2, $3, $4, 'CNY', $5, $6, $7)
-        """,
-        [
-            (tenant_id, event_id, "INSTRUMENT", instrument_id, quantity, None, avg_cost),
-            (tenant_id, event_id, "CASH", None, None, cash_amount, None),
-        ],
+    item_id = str(
+        await conn.fetchval(
+            """
+            INSERT INTO ledger.portfolio_import_items
+                (tenant_id, batch_id, item_type, instrument_id, quantity,
+                 unit_cost, trade_date, source_row, validation_status,
+                 validation_errors)
+            VALUES ($1, $2, 'POSITION', $3, $4, $5, $6, 1, 'VALID', '[]'::jsonb)
+            RETURNING id
+            """,
+            tenant_id,
+            batch_id,
+            instrument_id,
+            quantity,
+            unit_cost,
+            trade_date,
+        )
     )
-    return event_id
+    return {"batch_id": batch_id, "item_id": item_id}
 
 
-async def insert_cash_in_event(
+async def confirm_import_batch(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
-    account_id: str,
-    amount: Decimal,
-    trade_date: date,
+    batch_id: str,
     idempotency_key: str,
-) -> str:
-    """Append a CONFIRMED CASH_IN event (manual-holding principal injection).
+) -> dict:
+    """Atomically confirm a draft as opening ``ADJUSTMENT`` events.
 
-    Pairs with the BUY's CASH leg so a manually entered holding stays cash
-    neutral while the injected principal keeps ``principal`` (hence
-    ``cumulative_pnl``) accurate for accounts without real cash-flow events.
+    An initialization describes the portfolio state observed by the user; it
+    does not prove that a trade or cash transfer occurred in WealthSail.  Each
+    row therefore creates exactly one provenance-linked ADJUSTMENT.  Position
+    rows have only an INSTRUMENT leg, so no synthetic cash flow or principal is
+    introduced.
     """
-    event_id = str(
-        await conn.fetchval(
-            """
-            INSERT INTO ledger.ledger_events
-                (tenant_id, account_id, event_type, status, trade_date,
-                 idempotency_key, schema_version)
-            VALUES ($1, $2, 'CASH_IN', 'CONFIRMED', $3, $4, 1)
-            RETURNING id
-            """,
-            tenant_id,
-            account_id,
-            trade_date,
-            idempotency_key,
-        )
-    )
-    await conn.execute(
+    batch = await conn.fetchrow(
         """
-        INSERT INTO ledger.ledger_legs
-            (tenant_id, event_id, leg_type, currency, amount)
-        VALUES ($1, $2, 'CASH', 'CNY', $3)
+        SELECT id AS batch_id, account_id, status, version
+        FROM ledger.portfolio_import_batches
+        WHERE tenant_id = $1 AND id = $2
+        FOR UPDATE
         """,
         tenant_id,
-        event_id,
-        amount.quantize(Decimal("0.00000001")),
+        batch_id,
     )
-    return event_id
+    if batch is None:
+        return {}
 
-
-async def insert_cash_out_event(
-    conn: asyncpg.Connection,
-    *,
-    tenant_id: str,
-    account_id: str,
-    amount: Decimal,  # 负数（流出）
-    trade_date: date,
-    idempotency_key: str,
-) -> str:
-    """Append a CONFIRMED CASH_OUT event (manual-holding principal withdrawal).
-
-    Pairs with the clear/SELL leg so removing a manually entered holding keeps
-    cash neutral while ``principal`` (hence ``cumulative_pnl``) reflects the
-    capital actually withdrawn.
-    """
-    event_id = str(
-        await conn.fetchval(
+    if batch["status"] == "CONFIRMED":
+        event_id = await conn.fetchval(
             """
-            INSERT INTO ledger.ledger_events
-                (tenant_id, account_id, event_type, status, trade_date,
-                 idempotency_key, schema_version)
-            VALUES ($1, $2, 'CASH_OUT', 'CONFIRMED', $3, $4, 1)
-            RETURNING id
+            SELECT id FROM ledger.ledger_events
+            WHERE tenant_id = $1 AND import_batch_id = $2
+              AND status = 'CONFIRMED'
+            ORDER BY created_at, id LIMIT 1
             """,
             tenant_id,
-            account_id,
-            trade_date,
-            idempotency_key,
+            batch_id,
         )
-    )
-    await conn.execute(
+        return {
+            "batch_id": batch_id,
+            "event_id": str(event_id) if event_id else None,
+            "version": int(batch["version"]),
+            "already_confirmed": True,
+        }
+    if batch["status"] != "DRAFT":
+        return {"batch_id": batch_id, "status": str(batch["status"])}
+
+    items = await conn.fetch(
         """
-        INSERT INTO ledger.ledger_legs
-            (tenant_id, event_id, leg_type, currency, amount)
-        VALUES ($1, $2, 'CASH', 'CNY', $3)
+        SELECT id AS item_id, item_type, instrument_id, quantity, unit_cost,
+               cash_amount, currency, trade_date, validation_status
+        FROM ledger.portfolio_import_items
+        WHERE tenant_id = $1 AND batch_id = $2
+        ORDER BY source_row NULLS LAST, id
         """,
         tenant_id,
-        event_id,
-        amount.quantize(Decimal("0.00000001")),
+        batch_id,
     )
-    return event_id
+    if not items or any(item["validation_status"] != "VALID" for item in items):
+        return {"batch_id": batch_id, "status": "INVALID"}
 
-
-async def insert_adjustment_event(
-    conn: asyncpg.Connection,
-    *,
-    tenant_id: str,
-    account_id: str,
-    instrument_id: str,
-    quantity_delta: Decimal,  # 正=加仓/建仓，负=减仓/清仓
-    unit_price: Decimal | None,
-    cash_amount: Decimal | None,  # 配平现金（负=扣现金，正=回收现金）
-    trade_date: date,
-    idempotency_key: str,
-) -> str:
-    """Append a CONFIRMED ADJUSTMENT event with optional legs.
-
-    A negative ``quantity_delta`` clears holdings through the ledger replay's
-    SELL branch (proportional cost reduction); the paired CASH leg keeps the
-    account cash reconciliation coherent.
-    """
-    event_id = str(
-        await conn.fetchval(
-            """
-            INSERT INTO ledger.ledger_events
-                (tenant_id, account_id, event_type, status, trade_date,
-                 idempotency_key, schema_version)
-            VALUES ($1, $2, 'ADJUSTMENT', 'CONFIRMED', $3, $4, 1)
-            RETURNING id
-            """,
-            tenant_id,
-            account_id,
-            trade_date,
-            idempotency_key,
-        )
-    )
-    rows = []
-    if quantity_delta != 0:
-        rows.append(
-            (
+    event_ids: list[str] = []
+    for index, item in enumerate(items, start=1):
+        event_id = str(
+            await conn.fetchval(
+                """
+                INSERT INTO ledger.ledger_events
+                    (tenant_id, account_id, event_type, status, trade_date,
+                     idempotency_key, import_batch_id, import_item_id,
+                     description, schema_version)
+                VALUES ($1, $2, 'ADJUSTMENT', 'CONFIRMED', $3, $4, $5, $6,
+                        '用户确认的期初组合基线；不代表真实成交或出入金', 1)
+                RETURNING id
+                """,
                 tenant_id,
-                event_id,
-                "INSTRUMENT",
-                instrument_id,
-                quantity_delta,
-                None,
-                unit_price,
+                str(batch["account_id"]),
+                item["trade_date"],
+                f"{idempotency_key}:item:{index}",
+                batch_id,
+                str(item["item_id"]),
             )
         )
-    if cash_amount is not None:
-        rows.append(
-            (tenant_id, event_id, "CASH", None, None, cash_amount, None)
-        )
-    if rows:
-        await conn.executemany(
-            """
-            INSERT INTO ledger.ledger_legs
-                (tenant_id, event_id, leg_type, instrument_id, currency,
-                 quantity, amount, unit_price)
-            VALUES ($1, $2, $3, $4, 'CNY', $5, $6, $7)
-            """,
-            rows,
-        )
-    return event_id
+        if item["item_type"] == "POSITION":
+            legs = [
+                (
+                    tenant_id,
+                    event_id,
+                    "INSTRUMENT",
+                    str(item["instrument_id"]),
+                    item["quantity"],
+                    item["unit_cost"],
+                )
+            ]
+            await conn.executemany(
+                """
+                INSERT INTO ledger.ledger_legs
+                    (tenant_id, event_id, leg_type, instrument_id, currency,
+                     quantity, unit_price)
+                VALUES ($1, $2, $3, $4, 'CNY', $5, $6)
+                """,
+                legs,
+            )
+        else:
+            await conn.execute(
+                """
+                INSERT INTO ledger.ledger_legs
+                    (tenant_id, event_id, leg_type, currency, amount)
+                VALUES ($1, $2, 'CASH', $3, $4)
+                """,
+                tenant_id,
+                event_id,
+                item["currency"],
+                item["cash_amount"],
+            )
+        event_ids.append(event_id)
 
-
-async def current_position(
-    conn: asyncpg.Connection, tenant_id: str, symbol: str
-) -> asyncpg.Record | None:
-    """Latest open position for one ticker symbol (account+instrument)."""
-    return await conn.fetchrow(
+    next_version = int(batch["version"]) + 1
+    await conn.execute(
         """
-        SELECT DISTINCT ON (ps.account_id, ps.instrument_id)
-            ps.account_id, ps.instrument_id, ps.quantity, ps.avg_cost
-        FROM ledger.position_snapshots ps
-        JOIN reference.instruments i ON i.id = ps.instrument_id
-        JOIN reference.instrument_aliases a ON a.instrument_id = i.id
-        WHERE ps.tenant_id = $1
-          AND a.alias_type = 'TICKER' AND a.alias_value = $2
-          AND (a.effective_to IS NULL OR a.effective_to >= CURRENT_DATE)
-        ORDER BY ps.account_id, ps.instrument_id, ps.as_of DESC
-        LIMIT 1
+        UPDATE ledger.portfolio_import_batches
+        SET status = 'CONFIRMED', confirmed_at = now(),
+            version = $3, updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND status = 'DRAFT'
         """,
         tenant_id,
-        symbol,
+        batch_id,
+        next_version,
     )
+    return {
+        "batch_id": batch_id,
+        "event_id": event_ids[0],
+        "event_ids": event_ids,
+        "version": next_version,
+        "already_confirmed": False,
+    }
 
 
 async def holding_instrument_ids(

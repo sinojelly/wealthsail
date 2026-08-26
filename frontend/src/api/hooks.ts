@@ -33,7 +33,6 @@ import type {
   PortfolioSummary,
   PositionDto,
   PositionMutationPayload,
-  PositionUpdatePayload,
   ReportDetail,
   ReportSession,
   ReportSummary,
@@ -90,7 +89,7 @@ export function useInstrumentSearch(
   return useQuery({
     queryKey: privateQueryKey(session, "portfolio", "search", trimmed),
     queryFn: () => portfolioApi.searchInstruments(trimmed),
-    enabled: enabled && trimmed.length >= 1,
+    enabled: enabled && trimmed.length >= 2,
     staleTime: 60_000,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
@@ -111,38 +110,35 @@ function usePortfolioInvalidate() {
     void queryClient.invalidateQueries({
       queryKey: privateQueryKey(session, "portfolio", "nav-trend"),
     });
+    void queryClient.invalidateQueries({
+      queryKey: privateQueryKey(session, "research", "recommendations"),
+    });
   };
 }
 
 export function useAddPosition() {
-  const invalidate = usePortfolioInvalidate();
   return useMutation({
-    mutationFn: (payload: PositionMutationPayload) =>
-      portfolioApi.addPosition(payload),
-    onSuccess: invalidate,
+    mutationFn: ({
+      payload,
+      idempotencyKey,
+    }: {
+      payload: PositionMutationPayload;
+      idempotencyKey: string;
+    }) => portfolioApi.createPositionImport(payload, idempotencyKey),
     onError: onAuthFailure,
   });
 }
 
-export function useUpdatePosition() {
+export function useConfirmPositionImport() {
   const invalidate = usePortfolioInvalidate();
   return useMutation({
     mutationFn: ({
-      symbol,
-      payload,
+      batchId,
+      idempotencyKey,
     }: {
-      symbol: string;
-      payload: PositionUpdatePayload;
-    }) => portfolioApi.updatePosition(symbol, payload),
-    onSuccess: invalidate,
-    onError: onAuthFailure,
-  });
-}
-
-export function useDeletePosition() {
-  const invalidate = usePortfolioInvalidate();
-  return useMutation({
-    mutationFn: (symbol: string) => portfolioApi.deletePosition(symbol),
+      batchId: string;
+      idempotencyKey: string;
+    }) => portfolioApi.confirmPositionImport(batchId, idempotencyKey),
     onSuccess: invalidate,
     onError: onAuthFailure,
   });
@@ -302,27 +298,38 @@ export function useMarketSentiment() {
 
 export interface AiAdvice {
   items: Array<{
-    action: "观察" | "持有" | "关注" | "减仓" | "加仓";
+    id: string;
+    action: "观察" | "持有候选" | "复核" | "减仓候选" | "加仓候选" | "暂不建议";
     title: string;
     detail: string;
+    counterCase: string | null;
+    confidence: string | null;
     riskLevel: "低" | "中" | "高";
+    policyCheckStatus: "PASSED" | "WARNING";
+    evidenceCount: number;
+    evidenceQuality: string;
+    validUntil: string;
+    methodVersion: string;
   }>;
+  status: "PUBLISHED" | "ABSTAIN";
+  reasonCode: string | null;
+  qualityStatus: string;
   disclaimer: string;
   generatedAt: string | null;
   model: string | null;
 }
 
 async function getChatAdvice(): Promise<AiAdvice> {
-  const envelope = await request<AiAdvice>("/v1/chat/advice");
+  const envelope = await request<AiAdvice>("/v1/research/recommendations/latest");
   return envelope.data;
 }
 
 export function useAiAdvice() {
   const session = usePrivateSession();
   return useQuery({
-    queryKey: privateQueryKey(session, "chat", "advice"),
+    queryKey: privateQueryKey(session, "research", "recommendations"),
     queryFn: getChatAdvice,
-    staleTime: 300_000, // 5 分钟内复用（LLM 调用有成本）
+    staleTime: 300_000, // 读取已发布结果；GET 不触发模型调用。
     retry: 1,
     refetchOnWindowFocus: false,
   });

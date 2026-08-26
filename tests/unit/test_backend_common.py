@@ -13,6 +13,7 @@ from backend.common.security import (
     constant_time_eq,
     envelope_decrypt,
     envelope_encrypt,
+    generate_binding_code,
     generate_token,
     hmac_digest,
 )
@@ -89,6 +90,14 @@ def test_generate_token_entropy_and_format() -> None:
     # 16 bytes → 26 base32 chars → entropy >= 128 bit.
     body = t1[3:].replace("-", "")
     assert len(body) == 26
+
+
+def test_binding_code_keeps_at_least_128_bits_of_entropy() -> None:
+    """A binding capability must not regress to a guessable short code."""
+    code = generate_binding_code()
+
+    assert code.startswith("WS-")
+    assert len(code[3:].replace("-", "")) >= 26
 
 
 def test_hmac_and_constant_time() -> None:

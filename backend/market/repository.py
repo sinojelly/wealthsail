@@ -556,8 +556,10 @@ async def upsert_market_sentiment(
         """
         INSERT INTO market.market_sentiment
             (trade_date, total_up, total_down, total_flat, limit_up, limit_down,
-             turnover, north_flow, sentiment_score, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+             turnover, north_flow, sentiment_score, source_name, source_as_of,
+             retrieved_at, quality_status, coverage_pct, method_version, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, now())
         ON CONFLICT (trade_date) DO UPDATE SET
             total_up = EXCLUDED.total_up,
             total_down = EXCLUDED.total_down,
@@ -567,6 +569,12 @@ async def upsert_market_sentiment(
             turnover = EXCLUDED.turnover,
             north_flow = EXCLUDED.north_flow,
             sentiment_score = EXCLUDED.sentiment_score,
+            source_name = EXCLUDED.source_name,
+            source_as_of = EXCLUDED.source_as_of,
+            retrieved_at = EXCLUDED.retrieved_at,
+            quality_status = EXCLUDED.quality_status,
+            coverage_pct = EXCLUDED.coverage_pct,
+            method_version = EXCLUDED.method_version,
             updated_at = now()
         """,
         date.fromisoformat(trade_date),
@@ -578,6 +586,12 @@ async def upsert_market_sentiment(
         data.get("turnover"),
         data.get("north_flow"),
         data.get("sentiment_score"),
+        data["source_name"],
+        data["source_as_of"],
+        data["retrieved_at"],
+        data["quality_status"],
+        data.get("coverage_pct"),
+        data["method_version"],
     )
 
 
@@ -588,7 +602,8 @@ async def get_latest_market_sentiment(
     rows = await conn.fetch(
         """
         SELECT trade_date, total_up, total_down, total_flat, limit_up, limit_down,
-               turnover, north_flow, sentiment_score, updated_at
+               turnover, north_flow, sentiment_score, source_name, source_as_of,
+               retrieved_at, quality_status, coverage_pct, method_version, updated_at
         FROM market.market_sentiment
         ORDER BY trade_date DESC
         LIMIT $1

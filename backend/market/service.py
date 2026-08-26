@@ -425,50 +425,30 @@ async def fill_trading_calendar(pool: Pool) -> int:
     return inserted
 
 
-async def get_market_sentiment(pool: Pool, settings: Settings) -> dict:
-    """今日市场情绪指数：实时抓取优先，落库后返回；抓取失败回退库内最近记录。
-
-    返回: { tradeDate, totalUp, totalDown, totalFlat, limitUp, limitDown,
-            turnover(亿元), northFlow(亿元|null), sentimentScore(0-100),
-            source: "live" | "db", updatedAt }
-    """
-    del settings  # 预留：后续可加缓存 TTL 等配置
+async def refresh_market_sentiment(pool: Pool) -> dict:
+    """Worker-only Provider refresh; persist provenance before publishing."""
     stats = await md.fetch_market_sentiment()
-    if stats:
-        try:
-            async with system_connection(pool) as conn:
-                await repository.upsert_market_sentiment(
-                    conn, trade_date=stats["trade_date"], data=stats
-                )
-        except Exception as exc:  # noqa: BLE001 — 落库失败不阻断响应
-            logger.warning("市场情绪落库失败: %s", exc)
-        return {
-            "tradeDate": stats["trade_date"],
-            "totalUp": stats.get("total_up"),
-            "totalDown": stats.get("total_down"),
-            "totalFlat": stats.get("total_flat"),
-            "limitUp": stats.get("limit_up"),
-            "limitDown": stats.get("limit_down"),
-            "turnover": (
-                str(stats["turnover"]) if stats.get("turnover") is not None else None
-            ),
-            "northFlow": (
-                str(stats["north_flow"]) if stats.get("north_flow") is not None else None
-            ),
-            "sentimentScore": (
-                str(stats["sentiment_score"])
-                if stats.get("sentiment_score") is not None
-                else None
-            ),
-            "source": "live",
-            "updatedAt": now_shanghai(),
-        }
-
-    # 降级：读库内最近一条（诚实标注来源与时间）
+    if not stats:
+        return {"status": "ABSTAINED", "reason": "PROVIDER_UNAVAILABLE"}
     async with system_connection(pool) as conn:
-        rows = await repository.get_latest_market_sentiment(conn, limit=1)
+        await repository.upsert_market_sentiment(
+            conn, trade_date=stats["trade_date"], data=stats
+        )
+    return {"status": "COMPLETED", "tradeDate": stats["trade_date"]}
+
+
+async def get_market_sentiment(conn) -> dict:
+    """Return the latest governed snapshot without any external I/O."""
+    rows = await repository.get_latest_market_sentiment(conn, limit=1)
     if rows:
         r = rows[0]
+        persisted_quality = str(r["quality_status"])
+        quality = (
+            "STALE"
+            if persisted_quality == "FRESH"
+            and r["trade_date"] != now_shanghai().date()
+            else persisted_quality
+        )
         return {
             "tradeDate": r["trade_date"].isoformat(),
             "totalUp": r["total_up"],
@@ -481,7 +461,14 @@ async def get_market_sentiment(pool: Pool, settings: Settings) -> dict:
             "sentimentScore": (
                 str(r["sentiment_score"]) if r["sentiment_score"] is not None else None
             ),
-            "source": "db",
+            "source": r["source_name"],
+            "sourceAsOf": r["source_as_of"],
+            "retrievedAt": r["retrieved_at"],
+            "qualityStatus": quality,
+            "coveragePct": (
+                str(r["coverage_pct"]) if r["coverage_pct"] is not None else None
+            ),
+            "methodVersion": r["method_version"],
             "updatedAt": r["updated_at"],
         }
     return {
@@ -495,5 +482,10 @@ async def get_market_sentiment(pool: Pool, settings: Settings) -> dict:
         "northFlow": None,
         "sentimentScore": None,
         "source": "unavailable",
+        "sourceAsOf": None,
+        "retrievedAt": None,
+        "qualityStatus": "UNAVAILABLE",
+        "coveragePct": None,
+        "methodVersion": None,
         "updatedAt": now_shanghai(),
     }

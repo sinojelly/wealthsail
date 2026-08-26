@@ -3,15 +3,30 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
+from backend.common.tenancy import TenantContext
+from backend.errors import ForbiddenError
 from backend.reports.service import (
     _attach_deterministic_fund_items,
     _fallback_draft,
     _parse_llm_draft,
     canonical_context_hash,
+    generate_report,
 )
+
+
+@pytest.mark.asyncio
+async def test_viewer_cannot_trigger_costly_report_generation_or_tenant_delivery() -> None:
+    with pytest.raises(ForbiddenError):
+        await generate_report(
+            MagicMock(),
+            TenantContext("viewer-1", "tenant-1", tenant_role="VIEWER"),
+            MagicMock(),
+            "PRE_MARKET",
+        )
 
 
 def test_context_hash_changes_when_financial_content_changes() -> None:

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -841,11 +842,38 @@ _ak_module = None
 # ---------------------------------------------------------------------------
 # 市场情绪指数（涨跌家数 / 涨停跌停 / 成交额 / 北向资金）
 # ---------------------------------------------------------------------------
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def price_limit_pct(symbol: str, name: str = "") -> Decimal:
+    """Return the ordinary daily price-limit band for a listed A-share.
+
+    New-listing and resumption exemptions require exchange-status data that is
+    not present in the snapshot.  Those exceptional rows remain an explicit
+    limitation of ``sentiment/v2`` rather than being silently treated as exact.
+    """
+    normalized_name = name.upper().replace("*", "")
+    if "ST" in normalized_name:
+        return Decimal("5")
+    if symbol.startswith(("4", "8", "92")):
+        return Decimal("30")
+    if symbol.startswith(("300", "301", "688", "689")):
+        return Decimal("20")
+    return Decimal("10")
+
+
+def _is_limit_move(change_pct: Decimal, symbol: str, name: str, *, up: bool) -> bool:
+    # Quotes are rounded by the Provider; 0.2 percentage-point tolerance
+    # matches the old 9.8% main-board convention without applying it to all boards.
+    threshold = price_limit_pct(symbol, name) - Decimal("0.2")
+    return change_pct >= threshold if up else change_pct <= -threshold
+
+
 def _sentiment_from_ak(df) -> dict:
     """从 AkShare 全市场快照统计情绪指标。
 
-    涨停/跌停用涨跌幅阈值近似（≥9.8% / ≤-9.8%）：不细分主板 10%、创业板/科创板
-    20% 与 ST 5%，MVP 阶段按全市场统一阈值统计，注释保留口径。
+    涨停/跌停按 ST、主板、创业板/科创板、北交所的通常价格限制分别近似；
+    新股/复牌等无涨跌停例外因快照缺少交易状态，作为方法局限写入版本说明。
     """
     columns = list(df.columns)
     if "代码" not in columns or "涨跌幅" not in columns:
@@ -854,17 +882,21 @@ def _sentiment_from_ak(df) -> dict:
     up = down = flat = 0
     limit_up = limit_down = 0
     turnover_yuan = Decimal("0")
+    source_rows = len(df.index)
     for _, row in df.iterrows():
         change = _num(row, "涨跌幅")
         if change is None:
             continue
+        change_decimal = Decimal(str(change))
+        symbol = str(row.get("代码") or "").strip().zfill(6)
+        name = str(row.get("名称") or "").strip()
         if change > 0:
             up += 1
-            if change >= 9.8:
+            if _is_limit_move(change_decimal, symbol, name, up=True):
                 limit_up += 1
         elif change < 0:
             down += 1
-            if change <= -9.8:
+            if _is_limit_move(change_decimal, symbol, name, up=False):
                 limit_down += 1
         else:
             flat += 1
@@ -879,8 +911,9 @@ def _sentiment_from_ak(df) -> dict:
     base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
     score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
     score = max(Decimal("0"), min(Decimal("100"), score))
+    now = datetime.now(_SHANGHAI_TZ)
     return {
-        "trade_date": date.today().isoformat(),
+        "trade_date": now.date().isoformat(),
         "total_up": up,
         "total_down": down,
         "total_flat": flat,
@@ -889,6 +922,16 @@ def _sentiment_from_ak(df) -> dict:
         "turnover": turnover_yi.quantize(Decimal("0.01")),
         "sentiment_score": score.quantize(Decimal("0.01")),
         "total": total,
+        "source_name": AKSOURCE_NAME,
+        "source_as_of": now,
+        "retrieved_at": now,
+        "quality_status": Q_FRESH,
+        "coverage_pct": (
+            (Decimal(total) / Decimal(source_rows) * 100).quantize(Decimal("0.01"))
+            if source_rows
+            else None
+        ),
+        "method_version": "sentiment/v2",
     }
 
 
@@ -931,16 +974,19 @@ def _count_from_sina_items(items: list[dict]) -> tuple[int, int, int, int, int, 
         if cp is None:
             continue
         try:
-            cp_f = float(cp)
+            cp_value = Decimal(str(cp))
         except (TypeError, ValueError):
             continue
-        if cp_f > 0:
+        symbol = str(item.get("symbol") or item.get("code") or "").strip()
+        symbol = symbol[-6:] if len(symbol) >= 6 else symbol.zfill(6)
+        name = str(item.get("name") or "")
+        if cp_value > 0:
             up += 1
-            if cp_f >= 9.8:
+            if _is_limit_move(cp_value, symbol, name, up=True):
                 limit_up += 1
-        elif cp_f < 0:
+        elif cp_value < 0:
             down += 1
-            if cp_f <= -9.8:
+            if _is_limit_move(cp_value, symbol, name, up=False):
                 limit_down += 1
         else:
             flat += 1
@@ -962,6 +1008,7 @@ async def _fetch_sina_market_sentiment() -> dict:
     up = down = flat = limit_up = limit_down = 0
     turnover = Decimal("0")
     page = 1
+    incomplete = False
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
         while page <= 100:
             batch = list(range(page, page + 10))
@@ -972,13 +1019,16 @@ async def _fetch_sina_market_sentiment() -> dict:
             got = 0
             for r in results:
                 if isinstance(r, Exception):
+                    incomplete = True
                     continue
                 response: httpx.Response = r  # type: ignore[assignment] — gather 联合类型收窄
                 if response.status_code != 200:
+                    incomplete = True
                     continue
                 try:
                     items = response.json()
                 except ValueError:
+                    incomplete = True
                     continue
                 if not isinstance(items, list) or not items:
                     continue
@@ -996,14 +1046,15 @@ async def _fetch_sina_market_sentiment() -> dict:
             if got < 100 * 10:
                 break  # 最后一轮不足一满页 = 已取完
     total = up + down + flat
-    if total == 0:
+    if total == 0 or incomplete:
         return {}
     turnover_yi = turnover / Decimal("100000000")
     base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
     score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
     score = max(Decimal("0"), min(Decimal("100"), score))
+    now = datetime.now(_SHANGHAI_TZ)
     return {
-        "trade_date": date.today().isoformat(),
+        "trade_date": now.date().isoformat(),
         "total_up": up,
         "total_down": down,
         "total_flat": flat,
@@ -1012,6 +1063,12 @@ async def _fetch_sina_market_sentiment() -> dict:
         "turnover": turnover_yi.quantize(Decimal("0.01")),
         "sentiment_score": score.quantize(Decimal("0.01")),
         "total": total,
+        "source_name": SINASOURCE_NAME,
+        "source_as_of": now,
+        "retrieved_at": now,
+        "quality_status": Q_FRESH,
+        "coverage_pct": Decimal("100.00"),
+        "method_version": "sentiment/v2",
     }
 
 

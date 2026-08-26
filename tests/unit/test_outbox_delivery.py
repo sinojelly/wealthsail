@@ -231,11 +231,11 @@ class _DeliveryConnection:
     def __init__(self) -> None:
         self.inserted = []
 
-    async def fetch(self, _sql: str, tenant_id: str, user_id: str):
+    async def fetch(self, _sql: str, tenant_id: str):
         assert tenant_id == "tenant-a"
-        assert user_id == "user-1"
         return [
             {"id": "binding-1", "user_id": "user-1"},
+            {"id": "binding-2", "user_id": "user-2"},
         ]
 
     async def executemany(self, _sql: str, rows):
@@ -244,20 +244,19 @@ class _DeliveryConnection:
 
 @pytest.mark.asyncio
 async def test_report_publication_expands_one_outbox_delivery_per_active_binding() -> None:
-    """A report pushes only to the acting user's own ACTIVE binding."""
+    """A tenant report fans out once to every ACTIVE member binding."""
     conn = _DeliveryConnection()
 
     count = await insert_report_outbox_deliveries(
         conn,
         tenant_id="tenant-a",
-        user_id="user-1",
         report_id="report-1",
         session="FUND_1430",
         version=2,
         trade_date="2026-08-26",
     )
 
-    assert count == 1
-    assert {row[1] for row in conn.inserted} == {"binding-1"}
-    assert len({row[-1] for row in conn.inserted}) == 1
+    assert count == 2
+    assert {row[1] for row in conn.inserted} == {"binding-1", "binding-2"}
+    assert len({row[-1] for row in conn.inserted}) == 2
     assert all("touser" not in row[5] for row in conn.inserted)

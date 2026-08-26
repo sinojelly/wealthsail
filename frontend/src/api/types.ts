@@ -114,26 +114,30 @@ export interface PositionMutationPayload {
   quantity: string;
   avgCost: string;
   buyDate?: string;
-  idempotencyKey?: string;
 }
 
-export interface PositionUpdatePayload {
-  quantity: string;
-  avgCost: string;
-  buyDate?: string;
-  idempotencyKey?: string;
-}
-
-export interface PositionMutationResult {
-  position: PositionDto & {
-    avgCost: DecimalString;
-    buyDate: string;
-    eventId: string;
+export interface PositionImportDraft {
+  batchId: string;
+  status: "DRAFT";
+  version: number;
+  item: {
+    itemId: string;
+    symbol: string;
+    name: string;
+    assetType: InstrumentType;
+    quantity: DecimalString;
+    unitCost: DecimalString;
+    tradeDate: string;
+    accountId: string;
+    validationStatus: "VALID";
   };
 }
 
-export interface DeletePositionResult {
-  removed: { symbol: string; name: string; quantity: string };
+export interface PositionImportConfirmation {
+  batchId: string;
+  status: "CONFIRMED";
+  version: number;
+  eventId: string;
 }
 
 export interface NavPoint {

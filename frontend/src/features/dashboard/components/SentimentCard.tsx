@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { MarketSentiment } from "../../../api/market";
 import Decimal from "decimal.js";
+import QualityBadge from "../../../components/data-state/QualityBadge";
 
 function scoreTone(score: number | null): { label: string; cls: string } {
   if (score == null) return { label: "暂无评分", cls: "status-pill pending" };
@@ -17,9 +18,11 @@ function scoreTone(score: number | null): { label: string; cls: string } {
 export default function SentimentCard({
   sentiment,
   loading,
+  error,
 }: {
   sentiment?: MarketSentiment;
   loading?: boolean;
+  error?: string | null;
 }) {
   const score = sentiment?.sentimentScore
     ? Number(sentiment.sentimentScore)
@@ -105,6 +108,7 @@ export default function SentimentCard({
         <Gauge size={17} />
       </div>
       <div className="panel-body">
+        {error ? <div className="alert alert-warning" role="alert">{error}</div> : null}
         <div className="sentiment-score-row">
           <div className="sentiment-score">
             <span className="score-value">
@@ -121,7 +125,18 @@ export default function SentimentCard({
               更新于 <strong className="mono">{updatedAt}</strong>
             </span>
             <span className="text-muted">
-              来源：{sentiment?.source === "live" ? "实时" : sentiment?.source === "db" ? "库内最近" : "不可用"}
+              来源：{sentiment?.source ?? "不可用"}
+            </span>
+            <QualityBadge
+              quality={
+                !sentiment || sentiment.qualityStatus === "UNAVAILABLE"
+                  ? "MISSING"
+                  : sentiment.qualityStatus
+              }
+            />
+            <span className="text-muted">
+              覆盖率：{sentiment?.coveragePct ? `${sentiment.coveragePct}%` : "未知"}
+              {sentiment?.methodVersion ? ` · ${sentiment.methodVersion}` : ""}
             </span>
           </div>
         </div>

@@ -1,13 +1,12 @@
 import { request } from "./client";
 import type {
-  DeletePositionResult,
   InstrumentSearchResult,
   NavTrend,
   PortfolioSummary,
   PositionDto,
+  PositionImportConfirmation,
+  PositionImportDraft,
   PositionMutationPayload,
-  PositionMutationResult,
-  PositionUpdatePayload,
 } from "./types";
 
 export async function getSummary(): Promise<PortfolioSummary> {
@@ -37,33 +36,31 @@ export async function searchInstruments(
   return envelope.data.items;
 }
 
-export async function addPosition(
+export async function createPositionImport(
   payload: PositionMutationPayload,
-): Promise<PositionMutationResult> {
-  const envelope = await request<PositionMutationResult>(
-    "/v1/portfolio/positions",
-    { method: "POST", body: JSON.stringify(payload) },
+  idempotencyKey: string,
+): Promise<PositionImportDraft> {
+  const envelope = await request<PositionImportDraft>(
+    "/v1/portfolio/imports",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(payload),
+    },
   );
   return envelope.data;
 }
 
-export async function updatePosition(
-  symbol: string,
-  payload: PositionUpdatePayload,
-): Promise<PositionMutationResult> {
-  const envelope = await request<PositionMutationResult>(
-    `/v1/portfolio/positions/${encodeURIComponent(symbol)}`,
-    { method: "PATCH", body: JSON.stringify(payload) },
-  );
-  return envelope.data;
-}
-
-export async function deletePosition(
-  symbol: string,
-): Promise<DeletePositionResult> {
-  const envelope = await request<DeletePositionResult>(
-    `/v1/portfolio/positions/${encodeURIComponent(symbol)}`,
-    { method: "DELETE" },
+export async function confirmPositionImport(
+  batchId: string,
+  idempotencyKey: string,
+): Promise<PositionImportConfirmation> {
+  const envelope = await request<PositionImportConfirmation>(
+    `/v1/portfolio/imports/${encodeURIComponent(batchId)}/confirm`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    },
   );
   return envelope.data;
 }

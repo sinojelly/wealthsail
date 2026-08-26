@@ -96,6 +96,51 @@ async def create_pool(
     return await asyncpg.create_pool(**pool_args, **pool_kwargs)
 
 
+async def verify_runtime_login_boundary(pool: Pool, *, process: str) -> None:
+    """Fail startup when one runtime credential can assume the other role.
+
+    ``SET ROLE`` in application code is useful only when the login credential
+    itself is least-privileged.  A shared ``postgres``/superuser credential or
+    API-to-Worker membership would let a compromised API assume BYPASSRLS, so
+    the process performs this readback before serving traffic.  The reverse
+    direction is intentional: the already-trusted Worker downgrades to the API
+    role for tenant-scoped report transactions.
+    """
+    if process not in {"api", "worker"}:
+        raise ValueError("process must be api or worker")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT session_user::text AS session_user,
+                   current_user::text AS current_user,
+                   login.rolsuper AS session_superuser,
+                   login.rolbypassrls AS session_bypassrls,
+                   pg_has_role(session_user, 'wealthsail_api', 'SET') AS can_set_api,
+                   pg_has_role(session_user, 'wealthsail_worker', 'SET') AS can_set_worker
+            FROM pg_roles login
+            WHERE login.rolname = session_user
+            """
+        )
+    if row is None:
+        raise RuntimeError("database session login role could not be inspected")
+    if bool(row.get("session_superuser", False)) or bool(row["session_bypassrls"]):
+        raise RuntimeError("runtime database login must not be superuser/BYPASSRLS")
+    if process == "api":
+        if not bool(row["can_set_api"]):
+            raise RuntimeError("API login cannot SET ROLE wealthsail_api")
+        if bool(row["can_set_worker"]):
+            raise RuntimeError("API login must not SET ROLE wealthsail_worker")
+    else:
+        if not bool(row["can_set_worker"]):
+            raise RuntimeError("Worker login cannot SET ROLE wealthsail_worker")
+        if not bool(row["can_set_api"]):
+            raise RuntimeError(
+                "Worker login cannot SET ROLE wealthsail_api for tenant transactions"
+            )
+        if row["current_user"] != "wealthsail_worker":
+            raise RuntimeError("Worker pool did not activate wealthsail_worker")
+
+
 def _claims_json(user_id: str, tenant_id: str, role: str) -> str:
     return json.dumps(
         {

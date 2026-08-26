@@ -26,7 +26,13 @@ export default function DashboardPage() {
   const navTrend = useNavTrend(30);
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
-  const errors = [summary.error, positions.error, navTrend.error]
+  const errors = [
+    summary.error,
+    positions.error,
+    navTrend.error,
+    sentiment.error,
+    advice.error,
+  ]
     .filter((error): error is Error => error instanceof Error)
     .map((error) => error.message);
 
@@ -71,11 +77,16 @@ export default function DashboardPage() {
         </div>
       ) : null}
       <MetricCards summary={summary.data} loading={summary.isLoading} />
-      <SentimentCard sentiment={sentiment.data} loading={sentiment.isLoading} />
+      <SentimentCard
+        sentiment={sentiment.data}
+        loading={sentiment.isLoading}
+        error={sentiment.error instanceof Error ? sentiment.error.message : null}
+      />
       <AdviceCard
         advice={advice.data}
         loading={advice.isLoading}
         refreshing={advice.isFetching && !advice.isLoading}
+        error={advice.error instanceof Error ? advice.error.message : null}
         onRefresh={() => void advice.refetch()}
       />
       <div className="dashboard-chart-grid">

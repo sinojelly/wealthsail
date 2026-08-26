@@ -32,6 +32,9 @@ Thumbs.db
 temp/
 figma/v2-ui-images/
 
+# 防止把工作区内误建的同名嵌套仓库提交成无 .gitmodules 的 gitlink
+/wealthsail/
+
 # 运行时/运维产物
 nohup.out
 backend/static/avatars/*

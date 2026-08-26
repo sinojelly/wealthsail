@@ -9,7 +9,7 @@ import pytest
 
 from backend.config import Settings
 from backend.jobs.runner import business_job_key, claim_job_run, finish_job_run
-from backend.jobs.scheduler import Scheduler
+from backend.jobs.scheduler import SCHEDULES, Scheduler
 
 
 def test_business_job_key_ignores_tick_seconds_and_worker_restart() -> None:
@@ -71,6 +71,45 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
 
     assert seen == [now]
     assert seen[0].utcoffset().total_seconds() == 8 * 60 * 60
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_times() -> None:
+    """Temporary sessions and an 18:00 drift must not enter production scheduling."""
+    shanghai = ZoneInfo("Asia/Shanghai")
+    dispatched: list[str] = []
+
+    async def execute(session: str, _at: datetime) -> None:
+        dispatched.append(session)
+
+    async def trading_day(_now: datetime) -> bool:
+        return True
+
+    assert {schedule.session for schedule in SCHEDULES} == {
+        "PRE_MARKET",
+        "INTRADAY",
+        "FUND_1430",
+        "POST_MARKET",
+    }
+
+    scheduler = Scheduler(
+        Settings(_env_file=None),
+        execute,
+        trading_day_check=trading_day,
+        now_provider=lambda: datetime(2026, 8, 27, 15, 30, tzinfo=shanghai),
+    )
+    await scheduler._tick()
+    assert dispatched == ["POST_MARKET"]
+
+    dispatched.clear()
+    scheduler = Scheduler(
+        Settings(_env_file=None),
+        execute,
+        trading_day_check=trading_day,
+        now_provider=lambda: datetime(2026, 8, 27, 18, 0, tzinfo=shanghai),
+    )
+    await scheduler._tick()
+    assert dispatched == []
 
 
 class _Acquire:

@@ -19,7 +19,7 @@ import logging
 import signal
 from datetime import datetime
 
-from backend.common.database import create_pool
+from backend.common.database import create_pool, verify_runtime_login_boundary
 from backend.config import get_settings, validate_runtime_settings
 from backend.jobs import runner
 from backend.jobs.outbox import OutboxConsumer
@@ -37,7 +37,12 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
         await market_service.refresh_market(pool, settings, session)
     except Exception:  # noqa: BLE001 — 行情失败不阻断报告生成
         logger.exception("session %s 行情刷新失败（继续生成报告）", session)
-    # 2. 报告生成（租约抢占 + 每租户 RLS 事务）
+    # 2. 市场情绪是全局 Worker 快照。API 只读库内结果，绝不按请求抓取。
+    try:
+        await market_service.refresh_market_sentiment(pool)
+    except Exception:  # noqa: BLE001 — 情绪不可用不阻断租户报告
+        logger.exception("session %s 市场情绪刷新失败（继续生成报告）", session)
+    # 3. 报告生成（租约抢占 + 每租户 RLS 事务）
     outcomes = await runner.run_session(pool, settings, session, now)
     for tenant_id, outcome in outcomes.items():
         logger.info("session %s tenant %s → %s", session, tenant_id, outcome)
@@ -55,6 +60,7 @@ async def main() -> None:
         max_size=settings.db_pool_max_size,
         runtime_role="wealthsail_worker",
     )
+    await verify_runtime_login_boundary(pool, process="worker")
     logger.info("worker connected: %s", settings.worker_database_url.split("@")[-1])
 
     # Recover runs stuck by a previous crash before starting fresh work.

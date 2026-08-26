@@ -46,6 +46,7 @@ vi.mock("../api/hooks", () => ({
       northFlow: null,
       sentimentScore: null,
       source: "unavailable",
+      qualityStatus: "UNAVAILABLE",
       updatedAt: null,
     },
     isLoading: false,
@@ -74,8 +75,7 @@ vi.mock("../api/hooks", () => ({
   useOpsAudit: () => ({ data: [], isLoading: false, isError: false, error: null }),
   useInstrumentSearch: () => ({ data: [], isLoading: false, isError: false, error: null }),
   useAddPosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useUpdatePosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useDeletePosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useConfirmPositionImport: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
 }));
 
 afterEach(() => {
