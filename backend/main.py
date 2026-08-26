@@ -33,6 +33,7 @@ from backend.reports.api import router as reports_router
 from backend.risk.api import router as risk_router
 
 logger = logging.getLogger("wealthsail.main")
+http_logger = logging.getLogger("wealthsail.http")
 
 
 @asynccontextmanager
@@ -83,9 +84,37 @@ def create_app() -> FastAPI:
         request.state.request_id = request_id
         start = time.perf_counter()
         response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
         response.headers["X-Request-Id"] = request_id
-        response.headers["X-Request-Time-Ms"] = str(
-            round((time.perf_counter() - start) * 1000, 1)
+        response.headers["X-Request-Time-Ms"] = str(duration_ms)
+
+        # Keep diagnostics at the HTTP boundary so proxy rewrites can be
+        # distinguished from application validation failures. Never log the
+        # query string, request body, cookies or authorization headers: invite
+        # tokens and passwords cross this boundary during registration.
+        def safe_header(name: str) -> str:
+            value = request.headers.get(name, "-")
+            return value.replace("\r", " ").replace("\n", " ")[:160] or "-"
+
+        allow = response.headers.get("Allow", "-")[:80] or "-"
+        location = response.headers.get("Location", "-").split("?", 1)[0][:240] or "-"
+        http_logger.log(
+            logging.WARNING if response.status_code >= 400 else logging.INFO,
+            (
+                "http_request method=%s path=%s status=%s request_id=%s "
+                "duration_ms=%s allow=%s host=%s forwarded_proto=%s "
+                "forwarded_host=%s location=%s"
+            ),
+            request.method,
+            request.url.path,
+            response.status_code,
+            request_id,
+            duration_ms,
+            allow,
+            safe_header("Host"),
+            safe_header("X-Forwarded-Proto"),
+            safe_header("X-Forwarded-Host"),
+            location,
         )
         return response
 

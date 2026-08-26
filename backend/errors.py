@@ -270,19 +270,24 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
         code = "INTERNAL_ERROR"
+        message = str(exc.detail)
         if exc.status_code == 401:
             code = "AUTH_REQUIRED"
         elif exc.status_code == 403:
             code = "FORBIDDEN"
         elif exc.status_code == 404:
             code = "NOT_FOUND"
+        elif exc.status_code == 405:
+            code = "VALIDATION_ERROR"
+            message = "请求方法不受支持"
         elif exc.status_code == 429:
             code = "RATE_LIMITED"
         return MoneyJSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content=_error_payload(
                 code=code,
-                message=str(exc.detail),
+                message=message,
                 retryable=exc.status_code >= 500,
                 field_errors=[],
                 request_id=request_id_of(request),
