@@ -27,6 +27,8 @@ SESSION_LABELS = {
     "INTRADAY": "盘中跟踪",
     "FUND_1430": "基金 2:30 报告",
     "POST_MARKET": "盘后交互复盘",
+    # [临时] 2026-08-26 21:30 测试推送，验证后与 014 迁移一并回滚
+    "TEST_2130": "21:30 测试推送",
 }
 
 
@@ -45,7 +47,9 @@ SCHEDULES: tuple[SessionSchedule, ...] = (
     SessionSchedule("PRE_MARKET", "盘前简报", minute=30, hour=8),
     SessionSchedule("INTRADAY", "盘中跟踪", minute=0, hour=9, every_minutes=5),
     SessionSchedule("FUND_1430", "基金 2:30 报告", minute=30, hour=14),
-    SessionSchedule("POST_MARKET", "盘后复盘", minute=30, hour=15),
+    SessionSchedule("POST_MARKET", "盘后复盘", minute=0, hour=18),
+    # [临时] 2026-08-26 21:30 测试推送（so 租户 TEST_2130 job），验证后移除
+    SessionSchedule("TEST_2130", "21:30 测试推送", minute=30, hour=21),
 )
 
 

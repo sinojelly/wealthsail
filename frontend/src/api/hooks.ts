@@ -4,13 +4,14 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { HttpError } from "./client";
+import { HttpError, request } from "./client";
 import {
   logout,
   privateQueryKey,
   useAuthSession,
 } from "../app/auth-session";
 import * as identityApi from "./identity";
+import * as marketApi from "./market";
 import * as operationsApi from "./operations";
 import * as portfolioApi from "./portfolio";
 import * as reportsApi from "./reports";
@@ -20,6 +21,7 @@ import type {
   AuditRow,
   BindingCredential,
   FreshnessResponse,
+  InstrumentSearchResult,
   LoginResponse,
   MeResponse,
   NavTrend,
@@ -28,6 +30,8 @@ import type {
   PoliciesResponse,
   PortfolioSummary,
   PositionDto,
+  PositionMutationPayload,
+  PositionUpdatePayload,
   ReportDetail,
   ReportSession,
   ReportSummary,
@@ -72,6 +76,73 @@ export function useNavTrend(days = 60): UseQueryResult<NavTrend> {
     queryFn: () => portfolioApi.getNavTrend(days),
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+export function useInstrumentSearch(
+  keyword: string,
+  enabled = true,
+): UseQueryResult<InstrumentSearchResult[]> {
+  const session = usePrivateSession();
+  const trimmed = keyword.trim();
+  return useQuery({
+    queryKey: privateQueryKey(session, "portfolio", "search", trimmed),
+    queryFn: () => portfolioApi.searchInstruments(trimmed),
+    enabled: enabled && trimmed.length >= 1,
+    staleTime: 60_000,
+    retry: (count, error) =>
+      !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+/** 持仓变更后统一刷新看板三件套（持仓列表 / 总览 / 净值走势）。 */
+function usePortfolioInvalidate() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return () => {
+    void queryClient.invalidateQueries({
+      queryKey: privateQueryKey(session, "portfolio", "positions"),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: privateQueryKey(session, "portfolio", "summary"),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: privateQueryKey(session, "portfolio", "nav-trend"),
+    });
+  };
+}
+
+export function useAddPosition() {
+  const invalidate = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: (payload: PositionMutationPayload) =>
+      portfolioApi.addPosition(payload),
+    onSuccess: invalidate,
+    onError: onAuthFailure,
+  });
+}
+
+export function useUpdatePosition() {
+  const invalidate = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: ({
+      symbol,
+      payload,
+    }: {
+      symbol: string;
+      payload: PositionUpdatePayload;
+    }) => portfolioApi.updatePosition(symbol, payload),
+    onSuccess: invalidate,
+    onError: onAuthFailure,
+  });
+}
+
+export function useDeletePosition() {
+  const invalidate = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: (symbol: string) => portfolioApi.deletePosition(symbol),
+    onSuccess: invalidate,
+    onError: onAuthFailure,
   });
 }
 
@@ -203,5 +274,44 @@ export function useOpsAudit(limit = 50): UseQueryResult<AuditRow[]> {
     queryKey: privateQueryKey(session, "operations", "audit", limit),
     queryFn: () => operationsApi.getOpsAudit(limit),
     refetchInterval: 30_000,
+  });
+}
+
+export function useMarketSentiment() {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(session, "market", "sentiment"),
+    queryFn: marketApi.getMarketSentiment,
+    refetchInterval: 300_000, // 5 分钟刷新（行情快照 60s 缓存，避免频繁拉取）
+    staleTime: 120_000,
+    retry: 1,
+  });
+}
+
+export interface AiAdvice {
+  items: Array<{
+    action: "观察" | "持有" | "关注" | "减仓" | "加仓";
+    title: string;
+    detail: string;
+    riskLevel: "低" | "中" | "高";
+  }>;
+  disclaimer: string;
+  generatedAt: string | null;
+  model: string | null;
+}
+
+async function getChatAdvice(): Promise<AiAdvice> {
+  const envelope = await request<AiAdvice>("/v1/chat/advice");
+  return envelope.data;
+}
+
+export function useAiAdvice() {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(session, "chat", "advice"),
+    queryFn: getChatAdvice,
+    staleTime: 300_000, // 5 分钟内复用（LLM 调用有成本）
+    retry: 1,
+    refetchOnWindowFocus: false,
   });
 }

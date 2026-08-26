@@ -32,3 +32,22 @@ export function fmtTurnoverYuan(turnover: number | null): string {
   if (turnover == null) return "--";
   return `${(turnover / 1e8).toFixed(2)} 亿`;
 }
+
+export interface MarketSentiment {
+  tradeDate: string | null;
+  totalUp: number | null;
+  totalDown: number | null;
+  totalFlat: number | null;
+  limitUp: number | null;
+  limitDown: number | null;
+  turnover: string | null; // 亿元
+  northFlow: string | null; // 亿元
+  sentimentScore: string | null; // 0-100
+  source: "live" | "db" | "unavailable";
+  updatedAt: string | null;
+}
+
+export async function getMarketSentiment(): Promise<MarketSentiment> {
+  const envelope = await request<MarketSentiment>("/v1/market/sentiment");
+  return envelope.data;
+}

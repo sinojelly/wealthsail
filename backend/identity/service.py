@@ -24,8 +24,18 @@ from backend.common.auth import (
     hash_password,
     verify_password,
 )
-from backend.common.database import Pool, system_connection, tenant_transaction
-from backend.common.security import envelope_encrypt, generate_token, hmac_digest
+from backend.common.database import (
+    Pool,
+    api_system_transaction,
+    system_connection,
+    tenant_transaction,
+)
+from backend.common.security import (
+    envelope_encrypt,
+    generate_binding_code,
+    generate_token,
+    hmac_digest,
+)
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.dependencies import now_shanghai, write_audit
@@ -68,7 +78,7 @@ async def _create_refresh_session(
 ) -> str:
     token = generate_token(32)
     expires_at = now_shanghai() + timedelta(days=settings.refresh_token_ttl_days)
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         await conn.execute(
             """
             INSERT INTO identity.refresh_sessions
@@ -161,7 +171,7 @@ async def login(
             "缺少登录口令", field_errors=[{"field": "password", "message": "必填"}]
         )
 
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         rows = await load_login_identity(conn, email)
 
     if not rows:
@@ -233,7 +243,7 @@ async def register(
     invitation_hash = hmac_digest(
         settings.binding_hmac_key, invitation_token.strip()
     )
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         try:
             row = await conn.fetchrow(
                 "SELECT * FROM identity.accept_invitation($1, $2, $3, $4)",
@@ -284,7 +294,7 @@ async def create_invitation(
     token = generate_token(32)
     token_hash = hmac_digest(settings.binding_hmac_key, token)
     expires_at = now_shanghai() + timedelta(days=7)
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         row = await conn.fetchrow(
             "SELECT * FROM identity.create_invitation($1, $2, $3, $4, $5, $6)",
             ctx.user_id,
@@ -314,7 +324,7 @@ async def refresh_session(pool: Pool, settings: Settings, refresh_token: str) ->
     new_hash = refresh_token_hash(settings, new_token)
     expires_at = now_shanghai() + timedelta(days=settings.refresh_token_ttl_days)
 
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
@@ -361,7 +371,7 @@ async def revoke_refresh_session(
 ) -> None:
     if not refresh_token:
         return
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         await conn.execute(
             """
             UPDATE identity.refresh_sessions
@@ -381,7 +391,7 @@ async def switch_tenant(
     refresh_token: str | None,
 ) -> dict:
     """Issue a new tenant-bound token after re-reading active membership."""
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         row = await conn.fetchrow(
             """
             SELECT p.id AS user_id, p.email, p.nickname,
@@ -425,7 +435,7 @@ async def create_binding_challenge(
 
     Returns the raw token exactly once; only its HMAC digest is persisted.
     """
-    token = generate_token(entropy_bytes=16)  # >= 128-bit CSPRNG entropy
+    token = generate_binding_code()
     token_hash = hmac_digest(settings.binding_hmac_key, token)
     expires_at = now_shanghai() + timedelta(seconds=settings.binding_token_ttl_seconds)
 
@@ -498,7 +508,7 @@ async def consume_binding_challenge(
         settings, external_user_id
     )
 
-    async with system_connection(pool) as conn:
+    async with api_system_transaction(pool) as conn:
         try:
             binding = await conn.fetchrow(
                 "SELECT * FROM identity.consume_binding_challenge($1, $2, $3, $4)",
@@ -563,6 +573,81 @@ async def revoke_binding(
         binding_id,
         ctx.tenant_id,
         ctx.user_id,
+    )
+    if row is None:
+        raise NotFoundError("活动绑定不存在或已撤销")
+    await write_audit(
+        conn,
+        tenant_id=ctx.tenant_id,
+        actor_type="USER",
+        actor_id=ctx.user_id,
+        action="WECOM_BINDING_REVOKED",
+        resource_type="identity.channel_bindings",
+        resource_id=str(row["id"]),
+        details={"channel_type": row["channel_type"]},
+    )
+    return {"bindingId": str(row["id"]), "status": row["status"]}
+
+
+async def get_binding_status(
+    conn: asyncpg.Connection, ctx: TenantContext, *, channel_type: str = "wecom"
+) -> dict:
+    """Return the current ACTIVE binding for this user+tenant, if any."""
+    binding = await conn.fetchrow(
+        """
+        SELECT id, channel_type, external_username, status, bound_at, last_used_at
+        FROM identity.channel_bindings
+        WHERE tenant_id = $1 AND user_id = $2
+          AND channel_type = $3 AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        ctx.tenant_id,
+        ctx.user_id,
+        channel_type,
+    )
+    if binding is None:
+        return {"bound": False, "binding": None}
+    return {
+        "bound": True,
+        "binding": {
+            "id": str(binding["id"]),
+            "channelType": binding["channel_type"],
+            "externalUsername": binding["external_username"],
+            "status": binding["status"],
+            "boundAt": binding["bound_at"],
+            "lastUsedAt": binding["last_used_at"],
+        },
+    }
+
+
+async def revoke_current_binding(
+    conn: asyncpg.Connection,
+    ctx: TenantContext,
+    *,
+    password: str,
+    channel_type: str = "wecom",
+) -> dict:
+    """Password-reauthenticated soft revoke of the user's ACTIVE binding.
+
+    Unlike ``revoke_binding`` the caller does not need to know the binding id;
+    the current ACTIVE binding for this user+tenant+channel is revoked.
+    """
+    password_hash = await conn.fetchval(
+        "SELECT password_hash FROM identity.profiles WHERE id=$1", ctx.user_id
+    )
+    if not verify_password(password, password_hash):
+        raise AuthRequiredError("重新验证口令失败")
+    row = await conn.fetchrow(
+        """
+        UPDATE identity.channel_bindings
+           SET status='REVOKED', revoked_at=now(), version=version+1
+         WHERE tenant_id=$1 AND user_id=$2 AND channel_type=$3 AND status='ACTIVE'
+        RETURNING id, status, channel_type
+        """,
+        ctx.tenant_id,
+        ctx.user_id,
+        channel_type,
     )
     if row is None:
         raise NotFoundError("活动绑定不存在或已撤销")

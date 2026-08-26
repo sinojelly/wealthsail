@@ -838,6 +838,211 @@ def source_names() -> tuple[str, str, str]:
 _ak_module = None
 
 
+# ---------------------------------------------------------------------------
+# 市场情绪指数（涨跌家数 / 涨停跌停 / 成交额 / 北向资金）
+# ---------------------------------------------------------------------------
+def _sentiment_from_ak(df) -> dict:
+    """从 AkShare 全市场快照统计情绪指标。
+
+    涨停/跌停用涨跌幅阈值近似（≥9.8% / ≤-9.8%）：不细分主板 10%、创业板/科创板
+    20% 与 ST 5%，MVP 阶段按全市场统一阈值统计，注释保留口径。
+    """
+    columns = list(df.columns)
+    if "代码" not in columns or "涨跌幅" not in columns:
+        logger.warning("akshare 情绪快照列结构变化: %s", columns[:8])
+        return {}
+    up = down = flat = 0
+    limit_up = limit_down = 0
+    turnover_yuan = Decimal("0")
+    for _, row in df.iterrows():
+        change = _num(row, "涨跌幅")
+        if change is None:
+            continue
+        if change > 0:
+            up += 1
+            if change >= 9.8:
+                limit_up += 1
+        elif change < 0:
+            down += 1
+            if change <= -9.8:
+                limit_down += 1
+        else:
+            flat += 1
+        t = _num(row, "成交额")
+        if t is not None:
+            turnover_yuan += Decimal(str(t))
+    total = up + down + flat
+    if total == 0:
+        return {}
+    turnover_yi = turnover_yuan / Decimal("100000000")
+    # 综合情绪评分 0-100：涨跌家数比为基础，涨停加分、跌停减分（封顶 ±20）
+    base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
+    score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    score = max(Decimal("0"), min(Decimal("100"), score))
+    return {
+        "trade_date": date.today().isoformat(),
+        "total_up": up,
+        "total_down": down,
+        "total_flat": flat,
+        "limit_up": limit_up,
+        "limit_down": limit_down,
+        "turnover": turnover_yi.quantize(Decimal("0.01")),
+        "sentiment_score": score.quantize(Decimal("0.01")),
+        "total": total,
+    }
+
+
+async def _fetch_north_flow() -> Decimal | None:
+    """北向资金净流入（亿元，可选）。
+
+    沪深港通北向实时净买入自 2024-08 起停止披露，该接口通常不可用；
+    失败返回 None（字段留空，不虚构数值）。
+    """
+    try:
+        df = await asyncio.to_thread(_ak_import().stock_hsgt_fund_flow_summary_em)
+        if df is None or df.empty:
+            return None
+        col = "北向资金" if "北向资金" in df.columns else df.columns[-1]
+        value = df.iloc[0][col]
+        if value is None:
+            return None
+        try:
+            return Decimal(str(value)).quantize(Decimal("0.01"))
+        except (ValueError, TypeError):
+            return None
+    except Exception as exc:  # noqa: BLE001 — 北向为可选字段，失败留空
+        logger.info("北向资金抓取不可用（可选字段留空）: %s", exc.__class__.__name__)
+        return None
+
+
+_SINA_MC_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "Market_Center.getHQNodeData?page={p}&num=100&sort=changepercent&asc=0"
+    "&node=hs_a&symbol=&_s_r_a=init"
+)
+
+
+def _count_from_sina_items(items: list[dict]) -> tuple[int, int, int, int, int, Decimal]:
+    """新浪市场中心行统计 → (up, down, flat, limit_up, limit_down, turnover_元)。"""
+    up = down = flat = limit_up = limit_down = 0
+    turnover = Decimal("0")
+    for item in items:
+        cp = item.get("changepercent")
+        if cp is None:
+            continue
+        try:
+            cp_f = float(cp)
+        except (TypeError, ValueError):
+            continue
+        if cp_f > 0:
+            up += 1
+            if cp_f >= 9.8:
+                limit_up += 1
+        elif cp_f < 0:
+            down += 1
+            if cp_f <= -9.8:
+                limit_down += 1
+        else:
+            flat += 1
+        amt = item.get("amount")
+        if amt is not None:
+            try:
+                turnover += Decimal(str(amt))
+            except (ValueError, TypeError):
+                pass
+    return up, down, flat, limit_up, limit_down, turnover
+
+
+async def _fetch_sina_market_sentiment() -> dict:
+    """新浪市场中心全市场分页统计（降级链第 2 级，不受东财 IP 风控影响）。
+
+    并发 10 页/轮拉取全市场快照（每页 100 条，按涨跌幅降序），直到数据取完
+    或连续失败。约 54 页 / 6 轮，耗时 10-20s（仅在东财不可用时触发）。
+    """
+    up = down = flat = limit_up = limit_down = 0
+    turnover = Decimal("0")
+    page = 1
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        while page <= 100:
+            batch = list(range(page, page + 10))
+            results = await asyncio.gather(
+                *(client.get(_SINA_MC_URL.format(p=p)) for p in batch),
+                return_exceptions=True,
+            )
+            got = 0
+            for r in results:
+                if isinstance(r, Exception):
+                    continue
+                response: httpx.Response = r  # type: ignore[assignment] — gather 联合类型收窄
+                if response.status_code != 200:
+                    continue
+                try:
+                    items = response.json()
+                except ValueError:
+                    continue
+                if not isinstance(items, list) or not items:
+                    continue
+                got += len(items)
+                u, d, f, lu, ld, t = _count_from_sina_items(items)
+                up += u
+                down += d
+                flat += f
+                limit_up += lu
+                limit_down += ld
+                turnover += t
+            if got == 0:
+                break  # 接口失败或已到末尾
+            page += 10
+            if got < 100 * 10:
+                break  # 最后一轮不足一满页 = 已取完
+    total = up + down + flat
+    if total == 0:
+        return {}
+    turnover_yi = turnover / Decimal("100000000")
+    base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
+    score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    score = max(Decimal("0"), min(Decimal("100"), score))
+    return {
+        "trade_date": date.today().isoformat(),
+        "total_up": up,
+        "total_down": down,
+        "total_flat": flat,
+        "limit_up": limit_up,
+        "limit_down": limit_down,
+        "turnover": turnover_yi.quantize(Decimal("0.01")),
+        "sentiment_score": score.quantize(Decimal("0.01")),
+        "total": total,
+    }
+
+
+async def fetch_market_sentiment() -> dict:
+    """今日市场情绪指数。
+
+    降级链：AkShare 全市场快照（60s 缓存，涨跌家数/涨停跌停/成交额）→
+    新浪市场中心分页统计（东财 IP 风控时）→ 北向资金单独可选
+    （2024-08 后通常不可用 → NULL）→ 彻底失败返回空 dict
+    （由调用方回退到数据库最近一条记录）。
+    """
+    try:
+        df = await _ak_spot_cached()
+        stats = _sentiment_from_ak(df)
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.warning("akshare 市场情绪抓取失败，降级新浪市场中心: %s", exc)
+        stats = {}
+    if not stats:
+        stats = await _fetch_sina_market_sentiment()
+    if stats:
+        north = await _fetch_north_flow()
+        stats["north_flow"] = north
+        logger.info(
+            "市场情绪: 涨 %d 跌 %d 平 %d 涨停 %d 跌停 %d 成交 %.0f 亿",
+            stats["total_up"], stats["total_down"], stats["total_flat"],
+            stats["limit_up"], stats["limit_down"], stats["turnover"] or 0,
+        )
+        return stats
+    return {}
+
+
 def _ak_import():
     global _ak_module
     if _ak_module is None:

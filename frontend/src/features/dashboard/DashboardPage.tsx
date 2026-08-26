@@ -16,11 +16,16 @@ import AssetDonutChart from "./components/AssetDonutChart";
 import EquityCurveChart from "./components/EquityCurveChart";
 import HoldingsTable from "./components/HoldingsTable";
 import MetricCards from "./components/MetricCards";
+import SentimentCard from "./components/SentimentCard";
+import AdviceCard from "./components/AdviceCard";
+import { useAiAdvice, useMarketSentiment } from "../../api/hooks";
 
 export default function DashboardPage() {
   const summary = usePortfolioSummary();
   const positions = usePositions();
   const navTrend = useNavTrend(30);
+  const sentiment = useMarketSentiment();
+  const advice = useAiAdvice();
   const errors = [summary.error, positions.error, navTrend.error]
     .filter((error): error is Error => error instanceof Error)
     .map((error) => error.message);
@@ -66,6 +71,13 @@ export default function DashboardPage() {
         </div>
       ) : null}
       <MetricCards summary={summary.data} loading={summary.isLoading} />
+      <SentimentCard sentiment={sentiment.data} loading={sentiment.isLoading} />
+      <AdviceCard
+        advice={advice.data}
+        loading={advice.isLoading}
+        refreshing={advice.isFetching && !advice.isLoading}
+        onRefresh={() => void advice.refetch()}
+      />
       <div className="dashboard-chart-grid">
         <EquityCurveChart
           points={navTrend.error ? [] : (navTrend.data?.points ?? [])}

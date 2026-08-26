@@ -15,9 +15,12 @@ from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.dependencies import (
     get_pool,
+    get_request_id,
     get_settings_dep,
     get_tenant_context,
+    now_shanghai,
 )
+from backend.errors import ok
 
 logger = logging.getLogger("wealthsail.chat_api")
 
@@ -86,3 +89,22 @@ async def chat_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.get("/advice")
+async def chat_advice(
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """AI 操作建议卡片：持仓 + 研报 + 行情 → LLM 一次性生成 2-4 条建议。
+
+    返回: { items: [{action, title, detail, riskLevel}], disclaimer,
+            generatedAt, model }
+    """
+    from backend.chat import service as chat_service
+
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await chat_service.generate_advice(conn, settings, ctx.tenant_id)
+    return ok(data, request_id=request_id, as_of=now_shanghai())

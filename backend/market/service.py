@@ -423,3 +423,77 @@ async def fill_trading_calendar(pool: Pool) -> int:
         inserted = await repository.upsert_trading_calendar_rows(conn, rows)
     logger.info("交易日历填充完成: %d 天 (2024-2026, SSE)", inserted)
     return inserted
+
+
+async def get_market_sentiment(pool: Pool, settings: Settings) -> dict:
+    """今日市场情绪指数：实时抓取优先，落库后返回；抓取失败回退库内最近记录。
+
+    返回: { tradeDate, totalUp, totalDown, totalFlat, limitUp, limitDown,
+            turnover(亿元), northFlow(亿元|null), sentimentScore(0-100),
+            source: "live" | "db", updatedAt }
+    """
+    del settings  # 预留：后续可加缓存 TTL 等配置
+    stats = await md.fetch_market_sentiment()
+    if stats:
+        try:
+            async with system_connection(pool) as conn:
+                await repository.upsert_market_sentiment(
+                    conn, trade_date=stats["trade_date"], data=stats
+                )
+        except Exception as exc:  # noqa: BLE001 — 落库失败不阻断响应
+            logger.warning("市场情绪落库失败: %s", exc)
+        return {
+            "tradeDate": stats["trade_date"],
+            "totalUp": stats.get("total_up"),
+            "totalDown": stats.get("total_down"),
+            "totalFlat": stats.get("total_flat"),
+            "limitUp": stats.get("limit_up"),
+            "limitDown": stats.get("limit_down"),
+            "turnover": (
+                str(stats["turnover"]) if stats.get("turnover") is not None else None
+            ),
+            "northFlow": (
+                str(stats["north_flow"]) if stats.get("north_flow") is not None else None
+            ),
+            "sentimentScore": (
+                str(stats["sentiment_score"])
+                if stats.get("sentiment_score") is not None
+                else None
+            ),
+            "source": "live",
+            "updatedAt": now_shanghai(),
+        }
+
+    # 降级：读库内最近一条（诚实标注来源与时间）
+    async with system_connection(pool) as conn:
+        rows = await repository.get_latest_market_sentiment(conn, limit=1)
+    if rows:
+        r = rows[0]
+        return {
+            "tradeDate": r["trade_date"].isoformat(),
+            "totalUp": r["total_up"],
+            "totalDown": r["total_down"],
+            "totalFlat": r["total_flat"],
+            "limitUp": r["limit_up"],
+            "limitDown": r["limit_down"],
+            "turnover": str(r["turnover"]) if r["turnover"] is not None else None,
+            "northFlow": str(r["north_flow"]) if r["north_flow"] is not None else None,
+            "sentimentScore": (
+                str(r["sentiment_score"]) if r["sentiment_score"] is not None else None
+            ),
+            "source": "db",
+            "updatedAt": r["updated_at"],
+        }
+    return {
+        "tradeDate": None,
+        "totalUp": None,
+        "totalDown": None,
+        "totalFlat": None,
+        "limitUp": None,
+        "limitDown": None,
+        "turnover": None,
+        "northFlow": None,
+        "sentimentScore": None,
+        "source": "unavailable",
+        "updatedAt": now_shanghai(),
+    }

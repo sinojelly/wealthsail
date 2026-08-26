@@ -44,6 +44,8 @@ SESSION_META: dict[str, dict[str, str]] = {
     "INTRADAY": {"title": "盘中跟踪", "subtitle": "持仓异动与风险预算触点"},
     "FUND_1430": {"title": "基金 2:30 报告", "subtitle": "场外基金估值、覆盖率与截止时间"},
     "POST_MARKET": {"title": "盘后交互复盘", "subtitle": "计划—决策—执行闭环与证据回看"},
+    # [临时] 2026-08-26 21:30 测试推送，验证后移除
+    "TEST_2130": {"title": "21:30 测试推送", "subtitle": "推送链路验证（临时调度）"},
 }
 
 _ALLOWED_ITEM_TYPES = {"FACT", "RISK", "ACTION_PLAN", "TODO", "FUND_ESTIMATE", "ALERT"}
@@ -664,6 +666,7 @@ async def _persist_generation(
     await repository.insert_report_outbox_deliveries(
         conn,
         tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
         report_id=report_id,
         session=session,
         version=version,

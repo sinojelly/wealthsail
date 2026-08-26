@@ -629,6 +629,78 @@ button:disabled {
 .dialog-content {
   padding: 18px;
 }
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* 添加持仓：标的搜索下拉 */
+.search-results {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 6px;
+  border: 1px solid var(--slate-200);
+  border-radius: 10px;
+  background: white;
+  box-shadow: 0 4px 14px rgb(15 23 42 / 8%);
+}
+.search-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--slate-100);
+  background: white;
+  text-align: left;
+  cursor: pointer;
+}
+.search-result-row:hover {
+  background: var(--slate-50);
+}
+.search-result-row:last-child {
+  border-bottom: 0;
+}
+.search-result-hint {
+  padding: 12px;
+  color: var(--slate-500);
+  font-size: 12px;
+}
+.selected-security {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--teal);
+  border-radius: 10px;
+  background: var(--teal-50, #f0fdfa);
+}
+.selected-security.static {
+  border-color: var(--slate-200);
+  background: var(--slate-50);
+}
+
+/* 持仓行操作 */
+.actions-col {
+  width: 74px;
+}
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.icon-button.danger {
+  color: #dc2626;
+}
+.icon-button.danger:hover {
+  background: #fef2f2;
+}
 .dialog-footer {
   position: sticky;
   bottom: 0;
@@ -3291,4 +3363,124 @@ button:disabled {
   border-top: 1px solid var(--slate-100);
   color: var(--slate-500);
   font-size: 13px;
+}
+
+/* ==========================================================================
+   市场情绪指数卡片（SentimentCard）
+   ========================================================================== */
+.sentiment-card .sentiment-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding: 6px 0 14px;
+  border-bottom: 1px solid var(--slate-100);
+  margin-bottom: 14px;
+}
+.sentiment-score {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.sentiment-score .score-value {
+  font-size: 34px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--slate-900);
+  line-height: 1;
+}
+.sentiment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 13px;
+  color: var(--slate-600);
+}
+.sentiment-meta .mono {
+  color: var(--slate-800);
+}
+.sentiment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.sentiment-grid .metric-card {
+  padding: 10px 12px;
+}
+.sentiment-grid .metric-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--slate-900);
+}
+.sentiment-grid .trend-up {
+  color: #d93026;
+}
+.sentiment-grid .trend-down {
+  color: #0aa869;
+}
+.text-muted {
+  color: var(--slate-500);
+}
+
+/* ==========================================================================
+   AI 操作建议卡片（AdviceCard）
+   ========================================================================== */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.advice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.advice-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--slate-100);
+  border-radius: 10px;
+  background: var(--slate-50);
+}
+.advice-item .advice-copy {
+  flex: 1;
+  min-width: 0;
+}
+.advice-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.advice-title strong {
+  font-size: 14px;
+  color: var(--slate-900);
+}
+.advice-item p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--slate-600);
+}
+.risk-tag {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.risk-high { background: #fdecec; color: #c53030; }
+.risk-mid  { background: #fff7e6; color: #b7791f; }
+.risk-low  { background: #e8f7ef; color: #1a7f4e; }
+.advice-disclaimer {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--slate-500);
+  line-height: 1.5;
 }

@@ -190,6 +190,35 @@ async def wecom_binding(
     return ok(data, request_id=request_id, as_of=as_of)
 
 
+@router.get("/wecom/binding/status")
+async def wecom_binding_status(
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """查询当前用户在企业微信的绑定状态。"""
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.get_binding_status(conn, ctx)
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.delete("/wecom/binding")
+async def revoke_wecom_binding_current(
+    body: RevokeBindingRequest,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """口令二次认证后解除当前用户的企业微信绑定（软撤销，保留审计）。"""
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.revoke_current_binding(
+            conn, ctx, password=body.password
+        )
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
 @router.post("/wecom/bindings/{binding_id}/revoke")
 async def revoke_wecom_binding(
     binding_id: str,

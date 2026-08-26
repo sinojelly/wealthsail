@@ -44,6 +44,20 @@ async def test_registration_accepts_only_database_validated_invitation() -> None
                 "out_tenant_name": "试点家庭",
             }
 
+        async def execute(self, sql, *args):
+            self.sql, self.args = sql, args
+            return "OK"
+
+        def transaction(self):
+            class _Tx:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *_args):
+                    return None
+
+            return _Tx()
+
     conn = Conn()
     settings = Settings(
         _env_file=None,

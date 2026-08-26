@@ -426,6 +426,15 @@ async def refresh_account_nav(
             WHERE leg.tenant_id = $1 AND ev.account_id = $2
               AND leg.leg_type = 'CASH'
               AND ev.status = 'CONFIRMED'
+              AND NOT EXISTS (
+                  -- 与 refresh_positions 保持一致：被 REVERSAL 逆转的事件
+                  -- 不再参与现金/本金计算。
+                  SELECT 1 FROM ledger.ledger_events reversal
+                  WHERE reversal.tenant_id = ev.tenant_id
+                    AND reversal.status = 'CONFIRMED'
+                    AND reversal.event_type = 'REVERSAL'
+                    AND reversal.reverses_event_id = ev.id
+              )
             """,
             tenant_id,
             account_id,
@@ -537,3 +546,53 @@ async def upsert_trading_calendar_rows(
         rows,
     )
     return len(rows)
+
+
+async def upsert_market_sentiment(
+    conn: asyncpg.Connection, *, trade_date: str, data: dict
+) -> None:
+    """Upsert one day's market-sentiment snapshot (idempotent by trade_date)."""
+    await conn.execute(
+        """
+        INSERT INTO market.market_sentiment
+            (trade_date, total_up, total_down, total_flat, limit_up, limit_down,
+             turnover, north_flow, sentiment_score, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+        ON CONFLICT (trade_date) DO UPDATE SET
+            total_up = EXCLUDED.total_up,
+            total_down = EXCLUDED.total_down,
+            total_flat = EXCLUDED.total_flat,
+            limit_up = EXCLUDED.limit_up,
+            limit_down = EXCLUDED.limit_down,
+            turnover = EXCLUDED.turnover,
+            north_flow = EXCLUDED.north_flow,
+            sentiment_score = EXCLUDED.sentiment_score,
+            updated_at = now()
+        """,
+        date.fromisoformat(trade_date),
+        data.get("total_up"),
+        data.get("total_down"),
+        data.get("total_flat"),
+        data.get("limit_up"),
+        data.get("limit_down"),
+        data.get("turnover"),
+        data.get("north_flow"),
+        data.get("sentiment_score"),
+    )
+
+
+async def get_latest_market_sentiment(
+    conn: asyncpg.Connection, limit: int = 1
+) -> list[dict]:
+    """Latest persisted sentiment snapshots (newest first)."""
+    rows = await conn.fetch(
+        """
+        SELECT trade_date, total_up, total_down, total_flat, limit_up, limit_down,
+               turnover, north_flow, sentiment_score, updated_at
+        FROM market.market_sentiment
+        ORDER BY trade_date DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    return [dict(r) for r in rows]

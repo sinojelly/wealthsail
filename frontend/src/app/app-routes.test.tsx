@@ -34,6 +34,32 @@ vi.mock("../api/hooks", () => ({
   usePortfolioSummary: () => ({ data: summaryFixture, isLoading: false, isError: false, error: null }),
   usePositions: () => ({ data: [], isLoading: false, isError: false, error: null }),
   useNavTrend: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  useMarketSentiment: () => ({
+    data: {
+      tradeDate: null,
+      totalUp: null,
+      totalDown: null,
+      totalFlat: null,
+      limitUp: null,
+      limitDown: null,
+      turnover: null,
+      northFlow: null,
+      sentimentScore: null,
+      source: "unavailable",
+      updatedAt: null,
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useAiAdvice: () => ({
+    data: { items: [], disclaimer: "", generatedAt: null, model: null },
+    isLoading: false,
+    isError: false,
+    error: null,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
   usePolicies: () => ({ data: policiesFixture, isLoading: false, isError: false, error: null }),
   useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null }),
   useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
@@ -46,6 +72,10 @@ vi.mock("../api/hooks", () => ({
   useOpsFreshness: () => ({ data: null, isLoading: false, isError: false, error: null }),
   useOpsOutbox: () => ({ data: null, isLoading: false, isError: false, error: null }),
   useOpsAudit: () => ({ data: [], isLoading: false, isError: false, error: null }),
+  useInstrumentSearch: () => ({ data: [], isLoading: false, isError: false, error: null }),
+  useAddPosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useUpdatePosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  useDeletePosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
 }));
 
 afterEach(() => {

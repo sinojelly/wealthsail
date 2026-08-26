@@ -27,6 +27,20 @@ def generate_token(entropy_bytes: int = 16) -> str:
     return "WS-" + "-".join(groups)
 
 
+def generate_binding_code() -> str:
+    """Short human-typable WeCom binding code: ``WS-`` + 6 base32 chars.
+
+    The code carries ~30 bits of entropy. It is deliberately short enough to
+    type into WeCom chat (``/bind WS-XXXXXX``); the security envelope is the
+    15-minute expiry plus the per-challenge attempt cap (5), so brute force
+    stays far below practical thresholds. Only the salted HMAC digest is
+    persisted — the plaintext is shown exactly once.
+    """
+    raw = secrets.token_bytes(4)  # 32 bits -> 6.4 base32 chars, truncated to 6
+    b32 = base64.b32encode(raw).decode("ascii").rstrip("=").upper()[:6]
+    return "WS-" + b32
+
+
 def hmac_digest(key: str, value: str) -> str:
     """Salted HMAC-SHA256 hex digest. Constant-time comparison is done by callers."""
     return hmac.new(key.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()

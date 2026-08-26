@@ -14,7 +14,7 @@ vi.mock("../../api/hooks", () => ({
   useCreateBindingCredential: () => ({
     mutate: vi.fn(),
     mutateAsync: vi.fn().mockResolvedValue({
-      token: "WS-TEST-1234-SECURE",
+      token: "WS-TEST12",
       expiresInSeconds: 900,
       channelType: "wecom",
     }),
@@ -38,7 +38,7 @@ it("waits for a verified WeCom callback instead of simulating an external identi
   await user.click(screen.getByRole("button", { name: "生成一次性绑定凭证" }));
   expect(await screen.findByText("等待企业微信回调确认")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /模拟企业微信确认/ })).not.toBeInTheDocument();
-  expect(screen.getByText("/bind WS-TEST-1234-SECURE")).toBeInTheDocument();
+  expect(screen.getByText("/bind WS-TEST12")).toBeInTheDocument();
 });
 
 it("revokes an active binding only through the reauthenticated backend command", async () => {

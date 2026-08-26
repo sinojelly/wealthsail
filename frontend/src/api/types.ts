@@ -86,6 +86,7 @@ export interface PositionDto {
   name: string;
   type: string; // A股 / 场内ETF / 场外基金 / 现金 …
   quantity: string;
+  avgCost: DecimalString;
   price: DecimalString | null;
   marketValue: DecimalString | null;
   weight: DecimalString | null;
@@ -93,6 +94,45 @@ export interface PositionDto {
   pnlRate: DecimalString | null;
   quality: QualityCode;
   accountId: string;
+}
+
+export type InstrumentType = "STOCK" | "ETF" | "FUND";
+
+export interface InstrumentSearchResult {
+  symbol: string;
+  name: string;
+  market: string;
+  type: InstrumentType;
+  source?: "local" | "live";
+}
+
+export interface PositionMutationPayload {
+  symbol: string;
+  name?: string;
+  assetType: InstrumentType;
+  quantity: string;
+  avgCost: string;
+  buyDate?: string;
+  idempotencyKey?: string;
+}
+
+export interface PositionUpdatePayload {
+  quantity: string;
+  avgCost: string;
+  buyDate?: string;
+  idempotencyKey?: string;
+}
+
+export interface PositionMutationResult {
+  position: PositionDto & {
+    avgCost: DecimalString;
+    buyDate: string;
+    eventId: string;
+  };
+}
+
+export interface DeletePositionResult {
+  removed: { symbol: string; name: string; quantity: string };
 }
 
 export interface NavPoint {

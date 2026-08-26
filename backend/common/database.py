@@ -131,6 +131,26 @@ async def tenant_transaction(
 
 
 @asynccontextmanager
+async def api_system_transaction(pool: Pool) -> AsyncIterator[asyncpg.Connection]:
+    """Borrow a pooled connection with the API role applied transactionally.
+
+    Unlike ``system_connection`` (which relies on the connection's default
+    role), this explicitly switches to ``wealthsail_api`` for the duration of
+    the transaction. Transaction-pooled deployments (Supabase Supavisor /
+    PgBouncer transaction mode) reuse backend connections across clients
+    without resetting session-level ``SET ROLE``, so the default role of a
+    pooled connection is not predictable — another client's ``SET ROLE`` can
+    leak into it. The identity tables and privileged helper RPCs are granted
+    to ``wealthsail_api`` only, so every identity/session operation must run
+    under that role explicitly.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL ROLE wealthsail_api;")
+            yield conn
+
+
+@asynccontextmanager
 async def system_connection(pool: Pool) -> AsyncIterator[asyncpg.Connection]:
     """Borrow a pooled connection without any RLS role switch.
 
