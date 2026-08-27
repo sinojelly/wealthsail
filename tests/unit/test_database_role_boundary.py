@@ -90,3 +90,10 @@ async def test_worker_login_requires_api_downgrade_for_tenant_transactions() -> 
             ),
             process="worker",
         )
+
+
+@pytest.mark.asyncio
+async def test_skip_does_not_accept_an_unknown_process_type() -> None:
+    """A development-only skip must not bypass argument validation."""
+    with pytest.raises(ValueError, match="api or worker"):
+        await verify_runtime_login_boundary(_Pool(None), process="typo", skip=True)

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from scripts.migrate import discover_migrations, safe_target_name
+from scripts.migrate import discover_migrations, load_migrations, safe_target_name
 
 
 def test_production_migration_discovery_never_includes_dev_seeds() -> None:
@@ -13,6 +13,16 @@ def test_production_migration_discovery_never_includes_dev_seeds() -> None:
     assert all(path.parent.name == "migrations" for path in migrations)
     assert all("seed" not in path.name.lower() for path in migrations)
     assert any(path.name.startswith("013_") for path in migrations)
+
+
+def test_production_migrations_have_one_file_per_version() -> None:
+    """The deploy runner must be able to load the complete forward-only chain."""
+    root = Path(__file__).resolve().parents[2]
+
+    migrations = load_migrations(root / "migrations")
+
+    versions = [migration.version for migration in migrations]
+    assert len(versions) == len(set(versions))
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,7 +26,10 @@ class Settings(BaseSettings):
     )
 
     # --- Runtime -----------------------------------------------------------
-    app_env: str = Field(default="development", description="development | production")
+    app_env: Literal["development", "test", "staging", "production"] = Field(
+        default="development",
+        description="development | test | staging | production",
+    )
     log_level: str = Field(default="INFO")
     api_prefix: str = Field(default="/api/v1")
     timezone: str = Field(default="Asia/Shanghai")
@@ -98,7 +102,7 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.app_env.lower() == "production"
+        return self.app_env == "production"
 
 
 _DEVELOPMENT_SECRET_MARKERS = ("dev-", "dev_", "change-me", "demo")

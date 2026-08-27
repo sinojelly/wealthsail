@@ -316,39 +316,27 @@ async def insert_report_outbox_deliveries(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
-    user_id: str,
     report_id: str,
     session: str,
     version: int,
     trade_date: object,
 ) -> int:
-    """Expand a report intent into one independently tracked user delivery.
+    """Expand one tenant report into one delivery per ACTIVE member binding.
 
-    Only the report's own user (the acting user, e.g. the tenant OWNER for
-    scheduled sessions) receives the push — a report never fans out to every
-    ACTIVE binding in the tenant. Delivery targets are the user's own ACTIVE
-    WeCom binding(s); with no binding the report is published silently and
-    nothing is queued.
-
-    Only the latest ACTIVE binding is selected (LIMIT 1): a tenant+user+channel
-    is contractually allowed at most one ACTIVE binding (enforced by
-    migrations/017 partial unique index), and this guard additionally protects
-    against historical duplicate-ACTIVE rows causing duplicate pushes.
+    Each binding gets its own idempotency key and retry state, so one unavailable
+    recipient cannot block or duplicate another recipient's message. Migration
+    020 guarantees at most one ACTIVE binding per tenant/user/channel.
     """
-    binding = await conn.fetchrow(
+    bindings = await conn.fetch(
         """
         SELECT id, user_id
         FROM identity.channel_bindings
-        WHERE tenant_id = $1 AND user_id = $2
+        WHERE tenant_id = $1
           AND channel_type = 'wecom' AND status = 'ACTIVE'
-        ORDER BY created_at DESC
-        LIMIT 1
+        ORDER BY user_id, id
         """,
         tenant_id,
-        user_id,
     )
-    if binding is None:
-        return 0
     rows = [
         (
             tenant_id,
@@ -362,7 +350,10 @@ async def insert_report_outbox_deliveries(
             ),
             f"{session}:{trade_date}:{version}:binding:{binding['id']}",
         )
+        for binding in bindings
     ]
+    if not rows:
+        return 0
     await conn.executemany(
         """
         INSERT INTO workflow.outbox
@@ -373,4 +364,4 @@ async def insert_report_outbox_deliveries(
         """,
         rows,
     )
-    return 1
+    return len(rows)

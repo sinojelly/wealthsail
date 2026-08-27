@@ -22,7 +22,6 @@ node_modules/
 dist/
 coverage/
 .coverage
-*.broken
 *.tsbuildinfo
 
 # OS / IDE 临时文件

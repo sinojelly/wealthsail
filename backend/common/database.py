@@ -117,14 +117,14 @@ async def verify_runtime_login_boundary(
     ``skip=not settings.is_production``, so the check stays mandatory when
     ``APP_ENV=production``.
     """
+    if process not in {"api", "worker"}:
+        raise ValueError("process must be api or worker")
     if skip:
         logger.warning(
             "runtime role boundary check skipped for process=%s "
             "(non-production startup)", process,
         )
         return
-    if process not in {"api", "worker"}:
-        raise ValueError("process must be api or worker")
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """

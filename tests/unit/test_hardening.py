@@ -76,6 +76,12 @@ def test_production_api_rejects_development_secrets_and_worker_credentials() -> 
         validate_runtime_settings(settings, process="api")
 
 
+def test_unknown_app_environment_is_rejected_instead_of_disabling_security() -> None:
+    """A deployment typo must not silently select development security policy."""
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, app_env="prod")
+
+
 def test_production_worker_does_not_require_or_accept_jwt_authority() -> None:
     """A Worker process must not receive the API signing secret."""
     settings = Settings(
@@ -227,6 +233,20 @@ def test_forward_migration_grants_worker_system_io_and_projection_rebuild() -> N
     assert "MARKET.MARKET_OBSERVATIONS" in sql
     assert "GRANT DELETE ON LEDGER.POSITION_SNAPSHOTS TO WEALTHSAIL_API" in sql
     assert "KNOWN_VALUE, VALUATION_COVERAGE_PCT, UNPRICED_POSITION_COUNT" in sql
+
+
+def test_binding_hardening_rejects_cross_owner_external_identity_conflicts() -> None:
+    """The forward migration must not attach another owner's binding to a challenge."""
+    migration = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "020_channel_binding_uniqueness_hardening.sql"
+    )
+    sql = migration.read_text(encoding="utf-8").upper()
+
+    assert "BINDING_EXTERNAL_ID_ALREADY_BOUND" in sql
+    assert "CHANNEL_BINDINGS.TENANT_ID = EXCLUDED.TENANT_ID" in sql
+    assert "CHANNEL_BINDINGS.USER_ID = EXCLUDED.USER_ID" in sql
 
 
 def test_reports_trade_date_query_keeps_the_frontend_camel_case_contract() -> None:
