@@ -3,17 +3,15 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 
 import { openAuthenticatedSession } from "./browser-session.mjs";
-import { collectTransactions } from "./collector.mjs";
-import { deduplicateTransactions } from "./domain.mjs";
 import { parseCliArgs } from "./options.mjs";
-import { writeRunOutput } from "./output.mjs";
 import { buildQueryPlans } from "./query.mjs";
+import { runCapture } from "./run.mjs";
 
 const HELP = `
 天天基金本地交易采集工具
 
-用途：打开独立的可见浏览器，由你扫码登录后，自动按年度、普通基金业务类型和分页采集成功交易。
-活期宝记录不会进入 fund-transactions.csv；账号密码、Cookie 和临时访问令牌不会写入导出文件。
+用途：打开独立的可见浏览器，由你扫码登录后，自动采集当前持仓和普通基金成功交易。
+工具会生成可上传 WealthSail 的单个 ZIP；账号密码、Cookie 和临时访问令牌不会写入导出文件。
 
 首次推荐：
   pnpm capture -- --from 2020-01-01
@@ -57,16 +55,15 @@ async function main() {
       logger: (message) => process.stdout.write(`${message}\n`),
     });
 
-    process.stdout.write(
-      `\n开始采集 ${options.from} 至 ${options.to} 的普通基金成功交易，共 ${plans.length} 个查询分片。\n`,
-    );
+    process.stdout.write(`\n开始采集当前持仓，以及 ${options.from} 至 ${options.to} 的普通基金成功交易。\n`);
     const delay = async () => {
       const jittered = Math.round(options.delayMs * (0.8 + Math.random() * 0.4));
       await new Promise((resolve) => setTimeout(resolve, jittered));
     };
-    const collected = await collectTransactions({
+    const result = await runCapture({
+      options,
       plans,
-      requestPage: session.requestPage,
+      session,
       delay,
       onProgress: ({ plan, pageNum, totalPages, pageRecordCount }) => {
         process.stdout.write(
@@ -76,23 +73,15 @@ async function main() {
       },
     });
 
-    const deduplicated = deduplicateTransactions(collected);
-    const runId = `run-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`;
-    const result = await writeRunOutput({
-      outputRoot: options.outputDir,
-      runId,
-      records: deduplicated.records,
-      duplicateCount: deduplicated.duplicateCount,
-      metadata: { from: options.from, to: options.to },
-    });
-
     process.stdout.write("\n采集完成。\n");
     process.stdout.write(`导出目录：${result.runDir}\n`);
-    process.stdout.write(`普通基金交易：${result.manifest.counts.fundTrades} 条\n`);
+    process.stdout.write(`上传 ZIP：${result.zipPath}\n`);
+    process.stdout.write(`当前持仓：${result.manifest.counts.currentPositions} 只\n`);
+    process.stdout.write(`普通基金交易：${result.manifest.counts.fundTransactions} 条\n`);
     process.stdout.write(
       `排除活期宝：${result.manifest.counts.cashManagementExcluded} 条；` +
         `待人工复核：${result.manifest.counts.reviewRequired} 条；` +
-        `去重：${result.manifest.counts.duplicatesRemoved} 条\n`,
+        `本地去重：${result.localManifest.counts.duplicatesRemoved} 条\n`,
     );
   } finally {
     await session?.close();

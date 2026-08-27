@@ -14,6 +14,8 @@ test("帮助命令无需打开浏览器即可说明最小操作流程", async ()
 
   assert.match(result.stdout, /天天基金本地交易采集工具/);
   assert.match(result.stdout, /扫码登录/);
+  assert.match(result.stdout, /当前持仓/);
+  assert.match(result.stdout, /ZIP/);
   assert.match(result.stdout, /--from 2020-01-01/);
   assert.equal(result.stderr, "");
 });

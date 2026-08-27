@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyTransaction,
   deduplicateTransactions,
+  normalizeFundBusinessType,
   normalizeTransaction,
   splitDateRange,
 } from "../src/domain.mjs";
@@ -154,4 +155,34 @@ test("日期区间按最多一个日历年连续切分且不重叠", () => {
 test("无效日期区间会被拒绝", () => {
   assert.throws(() => splitDateRange("2025-01-02", "2025-01-01"), /开始日期不能晚于结束日期/);
   assert.throws(() => splitDateRange("not-a-date", "2025-01-01"), /无效日期/);
+});
+
+test("把基金业务文案标准化为持仓份额语义", () => {
+  assert.equal(normalizeFundBusinessType("银行卡支付买入"), "PURCHASE");
+  assert.equal(normalizeFundBusinessType("活期宝转入"), "PURCHASE");
+  assert.equal(normalizeFundBusinessType("卖出回活期宝"), "REDEEM");
+  assert.equal(normalizeFundBusinessType("现金分红"), "DIVIDEND_CASH");
+  assert.equal(normalizeFundBusinessType("红利再投资"), "DIVIDEND_REINVEST");
+  assert.equal(normalizeFundBusinessType("基金转换转入"), "CONVERSION_IN");
+  assert.equal(normalizeFundBusinessType("基金转换转出"), "CONVERSION_OUT");
+  assert.equal(normalizeFundBusinessType("强行调增"), "FORCED_ADJUSTMENT");
+  assert.equal(normalizeFundBusinessType("无法识别业务"), "UNKNOWN");
+});
+
+test("标准化交易输出包含版本化业务类型而不改变原始业务文案", () => {
+  const result = normalizeTransaction({
+    id: "tx-1",
+    strikeStartDate: "2026-08-20",
+    productCode: "110022",
+    productShowName: "易方达消费行业股票",
+    businessTypeText1: "卖出回银行卡",
+    applyCount: "100.00",
+    applyCountUnit: "份",
+    confirmCount: "200.00",
+    confirmCountUnit: "元",
+    appStateText: "成功",
+  });
+
+  assert.equal(result.businessType, "卖出回银行卡");
+  assert.equal(result.normalizedBusinessType, "REDEEM");
 });

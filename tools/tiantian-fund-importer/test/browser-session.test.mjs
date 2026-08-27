@@ -20,10 +20,38 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
             headers: () => ({ "access-token": "session-token" }),
           }),
         );
+      } else if (this.navigationCount === 3) {
+        queueMicrotask(() =>
+          this.emit("response", {
+            url: () => "https://trade.1234567.com.cn/api/assets/holdings",
+            headers: () => ({ "content-type": "application/json" }),
+            json: async () => ({
+              data: {
+                totalCount: 1,
+                totalMarketValue: "100.00",
+                rows: [{
+                  id: "holding-1",
+                  fundCode: "110022",
+                  fundName: "测试基金",
+                  holdShare: "100.00",
+                  averageCost: "1.00",
+                  costAmount: "100.00",
+                  marketValue: "100.00",
+                }],
+              },
+            }),
+          }),
+        );
       }
     }
 
     async bringToFront() {}
+
+    url() {
+      return this.navigationCount >= 3
+        ? "https://trade.1234567.com.cn/myAssets/hold"
+        : "https://query.1234567.com.cn/";
+    }
   }
 
   const page = new FakePage();
@@ -66,6 +94,12 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
   assert.equal(state.prompted, true);
   assert.equal(page.navigationCount, 2);
   assert.equal(response.code, 1200);
+  const holdings = await session.requestHoldings({
+    capturedAt: "2026-08-28T00:00:00+08:00",
+    timeoutMs: 100,
+  });
+  assert.equal(page.navigationCount, 3);
+  assert.equal(holdings.positions[0].productCode, "110022");
   await session.close();
   assert.equal(state.closed, true);
 });

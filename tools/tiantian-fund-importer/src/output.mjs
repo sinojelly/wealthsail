@@ -13,6 +13,7 @@ const CSV_COLUMNS = [
   "productName",
   "businessCode",
   "businessType",
+  "normalizedBusinessType",
   "applicationValue",
   "applicationUnit",
   "confirmationValue",
@@ -46,6 +47,7 @@ export async function writeRunOutput({
   outputRoot,
   runId,
   records,
+  positions = [],
   duplicateCount,
   metadata = {},
 }) {
@@ -58,6 +60,7 @@ export async function writeRunOutput({
   const nonPosting = records.filter((record) => record.category === "NON_POSTING");
 
   const contents = {
+    "current-positions.json": jsonContent(positions),
     "all-transactions.json": jsonContent(records),
     "fund-transactions.csv": toCsv(fundTrades, CSV_COLUMNS),
     "excluded-cash-management.csv": toCsv(cashManagement, CSV_COLUMNS),

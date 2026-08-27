@@ -1,10 +1,12 @@
-# 天天基金本地交易采集工具
+# 天天基金本地持仓与交易采集工具
 
-这个工具在用户电脑上打开一个独立、可见的浏览器。用户自行扫码登录天天基金后，工具自动查询普通基金成功交易、按年度拆分日期、获取全部分页、去重并输出 WealthSail 可继续处理的 CSV/JSON。
+这个工具在用户电脑上打开一个独立、可见的浏览器。用户自行扫码登录天天基金后，工具自动采集当前基金持仓和普通基金成功交易，按年度拆分交易日期、获取全部分页、去重并生成 WealthSail 可导入的单个 ZIP。
 
 它不自动下单，不修改天天基金账户，不保存用户名或密码，也不会把 Cookie、访问令牌或浏览器资料提交到 WealthSail 服务端。
 
 ## 1. 当前采集范围
+
+工具首先从天天基金持仓页使用的结构化响应中提取当前基金持仓，包括基金代码、名称、份额、成本、市值和最近净值。持仓条数或市值汇总不一致时，工具停止形成完整基线，不会把页面加载失败误判为“空持仓”。
 
 工具自动查询天天基金交易页第一行的普通基金业务：
 
@@ -80,19 +82,27 @@ pnpm capture -- --from 2020-01-01 --browser chromium
 ```text
 tools/tiantian-fund-importer/private-data/exports/run-时间戳/
 ├── manifest.json
+├── current-positions.json
 ├── all-transactions.json
 ├── fund-transactions.csv
 ├── excluded-cash-management.csv
 ├── review-required.csv
-└── non-posting.csv
+├── non-posting.csv
+└── wealthsail-tiantian-YYYYMMDD.zip
 ```
 
-- `manifest.json`：时间范围、分类数量、去重数量、文件 SHA-256 和安全声明；
+- `manifest.json`：本地诊断输出的时间范围、分类数量、去重数量、文件 SHA-256 和安全声明；
+- `current-positions.json`：脱敏后的当前持仓快照；
 - `all-transactions.json`：标准化后的完整结果，银行卡只保留尾号；
-- `fund-transactions.csv`：普通基金成功交易，是后续导入 WealthSail 的主要文件；
+- `fund-transactions.csv`：供本地核对的普通基金成功交易；
 - `excluded-cash-management.csv`：被排除的活期宝记录；
 - `review-required.csv`：无法安全判断的“其他”产品或特殊交易，必须人工确认；
 - `non-posting.csv`：不应改变持仓的状态记录。当前默认只查询成功状态，通常为空。
+- `wealthsail-tiantian-YYYYMMDD.zip`：Web 中实际选择的 v2 导入包，包含持仓、基金交易、待复核记录、活期宝排除摘要和文件哈希。
+
+登录 WealthSail 后进入“导入 / 更新持仓”，选择最后这个 ZIP。不要手工解压后逐个选择文件。
+
+活期宝详细流水只保存在本地核对 CSV 中，不进入上传 ZIP。
 
 CSV 会阻断以 `= + - @` 开头的单元格，避免使用 Excel 打开第三方数据时执行公式。
 
@@ -124,4 +134,4 @@ CSV 会阻断以 `= + - @` 开头的单元格，避免使用 Excel 打开第三�
 pnpm test
 ```
 
-测试覆盖活期宝排除、普通基金保留、失败状态隔离、银行卡脱敏、日期切片、分页、去重、CSV 安全、查询请求契约以及会话秘密不落盘。
+测试覆盖当前持仓结构发现、成本精度、汇总完整性、活期宝排除、普通基金保留、失败状态隔离、银行卡脱敏、日期切片、分页、去重、CSV 安全、v2 ZIP 清单与哈希、查询请求契约以及会话秘密不落盘。

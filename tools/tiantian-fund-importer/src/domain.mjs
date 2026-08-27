@@ -13,6 +13,18 @@ const HUOQIBAO_CASH_ONLY_BUSINESS_TYPES = new Set([
 ]);
 const SPECIAL_FUND_ADJUSTMENT_TYPES = new Set(["强行调增", "活动发放"]);
 
+export function normalizeFundBusinessType(value) {
+  const businessType = text(value);
+  if (["强行调增", "活动发放"].includes(businessType)) return "FORCED_ADJUSTMENT";
+  if (/转换.*转入|转入.*转换/.test(businessType)) return "CONVERSION_IN";
+  if (/转换.*转出|转出.*转换/.test(businessType)) return "CONVERSION_OUT";
+  if (/红利再投资/.test(businessType)) return "DIVIDEND_REINVEST";
+  if (/现金分红/.test(businessType)) return "DIVIDEND_CASH";
+  if (/卖出|赎回/.test(businessType)) return "REDEEM";
+  if (/买入|活期宝转入/.test(businessType)) return "PURCHASE";
+  return "UNKNOWN";
+}
+
 function text(value) {
   return value == null ? "" : String(value).trim();
 }
@@ -80,6 +92,7 @@ export function normalizeTransaction(raw, context = {}) {
     productName: text(raw.productShowName),
     businessCode,
     businessType: text(raw.businessTypeText1),
+    normalizedBusinessType: normalizeFundBusinessType(raw.businessTypeText1),
     applicationValue: text(raw.applyCount),
     applicationUnit: text(raw.applyCountUnit),
     confirmationValue: text(raw.confirmCount),

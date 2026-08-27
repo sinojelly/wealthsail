@@ -1,4 +1,5 @@
 import { createApiRequester, waitForQueryAccessToken } from "./browser-query.mjs";
+import { captureHoldings } from "./browser-holdings.mjs";
 
 const QUERY_URL = "https://query.1234567.com.cn/";
 
@@ -38,6 +39,7 @@ export async function openAuthenticatedSession({
 
     return {
       requestPage: createApiRequester({ apiContext: context.request, accessToken }),
+      requestHoldings: (options) => captureHoldings(page, options),
       close: () => context.close(),
     };
   } catch (error) {
