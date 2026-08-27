@@ -16,6 +16,7 @@ from backend.portfolio.imports.repository import (
     load_preview_context,
     list_import_batches,
     persist_preview,
+    retry_position_metrics,
     write_ledger_effects,
 )
 from backend.portfolio.imports.service import (
@@ -190,6 +191,53 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
     assert listing["items"][0]["batchId"] == "batch-1"
     assert listing["items"][0]["summary"] == {"new": 1}
     assert listing["nextCursor"] is None
+
+
+class _RetryMetricsConnection:
+    def __init__(self, *, created: bool = True) -> None:
+        self.created = created
+        self.sql: list[str] = []
+        self.args: tuple = ()
+
+    async def fetchrow(self, sql: str, *_args):
+        self.sql.append(sql)
+        return {
+            "id": "batch-1",
+            "account_id": "account-1",
+            "source_binding_id": "binding-1",
+            "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
+        }
+
+    async def fetchval(self, sql: str, *args):
+        self.sql.append(sql)
+        self.args = args
+        return "job-1" if self.created else None
+
+
+@pytest.mark.asyncio
+async def test_metrics_retry_is_durable_idempotent_and_never_replays_ledger() -> None:
+    first = _RetryMetricsConnection()
+    replay = _RetryMetricsConnection(created=False)
+
+    created = await retry_position_metrics(
+        first,
+        tenant_id="tenant-1",
+        batch_id="batch-1",
+        idempotency_key="retry-command-1",
+    )
+    repeated = await retry_position_metrics(
+        replay,
+        tenant_id="tenant-1",
+        batch_id="batch-1",
+        idempotency_key="retry-command-1",
+    )
+
+    assert created["created"] is True
+    assert repeated == {"job_key": created["job_key"], "created": False}
+    combined = "\n".join(first.sql + replay.sql)
+    assert "POSITION_PERIOD_METRICS_REBUILD" in combined
+    assert "ON CONFLICT (tenant_id, job_key) DO NOTHING" in combined
+    assert "ledger_events" not in combined
 
 
 class _FirstBindingConflictConnection:

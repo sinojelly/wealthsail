@@ -87,39 +87,48 @@ def create_app() -> FastAPI:
         request_id = request_id_of(request)
         request.state.request_id = request_id
         start = time.perf_counter()
-        response = await call_next(request)
-        duration_ms = round((time.perf_counter() - start) * 1000, 1)
-        response.headers["X-Request-Id"] = request_id
-        response.headers["X-Request-Time-Ms"] = str(duration_ms)
 
-        # Keep diagnostics at the HTTP boundary so proxy rewrites can be
-        # distinguished from application validation failures. Never log the
-        # query string, request body, cookies or authorization headers: invite
-        # tokens and passwords cross this boundary during registration.
         def safe_header(name: str) -> str:
             value = request.headers.get(name, "-")
             return value.replace("\r", " ").replace("\n", " ")[:160] or "-"
 
+        def log_request(status: int, *, allow: str = "-", location: str = "-") -> None:
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            # Deliberately exclude query strings, bodies, filenames, cookies,
+            # and authorization headers. Import packages contain financial data.
+            http_logger.log(
+                logging.WARNING if status >= 400 else logging.INFO,
+                (
+                    "http_request method=%s path=%s status=%s request_id=%s "
+                    "duration_ms=%s allow=%s host=%s forwarded_proto=%s "
+                    "forwarded_host=%s location=%s"
+                ),
+                request.method,
+                request.url.path,
+                status,
+                request_id,
+                duration_ms,
+                allow,
+                safe_header("Host"),
+                safe_header("X-Forwarded-Proto"),
+                safe_header("X-Forwarded-Host"),
+                location,
+            )
+
+        try:
+            response = await call_next(request)
+        except Exception:
+            # The outer exception handler will produce the canonical envelope;
+            # still retain one safe HTTP-boundary record for the failed request.
+            log_request(500)
+            raise
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        response.headers["X-Request-Id"] = request_id
+        response.headers["X-Request-Time-Ms"] = str(duration_ms)
         allow = response.headers.get("Allow", "-")[:80] or "-"
         location = response.headers.get("Location", "-").split("?", 1)[0][:240] or "-"
-        http_logger.log(
-            logging.WARNING if response.status_code >= 400 else logging.INFO,
-            (
-                "http_request method=%s path=%s status=%s request_id=%s "
-                "duration_ms=%s allow=%s host=%s forwarded_proto=%s "
-                "forwarded_host=%s location=%s"
-            ),
-            request.method,
-            request.url.path,
-            response.status_code,
-            request_id,
-            duration_ms,
-            allow,
-            safe_header("Host"),
-            safe_header("X-Forwarded-Proto"),
-            safe_header("X-Forwarded-Host"),
-            location,
-        )
+        log_request(response.status_code, allow=allow, location=location)
         return response
 
     register_exception_handlers(app)

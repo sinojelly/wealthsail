@@ -1141,3 +1141,50 @@ async def list_import_batches(
         ],
         "nextCursor": page[-1]["created_at"].isoformat() if has_more else None,
     }
+
+
+async def retry_position_metrics(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    batch_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Create a durable metrics retry; this command never touches the ledger."""
+    batch = await conn.fetchrow(
+        """
+        SELECT id, account_id, source_binding_id, source_as_of
+          FROM ledger.portfolio_import_batches
+         WHERE tenant_id = $1 AND id = $2
+           AND source_type = 'TIANTIAN_FUND_ZIP' AND status = 'CONFIRMED'
+        """,
+        tenant_id,
+        batch_id,
+    )
+    if batch is None:
+        raise NotFoundError("已确认的天天基金导入批次不存在")
+    command_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:32]
+    job_key = f"position-period-metrics:{batch_id}:retry:{command_hash}"
+    created = await conn.fetchval(
+        """
+        INSERT INTO workflow.job_runs (
+            tenant_id, job_key, status, job_type, payload, available_at
+        ) VALUES (
+            $1, $2, 'PENDING', 'POSITION_PERIOD_METRICS_REBUILD', $3::jsonb, now()
+        )
+        ON CONFLICT (tenant_id, job_key) DO NOTHING
+        RETURNING id
+        """,
+        tenant_id,
+        job_key,
+        json.dumps(
+            {
+                "batchId": batch_id,
+                "accountId": str(batch["account_id"]),
+                "sourceBindingId": str(batch["source_binding_id"]),
+                "sourceAsOf": batch["source_as_of"].isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {"job_key": job_key, "created": created is not None}

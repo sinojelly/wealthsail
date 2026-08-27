@@ -100,6 +100,23 @@ class Settings(BaseSettings):
     outbox_delivery_concurrency: int = Field(default=4, ge=1, le=20)
     scheduler_tick_seconds: float = Field(default=20.0)
 
+    # --- Recoverable Tiantian Fund import -----------------------------------
+    # Mutations are guarded independently from reads so an operator can stop
+    # new imports without hiding an existing DRAFT or its audit history.
+    tiantian_import_enabled: bool = Field(default=False)
+    tiantian_import_max_upload_bytes: int = Field(
+        default=20 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024
+    )
+    tiantian_import_max_expanded_bytes: int = Field(
+        default=100 * 1024 * 1024, ge=1024, le=500 * 1024 * 1024
+    )
+    tiantian_import_max_entries: int = Field(default=20, ge=5, le=100)
+    tiantian_import_max_compression_ratio: int = Field(default=100, ge=1, le=1000)
+    tiantian_import_max_positions: int = Field(default=1000, ge=1, le=10000)
+    tiantian_import_max_transactions: int = Field(default=20000, ge=1, le=100000)
+    tiantian_import_max_json_depth: int = Field(default=32, ge=4, le=100)
+    tiantian_import_max_text_length: int = Field(default=2000, ge=32, le=20000)
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

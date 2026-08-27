@@ -21,7 +21,7 @@ from backend.errors import (
 )
 from backend.portfolio.imports import repository
 from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
-from backend.portfolio.imports.package import parse_tiantian_package
+from backend.portfolio.imports.package import ImportLimits, parse_tiantian_package
 from backend.portfolio.imports.tiantian import (
     TiantianPackage,
     TiantianPosition,
@@ -503,6 +503,8 @@ async def preview_tiantian_import(
     account_id: str | None,
     account_name: str | None,
     idempotency_key: str,
+    *,
+    limits: ImportLimits | None = None,
 ) -> dict[str, Any]:
     """Parse outside the DB, then atomically persist a recoverable DRAFT preview."""
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
@@ -511,7 +513,7 @@ async def preview_tiantian_import(
     if not idempotency_key or len(idempotency_key) > 128:
         raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
 
-    package = parse_tiantian_package(upload)
+    package = parse_tiantian_package(upload, limits=limits or ImportLimits())
     content_hash = _package_hash(upload)
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         prior = await repository.find_preview_by_idempotency(
@@ -718,4 +720,69 @@ async def cancel_tiantian_import(
         "batchId": batch_id,
         "status": "CANCELLED",
         "version": cancelled["version"],
+    }
+
+
+async def get_tiantian_import(pool: asyncpg.Pool, ctx, batch_id: str) -> dict[str, Any]:
+    """Restore one tenant-scoped import, including the full review state."""
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        return await repository.get_import_batch(conn, ctx.tenant_id, batch_id)
+
+
+async def list_tiantian_imports(
+    pool: asyncpg.Pool,
+    ctx,
+    *,
+    source_type: str,
+    cursor: datetime | None,
+    limit: int,
+) -> dict[str, Any]:
+    """List recoverable imports without exposing another tenant's batches."""
+    if source_type != "TIANTIAN_FUND_ZIP":
+        raise ValidationError_("sourceType 当前只支持 TIANTIAN_FUND_ZIP")
+    if not 1 <= limit <= 100:
+        raise ValidationError_("limit 必须在 1 到 100 之间")
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        return await repository.list_import_batches(
+            conn,
+            ctx.tenant_id,
+            source_type=source_type,
+            cursor=cursor,
+            limit=limit,
+        )
+
+
+async def retry_tiantian_metrics(
+    pool: asyncpg.Pool,
+    ctx,
+    batch_id: str,
+    *,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Queue an idempotent retry without replaying any financial effects."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        queued = await repository.retry_position_metrics(
+            conn,
+            tenant_id=ctx.tenant_id,
+            batch_id=batch_id,
+            idempotency_key=idempotency_key,
+        )
+        if queued["created"]:
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="TIANTIAN_IMPORT_METRICS_RETRY_QUEUED",
+                resource_type="ledger.portfolio_import_batches",
+                resource_id=batch_id,
+                details={"jobKey": queued["job_key"]},
+            )
+    return {
+        "batchId": batch_id,
+        "metricsStatus": "PENDING",
+        "jobKey": queued["job_key"],
     }

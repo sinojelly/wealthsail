@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
-from datetime import date
+import os
+import tempfile
+from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Body, Depends, File, Form, Header, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
-from backend.dependencies import get_pool, get_request_id, get_tenant_context, now_shanghai
-from backend.errors import ok
+from backend.config import Settings
+from backend.dependencies import (
+    get_pool,
+    get_request_id,
+    get_settings_dep,
+    get_tenant_context,
+    now_shanghai,
+)
+from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.portfolio import service
+from backend.portfolio.imports import service as tiantian_import_service
+from backend.portfolio.imports.package import ImportLimits
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -91,6 +103,167 @@ class PositionCreateRequest(BaseModel):
     accountId: str | None = Field(None, description="账户 id（可选，默认按类型自动选择/创建）")
 
 
+class TiantianHoldingStartDecision(BaseModel):
+    """A user-reviewed holding episode start for one preview item."""
+
+    itemId: str = Field(..., min_length=1, max_length=128)
+    startedOn: date
+
+
+class TiantianConfirmRequest(BaseModel):
+    decisions: list[TiantianHoldingStartDecision] = Field(default_factory=list)
+    confirmEmpty: bool = False
+
+
+def _require_tiantian_mutations(settings: Settings) -> None:
+    if not settings.tiantian_import_enabled:
+        raise DataUnavailableError("天天基金导入功能当前未启用", retryable=False)
+
+
+def _import_limits(settings: Settings) -> ImportLimits:
+    return ImportLimits(
+        max_compressed_bytes=settings.tiantian_import_max_upload_bytes,
+        max_expanded_bytes=settings.tiantian_import_max_expanded_bytes,
+        max_entries=settings.tiantian_import_max_entries,
+        max_compression_ratio=settings.tiantian_import_max_compression_ratio,
+        max_positions=settings.tiantian_import_max_positions,
+        max_transactions=settings.tiantian_import_max_transactions,
+        max_json_depth=settings.tiantian_import_max_json_depth,
+        max_text_length=settings.tiantian_import_max_text_length,
+    )
+
+
+def _parse_if_match(value: str | None) -> int:
+    if value is None:
+        raise ValidationError_("If-Match 版本请求头必填")
+    normalized = value.strip()
+    if normalized.startswith("W/"):
+        raise ValidationError_("If-Match 不接受弱版本标识")
+    if len(normalized) >= 2 and normalized[0] == normalized[-1] == '"':
+        normalized = normalized[1:-1]
+    try:
+        version = int(normalized)
+    except ValueError as exc:
+        raise ValidationError_("If-Match 必须是正整数版本") from exc
+    if version <= 0:
+        raise ValidationError_("If-Match 必须是正整数版本")
+    return version
+
+
+async def _persist_bounded_upload(upload: UploadFile, max_bytes: int) -> Path:
+    filename = (upload.filename or "").strip()
+    if Path(filename).suffix.lower() != ".zip":
+        await upload.close()
+        raise ValidationError_(
+            "请选择 .zip 导入包",
+            field_errors=[{"field": "file", "message": "文件扩展名必须是 .zip"}],
+        )
+
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix="wealthsail-tiantian-", suffix=".zip"
+    )
+    os.close(descriptor)
+    path = Path(raw_path)
+    total = 0
+    try:
+        with path.open("wb") as target:
+            while chunk := await upload.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValidationError_(
+                        "导入包超过允许大小",
+                        field_errors=[
+                            {
+                                "field": "file",
+                                "message": f"文件不能超过 {max_bytes} 字节",
+                            }
+                        ],
+                    )
+                target.write(chunk)
+        if total == 0:
+            raise ValidationError_(
+                "导入包不能为空",
+                field_errors=[{"field": "file", "message": "文件不能为空"}],
+            )
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+
+
+@router.post("/imports/tiantian/preview", status_code=201)
+async def portfolio_preview_tiantian_import(
+    file: UploadFile = File(...),
+    account_id: str | None = Form(None, alias="accountId"),
+    account_name: str | None = Form(None, alias="accountName"),
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Upload one bounded ZIP and persist a recoverable review-only DRAFT."""
+    _require_tiantian_mutations(settings)
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    upload_path = await _persist_bounded_upload(
+        file, settings.tiantian_import_max_upload_bytes
+    )
+    try:
+        data = await tiantian_import_service.preview_tiantian_import(
+            pool,
+            ctx,
+            upload_path,
+            account_id,
+            account_name,
+            idempotency_key,
+            limits=_import_limits(settings),
+        )
+    finally:
+        upload_path.unlink(missing_ok=True)
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=now_shanghai(),
+        quality_status="FRESH",
+    )
+
+
+@router.get("/imports")
+async def portfolio_list_tiantian_imports(
+    source_type: Literal["TIANTIAN_FUND_ZIP"] = Query(
+        default="TIANTIAN_FUND_ZIP", alias="sourceType"
+    ),
+    cursor: datetime | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    data = await tiantian_import_service.list_tiantian_imports(
+        pool,
+        ctx,
+        source_type=source_type,
+        cursor=cursor,
+        limit=limit,
+    )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.get("/imports/{batch_id}")
+async def portfolio_get_tiantian_import(
+    batch_id: str,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    data = await tiantian_import_service.get_tiantian_import(pool, ctx, batch_id)
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
 @router.post("/imports", status_code=201)
 async def portfolio_create_import(
     payload: PositionCreateRequest,
@@ -117,17 +290,87 @@ async def portfolio_create_import(
 @router.post("/imports/{batch_id}/confirm")
 async def portfolio_confirm_import(
     batch_id: str,
+    payload: TiantianConfirmRequest | None = Body(default=None),
     idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
+    if_match: str | None = Header(default=None, alias="If-Match"),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """确认期初组合基线并生成带批次来源的 ADJUSTMENT；不会伪造交易或现金流。"""
     as_of = now_shanghai()
-    data = await service.confirm_position_import(
+    if payload is not None or if_match is not None:
+        _require_tiantian_mutations(settings)
+        payload = payload or TiantianConfirmRequest()
+        decisions: dict[str, date] = {}
+        for decision in payload.decisions:
+            if decision.itemId in decisions:
+                raise ValidationError_("同一持仓项目不能提交多个开始日期")
+            decisions[decision.itemId] = decision.startedOn
+        data = await tiantian_import_service.confirm_tiantian_import(
+            pool,
+            ctx,
+            batch_id,
+            expected_version=_parse_if_match(if_match),
+            decisions=decisions,
+            confirm_empty=payload.confirmEmpty,
+            idempotency_key=idempotency_key,
+        )
+    else:
+        data = await service.confirm_position_import(
+            pool,
+            ctx,
+            batch_id,
+            idempotency_key=idempotency_key,
+        )
+    return ok(data, request_id=request_id, as_of=as_of, quality_status="FRESH")
+
+
+@router.post("/imports/{batch_id}/cancel")
+async def portfolio_cancel_tiantian_import(
+    batch_id: str,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    _require_tiantian_mutations(settings)
+    data = await tiantian_import_service.cancel_tiantian_import(
+        pool,
+        ctx,
+        batch_id,
+        expected_version=_parse_if_match(if_match),
+        idempotency_key=idempotency_key,
+    )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/imports/{batch_id}/metrics/retry", status_code=202)
+async def portfolio_retry_tiantian_metrics(
+    batch_id: str,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    _require_tiantian_mutations(settings)
+    data = await tiantian_import_service.retry_tiantian_metrics(
         pool,
         ctx,
         batch_id,
         idempotency_key=idempotency_key,
     )
-    return ok(data, request_id=request_id, as_of=as_of, quality_status="FRESH")
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=now_shanghai(),
+        quality_status="PENDING",
+    )
