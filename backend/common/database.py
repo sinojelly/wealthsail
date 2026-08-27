@@ -15,6 +15,7 @@ membership, so this switch is part of the trust boundary.
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -26,6 +27,8 @@ from asyncpg.pool import Pool
 # Domain commands run as a separate NOLOGIN role that deployment login roles
 # inherit; this prevents direct Data API clients from acquiring write policies.
 RLS_ROLE = "wealthsail_api"
+
+logger = logging.getLogger("wealthsail.database")
 
 
 def normalize_asyncpg_dsn(dsn: str) -> tuple[str, dict[str, int]]:
@@ -96,7 +99,9 @@ async def create_pool(
     return await asyncpg.create_pool(**pool_args, **pool_kwargs)
 
 
-async def verify_runtime_login_boundary(pool: Pool, *, process: str) -> None:
+async def verify_runtime_login_boundary(
+    pool: Pool, *, process: str, skip: bool = False
+) -> None:
     """Fail startup when one runtime credential can assume the other role.
 
     ``SET ROLE`` in application code is useful only when the login credential
@@ -105,7 +110,19 @@ async def verify_runtime_login_boundary(pool: Pool, *, process: str) -> None:
     the process performs this readback before serving traffic.  The reverse
     direction is intentional: the already-trusted Worker downgrades to the API
     role for tenant-scoped report transactions.
+
+    ``skip=True`` disables the readback entirely (local development against a
+    superuser/pooler connection).  Production startup must never pass skip —
+    ``backend/main.py`` / ``backend/worker.py`` pass
+    ``skip=not settings.is_production``, so the check stays mandatory when
+    ``APP_ENV=production``.
     """
+    if skip:
+        logger.warning(
+            "runtime role boundary check skipped for process=%s "
+            "(non-production startup)", process,
+        )
+        return
     if process not in {"api", "worker"}:
         raise ValueError("process must be api or worker")
     async with pool.acquire() as conn:

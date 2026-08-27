@@ -49,7 +49,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
     )
-    await verify_runtime_login_boundary(pool, process="api")
+    await verify_runtime_login_boundary(
+        pool, process="api", skip=not settings.is_production
+    )
     app.state.db_pool = pool
     logger.info("database pool ready (env=%s)", settings.app_env)
     try:

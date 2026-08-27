@@ -60,7 +60,9 @@ async def main() -> None:
         max_size=settings.db_pool_max_size,
         runtime_role="wealthsail_worker",
     )
-    await verify_runtime_login_boundary(pool, process="worker")
+    await verify_runtime_login_boundary(
+        pool, process="worker", skip=not settings.is_production
+    )
     logger.info("worker connected: %s", settings.worker_database_url.split("@")[-1])
 
     # Recover runs stuck by a previous crash before starting fresh work.
