@@ -264,3 +264,43 @@ def test_parser_rejects_unmasked_account_numbers_even_when_manifest_claims_maski
 
     with pytest.raises(ValidationError_, match="账号必须为空或仅保留末四位"):
         parse_tiantian_package(package_path, ImportLimits())
+
+
+@pytest.mark.parametrize(
+    ("member_name", "identity_field", "manifest_count"),
+    [
+        ("current-positions.json", "productCode", "currentPositions"),
+        ("fund-transactions.json", "sourceId", "fundTransactions"),
+    ],
+)
+def test_parser_rejects_duplicate_business_identities(
+    tmp_path: Path,
+    member_name: str,
+    identity_field: str,
+    manifest_count: str,
+) -> None:
+    payloads = _package_payloads()
+    records = json.loads(payloads[member_name])
+    duplicate = dict(records[0])
+    duplicate["sourceRecordId" if member_name == "current-positions.json" else "traceNo"] = (
+        "second-source-row"
+    )
+    assert duplicate[identity_field] == records[0][identity_field]
+    records.append(duplicate)
+    payloads[member_name] = _json_bytes(records)
+    counts = {
+        "currentPositions": 1,
+        "fundTransactions": 1,
+        "reviewRequired": 0,
+        "cashManagementExcluded": 1545,
+        "nonPostingExcluded": 4,
+    }
+    counts[manifest_count] = 2
+    package_path = write_synthetic_package(
+        tmp_path,
+        payloads=payloads,
+        manifest_overrides={"counts": counts},
+    )
+
+    with pytest.raises(ValidationError_, match="业务主键重复"):
+        parse_tiantian_package(package_path, ImportLimits())

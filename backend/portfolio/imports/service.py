@@ -1,0 +1,542 @@
+"""Tiantian Fund ZIP preview orchestration and pure snapshot comparison."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, replace
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Mapping
+
+import asyncpg
+
+from backend.common.database import tenant_transaction
+from backend.dependencies import write_audit
+from backend.errors import IdempotencyConflictError, ValidationError_
+from backend.portfolio.imports import repository
+from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
+from backend.portfolio.imports.package import parse_tiantian_package
+from backend.portfolio.imports.tiantian import (
+    TiantianPackage,
+    TiantianPosition,
+    TiantianTransaction,
+)
+
+PARSER_VERSION = "tiantian-package/v2"
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingBaseline:
+    instrument_id: str
+    product_code: str
+    product_name: str
+    quantity: Decimal
+    unit_cost: Decimal
+    external_record_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewContext:
+    resolved_funds: Mapping[str, Mapping[str, str]]
+    baselines: Mapping[str, ExistingBaseline]
+    account_conflict_instrument_ids: frozenset[str]
+    latest_source_as_of: datetime | None
+    binding_account_id: str | None
+    confirmed_transaction_hashes: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class TargetAccount:
+    account_id: str
+    binding_id: str | None
+    binding_status: str | None
+    binding_account_id: str | None
+    account_display_name: str = "天天基金账户"
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewItem:
+    instrument_id: str
+    product_code: str
+    product_name: str
+    external_record_id: str
+    quantity: Decimal
+    unit_cost: Decimal
+    market_value: Decimal | None
+    source_nav: Decimal | None
+    source_nav_date: date | None
+    comparison_status: str
+    candidate_holding_started_on: date | None
+    holding_start_status: str
+    source_payload: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewSourceRecord:
+    record_type: str
+    external_record_id: str
+    instrument_id: str | None
+    occurred_at: datetime | None
+    classification: str
+    normalized_payload: dict[str, Any]
+    content_hash: str
+    validation_status: str
+    validation_errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewPlan:
+    items: tuple[PreviewItem, ...]
+    source_records: tuple[PreviewSourceRecord, ...]
+    warnings: tuple[str, ...]
+    blocking_errors: tuple[str, ...]
+    history_importable: int
+    history_duplicated: int
+    can_confirm: bool
+
+    @property
+    def summary(self) -> dict[str, int]:
+        statuses = (item.comparison_status for item in self.items)
+        counts = {status: 0 for status in ("NEW", "UNCHANGED", "CHANGED", "CLOSED", "CONFLICT")}
+        for status in statuses:
+            counts[status] += 1
+        return {key.lower(): value for key, value in counts.items()}
+
+
+def _json_value(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", by_alias=True)
+    if isinstance(value, dict):
+        return value
+    return dict(vars(value))
+
+
+def source_record_hash(value: Any) -> str:
+    payload = json.dumps(
+        _json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _append_unique(target: list[str], value: str) -> None:
+    if value not in target:
+        target.append(value)
+
+
+def _parse_occurred_at(value: str) -> datetime:
+    normalized = value.strip().replace(" ", "T", 1)
+    return datetime.fromisoformat(normalized)
+
+
+def _share_quantity(transaction: TiantianTransaction) -> Decimal | None:
+    if transaction.normalized_business_type == "DIVIDEND_CASH":
+        return None
+    if transaction.confirmation_unit == "份":
+        return transaction.confirmation_value
+    if transaction.application_unit == "份":
+        return transaction.application_value
+    return None
+
+
+def _holding_result(
+    position: TiantianPosition,
+    transactions: tuple[TiantianTransaction, ...],
+):
+    events = [
+        ShareTransaction(
+            occurred_at=_parse_occurred_at(transaction.occurred_at),
+            source_id=transaction.source_id,
+            business_type=transaction.normalized_business_type,
+            share_quantity=_share_quantity(transaction),
+        )
+        for transaction in transactions
+        if transaction.product_code == position.product_code
+        and transaction.normalized_business_type != "NON_POSITION"
+    ]
+    return derive_holding_start(
+        events,
+        position.quantity,
+        as_of=position.captured_at.date(),
+    )
+
+
+def _position_payload(position: TiantianPosition) -> dict[str, Any]:
+    return position.model_dump(mode="json", by_alias=True)
+
+
+def analyze_preview(
+    package: TiantianPackage | Any,
+    context: PreviewContext,
+    *,
+    target_account_id: str,
+) -> PreviewPlan:
+    """Compare an authoritative source snapshot without producing ledger facts."""
+    warnings: list[str] = []
+    blocking: list[str] = []
+    items: list[PreviewItem] = []
+    source_records: list[PreviewSourceRecord] = []
+    incoming_instrument_ids: set[str] = set()
+
+    if context.binding_account_id not in (None, target_account_id):
+        _append_unique(blocking, "SOURCE_BINDING_ACCOUNT_CONFLICT")
+    if (
+        context.latest_source_as_of is not None
+        and package.manifest.positions_as_of < context.latest_source_as_of
+    ):
+        _append_unique(blocking, "SOURCE_SNAPSHOT_OLDER_THAN_CONFIRMED")
+    if package.manifest.completeness == "PARTIAL":
+        _append_unique(warnings, "PARTIAL_HISTORY")
+
+    for position in package.positions:
+        resolved = context.resolved_funds.get(position.product_code)
+        if resolved is None:
+            _append_unique(blocking, "UNKNOWN_FUND_CODE")
+            payload = _position_payload(position)
+            source_records.append(
+                PreviewSourceRecord(
+                    record_type="POSITION_SNAPSHOT",
+                    external_record_id=position.source_record_id,
+                    instrument_id=None,
+                    occurred_at=position.captured_at,
+                    classification="UNKNOWN_FUND_CODE",
+                    normalized_payload=payload,
+                    content_hash=source_record_hash(payload),
+                    validation_status="INVALID",
+                    validation_errors=("UNKNOWN_FUND_CODE",),
+                )
+            )
+            continue
+        instrument_id = str(resolved["instrument_id"])
+        incoming_instrument_ids.add(instrument_id)
+        if (
+            position.quantity <= 0
+            or position.average_cost < 0
+            or position.market_value < 0
+        ):
+            _append_unique(blocking, "INVALID_POSITION_VALUE")
+            payload = _position_payload(position)
+            source_records.append(
+                PreviewSourceRecord(
+                    record_type="POSITION_SNAPSHOT",
+                    external_record_id=position.source_record_id,
+                    instrument_id=instrument_id,
+                    occurred_at=position.captured_at,
+                    classification="INVALID_POSITION_VALUE",
+                    normalized_payload=payload,
+                    content_hash=source_record_hash(payload),
+                    validation_status="INVALID",
+                    validation_errors=("INVALID_POSITION_VALUE",),
+                )
+            )
+            continue
+
+        baseline = context.baselines.get(instrument_id)
+        if instrument_id in context.account_conflict_instrument_ids:
+            comparison = "CONFLICT"
+            _append_unique(blocking, "ACCOUNT_LEDGER_CONFLICT")
+        elif baseline is None:
+            comparison = "NEW"
+        elif (
+            baseline.quantity == position.quantity
+            and baseline.unit_cost == position.average_cost
+        ):
+            comparison = "UNCHANGED"
+        else:
+            comparison = "CHANGED"
+
+        holding = _holding_result(position, package.transactions)
+        if holding.status == "PARTIAL_HISTORY":
+            _append_unique(warnings, "PARTIAL_HISTORY")
+        elif holding.status == "INSUFFICIENT_DATA":
+            _append_unique(warnings, "HOLDING_START_INSUFFICIENT")
+        elif holding.status == "MISMATCH":
+            _append_unique(blocking, "HOLDING_SHARE_MISMATCH")
+
+        items.append(
+            PreviewItem(
+                instrument_id=instrument_id,
+                product_code=position.product_code,
+                product_name=str(resolved["canonical_name"]),
+                external_record_id=position.source_record_id,
+                quantity=position.quantity,
+                unit_cost=position.average_cost,
+                market_value=position.market_value,
+                source_nav=position.latest_nav,
+                source_nav_date=position.latest_nav_date,
+                comparison_status=comparison,
+                candidate_holding_started_on=holding.started_on,
+                holding_start_status=holding.status,
+                source_payload=_position_payload(position),
+            )
+        )
+
+    for baseline in context.baselines.values():
+        if baseline.instrument_id in incoming_instrument_ids:
+            continue
+        items.append(
+            PreviewItem(
+                instrument_id=baseline.instrument_id,
+                product_code=baseline.product_code,
+                product_name=baseline.product_name,
+                external_record_id=f"closed:{baseline.external_record_id}",
+                quantity=Decimal("0"),
+                unit_cost=baseline.unit_cost,
+                market_value=Decimal("0"),
+                source_nav=None,
+                source_nav_date=None,
+                comparison_status="CLOSED",
+                candidate_holding_started_on=None,
+                holding_start_status="INSUFFICIENT_DATA",
+                source_payload={
+                    "productCode": baseline.product_code,
+                    "reason": "ABSENT_FROM_AUTHORITATIVE_SNAPSHOT",
+                },
+            )
+        )
+
+    history_importable = 0
+    history_duplicated = 0
+    for transaction in package.transactions:
+        transaction_hash = source_record_hash(transaction)
+        confirmed_hash = context.confirmed_transaction_hashes.get(transaction.source_id)
+        if confirmed_hash is None:
+            classification = "IMPORTABLE"
+            validation_status = "VALID"
+            errors: tuple[str, ...] = ()
+            history_importable += 1
+        elif confirmed_hash == transaction_hash:
+            classification = "DUPLICATE"
+            validation_status = "VALID"
+            errors = ()
+            history_duplicated += 1
+        else:
+            classification = "SOURCE_CONFLICT"
+            validation_status = "INVALID"
+            errors = ("SOURCE_TRANSACTION_HASH_CONFLICT",)
+            _append_unique(blocking, "SOURCE_TRANSACTION_HASH_CONFLICT")
+        resolved = context.resolved_funds.get(transaction.product_code)
+        if resolved is None:
+            validation_status = "INVALID"
+            errors = tuple(dict.fromkeys((*errors, "UNKNOWN_FUND_CODE")))
+            _append_unique(blocking, "UNKNOWN_FUND_CODE")
+        source_records.append(
+            PreviewSourceRecord(
+                record_type="FUND_TRANSACTION",
+                external_record_id=transaction.source_id,
+                instrument_id=(str(resolved["instrument_id"]) if resolved else None),
+                occurred_at=_parse_occurred_at(transaction.occurred_at),
+                classification=classification,
+                normalized_payload=transaction.model_dump(mode="json", by_alias=True),
+                content_hash=transaction_hash,
+                validation_status=validation_status,
+                validation_errors=errors,
+            )
+        )
+
+    for index, review_record in enumerate(package.review_required, start=1):
+        payload = dict(review_record)
+        source_records.append(
+            PreviewSourceRecord(
+                record_type="REVIEW_REQUIRED",
+                external_record_id=f"review-{index}",
+                instrument_id=None,
+                occurred_at=None,
+                classification="NEEDS_REVIEW",
+                normalized_payload=payload,
+                content_hash=source_record_hash(payload),
+                validation_status="NEEDS_REVIEW",
+                validation_errors=("REVIEW_REQUIRED",),
+            )
+        )
+    if package.review_required:
+        _append_unique(blocking, "REVIEW_REQUIRED_RECORDS")
+
+    if not package.positions and not context.baselines:
+        _append_unique(blocking, "EMPTY_SNAPSHOT_WITHOUT_BASELINE")
+
+    items.sort(
+        key=lambda item: (
+            item.comparison_status == "CLOSED",
+            item.product_code,
+            item.instrument_id,
+        )
+    )
+    return PreviewPlan(
+        items=tuple(items),
+        source_records=tuple(source_records),
+        warnings=tuple(warnings),
+        blocking_errors=tuple(blocking),
+        history_importable=history_importable,
+        history_duplicated=history_duplicated,
+        can_confirm=not blocking,
+    )
+
+
+def _package_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _preview_response(
+    *,
+    batch_id: str,
+    binding_id: str,
+    target: TargetAccount,
+    package: TiantianPackage | Any,
+    plan: PreviewPlan,
+) -> dict[str, Any]:
+    return {
+        "batchId": batch_id,
+        "status": "DRAFT",
+        "version": 1,
+        "package": {
+            "schemaVersion": package.manifest.schema_version,
+            "collectorVersion": package.manifest.collector_version,
+            "positionsAsOf": package.manifest.positions_as_of.isoformat(),
+        },
+        "sourceBinding": {
+            "bindingId": binding_id,
+            "status": target.binding_status or "PENDING",
+            "accountId": target.account_id,
+            "displayName": target.account_display_name,
+        },
+        "summary": plan.summary,
+        "positions": [
+            {
+                "instrumentId": item.instrument_id,
+                "symbol": item.product_code,
+                "name": item.product_name,
+                "quantity": format(item.quantity, "f"),
+                "unitCost": format(item.unit_cost, "f"),
+                "marketValue": (
+                    format(item.market_value, "f") if item.market_value is not None else None
+                ),
+                "comparisonStatus": item.comparison_status,
+                "candidateHoldingStartedOn": (
+                    item.candidate_holding_started_on.isoformat()
+                    if item.candidate_holding_started_on
+                    else None
+                ),
+                "holdingStartStatus": item.holding_start_status,
+            }
+            for item in plan.items
+        ],
+        "historySummary": {
+            "importable": plan.history_importable,
+            "duplicated": plan.history_duplicated,
+            "reviewRequired": len(package.review_required),
+        },
+        "warnings": list(plan.warnings),
+        "blockingErrors": list(plan.blocking_errors),
+        "canConfirm": plan.can_confirm,
+    }
+
+
+async def preview_tiantian_import(
+    pool: asyncpg.Pool,
+    ctx,
+    upload: Path,
+    account_id: str | None,
+    account_name: str | None,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Parse outside the DB, then atomically persist a recoverable DRAFT preview."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if bool(account_id) == bool(account_name):
+        raise ValidationError_("accountId 与 accountName 必须二选一")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+
+    package = parse_tiantian_package(upload)
+    content_hash = _package_hash(upload)
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        prior = await repository.find_preview_by_idempotency(
+            conn,
+            tenant_id=ctx.tenant_id,
+            idempotency_key=idempotency_key,
+        )
+        if prior is not None:
+            if prior["package_content_hash"] != content_hash:
+                raise IdempotencyConflictError("相同 Idempotency-Key 对应了不同导入包")
+            return await repository.get_import_batch(
+                conn,
+                ctx.tenant_id,
+                str(prior["batch_id"]),
+            )
+
+        target = await repository.resolve_target_account(
+            conn,
+            tenant_id=ctx.tenant_id,
+            external_account_key=str(package.manifest.external_account_key),
+            account_id=account_id,
+            account_name=account_name,
+        )
+        context = await repository.load_preview_context(
+            conn,
+            tenant_id=ctx.tenant_id,
+            account_id=target.account_id,
+            binding_id=target.binding_id,
+            product_codes=sorted(
+                {
+                    *(position.product_code for position in package.positions),
+                    *(transaction.product_code for transaction in package.transactions),
+                }
+            ),
+            external_transaction_ids=[
+                transaction.source_id for transaction in package.transactions
+            ],
+        )
+        context = replace(context, binding_account_id=target.binding_account_id)
+        plan = analyze_preview(
+            package,
+            context,
+            target_account_id=target.account_id,
+        )
+        account_state_hash = await repository.account_fact_hash(
+            conn,
+            tenant_id=ctx.tenant_id,
+            account_id=target.account_id,
+        )
+        persisted = await repository.persist_preview(
+            conn,
+            tenant_id=ctx.tenant_id,
+            account_id=target.account_id,
+            created_by=ctx.user_id,
+            binding_id=target.binding_id,
+            package=package,
+            package_content_hash=content_hash,
+            target_account_state_hash=account_state_hash,
+            idempotency_key=idempotency_key,
+            account_display_name=target.account_display_name,
+            plan=plan,
+        )
+        await write_audit(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_type="USER",
+            actor_id=ctx.user_id,
+            action="TIANTIAN_IMPORT_PREVIEW_CREATED",
+            resource_type="ledger.portfolio_import_batches",
+            resource_id=persisted["batch_id"],
+            details={
+                "positionCount": len(plan.items),
+                "historyCount": len(package.transactions),
+                "blockingErrorCount": len(plan.blocking_errors),
+                "warningCount": len(plan.warnings),
+            },
+        )
+    return _preview_response(
+        batch_id=persisted["batch_id"],
+        binding_id=persisted["binding_id"],
+        target=target,
+        package=package,
+        plan=plan,
+    )

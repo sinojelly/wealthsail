@@ -200,6 +200,18 @@ def parse_tiantian_package(
         _validate_models(TiantianTransaction, item, f"fund-transactions.json[{index}]")
         for index, item in enumerate(transactions_payload)
     )
+    position_codes = [position.product_code for position in positions]
+    if len(position_codes) != len(set(position_codes)):
+        raise _invalid(
+            "current-positions.json 业务主键重复：productCode",
+            "current-positions.json",
+        )
+    transaction_ids = [transaction.source_id for transaction in transactions]
+    if len(transaction_ids) != len(set(transaction_ids)):
+        raise _invalid(
+            "fund-transactions.json 业务主键重复：sourceId",
+            "fund-transactions.json",
+        )
     excluded = _validate_models(
         ExcludedSummary,
         payloads["excluded-summary.json"],
