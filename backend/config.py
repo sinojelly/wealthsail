@@ -116,6 +116,13 @@ class Settings(BaseSettings):
     tiantian_import_max_transactions: int = Field(default=20000, ge=1, le=100000)
     tiantian_import_max_json_depth: int = Field(default=32, ge=4, le=100)
     tiantian_import_max_text_length: int = Field(default=2000, ge=32, le=20000)
+    data_task_poll_interval_seconds: float = Field(default=5.0, gt=0, le=300)
+    data_task_concurrency: int = Field(default=2, ge=1, le=8)
+    data_task_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    data_task_max_attempts: int = Field(default=5, ge=1, le=20)
+    data_task_base_backoff_seconds: int = Field(default=10, ge=1, le=3600)
+    fund_nav_history_page_size: int = Field(default=100, ge=10, le=500)
+    fund_nav_history_max_pages: int = Field(default=50, ge=1, le=200)
 
     @property
     def is_production(self) -> bool:

@@ -611,6 +611,9 @@ TO wealthsail_api;
 GRANT SELECT ON ledger.position_period_metrics TO wealthsail_api;
 
 GRANT SELECT ON
+    ledger.portfolio_source_bindings,
+    ledger.portfolio_import_batches,
+    ledger.portfolio_import_items,
     ledger.portfolio_source_transactions
 TO wealthsail_worker;
 GRANT SELECT, INSERT, UPDATE, DELETE ON

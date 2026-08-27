@@ -127,7 +127,14 @@ def test_migration_grants_only_required_api_and_worker_access(migration_sql: str
     assert "REVOKE ALL ON" in migration_sql
     assert "FROM PUBLIC, authenticated" in migration_sql
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON\n    ledger.position_period_metrics\nTO wealthsail_worker" in migration_sql
-    assert "GRANT SELECT ON\n    ledger.portfolio_source_transactions\nTO wealthsail_worker" in migration_sql
+    assert (
+        "GRANT SELECT ON\n"
+        "    ledger.portfolio_source_bindings,\n"
+        "    ledger.portfolio_import_batches,\n"
+        "    ledger.portfolio_import_items,\n"
+        "    ledger.portfolio_source_transactions\n"
+        "TO wealthsail_worker"
+    ) in migration_sql
 
 
 def test_migration_runner_reads_back_the_new_contract() -> None:

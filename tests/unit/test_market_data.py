@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
+import httpx
 
 from backend.integrations.market_data import (
     F_NAV,
@@ -20,6 +21,7 @@ from backend.integrations.market_data import (
     _rank_ak_spot,
     _sina_prefix,
     _split_symbol,
+    fetch_fund_nav_history,
 )
 from backend.market import service
 
@@ -191,3 +193,135 @@ def test_observation_payload_serialization() -> None:
     assert payload["value"] == "4.2552"
     assert payload["field_code"] == F_NAV
     assert payload["quality_status"] == Q_STALE
+
+
+class _HistoryResponse:
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.request = httpx.Request("GET", "https://api.fund.eastmoney.com/f10/lsjz")
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "provider failed", request=self.request, response=httpx.Response(self.status_code)
+            )
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _HistoryClient:
+    def __init__(self, outcomes: list[object]) -> None:
+        self.outcomes = iter(outcomes)
+        self.calls: list[dict] = []
+
+    async def get(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        outcome = next(self.outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.mark.asyncio
+async def test_fund_nav_history_is_paginated_official_decimal_and_inclusive() -> None:
+    client = _HistoryClient(
+        [
+            _HistoryResponse(
+                {
+                    "Data": {
+                        "TotalCount": 4,
+                        "LSJZList": [
+                            {"FSRQ": "2026-08-28", "DWJZ": "1.2345"},
+                            {"FSRQ": "2026-08-27", "DWJZ": "1.2000"},
+                        ],
+                    }
+                }
+            ),
+            _HistoryResponse(
+                {
+                    "Data": {
+                        "TotalCount": 4,
+                        "LSJZList": [
+                            # Provider page overlap: first occurrence wins.
+                            {"FSRQ": "2026-08-27", "DWJZ": "9.9999"},
+                            {"FSRQ": "2026-08-26", "DWJZ": "1.1000"},
+                        ],
+                    }
+                }
+            ),
+        ]
+    )
+
+    rows = await fetch_fund_nav_history(
+        "110022",
+        date(2026, 8, 26),
+        date(2026, 8, 28),
+        client,
+        page_size=2,
+        max_pages=3,
+    )
+
+    assert [(row.as_of.date(), row.value) for row in rows] == [
+        (date(2026, 8, 26), Decimal("1.1000")),
+        (date(2026, 8, 27), Decimal("1.2000")),
+        (date(2026, 8, 28), Decimal("1.2345")),
+    ]
+    assert all(row.field_code == F_NAV for row in rows)
+    assert all(row.method_version == "eastmoney/f10-lsjz-history/v1" for row in rows)
+    assert [call["params"]["pageIndex"] for call in client.calls] == [1, 2]
+    assert all(call["timeout"] == 10.0 for call in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_fund_nav_history_retries_transient_failure_with_bounded_requests() -> None:
+    request = httpx.Request("GET", "https://api.fund.eastmoney.com/f10/lsjz")
+    client = _HistoryClient(
+        [
+            httpx.ConnectError("temporary", request=request),
+            _HistoryResponse(
+                {
+                    "Data": {
+                        "TotalCount": 1,
+                        "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
+                    }
+                }
+            ),
+        ]
+    )
+
+    rows = await fetch_fund_nav_history(
+        "110022", date(2026, 8, 28), date(2026, 8, 28), client
+    )
+
+    assert len(rows) == 1
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_fund_nav_history_fails_closed_when_provider_exceeds_page_bound() -> None:
+    client = _HistoryClient(
+        [
+            _HistoryResponse(
+                {
+                    "Data": {
+                        "TotalCount": 1000,
+                        "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
+                    }
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="page bound"):
+        await fetch_fund_nav_history(
+            "110022",
+            date(2026, 8, 1),
+            date(2026, 8, 28),
+            client,
+            page_size=1,
+            max_pages=1,
+        )
+
+    assert len(client.calls) == 1

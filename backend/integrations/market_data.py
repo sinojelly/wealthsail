@@ -666,6 +666,107 @@ async def fetch_fund_observations(symbols: list[str]) -> list[Observation]:
     return observations
 
 
+async def fetch_fund_nav_history(
+    symbol: str,
+    start: date,
+    end: date,
+    client: httpx.AsyncClient,
+    *,
+    page_size: int = 100,
+    max_pages: int = 50,
+) -> list[Observation]:
+    """Fetch a bounded inclusive interval of official disclosed unit NAV.
+
+    EastMoney returns newest rows first and can repeat a boundary row between
+    pages. The first occurrence is authoritative for that response snapshot.
+    Network failures get one bounded retry; malformed/truncated pagination is
+    surfaced so the durable job can retry instead of materializing false data.
+    """
+    if not re.fullmatch(r"\d{6}", symbol):
+        raise ValueError("fund symbol must contain exactly six digits")
+    if start > end:
+        raise ValueError("fund NAV start date must not be after end date")
+    if page_size <= 0 or max_pages <= 0:
+        raise ValueError("pagination bounds must be positive")
+
+    url = "https://api.fund.eastmoney.com/f10/lsjz"
+    by_day: dict[date, Observation] = {}
+    total_count: int | None = None
+    received = 0
+    completed = False
+    for page_index in range(1, max_pages + 1):
+        response = None
+        for attempt in range(2):
+            try:
+                response = await client.get(
+                    url,
+                    params={
+                        "fundCode": symbol,
+                        "pageIndex": page_index,
+                        "pageSize": page_size,
+                        "startDate": start.isoformat(),
+                        "endDate": end.isoformat(),
+                    },
+                    headers={
+                        "User-Agent": _SINA_UA,
+                        "Referer": "https://fundf10.eastmoney.com/",
+                    },
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPError:
+                if attempt == 1:
+                    raise
+        if response is None:  # pragma: no cover - defensive type narrowing
+            raise RuntimeError("fund NAV provider produced no response")
+        try:
+            data = response.json()["Data"]
+            rows = data["LSJZList"]
+            total_count = int(data.get("TotalCount", len(rows)))
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise RuntimeError("fund NAV provider returned an invalid payload") from exc
+        if not isinstance(rows, list):
+            raise RuntimeError("fund NAV provider rows are not a list")
+        if not rows:
+            completed = True
+            break
+
+        received += len(rows)
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                observed_on = date.fromisoformat(str(raw.get("FSRQ", "")))
+                nav = _decimal(raw.get("DWJZ"))
+            except (ValueError, TypeError, ArithmeticError):
+                continue
+            if observed_on < start or observed_on > end or not nav.is_finite() or nav <= 0:
+                continue
+            by_day.setdefault(
+                observed_on,
+                Observation(
+                    symbol=symbol,
+                    subject_type="FUND",
+                    field_code=F_NAV,
+                    value=nav,
+                    as_of=datetime.combine(observed_on, time.min, tzinfo=timezone.utc),
+                    quality_status=Q_FRESH if observed_on == date.today() else Q_STALE,
+                    unit="CNY/share",
+                    method_version="eastmoney/f10-lsjz-history/v1",
+                    origin_uri="https://fundf10.eastmoney.com",
+                    metadata={"officialUnitNav": True},
+                ),
+            )
+        if received >= total_count:
+            completed = True
+            break
+
+    if total_count is not None and received < total_count and not completed:
+        raise RuntimeError("fund NAV provider page bound exceeded")
+    return [by_day[day] for day in sorted(by_day)]
+
+
 async def fetch_fund_disclosures(symbols: list[str]) -> list[FundDisclosure]:
     """Fetch the latest disclosed fund holdings with bounded concurrency.
 

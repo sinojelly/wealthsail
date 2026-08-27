@@ -22,6 +22,7 @@ from datetime import datetime
 from backend.common.database import create_pool, verify_runtime_login_boundary
 from backend.config import get_settings, validate_runtime_settings
 from backend.jobs import runner
+from backend.jobs.data_tasks import DataTaskConsumer
 from backend.jobs.outbox import OutboxConsumer
 from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
@@ -81,8 +82,10 @@ async def main() -> None:
         trading_day_check=_calendar_check,
     )
     consumer = OutboxConsumer(pool, settings)
+    data_tasks = DataTaskConsumer(pool, settings)
     scheduler.start()
     consumer.start()
+    data_tasks.start()
 
     stop_event = asyncio.Event()
 
@@ -96,11 +99,12 @@ async def main() -> None:
         except NotImplementedError:  # pragma: no cover — non-UNIX platforms
             pass
 
-    logger.info("wealthsail worker running (scheduler + outbox consumer)")
+    logger.info("wealthsail worker running (scheduler + outbox + data tasks)")
     await stop_event.wait()
     logger.info("shutting down worker…")
     await scheduler.stop()
     await consumer.stop()
+    await data_tasks.stop()
     await close_http_client()
     await pool.close()
     logger.info("worker stopped")

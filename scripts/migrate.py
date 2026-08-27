@@ -333,6 +333,18 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "SELECT has_table_privilege('wealthsail_worker',"
             "'ledger.portfolio_source_transactions','SELECT')"
         ),
+        "worker_source_binding_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.portfolio_source_bindings','SELECT')"
+        ),
+        "worker_import_batch_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.portfolio_import_batches','SELECT')"
+        ),
+        "worker_import_item_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.portfolio_import_items','SELECT')"
+        ),
         "worker_metrics_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker',"
             "'ledger.position_period_metrics','INSERT')"
