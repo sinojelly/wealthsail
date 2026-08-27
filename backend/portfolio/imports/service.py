@@ -448,15 +448,21 @@ def _preview_response(
     target: TargetAccount,
     package: TiantianPackage | Any,
     plan: PreviewPlan,
+    item_ids: list[str],
 ) -> dict[str, Any]:
+    if len(item_ids) != len(plan.items):
+        raise RuntimeError("persisted preview item ids do not match analyzed positions")
     return {
         "batchId": batch_id,
         "status": "DRAFT",
         "version": 1,
+        "sourceAsOf": package.manifest.positions_as_of.isoformat(),
         "package": {
             "schemaVersion": package.manifest.schema_version,
             "collectorVersion": package.manifest.collector_version,
             "positionsAsOf": package.manifest.positions_as_of.isoformat(),
+            "sourceWindowStart": package.manifest.source_window_start.isoformat(),
+            "sourceWindowEnd": package.manifest.source_window_end.isoformat(),
         },
         "sourceBinding": {
             "bindingId": binding_id,
@@ -464,9 +470,10 @@ def _preview_response(
             "accountId": target.account_id,
             "displayName": target.account_display_name,
         },
-        "summary": plan.summary,
+        "summary": {"total": len(package.positions), **plan.summary},
         "positions": [
             {
+                "itemId": item_id,
                 "instrumentId": item.instrument_id,
                 "symbol": item.product_code,
                 "name": item.product_name,
@@ -483,12 +490,16 @@ def _preview_response(
                 ),
                 "holdingStartStatus": item.holding_start_status,
             }
-            for item in plan.items
+            for item_id, item in zip(item_ids, plan.items, strict=True)
         ],
         "historySummary": {
             "importable": plan.history_importable,
             "duplicated": plan.history_duplicated,
             "reviewRequired": len(package.review_required),
+        },
+        "excludedSummary": {
+            "cashManagement": package.excluded_summary.cash_management,
+            "nonPosting": package.excluded_summary.non_posting,
         },
         "warnings": list(plan.warnings),
         "blockingErrors": list(plan.blocking_errors),
@@ -597,6 +608,7 @@ async def preview_tiantian_import(
         target=target,
         package=package,
         plan=plan,
+        item_ids=persisted["item_ids"],
     )
 
 

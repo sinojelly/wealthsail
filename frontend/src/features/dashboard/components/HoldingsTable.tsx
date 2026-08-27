@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
-import { Plus, Search } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import { Plus, Search, Upload } from "lucide-react";
+import { Link } from "react-router-dom";
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import { formatMoney, formatSignedMoney } from "../../../domain/money";
 import type { PositionDto } from "../../../api/types";
 import PositionDialog from "./PositionDialog";
+import FundRangeMetrics from "./FundRangeMetrics";
 
 export default function HoldingsTable({
   rows,
@@ -59,9 +61,13 @@ export default function HoldingsTable({
             <option>场内ETF</option>
             <option>场外基金</option>
           </select>
-          <button className="btn-primary" type="button" onClick={openAdd}>
+          <Link className="btn-primary" to="/onboarding">
+            <Upload size={14} />
+            导入 / 更新持仓
+          </Link>
+          <button className="btn-secondary" type="button" onClick={openAdd}>
             <Plus size={14} />
-            初始化持仓
+            手工初始化
           </button>
         </div>
       </div>
@@ -71,7 +77,7 @@ export default function HoldingsTable({
         ) : filtered.length === 0 ? (
           <div className="table-placeholder">
             {rows.length === 0
-              ? "暂无持仓，点击「初始化持仓」创建并确认期初基线"
+              ? "暂无持仓，可导入天天基金 ZIP，或手工创建并确认期初基线"
               : "无匹配持仓"}
           </div>
         ) : (
@@ -91,35 +97,51 @@ export default function HoldingsTable({
             </thead>
             <tbody>
               {filtered.map((row) => (
-                <tr key={`${row.symbol}-${row.accountId}`}>
-                  <td>
-                    <div className="security-cell">
-                      <strong>{row.name}</strong>
-                      <span className="mono">{row.symbol}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <span className="tag">{row.type}</span>
-                  </td>
-                  <td className="mono numeric">{row.quantity}</td>
-                  <td className="mono numeric">{row.avgCost}</td>
-                  <td className="mono numeric">{row.price ?? "—"}</td>
-                  <td className="mono numeric">
-                    {row.marketValue ? formatMoney(row.marketValue) : "—"}
-                  </td>
-                  <td className="mono numeric">
-                    {row.weight ? `${row.weight}%` : "—"}
-                  </td>
-                  <td
-                    className={`mono numeric ${row.pnl?.startsWith("-") ? "negative" : row.pnl ? "positive" : ""}`}
-                  >
-                    <strong>{row.pnl ? formatSignedMoney(row.pnl) : "—"}</strong>
-                    <small>{row.pnlRate ? `${row.pnlRate}%` : "—"}</small>
-                  </td>
-                  <td>
-                    <QualityBadge quality={row.quality} />
-                  </td>
-                </tr>
+                <Fragment key={`${row.symbol}-${row.accountId}`}>
+                  <tr>
+                    <td>
+                      <div className="security-cell">
+                        <strong>{row.name}</strong>
+                        <span className="mono">{row.symbol}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="tag">{row.type}</span>
+                    </td>
+                    <td className="mono numeric">{row.quantity}</td>
+                    <td className="mono numeric">{row.avgCost}</td>
+                    <td className="mono numeric">{row.price ?? "—"}</td>
+                    <td className="mono numeric">
+                      {row.marketValue ? formatMoney(row.marketValue) : "—"}
+                    </td>
+                    <td className="mono numeric">
+                      {row.weight ? `${row.weight}%` : "—"}
+                    </td>
+                    <td
+                      className={`mono numeric ${row.pnl?.startsWith("-") ? "negative" : row.pnl ? "positive" : ""}`}
+                    >
+                      <strong>
+                        {row.pnl ? formatSignedMoney(row.pnl) : "—"}
+                      </strong>
+                      <small>{row.pnlRate ? `${row.pnlRate}%` : "—"}</small>
+                    </td>
+                    <td>
+                      <QualityBadge quality={row.quality} />
+                    </td>
+                  </tr>
+                  {row.type === "场外基金" ? (
+                    <tr className="fund-range-row">
+                      <td colSpan={9}>
+                        <FundRangeMetrics
+                          holdingPeriod={row.holdingPeriod}
+                          metrics={row.rangeMetrics}
+                          currentNav={row.price}
+                          costReturnPct={row.pnlRate}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>

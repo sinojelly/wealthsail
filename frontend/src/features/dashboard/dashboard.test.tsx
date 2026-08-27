@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import DashboardPage from "./DashboardPage";
 import { renderWithSession } from "../../test/render-with-session";
 import {
@@ -67,7 +68,31 @@ it("never presents hard-coded fill drafts as confirmed financial facts", () => {
   renderWithSession(<DashboardPage />);
 
   expect(screen.getByText("¥1,921,840.00")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /笔草稿/ })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /笔草稿/ }),
+  ).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "录入成交草稿" })).toBeDisabled();
-  expect(screen.getByText("成交确认命令尚未接入，当前不会修改账本")).toBeInTheDocument();
+  expect(
+    screen.getByText("成交确认命令尚未接入，当前不会修改账本"),
+  ).toBeInTheDocument();
+});
+
+it("links to the recoverable import workflow and embeds fund range metrics", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<DashboardPage />);
+
+  const importLinks = screen.getAllByRole("link", {
+    name: "导入 / 更新持仓",
+  });
+  expect(importLinks).toHaveLength(2);
+  importLinks.forEach((link) =>
+    expect(link).toHaveAttribute("href", "/onboarding"),
+  );
+  const rangeToggle = screen.getByRole("button", {
+    name: "持有 895 天，区间位置 40%",
+  });
+  await user.click(rangeToggle);
+
+  expect(screen.getByText("距区间最高 -20%")).toBeInTheDocument();
+  expect(screen.getByText(/不等同于投资收益率/)).toBeInTheDocument();
 });

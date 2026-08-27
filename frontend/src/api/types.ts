@@ -3,7 +3,8 @@
 
 export type DecimalString = string;
 export type QualityCode = "FRESH" | "ESTIMATED" | "STALE" | "MISSING";
-export type ReportSession = "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
+export type ReportSession =
+  "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
 export type TenantRole = "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
 export type InvitableTenantRole = Exclude<TenantRole, "OWNER">;
 
@@ -95,6 +96,132 @@ export interface PositionDto {
   pnlRate: DecimalString | null;
   quality: QualityCode;
   accountId: string;
+  holdingPeriod: HoldingPeriodDto | null;
+  rangeMetrics: FundRangeMetricsDto | null;
+}
+
+export interface HoldingPeriodDto {
+  startedOn: string | null;
+  days: number | null;
+  method:
+    | "TRANSACTION_RECONCILED"
+    | "PARTIAL_HISTORY"
+    | "MISMATCH"
+    | "INSUFFICIENT_DATA"
+    | "USER_CONFIRMED";
+}
+
+export interface FundRangeMetricsDto {
+  high: DecimalString | null;
+  highDate: string | null;
+  low: DecimalString | null;
+  lowDate: string | null;
+  fromHighPct: DecimalString | null;
+  fromLowPct: DecimalString | null;
+  rangePositionPct: DecimalString | null;
+  status: "READY" | "PENDING" | "PARTIAL" | "CONFLICT";
+  qualityReasons: string[];
+  asOf: string | null;
+}
+
+export type TiantianComparisonStatus =
+  "NEW" | "UNCHANGED" | "CHANGED" | "CLOSED" | "CONFLICT";
+
+export interface TiantianImportPosition {
+  itemId: string;
+  instrumentId: string;
+  symbol: string;
+  name: string;
+  quantity: DecimalString;
+  unitCost: DecimalString;
+  marketValue: DecimalString | null;
+  sourceNav?: DecimalString | null;
+  sourceNavDate?: string | null;
+  comparisonStatus: TiantianComparisonStatus;
+  candidateHoldingStartedOn: string | null;
+  holdingStartStatus: string;
+  validationStatus?: "VALID" | "INVALID";
+  validationErrors?: string[];
+}
+
+export interface TiantianImportDetail {
+  batchId: string;
+  status: "DRAFT" | "CONFIRMED" | "CANCELLED";
+  version: number;
+  sourceType?: "TIANTIAN_FUND_ZIP";
+  sourceAsOf?: string;
+  package: {
+    schemaVersion: string;
+    collectorVersion?: string;
+    parserVersion?: string;
+    positionsAsOf?: string;
+    sourceWindowStart?: string | null;
+    sourceWindowEnd?: string | null;
+  };
+  sourceBinding: {
+    bindingId: string;
+    status: "PENDING" | "ACTIVE" | "DISABLED";
+    accountId?: string;
+    displayName: string;
+  };
+  account?: { accountId: string; name: string };
+  summary: {
+    total: number;
+    new: number;
+    unchanged: number;
+    changed: number;
+    closed: number;
+    conflict: number;
+  };
+  positions: TiantianImportPosition[];
+  historySummary: {
+    importable: number;
+    duplicated: number;
+    reviewRequired?: number;
+  };
+  excludedSummary: {
+    cashManagement: number;
+    nonPosting: number;
+  };
+  warnings: string[];
+  blockingErrors: string[];
+  validationStatus?: "VALID" | "INVALID";
+  canConfirm: boolean;
+  metricsStatus?:
+    "READY" | "PENDING" | "PARTIAL" | "CONFLICT" | "FAILED" | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface TiantianImportListItem {
+  batchId: string;
+  status: TiantianImportDetail["status"];
+  version: number;
+  sourceAsOf: string;
+  summary: TiantianImportDetail["summary"];
+  validationStatus: "VALID" | "INVALID";
+  account: { accountId: string; name: string };
+  createdAt: string;
+}
+
+export interface TiantianImportList {
+  items: TiantianImportListItem[];
+  nextCursor: string | null;
+}
+
+export interface TiantianConfirmPayload {
+  decisions: Array<{ itemId: string; startedOn: string }>;
+  confirmEmpty: boolean;
+}
+
+export interface TiantianImportConfirmation {
+  batchId: string;
+  status: "CONFIRMED";
+  version: number;
+  metricsStatus: "PENDING";
+  positionCount: number;
+  historyImported: number;
+  historyDuplicated: number;
 }
 
 export type InstrumentType = "STOCK" | "ETF" | "FUND";
@@ -171,7 +298,8 @@ export interface ReportSummary {
 
 export interface ReportItem {
   id: string;
-  itemType: "FACT" | "RISK" | "ACTION_PLAN" | "TODO" | "FUND_ESTIMATE" | "ALERT";
+  itemType:
+    "FACT" | "RISK" | "ACTION_PLAN" | "TODO" | "FUND_ESTIMATE" | "ALERT";
   severity: "INFO" | "WARNING" | "CRITICAL";
   title: string;
   body: string;

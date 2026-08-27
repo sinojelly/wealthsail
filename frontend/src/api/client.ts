@@ -1,4 +1,4 @@
-import type { ApiEnvelope, ApiMeta } from "./types";
+import type { ApiEnvelope, ApiFieldError, ApiMeta } from "./types";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 let accessToken: string | null = null;
@@ -12,6 +12,7 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code?: string,
     readonly requestId?: string,
+    readonly fieldErrors: ApiFieldError[] = [],
   ) {
     super(message);
   }
@@ -47,7 +48,13 @@ async function requestOnce<T>(
 ): Promise<ApiEnvelope<T>> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  if (init.body) headers.set("Content-Type", "application/json");
+  if (
+    init.body &&
+    !(init.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
+    headers.set("Content-Type", "application/json");
+  }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -89,6 +96,9 @@ async function requestOnce<T>(
       response.status,
       body.error?.code,
       body.requestId,
+      Array.isArray(body.error?.fieldErrors)
+        ? (body.error.fieldErrors as ApiFieldError[])
+        : [],
     );
   }
   if (!("data" in body) || !body.meta) {

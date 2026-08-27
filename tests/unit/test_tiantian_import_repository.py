@@ -81,7 +81,11 @@ async def test_persist_preview_writes_draft_tables_and_never_ledger_events() -> 
             collector_version="0.2.0",
             positions_as_of=datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
             external_account_key="1f8a8407-9d91-4a1d-b954-9ad46fbd9585",
-        )
+            source_window_start=datetime.fromisoformat("2020-01-01T00:00:00").date(),
+            source_window_end=datetime.fromisoformat("2026-08-28T00:00:00").date(),
+        ),
+        review_required=(),
+        excluded_summary=SimpleNamespace(cash_management=10, non_posting=2),
     )
 
     result = await persist_preview(
@@ -105,23 +109,31 @@ async def test_persist_preview_writes_draft_tables_and_never_ledger_events() -> 
     assert "portfolio_import_source_records" in combined
     assert "ledger_events" not in combined
     assert combined.count("$5::text") >= 2
-    assert result == {"batch_id": "batch-1", "binding_id": "binding-1"}
+    assert result["batch_id"] == "batch-1"
+    assert result["binding_id"] == "binding-1"
+    assert len(result["item_ids"]) == 1
 
 
 class _ReadConnection:
+    def __init__(self, *, status: str = "DRAFT", job_status: str = "RUNNING") -> None:
+        self.status = status
+        self.job_status = job_status
+
     async def fetchrow(self, sql: str, *_args):
         assert "WHERE b.tenant_id = $1 AND b.id = $2" in sql
         return {
             "batch_id": "batch-1",
-            "status": "DRAFT",
+            "status": self.status,
             "version": 1,
             "source_type": "TIANTIAN_FUND_ZIP",
             "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
             "package_schema_version": "wealthsail-tiantian-import/v2",
             "parser_version": "tiantian-package/v2",
             "preview_summary": (
-                '{"positionCounts":{"new":1},'
-                '"history":{"importable":0,"duplicated":0},'
+                '{"positionCounts":{"total":1,"new":1},'
+                '"history":{"importable":0,"duplicated":0,"reviewRequired":0},'
+                '"excluded":{"cashManagement":10,"nonPosting":2},'
+                '"sourceWindow":{"start":"2020-01-01","end":"2026-08-28"},'
                 '"warnings":["PARTIAL_HISTORY"]}'
             ),
             "validation_status": "VALID",
@@ -133,6 +145,8 @@ class _ReadConnection:
             "account_name": "天天基金账户",
             "created_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
             "updated_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
+            "data_job_status": self.job_status,
+            "metric_statuses": ["READY"],
         }
 
     async def fetch(self, sql: str, *_args):
@@ -159,8 +173,10 @@ class _ReadConnection:
             "version": 1,
             "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
             "preview_summary": {
-                "positionCounts": {"new": 1},
-                "history": {"importable": 0, "duplicated": 0},
+                "positionCounts": {"total": 1, "new": 1},
+                "history": {"importable": 0, "duplicated": 0, "reviewRequired": 0},
+                "excluded": {"cashManagement": 10, "nonPosting": 2},
+                "sourceWindow": {"start": "2020-01-01", "end": "2026-08-28"},
                 "warnings": ["PARTIAL_HISTORY"],
             },
             "validation_status": "VALID",
@@ -185,12 +201,27 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
 
     assert detail["batchId"] == "batch-1"
     assert detail["positions"][0]["comparisonStatus"] == "NEW"
-    assert detail["summary"] == {"new": 1}
-    assert detail["historySummary"] == {"importable": 0, "duplicated": 0}
+    assert detail["summary"] == {"total": 1, "new": 1}
+    assert detail["historySummary"] == {
+        "importable": 0,
+        "duplicated": 0,
+        "reviewRequired": 0,
+    }
+    assert detail["excludedSummary"] == {"cashManagement": 10, "nonPosting": 2}
+    assert detail["package"]["sourceWindowStart"] == "2020-01-01"
+    assert detail["package"]["sourceWindowEnd"] == "2026-08-28"
     assert detail["warnings"] == ["PARTIAL_HISTORY"]
+    assert detail["metricsStatus"] is None
     assert listing["items"][0]["batchId"] == "batch-1"
-    assert listing["items"][0]["summary"] == {"new": 1}
+    assert listing["items"][0]["summary"] == {"total": 1, "new": 1}
     assert listing["nextCursor"] is None
+
+    confirmed = await get_import_batch(
+        _ReadConnection(status="CONFIRMED", job_status="RUNNING"),
+        "tenant-1",
+        "batch-1",
+    )
+    assert confirmed["metricsStatus"] == "PENDING"
 
 
 class _RetryMetricsConnection:
@@ -235,7 +266,9 @@ async def test_metrics_retry_is_durable_idempotent_and_never_replays_ledger() ->
     assert created["created"] is True
     assert repeated == {"job_key": created["job_key"], "created": False}
     combined = "\n".join(first.sql + replay.sql)
-    assert "POSITION_PERIOD_METRICS_REBUILD" in combined
+    # 人工重试必须重新拉取可能完全缺失的官方净值；仅重算已有缓存会永久 PENDING。
+    assert "FUND_NAV_BACKFILL" in combined
+    assert "POSITION_PERIOD_METRICS_REBUILD" not in combined
     assert "ON CONFLICT (tenant_id, job_key) DO NOTHING" in combined
     assert "ledger_events" not in combined
 

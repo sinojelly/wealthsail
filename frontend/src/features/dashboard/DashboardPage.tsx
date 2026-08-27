@@ -45,9 +45,13 @@ export default function DashboardPage() {
           <>
             <Link className="btn-secondary" to="/onboarding">
               <Upload size={14} />
-              初始化导入
+              导入 / 更新持仓
             </Link>
-            <button className="btn-secondary" disabled title="快照导出接口尚未接入">
+            <button
+              className="btn-secondary"
+              disabled
+              title="快照导出接口尚未接入"
+            >
               <Download size={14} />
               导出快照
             </button>
@@ -80,7 +84,9 @@ export default function DashboardPage() {
       <SentimentCard
         sentiment={sentiment.data}
         loading={sentiment.isLoading}
-        error={sentiment.error instanceof Error ? sentiment.error.message : null}
+        error={
+          sentiment.error instanceof Error ? sentiment.error.message : null
+        }
       />
       <AdviceCard
         advice={advice.data}
@@ -114,10 +120,18 @@ export default function DashboardPage() {
             <ArrowRightLeft size={14} />
             登记出入金
           </button>
-          <button className="btn-secondary" disabled title="成交草稿命令尚未接入">
+          <button
+            className="btn-secondary"
+            disabled
+            title="成交草稿命令尚未接入"
+          >
             录入成交草稿
           </button>
-          <button className="btn-secondary" disabled title="由四时段 Worker 刷新行情">
+          <button
+            className="btn-secondary"
+            disabled
+            title="由四时段 Worker 刷新行情"
+          >
             <RefreshCw size={14} />
             刷新行情
           </button>

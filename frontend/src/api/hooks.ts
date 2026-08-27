@@ -5,11 +5,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { HttpError, request } from "./client";
-import {
-  logout,
-  privateQueryKey,
-  useAuthSession,
-} from "../app/auth-session";
+import { logout, privateQueryKey, useAuthSession } from "../app/auth-session";
 import * as identityApi from "./identity";
 import * as marketApi from "./market";
 import * as operationsApi from "./operations";
@@ -37,6 +33,9 @@ import type {
   ReportSession,
   ReportSummary,
   RulesResponse,
+  TiantianConfirmPayload,
+  TiantianImportDetail,
+  TiantianImportList,
 } from "./types";
 
 /** 401 统一处理：令牌失效 → 清会话（页面守卫会自动跳转登录页）。 */
@@ -144,6 +143,167 @@ export function useConfirmPositionImport() {
   });
 }
 
+export function useTiantianImports(): UseQueryResult<TiantianImportList> {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(session, "portfolio", "tiantian-imports"),
+    queryFn: () => portfolioApi.listTiantianImports(),
+    retry: (count, error) =>
+      !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+export function useTiantianImport(
+  batchId: string | null,
+  pollMetrics = false,
+): UseQueryResult<TiantianImportDetail> {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(
+      session,
+      "portfolio",
+      "tiantian-import",
+      batchId ?? "",
+    ),
+    queryFn: () => portfolioApi.getTiantianImport(batchId as string),
+    enabled: Boolean(batchId),
+    refetchInterval: pollMetrics ? 2_000 : false,
+  });
+}
+
+export function usePreviewTiantianImport() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: ({
+      file,
+      accountName,
+      accountId,
+      idempotencyKey,
+    }: {
+      file: File;
+      accountName?: string;
+      accountId?: string;
+      idempotencyKey: string;
+    }) =>
+      portfolioApi.previewTiantianImport(
+        file,
+        { accountName, accountId },
+        idempotencyKey,
+      ),
+    onSuccess: (detail) => {
+      queryClient.setQueryData(
+        privateQueryKey(
+          session,
+          "portfolio",
+          "tiantian-import",
+          detail.batchId,
+        ),
+        detail,
+      );
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "portfolio", "tiantian-imports"),
+      });
+    },
+    onError: onAuthFailure,
+  });
+}
+
+export function useConfirmTiantianImport() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  const invalidatePortfolio = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: ({
+      batchId,
+      version,
+      payload,
+      idempotencyKey,
+    }: {
+      batchId: string;
+      version: number;
+      payload: TiantianConfirmPayload;
+      idempotencyKey: string;
+    }) =>
+      portfolioApi.confirmTiantianImport(
+        batchId,
+        version,
+        payload,
+        idempotencyKey,
+      ),
+    onSuccess: (result) => {
+      invalidatePortfolio();
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(
+          session,
+          "portfolio",
+          "tiantian-import",
+          result.batchId,
+        ),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "portfolio", "tiantian-imports"),
+      });
+    },
+    onError: onAuthFailure,
+  });
+}
+
+export function useCancelTiantianImport() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: ({
+      batchId,
+      version,
+      idempotencyKey,
+    }: {
+      batchId: string;
+      version: number;
+      idempotencyKey: string;
+    }) => portfolioApi.cancelTiantianImport(batchId, version, idempotencyKey),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(
+          session,
+          "portfolio",
+          "tiantian-import",
+          result.batchId,
+        ),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "portfolio", "tiantian-imports"),
+      });
+    },
+    onError: onAuthFailure,
+  });
+}
+
+export function useRetryTiantianMetrics() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: ({
+      batchId,
+      idempotencyKey,
+    }: {
+      batchId: string;
+      idempotencyKey: string;
+    }) => portfolioApi.retryTiantianMetrics(batchId, idempotencyKey),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(
+          session,
+          "portfolio",
+          "tiantian-import",
+          result.batchId,
+        ),
+      });
+    },
+    onError: onAuthFailure,
+  });
+}
+
 export function useReportsList(params?: {
   tradeDate?: string;
   session?: ReportSession;
@@ -173,10 +333,7 @@ export function useGenerateReport() {
     mutationFn: (session: ReportSession) => reportsApi.generateReport(session),
     onSuccess: (report) => {
       queryClient.invalidateQueries({ queryKey: reportQueryKeys.all(auth) });
-      queryClient.setQueryData(
-        reportQueryKeys.detail(auth, report.id),
-        report,
-      );
+      queryClient.setQueryData(reportQueryKeys.detail(auth, report.id), report);
     },
   });
 }
@@ -243,7 +400,9 @@ export function useRevokeBinding() {
     mutationFn: (input: { bindingId: string; password: string }) =>
       identityApi.revokeBinding(input.bindingId, input.password),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: privateQueryKey(session, "identity", "me") });
+      queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "identity", "me"),
+      });
     },
     onError: onAuthFailure,
   });
@@ -320,7 +479,9 @@ export interface AiAdvice {
 }
 
 async function getChatAdvice(): Promise<AiAdvice> {
-  const envelope = await request<AiAdvice>("/v1/research/recommendations/latest");
+  const envelope = await request<AiAdvice>(
+    "/v1/research/recommendations/latest",
+  );
   return envelope.data;
 }
 

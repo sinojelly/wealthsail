@@ -3046,7 +3046,412 @@ button:disabled {
   color: var(--slate-500);
   font-size: 8px;
 }
+
+/* 天天基金 ZIP 导入：上传区与可恢复批次并列，预览在大对话框中完成。 */
+.tiantian-import-workflow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+.tiantian-package-step,
+.tiantian-history {
+  min-height: 214px;
+}
+.tiantian-package-step .panel-header > svg {
+  color: var(--teal);
+}
+.tiantian-package-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.35fr) minmax(220px, 1fr);
+  gap: 14px 16px;
+}
+.tiantian-package-form .form-actions,
+.tiantian-package-form .form-error,
+.tiantian-package-form .import-progress,
+.tiantian-package-form .collector-help {
+  grid-column: 1 / -1;
+}
+.tiantian-drop-zone {
+  padding: 12px;
+  border: 1px dashed #5eead4;
+  border-radius: 9px;
+  background: #f0fdfa;
+}
+.target-account-fields {
+  display: grid;
+  gap: 10px;
+}
+.target-account-fields .select {
+  width: 100%;
+}
+.import-progress {
+  margin: 0;
+  color: var(--teal-dark);
+  font-size: 10px;
+}
+.collector-help {
+  color: var(--slate-600);
+  font-size: 10px;
+}
+.collector-help summary {
+  color: var(--teal-dark);
+  cursor: pointer;
+  font-weight: 650;
+}
+.collector-help p {
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+.field-stack {
+  display: grid;
+  gap: 6px;
+  color: var(--slate-700);
+  font-size: 11px;
+  font-weight: 600;
+}
+.field-stack input {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--slate-200);
+  border-radius: 7px;
+  color: var(--navy);
+  background: white;
+}
+.field-stack small {
+  color: var(--slate-500);
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.tiantian-package-form .form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.tiantian-history .panel-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.import-history-list {
+  display: grid !important;
+  gap: 6px !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+.import-history-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--slate-200);
+  border-radius: 7px;
+  color: var(--navy);
+  background: white;
+  text-align: left;
+}
+.import-history-list button:hover {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+.import-history-list button span {
+  white-space: nowrap;
+}
+.tiantian-preview {
+  padding: 18px;
+}
+.import-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.import-summary-grid span {
+  padding: 10px;
+  border: 1px solid var(--slate-200);
+  border-radius: 8px;
+  color: var(--slate-600);
+  background: var(--slate-50);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+.import-tab-list {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--slate-200);
+}
+.import-tab-list button {
+  padding: 9px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--slate-500);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+.import-tab-list button[aria-selected="true"] {
+  border-bottom-color: var(--teal);
+  color: var(--teal-dark);
+}
+.import-position-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+.import-position-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto minmax(160px, auto) minmax(
+      220px,
+      1fr
+    );
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--slate-200);
+  border-radius: 8px;
+  background: white;
+}
+.import-position-row > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+.import-position-row > div:first-child small {
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.import-position-values {
+  display: grid;
+  gap: 3px;
+  color: var(--slate-600);
+  font-size: 10px;
+  text-align: right;
+}
+.import-status,
+.metric-status {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.import-status {
+  align-items: center;
+  gap: 4px;
+}
+.status-new,
+.status-unchanged,
+.metric-status.ready {
+  color: #047857;
+  background: #d1fae5;
+}
+.status-changed,
+.metric-status.partial,
+.metric-status.pending {
+  color: #9a3412;
+  background: #ffedd5;
+}
+.status-closed,
+.status-conflict,
+.metric-status.conflict {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+.compact-field input {
+  min-height: 32px;
+  padding: 5px 7px;
+}
+.import-tab-panel {
+  min-height: 160px;
+  padding: 16px 4px;
+  color: var(--slate-600);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.import-tab-panel small {
+  color: var(--slate-500);
+}
+.import-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9a3412;
+}
+.tiantian-confirm-step {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 12px 18px;
+  border-top: 1px solid var(--slate-200);
+  background: white;
+}
+.tiantian-confirm-step .dialog-actions {
+  margin-top: 8px;
+}
+.danger-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 650;
+}
+.confirmation-boundary {
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  color: var(--slate-600);
+  background: var(--slate-50);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.confirmation-boundary strong {
+  color: var(--navy);
+  font-size: 10px;
+}
+.confirmation-boundary ul {
+  margin: 5px 0 0;
+  padding-left: 18px;
+}
+.review-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--slate-700);
+  font-size: 11px;
+  font-weight: 650;
+}
+.tiantian-readonly {
+  min-height: 214px;
+}
+.import-result-step {
+  min-height: 280px;
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 24px;
+  color: #047857;
+}
+.import-result-step > div {
+  max-width: 600px;
+  color: var(--slate-600);
+}
+.import-result-step h3 {
+  margin: 1px 0 8px;
+  color: var(--navy);
+}
+.import-metrics-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9a3412;
+}
+
+/* 场外基金持有区间：独立于账本收益，缺值保留为待计算/不完整。 */
+.fund-range-row > td {
+  padding: 0 12px 9px !important;
+  border-top: 0 !important;
+  background: #fbfefd;
+}
+.fund-range-compact,
+.fund-range-metrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.fund-range-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--slate-600);
+  background: transparent;
+}
+.fund-range-toggle:hover {
+  color: var(--teal-dark);
+  background: #f0fdfa;
+}
+.fund-range-toggle strong {
+  color: var(--teal-dark);
+}
+.fund-range-toggle svg {
+  transition: transform 150ms ease;
+}
+.fund-range-toggle svg.expanded {
+  transform: rotate(180deg);
+}
+.fund-range-detail {
+  flex: 1 0 100%;
+  padding: 11px 12px;
+  border: 1px solid #ccfbf1;
+  border-radius: 8px;
+  background: white;
+}
+.fund-range-detail dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.fund-range-detail dl > div {
+  display: grid;
+  gap: 4px;
+}
+.fund-range-detail dt {
+  color: var(--slate-500);
+}
+.fund-range-detail dd {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--navy);
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 10px;
+}
+.fund-range-detail dd small {
+  color: var(--slate-500);
+  font-size: 8px;
+}
+.metric-quality-reasons {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #9a3412;
+}
+.metric-caveat {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--slate-100);
+  color: var(--slate-500);
+  line-height: 1.5;
+}
 @media (max-width: 950px) {
+  .tiantian-import-workflow {
+    grid-template-columns: 1fr;
+  }
+  .tiantian-package-form {
+    grid-template-columns: 1fr;
+  }
+  .import-position-row {
+    grid-template-columns: minmax(150px, 1fr) auto;
+  }
+  .import-position-values,
+  .import-position-row .compact-field {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
   .onboarding-layout {
     grid-template-columns: 1fr;
   }
@@ -3055,6 +3460,18 @@ button:disabled {
   }
 }
 @media (max-width: 650px) {
+  .import-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .import-position-row {
+    grid-template-columns: 1fr;
+  }
+  .import-position-row > * {
+    grid-column: 1 !important;
+  }
+  .fund-range-detail dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .onboarding-aside,
   .batch-stats {
     grid-template-columns: 1fr;
@@ -3083,7 +3500,9 @@ button:disabled {
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 20px rgb(13 148 136 / 30%);
-  transition: transform 150ms ease, background 150ms ease;
+  transition:
+    transform 150ms ease,
+    background 150ms ease;
 }
 .chat-fab:hover {
   transform: scale(1.08);
@@ -3240,8 +3659,12 @@ button:disabled {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .spin {
   animation: spin 1s linear infinite;
@@ -3283,7 +3706,9 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 150ms ease, opacity 150ms ease;
+  transition:
+    background 150ms ease,
+    opacity 150ms ease;
 }
 .chat-send:hover:not(:disabled) {
   background: var(--teal-dark);
@@ -3582,9 +4007,18 @@ button:disabled {
   padding: 1px 8px;
   border-radius: 999px;
 }
-.risk-high { background: #fdecec; color: #c53030; }
-.risk-mid  { background: #fff7e6; color: #b7791f; }
-.risk-low  { background: #e8f7ef; color: #1a7f4e; }
+.risk-high {
+  background: #fdecec;
+  color: #c53030;
+}
+.risk-mid {
+  background: #fff7e6;
+  color: #b7791f;
+}
+.risk-low {
+  background: #e8f7ef;
+  color: #1a7f4e;
+}
 .advice-disclaimer {
   display: flex;
   gap: 6px;

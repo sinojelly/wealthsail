@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -320,7 +321,7 @@ async def persist_preview(
     idempotency_key: str,
     account_display_name: str,
     plan: PreviewPlan,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     batch_id = str(await conn.fetchval("SELECT gen_random_uuid()"))
     effective_binding_id = binding_id
     if effective_binding_id is None:
@@ -351,10 +352,19 @@ async def persist_preview(
         package.manifest.positions_as_of,
         json.dumps(
             {
-                "positionCounts": plan.summary,
+                "positionCounts": {"total": len(plan.items), **plan.summary},
                 "history": {
                     "importable": plan.history_importable,
                     "duplicated": plan.history_duplicated,
+                    "reviewRequired": len(package.review_required),
+                },
+                "excluded": {
+                    "cashManagement": package.excluded_summary.cash_management,
+                    "nonPosting": package.excluded_summary.non_posting,
+                },
+                "sourceWindow": {
+                    "start": package.manifest.source_window_start.isoformat(),
+                    "end": package.manifest.source_window_end.isoformat(),
                 },
                 "warnings": list(plan.warnings),
             },
@@ -380,8 +390,10 @@ async def persist_preview(
             batch_id,
         )
 
+    item_ids = [str(uuid.uuid4()) for _item in plan.items]
     item_rows = [
         (
+            item_ids[index - 1],
             tenant_id,
             batch_id,
             item.instrument_id,
@@ -411,14 +423,14 @@ async def persist_preview(
     await conn.executemany(
         """
         INSERT INTO ledger.portfolio_import_items (
-            tenant_id, batch_id, item_type, instrument_id, quantity, unit_cost,
+            id, tenant_id, batch_id, item_type, instrument_id, quantity, unit_cost,
             trade_date, source_row, validation_status, validation_errors,
             external_record_id, source_symbol, source_market_value, source_nav,
             source_nav_date, comparison_status, candidate_holding_started_on,
             holding_start_status, source_payload
         ) VALUES (
-            $1, $2, 'POSITION_SNAPSHOT', $3, $4, $5, $6, $7, $8,
-            $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb
+            $1, $2, $3, 'POSITION_SNAPSHOT', $4, $5, $6, $7, $8, $9,
+            $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb
         )
         """,
         item_rows,
@@ -450,7 +462,11 @@ async def persist_preview(
         """,
         source_rows,
     )
-    return {"batch_id": batch_id, "binding_id": effective_binding_id}
+    return {
+        "batch_id": batch_id,
+        "binding_id": effective_binding_id,
+        "item_ids": item_ids,
+    }
 
 
 async def write_ledger_effects(
@@ -1003,12 +1019,38 @@ async def get_import_batch(
                b.created_at, b.updated_at, binding.id AS binding_id,
                binding.status AS binding_status,
                binding.display_name AS binding_display_name,
-               account.id AS account_id, account.name AS account_name
+               account.id AS account_id, account.name AS account_name,
+               data_job.status AS data_job_status,
+               metrics.metric_statuses
           FROM ledger.portfolio_import_batches b
           JOIN identity.accounts account
             ON account.tenant_id = b.tenant_id AND account.id = b.account_id
           LEFT JOIN ledger.portfolio_source_bindings binding
             ON binding.tenant_id = b.tenant_id AND binding.id = b.source_binding_id
+          LEFT JOIN LATERAL (
+              SELECT run.status
+                FROM workflow.job_runs run
+               WHERE run.tenant_id = b.tenant_id
+                 AND run.job_type IN (
+                     'FUND_NAV_BACKFILL', 'POSITION_PERIOD_METRICS_REBUILD'
+                 )
+                 AND run.payload->>'batchId' = b.id::text
+               ORDER BY run.available_at DESC, run.id DESC
+               LIMIT 1
+          ) data_job ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT array_agg(DISTINCT latest.calculation_status)
+                         AS metric_statuses
+                FROM (
+                    SELECT DISTINCT ON (metric.instrument_id)
+                           metric.instrument_id, metric.calculation_status
+                      FROM ledger.position_period_metrics metric
+                     WHERE metric.tenant_id = b.tenant_id
+                       AND metric.account_id = b.account_id
+                       AND metric.source_binding_id = b.source_binding_id
+                     ORDER BY metric.instrument_id, metric.as_of DESC
+                ) latest
+          ) metrics ON TRUE
          WHERE b.tenant_id = $1 AND b.id = $2
         """,
         tenant_id,
@@ -1035,10 +1077,32 @@ async def get_import_batch(
     )
     persisted_summary = _json_object(batch["preview_summary"])
     position_counts = persisted_summary.get("positionCounts", persisted_summary)
+    if "total" not in position_counts:
+        position_counts = {"total": len(positions), **position_counts}
     history_summary = persisted_summary.get(
         "history", {"importable": 0, "duplicated": 0}
     )
+    excluded_summary = persisted_summary.get(
+        "excluded", {"cashManagement": 0, "nonPosting": 0}
+    )
+    source_window = persisted_summary.get("sourceWindow", {})
     warnings = persisted_summary.get("warnings", [])
+    metrics_status: str | None = None
+    if batch["status"] == "CONFIRMED":
+        job_status = batch["data_job_status"]
+        statuses = set(batch["metric_statuses"] or [])
+        if job_status in {"PENDING", "RUNNING"}:
+            metrics_status = "PENDING"
+        elif job_status == "FAILED":
+            metrics_status = "FAILED"
+        elif "CONFLICT" in statuses:
+            metrics_status = "CONFLICT"
+        elif "PARTIAL" in statuses:
+            metrics_status = "PARTIAL"
+        elif statuses == {"READY"}:
+            metrics_status = "READY"
+        else:
+            metrics_status = "PENDING"
     return {
         "batchId": str(batch["batch_id"]),
         "status": str(batch["status"]),
@@ -1048,14 +1112,19 @@ async def get_import_batch(
         "package": {
             "schemaVersion": batch["package_schema_version"],
             "parserVersion": batch["parser_version"],
+            "positionsAsOf": batch["source_as_of"],
+            "sourceWindowStart": source_window.get("start"),
+            "sourceWindowEnd": source_window.get("end"),
         },
         "summary": position_counts,
         "historySummary": history_summary,
+        "excludedSummary": excluded_summary,
         "warnings": warnings,
         "validationStatus": str(batch["validation_status"]),
         "blockingErrors": _json_array(batch["validation_errors"]),
         "canConfirm": batch["status"] == "DRAFT"
         and batch["validation_status"] == "VALID",
+        "metricsStatus": metrics_status,
         "sourceBinding": {
             "bindingId": str(batch["binding_id"]),
             "status": str(batch["binding_status"]),
@@ -1150,7 +1219,13 @@ async def retry_position_metrics(
     batch_id: str,
     idempotency_key: str,
 ) -> dict[str, Any]:
-    """Create a durable metrics retry; this command never touches the ledger."""
+    """Retry official NAV backfill plus materialization without touching the ledger.
+
+    A terminal first attempt may have failed before any NAV was persisted.  A
+    rebuild-only retry would then materialize PENDING from an empty cache and
+    falsely complete, so the explicit user retry deliberately starts at the
+    provider backfill boundary.
+    """
     batch = await conn.fetchrow(
         """
         SELECT id, account_id, source_binding_id, source_as_of
@@ -1170,7 +1245,7 @@ async def retry_position_metrics(
         INSERT INTO workflow.job_runs (
             tenant_id, job_key, status, job_type, payload, available_at
         ) VALUES (
-            $1, $2, 'PENDING', 'POSITION_PERIOD_METRICS_REBUILD', $3::jsonb, now()
+            $1, $2, 'PENDING', 'FUND_NAV_BACKFILL', $3::jsonb, now()
         )
         ON CONFLICT (tenant_id, job_key) DO NOTHING
         RETURNING id

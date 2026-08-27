@@ -301,7 +301,13 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
         binding_status=None,
         binding_account_id=None,
     )
-    persist = AsyncMock(return_value={"batch_id": "batch-1", "binding_id": "binding-1"})
+    persist = AsyncMock(
+        return_value={
+            "batch_id": "batch-1",
+            "binding_id": "binding-1",
+            "item_ids": ["item-1"],
+        }
+    )
 
     with (
         patch("backend.portfolio.imports.service.parse_tiantian_package", return_value=package),
@@ -336,8 +342,18 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
 
     assert result["batchId"] == "batch-1"
     assert result["status"] == "DRAFT"
+    assert result["sourceAsOf"] == "2026-08-28T08:00:00+08:00"
+    assert result["summary"]["total"] == 1
     assert result["summary"]["new"] == 1
+    assert result["package"]["sourceWindowStart"] == "2020-01-01"
+    assert result["package"]["sourceWindowEnd"] == "2026-08-28"
+    assert result["excludedSummary"] == {
+        "cashManagement": 10,
+        "nonPosting": 2,
+    }
+    assert result["historySummary"]["reviewRequired"] == 0
     assert result["canConfirm"] is True
+    assert result["positions"][0]["itemId"] == "item-1"
     persist.assert_awaited_once()
     persisted_plan = persist.await_args.kwargs["plan"]
     assert persisted_plan.items[0].comparison_status == "NEW"

@@ -51,6 +51,8 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.56",
     quality: "FRESH",
     accountId: "acc-1",
+    holdingPeriod: null,
+    rangeMetrics: null,
   },
   {
     symbol: "510300",
@@ -65,14 +67,62 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.28",
     quality: "FRESH",
     accountId: "acc-1",
+    holdingPeriod: null,
+    rangeMetrics: null,
+  },
+  {
+    symbol: "012349",
+    name: "易方达高质量严选三年持有",
+    type: "场外基金",
+    quantity: "10000.00",
+    avgCost: "1.3100",
+    price: "1.4400",
+    marketValue: "14400.00",
+    weight: "0.75",
+    pnl: "1300.00",
+    pnlRate: "9.92",
+    quality: "FRESH",
+    accountId: "acc-fund-1",
+    holdingPeriod: {
+      startedOn: "2024-03-16",
+      days: 895,
+      method: "TRANSACTION_RECONCILED",
+    },
+    rangeMetrics: {
+      high: "1.8000",
+      highDate: "2025-10-08",
+      low: "1.2000",
+      lowDate: "2024-04-19",
+      fromHighPct: "-20.0000",
+      fromLowPct: "20.0000",
+      rangePositionPct: "40.0000",
+      status: "READY",
+      qualityReasons: [],
+      asOf: "2026-08-27",
+    },
   },
 ];
 
 export const navTrendFixture: NavTrend = {
   points: [
-    { date: "2026-07-14", totalNav: "1768000.00", dailyPnl: "8000.00", cashBalance: "201382.00" },
-    { date: "2026-07-15", totalNav: "1776000.00", dailyPnl: "12384.00", cashBalance: "201382.00" },
-    { date: "2026-08-23", totalNav: "1921840.00", dailyPnl: "12384.00", cashBalance: "201382.00" },
+    {
+      date: "2026-07-14",
+      totalNav: "1768000.00",
+      dailyPnl: "8000.00",
+      cashBalance: "201382.00",
+    },
+    {
+      date: "2026-07-15",
+      totalNav: "1776000.00",
+      dailyPnl: "12384.00",
+      cashBalance: "201382.00",
+    },
+    {
+      date: "2026-08-23",
+      totalNav: "1921840.00",
+      dailyPnl: "12384.00",
+      cashBalance: "201382.00",
+    },
   ],
   benchmark: null,
   currency: "CNY",
@@ -306,7 +356,11 @@ export const opsJobsFixture: OpsJobsResponse = {
 
 export const opsFreshnessFixture: FreshnessResponse = {
   nav: { latestAsOf: "2026-08-23T16:00:08+08:00", freshCount: 1, total: 1 },
-  positions: { latestAsOf: "2026-08-23T16:00:08+08:00", freshCount: 6, total: 6 },
+  positions: {
+    latestAsOf: "2026-08-23T16:00:08+08:00",
+    freshCount: 6,
+    total: 6,
+  },
 };
 
 export const opsOutboxFixture: OutboxResponse = {

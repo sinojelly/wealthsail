@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import PageHeader from "../../components/layout/PageHeader";
 import BatchPreviewModal from "./components/BatchPreviewModal";
 import ImportBatchForm from "./components/ImportBatchForm";
+import TiantianImportWizard from "./components/TiantianImportWizard";
 import { parseImportRows, type ImportRow } from "./import-parser";
 
 export default function OnboardingPage() {
@@ -22,8 +23,8 @@ export default function OnboardingPage() {
   return (
     <>
       <PageHeader
-        title="初始化导入"
-        description="把股票、场内基金和场外基金持仓安全地导入租户事实账本"
+        title="持仓导入与更新"
+        description="导入股票、场内基金和场外基金；所有外部快照先预览、确认，再进入租户事实账本"
         actions={
           <Link className="btn-secondary" to="/dashboard">
             <ArrowLeft size={14} />
@@ -31,6 +32,7 @@ export default function OnboardingPage() {
           </Link>
         }
       />
+      <TiantianImportWizard />
       <div className="onboarding-layout">
         <ImportBatchForm onPreview={preview} />
         <aside className="onboarding-aside">
