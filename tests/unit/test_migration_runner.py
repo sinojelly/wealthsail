@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from scripts.migrate import discover_migrations, load_migrations, safe_target_name
+from scripts.migrate import (
+    discover_migrations,
+    is_loopback_database,
+    load_migrations,
+    safe_target_name,
+)
 
 
 def test_production_migration_discovery_never_includes_dev_seeds() -> None:
@@ -35,3 +40,13 @@ def test_safe_target_name_never_contains_password_or_query_secret() -> None:
     assert target == "db.example:5432/wealthsail"
     assert "secret" not in target
     assert "deploy" not in target
+
+
+def test_loopback_detection_cannot_be_bypassed_with_an_explicit_port() -> None:
+    assert is_loopback_database("postgresql://postgres@127.0.0.1/wealthsail")
+    assert is_loopback_database("postgresql://postgres@127.0.0.1:55432/wealthsail")
+    assert is_loopback_database("postgresql://postgres@localhost:5432/wealthsail")
+    assert is_loopback_database("postgresql://postgres@[::1]:5432/wealthsail")
+    assert not is_loopback_database(
+        "postgresql://deploy@db.example:5432/wealthsail"
+    )

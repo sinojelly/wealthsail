@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import ipaddress
 import os
 import re
 from dataclasses import dataclass
@@ -51,6 +52,22 @@ def safe_target_name(dsn: str) -> str:
     if parsed.port:
         host = f"{host}:{parsed.port}"
     return f"{host}/{parsed.path.strip('/')}"
+
+
+def is_loopback_database(dsn: str) -> bool:
+    """Return whether the DSN hostname is an explicit loopback target.
+
+    This check is based on the parsed hostname rather than the redacted display
+    string so adding a port cannot bypass the production migration guard.
+    """
+
+    hostname = (urlsplit(dsn).hostname or "").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def load_migrations(directory: Path) -> list[Migration]:
@@ -481,7 +498,7 @@ def main() -> None:
         raise SystemExit(
             f"target confirmation mismatch; expected --confirm-target {target}"
         )
-    if args.environment == "production" and target.startswith(("localhost/", "127.0.0.1/")):
+    if args.environment == "production" and is_loopback_database(dsn):
         raise SystemExit("production environment cannot target a loopback database")
     print(f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}")
     asyncio.run(migrate(dsn, load_migrations(ROOT / "migrations"), dry_run=args.dry_run))

@@ -5,7 +5,9 @@ import type {
 } from "../../../api/types";
 
 interface Props {
-  result: TiantianImportConfirmation;
+  result: Omit<TiantianImportConfirmation, "metricsStatus"> & {
+    metricsStatus: NonNullable<TiantianImportDetail["metricsStatus"]>;
+  };
   restored?: TiantianImportDetail;
   retrying: boolean;
   onRetry: () => void;

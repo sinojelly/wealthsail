@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -26,8 +26,9 @@ def test_sentiment_endpoint_rejects_anonymous_provider_trigger() -> None:
 
 @pytest.mark.asyncio
 async def test_sentiment_read_model_never_calls_a_provider() -> None:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
     row = {
-        "trade_date": date(2026, 8, 27),
+        "trade_date": now.date(),
         "total_up": 3000,
         "total_down": 1900,
         "total_flat": 100,
@@ -37,12 +38,12 @@ async def test_sentiment_read_model_never_calls_a_provider() -> None:
         "north_flow": None,
         "sentiment_score": Decimal("62.50"),
         "source_name": "AkShare-OpenSource",
-        "source_as_of": datetime(2026, 8, 27, 14, 31, tzinfo=ZoneInfo("Asia/Shanghai")),
-        "retrieved_at": datetime(2026, 8, 27, 14, 31, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "source_as_of": now,
+        "retrieved_at": now,
         "quality_status": "FRESH",
         "coverage_pct": Decimal("99.00"),
         "method_version": "sentiment/v2",
-        "updated_at": datetime(2026, 8, 27, 14, 31, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "updated_at": now,
     }
     conn = object()
     with (
@@ -65,8 +66,10 @@ async def test_sentiment_read_model_never_calls_a_provider() -> None:
 
 @pytest.mark.asyncio
 async def test_previous_trade_date_sentiment_cannot_remain_fresh() -> None:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    previous_day = now - timedelta(days=1)
     row = {
-        "trade_date": date(2026, 8, 26),
+        "trade_date": previous_day.date(),
         "total_up": 1,
         "total_down": 1,
         "total_flat": 0,
@@ -76,12 +79,12 @@ async def test_previous_trade_date_sentiment_cannot_remain_fresh() -> None:
         "north_flow": None,
         "sentiment_score": Decimal("50"),
         "source_name": "AkShare-OpenSource",
-        "source_as_of": datetime(2026, 8, 26, 15, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
-        "retrieved_at": datetime(2026, 8, 26, 15, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "source_as_of": previous_day,
+        "retrieved_at": previous_day,
         "quality_status": "FRESH",
         "coverage_pct": Decimal("99"),
         "method_version": "sentiment/v2",
-        "updated_at": datetime(2026, 8, 26, 15, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "updated_at": previous_day,
     }
     with patch(
         "backend.market.service.repository.get_latest_market_sentiment",

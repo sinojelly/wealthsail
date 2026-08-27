@@ -155,7 +155,6 @@ export function useTiantianImports(): UseQueryResult<TiantianImportList> {
 
 export function useTiantianImport(
   batchId: string | null,
-  pollMetrics = false,
 ): UseQueryResult<TiantianImportDetail> {
   const session = usePrivateSession();
   return useQuery({
@@ -167,7 +166,13 @@ export function useTiantianImport(
     ),
     queryFn: () => portfolioApi.getTiantianImport(batchId as string),
     enabled: Boolean(batchId),
-    refetchInterval: pollMetrics ? 2_000 : false,
+    refetchInterval: (query) => {
+      const detail = query.state.data;
+      return detail?.status === "CONFIRMED" &&
+        detail.metricsStatus === "PENDING"
+        ? 2_000
+        : false;
+    },
   });
 }
 

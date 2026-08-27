@@ -176,7 +176,7 @@ it("restores a server-side draft from import history instead of relying on brows
   expect(
     await screen.findByRole("dialog", { name: "导入或更新天天基金持仓" }),
   ).toBeInTheDocument();
-  expect(mocks.detailHook).toHaveBeenCalledWith("batch-1", false);
+  expect(mocks.detailHook).toHaveBeenCalledWith("batch-1", undefined);
 });
 
 it("renders complete preview counts, three tabs and blocks conflicts", async () => {

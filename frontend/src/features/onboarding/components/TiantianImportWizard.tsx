@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { History } from "lucide-react";
 import {
   useCancelTiantianImport,
@@ -60,14 +60,8 @@ export default function TiantianImportWizard() {
   const cancelMutation = useCancelTiantianImport();
   const retryMutation = useRetryTiantianMetrics();
   const history = useTiantianImports();
-  const restored = useTiantianImport(
-    selectedBatchId,
-    Boolean(
-      selectedBatchId &&
-      detail?.status === "CONFIRMED" &&
-      detail.metricsStatus === "PENDING",
-    ),
-  );
+  const restored = useTiantianImport(selectedBatchId);
+  const currentDetail = newestDetail(detail, restored.data ?? null);
   const canWrite =
     !session || ["OWNER", "ADMIN", "EDITOR"].includes(session.role);
   const existingAccounts = Array.from(
@@ -78,14 +72,6 @@ export default function TiantianImportWizard() {
       ]),
     ).values(),
   );
-
-  useEffect(() => {
-    if (restored.data) {
-      setDetail(restored.data);
-      setError(null);
-      setStale(false);
-    }
-  }, [restored.data]);
 
   async function previewPackage() {
     if (!file || (!accountId && !accountName.trim())) return;
@@ -121,7 +107,7 @@ export default function TiantianImportWizard() {
   }
 
   async function confirmImport() {
-    if (!detail || confirmationInFlight.current) return;
+    if (!currentDetail || confirmationInFlight.current) return;
     confirmationInFlight.current = true;
     setError(null);
     setStale(false);
@@ -133,18 +119,22 @@ export default function TiantianImportWizard() {
         confirmEmpty,
       };
       const confirmation = await confirmMutation.mutateAsync({
-        batchId: detail.batchId,
-        version: detail.version,
+        batchId: currentDetail.batchId,
+        version: currentDetail.version,
         payload,
         idempotencyKey: stableCommandKey(
           confirmCommand,
-          JSON.stringify([detail.batchId, detail.version, payload]),
+          JSON.stringify([
+            currentDetail.batchId,
+            currentDetail.version,
+            payload,
+          ]),
           "tiantian-confirm",
         ),
       });
       setResult(confirmation);
       setDetail({
-        ...detail,
+        ...currentDetail,
         status: "CONFIRMED",
         version: confirmation.version,
         metricsStatus: confirmation.metricsStatus,
@@ -162,12 +152,12 @@ export default function TiantianImportWizard() {
   }
 
   async function cancelDraft() {
-    if (!detail) return;
+    if (!currentDetail) return;
     setError(null);
     try {
       await cancelMutation.mutateAsync({
-        batchId: detail.batchId,
-        version: detail.version,
+        batchId: currentDetail.batchId,
+        version: currentDetail.version,
         idempotencyKey: commandKey("tiantian-cancel"),
       });
       setDetail(null);
@@ -181,7 +171,7 @@ export default function TiantianImportWizard() {
   async function retryMetrics() {
     const batchId =
       result?.batchId ??
-      (detail?.status === "CONFIRMED" ? detail.batchId : null);
+      (currentDetail?.status === "CONFIRMED" ? currentDetail.batchId : null);
     if (!batchId) return;
     try {
       await retryMutation.mutateAsync({
@@ -204,18 +194,18 @@ export default function TiantianImportWizard() {
 
   const displayedResult =
     result ??
-    (detail?.status === "CONFIRMED"
+    (currentDetail?.status === "CONFIRMED"
       ? {
-          batchId: detail.batchId,
+          batchId: currentDetail.batchId,
           status: "CONFIRMED" as const,
-          version: detail.version,
-          metricsStatus: "PENDING" as const,
+          version: currentDetail.version,
+          metricsStatus: currentDetail.metricsStatus ?? ("PENDING" as const),
           positionCount: Math.max(
             0,
-            detail.summary.total - detail.summary.closed,
+            currentDetail.summary.total - currentDetail.summary.closed,
           ),
-          historyImported: detail.historySummary.importable,
-          historyDuplicated: detail.historySummary.duplicated,
+          historyImported: currentDetail.historySummary.importable,
+          historyDuplicated: currentDetail.historySummary.duplicated,
         }
       : null);
 
@@ -228,7 +218,7 @@ export default function TiantianImportWizard() {
           accountName={accountName}
           existingAccounts={existingAccounts}
           pending={previewMutation.isPending}
-          error={!detail ? error : null}
+          error={!currentDetail ? error : null}
           onFile={(nextFile) => {
             setFile(nextFile);
             previewCommand.current = null;
@@ -293,6 +283,8 @@ export default function TiantianImportWizard() {
                   setResult(null);
                   setDetail(null);
                   setReviewed(false);
+                  setError(null);
+                  setStale(false);
                   confirmCommand.current = null;
                 }}
               >
@@ -306,27 +298,27 @@ export default function TiantianImportWizard() {
         </div>
       </section>
       <Dialog
-        open={Boolean(detail)}
+        open={Boolean(currentDetail)}
         title="导入或更新天天基金持仓"
         size="xl"
         onClose={closeDialog}
       >
-        {detail && !displayedResult && detail.status === "DRAFT" ? (
+        {currentDetail &&
+        !displayedResult &&
+        currentDetail.status === "DRAFT" ? (
           <>
             <ImportPreviewStep
-              detail={detail}
+              detail={currentDetail}
               decisions={decisions}
               onDecision={(itemId, value) =>
                 setDecisions((current) => ({ ...current, [itemId]: value }))
               }
             />
             <ImportConfirmStep
-              detail={detail}
+              detail={currentDetail}
               confirmEmpty={confirmEmpty}
               reviewed={reviewed}
-              pending={
-                confirmMutation.isPending || confirmationInFlight.current
-              }
+              pending={confirmMutation.isPending}
               stale={stale}
               error={error}
               onConfirmEmpty={setConfirmEmpty}
@@ -337,7 +329,7 @@ export default function TiantianImportWizard() {
             />
           </>
         ) : null}
-        {detail && displayedResult ? (
+        {currentDetail && displayedResult ? (
           <ImportResultStep
             result={displayedResult}
             restored={restored.data}
@@ -348,6 +340,20 @@ export default function TiantianImportWizard() {
       </Dialog>
     </div>
   );
+}
+
+function newestDetail(
+  local: TiantianImportDetail | null,
+  remote: TiantianImportDetail | null,
+): TiantianImportDetail | null {
+  if (!local) return remote;
+  if (!remote || remote.batchId !== local.batchId) return local;
+  if (remote.version !== local.version) {
+    return remote.version > local.version ? remote : local;
+  }
+  // The Worker can update metric status without changing the command version.
+  // Prefer the query result for a terminal batch so polling becomes visible.
+  return remote.status === "CONFIRMED" ? remote : local;
 }
 
 function stableCommandKey(
