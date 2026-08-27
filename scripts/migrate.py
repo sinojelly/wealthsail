@@ -140,6 +140,195 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if projection_columns != {"known_value"}:
         raise RuntimeError("account NAV projection uses an incompatible known-value column")
 
+    tiantian_columns = {
+        "portfolio_source_bindings": {
+            "tenant_id",
+            "account_id",
+            "provider_code",
+            "external_account_key",
+            "status",
+            "created_by_batch_id",
+        },
+        "portfolio_import_source_records": {
+            "tenant_id",
+            "batch_id",
+            "record_type",
+            "external_record_id",
+            "normalized_payload",
+            "content_hash",
+        },
+        "portfolio_source_transactions": {
+            "tenant_id",
+            "source_binding_id",
+            "source_import_batch_id",
+            "external_transaction_id",
+            "business_type",
+            "source_payload",
+        },
+        "position_period_metrics": {
+            "tenant_id",
+            "account_id",
+            "instrument_id",
+            "source_binding_id",
+            "holding_started_on",
+            "period_high_nav",
+            "period_low_nav",
+            "range_position_pct",
+            "calculation_status",
+        },
+    }
+    tiantian_rows = await conn.fetch(
+        """
+        SELECT table_name, column_name
+          FROM information_schema.columns
+         WHERE table_schema='ledger'
+           AND table_name = ANY($1::text[])
+        """,
+        list(tiantian_columns),
+    )
+    actual_columns: dict[str, set[str]] = {
+        table_name: set() for table_name in tiantian_columns
+    }
+    for row in tiantian_rows:
+        actual_columns[row["table_name"]].add(row["column_name"])
+    missing_columns = {
+        table_name: sorted(required - actual_columns[table_name])
+        for table_name, required in tiantian_columns.items()
+        if required - actual_columns[table_name]
+    }
+    if missing_columns:
+        raise RuntimeError(f"Tiantian import schema columns missing: {missing_columns}")
+
+    rls_tables = {
+        row["relname"]
+        for row in await conn.fetch(
+            """
+            SELECT c.relname
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname='ledger'
+               AND c.relname = ANY($1::text[])
+               AND c.relrowsecurity
+               AND c.relforcerowsecurity
+            """,
+            list(tiantian_columns),
+        )
+    }
+    if rls_tables != set(tiantian_columns):
+        raise RuntimeError(
+            "Tiantian import tables missing ENABLE/FORCE RLS: "
+            + ", ".join(sorted(set(tiantian_columns) - rls_tables))
+        )
+
+    contract_definitions = "\n".join(
+        row["definition"]
+        for row in await conn.fetch(
+            """
+            SELECT pg_get_constraintdef(c.oid) AS definition
+              FROM pg_constraint c
+              JOIN pg_class t ON t.oid = c.conrelid
+              JOIN pg_namespace n ON n.oid = t.relnamespace
+             WHERE n.nspname IN ('ledger','workflow')
+               AND t.relname IN (
+                   'portfolio_import_batches','portfolio_import_items',
+                   'portfolio_source_bindings','portfolio_import_source_records',
+                   'portfolio_source_transactions','position_period_metrics','job_runs'
+               )
+            """
+        )
+    )
+    for token in (
+        "TIANTIAN_FUND_ZIP",
+        "POSITION_SNAPSHOT",
+        "FUND_NAV_BACKFILL",
+        "POSITION_PERIOD_METRICS_REBUILD",
+    ):
+        if token not in contract_definitions:
+            raise RuntimeError(f"Tiantian import database constraint missing token: {token}")
+
+    required_triggers = {
+        "protect_portfolio_source_bindings_trigger",
+        "protect_portfolio_import_source_records_trigger",
+        "protect_portfolio_source_transactions_trigger",
+        "protect_portfolio_import_batches_trigger",
+    }
+    actual_triggers = {
+        row["tgname"]
+        for row in await conn.fetch(
+            """
+            SELECT tgname
+              FROM pg_trigger
+             WHERE NOT tgisinternal
+               AND tgname = ANY($1::text[])
+            """,
+            list(required_triggers),
+        )
+    }
+    if actual_triggers != required_triggers:
+        raise RuntimeError(
+            "Tiantian import integrity triggers missing: "
+            + ", ".join(sorted(required_triggers - actual_triggers))
+        )
+
+    tiantian_privileges = {
+        "api_binding_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'ledger.portfolio_source_bindings','SELECT')"
+        ),
+        "api_binding_insert": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'ledger.portfolio_source_bindings','INSERT')"
+        ),
+        "api_source_record_insert": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'ledger.portfolio_import_source_records','INSERT')"
+        ),
+        "api_source_transaction_insert": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'ledger.portfolio_source_transactions','INSERT')"
+        ),
+        "api_metrics_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'ledger.position_period_metrics','SELECT')"
+        ),
+        "worker_source_transaction_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.portfolio_source_transactions','SELECT')"
+        ),
+        "worker_metrics_insert": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.position_period_metrics','INSERT')"
+        ),
+        "worker_metrics_update": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'ledger.position_period_metrics','UPDATE')"
+        ),
+    }
+    missing_tiantian_privileges = [
+        name for name, allowed in tiantian_privileges.items() if not allowed
+    ]
+    if missing_tiantian_privileges:
+        raise RuntimeError(
+            "Tiantian import runtime privileges missing: "
+            + ", ".join(missing_tiantian_privileges)
+        )
+
+    browser_import_writes = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM information_schema.role_table_grants
+         WHERE grantee='authenticated'
+           AND privilege_type IN ('INSERT','UPDATE','DELETE')
+           AND table_schema='ledger'
+           AND table_name IN (
+               'portfolio_source_bindings','portfolio_import_source_records',
+               'portfolio_source_transactions','position_period_metrics'
+           )
+        """
+    )
+    if browser_import_writes:
+        raise RuntimeError("authenticated has direct writes to Tiantian import tables")
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"
@@ -207,7 +396,10 @@ async def migrate(dsn: str, migrations: list[Migration], *, dry_run: bool) -> No
             print(f"APPLIED {migration.path.name}")
         if not dry_run:
             await _readback(conn)
-            print("READBACK OK: roles, browser grants and demo-user guard")
+            print(
+                "READBACK OK: roles, RLS, runtime grants, Tiantian import schema "
+                "and demo-user guard"
+            )
     finally:
         try:
             await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_KEY)

@@ -23,6 +23,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
+    assert versions[-1] == 21
+    assert migrations[-1].path.name == "021_tiantian_fund_import_and_position_metrics.sql"
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:
