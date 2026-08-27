@@ -46,6 +46,9 @@ def test_migration_extends_batches_items_and_recoverable_jobs(migration_sql: str
         "validation_status",
         "validation_errors",
         "target_account_state_hash",
+        "terminal_command_type",
+        "terminal_idempotency_key",
+        "terminal_content_hash",
         "comparison_status",
         "candidate_holding_started_on",
         "holding_start_status",
@@ -98,6 +101,24 @@ def test_migration_has_tenant_foreign_keys_uniqueness_and_append_only_guards(
 def test_confirmed_tiantian_batch_requires_an_active_binding(migration_sql: str) -> None:
     assert "binding.status = 'ACTIVE'" in migration_sql
     assert "confirmed Tiantian import requires its ACTIVE account binding" in migration_sql
+
+
+def test_terminal_import_commands_are_persisted_for_effect_free_idempotency(
+    migration_sql: str,
+) -> None:
+    assert "portfolio_import_batches_terminal_command_check" in migration_sql
+    assert "uq_import_batches_terminal_idempotency" in migration_sql
+    assert "terminal_command_type IN ('CONFIRM', 'CANCEL')" in migration_sql
+    assert (
+        "GRANT UPDATE (status, confirmed_at, cancelled_at, version, updated_at,\n"
+        "              terminal_command_type, terminal_idempotency_key, terminal_content_hash)"
+        in migration_sql
+    )
+    assert (
+        "GRANT UPDATE (user_holding_started_on, updated_at)\n"
+        "    ON ledger.portfolio_import_items TO wealthsail_api"
+        in migration_sql
+    )
 
 
 def test_migration_grants_only_required_api_and_worker_access(migration_sql: str) -> None:

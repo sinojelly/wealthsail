@@ -65,6 +65,9 @@ ALTER TABLE ledger.portfolio_import_batches
     ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'VALID',
     ADD COLUMN validation_errors JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN target_account_state_hash CHAR(64),
+    ADD COLUMN terminal_command_type TEXT,
+    ADD COLUMN terminal_idempotency_key TEXT,
+    ADD COLUMN terminal_content_hash CHAR(64),
     ADD CONSTRAINT portfolio_import_batches_validation_status_check
         CHECK (validation_status IN ('VALID', 'INVALID', 'NEEDS_REVIEW')),
     ADD CONSTRAINT portfolio_import_batches_validation_errors_check
@@ -75,6 +78,24 @@ ALTER TABLE ledger.portfolio_import_batches
         CHECK (package_content_hash IS NULL OR package_content_hash ~ '^[0-9a-f]{64}$'),
     ADD CONSTRAINT portfolio_import_batches_account_hash_check
         CHECK (target_account_state_hash IS NULL OR target_account_state_hash ~ '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT portfolio_import_batches_terminal_command_check CHECK (
+        source_type <> 'TIANTIAN_FUND_ZIP'
+        OR (status = 'DRAFT'
+            AND terminal_command_type IS NULL
+            AND terminal_idempotency_key IS NULL
+            AND terminal_content_hash IS NULL)
+        OR (status = 'CONFIRMED'
+            AND terminal_command_type = 'CONFIRM'
+            AND terminal_idempotency_key IS NOT NULL
+            AND terminal_content_hash ~ '^[0-9a-f]{64}$')
+        OR (status = 'CANCELLED'
+            AND terminal_command_type = 'CANCEL'
+            AND terminal_idempotency_key IS NOT NULL
+            AND terminal_content_hash ~ '^[0-9a-f]{64}$')
+    ),
+    ADD CONSTRAINT portfolio_import_batches_terminal_command_type_check CHECK (
+        terminal_command_type IS NULL OR terminal_command_type IN ('CONFIRM', 'CANCEL')
+    ),
     ADD CONSTRAINT portfolio_import_batches_tiantian_fields_check CHECK (
         source_type <> 'TIANTIAN_FUND_ZIP'
         OR (
@@ -99,6 +120,11 @@ ALTER TABLE ledger.portfolio_import_batches
 CREATE UNIQUE INDEX uq_import_batches_tiantian_package
     ON ledger.portfolio_import_batches (tenant_id, source_binding_id, package_content_hash)
     WHERE source_type = 'TIANTIAN_FUND_ZIP' AND status <> 'CANCELLED';
+CREATE UNIQUE INDEX uq_import_batches_terminal_idempotency
+    ON ledger.portfolio_import_batches
+       (tenant_id, terminal_command_type, terminal_idempotency_key)
+    WHERE source_type = 'TIANTIAN_FUND_ZIP'
+      AND terminal_idempotency_key IS NOT NULL;
 
 -- 3. A POSITION_SNAPSHOT is an absolute target state, including zero for CLOSED.
 ALTER TABLE ledger.portfolio_import_items
@@ -572,6 +598,11 @@ GRANT SELECT, INSERT, DELETE ON
     ledger.portfolio_source_bindings,
     ledger.portfolio_import_source_records
 TO wealthsail_api;
+GRANT UPDATE (status, confirmed_at, cancelled_at, version, updated_at,
+              terminal_command_type, terminal_idempotency_key, terminal_content_hash)
+    ON ledger.portfolio_import_batches TO wealthsail_api;
+GRANT UPDATE (user_holding_started_on, updated_at)
+    ON ledger.portfolio_import_items TO wealthsail_api;
 GRANT UPDATE (display_name, status, first_imported_at, last_imported_at, updated_at)
     ON ledger.portfolio_source_bindings TO wealthsail_api;
 GRANT SELECT, INSERT ON

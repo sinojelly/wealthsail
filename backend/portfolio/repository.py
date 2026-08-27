@@ -382,6 +382,18 @@ async def confirm_import_batch(
     if batch["status"] != "DRAFT":
         return {"batch_id": batch_id, "status": str(batch["status"])}
 
+    # Serialize every account-level baseline confirmation with source imports.
+    # This makes the target account fact hash meaningful under concurrent writes.
+    await conn.execute(
+        """
+        SELECT pg_advisory_xact_lock(
+            hashtextextended('portfolio-account:' || $1 || ':' || $2, 0)
+        )
+        """,
+        tenant_id,
+        str(batch["account_id"]),
+    )
+
     items = await conn.fetch(
         """
         SELECT id AS item_id, item_type, instrument_id, quantity, unit_cost,

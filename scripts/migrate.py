@@ -199,6 +199,28 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if missing_columns:
         raise RuntimeError(f"Tiantian import schema columns missing: {missing_columns}")
 
+    terminal_columns = {
+        row["column_name"]
+        for row in await conn.fetch(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_schema='ledger'
+               AND table_name='portfolio_import_batches'
+               AND column_name IN (
+                   'terminal_command_type','terminal_idempotency_key',
+                   'terminal_content_hash'
+               )
+            """
+        )
+    }
+    if terminal_columns != {
+        "terminal_command_type",
+        "terminal_idempotency_key",
+        "terminal_content_hash",
+    }:
+        raise RuntimeError("Tiantian terminal command idempotency columns missing")
+
     rls_tables = {
         row["relname"]
         for row in await conn.fetch(
@@ -290,6 +312,22 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "api_metrics_select": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_api',"
             "'ledger.position_period_metrics','SELECT')"
+        ),
+        "api_terminal_command_update": await conn.fetchval(
+            """
+            SELECT has_column_privilege(
+                'wealthsail_api','ledger.portfolio_import_batches',
+                'terminal_content_hash','UPDATE'
+            )
+            """
+        ),
+        "api_holding_start_decision_update": await conn.fetchval(
+            """
+            SELECT has_column_privilege(
+                'wealthsail_api','ledger.portfolio_import_items',
+                'user_holding_started_on','UPDATE'
+            )
+            """
         ),
         "worker_source_transaction_select": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker',"

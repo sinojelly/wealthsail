@@ -101,6 +101,8 @@ async def test_refresh_keeps_unpriced_holding_as_unavailable_row() -> None:
     assert count == 2
     assert conn.deleted is True
     assert "ev.status = 'CONFIRMED'" in conn.fetch_sql
+    assert "ev.event_type <> 'REVERSAL'" in conn.fetch_sql
+    assert "reversal.reverses_event_id = ev.id" in conn.fetch_sql
     by_instrument = {str(args[2]): args for args in conn.writes}
     assert by_instrument["priced"][6:10] == (
         Decimal("3"),
@@ -114,6 +116,24 @@ async def test_refresh_keeps_unpriced_holding_as_unavailable_row() -> None:
         None,
         "UNAVAILABLE",
     )
+
+
+def test_replacement_adjustment_uses_authoritative_snapshot_quantity_and_cost() -> None:
+    holdings = rebuild_confirmed_holdings(
+        [{
+            "account_id": "account-a",
+            "event_type": "ADJUSTMENT",
+            "legs": [{
+                "leg_type": "INSTRUMENT",
+                "instrument_id": "fund-1",
+                "quantity": "125.5",
+                "unit_price": "1.2345",
+            }],
+        }]
+    )
+
+    assert holdings[("account-a", "fund-1")].quantity == Decimal("125.5")
+    assert holdings[("account-a", "fund-1")].avg_cost == Decimal("1.2345")
 
 
 def test_account_nav_abstains_when_any_open_position_is_unpriced() -> None:

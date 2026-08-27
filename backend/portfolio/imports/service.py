@@ -14,7 +14,11 @@ import asyncpg
 
 from backend.common.database import tenant_transaction
 from backend.dependencies import write_audit
-from backend.errors import IdempotencyConflictError, ValidationError_
+from backend.errors import (
+    IdempotencyConflictError,
+    ValidationError_,
+    VersionConflictError,
+)
 from backend.portfolio.imports import repository
 from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
 from backend.portfolio.imports.package import parse_tiantian_package
@@ -103,6 +107,58 @@ class PreviewPlan:
         for status in statuses:
             counts[status] += 1
         return {key.lower(): value for key, value in counts.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationItem:
+    item_id: str
+    instrument_id: str
+    quantity: Decimal
+    unit_cost: Decimal
+    trade_date: date
+    comparison_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerEffect:
+    item_id: str
+    effect_type: str
+    previous_event_id: str | None
+
+
+def build_ledger_effects(
+    items: list[ConfirmationItem],
+    active_event_ids: Mapping[str, str],
+) -> tuple[LedgerEffect, ...]:
+    """Map reviewed snapshot comparisons to baseline-only ledger effects."""
+    effects: list[LedgerEffect] = []
+    for item in items:
+        previous = active_event_ids.get(item.item_id)
+        if item.comparison_status == "CONFLICT":
+            raise ValidationError_("冲突持仓不能确认")
+        if item.comparison_status == "NEW":
+            if previous is not None:
+                raise VersionConflictError("NEW 持仓已出现有效来源基线，请重新预览")
+            effects.append(LedgerEffect(item.item_id, "ADJUSTMENT", None))
+        elif item.comparison_status == "UNCHANGED":
+            if previous is None:
+                raise VersionConflictError("UNCHANGED 持仓的有效来源基线不存在")
+        elif item.comparison_status == "CHANGED":
+            if previous is None:
+                raise VersionConflictError("CHANGED 持仓的旧来源基线不存在")
+            effects.extend(
+                (
+                    LedgerEffect(item.item_id, "REVERSAL", previous),
+                    LedgerEffect(item.item_id, "ADJUSTMENT", None),
+                )
+            )
+        elif item.comparison_status == "CLOSED":
+            if previous is None:
+                raise VersionConflictError("CLOSED 持仓的旧来源基线不存在")
+            effects.append(LedgerEffect(item.item_id, "REVERSAL", previous))
+        else:
+            raise ValidationError_(f"不支持的持仓比较状态：{item.comparison_status}")
+    return tuple(effects)
 
 
 def _json_value(value: Any) -> Any:
@@ -540,3 +596,126 @@ async def preview_tiantian_import(
         package=package,
         plan=plan,
     )
+
+
+def _terminal_content_hash(
+    command_type: str,
+    *,
+    decisions: Mapping[str, date] | None = None,
+    confirm_empty: bool = False,
+) -> str:
+    payload = {
+        "commandType": command_type,
+        "confirmEmpty": confirm_empty,
+        "decisions": {
+            item_id: started_on.isoformat()
+            for item_id, started_on in sorted((decisions or {}).items())
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+async def confirm_tiantian_import(
+    pool: asyncpg.Pool,
+    ctx,
+    batch_id: str,
+    *,
+    expected_version: int,
+    decisions: Mapping[str, date] | None,
+    confirm_empty: bool,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Confirm source facts, ledger effects, projections, job, and audit atomically."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if expected_version <= 0:
+        raise ValidationError_("If-Match 版本必须为正整数")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    content_hash = _terminal_content_hash(
+        "CONFIRM",
+        decisions=decisions,
+        confirm_empty=confirm_empty,
+    )
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        confirmed = await repository.confirm_draft(
+            conn,
+            tenant_id=ctx.tenant_id,
+            batch_id=batch_id,
+            expected_version=expected_version,
+            decisions=dict(decisions or {}),
+            confirm_empty=confirm_empty,
+            idempotency_key=idempotency_key,
+            command_content_hash=content_hash,
+        )
+        if not confirmed["already_applied"]:
+            from backend.portfolio.service import _recompute_projections
+
+            await _recompute_projections(conn, tenant_id=ctx.tenant_id)
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="TIANTIAN_IMPORT_CONFIRMED",
+                resource_type="ledger.portfolio_import_batches",
+                resource_id=batch_id,
+                details={
+                    "positionCount": confirmed["position_count"],
+                    "historyImported": confirmed["history_imported"],
+                    "historyDuplicated": confirmed["history_duplicated"],
+                    "ledgerEffectCount": len(confirmed["event_ids"]),
+                },
+            )
+    return {
+        "batchId": batch_id,
+        "status": "CONFIRMED",
+        "version": confirmed["version"],
+        "metricsStatus": "PENDING",
+        "positionCount": confirmed["position_count"],
+        "historyImported": confirmed["history_imported"],
+        "historyDuplicated": confirmed["history_duplicated"],
+    }
+
+
+async def cancel_tiantian_import(
+    pool: asyncpg.Pool,
+    ctx,
+    batch_id: str,
+    *,
+    expected_version: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Cancel a DRAFT without deleting its auditable preview."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if expected_version <= 0:
+        raise ValidationError_("If-Match 版本必须为正整数")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    content_hash = _terminal_content_hash("CANCEL")
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        cancelled = await repository.cancel_draft(
+            conn,
+            tenant_id=ctx.tenant_id,
+            batch_id=batch_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            command_content_hash=content_hash,
+        )
+        if not cancelled["already_applied"]:
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="TIANTIAN_IMPORT_CANCELLED",
+                resource_type="ledger.portfolio_import_batches",
+                resource_id=batch_id,
+                details={"previousVersion": expected_version},
+            )
+    return {
+        "batchId": batch_id,
+        "status": "CANCELLED",
+        "version": cancelled["version"],
+    }

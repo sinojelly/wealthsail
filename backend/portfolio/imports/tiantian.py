@@ -183,6 +183,17 @@ class TiantianTransaction(SourceModel):
     def validate_account_mask(cls, value: str) -> str:
         return _masked_account(value)
 
+    @model_validator(mode="after")
+    def validate_nonnegative_values(self) -> "TiantianTransaction":
+        if (
+            self.application_value is not None
+            and self.application_value < 0
+            or self.confirmation_value is not None
+            and self.confirmation_value < 0
+        ):
+            raise ValueError("交易申请或确认值不能为负数")
+        return self
+
 
 class ExcludedSummary(SourceModel):
     cash_management: int = Field(ge=0)

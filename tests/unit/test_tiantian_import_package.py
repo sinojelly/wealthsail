@@ -304,3 +304,18 @@ def test_parser_rejects_duplicate_business_identities(
 
     with pytest.raises(ValidationError_, match="业务主键重复"):
         parse_tiantian_package(package_path, ImportLimits())
+
+
+@pytest.mark.parametrize("field_name", ["applicationValue", "confirmationValue"])
+def test_parser_rejects_negative_transaction_values(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    payloads = _package_payloads()
+    records = json.loads(payloads["fund-transactions.json"])
+    records[0][field_name] = "-1"
+    payloads["fund-transactions.json"] = _json_bytes(records)
+    package_path = write_synthetic_package(tmp_path, payloads=payloads)
+
+    with pytest.raises(ValidationError_, match="交易申请或确认值不能为负数"):
+        parse_tiantian_package(package_path, ImportLimits())

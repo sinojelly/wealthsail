@@ -12,12 +12,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.common.tenancy import TenantContext
-from backend.errors import ForbiddenError, ValidationError_
+from backend.errors import ForbiddenError, ValidationError_, VersionConflictError
 from backend.portfolio.imports.service import (
+    ConfirmationItem,
     ExistingBaseline,
     PreviewContext,
     TargetAccount,
     analyze_preview,
+    build_ledger_effects,
+    cancel_tiantian_import,
+    confirm_tiantian_import,
     preview_tiantian_import,
     source_record_hash,
 )
@@ -358,3 +362,183 @@ async def test_account_target_fields_are_mutually_exclusive(tmp_path: Path) -> N
             account_name="另一个账户",
             idempotency_key="preview-1",
         )
+
+
+def _confirmation_item(status: str, *, item_id: str = "item-1") -> ConfirmationItem:
+    return ConfirmationItem(
+        item_id=item_id,
+        instrument_id="fund-1",
+        quantity=Decimal("100" if status != "CLOSED" else "0"),
+        unit_cost=Decimal("1.20"),
+        trade_date=date(2026, 8, 28),
+        comparison_status=status,
+    )
+
+
+def test_effect_plan_replaces_only_changed_funds_and_never_models_source_trades() -> None:
+    effects = build_ledger_effects(
+        [
+            _confirmation_item("NEW", item_id="new"),
+            _confirmation_item("UNCHANGED", item_id="same"),
+            _confirmation_item("CHANGED", item_id="changed"),
+            _confirmation_item("CLOSED", item_id="closed"),
+        ],
+        {
+            "same": "old-event-same",
+            "changed": "old-event-changed",
+            "closed": "old-event-closed",
+        },
+    )
+
+    assert [(effect.item_id, effect.effect_type) for effect in effects] == [
+        ("new", "ADJUSTMENT"),
+        ("changed", "REVERSAL"),
+        ("changed", "ADJUSTMENT"),
+        ("closed", "REVERSAL"),
+    ]
+    assert not {effect.effect_type for effect in effects} & {
+        "BUY",
+        "SELL",
+        "DIVIDEND_CASH",
+        "DIVIDEND_REINVEST",
+    }
+
+
+@pytest.mark.asyncio
+async def test_first_confirmation_rebuilds_inside_transaction_and_returns_pending_metrics() -> None:
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    confirm = AsyncMock(
+        return_value={
+            "batch_id": "batch-1",
+            "version": 2,
+            "position_count": 1,
+            "history_imported": 3,
+            "history_duplicated": 1,
+            "event_ids": ["event-1"],
+            "already_applied": False,
+        }
+    )
+
+    with (
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch("backend.portfolio.imports.service.repository.confirm_draft", confirm),
+        patch(
+            "backend.portfolio.service._recompute_projections",
+            AsyncMock(),
+        ) as recompute,
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
+    ):
+        result = await confirm_tiantian_import(
+            MagicMock(),
+            ctx,
+            "batch-1",
+            expected_version=1,
+            decisions={"item-1": date(2025, 1, 1)},
+            confirm_empty=False,
+            idempotency_key="confirm-1",
+        )
+
+    assert result == {
+        "batchId": "batch-1",
+        "status": "CONFIRMED",
+        "version": 2,
+        "metricsStatus": "PENDING",
+        "positionCount": 1,
+        "historyImported": 3,
+        "historyDuplicated": 1,
+    }
+    confirm.assert_awaited_once()
+    recompute.assert_awaited_once()
+    assert audit.await_args.kwargs["details"] == {
+        "positionCount": 1,
+        "historyImported": 3,
+        "historyDuplicated": 1,
+        "ledgerEffectCount": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_replayed_confirmation_does_not_rebuild_or_write_a_second_audit() -> None:
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    confirm = AsyncMock(
+        return_value={
+            "batch_id": "batch-1",
+            "version": 2,
+            "position_count": 1,
+            "history_imported": 3,
+            "history_duplicated": 1,
+            "event_ids": ["event-1"],
+            "already_applied": True,
+        }
+    )
+
+    with (
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch("backend.portfolio.imports.service.repository.confirm_draft", confirm),
+        patch("backend.portfolio.service._recompute_projections", AsyncMock()) as recompute,
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
+    ):
+        await confirm_tiantian_import(
+            MagicMock(),
+            ctx,
+            "batch-1",
+            expected_version=1,
+            decisions={},
+            confirm_empty=False,
+            idempotency_key="confirm-1",
+        )
+
+    recompute.assert_not_awaited()
+    audit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_draft_cancellation_is_terminal_and_has_no_projection_side_effect() -> None:
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    cancel = AsyncMock(
+        return_value={"batch_id": "batch-1", "version": 2, "already_applied": False}
+    )
+
+    with (
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch("backend.portfolio.imports.service.repository.cancel_draft", cancel),
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
+    ):
+        result = await cancel_tiantian_import(
+            MagicMock(),
+            ctx,
+            "batch-1",
+            expected_version=1,
+            idempotency_key="cancel-1",
+        )
+
+    assert result == {"batchId": "batch-1", "status": "CANCELLED", "version": 2}
+    assert audit.await_args.kwargs["details"] == {"previousVersion": 1}
+
+
+@pytest.mark.asyncio
+async def test_confirmation_failure_writes_neither_projection_nor_audit() -> None:
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+
+    with (
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch(
+            "backend.portfolio.imports.service.repository.confirm_draft",
+            AsyncMock(side_effect=VersionConflictError("stale")),
+        ),
+        patch("backend.portfolio.service._recompute_projections", AsyncMock()) as recompute,
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
+    ):
+        with pytest.raises(VersionConflictError):
+            await confirm_tiantian_import(
+                MagicMock(),
+                ctx,
+                "batch-1",
+                expected_version=1,
+                decisions={},
+                confirm_empty=False,
+                idempotency_key="confirm-1",
+            )
+
+    recompute.assert_not_awaited()
+    audit.assert_not_awaited()

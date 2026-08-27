@@ -188,6 +188,7 @@ class _ConfirmConnection:
         self.event_sql = ""
         self.legs: list[tuple] = []
         self.batch_update_sql = ""
+        self.execute_sqls: list[str] = []
 
     async def fetchrow(self, sql: str, *_args):
         assert "FOR UPDATE" in sql
@@ -220,6 +221,7 @@ class _ConfirmConnection:
         self.legs = rows
 
     async def execute(self, sql: str, *_args):
+        self.execute_sqls.append(sql)
         self.batch_update_sql = sql
         return "UPDATE 1"
 
@@ -249,5 +251,6 @@ async def test_confirm_import_emits_one_opening_adjustment_and_no_cash_flow() ->
         )
     ]
     assert "status = 'CONFIRMED'" in conn.batch_update_sql
+    assert any("pg_advisory_xact_lock" in sql for sql in conn.execute_sqls)
     assert result["event_id"] == "event-1"
     assert result["version"] == 2
