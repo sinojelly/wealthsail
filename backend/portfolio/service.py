@@ -51,6 +51,66 @@ def _d(value: object) -> Decimal:
     raise TypeError(f"unexpected numeric type: {type(value).__name__}")
 
 
+def _row_value(row: asyncpg.Record | dict, key: str, default=None):
+    return row.get(key, default)
+
+
+def _date_text(value) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _decimal_text(value) -> str | None:
+    if value is None:
+        return None
+    return format(value if isinstance(value, Decimal) else Decimal(str(value)), "f")
+
+
+def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict | None]:
+    """Map persisted metric facts without recalculating financial percentages."""
+    if row["asset_type"] != "OFF_EXCHANGE_FUND":
+        return None, None
+    calculation_status = _row_value(row, "calculation_status")
+    if calculation_status is None:
+        return (
+            {"startedOn": None, "days": None, "method": "INSUFFICIENT_DATA"},
+            {
+                "high": None,
+                "highDate": None,
+                "low": None,
+                "lowDate": None,
+                "fromHighPct": None,
+                "fromLowPct": None,
+                "rangePositionPct": None,
+                "status": "PENDING",
+                "qualityReasons": ["METRICS_NOT_READY"],
+                "asOf": None,
+            },
+        )
+    return (
+        {
+            "startedOn": _date_text(_row_value(row, "holding_started_on")),
+            "days": _row_value(row, "holding_days"),
+            "method": _row_value(row, "holding_start_method"),
+        },
+        {
+            "high": _decimal_text(_row_value(row, "period_high_nav")),
+            "highDate": _date_text(_row_value(row, "period_high_date")),
+            "low": _decimal_text(_row_value(row, "period_low_nav")),
+            "lowDate": _date_text(_row_value(row, "period_low_date")),
+            "fromHighPct": _decimal_text(_row_value(row, "from_high_pct")),
+            "fromLowPct": _decimal_text(_row_value(row, "from_low_pct")),
+            "rangePositionPct": _decimal_text(
+                _row_value(row, "range_position_pct")
+            ),
+            "status": str(calculation_status),
+            "qualityReasons": list(_row_value(row, "quality_reasons", []) or []),
+            # This is the official current-NAV disclosure date, not the API
+            # request time and never an intraday/realtime label.
+            "asOf": _date_text(_row_value(row, "current_nav_date")),
+        },
+    )
+
+
 async def get_summary(conn: asyncpg.Connection, tenant_id: str, as_of: datetime) -> dict:
     """Aggregate the latest per-account NAV snapshots into the dashboard summary."""
     navs = await repository.latest_nav_per_account(conn, tenant_id)
@@ -177,6 +237,7 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
             pnl = market_value - (quantity * avg_cost)
         cost_value = quantity * avg_cost
         pnl_rate = pct(_d(pnl), cost_value) if pnl is not None and cost_value else None
+        holding_period, range_metrics = _position_period_dto(row)
 
         result.append(
             {
@@ -196,6 +257,8 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
                 "pnlRate": fmt_money(pnl_rate) if pnl_rate is not None else None,
                 "quality": merge_quality([row["data_quality_status"]]),
                 "accountId": str(row["account_id"]),
+                "holdingPeriod": holding_period,
+                "rangeMetrics": range_metrics,
             }
         )
     return result

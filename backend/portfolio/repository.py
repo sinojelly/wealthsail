@@ -28,7 +28,15 @@ _SELECT_POSITION_COLUMNS = """
     ps.instrument_id, ps.account_id, ps.as_of, ps.quantity, ps.avg_cost,
     ps.market_price, ps.market_value, ps.unrealized_pnl, ps.data_quality_status,
     i.canonical_name, i.asset_type,
-    COALESCE(a.ticker, '') AS ticker
+    COALESCE(a.ticker, '') AS ticker,
+    metric.as_of AS metric_as_of,
+    metric.holding_started_on, metric.holding_days,
+    metric.holding_start_method, metric.current_nav, metric.current_nav_date,
+    metric.period_high_nav, metric.period_high_date,
+    metric.period_low_nav, metric.period_low_date,
+    metric.from_high_pct, metric.from_low_pct, metric.range_position_pct,
+    metric.calculation_status, metric.quality_reasons,
+    metric.calculation_version
 """
 
 
@@ -107,6 +115,23 @@ async def latest_positions(
             ORDER BY effective_from DESC
             LIMIT 1
         ) a ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT metric.as_of, metric.holding_started_on, metric.holding_days,
+                   metric.holding_start_method, metric.current_nav,
+                   metric.current_nav_date, metric.period_high_nav,
+                   metric.period_high_date, metric.period_low_nav,
+                   metric.period_low_date, metric.from_high_pct,
+                   metric.from_low_pct, metric.range_position_pct,
+                   metric.calculation_status, metric.quality_reasons,
+                   metric.calculation_version
+              FROM ledger.position_period_metrics metric
+             WHERE metric.tenant_id = ps.tenant_id
+               AND metric.account_id = ps.account_id
+               AND metric.instrument_id = ps.instrument_id
+               AND metric.as_of <= CURRENT_DATE
+             ORDER BY metric.as_of DESC
+             LIMIT 1
+        ) metric ON i.asset_type = 'OFF_EXCHANGE_FUND'
         WHERE ps.tenant_id = $1
         ORDER BY ps.account_id, ps.instrument_id, ps.as_of DESC
         """,
