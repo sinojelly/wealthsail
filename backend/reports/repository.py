@@ -316,26 +316,39 @@ async def insert_report_outbox_deliveries(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
+    user_id: str,
     report_id: str,
     session: str,
     version: int,
     trade_date: object,
 ) -> int:
-    """Expand one tenant report into one independent delivery per active binding.
+    """Expand a report intent into one independently tracked user delivery.
 
-    Delivery status and idempotency remain binding-scoped, so one unavailable
-    recipient cannot block or duplicate another recipient's message.
+    Only the report's own user (the acting user, e.g. the tenant OWNER for
+    scheduled sessions) receives the push — a report never fans out to every
+    ACTIVE binding in the tenant. Delivery targets are the user's own ACTIVE
+    WeCom binding(s); with no binding the report is published silently and
+    nothing is queued.
+
+    Only the latest ACTIVE binding is selected (LIMIT 1): a tenant+user+channel
+    is contractually allowed at most one ACTIVE binding (enforced by
+    migrations/017 partial unique index), and this guard additionally protects
+    against historical duplicate-ACTIVE rows causing duplicate pushes.
     """
-    bindings = await conn.fetch(
+    binding = await conn.fetchrow(
         """
         SELECT id, user_id
         FROM identity.channel_bindings
-        WHERE tenant_id = $1
+        WHERE tenant_id = $1 AND user_id = $2
           AND channel_type = 'wecom' AND status = 'ACTIVE'
-        ORDER BY user_id, id
+        ORDER BY created_at DESC
+        LIMIT 1
         """,
         tenant_id,
+        user_id,
     )
+    if binding is None:
+        return 0
     rows = [
         (
             tenant_id,
@@ -349,10 +362,7 @@ async def insert_report_outbox_deliveries(
             ),
             f"{session}:{trade_date}:{version}:binding:{binding['id']}",
         )
-        for binding in bindings
     ]
-    if not rows:
-        return 0
     await conn.executemany(
         """
         INSERT INTO workflow.outbox
@@ -363,4 +373,4 @@ async def insert_report_outbox_deliveries(
         """,
         rows,
     )
-    return len(rows)
+    return 1

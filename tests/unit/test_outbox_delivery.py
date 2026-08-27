@@ -228,35 +228,65 @@ async def test_experimental_bot_rejects_oversized_markdown_before_connect(
 
 
 class _DeliveryConnection:
-    def __init__(self) -> None:
-        self.inserted = []
+    def __init__(self, bindings: list[dict] | None = None) -> None:
+        self.bindings = bindings or []
+        self.inserted: list[tuple] = []
+        self.sql = ""
 
-    async def fetch(self, _sql: str, tenant_id: str):
+    async def fetchrow(self, sql: str, tenant_id: str, user_id: str):
+        self.sql = sql
         assert tenant_id == "tenant-a"
-        return [
-            {"id": "binding-1", "user_id": "user-1"},
-            {"id": "binding-2", "user_id": "user-2"},
-        ]
+        assert user_id == "user-1"
+        return self.bindings[0] if self.bindings else None
 
     async def executemany(self, _sql: str, rows):
         self.inserted.extend(rows)
 
 
 @pytest.mark.asyncio
-async def test_report_publication_expands_one_outbox_delivery_per_active_binding() -> None:
-    """A tenant report fans out once to every ACTIVE member binding."""
-    conn = _DeliveryConnection()
+async def test_report_publication_writes_single_outbox_for_latest_active_binding() -> None:
+    """A report pushes only to the acting user's own latest ACTIVE binding.
+
+    The SQL must pick the newest ACTIVE binding (LIMIT 1) so duplicate-ACTIVE
+    history can never fan out into duplicate pushes.
+    """
+    conn = _DeliveryConnection(
+        bindings=[{"id": "binding-1", "user_id": "user-1"}]
+    )
 
     count = await insert_report_outbox_deliveries(
         conn,
         tenant_id="tenant-a",
+        user_id="user-1",
         report_id="report-1",
         session="FUND_1430",
         version=2,
         trade_date="2026-08-26",
     )
 
-    assert count == 2
-    assert {row[1] for row in conn.inserted} == {"binding-1", "binding-2"}
-    assert len({row[-1] for row in conn.inserted}) == 2
+    assert count == 1
+    sql = " ".join(conn.sql.split()).upper()
+    assert "ORDER BY CREATED_AT DESC" in sql
+    assert "LIMIT 1" in sql
+    assert {row[1] for row in conn.inserted} == {"binding-1"}
+    assert len({row[-1] for row in conn.inserted}) == 1
     assert all("touser" not in row[5] for row in conn.inserted)
+
+
+@pytest.mark.asyncio
+async def test_report_publication_without_active_binding_queues_nothing() -> None:
+    """An unbound user never receives a push: no ACTIVE binding -> 0 rows."""
+    conn = _DeliveryConnection(bindings=[])
+
+    count = await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        user_id="user-1",
+        report_id="report-1",
+        session="FUND_1430",
+        version=2,
+        trade_date="2026-08-26",
+    )
+
+    assert count == 0
+    assert conn.inserted == []
