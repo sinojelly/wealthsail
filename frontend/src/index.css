@@ -567,6 +567,11 @@ button:disabled {
   color: var(--slate-600);
   font-size: 12px;
 }
+.empty-state h2 {
+  margin: 0;
+  color: var(--slate-700);
+  font-size: 16px;
+}
 .empty-state p {
   max-width: 360px;
   margin: 0;

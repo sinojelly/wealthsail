@@ -79,7 +79,8 @@ export interface PortfolioSummary {
   cumulativePnlRate: DecimalString | null;
   allocation: AllocationItem[];
   qualityStatus: QualityCode;
-  asOf: string;
+  // A new tenant has no observed portfolio date until its first confirmed import.
+  asOf: string | null;
   positionCount: number;
 }
 

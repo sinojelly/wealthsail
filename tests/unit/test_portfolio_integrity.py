@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from backend.portfolio import repository, service
+from backend.portfolio import api, repository, service
 
 
 class _QueryConnection:
@@ -174,3 +178,151 @@ async def test_summary_exposes_known_value_and_coverage_without_fake_total(monke
     assert result["valuationCoveragePct"] == "50.00"
     assert result["unpricedPositionCount"] == 1
     assert result["qualityStatus"] == "MISSING"
+
+
+@pytest.mark.asyncio
+async def test_empty_portfolio_summary_is_a_missing_read_model_not_an_error(
+    monkeypatch,
+) -> None:
+    """A tenant that has not imported assets is a valid empty state, not an outage."""
+
+    async def no_nav(_conn, _tenant):
+        return []
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", no_nav)
+
+    result = await service.get_summary(
+        object(), "tenant-empty", as_of=date(2026, 8, 29)  # type: ignore[arg-type]
+    )
+
+    assert result == {
+        "totalAsset": None,
+        "knownValue": "0.00",
+        "valuationCoveragePct": "0.00",
+        "unpricedPositionCount": 0,
+        "currency": "CNY",
+        "cashBalance": "0.00",
+        "positionsMarketValue": None,
+        "dailyPnl": None,
+        "dailyPnlRate": None,
+        "cumulativePnl": None,
+        "cumulativePnlRate": None,
+        "allocation": [],
+        "qualityStatus": "MISSING",
+        "asOf": None,
+        "positionCount": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_nav_history_returns_an_empty_series(monkeypatch) -> None:
+    """No NAV observations must render an empty chart instead of HTTP 503."""
+
+    async def no_history(_conn, _tenant, *, limit):
+        assert limit == 30
+        return []
+
+    monkeypatch.setattr(repository, "nav_history", no_history)
+
+    result = await service.get_nav_trend(object(), "tenant-empty", days=30)
+
+    assert result == {
+        "points": [],
+        "benchmark": None,
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_nav_api_marks_success_envelope_as_missing(monkeypatch) -> None:
+    """The success envelope must not describe an empty time series as fresh."""
+
+    @asynccontextmanager
+    async def fake_tenant_transaction(_pool, _user_id, _tenant_id):
+        yield object()
+
+    async def empty_nav(_conn, _tenant_id, *, days):
+        assert days == 30
+        return {
+            "points": [],
+            "benchmark": None,
+            "currency": "CNY",
+            "timezone": "Asia/Shanghai",
+        }
+
+    monkeypatch.setattr(api, "tenant_transaction", fake_tenant_transaction)
+    monkeypatch.setattr(api.service, "get_nav_trend", empty_nav)
+
+    result = await api.portfolio_nav_trend(
+        days=30,
+        pool=object(),  # type: ignore[arg-type]
+        ctx=SimpleNamespace(user_id="user-1", tenant_id="tenant-empty"),
+        request_id="req_empty_nav",
+    )
+
+    assert result["data"]["points"] == []
+    assert result["meta"]["qualityStatus"] == "MISSING"
+
+
+def test_empty_summary_api_returns_the_complete_missing_success_contract(
+    monkeypatch,
+) -> None:
+    """The HTTP endpoint must expose the empty DTO and its missing quality."""
+
+    @asynccontextmanager
+    async def fake_tenant_transaction(_pool, _user_id, _tenant_id):
+        yield object()
+
+    async def empty_summary(_conn, _tenant_id, _as_of):
+        return {
+            "totalAsset": None,
+            "knownValue": "0.00",
+            "valuationCoveragePct": "0.00",
+            "unpricedPositionCount": 0,
+            "currency": "CNY",
+            "cashBalance": "0.00",
+            "positionsMarketValue": None,
+            "dailyPnl": None,
+            "dailyPnlRate": None,
+            "cumulativePnl": None,
+            "cumulativePnlRate": None,
+            "allocation": [],
+            "qualityStatus": "MISSING",
+            "asOf": None,
+            "positionCount": 0,
+        }
+
+    monkeypatch.setattr(api, "tenant_transaction", fake_tenant_transaction)
+    monkeypatch.setattr(api.service, "get_summary", empty_summary)
+
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.get_pool] = lambda: object()
+    app.dependency_overrides[api.get_tenant_context] = lambda: SimpleNamespace(
+        user_id="user-1", tenant_id="tenant-empty"
+    )
+    app.dependency_overrides[api.get_request_id] = lambda: "req_empty_summary"
+
+    response = TestClient(app).get("/portfolio/summary")
+    result = response.json()
+
+    assert response.status_code == 200
+    assert result["data"] == {
+        "totalAsset": None,
+        "knownValue": "0.00",
+        "valuationCoveragePct": "0.00",
+        "unpricedPositionCount": 0,
+        "currency": "CNY",
+        "cashBalance": "0.00",
+        "positionsMarketValue": None,
+        "dailyPnl": None,
+        "dailyPnlRate": None,
+        "cumulativePnl": None,
+        "cumulativePnlRate": None,
+        "allocation": [],
+        "qualityStatus": "MISSING",
+        "asOf": None,
+        "positionCount": 0,
+    }
+    assert result["meta"]["qualityStatus"] == "MISSING"

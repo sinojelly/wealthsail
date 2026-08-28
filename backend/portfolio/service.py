@@ -19,7 +19,6 @@ from backend.common.database import tenant_transaction
 from backend.common.formatting import fmt_money, fmt_qty, merge_quality, pct
 from backend.dependencies import SHANGHAI_TZ, now_shanghai, write_audit
 from backend.errors import (
-    DataUnavailableError,
     IdempotencyConflictError,
     NotFoundError,
     ValidationError_,
@@ -115,10 +114,26 @@ async def get_summary(conn: asyncpg.Connection, tenant_id: str, as_of: datetime)
     """Aggregate the latest per-account NAV snapshots into the dashboard summary."""
     navs = await repository.latest_nav_per_account(conn, tenant_id)
     if not navs:
-        raise DataUnavailableError(
-            "当前租户暂无资产快照数据，请先完成期初导入",
-            retryable=False,
-        )
+        # A newly created tenant has no observed portfolio facts yet. Preserve
+        # that distinction with null valuations instead of fabricating zeros or
+        # reporting the valid onboarding state as a service outage.
+        return {
+            "totalAsset": None,
+            "knownValue": "0.00",
+            "valuationCoveragePct": "0.00",
+            "unpricedPositionCount": 0,
+            "currency": "CNY",
+            "cashBalance": "0.00",
+            "positionsMarketValue": None,
+            "dailyPnl": None,
+            "dailyPnlRate": None,
+            "cumulativePnl": None,
+            "cumulativePnlRate": None,
+            "allocation": [],
+            "qualityStatus": "MISSING",
+            "asOf": None,
+            "positionCount": 0,
+        }
 
     complete = all(r["total_nav"] is not None for r in navs)
     total_asset = (
@@ -269,10 +284,6 @@ async def get_nav_trend(
 ) -> dict:
     """Daily NAV trend (points) — benchmark left null until index data exists."""
     rows = await repository.nav_history(conn, tenant_id, limit=days)
-    if not rows:
-        raise DataUnavailableError(
-            "暂无净值历史数据", retryable=False, field_errors=[]
-        )
     points = [
         {
             "date": r["as_of"].isoformat(),

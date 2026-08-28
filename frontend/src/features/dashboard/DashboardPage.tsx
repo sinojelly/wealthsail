@@ -26,6 +26,10 @@ export default function DashboardPage() {
   const navTrend = useNavTrend(30);
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
+  const isEmptyPortfolio =
+    summary.data?.qualityStatus === "MISSING" &&
+    summary.data.positionCount === 0 &&
+    summary.data.asOf === null;
   const errors = [
     summary.error,
     positions.error,
@@ -67,7 +71,16 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : null}
-      {summary.data && summary.data.totalAsset === null ? (
+      {isEmptyPortfolio ? (
+        <section className="empty-state panel" aria-labelledby="empty-portfolio-title">
+          <Upload size={28} />
+          <h2 id="empty-portfolio-title">尚未录入资产</h2>
+          <p>完成首笔期初持仓导入后，这里会展示资产汇总和净值走势。</p>
+          <Link className="btn-primary" to="/onboarding">
+            导入首笔持仓
+          </Link>
+        </section>
+      ) : summary.data && summary.data.totalAsset === null ? (
         <div className="alert alert-warning">
           <AlertTriangle size={16} />
           <div>

@@ -72,7 +72,12 @@ async def portfolio_nav_trend(
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         data = await service.get_nav_trend(conn, ctx.tenant_id, days=days)
-    return ok(data, request_id=request_id, as_of=as_of)
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=as_of,
+        quality_status="MISSING" if not data["points"] else "FRESH",
+    )
 
 
 @router.get("/search")

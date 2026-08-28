@@ -168,16 +168,16 @@ def main() -> int:
     token2 = r2.json()["data"]["accessToken"]
     h2 = {"Authorization": f"Bearer {token2}"}
     r2s = client.get("/portfolio/summary", headers=h2)
-    check("李华 summary isolated (not 张明 data)", r2s.status_code in (200, 503), f"{r2s.status_code} {r2s.text[:200]}")
+    check("李华 summary isolated (not 张明 data)", r2s.status_code == 200, f"{r2s.status_code} {r2s.text[:200]}")
     if r2s.status_code == 200:
         d2 = r2s.json()["data"]
-        check("李华 totalAsset=300000.00", d2["totalAsset"] == "300000.00", d2["totalAsset"])
+        check("李华 never sees 张明 totalAsset", d2["totalAsset"] != "506000.00", str(d2["totalAsset"]))
         check("李华 0 positions", d2["positionCount"] == 0, str(d2["positionCount"]))
-    else:
-        # Tenant 2 has no NAV projections seeded → DATA_UNAVAILABLE is the
-        # correct fail-closed isolation behavior; the point is it never sees
-        # tenant 1's 506000.00.
-        check("李华 DATA_UNAVAILABLE (no projections)", r2s.json()["error"]["code"] == "DATA_UNAVAILABLE", r2s.text[:200])
+        if d2["totalAsset"] is None:
+            check("李华 empty summary quality MISSING", d2["qualityStatus"] == "MISSING", str(d2["qualityStatus"]))
+            check("李华 empty summary has no fabricated allocation", d2["allocation"] == [], str(d2["allocation"]))
+        else:
+            check("李华 seeded totalAsset=300000.00", d2["totalAsset"] == "300000.00", str(d2["totalAsset"]))
     r2r = client.get("/reports/list", headers=h2)
     check("李华 reports empty (isolated)", r2r.status_code == 200 and r2r.json()["data"] == [])
 
