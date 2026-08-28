@@ -1,4 +1,5 @@
 import { request } from "./client";
+import { createIdempotencyKey } from "../lib/idempotency";
 import type {
   PoliciesResponse,
   RiskConfirmDto,
@@ -31,7 +32,7 @@ export async function previewRiskPolicy(
 ): Promise<RiskPreviewDto> {
   const envelope = await request<RiskPreviewDto>("/v1/risk/policies/preview", {
     method: "POST",
-    headers: { "Idempotency-Key": crypto.randomUUID() },
+    headers: { "Idempotency-Key": createIdempotencyKey() },
     body: JSON.stringify(input),
   });
   return envelope.data;

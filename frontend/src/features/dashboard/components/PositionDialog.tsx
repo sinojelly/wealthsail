@@ -10,6 +10,7 @@ import type {
   InstrumentSearchResult,
   PositionImportDraft,
 } from "../../../api/types";
+import { createIdempotencyKey } from "../../../lib/idempotency";
 
 interface PositionDialogProps {
   open: boolean;
@@ -39,8 +40,8 @@ export default function PositionDialog({ open, onClose }: PositionDialogProps) {
   const [draft, setDraft] = useState<PositionImportDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A retry of the same user intent must reuse its key. A new dialog mount gets new keys.
-  const [draftKey] = useState(() => crypto.randomUUID());
-  const [confirmKey] = useState(() => crypto.randomUUID());
+  const [draftKey] = useState(createIdempotencyKey);
+  const [confirmKey] = useState(createIdempotencyKey);
 
   const createMutation = useAddPosition();
   const confirmMutation = useConfirmPositionImport();

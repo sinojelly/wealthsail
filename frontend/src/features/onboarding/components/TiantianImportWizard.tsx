@@ -10,6 +10,7 @@ import {
 } from "../../../api/hooks";
 import { HttpError } from "../../../api/client";
 import { useAuthSession } from "../../../app/auth-session";
+import { createIdempotencyKey } from "../../../lib/idempotency";
 import type {
   TiantianImportConfirmation,
   TiantianImportDetail,
@@ -21,8 +22,7 @@ import ImportPreviewStep from "./ImportPreviewStep";
 import ImportResultStep from "./ImportResultStep";
 
 function commandKey(prefix: string): string {
-  const suffix =
-    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  const suffix = createIdempotencyKey();
   return `${prefix}-${suffix}`;
 }
 
