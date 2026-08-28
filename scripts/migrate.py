@@ -396,6 +396,125 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if browser_import_writes:
         raise RuntimeError("authenticated has direct writes to Tiantian import tables")
 
+    auth_version_column = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema='identity' AND table_name='profiles'
+          AND column_name='auth_version' AND is_nullable='NO'
+        """
+    )
+    if auth_version_column != 1:
+        raise RuntimeError("identity.profiles.auth_version is missing or nullable")
+
+    password_reset_rls = await conn.fetchrow(
+        """
+        SELECT c.relrowsecurity, c.relforcerowsecurity
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname='identity' AND c.relname='password_reset_tokens'
+        """
+    )
+    if not password_reset_rls or not all(password_reset_rls.values()):
+        raise RuntimeError("password reset tokens are missing ENABLE/FORCE RLS")
+
+    forbidden_l1_functions = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname='identity'
+          AND p.proname IN ('register_with_tenant','create_tenant')
+        """
+    )
+    if forbidden_l1_functions:
+        raise RuntimeError("L1-prohibited self-registration RPCs are still installed")
+
+    reset_function = await conn.fetchrow(
+        """
+        SELECT p.prosecdef, pg_get_functiondef(p.oid) AS definition
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname='identity' AND p.proname='reset_password'
+          AND pg_get_function_identity_arguments(p.oid)=
+              'p_token_hash text, p_new_password_hash text'
+        """
+    )
+    if (
+        not reset_function
+        or not reset_function["prosecdef"]
+        or "auth_version = auth_version + 1" not in reset_function["definition"]
+    ):
+        raise RuntimeError("reset_password does not rotate the access-token version")
+
+    reset_privileges = {
+        "api": await conn.fetchval(
+            "SELECT has_function_privilege('wealthsail_api',"
+            "'identity.reset_password(text,text)','EXECUTE')"
+        ),
+        "public": await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.routine_privileges
+                WHERE routine_schema='identity'
+                  AND routine_name='reset_password'
+                  AND grantee='PUBLIC'
+                  AND privilege_type='EXECUTE'
+            )
+            """
+        ),
+        "authenticated": await conn.fetchval(
+            "SELECT has_function_privilege('authenticated',"
+            "'identity.reset_password(text,text)','EXECUTE')"
+        ),
+    }
+    if (
+        not reset_privileges["api"]
+        or reset_privileges["public"]
+        or reset_privileges["authenticated"]
+    ):
+        raise RuntimeError("reset_password EXECUTE privileges are not least-privileged")
+
+    confirmation_constraints = "\n".join(
+        row["definition"]
+        for row in await conn.fetch(
+            """
+            SELECT pg_get_constraintdef(c.oid) AS definition
+            FROM pg_constraint c
+            WHERE c.conrelid='ledger.trade_fills'::regclass
+              AND c.conname='fk_trade_fills_confirmed_by_tenant'
+            """
+        )
+    )
+    if not all(
+        token in confirmation_constraints
+        for token in ("tenant_id", "confirmed_by", "tenant_members")
+    ):
+        raise RuntimeError("trade fill confirmation actor is not tenant-bound")
+
+    unique_event_link = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM pg_index index_entry
+        JOIN pg_class relation ON relation.oid = index_entry.indexrelid
+        WHERE relation.relname='uq_trade_fills_ledger_event'
+          AND index_entry.indisunique AND index_entry.indisvalid
+        """
+    )
+    if unique_event_link != 1:
+        raise RuntimeError("trade fill ledger-event uniqueness index is missing")
+
+    confirmation_policy = await conn.fetchval(
+        """
+        SELECT with_check
+        FROM pg_policies
+        WHERE schemaname='ledger' AND tablename='trade_fills'
+          AND policyname='domain_api_update'
+        """
+    )
+    if not confirmation_policy or "confirmed_by = auth.uid()" not in confirmation_policy:
+        raise RuntimeError("trade fill confirmation policy does not bind auth.uid()")
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"
@@ -464,8 +583,8 @@ async def migrate(dsn: str, migrations: list[Migration], *, dry_run: bool) -> No
         if not dry_run:
             await _readback(conn)
             print(
-                "READBACK OK: roles, RLS, runtime grants, Tiantian import schema "
-                "and demo-user guard"
+                "READBACK OK: roles, RLS, runtime grants, Tiantian import, "
+                "identity session and trade-integrity contracts"
             )
     finally:
         try:

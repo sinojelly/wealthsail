@@ -28,7 +28,6 @@ from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
 from backend.jobs.scheduler import is_trading_day
 from backend.integrations.wecom import close_http_client
-from modules.market_data.service import MarketDataService
 
 logger = logging.getLogger("wealthsail.worker")
 
@@ -41,7 +40,7 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
         logger.exception("session %s 行情刷新失败（继续生成报告）", session)
     # 2. 市场情绪是全局 Worker 快照。API 只读库内结果，绝不按请求抓取。
     try:
-        await MarketDataService(pool).refresh_market_sentiment()
+        await market_service.refresh_market_sentiment(pool)
     except Exception:  # noqa: BLE001 — 情绪不可用不阻断租户报告
         logger.exception("session %s 市场情绪刷新失败（继续生成报告）", session)
     # 3. 报告生成（租约抢占 + 每租户 RLS 事务）

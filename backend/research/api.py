@@ -12,7 +12,7 @@ from backend.common.tenancy import TenantContext
 from backend.dependencies import get_pool, get_request_id, get_tenant_context, now_shanghai
 from backend.errors import ok
 from backend.research import service
-from modules.research.service import DecisionService
+from backend.research.decisions import DecisionService
 
 router = APIRouter(prefix="/research", tags=["research"])
 

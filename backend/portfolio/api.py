@@ -26,8 +26,6 @@ from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.portfolio import service
 from backend.portfolio.imports import service as tiantian_import_service
 from backend.portfolio.imports.package import ImportLimits
-from backend.domain import domain_tenant
-from modules.portfolio.service import PortfolioService
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -89,7 +87,7 @@ async def portfolio_search(
     返回: { items: [{symbol, name, market, type: STOCK|ETF|FUND}], total }
     """
     as_of = now_shanghai()
-    data = await PortfolioService(pool).search_instruments(domain_tenant(ctx), keyword)
+    data = await service.search_instruments(pool, ctx, keyword)
     return ok(data, request_id=request_id, as_of=as_of)
 
 

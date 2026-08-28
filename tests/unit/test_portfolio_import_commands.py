@@ -75,7 +75,7 @@ async def test_create_position_import_returns_draft_without_publishing_a_positio
             create_draft,
         ),
         patch("backend.portfolio.service.write_audit", AsyncMock()),
-        patch("backend.portfolio.service._recompute_projections", recompute),
+        patch("backend.portfolio.service.recompute_projections", recompute),
     ):
         result = await service.create_position_import(
             MagicMock(), ctx, _payload(), idempotency_key="request-1"

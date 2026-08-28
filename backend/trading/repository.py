@@ -1,4 +1,4 @@
-"""账本持久化仓储（modules/ledger/repository.py）。
+"""成交与不可变账本持久化仓储。
 
 将 :mod:`modules.ledger.service` 的内存领域原型落到 PostgreSQL 不可变账本：
 ``ledger.ledger_events`` / ``ledger.ledger_legs``，并实现"成交"实体
@@ -13,14 +13,21 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from modules.database import AsyncConnection
-from modules.errors import ConflictError, NotFoundError, ValidationError
+from asyncpg import Connection as AsyncConnection
 
-logger = logging.getLogger("wealthsail.modules.ledger.repository")
+from backend.errors import (
+    IdempotencyConflictError as ConflictError,
+    NotFoundError,
+    ValidationError_ as ValidationError,
+    VersionConflictError,
+)
+
+logger = logging.getLogger("wealthsail.trading.repository")
 
 ZERO = Decimal("0.00")
 
@@ -44,6 +51,28 @@ def _d(value: object) -> Decimal:
     if isinstance(value, (int, str)):
         return Decimal(value)
     raise TypeError(f"unexpected numeric type: {type(value).__name__}")
+
+
+def _leg_signature(leg: tuple | dict) -> tuple:
+    """Return a stable, Decimal-safe signature for an economic leg."""
+    if isinstance(leg, dict):
+        values = (
+            leg["leg_type"],
+            leg["instrument_id"],
+            leg["quantity"],
+            leg["amount"],
+            leg["unit_price"],
+        )
+    else:
+        values = leg
+    leg_type, instrument_id, quantity, amount, unit_price = values
+    return (
+        leg_type,
+        str(instrument_id) if instrument_id is not None else None,
+        _d(quantity) if quantity is not None else None,
+        _d(amount) if amount is not None else None,
+        _d(unit_price) if unit_price is not None else None,
+    )
 
 
 class LedgerRepository:
@@ -138,7 +167,8 @@ class LedgerRepository:
         # 幂等重放：返回既有事件（不重复记账）
         existing = await conn.fetchrow(
             """
-            SELECT id, account_id, event_type, trade_date, reverses_event_id
+            SELECT id, account_id, event_type, status, trade_date,
+                   description, reverses_event_id
             FROM ledger.ledger_events
             WHERE tenant_id = $1 AND idempotency_key = $2
             """,
@@ -147,16 +177,30 @@ class LedgerRepository:
         )
         if existing is None:  # 理论上不可达（同事务内冲突行必可见）
             raise RuntimeError("ledger idempotency conflict without an existing row")
+        existing_legs = await conn.fetch(
+            """
+            SELECT leg_type, instrument_id, quantity, amount, unit_price
+            FROM ledger.ledger_legs
+            WHERE tenant_id = $1 AND event_id = $2
+            ORDER BY id
+            """,
+            tenant_id,
+            existing["id"],
+        )
         same_command = (
             str(existing["account_id"]) == str(account_id)
             and existing["event_type"] == event_type
+            and existing["status"] == status
             and existing["trade_date"] == trade_date
+            and existing["description"] == description
             and (
                 str(existing["reverses_event_id"])
                 if existing["reverses_event_id"] is not None
                 else None
             )
             == (str(reverses_event_id) if reverses_event_id is not None else None)
+            and [_leg_signature(leg) for leg in existing_legs]
+            == [_leg_signature(leg) for leg in legs]
         )
         if not same_command:
             raise ConflictError("Idempotency-Key 已用于另一笔账本命令")
@@ -365,7 +409,10 @@ class LedgerRepository:
             tenant_id,
             created_by,
             str(fill_id),
-            {"side": side, "tradeDate": trade_date.isoformat()},
+            json.dumps(
+                {"side": side, "tradeDate": trade_date.isoformat()},
+                ensure_ascii=False,
+            ),
         )
         logger.info("成交草稿已创建: tenant=%s fill=%s", tenant_id, fill_id)
         return {"fillId": str(fill_id), "status": "DRAFT", "replayed": False}
@@ -398,7 +445,7 @@ class LedgerRepository:
             raise NotFoundError("成交草稿不存在")
         if draft["status"] == "CONFIRMED":
             if draft["event_key"] != idempotency_key:
-                raise ConflictError("成交已经使用另一幂等键确认")
+                raise VersionConflictError("成交已经使用另一幂等键确认")
             return {
                 "fillId": str(draft["id"]),
                 "status": "CONFIRMED",
@@ -406,7 +453,7 @@ class LedgerRepository:
                 "replayed": True,
             }
         if draft["status"] != "DRAFT":
-            raise ConflictError("当前成交状态不允许确认")
+            raise VersionConflictError("当前成交状态不允许确认")
 
         side = str(draft["side"]).upper()
         instrument_leg_qty = _d(draft["quantity"]) if side == "BUY" else -_d(draft["quantity"])
@@ -429,7 +476,14 @@ class LedgerRepository:
             event_type=side,
             trade_date=draft["trade_date"],
             idempotency_key=idempotency_key,
-            description=description or f"确认成交草稿 {fill_id}",
+            # Always bind the event payload to this fill, even when the user
+            # supplied an optional note. This prevents two drafts from sharing
+            # one idempotent economic event.
+            description=(
+                f"确认成交草稿 {fill_id}：{description.strip()}"
+                if description and description.strip()
+                else f"确认成交草稿 {fill_id}"
+            ),
             legs=legs,
         )
         event_id = persisted["eventId"]
@@ -459,7 +513,7 @@ class LedgerRepository:
             tenant_id,
             confirmed_by,
             fill_id,
-            {"ledgerEventId": event_id},
+            json.dumps({"ledgerEventId": event_id}, ensure_ascii=False),
         )
 
         logger.info("成交草稿已确认: tenant=%s fill=%s event=%s", tenant_id, fill_id, event_id)

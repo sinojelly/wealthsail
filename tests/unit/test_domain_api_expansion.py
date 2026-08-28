@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import Response
 
+from backend.common.tenancy import TenantContext
 from backend.config import Settings, validate_runtime_settings
+from backend.identity import api as identity_api
 from backend.main import create_app
-from modules.identity.service import IdentityService, IdentitySettings
 
 
-def test_trade_decision_password_reset_and_tenant_routes_are_mounted() -> None:
+def test_l1_trade_decision_and_password_reset_routes_are_mounted() -> None:
     paths = create_app().openapi()["paths"]
     assert "post" in paths["/api/v1/trades/fills"]
     assert "post" in paths["/api/v1/trades/fills/{fill_id}/confirm"]
@@ -16,8 +19,8 @@ def test_trade_decision_password_reset_and_tenant_routes_are_mounted() -> None:
     assert "get" in paths["/api/v1/research/decisions"]
     assert "post" in paths["/api/v1/auth/password-reset/request"]
     assert "post" in paths["/api/v1/auth/password-reset/confirm"]
-    assert "post" in paths["/api/v1/auth/register-with-tenant"]
-    assert "post" in paths["/api/v1/auth/tenants"]
+    assert "/api/v1/auth/register-with-tenant" not in paths
+    assert "/api/v1/auth/tenants" not in paths
 
 
 def test_production_api_fails_before_startup_when_secrets_are_missing() -> None:
@@ -58,70 +61,37 @@ def test_production_api_accepts_only_independent_hardened_secrets() -> None:
         validate_runtime_settings(reused, process="api")
 
 
-class _Tx:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return None
-
-
-class _Conn:
-    def __init__(self) -> None:
-        self.call = None
-
-    def transaction(self):
-        return _Tx()
-
-    async def execute(self, *_args):
-        return "OK"
-
-    async def fetchrow(self, sql, *args):
-        self.call = (sql, args)
-        return {
-            "out_user_id": "user-1",
-            "out_tenant_id": "tenant-1",
-            "out_tenant_name": "个人投资组合",
-            "out_role": "OWNER",
-        }
-
-
-class _Acquire:
-    def __init__(self, conn):
-        self.conn = conn
-
-    async def __aenter__(self):
-        return self.conn
-
-    async def __aexit__(self, *_args):
-        return None
-
-
-class _Pool:
-    def __init__(self, conn):
-        self.conn = conn
-
-    def acquire(self):
-        return _Acquire(self.conn)
-
-
 @pytest.mark.asyncio
-async def test_self_registration_is_one_atomic_domain_command() -> None:
-    conn = _Conn()
-    service = IdentityService(
-        _Pool(conn),
-        IdentitySettings(
-            jwt_secret="jwt",
-            refresh_token_hmac_key="refresh",
-            binding_hmac_key="binding",
-        ),
+async def test_switch_tenant_keeps_refresh_token_out_of_json(monkeypatch) -> None:
+    class Identity:
+        async def switch_tenant(self, *_args, **_kwargs):
+            return {
+                "accessToken": "access-token",
+                "_refreshToken": "rotated-refresh-token",
+                "user": {"tenantId": "tenant-2"},
+            }
+
+    monkeypatch.setattr(identity_api, "identity_service", lambda *_args: Identity())
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/switch-tenant",
+            "headers": [(b"cookie", b"wealthsail_refresh=old-refresh")],
+        }
     )
-    result = await service.self_register(
-        email="New@example.test",
-        password="correct horse battery staple",
-        nickname="New User",
-        tenant_name="个人投资组合",
+    response = Response()
+
+    result = await identity_api.switch_tenant(
+        identity_api.SwitchTenantRequest(tenantId="tenant-2"),
+        response,
+        request,
+        pool=object(),
+        ctx=TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        settings=Settings(_env_file=None),
+        request_id="req-switch",
     )
-    assert "identity.register_with_tenant" in conn.call[0]
-    assert result["tenantId"] == "tenant-1"
-    assert result["role"] == "OWNER"
+
+    assert "_refreshToken" not in result["data"]
+    assert "rotated-refresh-token" not in str(result)
+    assert "HttpOnly" in response.headers["set-cookie"]

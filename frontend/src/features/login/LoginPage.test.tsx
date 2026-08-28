@@ -21,10 +21,30 @@ it("keeps invited registration disabled until the password reaches eight charact
   expect(submit).toBeEnabled();
 });
 
-it("offers password reset and self registration from the login page", async () => {
-  const user = userEvent.setup();
+it("offers password reset but not public self registration", () => {
   render(<MemoryRouter><LoginPage /></MemoryRouter>);
   expect(screen.getByRole("button", { name: "忘记密码？" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "自助注册" }));
-  expect(screen.getByLabelText("租户名称")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "自助注册" })).not.toBeInTheDocument();
+});
+
+it("consumes a reset token from the fragment and immediately scrubs the URL", () => {
+  window.history.replaceState({}, "", "/login#reset-token=secret%2Ftoken");
+  render(<MemoryRouter><LoginPage /></MemoryRouter>);
+
+  expect(screen.getByLabelText("新密码")).toBeInTheDocument();
+  expect(window.location.hash).toBe("");
+  expect(window.location.search).toBe("");
+});
+
+it("does not submit a reset request until the email is valid", async () => {
+  const user = userEvent.setup();
+  render(<MemoryRouter><LoginPage /></MemoryRouter>);
+  await user.click(screen.getByRole("button", { name: "忘记密码？" }));
+  const submit = screen.getByRole("button", { name: "发送重置邮件" });
+  expect(submit).toBeDisabled();
+  await user.type(screen.getByLabelText("邮箱"), "invalid");
+  expect(submit).toBeDisabled();
+  await user.clear(screen.getByLabelText("邮箱"));
+  await user.type(screen.getByLabelText("邮箱"), "user@example.com");
+  expect(submit).toBeEnabled();
 });

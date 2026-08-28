@@ -1,12 +1,11 @@
-"""身份与租户领域服务（modules/identity）。
+"""身份与会话领域服务。
 
-自包含的数据库驱动服务：注入 asyncpg 连接池与 :class:`IdentitySettings`，
-不依赖 backend.* 框架层。所有金额/凭据处理遵循项目约定——密码仅存 bcrypt
-哈希、绑定/重置令牌仅存 HMAC 摘要、JWT 载荷与 backend 完全兼容。
+该模块位于正式 ``backend/identity`` 纵向领域边界内，复用全站唯一的数据库
+事务、错误码、密码和 JWT 实现，避免身份协议出现两套不兼容实现。
 
 职责：
   * 注册（一次性邀请）与登录（bcrypt 校验 + JWT + refresh session）
-  * 租户管理（自助创建、邀请成员、切换活动租户）
+  * 试点成员邀请与活动租户切换
   * 企业微信绑定（一次性绑定码，仅存 HMAC 摘要）
   * 资料更新（昵称/头像）
   * 密码重置（一次性重置令牌 + SECURITY DEFINER 消费，撤销全部会话）
@@ -22,34 +21,40 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 import uuid
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Protocol
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import asyncpg
 
-from modules.database import (
-    AsyncConnection,
-    AsyncPool,
+from backend.common.auth import (
+    create_access_token,
+    hash_password as _hash_password,
+    verify_password as _verify_password,
+)
+from backend.common.database import (
+    Pool,
     api_system_transaction,
     tenant_transaction,
 )
-from modules.errors import (
+from backend.errors import (
     AuthRequiredError,
-    ConflictError,
     DataUnavailableError,
     ForbiddenError,
+    IdempotencyConflictError as ConflictError,
     NotFoundError,
-    ValidationError,
+    ValidationError_ as ValidationError,
 )
-from modules.identity.jwt import AuthSession, create_access_token, decode_access_token
 
-logger = logging.getLogger("wealthsail.modules.identity")
+AsyncConnection = asyncpg.Connection
+AsyncPool = Pool
+
+logger = logging.getLogger("wealthsail.identity.domain")
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _BINDING_CHANNEL = "wecom"
@@ -91,7 +96,7 @@ class TenantContext:
 
 
 # ---------------------------------------------------------------------------
-# 安全原语（与 backend.common.security 同构，领域层自包含）
+# 安全原语
 # ---------------------------------------------------------------------------
 def generate_token(entropy_bytes: int = 16) -> str:
     """CSPRNG 令牌（>=128 位熵），WS-XXXX-XXXX 分组 base32 格式。"""
@@ -109,26 +114,13 @@ def hmac_digest(key: str, value: str) -> str:
 
 
 def hash_password(password: str) -> str:
-    """bcrypt 哈希（UTF-8，72 字节上限，与 backend 一致）。"""
-    if not password:
-        raise ValueError("password cannot be empty")
-    import bcrypt
-
-    return bcrypt.hashpw(password.encode("utf-8")[:72], bcrypt.gensalt()).decode("ascii")
+    """调用全站唯一的 bcrypt 实现。"""
+    return _hash_password(password)
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
-    """常量时间 bcrypt 校验；哈希缺失时 fail closed。"""
-    if not password or not password_hash:
-        return False
-    import bcrypt
-
-    try:
-        return bcrypt.checkpw(
-            password.encode("utf-8")[:72], password_hash.encode("ascii")
-        )
-    except (ValueError, TypeError):
-        return False
+    """调用全站唯一的常量时间 bcrypt 校验实现。"""
+    return _verify_password(password, password_hash)
 
 
 def credentials_are_valid(
@@ -151,13 +143,13 @@ class IdentityService:
         self.pool = pool
         self.settings = settings
 
-    # -- 事务辅助（共享实现见 modules/database.py）----------------------------
+    # -- 事务辅助（共享实现见 backend/common/database.py）---------------------
     def _api_transaction(self):
-        """API 角色事务（委托 modules.database.api_system_transaction）。"""
+        """API 角色事务（委托 backend.common.database）。"""
         return api_system_transaction(self.pool)
 
     def _tenant_transaction(self, user_id: str, tenant_id: str):
-        """租户 RLS 事务（委托 modules.database.tenant_transaction）。"""
+        """租户 RLS 事务（委托 backend.common.database）。"""
         return tenant_transaction(self.pool, user_id, tenant_id)
 
     @staticmethod
@@ -187,7 +179,7 @@ class IdentityService:
             resource_type,
             resource_id,
             None,
-            (details or {}),
+            json.dumps(details or {}, ensure_ascii=False),
         )
 
     def _refresh_token_hash(self, token: str) -> str:
@@ -253,49 +245,6 @@ class IdentityService:
             "tenantName": row["out_tenant_name"],
         }
 
-    async def self_register(
-        self,
-        *,
-        email: str,
-        password: str,
-        tenant_name: str,
-        nickname: str | None = None,
-        base_currency: str = "CNY",
-    ) -> dict:
-        """Atomically create a user, a tenant and its OWNER membership."""
-        email = (email or "").strip().lower()
-        display_name = (nickname or "").strip() or email.split("@", 1)[0]
-        if not email or "@" not in email or "." not in email.split("@")[-1]:
-            raise ValidationError("邮箱格式不正确")
-        if len(password or "") < 8:
-            raise ValidationError("口令至少 8 个字符")
-        if len((tenant_name or "").strip()) < 2:
-            raise ValidationError("租户名称至少 2 个字符")
-        async with self._api_transaction() as conn:
-            try:
-                row = await conn.fetchrow(
-                    "SELECT * FROM identity.register_with_tenant($1, $2, $3, $4, $5)",
-                    email,
-                    display_name,
-                    hash_password(password),
-                    tenant_name.strip(),
-                    base_currency.upper(),
-                )
-            except asyncpg.PostgresError as exc:
-                if "EMAIL_ALREADY_REGISTERED" in str(exc):
-                    raise ConflictError("该邮箱已注册，请直接登录") from exc
-                raise
-        if row is None:
-            raise ConflictError("注册失败")
-        return {
-            "userId": str(row["out_user_id"]),
-            "email": email,
-            "nickname": display_name,
-            "tenantId": str(row["out_tenant_id"]),
-            "tenantName": row["out_tenant_name"],
-            "role": row["out_role"],
-        }
-
     async def create_invitation(
         self,
         actor: TenantContext,
@@ -353,6 +302,7 @@ class IdentityService:
             rows = await conn.fetch(
                 """
                 SELECT p.id AS user_id, p.email, p.nickname, p.password_hash,
+                       p.auth_version,
                        tm.tenant_id, t.name AS tenant_name, tm.role AS tenant_role
                 FROM identity.profiles p
                 JOIN identity.tenant_members tm
@@ -394,6 +344,7 @@ class IdentityService:
             email=row["email"],
             nickname=row["nickname"],
             tenant_role=row["tenant_role"],
+            auth_version=int(row.get("auth_version", 1)),
             jwt_secret=self.settings.jwt_secret,
             ttl_seconds=self.settings.access_token_ttl_seconds,
             algorithm=self.settings.jwt_algorithm,
@@ -462,7 +413,8 @@ class IdentityService:
                 row = await conn.fetchrow(
                     """
                     SELECT rs.id AS refresh_session_id, rs.user_id, rs.tenant_id,
-                           p.email, p.nickname, t.name AS tenant_name,
+                           p.email, p.nickname, p.auth_version,
+                           t.name AS tenant_name,
                            tm.role AS tenant_role
                     FROM identity.refresh_sessions rs
                     JOIN identity.profiles p ON p.id = rs.user_id
@@ -503,6 +455,7 @@ class IdentityService:
             email=row["email"],
             nickname=row["nickname"],
             tenant_role=row["tenant_role"],
+            auth_version=int(row.get("auth_version", 1)),
             jwt_secret=self.settings.jwt_secret,
             ttl_seconds=self.settings.access_token_ttl_seconds,
             algorithm=self.settings.jwt_algorithm,
@@ -574,7 +527,7 @@ class IdentityService:
         async with self._api_transaction() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT p.id AS user_id, p.email, p.nickname,
+                SELECT p.id AS user_id, p.email, p.nickname, p.auth_version,
                        tm.tenant_id, tm.role AS tenant_role, t.name AS tenant_name
                 FROM identity.profiles p
                 JOIN identity.tenant_members tm ON tm.user_id=p.id AND tm.status='ACTIVE'
@@ -607,6 +560,7 @@ class IdentityService:
             email=row["email"],
             nickname=row["nickname"],
             tenant_role=row["tenant_role"],
+            auth_version=int(row.get("auth_version", 1)),
             jwt_secret=self.settings.jwt_secret,
             ttl_seconds=self.settings.access_token_ttl_seconds,
             algorithm=self.settings.jwt_algorithm,
@@ -615,47 +569,6 @@ class IdentityService:
             row, access_token, expires_in, refresh_token or "",
             tenant_id=str(row["tenant_id"]),
         )
-
-    # -- 租户管理 -------------------------------------------------------------
-    async def create_tenant(
-        self,
-        actor: TenantContext,
-        *,
-        name: str,
-        base_currency: str = "CNY",
-    ) -> dict:
-        """自助创建租户并将当前用户绑定为 OWNER（SECURITY DEFINER 幂等）。
-
-        Raises:
-            ValidationError: 名称长度非法或币种非法。
-        """
-        clean_name = (name or "").strip()
-        if len(clean_name) < 2 or len(clean_name) > 64:
-            raise ValidationError("租户名称长度必须在 2 到 64 个字符之间")
-        if len(base_currency) != 3 or not base_currency.isalpha():
-            raise ValidationError("币种须为 3 位字母代码（如 CNY）")
-
-        async with self._tenant_transaction(actor.user_id, actor.tenant_id) as conn:
-            try:
-                row = await conn.fetchrow(
-                    "SELECT * FROM identity.create_tenant($1, $2, $3)",
-                    actor.user_id,
-                    clean_name,
-                    base_currency.upper(),
-                )
-            except asyncpg.PostgresError as exc:
-                if "TENANT_NAME_INVALID" in str(exc):
-                    raise ValidationError("租户名称长度必须在 2 到 64 个字符之间") from exc
-                raise
-        if row is None:
-            raise ForbiddenError("租户创建失败")
-
-        logger.info("租户就绪: %s (owner=%s)", row["out_tenant_id"], actor.user_id)
-        return {
-            "tenantId": str(row["out_tenant_id"]),
-            "name": row["out_tenant_name"],
-            "role": row["out_role"],
-        }
 
     # -- 企业微信绑定 ----------------------------------------------------------
     async def create_binding_challenge(self, actor: TenantContext) -> dict:
@@ -996,18 +909,24 @@ class IdentityService:
                 email,
             )
             if user_id is not None:
+                recently_issued = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM identity.password_reset_tokens
+                        WHERE user_id = $1
+                          AND created_at > now() - interval '60 seconds'
+                          AND consumed_at IS NULL
+                          AND expires_at > now()
+                    )
+                    """,
+                    user_id,
+                )
+                if recently_issued:
+                    return {"status": "sent", "token": None}
                 token = generate_token(32)
                 token_hash = self._password_reset_token_hash(token)
                 expires_at = _now() + timedelta(
                     minutes=self.settings.password_reset_token_ttl_minutes
-                )
-                await conn.execute(
-                    """
-                    UPDATE identity.password_reset_tokens
-                       SET consumed_at = now()
-                     WHERE user_id = $1 AND consumed_at IS NULL
-                    """,
-                    user_id,
                 )
                 await conn.execute(
                     """

@@ -1,13 +1,12 @@
-"""HTTP-layer adapters for the canonical services in :mod:`modules`.
+"""HTTP-layer adapters for canonical backend domain services.
 
-The backend package owns transport concerns only (FastAPI, cookies and response
-envelopes). Business services are constructed here so every route uses the
-same domain implementation as workers and tests.
+Service construction stays explicit so routes, integrations and tests use the
+same implementation and security settings.
 """
 
 from backend.common.tenancy import TenantContext as HttpTenantContext
 from backend.config import Settings
-from modules.identity.service import (
+from backend.identity.domain_service import (
     IdentityService,
     IdentitySettings,
     TenantContext as DomainTenantContext,

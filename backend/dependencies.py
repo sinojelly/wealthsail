@@ -18,7 +18,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.common.auth import AuthSession, decode_access_token
-from backend.common.database import Pool, create_pool
+from backend.common.database import Pool, api_system_transaction, create_pool
 from backend.common.tenancy import TenantContext, resolve_tenant_context
 from backend.config import Settings
 from backend.errors import AuthRequiredError
@@ -55,13 +55,23 @@ def _extract_bearer(
     return credentials.credentials
 
 
-def get_auth_session(
+async def get_auth_session(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> AuthSession:
     token = _extract_bearer(credentials)
     settings: Settings = request.app.state.settings
-    return decode_access_token(token, settings.jwt_secret, settings.jwt_algorithm)
+    session = decode_access_token(token, settings.jwt_secret, settings.jwt_algorithm)
+    token_version = int(session.extra.get("auth_version", 1))
+    pool: Pool = request.app.state.db_pool
+    async with api_system_transaction(pool) as conn:
+        current_version = await conn.fetchval(
+            "SELECT auth_version FROM identity.profiles WHERE id = $1",
+            session.user_id,
+        )
+    if current_version is None or int(current_version) != token_version:
+        raise AuthRequiredError("访问会话已撤销，请重新登录")
+    return session
 
 
 def get_tenant_context(

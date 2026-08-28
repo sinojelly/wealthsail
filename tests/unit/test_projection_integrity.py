@@ -10,6 +10,7 @@ import pytest
 from backend.market.repository import (
     derive_account_nav,
     rebuild_confirmed_holdings,
+    refresh_account_nav,
     refresh_positions,
 )
 
@@ -164,3 +165,36 @@ def test_cash_only_account_has_complete_fresh_nav() -> None:
     assert nav.total_nav == Decimal("100.00")
     assert nav.coverage_pct == Decimal("100.00")
     assert nav.quality == "FRESH"
+
+
+class _NavConnection:
+    def __init__(self) -> None:
+        self.cash_sql = ""
+
+    async def fetch(self, _sql: str, *_args):
+        return [{"account_id": "account-a"}]
+
+    async def fetchrow(self, sql: str, *_args):
+        normalized = " ".join(sql.split())
+        if "ledger.ledger_legs" in normalized:
+            self.cash_sql = normalized
+            return {"cash_balance": Decimal("100"), "principal": Decimal("100")}
+        if "ledger.position_snapshots" in normalized:
+            return {"positions_value": 0, "total": 0, "priced_count": 0}
+        return None
+
+    async def execute(self, _sql: str, *_args):
+        return "INSERT 0 1"
+
+
+@pytest.mark.asyncio
+async def test_account_nav_excludes_reversal_legs_from_cash() -> None:
+    conn = _NavConnection()
+
+    assert await refresh_account_nav(
+        conn,
+        tenant_id="tenant-a",
+        as_of_date=date(2026, 8, 28),
+    ) == 1
+    assert "ev.event_type <> 'REVERSAL'" in conn.cash_sql
+    assert "reversal.reverses_event_id = ev.id" in conn.cash_sql

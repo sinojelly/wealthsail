@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.common.database import Pool, tenant_transaction
@@ -26,6 +26,17 @@ router = APIRouter(prefix="/auth", tags=["identity"])
 logger = logging.getLogger("wealthsail.identity.api")
 
 
+async def _deliver_password_reset_email(
+    settings: Settings, *, recipient: str, token: str
+) -> None:
+    try:
+        await send_password_reset_email(settings, recipient=recipient, token=token)
+    except Exception:
+        # The public response remains identical and an older unconsumed token
+        # stays valid when mail delivery has a transient failure.
+        logger.exception("password-reset email delivery failed")
+
+
 class LoginRequest(BaseModel):
     email: str = Field(description="登录邮箱")
     password: str = Field(min_length=1, description="登录口令")
@@ -45,17 +56,6 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirmRequest(BaseModel):
     token: str = Field(min_length=16)
     newPassword: str = Field(min_length=8, max_length=128)
-
-
-class TenantCreateRequest(BaseModel):
-    name: str = Field(min_length=2, max_length=64)
-    baseCurrency: str = Field(default="CNY", min_length=3, max_length=3)
-
-
-class SelfRegisterRequest(TenantCreateRequest):
-    email: str
-    password: str = Field(min_length=8, max_length=128)
-    nickname: str | None = Field(default=None, max_length=32)
 
 
 class InvitationRequest(BaseModel):
@@ -98,26 +98,10 @@ async def register(
     return ok(data, request_id=request_id, as_of=as_of)
 
 
-@router.post("/register-with-tenant", status_code=201)
-async def register_with_tenant(
-    body: SelfRegisterRequest,
-    pool: Pool = Depends(get_pool),
-    settings: Settings = Depends(get_settings_dep),
-    request_id: str = Depends(get_request_id),
-) -> dict:
-    data = await identity_service(pool, settings).self_register(
-        email=body.email,
-        password=body.password,
-        nickname=body.nickname,
-        tenant_name=body.name,
-        base_currency=body.baseCurrency,
-    )
-    return ok(data, request_id=request_id, as_of=now_shanghai())
-
-
 @router.post("/password-reset/request")
 async def request_password_reset(
     body: PasswordResetRequest,
+    background_tasks: BackgroundTasks,
     pool: Pool = Depends(get_pool),
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
@@ -125,14 +109,12 @@ async def request_password_reset(
     result = await identity_service(pool, settings).request_password_reset(email=body.email)
     token = result.pop("token", None)
     if token:
-        try:
-            await send_password_reset_email(
-                settings, recipient=body.email.strip().lower(), token=token
-            )
-        except Exception:
-            # Keep the public response identical for registered and unknown
-            # addresses, including during a transient SMTP outage.
-            logger.exception("password-reset email delivery failed")
+        background_tasks.add_task(
+            _deliver_password_reset_email,
+            settings,
+            recipient=body.email.strip().lower(),
+            token=token,
+        )
     return ok({"status": "sent"}, request_id=request_id, as_of=now_shanghai())
 
 
@@ -145,20 +127,6 @@ async def confirm_password_reset(
 ) -> dict:
     data = await identity_service(pool, settings).reset_password(
         token=body.token, new_password=body.newPassword
-    )
-    return ok(data, request_id=request_id, as_of=now_shanghai())
-
-
-@router.post("/tenants", status_code=201)
-async def create_tenant(
-    body: TenantCreateRequest,
-    pool: Pool = Depends(get_pool),
-    settings: Settings = Depends(get_settings_dep),
-    ctx: TenantContext = Depends(get_tenant_context),
-    request_id: str = Depends(get_request_id),
-) -> dict:
-    data = await identity_service(pool, settings).create_tenant(
-        domain_tenant(ctx), name=body.name, base_currency=body.baseCurrency
     )
     return ok(data, request_id=request_id, as_of=now_shanghai())
 
@@ -232,6 +200,7 @@ async def logout(
 @router.post("/switch-tenant")
 async def switch_tenant(
     body: SwitchTenantRequest,
+    response: Response,
     request: Request,
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -244,6 +213,9 @@ async def switch_tenant(
         tenant_id=body.tenantId,
         refresh_token=request.cookies.get(settings.refresh_cookie_name),
     )
+    refresh_token = data.pop("_refreshToken", None)
+    if refresh_token:
+        _set_refresh_cookie(response, settings, refresh_token)
     return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
@@ -308,7 +280,7 @@ async def revoke_wecom_binding_current(
         )
         binding = status.get("binding")
         if binding is None:
-            from modules.errors import NotFoundError
+            from backend.errors import NotFoundError
 
             raise NotFoundError("活动绑定不存在或已撤销")
         data = await identity_service(pool, settings).revoke_binding(

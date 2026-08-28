@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import quote
 
 from backend.config import Settings
 
@@ -16,7 +17,12 @@ async def send_password_reset_email(
         if settings.is_production:
             raise RuntimeError("SMTP is not configured")
         return
-    reset_url = f"{settings.web_base_url.rstrip('/')}/login?token={token}"
+    # A URL fragment is never sent in the HTTP request line or Referer. The
+    # browser reads it once and immediately removes it from the address bar.
+    reset_url = (
+        f"{settings.web_base_url.rstrip('/')}/login"
+        f"#reset-token={quote(token, safe='')}"
+    )
     message = EmailMessage()
     message["Subject"] = "WealthSail 密码重置"
     message["From"] = settings.smtp_from

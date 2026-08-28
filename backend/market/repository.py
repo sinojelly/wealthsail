@@ -424,8 +424,10 @@ async def refresh_account_nav(
             JOIN ledger.ledger_events ev
               ON ev.tenant_id = leg.tenant_id AND ev.id = leg.event_id
             WHERE leg.tenant_id = $1 AND ev.account_id = $2
-              AND leg.leg_type = 'CASH'
+              -- Fees and taxes are separate legs but still reduce cash.
+              AND leg.amount IS NOT NULL
               AND ev.status = 'CONFIRMED'
+              AND ev.event_type <> 'REVERSAL'
               AND NOT EXISTS (
                   -- 与 refresh_positions 保持一致：被 REVERSAL 逆转的事件
                   -- 不再参与现金/本金计算。

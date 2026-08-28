@@ -1,4 +1,9 @@
-"""Compatibility facade for the canonical :mod:`modules.identity` domain."""
+"""Identity facade and avatar persistence helpers.
+
+Legacy function-shaped call sites delegate to the canonical class-based
+implementation in this same vertical domain. New HTTP code constructs the
+class directly through :mod:`backend.domain`.
+"""
 
 from __future__ import annotations
 
@@ -17,8 +22,14 @@ from backend.config import Settings
 from backend.dependencies import write_audit
 from backend.domain import domain_tenant, identity_service
 from backend.errors import NotFoundError, ValidationError_
-from modules.identity.service import IdentityService, IdentitySettings, credentials_are_valid, hmac_digest
-from modules.errors import ValidationError as DomainValidationError
+from backend.identity.domain_service import (
+    IdentityService,
+    IdentitySettings,
+    credentials_are_valid,
+    hmac_digest,
+)
+
+__all__ = ["IdentityService", "IdentitySettings", "credentials_are_valid"]
 
 
 def refresh_token_hash(settings: Settings, token: str) -> str:
@@ -104,10 +115,7 @@ async def get_me(conn, ctx: TenantContext):
 
 
 async def update_profile(conn, ctx: TenantContext, **kwargs):
-    try:
-        return await _connection_service().update_profile(conn, domain_tenant(ctx), **kwargs)
-    except DomainValidationError as exc:
-        raise ValidationError_(exc.message) from exc
+    return await _connection_service().update_profile(conn, domain_tenant(ctx), **kwargs)
 
 
 AVATAR_MAX_BYTES = 2 * 1024 * 1024

@@ -11,12 +11,11 @@ from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, Field
 
 from backend.common.database import Pool, tenant_transaction
+from backend.common.auth import verify_password
 from backend.common.tenancy import TenantContext
 from backend.dependencies import get_pool, get_request_id, get_tenant_context, now_shanghai
-from backend.errors import ok
-from modules.errors import AuthRequiredError
-from modules.identity.service import verify_password
-from modules.ledger.repository import LedgerRepository
+from backend.errors import AuthRequiredError, ok
+from backend.trading import service
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -47,7 +46,7 @@ async def create_fill_draft(
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await LedgerRepository().create_trade_fill_draft(
+        data = await service.create_trade_fill_draft(
             conn,
             tenant_id=ctx.tenant_id,
             account_id=str(body.accountId),
@@ -80,7 +79,7 @@ async def confirm_fill(
         )
         if not verify_password(body.password, password_hash):
             raise AuthRequiredError("重新验证口令失败")
-        data = await LedgerRepository().confirm_trade_fill(
+        data = await service.confirm_trade_fill(
             conn,
             tenant_id=ctx.tenant_id,
             fill_id=fill_id,
@@ -99,5 +98,5 @@ async def list_fills(
     request_id: str = Depends(get_request_id),
 ) -> dict:
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await LedgerRepository().list_trade_fills(conn, ctx.tenant_id, limit=limit)
+        data = await service.list_trade_fills(conn, ctx.tenant_id, limit=limit)
     return ok(data, request_id=request_id, as_of=now_shanghai())

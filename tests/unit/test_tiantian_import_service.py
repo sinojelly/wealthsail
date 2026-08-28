@@ -439,7 +439,7 @@ async def test_first_confirmation_rebuilds_inside_transaction_and_returns_pendin
         patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
         patch("backend.portfolio.imports.service.repository.confirm_draft", confirm),
         patch(
-            "backend.portfolio.service._recompute_projections",
+            "backend.portfolio.service.recompute_projections",
             AsyncMock(),
         ) as recompute,
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
@@ -491,7 +491,7 @@ async def test_replayed_confirmation_does_not_rebuild_or_write_a_second_audit() 
     with (
         patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
         patch("backend.portfolio.imports.service.repository.confirm_draft", confirm),
-        patch("backend.portfolio.service._recompute_projections", AsyncMock()) as recompute,
+        patch("backend.portfolio.service.recompute_projections", AsyncMock()) as recompute,
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
     ):
         await confirm_tiantian_import(
@@ -542,7 +542,7 @@ async def test_confirmation_failure_writes_neither_projection_nor_audit() -> Non
             "backend.portfolio.imports.service.repository.confirm_draft",
             AsyncMock(side_effect=VersionConflictError("stale")),
         ),
-        patch("backend.portfolio.service._recompute_projections", AsyncMock()) as recompute,
+        patch("backend.portfolio.service.recompute_projections", AsyncMock()) as recompute,
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
     ):
         with pytest.raises(VersionConflictError):

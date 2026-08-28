@@ -1,8 +1,8 @@
-"""建议采纳决策领域服务（modules/research/service.py）。
+"""建议采纳与修订决策服务。
 
 实现"建议 → 决策 → 成交"分离的第一环：用户对投研建议的响应只写
 ``reporting.decisions``（ACCEPTED / IGNORED / DEFERRED，幂等），**不**产生
-任何账本事实。只有当用户独立确认成交时，modules/ledger/repository.py 的
+任何账本事实。只有当用户独立确认成交时，trading 领域的
 ``record_trade`` / ``confirm_trade_fill`` 才会写入 ``ledger.trade_fills`` 并
 关联账本事件——决策与成交通过 ``decision_id`` 弱关联（ON DELETE SET NULL），
 互不阻塞。
@@ -11,12 +11,18 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
-from modules.database import AsyncConnection
-from modules.errors import ConflictError, NotFoundError
+from asyncpg import Connection as AsyncConnection
 
-logger = logging.getLogger("wealthsail.modules.research")
+from backend.errors import (
+    IdempotencyConflictError as ConflictError,
+    NotFoundError,
+    VersionConflictError,
+)
+
+logger = logging.getLogger("wealthsail.research.decisions")
 
 # 与 007 迁移 CHECK 对齐
 DECISION_ACTIONS = {"ACCEPTED", "IGNORED", "DEFERRED"}
@@ -85,6 +91,40 @@ class DecisionService:
             previous_decision_id,
         )
         if decision_id is not None:
+            if previous_decision_id:
+                previous = await conn.fetchrow(
+                    """
+                    SELECT id, user_id, report_id, recommendation_id, status
+                    FROM reporting.decisions
+                    WHERE id = $1 AND tenant_id = $2
+                    FOR UPDATE
+                    """,
+                    previous_decision_id,
+                    tenant_id,
+                )
+                if previous is None or str(previous["user_id"]) != str(user_id):
+                    raise NotFoundError("被修订的决策不存在")
+                same_subject = (
+                    (str(previous["report_id"]) if previous["report_id"] else None)
+                    == (str(report_id) if report_id else None)
+                    and (
+                        str(previous["recommendation_id"])
+                        if previous["recommendation_id"]
+                        else None
+                    )
+                    == (str(recommendation_id) if recommendation_id else None)
+                )
+                if not same_subject or previous["status"] != "RECORDED":
+                    raise VersionConflictError("被修订的决策对象或状态已经变化")
+                await conn.execute(
+                    """
+                    UPDATE reporting.decisions
+                    SET status = 'SUPERSEDED'
+                    WHERE id = $1 AND tenant_id = $2 AND status = 'RECORDED'
+                    """,
+                    previous_decision_id,
+                    tenant_id,
+                )
             await conn.execute(
                 """
                 INSERT INTO audit.audit_log
@@ -96,7 +136,7 @@ class DecisionService:
                 tenant_id,
                 user_id,
                 str(decision_id),
-                {"decisionAction": action},
+                json.dumps({"decisionAction": action}, ensure_ascii=False),
             )
             logger.info(
                 "决策已记录: tenant=%s action=%s decision=%s",
@@ -203,7 +243,7 @@ class DecisionService:
             tenant_id,
             user_id,
             str(row["id"]),
-            {"reason": reason},
+            json.dumps({"reason": reason}, ensure_ascii=False),
         )
         logger.info("决策已撤回: tenant=%s decision=%s", tenant_id, decision_id)
         return {
@@ -222,7 +262,7 @@ class DecisionService:
             """
             SELECT d.id, d.decision_action, d.status, d.reason, d.correction,
                    d.decided_at, d.retracted_reason, d.retracted_at,
-                   d.report_id, d.recommendation_id,
+                   d.report_id, d.recommendation_id, d.previous_decision_id,
                    r.summary AS recommendation_summary,
                    COALESCE(i.canonical_name, '') AS instrument_name,
                    COALESCE(a.alias_value, '') AS ticker
@@ -258,6 +298,11 @@ class DecisionService:
                     "retractedAt": r["retracted_at"],
                     "reportId": str(r["report_id"]) if r["report_id"] else None,
                     "recommendationId": str(r["recommendation_id"]) if r["recommendation_id"] else None,
+                    "previousDecisionId": (
+                        str(r["previous_decision_id"])
+                        if r["previous_decision_id"]
+                        else None
+                    ),
                     "instrument": (
                         f"{r['ticker']} {r['instrument_name']}".strip()
                         if r["ticker"] or r["instrument_name"]

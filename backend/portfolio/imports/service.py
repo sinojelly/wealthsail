@@ -664,9 +664,9 @@ async def confirm_tiantian_import(
             command_content_hash=content_hash,
         )
         if not confirmed["already_applied"]:
-            from backend.portfolio.service import _recompute_projections
+            from backend.portfolio.service import recompute_projections
 
-            await _recompute_projections(conn, tenant_id=ctx.tenant_id)
+            await recompute_projections(conn, tenant_id=ctx.tenant_id)
             await write_audit(
                 conn,
                 tenant_id=ctx.tenant_id,

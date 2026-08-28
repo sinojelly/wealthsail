@@ -454,7 +454,7 @@ async def search_instruments(
     return {"items": items, "total": len(items)}
 
 
-async def _recompute_projections(
+async def recompute_projections(
     conn: asyncpg.Connection, *, tenant_id: str, extra_quotes: dict | None = None
 ) -> None:
     """Recompute today's position + NAV projections for the tenant.
@@ -743,7 +743,7 @@ async def confirm_position_import(
         if confirmed.get("status") not in (None, "CONFIRMED"):
             raise ValidationError_("初始化草稿当前状态不允许确认")
         if not confirmed.get("already_confirmed"):
-            await _recompute_projections(conn, tenant_id=ctx.tenant_id)
+            await recompute_projections(conn, tenant_id=ctx.tenant_id)
             await write_audit(
                 conn,
                 tenant_id=ctx.tenant_id,

@@ -38,27 +38,6 @@ export async function register(input: {
   return envelope.data;
 }
 
-export async function registerWithTenant(input: {
-  email: string;
-  password: string;
-  name: string;
-  baseCurrency?: string;
-  nickname?: string;
-}) {
-  const envelope = await request<{
-    userId: string;
-    email: string;
-    nickname: string;
-    tenantId: string;
-    tenantName: string;
-    role: "OWNER";
-  }>("/v1/auth/register-with-tenant", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return envelope.data;
-}
-
 export async function requestPasswordReset(email: string): Promise<void> {
   await request<{ status: "sent" }>("/v1/auth/password-reset/request", {
     method: "POST",
