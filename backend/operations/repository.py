@@ -102,7 +102,9 @@ async def outbox_status(conn: asyncpg.Connection, tenant_id: str) -> dict:
             "pending": counts.get("PENDING", 0),
             "sending": counts.get("SENDING", 0),
             "sent": counts.get("SENT", 0),
+            "unknown": counts.get("UNKNOWN", 0),
             "dead": counts.get("DEAD", 0),
+            "cancelled": counts.get("CANCELLED", 0),
         },
         "recent": [
             {

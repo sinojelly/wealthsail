@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     outbox_poll_interval_seconds: float = Field(default=15.0)
     outbox_delivery_concurrency: int = Field(default=4, ge=1, le=20)
     scheduler_tick_seconds: float = Field(default=20.0)
+    job_recovery_window_minutes: int = Field(default=30, ge=5, le=240)
+    job_recovery_max_attempts: int = Field(default=5, ge=1, le=20)
 
     # --- Independent runtime monitor ---------------------------------------
     # The monitor is a separate systemd timer, so it can report a stopped

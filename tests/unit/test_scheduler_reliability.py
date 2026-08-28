@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from backend.config import Settings
+from backend.jobs import runner
 from backend.jobs.runner import business_job_key, claim_job_run, finish_job_run
 from backend.jobs.scheduler import SCHEDULES, Scheduler
 
@@ -23,6 +25,35 @@ def test_business_job_key_ignores_tick_seconds_and_worker_restart() -> None:
     assert business_job_key("job-7", "FUND_1430", first) == (
         "job:job-7:2026-08-26:FUND_1430"
     )
+
+
+def test_intraday_business_key_is_idempotent_per_five_minute_bucket() -> None:
+    shanghai = ZoneInfo("Asia/Shanghai")
+    first = datetime(2026, 8, 26, 9, 30, 1, tzinfo=shanghai)
+    same_bucket = datetime(2026, 8, 26, 9, 34, 59, tzinfo=shanghai)
+    next_bucket = datetime(2026, 8, 26, 9, 35, tzinfo=shanghai)
+
+    assert business_job_key("job-7", "INTRADAY", first) == business_job_key(
+        "job-7", "INTRADAY", same_bucket
+    )
+    assert business_job_key("job-7", "INTRADAY", first) != business_job_key(
+        "job-7", "INTRADAY", next_bucket
+    )
+    assert business_job_key("job-7", "INTRADAY", first).endswith(
+        ":INTRADAY:0930"
+    )
+
+
+def test_fixed_session_has_bounded_restart_catch_up_window() -> None:
+    pre_market = next(s for s in SCHEDULES if s.session == "PRE_MARKET")
+    assert pre_market.catch_up_minutes == 15
+    assert pre_market.hour == 8 and pre_market.minute == 30
+
+    from backend.jobs.scheduler import is_due
+
+    assert is_due(pre_market, datetime(2026, 8, 27, 8, 40)) is True
+    assert is_due(pre_market, datetime(2026, 8, 27, 8, 44)) is True
+    assert is_due(pre_market, datetime(2026, 8, 27, 8, 45)) is False
 
 
 @pytest.mark.asyncio
@@ -112,6 +143,36 @@ async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_tim
     assert dispatched == []
 
 
+@pytest.mark.asyncio
+async def test_simultaneous_sessions_start_independently() -> None:
+    """A slow intraday report must not delay the time-sensitive 14:30 report."""
+    shanghai = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 8, 27, 14, 30, tzinfo=shanghai)
+    fund_started = asyncio.Event()
+    started: list[str] = []
+
+    async def execute(session: str, _at: datetime) -> None:
+        started.append(session)
+        if session == "INTRADAY":
+            await fund_started.wait()
+        else:
+            fund_started.set()
+
+    async def trading_day(_now: datetime) -> bool:
+        return True
+
+    scheduler = Scheduler(
+        Settings(_env_file=None),
+        execute,
+        trading_day_check=trading_day,
+        now_provider=lambda: now,
+    )
+
+    await asyncio.wait_for(scheduler._tick(), timeout=0.5)
+
+    assert set(started) == {"INTRADAY", "FUND_1430"}
+
+
 class _Acquire:
     def __init__(self, conn):
         self.conn = conn
@@ -174,3 +235,45 @@ async def test_job_completion_uses_lease_token_compare_and_set() -> None:
     assert updated is True
     assert "lease_token = $2" in conn.sql
     assert "status = 'RUNNING'" in conn.sql
+
+
+@pytest.mark.asyncio
+async def test_recovery_scan_executes_due_report_run_with_original_key(
+    monkeypatch,
+) -> None:
+    class Conn:
+        def __init__(self):
+            self.sql = ""
+            self.args = ()
+
+        async def fetch(self, sql, *args):
+            self.sql = sql
+            self.args = args
+            return [
+                {
+                    "id": "job-1",
+                    "tenant_id": "tenant-1",
+                    "job_name": "pre-market",
+                    "report_session": "PRE_MARKET",
+                    "job_key": "job:job-1:2026-08-26:PRE_MARKET",
+                }
+            ]
+
+    conn = Conn()
+    executed: list[tuple[str, str]] = []
+
+    async def execute(_pool, _settings, job, key, session):
+        executed.append((key, session))
+        assert job["id"] == "job-1"
+        return "COMPLETED:report=report-1"
+
+    monkeypatch.setattr(runner, "_execute_with_lease", execute)
+    outcomes = await runner.run_recoverable_jobs(
+        _Pool(conn), Settings(_env_file=None), limit=10
+    )
+
+    assert "jr.status IN ('PENDING', 'FAILED')" in conn.sql
+    assert "jr.attempt_count <" in conn.sql
+    assert "make_interval(mins =>" in conn.sql
+    assert executed == [("job:job-1:2026-08-26:PRE_MARKET", "PRE_MARKET")]
+    assert outcomes == {"job:job-1:2026-08-26:PRE_MARKET": "COMPLETED:report=report-1"}

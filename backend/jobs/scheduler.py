@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,9 @@ class SessionSchedule:
     hour: int
     dow: tuple[int, ...] = (1, 2, 3, 4, 5)
     every_minutes: int = 0  # >0 → fire every N minutes while inside the hour range
+    # Fixed sessions can be caught up after a short Worker restart.  The
+    # persistent job key keeps repeated ticks idempotent across processes.
+    catch_up_minutes: int = 15
 
 
 SCHEDULES: tuple[SessionSchedule, ...] = (
@@ -53,13 +56,42 @@ def is_due(schedule: SessionSchedule, now: datetime) -> bool:
     if now.weekday() + 1 not in schedule.dow:
         return False
     if schedule.every_minutes > 0:
-        # INTRADAY: 09:30 – 15:00 window, every N minutes.
-        start = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        end = now.replace(hour=15, minute=0, second=0, microsecond=0)
-        if not (start <= now < end):
+        # INTRADAY follows the exchange sessions and does not run through the
+        # 11:30-13:00 lunch break.
+        morning_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        morning_end = now.replace(hour=11, minute=30, second=0, microsecond=0)
+        afternoon_start = now.replace(hour=13, minute=0, second=0, microsecond=0)
+        afternoon_end = now.replace(hour=15, minute=0, second=0, microsecond=0)
+        inside_session = (
+            morning_start <= now < morning_end
+            or afternoon_start <= now < afternoon_end
+        )
+        if not inside_session:
             return False
         return now.minute % schedule.every_minutes == 0
-    return now.hour == schedule.hour and now.minute == schedule.minute
+    scheduled_at = now.replace(
+        hour=schedule.hour,
+        minute=schedule.minute,
+        second=0,
+        microsecond=0,
+    )
+    delay = now - scheduled_at
+    return timedelta(0) <= delay < timedelta(minutes=schedule.catch_up_minutes)
+
+
+def _fire_key(schedule: SessionSchedule, now: datetime) -> tuple[str, str]:
+    """Return the logical schedule slot, not the scheduler's current tick."""
+    if schedule.every_minutes > 0:
+        bucket_minute = now.minute - (now.minute % schedule.every_minutes)
+        slot = now.replace(minute=bucket_minute, second=0, microsecond=0)
+    else:
+        slot = now.replace(
+            hour=schedule.hour,
+            minute=schedule.minute,
+            second=0,
+            microsecond=0,
+        )
+    return schedule.session, slot.strftime("%Y%m%d%H%M")
 
 
 async def is_trading_day(conn, day: datetime) -> bool:
@@ -131,16 +163,29 @@ class Scheduler:
         if self._trading_day_check is not None and not await self._trading_day_check(now):
             logger.info("calendar marks %s as non-trading; sessions skipped", now.date())
             return
+        dispatches: list[tuple[SessionSchedule, tuple[str, str]]] = []
         for schedule in due:
-            key = (schedule.session, now.strftime("%Y%m%d%H%M"))
+            key = _fire_key(schedule, now)
             if key in self._last_fired:
                 continue
             self._last_fired.add(key)
-            # Bound the memory of fired keys.
-            if len(self._last_fired) > 512:
-                self._last_fired.clear()
-            logger.info("dispatching %s at %s", schedule.session, now.isoformat())
-            try:
-                await self._execute(schedule.session, now)
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduler execution failed for %s", schedule.session)
+            dispatches.append((schedule, key))
+        if not dispatches:
+            return
+        # Bound memory without forgetting slots from the current day.
+        if len(self._last_fired) > 512:
+            today = now.strftime("%Y%m%d")
+            self._last_fired = {
+                key for key in self._last_fired if key[1].startswith(today)
+            }
+        await asyncio.gather(
+            *(self._dispatch(schedule, now) for schedule, _key in dispatches)
+        )
+
+    async def _dispatch(self, schedule: SessionSchedule, now: datetime) -> None:
+        """Execute one due session while isolating it from sibling failures."""
+        logger.info("dispatching %s at %s", schedule.session, now.isoformat())
+        try:
+            await self._execute(schedule.session, now)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler execution failed for %s", schedule.session)

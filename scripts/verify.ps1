@@ -19,6 +19,7 @@ try {
     if (-not (Test-Path -LiteralPath $Python)) {
         throw "Python virtual environment not found: $Python"
     }
+    Invoke-Checked { & $Python scripts/check_conflict_markers.py } "Merge conflict marker check"
     Invoke-Checked { & $Python -m ruff check backend tests scripts } "Python lint"
     Invoke-Checked { & $Python -m compileall -q backend scripts } "Python compile"
     Invoke-Checked { & $Python -m pytest -q } "Backend tests"

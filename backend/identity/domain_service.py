@@ -12,7 +12,7 @@
   * 会话管理（refresh token 轮换、登出、会话列表）
 
 数据库操作默认在 ``wealthsail_api`` 角色 + RLS 事务内执行（与
-backend.common.database 的十户事务语义一致）；调用方已在租户事务内时，
+backend.common.database 的租户事务语义一致）；调用方已在租户事务内时，
 可将连接传入 ``conn`` 参数以复用该事务。
 """
 
@@ -39,6 +39,7 @@ from backend.common.auth import (
 )
 from backend.common.database import (
     Pool,
+    apply_tenant_context,
     api_system_transaction,
     tenant_transaction,
 )
@@ -107,7 +108,7 @@ def generate_token(entropy_bytes: int = 16) -> str:
 
 
 def hmac_digest(key: str, value: str) -> str:
-    """加盐 HMAC-SHA256 十六进制摘要（令牌明文永不落库）。"""
+    """带服务端密钥的 HMAC-SHA256 摘要（令牌明文永不落库）。"""
     return hmac.new(
         key.encode("utf-8"), value.encode("utf-8"), hashlib.sha256
     ).hexdigest()
@@ -664,12 +665,16 @@ class IdentityService:
                 if "BINDING_TOKEN_EXHAUSTED" in message:
                     raise ValidationError("绑定口令尝试次数超限，请重新生成") from exc
                 raise
-        if binding is None:
-            raise NotFoundError("绑定口令无效或已过期")
-
-        async with self._tenant_transaction(
-            str(binding["out_user_id"]), str(binding["out_tenant_id"])
-        ) as conn:
+            if binding is None:
+                raise NotFoundError("绑定口令无效或已过期")
+            # The RPC reveals the tenant only after consuming the challenge.
+            # Apply its RLS claims on this same transaction so the binding and
+            # immutable audit fact either both commit or both roll back.
+            await apply_tenant_context(
+                conn,
+                str(binding["out_user_id"]),
+                str(binding["out_tenant_id"]),
+            )
             await self._write_audit(
                 conn,
                 tenant_id=str(binding["out_tenant_id"]),

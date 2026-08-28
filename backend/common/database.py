@@ -198,12 +198,28 @@ async def tenant_transaction(
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(f"SET LOCAL ROLE {role};")
-            await conn.execute(
-                "SELECT set_config('request.jwt.claims', $1, true);",
-                _claims_json(user_id, tenant_id, role),
-            )
+            await apply_tenant_context(conn, user_id, tenant_id, role=role)
             yield conn
+
+
+async def apply_tenant_context(
+    conn: asyncpg.Connection,
+    user_id: str,
+    tenant_id: str,
+    *,
+    role: str = RLS_ROLE,
+) -> None:
+    """Apply the RLS role and claims inside an already-open transaction.
+
+    This is used when a privileged Domain RPC discovers the tenant only after
+    it has atomically consumed a token, but the following tenant audit row must
+    still commit or roll back in that same transaction.
+    """
+    await conn.execute(f"SET LOCAL ROLE {role};")
+    await conn.execute(
+        "SELECT set_config('request.jwt.claims', $1, true);",
+        _claims_json(user_id, tenant_id, role),
+    )
 
 
 @asynccontextmanager

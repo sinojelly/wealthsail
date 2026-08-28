@@ -613,3 +613,45 @@ async def get_latest_market_sentiment(
         limit,
     )
     return [dict(r) for r in rows]
+
+
+async def insert_market_hot_snapshot(
+    conn: asyncpg.Connection, *, data: dict
+) -> str:
+    """Persist one immutable Worker-produced market-hot snapshot."""
+    row = await conn.fetchrow(
+        """
+        INSERT INTO market.market_hot_snapshots
+            (items, item_count, source_name, source_as_of, retrieved_at,
+             quality_status, method_version)
+        VALUES ($1::jsonb, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        """,
+        json.dumps(data["items"], ensure_ascii=False),
+        len(data["items"]),
+        data["source_name"],
+        data.get("source_as_of"),
+        data["retrieved_at"],
+        data["quality_status"],
+        data["method_version"],
+    )
+    return str(row["id"])
+
+
+async def get_latest_market_hot(conn: asyncpg.Connection) -> dict | None:
+    """Read the latest market-hot snapshot without external I/O."""
+    row = await conn.fetchrow(
+        """
+        SELECT id, items, item_count, source_name, source_as_of, retrieved_at,
+               quality_status, method_version, created_at AS updated_at
+          FROM market.market_hot_snapshots
+         ORDER BY retrieved_at DESC, id DESC
+         LIMIT 1
+        """
+    )
+    if row is None:
+        return None
+    result = dict(row)
+    if isinstance(result["items"], str):
+        result["items"] = json.loads(result["items"])
+    return result

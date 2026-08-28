@@ -1,13 +1,48 @@
 import { useQuery } from "@tanstack/react-query";
 import { Flame, RefreshCw } from "lucide-react";
+import {
+  fmtTurnoverYuan,
+  fmtVolumeHands,
+  getMarketHot,
+  type MarketHotResponse,
+} from "../../api/market";
 import PageHeader from "../../components/layout/PageHeader";
-import { fmtTurnoverYuan, fmtVolumeHands, getMarketHot } from "../../api/market";
+
+type HotQuality = MarketHotResponse["qualityStatus"];
+
+const QUALITY_PRESENTATION: Record<
+  HotQuality,
+  { label: string; detail: string; className: string }
+> = {
+  FRESH: {
+    label: "新鲜快照",
+    detail: "Worker 已刷新全市场热点快照，可按当前快照查看。",
+    className: "alert-info",
+  },
+  ESTIMATED: {
+    label: "估算热点",
+    detail: "当前结果来自有限候选池，不代表全市场实时排名。",
+    className: "alert-warning",
+  },
+  STALE: {
+    label: "快照已过期",
+    detail: "当前展示最近一次持久化结果，请勿视为实时行情。",
+    className: "alert-warning",
+  },
+  UNAVAILABLE: {
+    label: "热点数据不可用",
+    detail: "暂无可审计的市场热点快照，请稍后刷新。",
+    className: "alert-danger",
+  },
+};
 
 /** 触发全局对话窗口查询某标的（ChatDrawer 监听同名事件）。 */
 function askChatAboutStock(symbol: string, name: string) {
   window.dispatchEvent(
     new CustomEvent("wealthsail:chat-ask", {
-      detail: { message: `帮我分析下 ${name}（${symbol}）的实时行情和风险` },
+      detail: {
+        message: `帮我分析一下${name}（${symbol}）的当前可用行情快照与风险`,
+      },
     }),
   );
 }
@@ -22,23 +57,31 @@ function formatPrice(price: number | null): string {
   return price == null ? "--" : price.toFixed(2);
 }
 
+function formatTimestamp(value: string | null): string {
+  if (!value) return "--";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  return timestamp.toLocaleString("zh-CN", { hour12: false });
+}
+
 export default function MarketHot() {
   const query = useQuery({
     queryKey: ["market", "hot"],
     queryFn: getMarketHot,
-    refetchInterval: 60_000, // 实时更新：每分钟自动刷新
+    refetchInterval: 60_000, // 每分钟轮询一次 Worker 持久化快照
   });
 
   const items = query.data?.items ?? [];
-  const updatedAt = query.data?.updatedAt
-    ? new Date(query.data.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })
-    : "--";
+  const quality = query.data
+    ? QUALITY_PRESENTATION[query.data.qualityStatus]
+    : null;
+  const updatedAt = formatTimestamp(query.data?.updatedAt ?? null);
 
   return (
     <>
       <PageHeader
-        title="市场热点 · 实时更新"
-        description={`全市场实时涨跌幅排行前 10 · 数据更新 ${updatedAt}`}
+        title="市场热点"
+        description={`Worker 持久化热点快照前 10 · 快照更新 ${updatedAt}`}
         actions={
           <button
             type="button"
@@ -54,11 +97,30 @@ export default function MarketHot() {
 
       <div className="panel">
         {query.isError ? (
-          <div className="alert alert-error">
+          <div className="alert alert-danger">
             <strong>行情获取失败</strong>
-            <p>数据源暂时不可用，请稍后重试。</p>
+            <p>暂时无法读取市场热点快照，请稍后重试。</p>
           </div>
         ) : null}
+
+        {query.data && quality ? (
+          <div
+            className={`alert ${quality.className}`}
+            role={query.data.qualityStatus === "FRESH" ? "status" : "alert"}
+          >
+            <div>
+              <strong>{quality.label}</strong>
+              <p>{quality.detail}</p>
+              <p className="mono">
+                来源：{query.data.source || "--"} · 源时间：
+                {formatTimestamp(query.data.sourceAsOf)} · 抓取时间：
+                {formatTimestamp(query.data.retrievedAt)} · 方法：
+                {query.data.methodVersion ?? "--"}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -101,7 +163,9 @@ export default function MarketHot() {
                     <td>{item.name}</td>
                     <td className="num">{formatPrice(item.price)}</td>
                     <td className={`num ${trendClass(item.change_pct)}`}>
-                      {item.change_pct == null ? "--" : `${item.change_pct >= 0 ? "+" : ""}${item.change_pct.toFixed(2)}%`}
+                      {item.change_pct == null
+                        ? "--"
+                        : `${item.change_pct >= 0 ? "+" : ""}${item.change_pct.toFixed(2)}%`}
                     </td>
                     <td className="num">{fmtVolumeHands(item.volume)}</td>
                     <td className="num">{fmtTurnoverYuan(item.turnover)}</td>
@@ -113,7 +177,7 @@ export default function MarketHot() {
         </div>
         <div className="market-hot-footer">
           <Flame size={14} />
-          <span>点击任意一行，AI 助手将为你分析该标的的实时行情与风险</span>
+          <span>点击任意一行，AI 助手将基于当前快照分析该标的行情与风险</span>
         </div>
       </div>
     </>

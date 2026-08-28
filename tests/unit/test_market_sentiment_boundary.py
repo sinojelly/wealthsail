@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -12,6 +13,8 @@ from fastapi.testclient import TestClient
 
 from backend.integrations import market_data
 from backend.main import app
+from backend.common.tenancy import TenantContext
+from backend.market import api as market_api
 from backend.market import service
 
 
@@ -93,6 +96,73 @@ async def test_previous_trade_date_sentiment_cannot_remain_fresh() -> None:
         result = await service.get_market_sentiment(object())
 
     assert result["qualityStatus"] == "STALE"
+
+
+@pytest.mark.asyncio
+async def test_market_hot_read_model_never_calls_a_provider() -> None:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    row = {
+        "items": [{"symbol": "600519", "name": "贵州茅台", "price": 1500}],
+        "source_name": "AkShare-OpenSource",
+        "source_as_of": now,
+        "retrieved_at": now,
+        "quality_status": "FRESH",
+        "method_version": "market-hot/v1",
+        "updated_at": now,
+    }
+    with (
+        patch(
+            "backend.market.service.repository.get_latest_market_hot",
+            AsyncMock(return_value=row),
+        ),
+        patch(
+            "backend.market.service.md.get_hot_stocks_snapshot",
+            AsyncMock(side_effect=AssertionError("API reads must not call providers")),
+        ),
+    ):
+        result = await service.get_market_hot(object())
+
+    assert result["items"][0]["symbol"] == "600519"
+    assert result["source"] == "AkShare-OpenSource"
+    assert result["qualityStatus"] == "FRESH"
+
+
+@pytest.mark.asyncio
+async def test_market_hot_without_snapshot_is_explicitly_unavailable() -> None:
+    with patch(
+        "backend.market.service.repository.get_latest_market_hot",
+        AsyncMock(return_value=None),
+    ):
+        result = await service.get_market_hot(object())
+
+    assert result["items"] == []
+    assert result["qualityStatus"] == "UNAVAILABLE"
+    assert result["source"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["sentiment", "hot"])
+async def test_market_envelope_meta_matches_read_model_quality(
+    endpoint: str, monkeypatch
+) -> None:
+    @asynccontextmanager
+    async def fake_transaction(*_args):
+        yield object()
+
+    payload = {"qualityStatus": "UNAVAILABLE", "items": []}
+    monkeypatch.setattr(market_api, "tenant_transaction", fake_transaction)
+    monkeypatch.setattr(
+        service,
+        f"get_market_{endpoint}",
+        AsyncMock(return_value=payload),
+    )
+    actor = TenantContext(user_id="user-1", tenant_id="tenant-1", tenant_role="OWNER")
+
+    handler = getattr(market_api, f"market_{endpoint}")
+    response = await handler(actor, object(), "req_market_quality")
+
+    assert response["data"]["qualityStatus"] == "UNAVAILABLE"
+    assert response["meta"]["qualityStatus"] == "UNAVAILABLE"
 
 
 @pytest.mark.parametrize(

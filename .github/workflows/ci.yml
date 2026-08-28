@@ -25,6 +25,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Reject unresolved merge conflict markers
+        run: python scripts/check_conflict_markers.py
       - run: pip install -r requirements-dev.txt
       - run: ruff check backend tests scripts
       - run: python -m compileall -q backend scripts

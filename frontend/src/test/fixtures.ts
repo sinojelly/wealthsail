@@ -364,7 +364,14 @@ export const opsFreshnessFixture: FreshnessResponse = {
 };
 
 export const opsOutboxFixture: OutboxResponse = {
-  counts: { pending: 1, sending: 0, sent: 10, dead: 0 },
+  counts: {
+    pending: 1,
+    sending: 0,
+    sent: 10,
+    unknown: 2,
+    dead: 0,
+    cancelled: 1,
+  },
   recent: [],
 };
 

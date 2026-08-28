@@ -515,6 +515,28 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if not confirmation_policy or "confirmed_by = auth.uid()" not in confirmation_policy:
         raise RuntimeError("trade fill confirmation policy does not bind auth.uid()")
 
+    replay_table = await conn.fetchval(
+        "SELECT to_regclass('workflow.wecom_callback_claims') IS NOT NULL"
+    )
+    replay_function = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname='workflow'
+          AND p.proname='claim_wecom_callback'
+          AND p.prosecdef
+        """
+    )
+    if not replay_table or replay_function != 1:
+        raise RuntimeError("WeCom callback replay guard is missing")
+
+    market_hot_table = await conn.fetchval(
+        "SELECT to_regclass('market.market_hot_snapshots') IS NOT NULL"
+    )
+    if not market_hot_table:
+        raise RuntimeError("Worker-owned market-hot read model is missing")
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"
@@ -531,6 +553,18 @@ async def _readback(conn: asyncpg.Connection) -> None:
                 'wealthsail_api','ledger.account_nav_snapshots','known_value','UPDATE'
             )
             """
+        ),
+        "api_market_hot_select": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_api',"
+            "'market.market_hot_snapshots','SELECT')"
+        ),
+        "worker_market_hot_insert": await conn.fetchval(
+            "SELECT has_table_privilege('wealthsail_worker',"
+            "'market.market_hot_snapshots','INSERT')"
+        ),
+        "browser_market_hot_select": not await conn.fetchval(
+            "SELECT has_table_privilege('authenticated',"
+            "'market.market_hot_snapshots','SELECT')"
         ),
     }
     missing = [name for name, allowed in privilege_checks.items() if not allowed]

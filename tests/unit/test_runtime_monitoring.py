@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
+
+import pytest
 
 from backend.operations.monitoring import (
     RuntimeSignal,
     alert_content,
+    collect_database_signals,
     due_signals,
     mark_sent,
 )
@@ -36,12 +40,49 @@ def test_alert_content_has_counts_without_internal_identifiers() -> None:
         [
             RuntimeSignal("WORKER_STOPPED", "wealthsail-worker.service"),
             RuntimeSignal("OUTBOX_DEAD", "secret-row-id", "tenant-a"),
+            RuntimeSignal("OUTBOX_UNKNOWN", "secret-unknown-id", "tenant-a"),
             RuntimeSignal("JOB_FAILED", "secret-job-id", "tenant-a"),
         ]
     )
 
     assert "Worker 服务已停止" in content
     assert "推送死信：1 条" in content
+    assert "推送结果未知：1 条" in content
     assert "后台任务失败：1 条" in content
     assert "secret-row-id" not in content
     assert "tenant-a" not in content
+
+
+@pytest.mark.asyncio
+async def test_database_monitor_collects_unknown_outbox_results() -> None:
+    class Conn:
+        def __init__(self) -> None:
+            self.sql = ""
+
+        async def fetch(self, sql, *_args):
+            self.sql = sql
+            return [
+                {
+                    "kind": "OUTBOX_UNKNOWN",
+                    "object_id": "outbox-1",
+                    "tenant_id": "tenant-a",
+                }
+            ]
+
+    class Pool:
+        def __init__(self) -> None:
+            self.conn = Conn()
+
+        @asynccontextmanager
+        async def acquire(self):
+            yield self.conn
+
+    pool = Pool()
+    signals = await collect_database_signals(
+        pool,
+        failed_job_window_minutes=15,
+        dead_outbox_window_hours=24,
+    )
+
+    assert "status = 'UNKNOWN'" in pool.conn.sql
+    assert signals == [RuntimeSignal("OUTBOX_UNKNOWN", "outbox-1", "tenant-a")]

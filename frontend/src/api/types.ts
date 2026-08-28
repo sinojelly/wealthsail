@@ -523,20 +523,35 @@ export interface FreshnessResponse {
   positions: FreshnessInfo;
 }
 
+export type OutboxStatus =
+  | "PENDING"
+  | "SENDING"
+  | "SENT"
+  | "UNKNOWN"
+  | "DEAD"
+  | "CANCELLED";
+
 export interface OutboxMessage {
   id: string;
   topic: string;
   aggregateType: string;
   aggregateId: string;
   availableAt: string;
-  status: string;
+  status: OutboxStatus;
   attemptCount: number;
   sentAt: string | null;
   createdAt: string;
 }
 
 export interface OutboxResponse {
-  counts: { pending: number; sending: number; sent: number; dead: number };
+  counts: {
+    pending: number;
+    sending: number;
+    sent: number;
+    unknown: number;
+    dead: number;
+    cancelled: number;
+  };
   recent: OutboxMessage[];
 }
 

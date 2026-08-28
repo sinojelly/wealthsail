@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from backend.common.database import Pool
+from backend.common.database import Pool, api_system_transaction
 from backend.common.security import constant_time_eq
 from backend.config import Settings
 from backend.dependencies import get_pool, get_settings_dep
@@ -308,6 +308,31 @@ def _parse_xml(body: str) -> dict[str, str]:
     return {child.tag: (child.text or "") for child in root}
 
 
+def _callback_event_fingerprint(
+    corp_id: str, inner: dict[str, str], authenticated_payload: str
+) -> str:
+    """Opaque replay key scoped to one CorpID without persisting external IDs."""
+    msg_id = inner.get("MsgId", "").strip()
+    if msg_id:
+        event_identity = f"msgid:{msg_id}"
+    else:
+        payload_hash = hashlib.sha256(
+            authenticated_payload.encode("utf-8")
+        ).hexdigest()
+        event_identity = f"payload-sha256:{payload_hash}"
+    material = f"wecom\x00{corp_id}\x00{event_identity}".encode("utf-8")
+    return "sha256:" + hashlib.sha256(material).hexdigest()
+
+
+async def _claim_callback_once(pool: Pool, event_fingerprint: str) -> bool:
+    """Persist the replay claim under the restricted API role."""
+    async with api_system_transaction(pool) as conn:
+        claimed = await conn.fetchval(
+            "SELECT workflow.claim_wecom_callback($1)", event_fingerprint
+        )
+    return claimed is True
+
+
 # ---------------------------------------------------------------------------
 # Callback endpoints
 # ---------------------------------------------------------------------------
@@ -358,11 +383,29 @@ async def wecom_callback(
             settings.wecom_callback_token, timestamp, nonce, encrypt, msg_signature
         ):
             raise ValueError("signature mismatch")
-        inner = _parse_xml(wecom_decrypt(encrypt, settings.wecom_callback_aes_key, settings.wecom_corp_id))
+        authenticated_payload = wecom_decrypt(
+            encrypt, settings.wecom_callback_aes_key, settings.wecom_corp_id
+        )
+        inner = _parse_xml(authenticated_payload)
     except (ValueError, ET.ParseError) as exc:
         logger.warning("wecom callback rejected: %s", exc)
         reply = _build_encrypted_reply(
             "回调验证失败", settings=settings, timestamp=timestamp, nonce=nonce
+        )
+        return Response(reply, media_type="application/xml")
+
+    event_fingerprint = _callback_event_fingerprint(
+        settings.wecom_corp_id, inner, authenticated_payload
+    )
+    try:
+        claimed = await _claim_callback_once(pool, event_fingerprint)
+    except Exception:  # noqa: BLE001 -- replay storage failure must fail closed
+        logger.exception("wecom callback replay claim failed")
+        return PlainTextResponse("temporarily unavailable", status_code=503)
+    if not claimed:
+        logger.info("wecom callback replay suppressed")
+        reply = _build_encrypted_reply(
+            "收到", settings=settings, timestamp=timestamp, nonce=nonce
         )
         return Response(reply, media_type="application/xml")
 

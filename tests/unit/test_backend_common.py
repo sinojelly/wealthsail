@@ -169,12 +169,18 @@ def test_scheduler_is_due() -> None:
     pre = SessionSchedule("PRE_MARKET", "盘前简报", minute=30, hour=8)
     d = datetime(2026, 8, 24, 8, 30, tzinfo=timezone.utc)  # Monday
     assert is_due(pre, d) is True
-    assert is_due(pre, d.replace(hour=8, minute=31)) is False
+    assert is_due(pre, d.replace(hour=8, minute=31)) is True  # bounded catch-up
+    assert is_due(pre, d.replace(hour=8, minute=45)) is False
     # Sunday → not due
     assert is_due(pre, datetime(2026, 8, 23, 8, 30)) is False
 
     intraday = SessionSchedule("INTRADAY", "盘中跟踪", minute=0, hour=9, every_minutes=5)
     assert is_due(intraday, datetime(2026, 8, 24, 10, 25)) is True
+    assert is_due(intraday, datetime(2026, 8, 24, 11, 25)) is True
+    assert is_due(intraday, datetime(2026, 8, 24, 11, 30)) is False
+    assert is_due(intraday, datetime(2026, 8, 24, 12, 0)) is False
+    assert is_due(intraday, datetime(2026, 8, 24, 12, 55)) is False
+    assert is_due(intraday, datetime(2026, 8, 24, 13, 0)) is True
     assert is_due(intraday, datetime(2026, 8, 24, 9, 20)) is False  # before 09:30
     assert is_due(intraday, datetime(2026, 8, 24, 15, 5)) is False  # after 15:00
 

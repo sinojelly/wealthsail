@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from backend.common.database import Pool, system_connection, tenant_transaction
@@ -435,6 +435,55 @@ async def refresh_market_sentiment(pool: Pool) -> dict:
             conn, trade_date=stats["trade_date"], data=stats
         )
     return {"status": "COMPLETED", "tradeDate": stats["trade_date"]}
+
+
+async def refresh_market_hot(pool: Pool, *, limit: int = 10) -> dict:
+    """Worker-only Provider refresh for the market-hot read model."""
+    snapshot = await md.get_hot_stocks_snapshot(limit=limit)
+    async with system_connection(pool) as conn:
+        snapshot_id = await repository.insert_market_hot_snapshot(
+            conn, data=snapshot
+        )
+    return {
+        "status": (
+            "COMPLETED"
+            if snapshot["quality_status"] != md.Q_UNAVAILABLE
+            else "ABSTAINED"
+        ),
+        "snapshotId": snapshot_id,
+        "qualityStatus": snapshot["quality_status"],
+    }
+
+
+async def get_market_hot(conn) -> dict:
+    """Return the latest persisted hotspot snapshot without Provider I/O."""
+    row = await repository.get_latest_market_hot(conn)
+    if row is None:
+        return {
+            "items": [],
+            "source": "unavailable",
+            "sourceAsOf": None,
+            "retrievedAt": None,
+            "qualityStatus": "UNAVAILABLE",
+            "methodVersion": None,
+            "updatedAt": now_shanghai(),
+        }
+    quality = str(row["quality_status"])
+    retrieved_at = row["retrieved_at"]
+    if (
+        quality in {md.Q_FRESH, md.Q_ESTIMATED}
+        and retrieved_at < now_shanghai() - timedelta(minutes=10)
+    ):
+        quality = md.Q_STALE
+    return {
+        "items": row["items"],
+        "source": row["source_name"],
+        "sourceAsOf": row["source_as_of"],
+        "retrievedAt": retrieved_at,
+        "qualityStatus": quality,
+        "methodVersion": row["method_version"],
+        "updatedAt": row["updated_at"],
+    }
 
 
 async def get_market_sentiment(conn) -> dict:

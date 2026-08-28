@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 25
-    assert migrations[-1].path.name == "025_identity_session_and_trade_integrity_hardening.sql"
+    assert versions[-1] == 27
+    assert migrations[-1].path.name == "027_market_hot_read_model.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -45,6 +45,9 @@ def test_readback_covers_identity_and_trade_hardening() -> None:
         "fk_trade_fills_confirmed_by_tenant",
         "uq_trade_fills_ledger_event",
         "confirmed_by = auth.uid()",
+        "wecom_callback_claims",
+        "claim_wecom_callback",
+        "market_hot_snapshots",
     ):
         assert contract in source
 
@@ -68,6 +71,22 @@ def test_025_migration_contains_forward_fix_contracts() -> None:
         assert contract in migration
 
 
+def test_027_migration_enforces_worker_owned_market_hot_projection() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "027_market_hot_read_model.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE TABLE market.market_hot_snapshots",
+        "jsonb_typeof(items) = 'array'",
+        "GRANT SELECT ON market.market_hot_snapshots TO wealthsail_api",
+        "GRANT SELECT, INSERT ON market.market_hot_snapshots TO wealthsail_worker",
+        "REVOKE ALL ON market.market_hot_snapshots FROM PUBLIC, authenticated",
+    ):
+        assert contract in migration
+
+
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:
     target = safe_target_name(
         "postgresql://deploy:super-secret@db.example:5432/wealthsail?sslmode=require"
@@ -76,6 +95,16 @@ def test_safe_target_name_never_contains_password_or_query_secret() -> None:
     assert target == "db.example:5432/wealthsail"
     assert "secret" not in target
     assert "deploy" not in target
+
+
+def test_role_provisioning_grants_connect_to_the_selected_database() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "scripts" / "provision_supabase_roles.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "current_database()" in source
+    assert "GRANT CONNECT ON DATABASE postgres" not in source
 
 
 def test_loopback_detection_cannot_be_bypassed_with_an_explicit_port() -> None:

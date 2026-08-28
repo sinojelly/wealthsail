@@ -25,3 +25,10 @@ it("switches from job health to the high-risk audit trail", async () => {
 
   expect(screen.getByText("policy.confirm")).toBeInTheDocument();
 });
+
+it("surfaces UNKNOWN and CANCELLED outbox states for reconciliation", () => {
+  renderWithSession(<OperationsPage />);
+
+  expect(screen.getByText(/UNKNOWN\s+2/)).toBeInTheDocument();
+  expect(screen.getByText(/CANCELLED\s+1/)).toBeInTheDocument();
+});

@@ -583,6 +583,19 @@ def _database_quality(value: object) -> str:
     return quality if quality in {"FRESH", "ESTIMATED", "STALE"} else "UNAVAILABLE"
 
 
+def _delivery_audit_details(
+    *, session: str, version: int, degraded: bool, delivery_count: int
+) -> dict:
+    """Describe report delivery fan-out, including the zero-recipient case."""
+    return {
+        "session": session,
+        "version": version,
+        "degraded": degraded,
+        "deliveryCount": delivery_count,
+        "deliveryStatus": "QUEUED" if delivery_count else "NO_ACTIVE_BINDING",
+    }
+
+
 async def _persist_generation(
     conn: asyncpg.Connection,
     *,
@@ -662,7 +675,7 @@ async def _persist_generation(
         report_id=report_id,
         items=draft["items"],
     )
-    await repository.insert_report_outbox_deliveries(
+    delivery_count = await repository.insert_report_outbox_deliveries(
         conn,
         tenant_id=ctx.tenant_id,
         report_id=report_id,
@@ -679,7 +692,12 @@ async def _persist_generation(
         resource_type="reporting.reports",
         resource_id=report_id,
         correlation_id=correlation_id,
-        details={"session": session, "version": version, "degraded": model_result is None},
+        details=_delivery_audit_details(
+            session=session,
+            version=version,
+            degraded=model_result is None,
+            delivery_count=delivery_count,
+        ),
     )
     return await get_report_detail(conn, ctx.tenant_id, report_id)
 

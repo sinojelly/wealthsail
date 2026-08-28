@@ -38,7 +38,11 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
         await market_service.refresh_market(pool, settings, session)
     except Exception:  # noqa: BLE001 — 行情失败不阻断报告生成
         logger.exception("session %s 行情刷新失败（继续生成报告）", session)
-    # 2. 市场情绪是全局 Worker 快照。API 只读库内结果，绝不按请求抓取。
+    # 2. 热点排行和市场情绪都是全局 Worker 快照；API 只读数据库。
+    try:
+        await market_service.refresh_market_hot(pool)
+    except Exception:  # noqa: BLE001 — 热点不可用不阻断租户报告
+        logger.exception("session %s 市场热点刷新失败（继续生成报告）", session)
     try:
         await market_service.refresh_market_sentiment(pool)
     except Exception:  # noqa: BLE001 — 情绪不可用不阻断租户报告
@@ -47,6 +51,21 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
     outcomes = await runner.run_session(pool, settings, session, now)
     for tenant_id, outcome in outcomes.items():
         logger.info("session %s tenant %s → %s", session, tenant_id, outcome)
+
+
+async def _recovery_loop(pool, settings) -> None:
+    """Continuously consume recent persisted report runs needing recovery."""
+    interval = max(5.0, settings.scheduler_tick_seconds)
+    while True:
+        try:
+            outcomes = await runner.run_recoverable_jobs(pool, settings)
+            for key, outcome in outcomes.items():
+                logger.info("recovered %s → %s", key, outcome)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- keep the independent loop alive
+            logger.exception("job recovery scan failed")
+        await asyncio.sleep(interval)
 
 
 async def main() -> None:
@@ -84,6 +103,9 @@ async def main() -> None:
     )
     consumer = OutboxConsumer(pool, settings)
     data_tasks = DataTaskConsumer(pool, settings)
+    recovery_task = asyncio.create_task(
+        _recovery_loop(pool, settings), name="wealthsail-job-recovery"
+    )
     scheduler.start()
     consumer.start()
     data_tasks.start()
@@ -106,6 +128,11 @@ async def main() -> None:
     await scheduler.stop()
     await consumer.stop()
     await data_tasks.stop()
+    recovery_task.cancel()
+    try:
+        await recovery_task
+    except asyncio.CancelledError:
+        pass
     await close_http_client()
     await pool.close()
     logger.info("worker stopped")

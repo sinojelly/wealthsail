@@ -32,8 +32,17 @@ class JobLease:
 
 
 def business_job_key(job_id: str, session: str, now: datetime) -> str:
-    """Stable idempotency key for one job's business session and trade date."""
-    return f"job:{job_id}:{now.date().isoformat()}:{session}"
+    """Stable idempotency key for one logical report occurrence.
+
+    Fixed sessions run once per trade date.  INTRADAY is intentionally a
+    sequence of five-minute reports, so its key includes the logical bucket;
+    repeated scheduler ticks inside the same bucket remain idempotent.
+    """
+    key = f"job:{job_id}:{now.date().isoformat()}:{session}"
+    if session == "INTRADAY":
+        bucket_minute = now.minute - (now.minute % 5)
+        key = f"{key}:{now.hour:02d}{bucket_minute:02d}"
+    return key
 
 
 def worker_owner() -> str:
@@ -63,6 +72,56 @@ async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
     if recovered:
         logger.warning("made %d expired job leases recoverable", recovered)
     return recovered
+
+
+async def run_recoverable_jobs(
+    pool: Pool,
+    settings: Settings,
+    *,
+    limit: int = 100,
+) -> dict[str, str]:
+    """Retry recent report runs that survived a Worker crash or failed safely.
+
+    The scan reuses each persisted ``job_key``.  This closes the gap where
+    startup recovery changed an expired RUNNING row to PENDING but no future
+    fixed scheduler tick would ever claim it.  Recovery is deliberately
+    bounded by age and attempt count so stale financial reports are not
+    published hours later without an operator decision.
+    """
+    async with system_connection(pool) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT j.id, j.tenant_id, j.job_name, j.report_session, jr.job_key
+              FROM workflow.job_runs jr
+              JOIN workflow.jobs j
+                ON j.id = jr.job_id AND j.tenant_id = jr.tenant_id
+             WHERE jr.status IN ('PENDING', 'FAILED')
+               AND COALESCE(jr.job_type, 'REPORT_SESSION') = 'REPORT_SESSION'
+               AND COALESCE(jr.next_retry_at, now()) <= now()
+               AND jr.started_at >=
+                   now() - make_interval(mins => $1)
+               AND jr.attempt_count < $2
+               AND j.is_enabled = TRUE
+             ORDER BY COALESCE(jr.next_retry_at, jr.started_at), jr.id
+             LIMIT $3
+            """,
+            settings.job_recovery_window_minutes,
+            settings.job_recovery_max_attempts,
+            limit,
+        )
+
+    outcomes: dict[str, str] = {}
+    for job in rows:
+        key = str(job["job_key"])
+        session = str(job["report_session"])
+        try:
+            outcomes[key] = await _execute_with_lease(
+                pool, settings, job, key, session
+            )
+        except Exception as exc:  # noqa: BLE001 -- isolate recoverable runs
+            logger.exception("recovery failed for %s", key)
+            outcomes[key] = f"FAILED:{exc.__class__.__name__}"
+    return outcomes
 
 
 async def claim_job_run(
@@ -148,7 +207,11 @@ async def finish_job_run(
             """
             UPDATE workflow.job_runs
                SET status=$3, finished_at=now(), error_class=$4,
-                   lease_token=NULL, lease_owner=NULL, lease_until=NULL
+                   lease_token=NULL, lease_owner=NULL, lease_until=NULL,
+                   next_retry_at = CASE
+                       WHEN $3 = 'FAILED' THEN now() + interval '30 seconds'
+                       ELSE NULL
+                   END
              WHERE id=$1 AND lease_token = $2 AND status = 'RUNNING'
             """,
             run_id,

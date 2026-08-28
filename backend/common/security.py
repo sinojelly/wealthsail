@@ -1,8 +1,10 @@
-"""Security primitives: CSPRNG tokens, salted HMAC digests, envelope encryption.
+"""Security primitives: CSPRNG tokens, keyed HMAC digests, envelope encryption.
 
-Binding tokens are high-entropy one-time capabilities. Only salted HMAC-SHA256
+Binding tokens are high-entropy one-time capabilities. Only keyed HMAC-SHA256
 digests are persisted; reversible routing values use AES-256-GCM envelope
-encryption (the Worker holds the decryption capability, matching docs/10 §3.3).
+encryption. The API callback writer and Worker currently share that symmetric
+key, while database column privileges prevent the API role from reading stored
+ciphertext. Public-key/KMS-separated decrypt authority remains a target design.
 """
 
 from __future__ import annotations
@@ -33,13 +35,13 @@ def generate_binding_code() -> str:
     A binding credential grants access to a user's private delivery route, so
     expiry alone cannot compensate for a guessable short code.  The grouped
     base32 representation remains copy/paste friendly and the UI displays it
-    exactly once; only its salted HMAC digest is persisted.
+    exactly once; only its keyed HMAC digest is persisted.
     """
     return generate_token(16)
 
 
 def hmac_digest(key: str, value: str) -> str:
-    """Salted HMAC-SHA256 hex digest. Constant-time comparison is done by callers."""
+    """Keyed HMAC-SHA256 hex digest. Callers compare sensitive values safely."""
     return hmac.new(key.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

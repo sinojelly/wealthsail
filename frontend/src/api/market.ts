@@ -9,8 +9,19 @@ export interface HotStock {
   turnover: number | null;
 }
 
+export type MarketQualityStatus =
+  | "FRESH"
+  | "ESTIMATED"
+  | "STALE"
+  | "UNAVAILABLE";
+
 export interface MarketHotResponse {
   items: HotStock[];
+  source: string;
+  sourceAsOf: string | null;
+  retrievedAt: string | null;
+  qualityStatus: MarketQualityStatus;
+  methodVersion: string | null;
   updatedAt: string;
 }
 
@@ -46,7 +57,7 @@ export interface MarketSentiment {
   source: string;
   sourceAsOf: string | null;
   retrievedAt: string | null;
-  qualityStatus: "FRESH" | "ESTIMATED" | "STALE" | "UNAVAILABLE";
+  qualityStatus: MarketQualityStatus;
   coveragePct: string | null;
   methodVersion: string | null;
   updatedAt: string | null;

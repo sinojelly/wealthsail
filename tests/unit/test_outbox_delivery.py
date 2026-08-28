@@ -12,6 +12,7 @@ from backend.config import Settings
 from backend.integrations import wecom, wecom_bot
 from backend.jobs.outbox import build_delivery_command, claim_batch
 from backend.reports.repository import insert_report_outbox_deliveries
+from backend.reports.service import _delivery_audit_details
 
 
 class _Transaction:
@@ -285,3 +286,18 @@ async def test_report_publication_without_active_binding_queues_nothing() -> Non
 
     assert count == 0
     assert conn.inserted == []
+
+
+def test_zero_delivery_is_explicit_in_report_audit_details() -> None:
+    assert _delivery_audit_details(
+        session="FUND_1430", version=2, degraded=False, delivery_count=0
+    ) == {
+        "session": "FUND_1430",
+        "version": 2,
+        "degraded": False,
+        "deliveryCount": 0,
+        "deliveryStatus": "NO_ACTIVE_BINDING",
+    }
+    assert _delivery_audit_details(
+        session="PRE_MARKET", version=1, degraded=True, delivery_count=2
+    )["deliveryStatus"] == "QUEUED"

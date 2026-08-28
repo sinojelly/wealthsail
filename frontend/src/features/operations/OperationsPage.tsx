@@ -30,6 +30,10 @@ export default function OperationsPage() {
     runs.length > 0 ? ((completed / runs.length) * 100).toFixed(1) : "—";
   const pendingMessages =
     (outbox.data?.counts.pending ?? 0) + (outbox.data?.counts.sending ?? 0);
+  const unknownMessages = outbox.data?.counts.unknown ?? 0;
+  const deadMessages = outbox.data?.counts.dead ?? 0;
+  const cancelledMessages = outbox.data?.counts.cancelled ?? 0;
+  const deliveryNeedsAttention = pendingMessages + unknownMessages + deadMessages;
   const navFresh = freshness.data?.nav?.latestAsOf;
   const errors = [jobs.error, freshness.error, outbox.error, audit.error]
     .filter((error): error is Error => error instanceof Error)
@@ -101,7 +105,7 @@ export default function OperationsPage() {
         </div>
         <div className="panel">
           <span
-            className={`ops-icon ${pendingMessages > 0 ? "warning" : "good"}`}
+            className={`ops-icon ${deliveryNeedsAttention > 0 ? "warning" : "good"}`}
           >
             <RadioTower size={17} />
           </span>
@@ -109,8 +113,8 @@ export default function OperationsPage() {
             <span>消息待投递</span>
             <strong className="mono">{pendingMessages}</strong>
             <small>
-              已投递 {outbox.data?.counts.sent ?? 0} · DEAD{" "}
-              {outbox.data?.counts.dead ?? 0}
+              已投递 {outbox.data?.counts.sent ?? 0} · UNKNOWN {unknownMessages} · DEAD{" "}
+              {deadMessages} · CANCELLED {cancelledMessages}
             </small>
           </div>
         </div>

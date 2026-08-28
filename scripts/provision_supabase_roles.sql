@@ -70,7 +70,13 @@ REVOKE wealthsail_worker FROM postgres;
 -- table privileges per schema, so no blanket ALL TABLES grant is needed —
 -- that would silently widen least-privilege boundaries).
 -- ---------------------------------------------------------------------------
-GRANT CONNECT ON DATABASE postgres TO wealthsail_api_login, wealthsail_worker_login;
+DO $$
+BEGIN
+    EXECUTE format(
+        'GRANT CONNECT ON DATABASE %I TO wealthsail_api_login, wealthsail_worker_login',
+        current_database()
+    );
+END $$;
 
 -- Schema USAGE for the runtime roles (GRANT is idempotent; existing grants
 -- from migrations are unaffected). Include every schema the backend touches.

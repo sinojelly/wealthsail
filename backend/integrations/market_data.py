@@ -504,34 +504,71 @@ _EM_CLIST_URL = (
 )
 
 
-async def get_hot_stocks(limit: int = 10) -> list[dict]:
-    """市场热点：全市场实时涨跌幅排行前 N。
+async def get_hot_stocks_snapshot(limit: int = 10) -> dict:
+    """Fetch one governed market-hot snapshot for Worker persistence.
 
     降级链：
       1. AkShare 全市场快照（60s 缓存）→ 本地按涨跌幅降序；
       2. 东财 push2 clist（只拉前 N，轻量直连，与 AkShare 同源）；
       3. 新浪候选池批量查询 → 计算涨跌幅后排序（仅代表性标的）。
-    返回字段：symbol / name / price / change_pct(%) / volume(手) / turnover(元)。
+    返回的 items 字段：symbol / name / price / change_pct(%) / volume(手) /
+    turnover(元)。API 层不得直接调用本函数。
     """
+    retrieved_at = datetime.now(timezone.utc)
     # 1) AkShare 全市场快照
     try:
         df = await _ak_spot_cached()
         rows = _rank_ak_spot(df, limit)
         if rows:
-            return rows
+            return {
+                "items": rows,
+                "source_name": AKSOURCE_NAME,
+                "source_as_of": retrieved_at,
+                "retrieved_at": retrieved_at,
+                "quality_status": Q_FRESH,
+                "method_version": "market-hot/v1",
+            }
     except Exception as exc:  # noqa: BLE001 — vendor outage degrades
         logger.warning("akshare 热点排行失败，降级东财 clist: %s", exc)
 
     # 2) 东财 clist 前 N
     rows = await _fetch_em_clist(limit)
     if rows:
-        return rows
+        return {
+            "items": rows,
+            "source_name": "EastMoney-push2",
+            "source_as_of": retrieved_at,
+            "retrieved_at": retrieved_at,
+            "quality_status": Q_FRESH,
+            "method_version": "market-hot/v1",
+        }
 
     # 3) 新浪候选池
     rows = await _fetch_sina_pool_hot(limit)
     if rows:
-        return rows
-    return []
+        return {
+            "items": rows,
+            "source_name": SINASOURCE_NAME,
+            "source_as_of": retrieved_at,
+            "retrieved_at": retrieved_at,
+            # The fixed candidate pool is a degraded approximation of the
+            # whole-market ranking and must never be labelled fully fresh.
+            "quality_status": Q_ESTIMATED,
+            "method_version": "market-hot/v1-candidate-pool",
+        }
+    return {
+        "items": [],
+        "source_name": "unavailable",
+        "source_as_of": None,
+        "retrieved_at": retrieved_at,
+        "quality_status": Q_UNAVAILABLE,
+        "method_version": "market-hot/v1",
+    }
+
+
+async def get_hot_stocks(limit: int = 10) -> list[dict]:
+    """Compatibility wrapper for non-API callers; prefer the snapshot form."""
+    return (await get_hot_stocks_snapshot(limit))["items"]
 
 
 def _rank_ak_spot(df, limit: int) -> list[dict]:

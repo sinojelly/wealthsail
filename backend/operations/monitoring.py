@@ -75,12 +75,15 @@ def alert_content(signals: Iterable[RuntimeSignal]) -> str:
     kinds = [signal.kind for signal in signals]
     worker = kinds.count("WORKER_STOPPED")
     dead = kinds.count("OUTBOX_DEAD")
+    unknown = kinds.count("OUTBOX_UNKNOWN")
     failed = kinds.count("JOB_FAILED")
     lines = ["WealthSail 运行告警"]
     if worker:
         lines.append("- Worker 服务已停止")
     if dead:
         lines.append(f"- 推送死信：{dead} 条")
+    if unknown:
+        lines.append(f"- 推送结果未知：{unknown} 条（需要人工核对）")
     if failed:
         lines.append(f"- 后台任务失败：{failed} 条")
     lines.append("请登录运维页面或查看服务器日志。")
@@ -99,6 +102,11 @@ async def collect_database_signals(
             SELECT 'OUTBOX_DEAD' AS kind, id::text AS object_id, tenant_id::text
               FROM workflow.outbox
              WHERE status = 'DEAD'
+               AND created_at >= now() - make_interval(hours => $1)
+            UNION ALL
+            SELECT 'OUTBOX_UNKNOWN' AS kind, id::text AS object_id, tenant_id::text
+              FROM workflow.outbox
+             WHERE status = 'UNKNOWN'
                AND created_at >= now() - make_interval(hours => $1)
             UNION ALL
             SELECT 'JOB_FAILED' AS kind, id::text AS object_id, tenant_id::text

@@ -1,21 +1,20 @@
-"""modules/identity 领域服务单元测试（假连接断言 SQL 与业务规则，无需真实库）。"""
+"""backend/identity 领域服务单元测试（假连接断言 SQL 与业务规则，无需真实库）。"""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 
-from modules.errors import (
+from backend.common import auth as jwt_module
+from backend.errors import (
     AuthRequiredError,
-    ConflictError,
+    IdempotencyConflictError as ConflictError,
     NotFoundError,
-    ValidationError,
+    ValidationError_ as ValidationError,
 )
-from modules.identity import jwt as jwt_module
-from modules.identity.service import (
+from backend.identity.domain_service import (
     IdentityService,
     IdentitySettings,
     TenantContext,
@@ -48,6 +47,8 @@ class FakeConn:
         self._fetch: list[dict] | None = None
         self._fetchval: object = None
         self.execute_result = "UPDATE 1"
+        self.transaction_entries = 0
+        self.transaction_exits = 0
 
     async def fetchrow(self, sql, *args) -> Any:
         self.calls.append((sql, args))
@@ -71,9 +72,11 @@ class FakeConn:
                 self._conn = conn
 
             async def __aenter__(self):
+                self._conn.transaction_entries += 1
                 return self._conn
 
             async def __aexit__(self, *_args):
+                self._conn.transaction_exits += 1
                 return None
 
         return _Tx(self)
@@ -330,27 +333,6 @@ async def test_switch_tenant_rebinds_refresh_session() -> None:
     assert result["user"]["tenantId"] == "tenant-2"
 
 
-@pytest.mark.asyncio
-async def test_create_tenant_invokes_privileged_helper() -> None:
-    conn = FakeConn()
-    conn._fetchrow = {
-        "out_tenant_id": "tenant-9",
-        "out_tenant_name": "我的组合",
-        "out_role": "OWNER",
-    }
-    service = _service(conn)
-    actor = TenantContext(tenant_id="tenant-1", user_id="user-1", tenant_role="OWNER")
-
-    result = await service.create_tenant(actor, name="  我的组合  ", base_currency="cny")
-
-    call = next(c for c in conn.calls if "identity.create_tenant" in c[0])
-    assert call[1] == ("user-1", "我的组合", "CNY")
-    assert result["role"] == "OWNER"
-
-    with pytest.raises(ValidationError):
-        await service.create_tenant(actor, name="x")
-
-
 # ---------------------------------------------------------------------------
 # 企微绑定
 # ---------------------------------------------------------------------------
@@ -396,6 +378,12 @@ async def test_consume_binding_challenge_hashes_external_id() -> None:
     assert call[1][3] == "陈国栋"
     assert result["status"] == "ACTIVE"
     assert result["channelType"] == "wecom"
+    assert conn.transaction_entries == 1
+    assert conn.transaction_exits == 1
+    sqls = [sql for sql, _args in conn.calls]
+    assert next(i for i, sql in enumerate(sqls) if "consume_binding_challenge" in sql) < next(
+        i for i, sql in enumerate(sqls) if "INSERT INTO audit.audit_log" in sql
+    )
 
 
 @pytest.mark.asyncio
@@ -462,7 +450,13 @@ async def test_update_profile_validates_and_updates() -> None:
 @pytest.mark.asyncio
 async def test_request_password_reset_is_anti_enumeration() -> None:
     conn = FakeConn()
-    conn._fetchval = "user-1"
+    values = iter(["user-1", False])
+
+    async def fetchval(sql, *args):
+        conn.calls.append((sql, args))
+        return next(values)
+
+    conn.fetchval = fetchval
     service = _service(conn)
 
     result = await service.request_password_reset(email="a@example.test")
@@ -478,17 +472,16 @@ async def test_request_password_reset_is_anti_enumeration() -> None:
     assert insert[1][1] == hmac_digest(
         _KEYS["password_reset_hmac_key"], result["token"]
     )
-    token_call_count = len(
-        [c for c in conn.calls if "password_reset_tokens" in c[0]]
-    )
-
-    # 不存在的邮箱同样返回 sent，且不落库
-    conn._fetchval = None
-    result2 = await service.request_password_reset(email="ghost@example.test")
+    # 不存在的邮箱同样返回 sent，但不会创建重置令牌。
+    unknown_conn = FakeConn()
+    unknown_service = _service(unknown_conn)
+    result2 = await unknown_service.request_password_reset(email="ghost@example.test")
     assert result2["status"] == "sent"
     assert result2["token"] is None
-    token_calls = [c for c in conn.calls if "password_reset_tokens" in c[0]]
-    assert len(token_calls) == token_call_count
+    token_calls = [
+        c for c in unknown_conn.calls if "password_reset_tokens" in c[0]
+    ]
+    assert token_calls == []
 
 
 @pytest.mark.asyncio
