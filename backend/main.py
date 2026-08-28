@@ -32,6 +32,7 @@ from backend.portfolio.api import router as portfolio_router
 from backend.reports.api import router as reports_router
 from backend.research.api import router as research_router
 from backend.risk.api import router as risk_router
+from backend.trading.api import router as trading_router
 
 logger = logging.getLogger("wealthsail.main")
 http_logger = logging.getLogger("wealthsail.http")
@@ -148,6 +149,7 @@ def create_app() -> FastAPI:
     app.include_router(wecom_router, prefix=prefix)
     app.include_router(chat_router, prefix=prefix)
     app.include_router(market_router, prefix=prefix)
+    app.include_router(trading_router, prefix=prefix)
 
     @app.get("/healthz", tags=["system"])
     async def healthz(request: Request) -> JSONResponse:

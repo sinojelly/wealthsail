@@ -311,3 +311,49 @@ def test_reversal_rejects_non_latest_economic_event() -> None:
 
     with pytest.raises(ValueError, match="最新经济事件"):
         ledger.record_reversal(first.id, date(2026, 8, 25), "REVERSE_OLD")
+
+
+# ---- UT-LED-008 / UT-LED-010: 非法参数拦截 (parameterized) ----
+
+@pytest.mark.parametrize("method_name,kwargs,error_match", [
+    # record_buy
+    ("record_buy", dict(quantity=Decimal("0"), unit_price=Decimal("10.00"), fee=Decimal("0.00")), "买入数量和单价必须大于 0"),
+    ("record_buy", dict(quantity=Decimal("-1"), unit_price=Decimal("10.00"), fee=Decimal("0.00")), "买入数量和单价必须大于 0"),
+    ("record_buy", dict(quantity=Decimal("10"), unit_price=Decimal("0"), fee=Decimal("0.00")), "买入数量和单价必须大于 0"),
+    ("record_buy", dict(quantity=Decimal("10"), unit_price=Decimal("-5"), fee=Decimal("0.00")), "买入数量和单价必须大于 0"),
+    ("record_buy", dict(quantity=Decimal("10"), unit_price=Decimal("10.00"), fee=Decimal("-1")), "手续费不能为负数"),
+    # record_sell
+    ("record_sell", dict(quantity=Decimal("0"), unit_price=Decimal("10.00"), fee=Decimal("0.00")), "卖出数量和单价必须大于 0"),
+    ("record_sell", dict(quantity=Decimal("-1"), unit_price=Decimal("10.00"), fee=Decimal("0.00")), "卖出数量和单价必须大于 0"),
+    ("record_sell", dict(quantity=Decimal("10"), unit_price=Decimal("0"), fee=Decimal("0.00")), "卖出数量和单价必须大于 0"),
+    ("record_sell", dict(quantity=Decimal("10"), unit_price=Decimal("-5"), fee=Decimal("0.00")), "卖出数量和单价必须大于 0"),
+    ("record_sell", dict(quantity=Decimal("10"), unit_price=Decimal("10.00"), fee=Decimal("-1")), "手续费不能为负数"),
+    # record_cash_in
+    ("record_cash_in", dict(amount=Decimal("0")), "入金金额必须大于 0"),
+    ("record_cash_in", dict(amount=Decimal("-10")), "入金金额必须大于 0"),
+    # record_cash_out
+    ("record_cash_out", dict(amount=Decimal("0")), "出金金额必须大于 0"),
+    ("record_cash_out", dict(amount=Decimal("-10")), "出金金额必须大于 0"),
+    # record_fee
+    ("record_fee", dict(amount=Decimal("0")), "费用或税额必须大于 0"),
+    ("record_fee", dict(amount=Decimal("-5")), "费用或税额必须大于 0"),
+    # record_tax
+    ("record_tax", dict(amount=Decimal("0")), "费用或税额必须大于 0"),
+    ("record_tax", dict(amount=Decimal("-5")), "费用或税额必须大于 0"),
+])
+def test_ledger_rejects_non_positive_parameters(method_name: str, kwargs: dict, error_match: str) -> None:
+    """All ledger entry methods must reject non-positive quantity/price/amount before persistence."""
+    ledger = LedgerService(tenant_id=uuid.uuid4(), account_id=uuid.uuid4())
+    ledger.record_cash_in(Decimal("10000.00"), date(2026, 8, 24), "DEP_SETUP")
+
+    method = getattr(ledger, method_name)
+    base_kwargs = dict(
+        trade_date=date(2026, 8, 24),
+        idempotency_key=f"BAD_{method_name.upper()}_{uuid.uuid4().hex[:8]}",
+    )
+    if "instrument_id" in method.__code__.co_varnames:
+        base_kwargs["instrument_id"] = uuid.uuid4()
+    base_kwargs.update(kwargs)
+
+    with pytest.raises(ValueError, match=error_match):
+        method(**base_kwargs)

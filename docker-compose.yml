@@ -48,6 +48,8 @@ services:
       DATABASE_URL: ""
       JWT_SECRET: ""
       REFRESH_TOKEN_HMAC_KEY: ""
+      PASSWORD_RESET_HMAC_KEY: ""
+      BINDING_HMAC_KEY: ""
       WECOM_CALLBACK_TOKEN: ""
       WECOM_CALLBACK_AES_KEY: ""
     depends_on:

@@ -19,6 +19,7 @@ __pycache__/
 
 # Node / 前端构建产物
 node_modules/
+.pnpm-store/
 dist/
 coverage/
 .coverage

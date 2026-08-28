@@ -9,7 +9,7 @@ from backend.common.tenancy import TenantContext
 from backend.dependencies import get_pool, get_request_id, get_tenant_context, now_shanghai
 from backend.errors import ok
 from backend.integrations.market_data import get_hot_stocks
-from backend.market import service
+from modules.market_data.service import MarketDataService
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -47,5 +47,5 @@ async def market_sentiment(
     """
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.get_market_sentiment(conn)
+        data = await MarketDataService(pool).get_market_sentiment(conn)
     return ok(data, request_id=request_id, as_of=as_of)

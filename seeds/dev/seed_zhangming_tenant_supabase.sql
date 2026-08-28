@@ -30,9 +30,4 @@ INSERT INTO identity.tenant_members (tenant_id, user_id, role, status)
 VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111', 'OWNER', 'ACTIVE')
 ON CONFLICT (tenant_id, user_id) DO NOTHING;
 
--- （可选）设置 bcrypt 密码 demo1234，使后端 /auth/login 可直接登录。
--- 需要 pgcrypto 扩展（Supabase 自带）。
--- UPDATE identity.profiles
---    SET password_hash = crypt('demo1234', gen_salt('bf'))
---  WHERE id = '11111111-1111-1111-1111-111111111111'
---    AND password_hash IS NULL;
+-- Credentials are set through registration or password-reset flows, never seeds.

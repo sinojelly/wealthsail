@@ -99,8 +99,8 @@ def test_refresh_token_is_hmac_only_and_cookie_is_http_only_strict() -> None:
     assert "path=/api/v1/auth" in cookie
 
 
-def test_passwordless_seed_accounts_are_accepted_only_in_explicit_dev_mode() -> None:
-    """Local seed convenience must never become a production auth bypass."""
-    assert credentials_are_valid("any-non-empty-dev-password", None, auth_dev_mode=True)
+def test_passwordless_seed_accounts_are_always_rejected() -> None:
+    """No runtime mode may turn a passwordless seed into an auth bypass."""
+    assert not credentials_are_valid("any-non-empty-dev-password", None, auth_dev_mode=True)
     assert not credentials_are_valid("any-non-empty-dev-password", None, auth_dev_mode=False)
     assert not credentials_are_valid("", None, auth_dev_mode=True)

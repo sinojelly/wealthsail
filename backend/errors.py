@@ -24,6 +24,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from modules import errors as domain_errors
 
 logger = logging.getLogger("wealthsail.errors")
 
@@ -238,6 +239,30 @@ def register_exception_handlers(app: FastAPI) -> None:
                 message=exc.message,
                 retryable=exc.retryable,
                 field_errors=exc.field_errors,
+                request_id=request_id_of(request),
+            ),
+        )
+
+    @app.exception_handler(domain_errors.WealthSailError)
+    async def _domain_error_handler(
+        request: Request, exc: domain_errors.WealthSailError
+    ) -> JSONResponse:
+        mapping: list[tuple[type[Exception], str]] = [
+            (domain_errors.ValidationError, "VALIDATION_ERROR"),
+            (domain_errors.AuthRequiredError, "AUTH_REQUIRED"),
+            (domain_errors.ForbiddenError, "FORBIDDEN"),
+            (domain_errors.NotFoundError, "NOT_FOUND"),
+            (domain_errors.ConflictError, "IDEMPOTENCY_CONFLICT"),
+            (domain_errors.DataUnavailableError, "DATA_UNAVAILABLE"),
+        ]
+        code = next((value for cls, value in mapping if isinstance(exc, cls)), "INTERNAL_ERROR")
+        return MoneyJSONResponse(
+            status_code=ERROR_HTTP_STATUS[code],
+            content=_error_payload(
+                code=code,
+                message=exc.message,
+                retryable=ERROR_RETRYABLE[code],
+                field_errors=[],
                 request_id=request_id_of(request),
             ),
         )

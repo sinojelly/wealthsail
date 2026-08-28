@@ -38,12 +38,8 @@ class Settings(BaseSettings):
     # --- Database -----------------------------------------------------------
     # Local dev default targets the working local Postgres 16 instance
     # (port 5433). Supabase/remote setups override DATABASE_URL entirely.
-    database_url: str = Field(
-        default="postgresql://wealthsail_user:dev_password_123@localhost:5433/wealthsail_dev"
-    )
-    worker_database_url: str = Field(
-        default="postgresql://wealthsail_worker:dev_worker_password_123@localhost:5433/wealthsail_dev"
-    )
+    database_url: str = Field(default="")
+    worker_database_url: str = Field(default="")
     db_pool_min_size: int = Field(default=2)
     db_pool_max_size: int = Field(default=10)
     # Transaction-pooler (PgBouncer, Supabase Session Pooler 6543) deployments
@@ -53,16 +49,26 @@ class Settings(BaseSettings):
     db_statement_cache_size: int | None = Field(default=None)
 
     # --- Auth (Supabase-compatible JWT) --------------------------------------
-    jwt_secret: str = Field(default="dev-only-jwt-secret-change-me")
+    jwt_secret: str = Field(default="")
     jwt_algorithm: str = Field(default="HS256")
     access_token_ttl_seconds: int = Field(default=3600)
-    refresh_token_hmac_key: str = Field(default="dev-refresh-hmac-key-change-me")
+    refresh_token_hmac_key: str = Field(default="")
+    password_reset_hmac_key: str = Field(default="")
     refresh_token_ttl_days: int = Field(default=30, ge=1, le=90)
     refresh_cookie_name: str = Field(default="wealthsail_refresh")
-    # When true, POST /api/v1/auth/login accepts any non-empty password for the
-    # seeded pilot profiles (local development only; Supabase Auth owns login in
-    # production).
-    auth_dev_mode: bool = Field(default=True)
+    # Deprecated compatibility flag. Any true value is rejected at startup;
+    # password verification never bypasses bcrypt in any environment.
+    auth_dev_mode: bool = Field(default=False)
+    password_reset_token_ttl_minutes: int = Field(default=30, ge=5, le=1440)
+
+    # --- Email -------------------------------------------------------------
+    web_base_url: str = Field(default="http://localhost:5173")
+    smtp_host: str | None = Field(default=None)
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_starttls: bool = Field(default=True)
+    smtp_username: str | None = Field(default=None)
+    smtp_password: str | None = Field(default=None)
+    smtp_from: str | None = Field(default=None)
 
     # --- DeepSeek model gateway ----------------------------------------------
     model_base_url: str = Field(default="https://api.deepseek.com/v1")
@@ -71,11 +77,9 @@ class Settings(BaseSettings):
     model_timeout_seconds: float = Field(default=45.0)
 
     # --- WeCom callback / binding --------------------------------------------
-    wecom_callback_token: str = Field(default="dev-wecom-callback-token")
-    wecom_callback_aes_key: str = Field(
-        default="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
-    )  # 43-char AES key per WeCom spec (dev placeholder)
-    wecom_corp_id: str = Field(default="ww-dev-corp-id")
+    wecom_callback_token: str = Field(default="")
+    wecom_callback_aes_key: str = Field(default="")
+    wecom_corp_id: str = Field(default="")
     wecom_corp_secret: str = Field(default="")
     wecom_agent_id: str = Field(default="1000002")
     wecom_credential_version: str = Field(default="v1")
@@ -85,11 +89,11 @@ class Settings(BaseSettings):
     wecom_bot_secret: str = Field(default="")
     wecom_bot_enabled: bool = Field(default=False)
     # Salt/key for HMAC-SHA256 of one-time binding tokens (never store plaintext).
-    binding_hmac_key: str = Field(default="dev-binding-hmac-key-change-me")
+    binding_hmac_key: str = Field(default="")
     binding_token_ttl_seconds: int = Field(default=900)
     binding_token_max_attempts: int = Field(default=5)
     # Envelope-encryption key for reversible routing values (AES-256-GCM).
-    routing_encryption_key: str = Field(default="dev-routing-key-32-bytes-minimum!")
+    routing_encryption_key: str = Field(default="")
 
     # --- Jobs / Outbox --------------------------------------------------------
     job_lease_timeout_seconds: int = Field(default=900)
@@ -137,6 +141,26 @@ def _is_development_secret(value: str | None) -> bool:
     return not normalized or any(marker in normalized for marker in _DEVELOPMENT_SECRET_MARKERS)
 
 
+def _require_secret(name: str, value: str | None, *, min_length: int = 32) -> None:
+    if _is_development_secret(value) or len((value or "").strip()) < min_length:
+        raise ValueError(f"{name} must be a non-development secret of at least {min_length} characters")
+
+
+def _require_distinct_secrets(secrets: dict[str, str | None]) -> None:
+    normalized = {
+        name: (value or "").strip()
+        for name, value in secrets.items()
+        if (value or "").strip()
+    }
+    by_value: dict[str, list[str]] = {}
+    for name, value in normalized.items():
+        by_value.setdefault(value, []).append(name)
+    reused = [names for names in by_value.values() if len(names) > 1]
+    if reused:
+        names = ", ".join(sorted(reused[0]))
+        raise ValueError(f"security secrets must be independent: {names}")
+
+
 def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
     """Fail closed when a production process receives the wrong authority.
 
@@ -146,37 +170,62 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
     """
     if process not in {"api", "worker"}:
         raise ValueError(f"unknown process type: {process}")
+    if settings.auth_dev_mode:
+        raise ValueError("AUTH_DEV_MODE is no longer supported; use bcrypt credentials")
     if not settings.is_production:
         return settings
-    if settings.auth_dev_mode:
-        raise ValueError("AUTH_DEV_MODE must be false in production")
 
     if process == "api":
-        if _is_development_secret(settings.jwt_secret):
-            raise ValueError("JWT_SECRET must be a production secret")
-        if _is_development_secret(settings.refresh_token_hmac_key):
-            raise ValueError("REFRESH_TOKEN_HMAC_KEY must be a production secret")
+        _require_secret("JWT_SECRET", settings.jwt_secret)
+        _require_secret("REFRESH_TOKEN_HMAC_KEY", settings.refresh_token_hmac_key)
+        _require_secret("PASSWORD_RESET_HMAC_KEY", settings.password_reset_hmac_key)
         if not settings.database_url.strip():
             raise ValueError("DATABASE_URL is required for the API")
-        if _is_development_secret(settings.binding_hmac_key):
-            raise ValueError("BINDING_HMAC_KEY must be a production secret")
-        if _is_development_secret(settings.routing_encryption_key):
-            raise ValueError("ROUTING_ENCRYPTION_KEY must be a production secret")
-        if _is_development_secret(settings.wecom_callback_token):
-            raise ValueError("WECOM_CALLBACK_TOKEN must be a production secret")
+        _require_secret("BINDING_HMAC_KEY", settings.binding_hmac_key)
+        _require_secret("ROUTING_ENCRYPTION_KEY", settings.routing_encryption_key)
+        _require_secret("WECOM_CALLBACK_TOKEN", settings.wecom_callback_token, min_length=16)
+        _require_distinct_secrets(
+            {
+                "JWT_SECRET": settings.jwt_secret,
+                "REFRESH_TOKEN_HMAC_KEY": settings.refresh_token_hmac_key,
+                "PASSWORD_RESET_HMAC_KEY": settings.password_reset_hmac_key,
+                "BINDING_HMAC_KEY": settings.binding_hmac_key,
+                "ROUTING_ENCRYPTION_KEY": settings.routing_encryption_key,
+                "WECOM_CALLBACK_TOKEN": settings.wecom_callback_token,
+            }
+        )
+        if settings.jwt_algorithm != "HS256":
+            raise ValueError("JWT_ALGORITHM must be HS256")
+        if len(settings.wecom_callback_aes_key.strip()) != 43:
+            raise ValueError("WECOM_CALLBACK_AES_KEY must be exactly 43 characters")
+        if not settings.wecom_corp_id.strip():
+            raise ValueError("WECOM_CORP_ID is required for the API")
+        if not settings.smtp_host or not settings.smtp_from:
+            raise ValueError("SMTP_HOST and SMTP_FROM are required for password reset delivery")
+        if not settings.smtp_starttls:
+            raise ValueError("SMTP_STARTTLS must be true in production")
+        if settings.smtp_username and not settings.smtp_password:
+            raise ValueError("SMTP_PASSWORD is required when SMTP_USERNAME is configured")
         if settings.worker_database_url.strip():
             raise ValueError("WORKER_DATABASE_URL must not be provided to the API")
         if settings.wecom_corp_secret or settings.wecom_bot_secret or settings.model_api_key:
             raise ValueError("Worker/model sending credentials must not be provided to the API")
+        if not settings.web_base_url.lower().startswith("https://"):
+            raise ValueError("WEB_BASE_URL must use HTTPS in production")
+        if any(origin == "*" for origin in settings.cors_origins):
+            raise ValueError("CORS_ORIGINS must not contain '*' in production")
     else:
         if settings.jwt_secret.strip():
             raise ValueError("JWT_SECRET must not be provided to the Worker")
+        if settings.refresh_token_hmac_key.strip() or settings.password_reset_hmac_key.strip():
+            raise ValueError("session and password-reset secrets must not be provided to the Worker")
+        if settings.binding_hmac_key.strip():
+            raise ValueError("BINDING_HMAC_KEY must not be provided to the Worker")
         if settings.database_url.strip():
             raise ValueError("DATABASE_URL must not be provided to the Worker")
         if not settings.worker_database_url.strip():
             raise ValueError("WORKER_DATABASE_URL is required for the Worker")
-        if _is_development_secret(settings.routing_encryption_key):
-            raise ValueError("ROUTING_ENCRYPTION_KEY must be a production secret")
+        _require_secret("ROUTING_ENCRYPTION_KEY", settings.routing_encryption_key)
         if not settings.wecom_corp_id.strip() or not settings.wecom_corp_secret.strip():
             raise ValueError("WECOM_CORP_ID and WECOM_CORP_SECRET are required for the Worker")
         if settings.wecom_bot_enabled and not (

@@ -2,6 +2,13 @@
 import { chromium } from "playwright";
 
 const BASE = "http://127.0.0.1:5173";
+const TEST_EMAIL = process.env.WEALTHSAIL_TEST_EMAIL;
+const TEST_PASSWORD = process.env.WEALTHSAIL_TEST_PASSWORD;
+if (!TEST_EMAIL || !TEST_PASSWORD) {
+  throw new Error(
+    "Set WEALTHSAIL_TEST_EMAIL and WEALTHSAIL_TEST_PASSWORD before running this verification.",
+  );
+}
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
@@ -31,8 +38,8 @@ try {
   check("登录页渲染", await page.getByRole("button", { name: "登录工作台" }).isVisible());
 
   // 2. 真实登录
-  await page.fill('input[type="email"]', "zhangming@example.com");
-  await page.fill('input[type="password"]', "demo1234");
+  await page.fill('input[type="email"]', TEST_EMAIL);
+  await page.fill('input[type="password"]', TEST_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL("**/dashboard", { timeout: 15000 });
   check("登录成功 → 跳转 /dashboard", true);

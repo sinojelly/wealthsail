@@ -35,7 +35,7 @@ from backend.common.database import Pool
 from backend.common.security import constant_time_eq
 from backend.config import Settings
 from backend.dependencies import get_pool, get_settings_dep
-from backend.identity import service as identity_service
+from backend.domain import identity_service
 
 logger = logging.getLogger("wealthsail.wecom")
 
@@ -374,9 +374,7 @@ async def wecom_callback(
     if msg_type == "text" and content.lower().startswith("/bind"):
         token = content[5:].strip()
         try:
-            result = await identity_service.consume_binding_challenge(
-                pool,
-                settings,
+            result = await identity_service(pool, settings).consume_binding_challenge(
                 token=token,
                 external_user_id=from_user,
                 external_username=inner.get("Alias") or None,

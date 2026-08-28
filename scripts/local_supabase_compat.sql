@@ -19,7 +19,16 @@ BEGIN
     END IF;
 END $$;
 
--- 2. Allow the application connection role to impersonate `authenticated`
+-- 2. Local stand-in roles carry no LOGIN and therefore no embedded password.
+-- Deployment creates separate secret-backed login roles.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wealthsail_worker') THEN
+        CREATE ROLE wealthsail_worker NOLOGIN NOINHERIT BYPASSRLS;
+    END IF;
+END $$;
+
+-- Allow the application connection role to impersonate `authenticated`
 --    inside a transaction (SET LOCAL ROLE authenticated).
 GRANT authenticated TO wealthsail_user;
 -- The Worker also executes per-tenant report generation through the same RLS
@@ -37,17 +46,10 @@ AS $$
     SELECT (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
 $$;
 
--- 4. Dedicated worker login role. Mirrors the Supabase service_role pattern:
+-- 4. Dedicated worker execution role. Mirrors the Supabase service_role pattern:
 --    the background Worker (scheduler + Outbox consumer) processes rows for
 --    ALL tenants, so it bypasses RLS and enforces tenant_id in application
 --    code instead. The API role never uses this account.
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wealthsail_worker') THEN
-        CREATE ROLE wealthsail_worker LOGIN BYPASSRLS PASSWORD 'dev_worker_password_123';
-    END IF;
-END $$;
-
 GRANT USAGE ON SCHEMA identity, ledger, reference, market, research,
     reporting, risk, workflow, audit TO wealthsail_worker;
 GRANT ALL ON ALL TABLES IN SCHEMA identity, ledger, reference, market, research,
