@@ -3,6 +3,13 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_remote_smoke:
+        description: Run the protected remote Supabase smoke on master
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -12,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,6 +42,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -42,4 +53,111 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm test
+      - run: pnpm run test:smoke-config
       - run: pnpm build
+
+  # Merge gate: every push/PR runs the production frontend bundle and real API
+  # against an ephemeral PostgreSQL 16. No repository secret is available here.
+  full-stack-smoke:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI_SMOKE_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      WS_SMOKE_DATABASE_URL: postgresql://wealthsail_api_login:ci-api-password-32-characters-only@127.0.0.1:5432/postgres?sslmode=disable
+      WS_SMOKE_DATABASE_EXPECTED_HOST: 127.0.0.1
+      WS_SMOKE_EMAIL: ci-smoke@wealthsail.example
+      WS_SMOKE_PASSWORD: SmokeLogin-Only-2026!
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: corepack enable
+      - run: pip install -r requirements-dev.txt
+      - name: Install frontend dependencies and Chromium
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Apply migrations and seed the isolated CI login
+        run: python scripts/prepare_ci_smoke_db.py
+      - name: Run local full-stack browser smoke
+        run: python scripts/full_stack_smoke.py --allow-loopback-database
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-stack-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/full-stack-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Real-database compatibility check. It is intentionally absent from PRs:
+  # executing unreviewed PR code with a production DSN would expose the secret.
+  # Enable after configuring the `production-smoke` environment and setting
+  # repository variable WS_REMOTE_SMOKE_ENABLED=true.
+  remote-supabase-smoke:
+    needs: [backend, frontend, full-stack-smoke]
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      ((github.event_name == 'push' && vars.WS_REMOTE_SMOKE_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.run_remote_smoke))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-smoke
+    concurrency:
+      group: wealthsail-remote-supabase-smoke
+      cancel-in-progress: false
+    env:
+      WS_SMOKE_DATABASE_URL: ${{ secrets.WS_SMOKE_DATABASE_URL }}
+      WS_SMOKE_DATABASE_EXPECTED_HOST: ${{ vars.WS_SMOKE_DATABASE_EXPECTED_HOST }}
+      WS_SMOKE_EMAIL: ${{ secrets.WS_SMOKE_EMAIL }}
+      WS_SMOKE_PASSWORD: ${{ secrets.WS_SMOKE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: corepack enable
+      - run: pip install -r requirements-dev.txt
+      - name: Install frontend dependencies and Chromium
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Run local app against protected remote Supabase
+        run: python scripts/full_stack_smoke.py
+      - name: Upload remote smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-supabase-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/full-stack-smoke/
+          if-no-files-found: ignore
+          retention-days: 7

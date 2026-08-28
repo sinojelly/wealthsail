@@ -33,6 +33,7 @@ try {
     try {
         Invoke-Checked { npm run lint } "Frontend lint"
         Invoke-Checked { npm test -- --run } "Frontend tests"
+        Invoke-Checked { npm run test:smoke-config } "Frontend smoke safety contracts"
         Invoke-Checked { npm run build } "Frontend production build"
     } finally {
         Pop-Location

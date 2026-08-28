@@ -19,6 +19,22 @@ export default defineConfig({
       },
     },
   },
+  // `vite preview` is used by CI smoke tests so the browser exercises the
+  // production bundle while API requests still reach the local FastAPI process.
+  preview: {
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+      "/static": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
