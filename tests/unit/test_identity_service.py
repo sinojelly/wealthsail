@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+=======
+import json
+from datetime import datetime, timedelta, timezone
+>>>>>>> c6f4d04 (Windows 本地修改)
 from typing import Any
 
 import pytest
@@ -231,7 +236,12 @@ async def test_login_mints_jwt_and_persists_refresh_hash() -> None:
 
     audit = next(c for c in conn.calls if "audit.audit_log" in c[0])
     assert "SESSION_LOGIN" in audit[1]
+<<<<<<< HEAD
     assert isinstance(audit[1][-1], str)
+=======
+    assert isinstance(audit[1][7], str)
+    assert json.loads(audit[1][7]) == {"method": "password"}
+>>>>>>> c6f4d04 (Windows 本地修改)
 
 
 @pytest.mark.asyncio
@@ -509,6 +519,39 @@ def test_jwt_roundtrip_and_compat_payload() -> None:
     assert session.tenant_id == "tenant-1"
     assert session.tenant_role == "OWNER"
     assert session.email == "a@example.test"
+
+
+def test_jwt_is_bidirectionally_compatible_with_backend() -> None:
+    from backend.common.auth import (
+        create_access_token as backend_create_access_token,
+        decode_access_token as backend_decode_access_token,
+    )
+
+    module_token, _ = jwt_module.create_access_token(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        email="a@example.test",
+        nickname="A",
+        tenant_role="OWNER",
+        jwt_secret=_KEYS["jwt_secret"],
+        ttl_seconds=3600,
+    )
+    assert backend_decode_access_token(
+        module_token, _KEYS["jwt_secret"]
+    ).tenant_id == "tenant-1"
+
+    backend_token, _ = backend_create_access_token(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        email="a@example.test",
+        nickname="A",
+        tenant_role="OWNER",
+        jwt_secret=_KEYS["jwt_secret"],
+        ttl_seconds=3600,
+    )
+    assert jwt_module.decode_access_token(
+        backend_token, _KEYS["jwt_secret"]
+    ).tenant_id == "tenant-1"
 
 
 def test_jwt_tampered_or_expired_token_rejected() -> None:

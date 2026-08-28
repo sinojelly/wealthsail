@@ -137,6 +137,7 @@ async def lifespan_pool(settings: Settings) -> AsyncIterator[Pool]:
         settings.database_url,
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
+        statement_cache_size=settings.db_statement_cache_size,
     )
     try:
         yield pool

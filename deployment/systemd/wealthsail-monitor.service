@@ -1,0 +1,22 @@
+[Unit]
+Description=WealthSail runtime health monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/wealthsail
+EnvironmentFile=/etc/wealthsail/worker.env
+Environment=WEALTHSAIL_MONITOR_STATE=/var/lib/wealthsail-monitor/state.json
+StateDirectory=wealthsail-monitor
+StateDirectoryMode=0700
+ExecStart=/opt/wealthsail/.venv/bin/python -m scripts.runtime_monitor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# asyncpg reads the ubuntu user's ~/.postgresql/root.crt trust anchor.
+# Keep the home tree immutable while allowing that certificate to be read.
+ProtectHome=read-only
+ReadWritePaths=/var/lib/wealthsail-monitor

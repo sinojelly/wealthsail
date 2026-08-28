@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.database_url,
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
+        statement_cache_size=settings.db_statement_cache_size,
     )
     await verify_runtime_login_boundary(
         pool, process="api", skip=not settings.is_production

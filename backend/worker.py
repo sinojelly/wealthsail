@@ -59,6 +59,7 @@ async def main() -> None:
         settings.worker_database_url,
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
+        statement_cache_size=settings.db_statement_cache_size,
         runtime_role="wealthsail_worker",
     )
     await verify_runtime_login_boundary(

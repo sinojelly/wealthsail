@@ -31,6 +31,12 @@ RLS_ROLE = "wealthsail_api"
 logger = logging.getLogger("wealthsail.database")
 
 
+def _uses_supabase_transaction_pooler(dsn: str) -> bool:
+    parts = urlsplit(dsn)
+    hostname = (parts.hostname or "").lower()
+    return parts.port == 6543 and hostname.endswith(".pooler.supabase.com")
+
+
 def normalize_asyncpg_dsn(dsn: str) -> tuple[str, dict[str, int]]:
     """Separate asyncpg-only connection options from a PostgreSQL DSN.
 
@@ -77,6 +83,11 @@ async def create_pool(
     dsn, dsn_options = normalize_asyncpg_dsn(dsn)
     if statement_cache_size is None:
         statement_cache_size = dsn_options.get("statement_cache_size")
+    if statement_cache_size is None and _uses_supabase_transaction_pooler(dsn):
+        statement_cache_size = 0
+        logger.info(
+            "disabled asyncpg statement cache for Supabase transaction pooler"
+        )
     pool_args: dict[str, Any] = {
         "dsn": dsn,
         "min_size": min_size,
@@ -88,14 +99,17 @@ async def create_pool(
     if runtime_role is not None:
         if runtime_role not in {"wealthsail_api", "wealthsail_worker"}:
             raise ValueError("unsupported database runtime role")
-        if "init" in pool_kwargs:
-            raise ValueError("runtime_role cannot be combined with a custom pool init")
+        if "setup" in pool_kwargs:
+            raise ValueError("runtime_role cannot be combined with a custom pool setup")
 
-        async def initialize_runtime_role(conn: asyncpg.Connection) -> None:
-            # The identifier comes from the closed allowlist above.
+        async def setup_runtime_role(conn: asyncpg.Connection) -> None:
+            # asyncpg resets session state when a connection is returned to the
+            # pool.  ``setup`` runs on every acquire, whereas ``init`` only runs
+            # once when the physical connection is created.  The role switch is
+            # therefore an acquire-time trust-boundary operation.
             await conn.execute(f"SET ROLE {runtime_role};")
 
-        pool_args["init"] = initialize_runtime_role
+        pool_args["setup"] = setup_runtime_role
     return await asyncpg.create_pool(**pool_args, **pool_kwargs)
 
 

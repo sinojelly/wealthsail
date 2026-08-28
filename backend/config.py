@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     outbox_delivery_concurrency: int = Field(default=4, ge=1, le=20)
     scheduler_tick_seconds: float = Field(default=20.0)
 
+    # --- Independent runtime monitor ---------------------------------------
+    # The monitor is a separate systemd timer, so it can report a stopped
+    # Worker instead of depending on the Worker to report its own failure.
+    monitor_worker_service: str = Field(default="wealthsail-worker.service")
+    monitor_failed_job_window_minutes: int = Field(default=15, ge=1, le=1440)
+    monitor_dead_outbox_window_hours: int = Field(default=24, ge=1, le=720)
+    monitor_alert_cooldown_minutes: int = Field(default=60, ge=1, le=1440)
+
     # --- Recoverable Tiantian Fund import -----------------------------------
     # Mutations are guarded independently from reads so an operator can stop
     # new imports without hiding an existing DRAFT or its audit history.

@@ -47,6 +47,42 @@ def test_asyncpg_dsn_normalization_is_independent_of_query_order(query: str) -> 
     assert options["statement_cache_size"] == 0
 
 
+@pytest.mark.asyncio
+async def test_supabase_transaction_pooler_disables_statement_cache(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    async def fake_create_pool(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("backend.common.database.asyncpg.create_pool", fake_create_pool)
+    await create_pool(
+        "postgresql://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/app"
+        "?sslmode=require"
+    )
+
+    assert captured["statement_cache_size"] == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_statement_cache_setting_wins_for_pooler(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_create_pool(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("backend.common.database.asyncpg.create_pool", fake_create_pool)
+    await create_pool(
+        "postgresql://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/app",
+        statement_cache_size=7,
+    )
+
+    assert captured["statement_cache_size"] == 7
+
+
 def test_tenant_header_cannot_rebind_a_token_to_another_tenant() -> None:
     """A token-bound role must never be reused for a caller-selected tenant."""
     with pytest.raises(ForbiddenError):
@@ -213,9 +249,14 @@ async def test_worker_pool_sets_the_bypass_role_on_every_connection(monkeypatch)
         async def execute(self, sql):
             self.sql = sql
 
-    conn = Connection()
-    await captured["init"](conn)
-    assert conn.sql == "SET ROLE wealthsail_worker;"
+    first = Connection()
+    second = Connection()
+    await captured["setup"](first)
+    await captured["setup"](second)
+
+    assert "init" not in captured
+    assert first.sql == "SET ROLE wealthsail_worker;"
+    assert second.sql == "SET ROLE wealthsail_worker;"
 
 
 def test_forward_migration_grants_worker_system_io_and_projection_rebuild() -> None:
