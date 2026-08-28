@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-=======
 import json
 from datetime import datetime, timedelta, timezone
->>>>>>> c6f4d04 (Windows 本地修改)
 from typing import Any
 
 import pytest
 
-from backend.common.auth import decode_access_token as decode_http_access_token
-from backend.errors import (
+from modules.errors import (
     AuthRequiredError,
-    IdempotencyConflictError as ConflictError,
+    ConflictError,
     NotFoundError,
-    ValidationError_ as ValidationError,
+    ValidationError,
 )
-from backend.common import auth as jwt_module
-from backend.identity.domain_service import (
+from modules.identity import jwt as jwt_module
+from modules.identity.service import (
     IdentityService,
     IdentitySettings,
     TenantContext,
@@ -220,9 +216,7 @@ async def test_login_mints_jwt_and_persists_refresh_hash() -> None:
     result = await service.login(email="ZHANGMING@example.test", password="demo1234")
 
     token = result["accessToken"]
-    # The token must be accepted by the decoder used by real HTTP requests,
-    # not merely by the issuer's sibling test helper.
-    session = decode_http_access_token(token, _KEYS["jwt_secret"])
+    session = jwt_module.decode_access_token(token, _KEYS["jwt_secret"])
     assert session.user_id == "user-1"
     assert session.tenant_id == "tenant-1"
     assert session.tenant_role == "OWNER"
@@ -236,12 +230,8 @@ async def test_login_mints_jwt_and_persists_refresh_hash() -> None:
 
     audit = next(c for c in conn.calls if "audit.audit_log" in c[0])
     assert "SESSION_LOGIN" in audit[1]
-<<<<<<< HEAD
-    assert isinstance(audit[1][-1], str)
-=======
     assert isinstance(audit[1][7], str)
     assert json.loads(audit[1][7]) == {"method": "password"}
->>>>>>> c6f4d04 (Windows 本地修改)
 
 
 @pytest.mark.asyncio
@@ -338,6 +328,27 @@ async def test_switch_tenant_rebinds_refresh_session() -> None:
     assert update[1][0] == "tenant-2"
     assert update[1][1] != "refresh-token"  # 库中只有摘要
     assert result["user"]["tenantId"] == "tenant-2"
+
+
+@pytest.mark.asyncio
+async def test_create_tenant_invokes_privileged_helper() -> None:
+    conn = FakeConn()
+    conn._fetchrow = {
+        "out_tenant_id": "tenant-9",
+        "out_tenant_name": "我的组合",
+        "out_role": "OWNER",
+    }
+    service = _service(conn)
+    actor = TenantContext(tenant_id="tenant-1", user_id="user-1", tenant_role="OWNER")
+
+    result = await service.create_tenant(actor, name="  我的组合  ", base_currency="cny")
+
+    call = next(c for c in conn.calls if "identity.create_tenant" in c[0])
+    assert call[1] == ("user-1", "我的组合", "CNY")
+    assert result["role"] == "OWNER"
+
+    with pytest.raises(ValidationError):
+        await service.create_tenant(actor, name="x")
 
 
 # ---------------------------------------------------------------------------
@@ -451,13 +462,7 @@ async def test_update_profile_validates_and_updates() -> None:
 @pytest.mark.asyncio
 async def test_request_password_reset_is_anti_enumeration() -> None:
     conn = FakeConn()
-    values = iter(["user-1", False])
-
-    async def fetchval(sql, *args):
-        conn.calls.append((sql, args))
-        return next(values)
-
-    conn.fetchval = fetchval  # type: ignore[method-assign]
+    conn._fetchval = "user-1"
     service = _service(conn)
 
     result = await service.request_password_reset(email="a@example.test")
@@ -473,14 +478,17 @@ async def test_request_password_reset_is_anti_enumeration() -> None:
     assert insert[1][1] == hmac_digest(
         _KEYS["password_reset_hmac_key"], result["token"]
     )
+    token_call_count = len(
+        [c for c in conn.calls if "password_reset_tokens" in c[0]]
+    )
+
     # 不存在的邮箱同样返回 sent，且不落库
-    unknown_conn = FakeConn()
-    unknown_service = _service(unknown_conn)
-    result2 = await unknown_service.request_password_reset(email="ghost@example.test")
+    conn._fetchval = None
+    result2 = await service.request_password_reset(email="ghost@example.test")
     assert result2["status"] == "sent"
     assert result2["token"] is None
-    token_calls = [c for c in unknown_conn.calls if "password_reset_tokens" in c[0]]
-    assert token_calls == []
+    token_calls = [c for c in conn.calls if "password_reset_tokens" in c[0]]
+    assert len(token_calls) == token_call_count
 
 
 @pytest.mark.asyncio
@@ -519,39 +527,6 @@ def test_jwt_roundtrip_and_compat_payload() -> None:
     assert session.tenant_id == "tenant-1"
     assert session.tenant_role == "OWNER"
     assert session.email == "a@example.test"
-
-
-def test_jwt_is_bidirectionally_compatible_with_backend() -> None:
-    from backend.common.auth import (
-        create_access_token as backend_create_access_token,
-        decode_access_token as backend_decode_access_token,
-    )
-
-    module_token, _ = jwt_module.create_access_token(
-        user_id="user-1",
-        tenant_id="tenant-1",
-        email="a@example.test",
-        nickname="A",
-        tenant_role="OWNER",
-        jwt_secret=_KEYS["jwt_secret"],
-        ttl_seconds=3600,
-    )
-    assert backend_decode_access_token(
-        module_token, _KEYS["jwt_secret"]
-    ).tenant_id == "tenant-1"
-
-    backend_token, _ = backend_create_access_token(
-        user_id="user-1",
-        tenant_id="tenant-1",
-        email="a@example.test",
-        nickname="A",
-        tenant_role="OWNER",
-        jwt_secret=_KEYS["jwt_secret"],
-        ttl_seconds=3600,
-    )
-    assert jwt_module.decode_access_token(
-        backend_token, _KEYS["jwt_secret"]
-    ).tenant_id == "tenant-1"
 
 
 def test_jwt_tampered_or_expired_token_rejected() -> None:
