@@ -1087,12 +1087,13 @@ async def get_import_batch(
                 ) latest
           ) metrics ON TRUE
          WHERE b.tenant_id = $1 AND b.id = $2
+           AND b.source_type = 'TIANTIAN_FUND_ZIP'
         """,
         tenant_id,
         batch_id,
     )
     if batch is None:
-        raise NotFoundError("导入批次不存在")
+        raise NotFoundError("天天基金导入批次不存在")
     positions = await conn.fetch(
         """
         SELECT item.id AS item_id, item.instrument_id, item.source_symbol,

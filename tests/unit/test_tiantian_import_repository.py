@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.errors import IdempotencyConflictError, VersionConflictError
+from backend.errors import IdempotencyConflictError, NotFoundError, VersionConflictError
 from backend.portfolio.imports.repository import (
     cancel_draft,
     confirm_draft,
@@ -287,6 +287,24 @@ class _ReadConnection:
                 "created_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
             }
         ]
+
+
+class _ManualBatchReadConnection(_ReadConnection):
+    """Model the database result for a batch owned by another import flow."""
+
+    async def fetchrow(self, sql: str, *_args):
+        if "b.source_type = 'TIANTIAN_FUND_ZIP'" in sql:
+            return None
+        return await super().fetchrow(sql, *_args)
+
+
+@pytest.mark.asyncio
+async def test_get_batch_rejects_a_manual_import_batch() -> None:
+    """Removing the source predicate must expose the regression caught here."""
+    conn = _ManualBatchReadConnection()
+
+    with pytest.raises(NotFoundError, match="天天基金导入批次不存在"):
+        await get_import_batch(conn, "tenant-1", "manual-batch-1")
 
 
 @pytest.mark.asyncio

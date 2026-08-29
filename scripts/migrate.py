@@ -399,6 +399,57 @@ async def _readback(conn: asyncpg.Connection) -> None:
             + ", ".join(missing_tiantian_privileges)
         )
 
+    # The API only needs these columns to correlate a Tiantian import batch
+    # with its latest durable data task.  A table-wide SELECT would expose
+    # worker lease, retry and error details that are not part of the API
+    # contract, so readback rejects both missing columns and an over-broad
+    # table grant.
+    job_status_columns = (
+        "id",
+        "tenant_id",
+        "status",
+        "job_type",
+        "payload",
+        "available_at",
+    )
+    missing_job_status_columns = [
+        column
+        for column in job_status_columns
+        if not await conn.fetchval(
+            "SELECT has_column_privilege("
+            "'wealthsail_api','workflow.job_runs',$1,'SELECT')",
+            column,
+        )
+    ]
+    broad_job_status_select = await conn.fetchval(
+        "SELECT has_table_privilege("
+        "'wealthsail_api','workflow.job_runs','SELECT')"
+    )
+    if missing_job_status_columns or broad_job_status_select:
+        details = ", ".join(missing_job_status_columns) or "table-wide SELECT"
+        raise RuntimeError(
+            "Tiantian job status column privileges missing or too broad: " + details
+        )
+
+    job_status_policy = await conn.fetchrow(
+        """
+        SELECT qual
+          FROM pg_policies
+         WHERE schemaname='workflow'
+           AND tablename='job_runs'
+           AND policyname='job_runs_api_select'
+           AND cmd='SELECT'
+           AND 'wealthsail_api' = ANY(roles)
+        """
+    )
+    if (
+        job_status_policy is None
+        or "identity.is_tenant_member" not in str(job_status_policy["qual"] or "")
+    ):
+        raise RuntimeError(
+            "Tiantian job status SELECT policy is missing or too broad"
+        )
+
     import_item_update_policy = await conn.fetchrow(
         """
         SELECT qual, with_check

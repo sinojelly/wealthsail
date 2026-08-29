@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 29
-    assert migrations[-1].path.name == "029_holding_start_inference_metadata.sql"
+    assert versions[-1] == 30
+    assert migrations[-1].path.name == "030_tiantian_job_status_read_policy.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -122,10 +122,34 @@ def test_029_migration_persists_inference_method_and_confidence() -> None:
         assert contract in migration
 
 
+def test_030_migration_limits_api_job_reads_to_tenant_scoped_status_columns() -> None:
+    """Batch detail needs job status without exposing worker payloads broadly."""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "030_tiantian_job_status_read_policy.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE POLICY job_runs_api_select",
+        "FOR SELECT TO wealthsail_api",
+        "identity.is_tenant_member(tenant_id)",
+        "GRANT SELECT (id, tenant_id, status, job_type, payload, available_at)",
+    ):
+        assert contract in migration
+    assert "GRANT SELECT ON workflow.job_runs TO wealthsail_api" not in migration
+
+
 def test_readback_rejects_a_missing_import_item_update_policy() -> None:
     source = inspect.getsource(_readback)
 
     assert "portfolio import item UPDATE policy is missing or too broad" in source
+
+
+def test_readback_checks_tenant_scoped_job_status_access() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "Tiantian job status SELECT policy is missing or too broad" in source
+    assert "Tiantian job status column privileges missing" in source
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:
