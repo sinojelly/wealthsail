@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { openAuthenticatedSession } from "../src/browser-session.mjs";
 
-test("登录确认后重新加载查询页并返回可关闭的认证会话", async () => {
+test("交易查询和持仓子系统分别完成登录后返回可用会话", async () => {
   class FakePage extends EventEmitter {
     constructor() {
       super();
@@ -20,7 +20,7 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
             headers: () => ({ "access-token": "session-token" }),
           }),
         );
-      } else if (this.navigationCount === 3) {
+      } else if (this.navigationCount === 4) {
         queueMicrotask(() =>
           this.emit("response", {
             url: () => "https://trade.1234567.com.cn/api/assets/holdings",
@@ -48,14 +48,16 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
     async bringToFront() {}
 
     url() {
-      return this.navigationCount >= 3
-        ? "https://trade.1234567.com.cn/myAssets/hold"
-        : "https://query.1234567.com.cn/";
+      if (this.navigationCount === 3) return "https://login.1234567.com.cn/";
+      if (this.navigationCount >= 4) {
+        return "https://trade.1234567.com.cn/myAssets/hold";
+      }
+      return "https://query.1234567.com.cn/";
     }
   }
 
   const page = new FakePage();
-  const state = { closed: false, prompted: false };
+  const state = { closed: false, promptCount: 0 };
   const context = {
     pages: () => [page],
     request: {
@@ -77,7 +79,7 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
     profileDir: "ignored-in-test",
     browser: "msedge",
     prompt: async () => {
-      state.prompted = true;
+      state.promptCount += 1;
     },
     logger: () => {},
   });
@@ -91,14 +93,15 @@ test("登录确认后重新加载查询页并返回可关闭的认证会话", as
     pageSize: 20,
   });
 
-  assert.equal(state.prompted, true);
+  assert.equal(state.promptCount, 1);
   assert.equal(page.navigationCount, 2);
   assert.equal(response.code, 1200);
   const holdings = await session.requestHoldings({
     capturedAt: "2026-08-28T00:00:00+08:00",
     timeoutMs: 100,
   });
-  assert.equal(page.navigationCount, 3);
+  assert.equal(state.promptCount, 2);
+  assert.equal(page.navigationCount, 4);
   assert.equal(holdings.positions[0].productCode, "110022");
   await session.close();
   assert.equal(state.closed, true);

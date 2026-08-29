@@ -19,6 +19,11 @@ def _json_bytes(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
 
 
+def _record_count(content: bytes) -> int:
+    payload = json.loads(content)
+    return len(payload) if isinstance(payload, list) else 1
+
+
 def _package_payloads() -> dict[str, bytes]:
     return {
         "current-positions.json": _json_bytes(
@@ -93,7 +98,7 @@ def write_synthetic_package(
         {
             "name": name,
             "sha256": hashlib.sha256(content).hexdigest(),
-            "records": len(json.loads(content)),
+            "records": _record_count(content),
         }
         for name, content in payloads.items()
     ]
@@ -157,7 +162,7 @@ def test_parser_rejects_a_payload_whose_bytes_do_not_match_manifest_hash(
                 if name == "current-positions.json"
                 else hashlib.sha256(content).hexdigest()
             ),
-            "records": len(json.loads(content)),
+            "records": _record_count(content),
         }
         for name, content in payloads.items()
     ]

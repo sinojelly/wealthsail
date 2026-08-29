@@ -66,6 +66,21 @@ test("只有平均成本时用份额精确推导成本总额", () => {
   assert.equal(result.holdingProfitRate, "8.81");
 });
 
+test("天天基金提供同时点市值和持仓收益时精确推导成本", () => {
+  const result = normalizeHolding(
+    sourceHolding({
+      costAmount: "",
+      averageCost: "",
+      holdingProfit: "200.00",
+    }),
+    CAPTURED_AT,
+  );
+
+  assert.equal(result.costAmount, "2500.00");
+  assert.equal(result.averageCost, "2.02501296");
+  assert.equal(result.holdingProfit, "200.00");
+});
+
 test("当前持仓缺少成本事实时拒绝生成零成本基线", () => {
   assert.throws(
     () => normalizeHolding(sourceHolding({ costAmount: "", averageCost: "" }), CAPTURED_AT),

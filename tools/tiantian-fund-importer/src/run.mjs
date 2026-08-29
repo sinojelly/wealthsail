@@ -25,7 +25,7 @@ export async function runCapture({
 }) {
   await mkdir(options.outputDir, { recursive: true });
   const capturedAt = now.toISOString();
-  const holdings = await session.requestHoldings({ capturedAt });
+  const holdings = await session.requestHoldings({ capturedAt, detailDelay: delay });
   const collected = await collectTransactions({
     plans,
     requestPage: session.requestPage,

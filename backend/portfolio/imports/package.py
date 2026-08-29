@@ -177,7 +177,13 @@ def parse_tiantian_package(
             raise _invalid(f"文件哈希不匹配：{name}", name)
         payload = _decode_json(content, name)
         _validate_json_shape(payload, limits, name)
-        actual_records = len(payload) if isinstance(payload, (list, dict)) else -1
+        if isinstance(payload, list):
+            actual_records = len(payload)
+        elif isinstance(payload, dict):
+            # JSON 对象是一个汇总记录，其字段数量不是 Manifest 的记录数。
+            actual_records = 1
+        else:
+            actual_records = -1
         if actual_records != manifest_files[name].records:
             raise _invalid(f"文件记录数与 Manifest 不一致：{name}", name)
         payloads[name] = payload

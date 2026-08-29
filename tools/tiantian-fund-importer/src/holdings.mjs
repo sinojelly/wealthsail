@@ -109,8 +109,17 @@ export function normalizeHolding(raw, capturedAt) {
   const parsedQuantity = parseDecimal(quantity, "持有份额");
   if (parsedQuantity.coefficient <= 0n) throw new Error("持有份额必须大于零");
 
+  const marketValue = sourceText(raw, ["marketValue", "holdValue", "assetValue"]);
+  parseDecimal(marketValue, "当前市值");
+  const sourceHoldingProfit = optionalDecimal(
+    raw,
+    ["holdingProfit", "holdProfit", "profit", "profitValue"],
+    "持有收益",
+  );
   const directAverageCost = sourceText(raw, ["averageCost", "avgCost", "costNav"]);
-  const sourceCostAmount = sourceText(raw, ["costAmount", "totalCost", "holdCost"]);
+  const sourceCostAmount =
+    sourceText(raw, ["costAmount", "totalCost", "holdCost"]) ||
+    (sourceHoldingProfit ? subtractDecimal(marketValue, sourceHoldingProfit, 2) : "");
   if (!directAverageCost && !sourceCostAmount) {
     throw new Error(`基金 ${productCode} 缺少可靠成本，不能生成零成本基线`);
   }
@@ -119,16 +128,18 @@ export function normalizeHolding(raw, capturedAt) {
   parseDecimal(averageCost, "平均成本");
   const costAmount = sourceCostAmount || multiplyDecimal(averageCost, quantity);
 
-  const marketValue = sourceText(raw, ["marketValue", "holdValue", "assetValue"]);
-  parseDecimal(marketValue, "当前市值");
   const holdingProfit =
-    optionalDecimal(raw, ["holdingProfit", "holdProfit", "profit"], "持有收益") ||
+    sourceHoldingProfit ||
     subtractDecimal(marketValue, costAmount, 2);
   const holdingProfitRate =
-    optionalDecimal(raw, ["holdingProfitRate", "holdProfitRate", "profitRate"], "持有收益率") ||
+    optionalDecimal(
+      raw,
+      ["holdingProfitRate", "holdProfitRate", "profitRate", "profitPercent"],
+      "持有收益率",
+    ) ||
     divideDecimal(holdingProfit, costAmount, 2, 100n);
 
-  const latestNavDate = sourceText(raw, ["navDate", "latestNavDate", "PDATE"]);
+  const latestNavDate = sourceText(raw, ["navDate", "navdate", "latestNavDate", "PDATE"]);
   if (latestNavDate && !ISO_DATE.test(latestNavDate)) {
     throw new Error(`净值日期格式无效：${latestNavDate}`);
   }

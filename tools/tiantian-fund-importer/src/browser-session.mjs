@@ -39,7 +39,7 @@ export async function openAuthenticatedSession({
 
     return {
       requestPage: createApiRequester({ apiContext: context.request, accessToken }),
-      requestHoldings: (options) => captureHoldings(page, options),
+      requestHoldings: (options) => captureHoldings(page, { ...options, prompt, logger }),
       close: () => context.close(),
     };
   } catch (error) {
