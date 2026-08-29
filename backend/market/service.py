@@ -29,6 +29,8 @@ from backend.market.fund_estimator import FundComponentReturn, estimate_fund_nav
 
 logger = logging.getLogger("wealthsail.market")
 
+_MARKET_HOT_BOOTSTRAP_LOCK = "wealthsail.market-hot.bootstrap.v1"
+
 # field_code priority when an instrument has multiple observations (best wins)
 _FIELD_PRIORITY = {
     md.F_CLOSE: 0,
@@ -437,13 +439,10 @@ async def refresh_market_sentiment(pool: Pool) -> dict:
     return {"status": "COMPLETED", "tradeDate": stats["trade_date"]}
 
 
-async def refresh_market_hot(pool: Pool, *, limit: int = 10) -> dict:
-    """Worker-only Provider refresh for the market-hot read model."""
+async def _refresh_market_hot_on_connection(conn, *, limit: int) -> dict:
+    """Fetch and persist one hotspot snapshot on a Worker connection."""
     snapshot = await md.get_hot_stocks_snapshot(limit=limit)
-    async with system_connection(pool) as conn:
-        snapshot_id = await repository.insert_market_hot_snapshot(
-            conn, data=snapshot
-        )
+    snapshot_id = await repository.insert_market_hot_snapshot(conn, data=snapshot)
     return {
         "status": (
             "COMPLETED"
@@ -453,6 +452,49 @@ async def refresh_market_hot(pool: Pool, *, limit: int = 10) -> dict:
         "snapshotId": snapshot_id,
         "qualityStatus": snapshot["quality_status"],
     }
+
+
+async def refresh_market_hot(pool: Pool, *, limit: int = 10) -> dict:
+    """Worker-only Provider refresh for the market-hot read model."""
+    async with system_connection(pool) as conn:
+        return await _refresh_market_hot_on_connection(conn, limit=limit)
+
+
+async def ensure_market_hot_snapshot(pool: Pool, *, limit: int = 10) -> dict:
+    """Bootstrap the Worker read model only when no hotspot snapshot exists.
+
+    A newly migrated environment may start on a weekend or outside every
+    trading-session catch-up window.  In that state an active Worker would
+    otherwise leave the API permanently unavailable until the next scheduled
+    session.  The existence check keeps ordinary restarts side-effect free:
+    once any governed snapshot exists, the scheduler remains the sole refresh
+    cadence and API requests continue to be database-only reads.
+    """
+    async with system_connection(pool) as conn:
+        # The supported Worker DSN is session-pooled because its connection
+        # also carries the wealthsail_worker runtime role. A session advisory
+        # lock serializes replacement instances without holding a database
+        # transaction open while the external Provider responds.
+        await conn.execute(
+            "SELECT pg_advisory_lock(hashtextextended($1, 0));",
+            _MARKET_HOT_BOOTSTRAP_LOCK,
+        )
+        try:
+            # Recheck only after winning the lock: another Worker may have
+            # populated the table while this instance was waiting.
+            existing = await repository.get_latest_market_hot(conn)
+            if existing is not None:
+                return {
+                    "status": "SKIPPED",
+                    "reason": "SNAPSHOT_EXISTS",
+                    "qualityStatus": existing["quality_status"],
+                }
+            return await _refresh_market_hot_on_connection(conn, limit=limit)
+        finally:
+            await conn.execute(
+                "SELECT pg_advisory_unlock(hashtextextended($1, 0));",
+                _MARKET_HOT_BOOTSTRAP_LOCK,
+            )
 
 
 async def get_market_hot(conn) -> dict:

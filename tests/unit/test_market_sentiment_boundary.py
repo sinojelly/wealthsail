@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -138,6 +139,159 @@ async def test_market_hot_without_snapshot_is_explicitly_unavailable() -> None:
     assert result["items"] == []
     assert result["qualityStatus"] == "UNAVAILABLE"
     assert result["source"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_market_hot_bootstrap_refreshes_when_snapshot_table_is_empty() -> None:
+    snapshot = {
+        "items": [
+            {
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "price": 1500,
+                "change_pct": 1.25,
+                "volume": 100,
+                "turnover": 150000,
+            }
+        ],
+        "source_name": "Sina-Finance-Quote",
+        "source_as_of": datetime(2026, 8, 29, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "retrieved_at": datetime(2026, 8, 29, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "quality_status": "ESTIMATED",
+        "method_version": "market-hot/v1-candidate-pool",
+    }
+
+    conn = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_system_connection(_pool):
+        yield conn
+
+    with (
+        patch(
+            "backend.market.service.system_connection",
+            fake_system_connection,
+        ),
+        patch(
+            "backend.market.service.repository.get_latest_market_hot",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.market.service.md.get_hot_stocks_snapshot",
+            AsyncMock(return_value=snapshot),
+        ) as provider,
+        patch(
+            "backend.market.service.repository.insert_market_hot_snapshot",
+            AsyncMock(return_value="snapshot-1"),
+        ) as insert,
+    ):
+        result = await service.ensure_market_hot_snapshot(object())
+
+    assert result == {
+        "status": "COMPLETED",
+        "snapshotId": "snapshot-1",
+        "qualityStatus": "ESTIMATED",
+    }
+    provider.assert_awaited_once_with(limit=10)
+    insert.assert_awaited_once_with(ANY, data=snapshot)
+
+
+@pytest.mark.asyncio
+async def test_market_hot_bootstrap_skips_provider_when_snapshot_exists() -> None:
+    conn = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_system_connection(_pool):
+        yield conn
+
+    with (
+        patch(
+            "backend.market.service.system_connection",
+            fake_system_connection,
+        ),
+        patch(
+            "backend.market.service.repository.get_latest_market_hot",
+            AsyncMock(return_value={"quality_status": "STALE"}),
+        ),
+        patch(
+            "backend.market.service.md.get_hot_stocks_snapshot",
+            AsyncMock(side_effect=AssertionError("existing snapshots must not refetch")),
+        ) as provider,
+        patch(
+            "backend.market.service.repository.insert_market_hot_snapshot",
+            AsyncMock(side_effect=AssertionError("existing snapshots must not rewrite")),
+        ) as insert,
+    ):
+        result = await service.ensure_market_hot_snapshot(object())
+
+    assert result == {
+        "status": "SKIPPED",
+        "reason": "SNAPSHOT_EXISTS",
+        "qualityStatus": "STALE",
+    }
+    provider.assert_not_awaited()
+    insert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_market_hot_bootstrap_has_one_provider_winner() -> None:
+    advisory_lock = asyncio.Lock()
+    persisted: dict[str, object] = {"row": None}
+    snapshot = {
+        "items": [{"symbol": "600519", "name": "贵州茅台", "price": 1500}],
+        "source_name": "Sina-Finance-Quote",
+        "source_as_of": datetime(2026, 8, 29, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "retrieved_at": datetime(2026, 8, 29, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "quality_status": "ESTIMATED",
+        "method_version": "market-hot/v1-candidate-pool",
+    }
+
+    class Connection:
+        async def execute(self, sql: str, *_args):
+            if "pg_advisory_unlock" in sql:
+                advisory_lock.release()
+            elif "pg_advisory_lock" in sql:
+                await advisory_lock.acquire()
+
+    @asynccontextmanager
+    async def fake_system_connection(_pool):
+        yield Connection()
+
+    async def latest(_conn):
+        observed = persisted["row"]
+        # Give a second unlocked bootstrap time to observe the same empty
+        # state. A correct advisory lock keeps it outside this section.
+        await asyncio.sleep(0.01)
+        return observed
+
+    async def insert(_conn, *, data):
+        persisted["row"] = {"quality_status": data["quality_status"]}
+        return "snapshot-1"
+
+    with (
+        patch("backend.market.service.system_connection", fake_system_connection),
+        patch(
+            "backend.market.service.repository.get_latest_market_hot",
+            AsyncMock(side_effect=latest),
+        ) as latest_query,
+        patch(
+            "backend.market.service.md.get_hot_stocks_snapshot",
+            AsyncMock(return_value=snapshot),
+        ) as provider,
+        patch(
+            "backend.market.service.repository.insert_market_hot_snapshot",
+            AsyncMock(side_effect=insert),
+        ) as persist,
+    ):
+        results = await asyncio.gather(
+            service.ensure_market_hot_snapshot(object()),
+            service.ensure_market_hot_snapshot(object()),
+        )
+
+    assert sorted(result["status"] for result in results) == ["COMPLETED", "SKIPPED"]
+    assert latest_query.await_count == 2
+    assert provider.await_count == 1
+    assert persist.await_count == 1
 
 
 @pytest.mark.asyncio

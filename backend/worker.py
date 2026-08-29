@@ -92,6 +92,20 @@ async def main() -> None:
     except Exception:  # noqa: BLE001
         logger.exception("stale-run recovery failed (continuing)")
 
+    # A fresh market-hot migration can be deployed outside trading hours.
+    # Seed only an empty read model here; normal refreshes remain tied to the
+    # four governed trading sessions and API requests never call Providers.
+    try:
+        bootstrap = await market_service.ensure_market_hot_snapshot(pool)
+        logger.info(
+            "market hotspot bootstrap status=%s quality=%s reason=%s",
+            bootstrap["status"],
+            bootstrap.get("qualityStatus", "-"),
+            bootstrap.get("reason", "-"),
+        )
+    except Exception:  # noqa: BLE001 -- independent loops must still start
+        logger.exception("market hotspot bootstrap failed (continuing)")
+
     async def _calendar_check(now: datetime) -> bool:
         async with pool.acquire() as conn:
             return await is_trading_day(conn, now)

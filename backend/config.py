@@ -10,6 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,9 +41,16 @@ class Settings(BaseSettings):
     # (port 5433). Supabase/remote setups override DATABASE_URL entirely.
     database_url: str = Field(default="")
     worker_database_url: str = Field(default="")
+    # Worker correctness depends on connection-scoped SET ROLE and advisory
+    # locks. Custom proxies must declare their actual pooling semantics; the
+    # transaction value is accepted by parsing only so startup can explain why
+    # that topology is unsupported.
+    worker_database_pool_mode: Literal["direct", "session", "transaction"] | None = Field(
+        default=None
+    )
     db_pool_min_size: int = Field(default=2)
     db_pool_max_size: int = Field(default=10)
-    # Transaction-pooler (PgBouncer, Supabase Session Pooler 6543) deployments
+    # Transaction-pooler (PgBouncer, Supabase Transaction Pooler 6543) deployments
     # must set statement_cache_size=0 in the DSN query string (asyncpg reads
     # it from there). None = let the DSN decide (direct connections keep the
     # asyncpg default of 100).
@@ -171,6 +179,16 @@ def _require_distinct_secrets(secrets: dict[str, str | None]) -> None:
         raise ValueError(f"security secrets must be independent: {names}")
 
 
+def _uses_supabase_transaction_pooler(dsn: str) -> bool:
+    """Recognize Supabase's transaction-pooled endpoint without logging secrets."""
+    try:
+        parsed = urlsplit(dsn)
+        hostname = (parsed.hostname or "").lower()
+        return parsed.port == 6543 and hostname.endswith(".pooler.supabase.com")
+    except ValueError:
+        return False
+
+
 def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
     """Fail closed when a production process receives the wrong authority.
 
@@ -182,6 +200,28 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
         raise ValueError(f"unknown process type: {process}")
     if settings.auth_dev_mode:
         raise ValueError("AUTH_DEV_MODE is no longer supported; use bcrypt credentials")
+    # Worker initialization installs session-scoped runtime authority, and its
+    # cold-start jobs use session advisory locks. Supabase's transaction pooler
+    # may move consecutive statements to different PostgreSQL backends, which
+    # can invalidate SET ROLE and leak a lock. Reject that topology in every
+    # environment instead of limiting the guard to production deployments.
+    worker_dsn = settings.worker_database_url.strip()
+    if process == "worker" and worker_dsn:
+        if _uses_supabase_transaction_pooler(worker_dsn):
+            raise ValueError(
+                "WORKER_DATABASE_URL must use a direct or session-pooled endpoint "
+                "(Supabase port 5432); transaction pooler port 6543 is not supported"
+            )
+        if settings.worker_database_pool_mode is None:
+            raise ValueError(
+                "WORKER_DATABASE_POOL_MODE is required when WORKER_DATABASE_URL is set; "
+                "declare direct or session after verifying the endpoint topology"
+            )
+        if settings.worker_database_pool_mode == "transaction":
+            raise ValueError(
+                "Worker does not support transaction pooling; set "
+                "WORKER_DATABASE_POOL_MODE to direct or session and use a matching endpoint"
+            )
     if not settings.is_production:
         return settings
 

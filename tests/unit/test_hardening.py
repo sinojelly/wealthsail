@@ -125,6 +125,7 @@ def test_production_worker_does_not_require_or_accept_jwt_authority() -> None:
         app_env="production",
         database_url="",
         worker_database_url="postgresql://worker@db/app",
+        worker_database_pool_mode="session",
         jwt_secret="a-production-signing-key-that-worker-must-not-have",
         auth_dev_mode=False,
         model_api_key="model-key",
@@ -134,6 +135,65 @@ def test_production_worker_does_not_require_or_accept_jwt_authority() -> None:
     )
 
     with pytest.raises(ValueError, match="JWT_SECRET"):
+        validate_runtime_settings(settings, process="worker")
+
+
+def test_worker_rejects_supabase_transaction_pooler() -> None:
+    """Worker session state and advisory locks require a pinned DB session."""
+    settings = Settings(
+        _env_file=None,
+        worker_database_url=(
+            "postgresql://wealthsail_worker_login:secret@"
+            "aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres"
+            "?sslmode=require"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="direct or session-pooled endpoint"):
+        validate_runtime_settings(settings, process="worker")
+
+
+def test_worker_accepts_supabase_session_pooler() -> None:
+    """Supabase port 5432 keeps one backend session for each Worker connection."""
+    settings = Settings(
+        _env_file=None,
+        worker_database_url=(
+            "postgresql://wealthsail_worker_login:secret@"
+            "aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+            "?sslmode=require"
+        ),
+        worker_database_pool_mode="session",
+    )
+
+    assert validate_runtime_settings(settings, process="worker") is settings
+
+
+def test_worker_rejects_declared_transaction_pooler_on_custom_endpoint() -> None:
+    """Custom pooler endpoints must declare and obey the Worker session contract."""
+    settings = Settings(
+        _env_file=None,
+        worker_database_url=(
+            "postgresql://wealthsail_worker_login:secret@"
+            "postgres-proxy.internal:7432/postgres?sslmode=require"
+        ),
+        worker_database_pool_mode="transaction",
+    )
+
+    with pytest.raises(ValueError, match="does not support transaction pooling"):
+        validate_runtime_settings(settings, process="worker")
+
+
+def test_worker_rejects_custom_endpoint_without_explicit_pool_mode() -> None:
+    """An unknown proxy must never inherit an optimistic session-mode default."""
+    settings = Settings(
+        _env_file=None,
+        worker_database_url=(
+            "postgresql://wealthsail_worker_login:secret@"
+            "postgres-proxy.internal:7432/postgres?sslmode=require"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="WORKER_DATABASE_POOL_MODE is required"):
         validate_runtime_settings(settings, process="worker")
 
 
