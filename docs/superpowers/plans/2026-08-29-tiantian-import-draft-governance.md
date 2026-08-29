@@ -24,7 +24,7 @@
 
 ## File Map
 
-- `migrations/030_import_draft_governance.sql`：批次取消原因、替代链和约束、索引、权限。
+- `migrations/031_import_draft_governance.sql`：批次取消原因、替代链和约束、索引、权限。
 - `scripts/migrate.py`：迁移后 readback，验证 030 的列、约束和外键。
 - `backend/portfolio/imports/freshness.py`：纯函数形式的新鲜度、原因和可用动作计算。
 - `backend/portfolio/imports/repository.py`：读取新鲜度上下文、状态筛选、锁定重复批次、原子替换草稿。
@@ -40,7 +40,7 @@
 ### Task 1: 数据库保存取消原因与草稿替代链
 
 **Files:**
-- Create: `migrations/030_import_draft_governance.sql`
+- Create: `migrations/031_import_draft_governance.sql`
 - Modify: `scripts/migrate.py`
 - Modify: `tests/unit/test_migration_runner.py`
 - Create: `tests/unit/test_import_draft_governance_schema_contract.py`
@@ -55,7 +55,7 @@
 
 ```python
 def test_030_migration_adds_terminal_reason_and_supersession_chain() -> None:
-    sql = (ROOT / "migrations/030_import_draft_governance.sql").read_text("utf-8")
+    sql = (ROOT / "migrations/031_import_draft_governance.sql").read_text("utf-8")
     for token in (
         "terminal_reason",
         "USER_CANCELLED",
@@ -72,7 +72,7 @@ def test_030_migration_adds_terminal_reason_and_supersession_chain() -> None:
 
 Run: `python -m pytest tests/unit/test_import_draft_governance_schema_contract.py tests/unit/test_migration_runner.py -q`
 
-Expected: FAIL，指出 `030_import_draft_governance.sql` 缺失或最新迁移版本仍为 29。
+Expected: FAIL，指出 `031_import_draft_governance.sql` 缺失或最新迁移版本仍为 30。
 
 - [ ] **Step 3: 实现前向迁移与 readback**
 
@@ -103,7 +103,7 @@ Expected: PASS。
 - [ ] **Step 5: 提交迁移切片**
 
 ```powershell
-git add migrations/030_import_draft_governance.sql scripts/migrate.py tests/unit/test_import_draft_governance_schema_contract.py tests/unit/test_migration_runner.py
+git add migrations/031_import_draft_governance.sql scripts/migrate.py tests/unit/test_import_draft_governance_schema_contract.py tests/unit/test_migration_runner.py
 git commit -m "feat(import): 增加草稿取消原因与替代链"
 ```
 
@@ -449,9 +449,9 @@ git commit -m "feat(frontend): 增加待处理草稿与重新解析闭环"
 - Modify: `tests/unit/test_tiantian_import_api.py`
 
 **Interfaces:**
-- Documents deployment: `python scripts/migrate.py --target 30` 后自动 readback。
+- Documents deployment: 使用迁移管理员 DSN 执行 `python scripts/migrate.py --environment production --confirm-target <host[:port]/database>`；runner 自动应用全部缺失迁移到 031 并执行 readback。
 - Documents recovery: 无 ZIP 可继续/取消草稿；REPARSE 必须重选 ZIP；相同已确认包不会重复入账。
-- Documents stable errors: `DRAFT_RESTORE_NOT_ALLOWED`、`DRAFT_STALE_REPARSE_REQUIRED`、`IMPORT_REPARSE_CONFLICT`。
+- Documents stable signals: 409 消息标识 `DRAFT_RESTORE_NOT_ALLOWED`，其余分支由 `previewDisposition`、`freshnessReasons`、`blockingErrors` 和 `availableActions` 表达。
 
 - [ ] **Step 1: 增加文档契约测试**
 
