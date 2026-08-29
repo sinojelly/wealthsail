@@ -39,7 +39,8 @@ vi.mock("../../api/hooks", () => ({
   }),
   useTiantianImport: (batchId: string | null, pollMetrics: boolean) =>
     mocks.detailHook(batchId, pollMetrics),
-  useTiantianImports: () => mocks.historyHook(),
+  useTiantianImports: (options?: { status?: "DRAFT" }) =>
+    mocks.historyHook(options),
 }));
 
 function preview(
@@ -140,6 +141,12 @@ function preview(
     excludedSummary: { cashManagement: 1545, nonPosting: 8 },
     warnings: ["PARTIAL_HISTORY"],
     blockingErrors: ["ACCOUNT_LEDGER_CONFLICT"],
+    validationStatus: "INVALID",
+    freshness: "FRESH",
+    freshnessReasons: [],
+    availableActions: ["VIEW", "CONFIRM", "CANCEL", "REPARSE"],
+    terminalReason: null,
+    supersedesBatchId: null,
     canConfirm: false,
     ...overrides,
   };
@@ -150,11 +157,141 @@ beforeEach(() => {
   mocks.preview.mockResolvedValue(preview());
   mocks.role.value = "EDITOR";
   mocks.detailHook.mockReturnValue({ data: undefined, refetch: mocks.refetch });
-  mocks.historyHook.mockReturnValue({
+  mocks.historyHook.mockImplementation(() => ({
     data: { items: [], nextCursor: null },
     isLoading: false,
     error: null,
+  }));
+});
+
+it("shows pending drafts before upload without asking for the ZIP again", () => {
+  const draft = preview({
+    blockingErrors: [],
+    validationStatus: "VALID",
+    canConfirm: true,
   });
+  mocks.historyHook.mockImplementation((options?: { status?: "DRAFT" }) => ({
+    data: {
+      items:
+        options?.status === "DRAFT"
+          ? [
+              {
+                batchId: draft.batchId,
+                status: "DRAFT",
+                version: draft.version,
+                sourceAsOf: "2026-08-28T08:00:00+08:00",
+                summary: draft.summary,
+                validationStatus: "VALID",
+                freshness: "FRESH",
+                freshnessReasons: [],
+                availableActions: ["VIEW", "CONFIRM", "CANCEL", "REPARSE"],
+                terminalReason: null,
+                supersedesBatchId: null,
+                account: { accountId: "account-1", name: "待确认天天基金账户" },
+                createdAt: "2026-08-28T08:01:00+08:00",
+                updatedAt: "2026-08-29T08:02:00+08:00",
+              },
+            ]
+          : [],
+      nextCursor: null,
+    },
+    isLoading: false,
+    error: null,
+  }));
+
+  renderWithSession(<TiantianImportWizard />);
+
+  const pendingHeading = screen.getByRole("heading", { name: "待处理草稿" });
+  const uploadHeading = screen.getByRole("heading", {
+    name: "导入或更新天天基金持仓",
+  });
+  expect(
+    pendingHeading.compareDocumentPosition(uploadHeading) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: /继续核对.*待确认天天基金账户/ }),
+  ).toBeEnabled();
+  expect(screen.getByText("有效，可继续确认")).toBeInTheDocument();
+});
+
+it("blocks a stale draft and guides an explicit reparse with the original ZIP", async () => {
+  const staleDraft = preview({
+    blockingErrors: [],
+    validationStatus: "VALID",
+    freshness: "STALE",
+    freshnessReasons: ["PREVIEW_ENGINE_CHANGED"],
+    availableActions: ["VIEW", "CANCEL", "REPARSE"],
+    canConfirm: false,
+  });
+  const draftItem = {
+    batchId: staleDraft.batchId,
+    status: "DRAFT" as const,
+    version: staleDraft.version,
+    sourceAsOf: "2026-08-28T08:00:00+08:00",
+    summary: staleDraft.summary,
+    validationStatus: "VALID" as const,
+    freshness: "STALE" as const,
+    freshnessReasons: ["PREVIEW_ENGINE_CHANGED" as const],
+    availableActions: ["VIEW" as const, "CANCEL" as const, "REPARSE" as const],
+    terminalReason: null,
+    supersedesBatchId: null,
+    account: { accountId: "account-1", name: "过期待处理账户" },
+    createdAt: "2026-08-28T08:01:00+08:00",
+    updatedAt: "2026-08-29T08:02:00+08:00",
+  };
+  mocks.historyHook.mockImplementation((options?: { status?: "DRAFT" }) => ({
+    data: {
+      items: options?.status === "DRAFT" ? [draftItem] : [],
+      nextCursor: null,
+    },
+    isLoading: false,
+    error: null,
+  }));
+  mocks.detailHook.mockImplementation((batchId: string | null) => ({
+    data: batchId === staleDraft.batchId ? staleDraft : undefined,
+    refetch: mocks.refetch,
+  }));
+  mocks.preview.mockResolvedValue(
+    preview({
+      previewDisposition: "REPARSED",
+      blockingErrors: [],
+      validationStatus: "VALID",
+      canConfirm: true,
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithSession(<TiantianImportWizard />);
+
+  await user.click(
+    screen.getByRole("button", { name: /继续核对.*过期待处理账户/ }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "导入或更新天天基金持仓",
+  });
+  expect(
+    within(dialog).getByText("预览规则已经升级，需要重新解析"),
+  ).toBeVisible();
+  expect(
+    within(dialog).getByRole("button", { name: "确认写入持仓基线" }),
+  ).toBeDisabled();
+
+  await user.click(
+    within(dialog).getByRole("button", { name: "选择原 ZIP 重新解析" }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByText(/正在替代“过期待处理账户”的旧草稿/)).toBeVisible();
+  await user.upload(
+    screen.getByLabelText("天天基金 ZIP 导入包"),
+    new File(["PK\u0003\u0004payload"], "snapshot.zip", {
+      type: "application/zip",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "重新解析并预览" }));
+
+  expect(mocks.preview).toHaveBeenCalledWith(
+    expect.objectContaining({ duplicatePolicy: "REPARSE" }),
+  );
 });
 
 it("restores a server-side draft from import history instead of relying on browser state", async () => {
@@ -258,14 +395,18 @@ it("prefills inferred dates and explains their method and confidence", async () 
   const dialog = await screen.findByRole("dialog", {
     name: "导入或更新天天基金持仓",
   });
+  expect(within(dialog).getByLabelText("测试新增基金持有开始日期")).toHaveValue(
+    "2024-01-02",
+  );
+  expect(within(dialog).getByLabelText("测试变化基金持有开始日期")).toHaveValue(
+    "2021-01-26",
+  );
   expect(
-    within(dialog).getByLabelText("测试新增基金持有开始日期"),
-  ).toHaveValue("2024-01-02");
+    within(dialog).getByText("逐基金交易流水 · 高可信"),
+  ).toBeInTheDocument();
   expect(
-    within(dialog).getByLabelText("测试变化基金持有开始日期"),
-  ).toHaveValue("2021-01-26");
-  expect(within(dialog).getByText("逐基金交易流水 · 高可信")).toBeInTheDocument();
-  expect(within(dialog).getByText("组合/调仓估算 · 低可信")).toBeInTheDocument();
+    within(dialog).getByText("组合/调仓估算 · 低可信"),
+  ).toBeInTheDocument();
   expect(
     within(dialog).getByText("组合调仓可能改变成分，建议核对"),
   ).toBeInTheDocument();

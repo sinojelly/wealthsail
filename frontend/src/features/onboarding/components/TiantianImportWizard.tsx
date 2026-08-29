@@ -12,14 +12,17 @@ import { HttpError } from "../../../api/client";
 import { useAuthSession } from "../../../app/auth-session";
 import { createIdempotencyKey } from "../../../lib/idempotency";
 import type {
+  TiantianDuplicatePolicy,
   TiantianImportConfirmation,
   TiantianImportDetail,
+  TiantianImportListItem,
 } from "../../../api/types";
 import Dialog from "../../../components/accessibility/Dialog";
 import ImportConfirmStep from "./ImportConfirmStep";
 import ImportPackageStep from "./ImportPackageStep";
 import ImportPreviewStep from "./ImportPreviewStep";
 import ImportResultStep from "./ImportResultStep";
+import TiantianDraftQueue from "./TiantianDraftQueue";
 
 function commandKey(prefix: string): string {
   const suffix = createIdempotencyKey();
@@ -47,6 +50,11 @@ export default function TiantianImportWizard() {
   const [reviewed, setReviewed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const [reparseDraft, setReparseDraft] =
+    useState<TiantianImportListItem | null>(null);
+  const [cancellingBatchId, setCancellingBatchId] = useState<string | null>(
+    null,
+  );
   const confirmationInFlight = useRef(false);
   const previewCommand = useRef<{ signature: string; key: string } | null>(
     null,
@@ -59,6 +67,7 @@ export default function TiantianImportWizard() {
   const confirmMutation = useConfirmTiantianImport();
   const cancelMutation = useCancelTiantianImport();
   const retryMutation = useRetryTiantianMetrics();
+  const drafts = useTiantianImports({ status: "DRAFT" });
   const history = useTiantianImports();
   const restored = useTiantianImport(selectedBatchId);
   const currentDetail = newestDetail(detail, restored.data ?? null);
@@ -66,23 +75,26 @@ export default function TiantianImportWizard() {
     !session || ["OWNER", "ADMIN", "EDITOR"].includes(session.role);
   const existingAccounts = Array.from(
     new Map(
-      (history.data?.items ?? []).map((item) => [
-        item.account.accountId,
-        item.account,
-      ]),
+      [...(drafts.data?.items ?? []), ...(history.data?.items ?? [])].map(
+        (item) => [item.account.accountId, item.account],
+      ),
     ).values(),
   );
 
-  async function previewPackage() {
+  async function previewPackage(policyOverride?: TiantianDuplicatePolicy) {
     if (!file || (!accountId && !accountName.trim())) return;
     setError(null);
     try {
+      const duplicatePolicy =
+        policyOverride ?? (reparseDraft ? "REPARSE" : "AUTO");
       const signature = [
         file.name,
         file.size,
         file.lastModified,
         accountId,
         accountName.trim(),
+        duplicatePolicy,
+        reparseDraft?.batchId ?? "",
       ].join(":");
       const next = await previewMutation.mutateAsync({
         file,
@@ -93,6 +105,7 @@ export default function TiantianImportWizard() {
           signature,
           "tiantian-preview",
         ),
+        duplicatePolicy,
       });
       setDetail(next);
       setSelectedBatchId(next.batchId);
@@ -101,6 +114,7 @@ export default function TiantianImportWizard() {
       setConfirmEmpty(false);
       setReviewed(false);
       confirmCommand.current = null;
+      if (next.previewDisposition === "REPARSED") setReparseDraft(null);
     } catch (cause) {
       setError(errorText(cause));
     }
@@ -168,6 +182,56 @@ export default function TiantianImportWizard() {
     }
   }
 
+  async function cancelListedDraft(item: TiantianImportListItem) {
+    setCancellingBatchId(item.batchId);
+    setError(null);
+    try {
+      await cancelMutation.mutateAsync({
+        batchId: item.batchId,
+        version: item.version,
+        idempotencyKey: commandKey("tiantian-cancel"),
+      });
+      if (selectedBatchId === item.batchId) closeDialog();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setCancellingBatchId(null);
+    }
+  }
+
+  function openDraft(item: TiantianImportListItem) {
+    setSelectedBatchId(item.batchId);
+    setResult(null);
+    setDetail(null);
+    setReviewed(false);
+    setError(null);
+    setStale(false);
+    confirmCommand.current = null;
+  }
+
+  function startReparse(item: TiantianImportListItem) {
+    setReparseDraft(item);
+    setAccountId(item.account.accountId);
+    setAccountName(item.account.name);
+    setFile(null);
+    previewCommand.current = null;
+    closeDialog();
+  }
+
+  function reparseCurrentDraft() {
+    if (
+      file &&
+      currentDetail?.previewDisposition === "USER_DECISION_REQUIRED"
+    ) {
+      void previewPackage("REPARSE");
+      return;
+    }
+    const item = drafts.data?.items.find(
+      (candidate) => candidate.batchId === currentDetail?.batchId,
+    );
+    if (item) startReparse(item);
+  }
+
   async function retryMetrics() {
     const batchId =
       result?.batchId ??
@@ -211,6 +275,16 @@ export default function TiantianImportWizard() {
 
   return (
     <div className="tiantian-import-workflow">
+      <TiantianDraftQueue
+        items={drafts.data?.items ?? []}
+        loading={drafts.isLoading}
+        error={drafts.error ? errorText(drafts.error) : null}
+        canWrite={canWrite}
+        cancellingBatchId={cancellingBatchId}
+        onOpen={openDraft}
+        onCancel={(item) => void cancelListedDraft(item)}
+        onReparse={startReparse}
+      />
       {canWrite ? (
         <ImportPackageStep
           file={file}
@@ -219,16 +293,21 @@ export default function TiantianImportWizard() {
           existingAccounts={existingAccounts}
           pending={previewMutation.isPending}
           error={!currentDetail ? error : null}
+          reparseAccountName={reparseDraft?.account.name ?? null}
           onFile={(nextFile) => {
             setFile(nextFile);
             previewCommand.current = null;
           }}
           onAccountId={(nextAccountId) => {
             setAccountId(nextAccountId);
+            if (nextAccountId !== reparseDraft?.account.accountId) {
+              setReparseDraft(null);
+            }
             previewCommand.current = null;
           }}
           onAccountName={(nextName) => {
             setAccountName(nextName);
+            setReparseDraft(null);
             previewCommand.current = null;
           }}
           onPreview={() => void previewPackage()}
@@ -270,30 +349,28 @@ export default function TiantianImportWizard() {
               恢复批次失败：{errorText(restored.error)}
             </p>
           ) : null}
-          {history.data?.items.length === 0 ? (
+          {(history.data?.items ?? []).every(
+            (item) => item.status === "DRAFT",
+          ) ? (
             <p className="muted">暂无服务器导入批次。</p>
           ) : null}
           <div className="import-history-list">
-            {history.data?.items.map((item) => (
-              <button
-                type="button"
-                key={item.batchId}
-                onClick={() => {
-                  setSelectedBatchId(item.batchId);
-                  setResult(null);
-                  setDetail(null);
-                  setReviewed(false);
-                  setError(null);
-                  setStale(false);
-                  confirmCommand.current = null;
-                }}
-              >
-                <strong>{item.account.name}</strong>
-                <span>
-                  {item.status} · {item.sourceAsOf.slice(0, 10)}
-                </span>
-              </button>
-            ))}
+            {history.data?.items
+              .filter((item) => item.status !== "DRAFT")
+              .map((item) => (
+                <button
+                  type="button"
+                  key={item.batchId}
+                  onClick={() => {
+                    openDraft(item);
+                  }}
+                >
+                  <strong>{item.account.name}</strong>
+                  <span>
+                    {item.status} · {item.sourceAsOf.slice(0, 10)}
+                  </span>
+                </button>
+              ))}
           </div>
         </div>
       </section>
@@ -303,6 +380,11 @@ export default function TiantianImportWizard() {
         size="xl"
         onClose={closeDialog}
       >
+        {currentDetail?.previewDisposition ? (
+          <p className="preview-disposition" role="status">
+            {dispositionText(currentDetail.previewDisposition)}
+          </p>
+        ) : null}
         {currentDetail &&
         !displayedResult &&
         currentDetail.status === "DRAFT" ? (
@@ -326,6 +408,7 @@ export default function TiantianImportWizard() {
               onConfirm={() => void confirmImport()}
               onCancel={() => void cancelDraft()}
               onRefresh={() => void restored.refetch()}
+              onReparse={reparseCurrentDraft}
             />
           </>
         ) : null}
@@ -365,4 +448,16 @@ function stableCommandKey(
   const key = commandKey(prefix);
   reference.current = { signature, key };
   return key;
+}
+
+function dispositionText(
+  disposition: NonNullable<TiantianImportDetail["previewDisposition"]>,
+): string {
+  return {
+    CREATED: "已生成新预览，尚未写入正式持仓。",
+    RESTORED_DRAFT: "检测到相同 ZIP，已恢复已有草稿。",
+    ALREADY_CONFIRMED: "该 ZIP 已经导入，不会重复写入正式持仓。",
+    REPARSED: "旧草稿已保留为取消记录，并已按当前规则重新解析。",
+    USER_DECISION_REQUIRED: "已保留旧草稿，请继续核对或明确选择重新解析。",
+  }[disposition];
 }

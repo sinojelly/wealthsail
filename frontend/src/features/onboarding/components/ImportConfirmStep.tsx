@@ -1,4 +1,5 @@
 import type { TiantianImportDetail } from "../../../api/types";
+import { freshnessReasonText } from "./import-governance-copy";
 
 interface Props {
   detail: TiantianImportDetail;
@@ -12,6 +13,7 @@ interface Props {
   onConfirm: () => void;
   onCancel: () => void;
   onRefresh: () => void;
+  onReparse: () => void;
 }
 
 export default function ImportConfirmStep({
@@ -26,10 +28,16 @@ export default function ImportConfirmStep({
   onConfirm,
   onCancel,
   onRefresh,
+  onReparse,
 }: Props) {
   const allClosed =
     detail.positions.length > 0 &&
     detail.positions.every((item) => item.comparisonStatus === "CLOSED");
+  const canConfirm =
+    detail.canConfirm && detail.availableActions.includes("CONFIRM");
+  const requiresReparse =
+    detail.freshness === "STALE" ||
+    detail.previewDisposition === "USER_DECISION_REQUIRED";
   return (
     <footer className="tiantian-confirm-step">
       <div className="confirmation-boundary">
@@ -42,6 +50,22 @@ export default function ImportConfirmStep({
           <li>活期宝和非入账记录保持排除，官方净值区间指标由后台继续计算。</li>
         </ul>
       </div>
+      {requiresReparse ? (
+        <div className="draft-governance-warning" role="status">
+          <strong>当前草稿不能直接确认</strong>
+          {(detail.freshnessReasons.length > 0
+            ? detail.freshnessReasons
+            : ["PREVIEW_ENGINE_CHANGED" as const]
+          ).map((reason) => (
+            <span key={reason}>{freshnessReasonText(reason)}</span>
+          ))}
+          <button className="btn-secondary" type="button" onClick={onReparse}>
+            {detail.previewDisposition === "USER_DECISION_REQUIRED"
+              ? "使用当前 ZIP 重新解析"
+              : "选择原 ZIP 重新解析"}
+          </button>
+        </div>
+      ) : null}
       <label className="review-confirmation">
         <input
           type="checkbox"
@@ -84,10 +108,7 @@ export default function ImportConfirmStep({
           type="button"
           onClick={onConfirm}
           disabled={
-            !detail.canConfirm ||
-            !reviewed ||
-            pending ||
-            (allClosed && !confirmEmpty)
+            !canConfirm || !reviewed || pending || (allClosed && !confirmEmpty)
           }
         >
           {pending ? "确认中…" : "确认写入持仓基线"}

@@ -15,6 +15,7 @@ interface Props {
   existingAccounts: ImportAccountOption[];
   pending: boolean;
   error: string | null;
+  reparseAccountName: string | null;
   onFile: (file: File | null) => void;
   onAccountId: (accountId: string) => void;
   onAccountName: (name: string) => void;
@@ -34,6 +35,7 @@ export default function ImportPackageStep({
   existingAccounts,
   pending,
   error,
+  reparseAccountName,
   onFile,
   onAccountId,
   onAccountName,
@@ -75,6 +77,15 @@ export default function ImportPackageStep({
         <FileArchive size={20} aria-hidden="true" />
       </div>
       <div className="panel-body tiantian-package-form">
+        {reparseAccountName ? (
+          <div className="reparse-mode-notice" role="status">
+            <strong>重新解析旧草稿</strong>
+            <span>
+              正在替代“{reparseAccountName}”的旧草稿，请选择当时使用的原
+              ZIP；新预览安全落库后旧草稿才会取消。
+            </span>
+          </div>
+        ) : null}
         <div
           className="tiantian-drop-zone"
           data-testid="tiantian-drop-zone"
@@ -158,7 +169,11 @@ export default function ImportPackageStep({
             onClick={onPreview}
           >
             <Upload size={14} />
-            {pending ? "正在安全解析…" : "解析并预览"}
+            {pending
+              ? "正在安全解析…"
+              : reparseAccountName
+                ? "重新解析并预览"
+                : "解析并预览"}
           </button>
         </div>
       </div>

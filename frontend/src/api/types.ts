@@ -130,6 +130,20 @@ export interface FundRangeMetricsDto {
 export type TiantianComparisonStatus =
   "NEW" | "UNCHANGED" | "CHANGED" | "CLOSED" | "CONFLICT";
 
+export type TiantianDuplicatePolicy = "AUTO" | "RESTORE" | "REPARSE";
+export type TiantianPreviewDisposition =
+  | "CREATED"
+  | "RESTORED_DRAFT"
+  | "ALREADY_CONFIRMED"
+  | "REPARSED"
+  | "USER_DECISION_REQUIRED";
+export type TiantianFreshness = "FRESH" | "STALE";
+export type TiantianFreshnessReason =
+  | "ACCOUNT_FACTS_CHANGED"
+  | "PREVIEW_ENGINE_CHANGED"
+  | "NEWER_SOURCE_SNAPSHOT_CONFIRMED";
+export type TiantianImportAction = "VIEW" | "CONFIRM" | "CANCEL" | "REPARSE";
+
 export interface TiantianImportPosition {
   itemId: string;
   instrumentId: string | null;
@@ -159,6 +173,7 @@ export interface TiantianImportDetail {
   batchId: string;
   status: "DRAFT" | "CONFIRMED" | "CANCELLED";
   version: number;
+  previewDisposition?: TiantianPreviewDisposition;
   sourceType?: "TIANTIAN_FUND_ZIP";
   sourceAsOf?: string;
   package: {
@@ -197,6 +212,11 @@ export interface TiantianImportDetail {
   warnings: string[];
   blockingErrors: string[];
   validationStatus?: "VALID" | "INVALID";
+  freshness: TiantianFreshness;
+  freshnessReasons: TiantianFreshnessReason[];
+  availableActions: TiantianImportAction[];
+  terminalReason: "USER_CANCELLED" | "SUPERSEDED_BY_REPARSE" | "EXPIRED" | null;
+  supersedesBatchId: string | null;
   canConfirm: boolean;
   metricsStatus?:
     "READY" | "PENDING" | "PARTIAL" | "CONFLICT" | "FAILED" | null;
@@ -211,8 +231,14 @@ export interface TiantianImportListItem {
   sourceAsOf: string;
   summary: TiantianImportDetail["summary"];
   validationStatus: "VALID" | "INVALID";
+  freshness: TiantianFreshness;
+  freshnessReasons: TiantianFreshnessReason[];
+  availableActions: TiantianImportAction[];
+  terminalReason: TiantianImportDetail["terminalReason"];
+  supersedesBatchId: string | null;
   account: { accountId: string; name: string };
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface TiantianImportList {

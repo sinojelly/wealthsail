@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "./client";
-import { confirmTiantianImport, previewTiantianImport } from "./portfolio";
+import {
+  confirmTiantianImport,
+  listTiantianImports,
+  previewTiantianImport,
+} from "./portfolio";
 
 const meta = {
   requestId: "req-1",
@@ -31,6 +35,7 @@ describe("Tiantian import API", () => {
       file,
       { accountName: "天天基金账户" },
       "preview-1",
+      "REPARSE",
     );
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -40,6 +45,25 @@ describe("Tiantian import API", () => {
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.body as FormData).get("file")).toBe(file);
     expect((init.body as FormData).get("accountName")).toBe("天天基金账户");
+    expect((init.body as FormData).get("duplicatePolicy")).toBe("REPARSE");
+  });
+
+  it("pushes the pending-draft filter into the list request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ data: { items: [], nextCursor: null }, meta }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listTiantianImports({ status: "DRAFT", limit: 20 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("status=DRAFT");
+    expect(url).toContain("limit=20");
   });
 
   it("sends versioned confirmation and preserves actionable field errors", async () => {

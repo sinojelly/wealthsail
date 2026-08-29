@@ -11,6 +11,7 @@ import type {
   TiantianImportConfirmation,
   TiantianImportDetail,
   TiantianImportList,
+  TiantianDuplicatePolicy,
 } from "./types";
 
 export async function getSummary(): Promise<PortfolioSummary> {
@@ -70,11 +71,13 @@ export async function previewTiantianImport(
   file: File,
   target: { accountId?: string; accountName?: string },
   idempotencyKey: string,
+  duplicatePolicy: TiantianDuplicatePolicy = "AUTO",
 ): Promise<TiantianImportDetail> {
   const form = new FormData();
   form.append("file", file);
   if (target.accountId) form.append("accountId", target.accountId);
   if (target.accountName) form.append("accountName", target.accountName);
+  form.append("duplicatePolicy", duplicatePolicy);
   const envelope = await request<TiantianImportDetail>(
     "/v1/portfolio/imports/tiantian/preview",
     {
@@ -96,14 +99,15 @@ export async function getTiantianImport(
 }
 
 export async function listTiantianImports(
-  cursor?: string,
-  limit = 20,
+  options: { cursor?: string; limit?: number; status?: "DRAFT" } = {},
 ): Promise<TiantianImportList> {
+  const limit = options.limit ?? 20;
   const params = new URLSearchParams({
     sourceType: "TIANTIAN_FUND_ZIP",
     limit: String(limit),
   });
-  if (cursor) params.set("cursor", cursor);
+  if (options.cursor) params.set("cursor", options.cursor);
+  if (options.status) params.set("status", options.status);
   const envelope = await request<TiantianImportList>(
     `/v1/portfolio/imports?${params.toString()}`,
   );

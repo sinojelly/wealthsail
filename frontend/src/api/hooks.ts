@@ -36,6 +36,7 @@ import type {
   TiantianConfirmPayload,
   TiantianImportDetail,
   TiantianImportList,
+  TiantianDuplicatePolicy,
 } from "./types";
 
 /** 401 统一处理：令牌失效 → 清会话（页面守卫会自动跳转登录页）。 */
@@ -143,11 +144,20 @@ export function useConfirmPositionImport() {
   });
 }
 
-export function useTiantianImports(): UseQueryResult<TiantianImportList> {
+export function useTiantianImports(
+  options: { cursor?: string; limit?: number; status?: "DRAFT" } = {},
+): UseQueryResult<TiantianImportList> {
   const session = usePrivateSession();
   return useQuery({
-    queryKey: privateQueryKey(session, "portfolio", "tiantian-imports"),
-    queryFn: () => portfolioApi.listTiantianImports(),
+    queryKey: privateQueryKey(
+      session,
+      "portfolio",
+      "tiantian-imports",
+      options.status ?? "ALL",
+      options.cursor ?? "FIRST",
+      options.limit ?? 20,
+    ),
+    queryFn: () => portfolioApi.listTiantianImports(options),
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
@@ -185,16 +195,19 @@ export function usePreviewTiantianImport() {
       accountName,
       accountId,
       idempotencyKey,
+      duplicatePolicy,
     }: {
       file: File;
       accountName?: string;
       accountId?: string;
       idempotencyKey: string;
+      duplicatePolicy?: TiantianDuplicatePolicy;
     }) =>
       portfolioApi.previewTiantianImport(
         file,
         { accountName, accountId },
         idempotencyKey,
+        duplicatePolicy,
       ),
     onSuccess: (detail) => {
       queryClient.setQueryData(
