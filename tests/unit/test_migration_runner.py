@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 30
-    assert migrations[-1].path.name == "030_tiantian_job_status_read_policy.sql"
+    assert versions[-1] == 31
+    assert migrations[-1].path.name == "031_import_draft_governance.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:

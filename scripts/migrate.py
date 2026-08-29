@@ -242,7 +242,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
                AND table_name='portfolio_import_batches'
                AND column_name IN (
                    'terminal_command_type','terminal_idempotency_key',
-                   'terminal_content_hash'
+                   'terminal_content_hash','terminal_reason',
+                   'supersedes_batch_id'
                )
             """
         )
@@ -251,8 +252,32 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "terminal_command_type",
         "terminal_idempotency_key",
         "terminal_content_hash",
+        "terminal_reason",
+        "supersedes_batch_id",
     }:
         raise RuntimeError("Tiantian terminal command idempotency columns missing")
+
+    draft_governance_constraints = {
+        row["conname"]
+        for row in await conn.fetch(
+            """
+            SELECT conname
+              FROM pg_constraint
+             WHERE conrelid='ledger.portfolio_import_batches'::regclass
+               AND conname = ANY($1::text[])
+            """,
+            [
+                "portfolio_import_batches_terminal_reason_check",
+                "fk_portfolio_import_batches_supersedes",
+            ],
+        )
+    }
+    required_draft_governance_constraints = {
+        "portfolio_import_batches_terminal_reason_check",
+        "fk_portfolio_import_batches_supersedes",
+    }
+    if draft_governance_constraints != required_draft_governance_constraints:
+        raise RuntimeError("Tiantian import draft-governance constraints missing")
 
     rls_tables = {
         row["relname"]
@@ -354,6 +379,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
             SELECT has_column_privilege(
                 'wealthsail_api','ledger.portfolio_import_batches',
                 'terminal_content_hash','UPDATE'
+            )
+            """
+        ),
+        "api_import_terminal_reason_update": await conn.fetchval(
+            """
+            SELECT has_column_privilege(
+                'wealthsail_api','ledger.portfolio_import_batches',
+                'terminal_reason','UPDATE'
             )
             """
         ),
