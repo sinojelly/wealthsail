@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -77,6 +78,9 @@ class PreviewItem:
     candidate_holding_started_on: date | None
     holding_start_status: str
     source_payload: dict[str, Any]
+    holding_start_method: str = "INSUFFICIENT_DATA"
+    holding_start_confidence: str = "NONE"
+    holding_start_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,9 +208,92 @@ def _share_quantity(transaction: TiantianTransaction) -> Decimal | None:
     return None
 
 
+def _account_mask_suffix(value: object) -> str | None:
+    match = re.search(r"\*{4}(\d{4})\s*$", str(value or "").strip())
+    return match.group(1) if match else None
+
+
+def _portfolio_activity_fallback(
+    position: TiantianPosition,
+    review_required: tuple[dict[str, Any], ...],
+    base,
+):
+    """Estimate a component start only from same-account portfolio evidence.
+
+    Aggregate portfolio orders do not prove which component entered on which
+    date. They are therefore a visible, low/medium-confidence fallback and
+    never override a reconciled per-fund replay or a share mismatch.
+    """
+    # Even incomplete per-fund share history identifies the component more
+    # directly than an aggregate portfolio order. Use aggregate evidence only
+    # when no component-level date can be derived at all.
+    if base.status != "INSUFFICIENT_DATA":
+        return base
+    account_suffix = _account_mask_suffix(position.account_mask)
+    if account_suffix is None:
+        return base
+
+    activities: list[tuple[datetime, dict[str, Any]]] = []
+    for raw in review_required:
+        if raw.get("classificationReason") != "PORTFOLIO_ACTIVITY":
+            continue
+        if _account_mask_suffix(raw.get("accountMask")) != account_suffix:
+            continue
+        try:
+            occurred_at = _parse_occurred_at(str(raw.get("occurredAt") or ""))
+        except ValueError:
+            continue
+        if occurred_at.date() > position.captured_at.date():
+            continue
+        activities.append((occurred_at, raw))
+
+    purchases = [
+        (occurred_at, raw)
+        for occurred_at, raw in activities
+        if raw.get("normalizedBusinessType") == "PURCHASE"
+        and "组合" in str(raw.get("businessType") or "")
+    ]
+    rebalances = [
+        (occurred_at, raw)
+        for occurred_at, raw in activities
+        if "调仓" in str(raw.get("businessType") or "")
+    ]
+    if purchases:
+        started_on = min(occurred_at.date() for occurred_at, _ in purchases)
+        rebalance_only = False
+    elif rebalances:
+        # A rebalance proves only that the component may have been present or
+        # introduced by that date. It is still more useful than a blank field,
+        # but remains explicitly low-confidence and editable.
+        started_on = min(occurred_at.date() for occurred_at, _ in rebalances)
+        rebalance_only = True
+    else:
+        return base
+    has_rebalance = bool(rebalances)
+    reasons = [
+        "PORTFOLIO_ACTIVITY_ACCOUNT_MATCH",
+        "PORTFOLIO_COMPONENT_DETAILS_UNAVAILABLE",
+    ]
+    if has_rebalance:
+        reasons.append("PORTFOLIO_REBALANCE_PRESENT")
+    if rebalance_only:
+        reasons.append("PORTFOLIO_REBALANCE_ONLY")
+    confidence = "LOW" if has_rebalance else "MEDIUM"
+    return replace(
+        base,
+        started_on=started_on,
+        holding_days=(position.captured_at.date() - started_on).days + 1,
+        status="PARTIAL_HISTORY",
+        reason_codes=tuple(reasons),
+        method="PORTFOLIO_ACTIVITY_ESTIMATE",
+        confidence=confidence,
+    )
+
+
 def _holding_result(
     position: TiantianPosition,
     transactions: tuple[TiantianTransaction, ...],
+    review_required: tuple[dict[str, Any], ...] = (),
 ):
     events = [
         ShareTransaction(
@@ -219,11 +306,12 @@ def _holding_result(
         if transaction.product_code == position.product_code
         and transaction.normalized_business_type != "NON_POSITION"
     ]
-    return derive_holding_start(
+    base = derive_holding_start(
         events,
         position.quantity,
         as_of=position.captured_at.date(),
     )
+    return _portfolio_activity_fallback(position, review_required, base)
 
 
 def _position_payload(position: TiantianPosition) -> dict[str, Any]:
@@ -271,7 +359,9 @@ def analyze_preview(
                     validation_errors=("UNKNOWN_FUND_CODE",),
                 )
             )
-            holding = _holding_result(position, package.transactions)
+            holding = _holding_result(
+                position, package.transactions, package.review_required
+            )
             items.append(
                 PreviewItem(
                     instrument_id=None,
@@ -287,6 +377,9 @@ def analyze_preview(
                     candidate_holding_started_on=holding.started_on,
                     holding_start_status=holding.status,
                     source_payload=payload,
+                    holding_start_method=holding.method,
+                    holding_start_confidence=holding.confidence,
+                    holding_start_reasons=holding.reason_codes,
                 )
             )
             continue
@@ -328,13 +421,17 @@ def analyze_preview(
         else:
             comparison = "CHANGED"
 
-        holding = _holding_result(position, package.transactions)
+        holding = _holding_result(
+            position, package.transactions, package.review_required
+        )
         if holding.status == "PARTIAL_HISTORY":
             _append_unique(warnings, "PARTIAL_HISTORY")
         elif holding.status == "INSUFFICIENT_DATA":
             _append_unique(warnings, "HOLDING_START_INSUFFICIENT")
         elif holding.status == "MISMATCH":
             _append_unique(blocking, "HOLDING_SHARE_MISMATCH")
+        if holding.method == "PORTFOLIO_ACTIVITY_ESTIMATE":
+            _append_unique(warnings, "PORTFOLIO_ACTIVITY_ESTIMATE")
 
         items.append(
             PreviewItem(
@@ -351,6 +448,9 @@ def analyze_preview(
                 candidate_holding_started_on=holding.started_on,
                 holding_start_status=holding.status,
                 source_payload=_position_payload(position),
+                holding_start_method=holding.method,
+                holding_start_confidence=holding.confidence,
+                holding_start_reasons=holding.reason_codes,
             )
         )
 
@@ -375,6 +475,9 @@ def analyze_preview(
                     "productCode": baseline.product_code,
                     "reason": "ABSENT_FROM_AUTHORITATIVE_SNAPSHOT",
                 },
+                holding_start_method="INSUFFICIENT_DATA",
+                holding_start_confidence="NONE",
+                holding_start_reasons=("POSITION_CLOSED",),
             )
         )
 
@@ -419,20 +522,36 @@ def analyze_preview(
 
     for index, review_record in enumerate(package.review_required, start=1):
         payload = dict(review_record)
+        is_portfolio_activity = (
+            payload.get("classificationReason") == "PORTFOLIO_ACTIVITY"
+        )
+        try:
+            review_occurred_at = _parse_occurred_at(
+                str(payload.get("occurredAt") or "")
+            )
+        except ValueError:
+            review_occurred_at = None
         source_records.append(
             PreviewSourceRecord(
                 record_type="REVIEW_REQUIRED",
-                external_record_id=f"review-{index}",
+                external_record_id=str(payload.get("sourceId") or f"review-{index}"),
                 instrument_id=None,
-                occurred_at=None,
-                classification="NEEDS_REVIEW",
+                occurred_at=review_occurred_at,
+                classification=(
+                    "PORTFOLIO_ACTIVITY_EVIDENCE"
+                    if is_portfolio_activity
+                    else "NEEDS_REVIEW"
+                ),
                 normalized_payload=payload,
                 content_hash=source_record_hash(payload),
                 validation_status="NEEDS_REVIEW",
                 validation_errors=("REVIEW_REQUIRED",),
             )
         )
-    if package.review_required:
+    if any(
+        record.get("classificationReason") != "PORTFOLIO_ACTIVITY"
+        for record in package.review_required
+    ):
         # These records are retained for review but never fabricated as ledger
         # trades, so they do not invalidate an authoritative position snapshot.
         _append_unique(warnings, "REVIEW_REQUIRED_RECORDS")
@@ -516,6 +635,9 @@ def _preview_response(
                     else None
                 ),
                 "holdingStartStatus": item.holding_start_status,
+                "holdingStartMethod": item.holding_start_method,
+                "holdingStartConfidence": item.holding_start_confidence,
+                "holdingStartReasons": list(item.holding_start_reasons),
                 "validationStatus": (
                     "INVALID" if item.comparison_status == "CONFLICT" else "VALID"
                 ),

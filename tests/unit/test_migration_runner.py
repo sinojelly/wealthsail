@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 28
-    assert migrations[-1].path.name == "028_portfolio_import_item_update_policy.sql"
+    assert versions[-1] == 29
+    assert migrations[-1].path.name == "029_holding_start_inference_metadata.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -104,6 +104,22 @@ def test_028_migration_allows_only_draft_import_item_updates() -> None:
     ):
         assert contract in migration
     assert "GRANT UPDATE ON ledger.portfolio_import_items" not in migration
+
+
+def test_029_migration_persists_inference_method_and_confidence() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "029_holding_start_inference_metadata.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "holding_start_method",
+        "holding_start_confidence",
+        "holding_start_reasons",
+        "PORTFOLIO_ACTIVITY_ESTIMATE",
+        "TRANSACTION_RECONCILED",
+    ):
+        assert contract in migration
 
 
 def test_readback_rejects_a_missing_import_item_update_policy() -> None:

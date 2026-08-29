@@ -36,6 +36,7 @@ def _position(**overrides):
         "holding_started_on": date(2024, 3, 15),
         "holding_days": 898,
         "holding_start_method": "TRANSACTION_RECONCILED",
+        "holding_start_confidence": "HIGH",
         "current_nav": Decimal("1.2000"),
         "current_nav_date": date(2026, 8, 27),
         "period_high_nav": Decimal("1.5000"),
@@ -68,7 +69,9 @@ async def test_latest_positions_uses_one_indexed_lateral_metric_join() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ready_metrics_are_nested_strings_and_never_relabeled_realtime(monkeypatch) -> None:
+async def test_ready_metrics_are_nested_strings_and_never_relabeled_realtime(
+    monkeypatch,
+) -> None:
     async def positions(_conn, _tenant):
         return [_position()]
 
@@ -84,6 +87,7 @@ async def test_ready_metrics_are_nested_strings_and_never_relabeled_realtime(mon
         "startedOn": "2024-03-15",
         "days": 898,
         "method": "TRANSACTION_RECONCILED",
+        "confidence": "HIGH",
     }
     assert result["rangeMetrics"] == {
         "high": "1.5000",
@@ -101,7 +105,9 @@ async def test_ready_metrics_are_nested_strings_and_never_relabeled_realtime(mon
 
 
 @pytest.mark.asyncio
-async def test_pending_and_partial_metrics_preserve_nulls_and_reasons(monkeypatch) -> None:
+async def test_pending_and_partial_metrics_preserve_nulls_and_reasons(
+    monkeypatch,
+) -> None:
     async def positions(_conn, _tenant):
         return [
             _position(
@@ -110,6 +116,7 @@ async def test_pending_and_partial_metrics_preserve_nulls_and_reasons(monkeypatc
                 holding_started_on=None,
                 holding_days=None,
                 holding_start_method="INSUFFICIENT_DATA",
+                holding_start_confidence="NONE",
                 current_nav=None,
                 current_nav_date=None,
                 period_high_nav=None,
@@ -143,9 +150,7 @@ async def test_pending_and_partial_metrics_preserve_nulls_and_reasons(monkeypatc
     assert pending["rangeMetrics"]["high"] is None
     assert pending["rangeMetrics"]["rangePositionPct"] is None
     assert pending["rangeMetrics"]["status"] == "PENDING"
-    assert pending["rangeMetrics"]["qualityReasons"] == [
-        "HOLDING_START_NOT_AVAILABLE"
-    ]
+    assert pending["rangeMetrics"]["qualityReasons"] == ["HOLDING_START_NOT_AVAILABLE"]
     assert partial["rangeMetrics"]["rangePositionPct"] is None
     assert partial["rangeMetrics"]["status"] == "PARTIAL"
     assert partial["rangeMetrics"]["qualityReasons"] == [

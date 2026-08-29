@@ -71,7 +71,12 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
     calculation_status = _row_value(row, "calculation_status")
     if calculation_status is None:
         return (
-            {"startedOn": None, "days": None, "method": "INSUFFICIENT_DATA"},
+            {
+                "startedOn": None,
+                "days": None,
+                "method": "INSUFFICIENT_DATA",
+                "confidence": "NONE",
+            },
             {
                 "high": None,
                 "highDate": None,
@@ -90,6 +95,7 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
             "startedOn": _date_text(_row_value(row, "holding_started_on")),
             "days": _row_value(row, "holding_days"),
             "method": _row_value(row, "holding_start_method"),
+            "confidence": _row_value(row, "holding_start_confidence", "NONE"),
         },
         {
             "high": _decimal_text(_row_value(row, "period_high_nav")),

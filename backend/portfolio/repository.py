@@ -31,7 +31,8 @@ _SELECT_POSITION_COLUMNS = """
     COALESCE(a.ticker, '') AS ticker,
     metric.as_of AS metric_as_of,
     metric.holding_started_on, metric.holding_days,
-    metric.holding_start_method, metric.current_nav, metric.current_nav_date,
+    metric.holding_start_method, metric.holding_start_confidence,
+    metric.current_nav, metric.current_nav_date,
     metric.period_high_nav, metric.period_high_date,
     metric.period_low_nav, metric.period_low_date,
     metric.from_high_pct, metric.from_low_pct, metric.range_position_pct,
@@ -117,7 +118,8 @@ async def latest_positions(
         ) a ON TRUE
         LEFT JOIN LATERAL (
             SELECT metric.as_of, metric.holding_started_on, metric.holding_days,
-                   metric.holding_start_method, metric.current_nav,
+                   metric.holding_start_method, metric.holding_start_confidence,
+                   metric.current_nav,
                    metric.current_nav_date, metric.period_high_nav,
                    metric.period_high_date, metric.period_low_nav,
                    metric.period_low_date, metric.from_high_pct,
@@ -509,9 +511,7 @@ async def confirm_import_batch(
     }
 
 
-async def holding_instrument_ids(
-    conn: asyncpg.Connection, tenant_id: str
-) -> list[str]:
+async def holding_instrument_ids(conn: asyncpg.Connection, tenant_id: str) -> list[str]:
     """Distinct instrument ids currently present in the tenant's projections."""
     rows = await conn.fetch(
         """

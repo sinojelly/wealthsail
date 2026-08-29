@@ -259,6 +259,9 @@ class _ReadConnection:
                     "comparison_status": "NEW",
                     "candidate_holding_started_on": None,
                     "holding_start_status": "INSUFFICIENT_DATA",
+                    "holding_start_method": "INSUFFICIENT_DATA",
+                    "holding_start_confidence": "NONE",
+                    "holding_start_reasons": ["NO_SHARE_TRANSACTIONS"],
                     "validation_status": "VALID",
                     "validation_errors": "[]",
                 }
@@ -368,6 +371,9 @@ async def test_get_batch_restores_unknown_fund_as_visible_conflict() -> None:
             "comparisonStatus": "CONFLICT",
             "candidateHoldingStartedOn": None,
             "holdingStartStatus": "INSUFFICIENT_DATA",
+            "holdingStartMethod": "INSUFFICIENT_DATA",
+            "holdingStartConfidence": "NONE",
+            "holdingStartReasons": ["UNKNOWN_FUND_CODE"],
             "validationStatus": "INVALID",
             "validationErrors": ["UNKNOWN_FUND_CODE"],
         }

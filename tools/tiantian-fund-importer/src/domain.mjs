@@ -12,6 +12,8 @@ const HUOQIBAO_CASH_ONLY_BUSINESS_TYPES = new Set([
   "活期宝每日分红",
 ]);
 const SPECIAL_FUND_ADJUSTMENT_TYPES = new Set(["强行调增", "活动发放"]);
+const PORTFOLIO_ACTIVITY_PATTERN =
+  /(?:组合.*(?:买入|购买|申购|卖出|赎回|调仓))|恢复比例调仓/;
 
 export function normalizeFundBusinessType(value) {
   const businessType = text(value);
@@ -21,7 +23,7 @@ export function normalizeFundBusinessType(value) {
   if (/红利再投资/.test(businessType)) return "DIVIDEND_REINVEST";
   if (/现金分红/.test(businessType)) return "DIVIDEND_CASH";
   if (/卖出|赎回/.test(businessType)) return "REDEEM";
-  if (/买入|活期宝转入/.test(businessType)) return "PURCHASE";
+  if (/买入|购买|申购|活期宝转入/.test(businessType)) return "PURCHASE";
   return "UNKNOWN";
 }
 
@@ -35,7 +37,14 @@ function hasFundCode(value) {
 
 export function classifyTransaction(raw) {
   const status = text(raw.appStateText ?? raw.status);
+  const businessType = text(raw.businessTypeText1 ?? raw.businessType);
   if (status !== POSTING_STATUS) {
+    // 天天基金的组合订单列表有时不返回 appStateText，但同一行具有订单号、
+    // 发生时间和确认金额。这些记录不能伪造成逐基金交易，却是估算组合成分
+    // 持有起点的重要证据，因此只在“状态缺失”时保留为待复核来源事实。
+    if (!status && PORTFOLIO_ACTIVITY_PATTERN.test(businessType)) {
+      return { category: "REVIEW_REQUIRED", reason: "PORTFOLIO_ACTIVITY" };
+    }
     return { category: "NON_POSTING", reason: `STATUS_${status || "UNKNOWN"}` };
   }
 
@@ -44,7 +53,9 @@ export function classifyTransaction(raw) {
     return { category: "CASH_MANAGEMENT", reason: "HUOQIBAO_PRODUCT" };
   }
 
-  const businessType = text(raw.businessTypeText1 ?? raw.businessType);
+  if (PORTFOLIO_ACTIVITY_PATTERN.test(businessType)) {
+    return { category: "REVIEW_REQUIRED", reason: "PORTFOLIO_ACTIVITY" };
+  }
   if (HUOQIBAO_CASH_ONLY_BUSINESS_TYPES.has(businessType)) {
     return { category: "CASH_MANAGEMENT", reason: "HUOQIBAO_CASH_ONLY_BUSINESS" };
   }

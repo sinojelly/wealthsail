@@ -14,6 +14,7 @@ from backend.config import Settings
 from backend.jobs.data_tasks import (
     DataTaskLease,
     OpenFundPosition,
+    _holding_method,
     claim_data_task,
     complete_data_task,
     fail_data_task,
@@ -65,8 +66,12 @@ async def test_claim_is_atomic_skip_locked_and_second_consumer_gets_nothing() ->
         "backend.jobs.data_tasks.system_connection",
         side_effect=[_connection(first), _connection(second)],
     ):
-        first_lease = await claim_data_task(MagicMock(), owner="worker-a", lease_seconds=60)
-        second_lease = await claim_data_task(MagicMock(), owner="worker-b", lease_seconds=60)
+        first_lease = await claim_data_task(
+            MagicMock(), owner="worker-a", lease_seconds=60
+        )
+        second_lease = await claim_data_task(
+            MagicMock(), owner="worker-b", lease_seconds=60
+        )
 
     assert first_lease is not None and first_lease.lease_token == "lease-1"
     assert second_lease is None
@@ -102,9 +107,14 @@ async def test_completion_and_failure_are_lease_token_compare_and_set() -> None:
         ],
     ):
         assert await complete_data_task(MagicMock(), lease) is True
-        assert await fail_data_task(MagicMock(), lease, settings, RuntimeError()) is True
+        assert (
+            await fail_data_task(MagicMock(), lease, settings, RuntimeError()) is True
+        )
         terminal = replace(lease, attempt_count=3)
-        assert await fail_data_task(MagicMock(), terminal, settings, RuntimeError()) is True
+        assert (
+            await fail_data_task(MagicMock(), terminal, settings, RuntimeError())
+            is True
+        )
 
     assert "lease_token = $2" in completed_conn.sql[0]
     assert retry_conn.args[2] == "FAILED"
@@ -113,8 +123,41 @@ async def test_completion_and_failure_are_lease_token_compare_and_set() -> None:
     assert terminal_conn.args[5] is True
 
 
+def test_effective_holding_date_defaults_to_portfolio_estimate_until_user_overrides() -> (
+    None
+):
+    estimated = _holding_method(
+        {
+            "user_holding_started_on": None,
+            "candidate_holding_started_on": date(2021, 1, 26),
+            "holding_start_status": "PARTIAL_HISTORY",
+            "holding_start_method": "PORTFOLIO_ACTIVITY_ESTIMATE",
+            "holding_start_confidence": "LOW",
+        }
+    )
+    overridden = _holding_method(
+        {
+            "user_holding_started_on": date(2021, 2, 23),
+            "candidate_holding_started_on": date(2021, 1, 26),
+            "holding_start_status": "PARTIAL_HISTORY",
+            "holding_start_method": "PORTFOLIO_ACTIVITY_ESTIMATE",
+            "holding_start_confidence": "LOW",
+        }
+    )
+
+    assert estimated == (
+        date(2021, 1, 26),
+        "PORTFOLIO_ACTIVITY_ESTIMATE",
+        "LOW",
+        False,
+    )
+    assert overridden == (date(2021, 2, 23), "USER_CONFIRMED", "HIGH", True)
+
+
 @pytest.mark.asyncio
-async def test_backfill_fetches_outside_db_and_materializes_only_open_source_positions() -> None:
+async def test_backfill_fetches_outside_db_and_materializes_only_open_source_positions() -> (
+    None
+):
     position = OpenFundPosition(
         tenant_id="tenant-1",
         account_id="account-1",
@@ -123,6 +166,7 @@ async def test_backfill_fetches_outside_db_and_materializes_only_open_source_pos
         symbol="110022",
         holding_started_on=date(2024, 1, 2),
         holding_start_method="TRANSACTION_RECONCILED",
+        holding_start_confidence="HIGH",
         history_complete=True,
     )
     observations = [
@@ -197,6 +241,7 @@ async def test_materialization_writes_literal_decimal_range_and_holding_days() -
         symbol="110022",
         holding_started_on=date(2026, 8, 26),
         holding_start_method="TRANSACTION_RECONCILED",
+        holding_start_confidence="HIGH",
         history_complete=True,
     )
     observations = [
@@ -235,10 +280,11 @@ async def test_materialization_writes_literal_decimal_range_and_holding_days() -
 
     args = conn.args
     assert args[6] == 3
-    assert args[8] == Decimal("1.50")
-    assert args[10] == Decimal("2.00")
-    assert args[12] == Decimal("1.00")
-    assert args[14] == Decimal("-25.00")
-    assert args[15] == Decimal("50.00")
+    assert args[8] == "HIGH"
+    assert args[9] == Decimal("1.50")
+    assert args[11] == Decimal("2.00")
+    assert args[13] == Decimal("1.00")
+    assert args[15] == Decimal("-25.00")
     assert args[16] == Decimal("50.00")
-    assert args[17] == "READY"
+    assert args[17] == Decimal("50.00")
+    assert args[18] == "READY"

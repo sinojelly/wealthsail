@@ -87,6 +87,7 @@ export const positionsFixture: PositionDto[] = [
       startedOn: "2024-03-16",
       days: 895,
       method: "TRANSACTION_RECONCILED",
+      confidence: "HIGH",
     },
     rangeMetrics: {
       high: "1.8000",

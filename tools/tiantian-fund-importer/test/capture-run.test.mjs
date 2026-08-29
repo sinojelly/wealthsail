@@ -69,7 +69,7 @@ test("一次采集同时输出当前持仓、本地交易报告和可上传 v2 Z
 
     assert.equal(result.manifest.counts.currentPositions, 1);
     assert.equal(result.manifest.counts.fundTransactions, 1);
-    assert.equal(result.manifest.collectorVersion, "0.2.0");
+    assert.equal(result.manifest.collectorVersion, "0.3.0");
     assert.match(result.zipPath, /wealthsail-tiantian-20260828\.zip$/);
 
     const localPositions = JSON.parse(

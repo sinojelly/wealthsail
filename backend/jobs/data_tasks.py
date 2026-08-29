@@ -59,6 +59,7 @@ class OpenFundPosition:
     symbol: str
     holding_started_on: date | None
     holding_start_method: str
+    holding_start_confidence: str
     history_complete: bool
     source_as_of: date | None = None
 
@@ -195,20 +196,31 @@ async def fail_data_task(
     return result.endswith("1")
 
 
-def _holding_method(row: Mapping[str, Any]) -> tuple[date | None, str, bool]:
+def _holding_method(
+    row: Mapping[str, Any],
+) -> tuple[date | None, str, str, bool]:
     user_started = row.get("user_holding_started_on")
     if user_started is not None:
-        return user_started, "USER_CONFIRMED", True
-    status = str(row.get("holding_start_status") or "INSUFFICIENT_DATA")
-    method = "TRANSACTION_RECONCILED" if status == "RECONCILED" else status
+        return user_started, "USER_CONFIRMED", "HIGH", True
+    method = str(row.get("holding_start_method") or "INSUFFICIENT_DATA")
     if method not in {
         "TRANSACTION_RECONCILED",
+        "PORTFOLIO_ACTIVITY_ESTIMATE",
         "PARTIAL_HISTORY",
         "MISMATCH",
         "INSUFFICIENT_DATA",
     }:
         method = "INSUFFICIENT_DATA"
-    return row.get("candidate_holding_started_on"), method, method != "PARTIAL_HISTORY"
+    confidence = str(row.get("holding_start_confidence") or "NONE")
+    if confidence not in {"HIGH", "MEDIUM", "LOW", "NONE"}:
+        confidence = "NONE"
+    history_complete = method == "TRANSACTION_RECONCILED"
+    return (
+        row.get("candidate_holding_started_on"),
+        method,
+        confidence,
+        history_complete,
+    )
 
 
 async def load_open_fund_positions(
@@ -226,7 +238,9 @@ async def load_open_fund_positions(
                    batch.source_binding_id, item.source_symbol,
                    item.user_holding_started_on,
                    item.candidate_holding_started_on,
-                   item.holding_start_status, batch.source_as_of::date AS source_as_of
+                   item.holding_start_status, item.holding_start_method,
+                   item.holding_start_confidence,
+                   batch.source_as_of::date AS source_as_of
               FROM ledger.ledger_events event
               JOIN ledger.portfolio_import_batches batch
                 ON batch.tenant_id = event.tenant_id
@@ -258,7 +272,7 @@ async def load_open_fund_positions(
         )
     positions: list[OpenFundPosition] = []
     for row in rows:
-        started_on, method, history_complete = _holding_method(row)
+        started_on, method, confidence, history_complete = _holding_method(row)
         positions.append(
             OpenFundPosition(
                 tenant_id=tenant_id,
@@ -268,6 +282,7 @@ async def load_open_fund_positions(
                 symbol=str(row["source_symbol"]),
                 holding_started_on=started_on,
                 holding_start_method=method,
+                holding_start_confidence=confidence,
                 history_complete=history_complete,
                 source_as_of=row["source_as_of"],
             )
@@ -402,7 +417,9 @@ async def materialize_position_metrics(
             for position in positions:
                 observations = [
                     NavObservation(item.as_of.date(), item.value)
-                    for item in observations_by_instrument.get(position.instrument_id, [])
+                    for item in observations_by_instrument.get(
+                        position.instrument_id, []
+                    )
                     if item.value is not None
                 ]
                 metric = calculate_range_metrics(
@@ -421,13 +438,14 @@ async def materialize_position_metrics(
                     INSERT INTO ledger.position_period_metrics (
                         tenant_id, account_id, instrument_id, source_binding_id,
                         as_of, holding_started_on, holding_days, holding_start_method,
-                        current_nav, current_nav_date, period_high_nav, period_high_date,
+                        holding_start_confidence, current_nav, current_nav_date,
+                        period_high_nav, period_high_date,
                         period_low_nav, period_low_date, from_high_pct, from_low_pct,
                         range_position_pct, calculation_status, quality_reasons,
                         calculation_version, updated_at
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                        $13, $14, $15, $16, $17, $18, $19::text[], $20, now()
+                        $13, $14, $15, $16, $17, $18, $19, $20::text[], $21, now()
                     )
                     ON CONFLICT (tenant_id, account_id, instrument_id, as_of)
                     DO UPDATE SET
@@ -435,6 +453,7 @@ async def materialize_position_metrics(
                         holding_started_on = EXCLUDED.holding_started_on,
                         holding_days = EXCLUDED.holding_days,
                         holding_start_method = EXCLUDED.holding_start_method,
+                        holding_start_confidence = EXCLUDED.holding_start_confidence,
                         current_nav = EXCLUDED.current_nav,
                         current_nav_date = EXCLUDED.current_nav_date,
                         period_high_nav = EXCLUDED.period_high_nav,
@@ -457,6 +476,7 @@ async def materialize_position_metrics(
                     position.holding_started_on,
                     holding_days,
                     position.holding_start_method,
+                    position.holding_start_confidence,
                     metric.current_nav,
                     metric.as_of,
                     metric.high_nav,
@@ -503,7 +523,9 @@ async def process_data_task(
                     max_pages=settings.fund_nav_history_max_pages,
                 )
                 observations_by_instrument[position.instrument_id] = observations
-                await persist_nav_observations(pool, position.instrument_id, observations)
+                await persist_nav_observations(
+                    pool, position.instrument_id, observations
+                )
     else:
         observations_by_instrument = await load_persisted_nav(
             pool, positions, as_of=as_of
@@ -513,9 +535,7 @@ async def process_data_task(
     )
 
 
-async def _heartbeat_loop(
-    pool: Pool, lease: DataTaskLease, lease_seconds: int
-) -> None:
+async def _heartbeat_loop(pool: Pool, lease: DataTaskLease, lease_seconds: int) -> None:
     while True:
         await asyncio.sleep(max(1.0, lease_seconds / 3))
         if not await renew_data_task(pool, lease, lease_seconds):
@@ -539,9 +559,7 @@ class DataTaskConsumer:
         if lease is None:
             return False
         heartbeat = asyncio.create_task(
-            _heartbeat_loop(
-                self._pool, lease, self._settings.data_task_lease_seconds
-            ),
+            _heartbeat_loop(self._pool, lease, self._settings.data_task_lease_seconds),
             name=f"data-task-heartbeat:{lease.run_id}",
         )
         try:

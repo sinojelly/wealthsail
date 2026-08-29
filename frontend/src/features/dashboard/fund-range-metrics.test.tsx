@@ -7,6 +7,7 @@ const holdingPeriod: HoldingPeriodDto = {
   startedOn: "2024-03-16",
   days: 895,
   method: "TRANSACTION_RECONCILED",
+  confidence: "HIGH",
 };
 
 const readyMetrics: FundRangeMetricsDto = {
@@ -46,12 +47,33 @@ it("keeps the holding table compact and expands official unit-NAV range facts", 
   expect(screen.getByText("1.2000")).toBeInTheDocument();
   expect(screen.getByText("2024-04-19")).toBeInTheDocument();
   expect(screen.getByText("流水对账推导")).toBeInTheDocument();
+  expect(screen.getByText("高可信")).toBeInTheDocument();
   expect(screen.getByText("+9.92%")).toBeInTheDocument();
   expect(screen.getByText("距区间最高 -20%")).toBeInTheDocument();
   expect(screen.getByText("较区间最低 +20%")).toBeInTheDocument();
   expect(
     screen.getByText(/最近公布的官方单位净值，不是盘中估值/),
   ).toBeInTheDocument();
+});
+
+it("labels portfolio activity estimates as low confidence", async () => {
+  const user = userEvent.setup();
+  render(
+    <FundRangeMetrics
+      holdingPeriod={{
+        ...holdingPeriod,
+        startedOn: "2021-01-26",
+        method: "PORTFOLIO_ACTIVITY_ESTIMATE",
+        confidence: "LOW",
+      }}
+      metrics={{ ...readyMetrics, status: "PARTIAL" }}
+      currentNav="1.4400"
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: /持有 895 天/ }));
+  expect(screen.getByText("组合/调仓估算")).toBeInTheDocument();
+  expect(screen.getByText("低可信")).toBeInTheDocument();
 });
 
 it("renders a conflict as an explicit quality state rather than a precise conclusion", async () => {
@@ -84,6 +106,7 @@ it("never turns unavailable pending metrics into a misleading zero", () => {
         startedOn: null,
         days: null,
         method: "INSUFFICIENT_DATA",
+        confidence: "NONE",
       }}
       metrics={{
         ...readyMetrics,

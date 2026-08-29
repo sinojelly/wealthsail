@@ -42,7 +42,7 @@ def test_first_purchase_derives_a_reconciled_holding_start() -> None:
     assert result.holding_days == 605
     assert result.status == "RECONCILED"
     assert result.reason_codes == ()
-    assert result.algorithm_version == "holding-start/v1"
+    assert result.algorithm_version == "holding-start/v2"
 
 
 def test_multiple_buys_and_partial_redemption_keep_the_first_purchase() -> None:
@@ -245,7 +245,9 @@ def test_nonpositive_nav_is_excluded_and_marks_result_partial() -> None:
     assert result.quality_reasons == ("INVALID_NAV_EXCLUDED",)
 
 
-def test_expected_market_date_gap_is_explicit_but_weekends_need_not_be_expected() -> None:
+def test_expected_market_date_gap_is_explicit_but_weekends_need_not_be_expected() -> (
+    None
+):
     result = calculate_range_metrics(
         [_nav("2025-01-03", "1.0000"), _nav("2025-01-06", "1.1000")],
         holding_started_on=date(2025, 1, 3),

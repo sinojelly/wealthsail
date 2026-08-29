@@ -187,6 +187,7 @@
 | TT-FR-006 | 采集器必须校验页面汇总、持仓条数、历史分页完整性和数值合法性。 |
 | TT-FR-007 | 采集器不得把密码、Cookie、Token 或完整账户号写入输出。 |
 | TT-FR-008 | 同一采集配置必须维持稳定的匿名来源账户标识。 |
+| TT-FR-009 | 组合一键买入、卖出和调仓必须保留为待复核来源事实，不得因状态文案缺失而直接丢弃，也不得伪造成逐基金成交。 |
 
 ### 7.2 Web 导入
 
@@ -221,7 +222,7 @@
 
 | 编号 | 需求 |
 |---|---|
-| TT-FR-060 | 系统必须推导本轮连续持仓开始日并说明推导方法。 |
+| TT-FR-060 | 系统必须按证据优先级推导本轮连续持仓开始日，并说明推导方法、可信度与结构化原因。 |
 | TT-FR-061 | 系统必须按自然日计算持仓天数。 |
 | TT-FR-062 | 系统必须回补持仓开始日至今的官方单位净值。 |
 | TT-FR-063 | 系统必须计算期间最高/最低单位净值及日期。 |
@@ -230,6 +231,8 @@
 | TT-FR-066 | 行情回补失败不得回滚已经确认的持仓。 |
 | TT-FR-067 | 每日最新净值更新后必须重算仍持有基金的指标。 |
 | TT-FR-068 | 多用户持有同一基金时必须共享历史净值缓存。 |
+| TT-FR-069 | 有候选日期时 Web 必须自动预填；用户不修改即采用候选日期，用户修改后标记为高可信用户确认。 |
+| TT-FR-070 | 缺少逐基金日期时，系统必须使用同一脱敏来源账户的组合买入或调仓活动给出可编辑候选，不得跨账户猜测。 |
 
 ---
 
@@ -487,6 +490,9 @@ DRAFT → CANCELLED
 - `comparison_status`：`NEW / UNCHANGED / CHANGED / CLOSED / CONFLICT`
 - `candidate_holding_started_on`
 - `holding_start_status`
+- `holding_start_method`
+- `holding_start_confidence`
+- `holding_start_reasons`
 - `user_holding_started_on`
 - `source_payload`
 
@@ -568,6 +574,7 @@ DRAFT → CANCELLED
 - `holding_started_on`
 - `holding_days`
 - `holding_start_method`
+- `holding_start_confidence`
 - `current_nav`
 - `current_nav_date`
 - `period_high_nav`
@@ -708,6 +715,17 @@ market.market_observations
 5. 将模拟期末份额与当前快照比较；
 6. 输出候选开始日、状态、原因和算法版本。
 
+逐基金份额流水是最高优先级证据。`RECONCILED` 输出
+`TRANSACTION_RECONCILED / HIGH`；逐基金历史不完整但已有候选时输出 `PARTIAL_HISTORY / LOW`，
+并继续优先于任何组合级记录。只有逐基金结果为 `INSUFFICIENT_DATA` 时才允许组合回退：
+
+1. 只选择与当前持仓 `accountMask` 后四位一致、发生时间不晚于快照的组合活动；
+2. 有组合买入时取最早组合买入日；没有买入但有调仓时取最早调仓日；
+3. 纯组合买入输出 `PORTFOLIO_ACTIVITY_ESTIMATE / MEDIUM`；存在调仓或只有调仓时输出
+   `PORTFOLIO_ACTIVITY_ESTIMATE / LOW`；
+4. 保存“同账户匹配”“缺少组合成分明细”“存在调仓”“仅有调仓”等结构化原因；
+5. 组合活动只产生日期候选，不生成逐基金交易、金额或份额。
+
 ### 13.3 状态
 
 - `RECONCILED`：期末份额在容差内一致；
@@ -715,6 +733,10 @@ market.market_observations
 - `MISMATCH`：期末模拟份额与当前快照不一致；
 - `INSUFFICIENT_DATA`：缺少关键份额或转换记录；
 - `USER_CONFIRMED`：用户明确补充开始日。
+
+预览页把候选日期自动放入日期控件，但未编辑的候选不冒充用户决策。确认后，后台采用候选日期及其
+原始方法/可信度；用户实际修改日期时才写 `user_holding_started_on`，后续指标方法变为
+`USER_CONFIRMED / HIGH`。用户可以修改低可信组合候选，也可以保留默认值。
 
 同日清仓并重新买入但缺少精确时刻时，可把开始日确定为当天，状态降级并在原因中说明。
 
@@ -1201,6 +1223,7 @@ TanStack Query 保存服务端状态；ZIP 和步骤草稿只在 feature scope�
 - 基金/活期宝分类；
 - 真实货币基金不误排除；
 - 买入、赎回、分红、再投资、转换和未知业务；
+- 状态文案缺失的组合买入、明确失败的组合订单和调仓证据保留；
 - 数值日期标准化；
 - 脱敏；
 - 稳定匿名账号；
@@ -1258,6 +1281,7 @@ TanStack Query 保存服务端状态；ZIP 和步骤草稿只在 feature scope�
 - 同日清仓买入；
 - 部分历史、份额容差和不一致；
 - 用户确认开始日；
+- 候选日期自动采用、用户覆盖、同账户组合买入、仅调仓、跨账户拒绝和逐基金证据优先；
 - 高低点、重复高低日期；
 - 当前等于高/低；
 - 高低相等；

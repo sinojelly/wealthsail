@@ -8,7 +8,7 @@ from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
 
-HOLDING_ALGORITHM_VERSION = "holding-start/v1"
+HOLDING_ALGORITHM_VERSION = "holding-start/v2"
 NAV_RANGE_ALGORITHM_VERSION = "nav-range/v1"
 PERCENT_QUANTUM = Decimal("0.01")
 
@@ -37,6 +37,8 @@ class HoldingStartResult:
     algorithm_version: str
     tolerance: Decimal
     simulated_opening_quantity: Decimal | None
+    method: str
+    confidence: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +96,8 @@ def _insufficient_result(tolerance: Decimal, reason: str) -> HoldingStartResult:
         algorithm_version=HOLDING_ALGORITHM_VERSION,
         tolerance=tolerance,
         simulated_opening_quantity=None,
+        method="INSUFFICIENT_DATA",
+        confidence="NONE",
     )
 
 
@@ -144,7 +148,11 @@ def derive_holding_start(
     mismatch = False
     for transaction, delta in reversed(deltas):
         balance_before = balance_after - delta
-        if candidate is None and balance_after > tolerance and balance_before <= tolerance:
+        if (
+            candidate is None
+            and balance_after > tolerance
+            and balance_before <= tolerance
+        ):
             candidate = _event_date(transaction.occurred_at)
         if balance_before < -tolerance:
             mismatch = True
@@ -184,6 +192,11 @@ def derive_holding_start(
         status = "MISMATCH"
         reason_codes.append("START_DATE_AFTER_AS_OF")
 
+    method = "TRANSACTION_RECONCILED" if status == "RECONCILED" else status
+    confidence = "HIGH" if status == "RECONCILED" else "LOW"
+    if status == "MISMATCH":
+        confidence = "NONE"
+
     return HoldingStartResult(
         started_on=candidate,
         holding_days=holding_days,
@@ -192,6 +205,8 @@ def derive_holding_start(
         algorithm_version=HOLDING_ALGORITHM_VERSION,
         tolerance=tolerance,
         simulated_opening_quantity=opening_quantity,
+        method=method,
+        confidence=confidence,
     )
 
 
@@ -245,7 +260,9 @@ def calculate_range_metrics(
     if any(len(values) > 1 for values in values_by_date.values()):
         return replace(_pending_range("NAV_SOURCE_CONFLICT"), status="CONFLICT")
 
-    normalized = sorted((day, next(iter(values))) for day, values in values_by_date.items())
+    normalized = sorted(
+        (day, next(iter(values))) for day, values in values_by_date.items()
+    )
     if not normalized:
         return _pending_range("NAV_NOT_AVAILABLE")
 
@@ -274,9 +291,11 @@ def calculate_range_metrics(
     else:
         range_position = _pct(current_nav - low_nav, high_nav - low_nav)
 
-    status = "PARTIAL" if any(
-        reason != "FLAT_NAV_RANGE" for reason in quality_reasons
-    ) else "READY"
+    status = (
+        "PARTIAL"
+        if any(reason != "FLAT_NAV_RANGE" for reason in quality_reasons)
+        else "READY"
+    )
     return RangeMetricsResult(
         current_nav=current_nav,
         as_of=current_on,

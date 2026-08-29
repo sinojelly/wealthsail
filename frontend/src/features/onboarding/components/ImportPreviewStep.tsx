@@ -45,6 +45,41 @@ const WARNING_MESSAGE: Record<string, string> = {
   HOLDING_START_INSUFFICIENT: "部分基金缺少足够流水，持有开始日期可人工补充",
   REVIEW_REQUIRED_RECORDS:
     "存在无法安全分类的历史记录，已保留待复核且不会生成买卖或资金流水",
+  PORTFOLIO_ACTIVITY_ESTIMATE:
+    "部分持有日期来自组合或调仓记录，已按最可信候选日期预填，请核对",
+};
+
+const METHOD_LABEL: Record<string, string> = {
+  TRANSACTION_RECONCILED: "逐基金交易流水",
+  PORTFOLIO_ACTIVITY_ESTIMATE: "组合/调仓估算",
+  PARTIAL_HISTORY: "部分交易流水",
+  MISMATCH: "来源不一致",
+  INSUFFICIENT_DATA: "数据不足",
+};
+
+const CONFIDENCE_LABEL: Record<string, string> = {
+  HIGH: "高可信",
+  MEDIUM: "中可信",
+  LOW: "低可信",
+  NONE: "无可信结论",
+};
+
+const HOLDING_REASON_MESSAGE: Record<string, string> = {
+  PORTFOLIO_ACTIVITY_ACCOUNT_MATCH: "组合活动与当前持仓属于同一来源账户",
+  PORTFOLIO_COMPONENT_DETAILS_UNAVAILABLE: "组合记录没有逐基金成分明细",
+  PORTFOLIO_REBALANCE_PRESENT: "组合调仓可能改变成分，建议核对",
+  PORTFOLIO_REBALANCE_ONLY: "仅发现调仓记录，无法证明最初买入日期",
+  INVALID_CURRENT_QUANTITY: "当前持仓份额无效，无法推导日期",
+  NO_SHARE_TRANSACTIONS: "缺少该基金的份额交易流水",
+  UNSUPPORTED_SHARE_TRANSACTION: "存在暂不支持的份额变动类型",
+  MISSING_SHARE_QUANTITY: "交易记录缺少可用的确认份额",
+  SIMULATED_SHARES_MISMATCH: "流水回放份额与当前持仓不一致",
+  HISTORY_STARTS_WITH_OPEN_POSITION: "历史第一笔记录前已经持仓，实际日期可能更早",
+  HOLDING_START_NOT_FOUND: "现有流水无法定位本轮持有起点",
+  SAME_DAY_ORDER_AMBIGUOUS: "同日同时有增减份额，日期精度有限",
+  START_DATE_AFTER_AS_OF: "推导日期晚于持仓快照日期",
+  POSITION_CLOSED: "该基金在本次快照中已经清仓",
+  UNKNOWN_FUND_CODE: "基金代码尚未通过主数据核验",
 };
 
 const POSITION_ERROR_MESSAGE: Record<string, string> = {
@@ -140,16 +175,30 @@ export default function ImportPreviewStep({
                   aria-label={`${position.name}持有开始日期`}
                   type="date"
                   max={detail.package.positionsAsOf?.slice(0, 10) ?? undefined}
-                  value={decisions[position.itemId] ?? ""}
+                  value={
+                    decisions[position.itemId] ??
+                    position.candidateHoldingStartedOn ??
+                    ""
+                  }
                   onChange={(event) =>
-                    onDecision(position.itemId, event.target.value)
+                    onDecision(
+                      position.itemId,
+                      event.target.value ||
+                        position.candidateHoldingStartedOn ||
+                        "",
+                    )
                   }
                 />
                 <small>
                   {position.candidateHoldingStartedOn
-                    ? `系统推导：${position.candidateHoldingStartedOn}（${position.holdingStartStatus}）`
+                    ? `${METHOD_LABEL[position.holdingStartMethod] ?? position.holdingStartMethod} · ${CONFIDENCE_LABEL[position.holdingStartConfidence] ?? position.holdingStartConfidence}`
                     : `系统未能可靠推导（${position.holdingStartStatus}），可人工确认。`}
                 </small>
+                {position.holdingStartReasons.map((reason) => (
+                  <small key={`${position.itemId}-${reason}`}>
+                    {HOLDING_REASON_MESSAGE[reason] ?? reason}
+                  </small>
+                ))}
               </label>
             </article>
           ))}

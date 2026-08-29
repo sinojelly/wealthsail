@@ -423,6 +423,9 @@ async def persist_preview(
                 item.comparison_status,
                 item.candidate_holding_started_on,
                 item.holding_start_status,
+                item.holding_start_method,
+                item.holding_start_confidence,
+                list(item.holding_start_reasons),
                 json.dumps(item.source_payload, ensure_ascii=False),
             )
         )
@@ -433,10 +436,12 @@ async def persist_preview(
             trade_date, source_row, validation_status, validation_errors,
             external_record_id, source_symbol, source_market_value, source_nav,
             source_nav_date, comparison_status, candidate_holding_started_on,
-            holding_start_status, source_payload
+            holding_start_status, holding_start_method, holding_start_confidence,
+            holding_start_reasons, source_payload
         ) VALUES (
             $1, $2, $3, 'POSITION_SNAPSHOT', $4, $5, $6, $7, $8, $9,
-            $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb
+            $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+            $20, $21::text[], $22::jsonb
         )
         """,
         item_rows,
@@ -1070,7 +1075,9 @@ async def get_import_batch(
                instrument.canonical_name, item.quantity, item.unit_cost,
                item.source_market_value, item.source_nav, item.source_nav_date,
                item.comparison_status, item.candidate_holding_started_on,
-               item.holding_start_status, item.validation_status,
+               item.holding_start_status, item.holding_start_method,
+               item.holding_start_confidence, item.holding_start_reasons,
+               item.validation_status,
                item.validation_errors
           FROM ledger.portfolio_import_items item
           JOIN reference.instruments instrument ON instrument.id = item.instrument_id
@@ -1137,6 +1144,9 @@ async def get_import_batch(
             "comparisonStatus": str(row["comparison_status"]),
             "candidateHoldingStartedOn": row["candidate_holding_started_on"],
             "holdingStartStatus": str(row["holding_start_status"]),
+            "holdingStartMethod": str(row["holding_start_method"]),
+            "holdingStartConfidence": str(row["holding_start_confidence"]),
+            "holdingStartReasons": list(row["holding_start_reasons"] or []),
             "validationStatus": str(row["validation_status"]),
             "validationErrors": _json_array(row["validation_errors"]),
         }
@@ -1162,6 +1172,9 @@ async def get_import_batch(
                 "comparisonStatus": "CONFLICT",
                 "candidateHoldingStartedOn": None,
                 "holdingStartStatus": "INSUFFICIENT_DATA",
+                "holdingStartMethod": "INSUFFICIENT_DATA",
+                "holdingStartConfidence": "NONE",
+                "holdingStartReasons": ["UNKNOWN_FUND_CODE"],
                 "validationStatus": str(row["validation_status"]),
                 "validationErrors": _json_array(row["validation_errors"]),
             }

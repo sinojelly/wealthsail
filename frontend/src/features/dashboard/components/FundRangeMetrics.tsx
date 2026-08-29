@@ -40,12 +40,25 @@ function statusLabel(status: FundRangeMetricsDto["status"]) {
 function methodLabel(method: HoldingPeriodDto["method"] | undefined) {
   const labels: Record<HoldingPeriodDto["method"], string> = {
     TRANSACTION_RECONCILED: "流水对账推导",
+    PORTFOLIO_ACTIVITY_ESTIMATE: "组合/调仓估算",
     PARTIAL_HISTORY: "部分历史推导",
     MISMATCH: "来源不一致",
     INSUFFICIENT_DATA: "数据不足",
     USER_CONFIRMED: "用户确认",
   };
   return method ? labels[method] : "方法待确认";
+}
+
+function confidenceLabel(
+  confidence: HoldingPeriodDto["confidence"] | undefined,
+) {
+  const labels: Record<HoldingPeriodDto["confidence"], string> = {
+    HIGH: "高可信",
+    MEDIUM: "中可信",
+    LOW: "低可信",
+    NONE: "无可信结论",
+  };
+  return confidence ? labels[confidence] : "可信度待确认";
 }
 
 export default function FundRangeMetrics({
@@ -97,6 +110,7 @@ export default function FundRangeMetrics({
               <dd>
                 <strong>{holdingPeriod?.startedOn ?? "—"}</strong>
                 <small>{methodLabel(holdingPeriod?.method)}</small>
+                <small>{confidenceLabel(holdingPeriod?.confidence)}</small>
               </dd>
             </div>
             <div>

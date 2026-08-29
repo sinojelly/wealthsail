@@ -51,7 +51,12 @@ def _position(
     )
 
 
-def _transaction(source_id: str, code: str = "110022") -> TiantianTransaction:
+def _transaction(
+    source_id: str,
+    code: str = "110022",
+    *,
+    confirmation_value: str = "100",
+) -> TiantianTransaction:
     return TiantianTransaction.model_validate(
         {
             "sourceProvider": "TIANTIAN_FUND",
@@ -61,7 +66,7 @@ def _transaction(source_id: str, code: str = "110022") -> TiantianTransaction:
             "productName": f"来源名称-{code}",
             "businessType": "买入",
             "normalizedBusinessType": "PURCHASE",
-            "confirmationValue": "100",
+            "confirmationValue": confirmation_value,
             "confirmationUnit": "份",
             "status": "成功",
             "category": "FUND_TRADE",
@@ -72,6 +77,28 @@ def _transaction(source_id: str, code: str = "110022") -> TiantianTransaction:
             "sourcePage": 1,
         }
     )
+
+
+def _portfolio_activity(
+    source_id: str,
+    occurred_at: str,
+    business_type: str,
+    *,
+    account_mask: str = "中信银行 | ****5678",
+) -> dict:
+    normalized = "PURCHASE" if "买入" in business_type else "UNKNOWN"
+    return {
+        "sourceProvider": "TIANTIAN_FUND",
+        "sourceId": source_id,
+        "occurredAt": occurred_at,
+        "productCode": "",
+        "productName": "价值五剑",
+        "businessType": business_type,
+        "normalizedBusinessType": normalized,
+        "accountMask": account_mask,
+        "category": "REVIEW_REQUIRED",
+        "classificationReason": "PORTFOLIO_ACTIVITY",
+    }
 
 
 def _package(
@@ -260,6 +287,123 @@ def test_partial_history_warns_but_does_not_block_an_otherwise_valid_preview() -
 
     assert plan.can_confirm is True
     assert "PARTIAL_HISTORY" in plan.warnings
+
+
+def test_reconciled_fund_history_exposes_high_confidence_transaction_method() -> None:
+    plan = analyze_preview(
+        _package([_position("110022")], [_transaction("tx-1")]),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    item = plan.items[0]
+    assert item.candidate_holding_started_on == date(2026, 8, 20)
+    assert item.holding_start_method == "TRANSACTION_RECONCILED"
+    assert item.holding_start_confidence == "HIGH"
+    assert item.holding_start_reasons == ()
+
+
+def test_portfolio_activity_fills_missing_date_with_auditable_low_confidence() -> None:
+    plan = analyze_preview(
+        _package(
+            [_position("110022")],
+            review_required=(
+                _portfolio_activity(
+                    "portfolio-buy", "2021-01-26 14:22:24", "组合一键买入"
+                ),
+                _portfolio_activity(
+                    "portfolio-rebalance", "2021-02-23 12:46:09", "恢复比例调仓"
+                ),
+            ),
+        ),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    item = plan.items[0]
+    assert item.candidate_holding_started_on == date(2021, 1, 26)
+    assert item.holding_start_status == "PARTIAL_HISTORY"
+    assert item.holding_start_method == "PORTFOLIO_ACTIVITY_ESTIMATE"
+    assert item.holding_start_confidence == "LOW"
+    assert item.holding_start_reasons == (
+        "PORTFOLIO_ACTIVITY_ACCOUNT_MATCH",
+        "PORTFOLIO_COMPONENT_DETAILS_UNAVAILABLE",
+        "PORTFOLIO_REBALANCE_PRESENT",
+    )
+    assert "PORTFOLIO_ACTIVITY_ESTIMATE" in plan.warnings
+
+
+def test_rebalance_only_activity_still_supplies_an_editable_low_confidence_date() -> (
+    None
+):
+    plan = analyze_preview(
+        _package(
+            [_position("110022")],
+            review_required=(
+                _portfolio_activity(
+                    "portfolio-rebalance", "2021-02-23 12:46:09", "恢复比例调仓"
+                ),
+            ),
+        ),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    item = plan.items[0]
+    assert item.candidate_holding_started_on == date(2021, 2, 23)
+    assert item.holding_start_method == "PORTFOLIO_ACTIVITY_ESTIMATE"
+    assert item.holding_start_confidence == "LOW"
+    assert item.holding_start_reasons == (
+        "PORTFOLIO_ACTIVITY_ACCOUNT_MATCH",
+        "PORTFOLIO_COMPONENT_DETAILS_UNAVAILABLE",
+        "PORTFOLIO_REBALANCE_PRESENT",
+        "PORTFOLIO_REBALANCE_ONLY",
+    )
+
+
+def test_portfolio_activity_from_another_account_is_not_used_as_a_default() -> None:
+    plan = analyze_preview(
+        _package(
+            [_position("110022")],
+            review_required=(
+                _portfolio_activity(
+                    "portfolio-buy",
+                    "2021-01-26 14:22:24",
+                    "组合一键买入",
+                    account_mask="建设银行 | ****9999",
+                ),
+            ),
+        ),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    item = plan.items[0]
+    assert item.candidate_holding_started_on is None
+    assert item.holding_start_method == "INSUFFICIENT_DATA"
+    assert item.holding_start_confidence == "NONE"
+
+
+def test_specific_partial_fund_history_beats_earlier_aggregate_portfolio_date() -> None:
+    plan = analyze_preview(
+        _package(
+            [_position("110022")],
+            [_transaction("partial-buy", confirmation_value="20")],
+            review_required=(
+                _portfolio_activity(
+                    "portfolio-buy", "2021-01-26 14:22:24", "组合一键买入"
+                ),
+            ),
+        ),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    item = plan.items[0]
+    assert item.candidate_holding_started_on == date(2026, 8, 20)
+    assert item.holding_start_method == "PARTIAL_HISTORY"
+    assert item.holding_start_confidence == "LOW"
+    assert item.holding_start_reasons == ("HISTORY_STARTS_WITH_OPEN_POSITION",)
 
 
 def test_same_source_transaction_hash_is_classified_as_duplicate() -> None:

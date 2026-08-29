@@ -106,10 +106,12 @@ export interface HoldingPeriodDto {
   days: number | null;
   method:
     | "TRANSACTION_RECONCILED"
+    | "PORTFOLIO_ACTIVITY_ESTIMATE"
     | "PARTIAL_HISTORY"
     | "MISMATCH"
     | "INSUFFICIENT_DATA"
     | "USER_CONFIRMED";
+  confidence: "HIGH" | "MEDIUM" | "LOW" | "NONE";
 }
 
 export interface FundRangeMetricsDto {
@@ -141,6 +143,14 @@ export interface TiantianImportPosition {
   comparisonStatus: TiantianComparisonStatus;
   candidateHoldingStartedOn: string | null;
   holdingStartStatus: string;
+  holdingStartMethod:
+    | "TRANSACTION_RECONCILED"
+    | "PORTFOLIO_ACTIVITY_ESTIMATE"
+    | "PARTIAL_HISTORY"
+    | "MISMATCH"
+    | "INSUFFICIENT_DATA";
+  holdingStartConfidence: "HIGH" | "MEDIUM" | "LOW" | "NONE";
+  holdingStartReasons: string[];
   validationStatus?: "VALID" | "INVALID";
   validationErrors?: string[];
 }

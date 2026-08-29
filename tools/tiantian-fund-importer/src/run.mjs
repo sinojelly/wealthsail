@@ -9,7 +9,7 @@ import {
 } from "./import-package.mjs";
 import { writeRunOutput } from "./output.mjs";
 
-export const COLLECTOR_VERSION = "0.2.0";
+export const COLLECTOR_VERSION = "0.3.0";
 
 function runId(now) {
   return `run-${now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`;

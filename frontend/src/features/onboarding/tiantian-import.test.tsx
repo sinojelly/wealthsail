@@ -82,6 +82,9 @@ function preview(
         comparisonStatus: "NEW",
         candidateHoldingStartedOn: "2024-01-02",
         holdingStartStatus: "RECONCILED",
+        holdingStartMethod: "TRANSACTION_RECONCILED",
+        holdingStartConfidence: "HIGH",
+        holdingStartReasons: [],
       },
       {
         itemId: "changed-1",
@@ -92,8 +95,15 @@ function preview(
         unitCost: "1.10",
         marketValue: "90.00",
         comparisonStatus: "CHANGED",
-        candidateHoldingStartedOn: null,
+        candidateHoldingStartedOn: "2021-01-26",
         holdingStartStatus: "PARTIAL_HISTORY",
+        holdingStartMethod: "PORTFOLIO_ACTIVITY_ESTIMATE",
+        holdingStartConfidence: "LOW",
+        holdingStartReasons: [
+          "PORTFOLIO_ACTIVITY_ACCOUNT_MATCH",
+          "PORTFOLIO_COMPONENT_DETAILS_UNAVAILABLE",
+          "PORTFOLIO_REBALANCE_PRESENT",
+        ],
       },
       {
         itemId: "closed-1",
@@ -106,6 +116,9 @@ function preview(
         comparisonStatus: "CLOSED",
         candidateHoldingStartedOn: null,
         holdingStartStatus: "INSUFFICIENT_DATA",
+        holdingStartMethod: "INSUFFICIENT_DATA",
+        holdingStartConfidence: "NONE",
+        holdingStartReasons: ["NO_SHARE_TRANSACTIONS"],
       },
       {
         itemId: "conflict-1",
@@ -118,6 +131,9 @@ function preview(
         comparisonStatus: "CONFLICT",
         candidateHoldingStartedOn: null,
         holdingStartStatus: "MISMATCH",
+        holdingStartMethod: "MISMATCH",
+        holdingStartConfidence: "NONE",
+        holdingStartReasons: ["SIMULATED_SHARES_MISMATCH"],
       },
     ],
     historySummary: { importable: 16, duplicated: 2, reviewRequired: 3 },
@@ -224,6 +240,37 @@ it("renders complete preview counts, three tabs and blocks conflicts", async () 
   ).toBeDisabled();
 });
 
+it("prefills inferred dates and explains their method and confidence", async () => {
+  mocks.preview.mockResolvedValue(
+    preview({ blockingErrors: [], warnings: [], canConfirm: true }),
+  );
+  const user = userEvent.setup();
+  renderWithSession(<TiantianImportWizard />);
+
+  await user.upload(
+    screen.getByLabelText("天天基金 ZIP 导入包"),
+    new File(["PK\u0003\u0004payload"], "snapshot.zip", {
+      type: "application/zip",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "解析并预览" }));
+
+  const dialog = await screen.findByRole("dialog", {
+    name: "导入或更新天天基金持仓",
+  });
+  expect(
+    within(dialog).getByLabelText("测试新增基金持有开始日期"),
+  ).toHaveValue("2024-01-02");
+  expect(
+    within(dialog).getByLabelText("测试变化基金持有开始日期"),
+  ).toHaveValue("2021-01-26");
+  expect(within(dialog).getByText("逐基金交易流水 · 高可信")).toBeInTheDocument();
+  expect(within(dialog).getByText("组合/调仓估算 · 低可信")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("组合调仓可能改变成分，建议核对"),
+  ).toBeInTheDocument();
+});
+
 it("keeps an unresolved fund visible and explains the blocking conflict", async () => {
   mocks.preview.mockResolvedValue(
     preview({
@@ -247,6 +294,9 @@ it("keeps an unresolved fund visible and explains the blocking conflict", async 
           comparisonStatus: "CONFLICT",
           candidateHoldingStartedOn: null,
           holdingStartStatus: "INSUFFICIENT_DATA",
+          holdingStartMethod: "INSUFFICIENT_DATA",
+          holdingStartConfidence: "NONE",
+          holdingStartReasons: ["NO_SHARE_TRANSACTIONS"],
           validationStatus: "INVALID",
           validationErrors: ["UNKNOWN_FUND_CODE"],
         },

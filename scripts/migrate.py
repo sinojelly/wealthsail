@@ -162,6 +162,16 @@ async def _readback(conn: asyncpg.Connection) -> None:
         )
 
     tiantian_columns = {
+        "portfolio_import_items": {
+            "tenant_id",
+            "batch_id",
+            "candidate_holding_started_on",
+            "holding_start_status",
+            "holding_start_method",
+            "holding_start_confidence",
+            "holding_start_reasons",
+            "user_holding_started_on",
+        },
         "portfolio_source_bindings": {
             "tenant_id",
             "account_id",
@@ -192,6 +202,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "instrument_id",
             "source_binding_id",
             "holding_started_on",
+            "holding_start_method",
+            "holding_start_confidence",
             "period_high_nav",
             "period_low_nav",
             "range_position_pct",
@@ -285,6 +297,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "POSITION_SNAPSHOT",
         "FUND_NAV_BACKFILL",
         "POSITION_PERIOD_METRICS_REBUILD",
+        "PORTFOLIO_ACTIVITY_ESTIMATE",
     ):
         if token not in contract_definitions:
             raise RuntimeError(

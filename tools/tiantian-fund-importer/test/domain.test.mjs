@@ -75,6 +75,47 @@ test("失败和撤单记录只用于对账而不进入持仓", () => {
   }
 });
 
+test("组合一键买入和调仓即使列表缺少状态也保留为日期推导证据", () => {
+  for (const businessTypeText1 of ["组合一键买入", "恢复比例调仓"]) {
+    assert.deepEqual(
+      classifyTransaction({
+        productShowName: "价值五剑",
+        productCode: "",
+        businessTypeText1,
+        appStateText: "",
+      }),
+      { category: "REVIEW_REQUIRED", reason: "PORTFOLIO_ACTIVITY" },
+    );
+  }
+});
+
+test("组合申购的同义文案同样保留并标准化为买入证据", () => {
+  const result = normalizeTransaction({
+    id: "portfolio-subscribe",
+    strikeStartDate: "2021-01-26 14:22:24",
+    productShowName: "价值组合",
+    businessTypeText1: "组合一键申购",
+    appStateText: "",
+    bkAcc: "中信银行 | 622200008671",
+  });
+
+  assert.equal(result.category, "REVIEW_REQUIRED");
+  assert.equal(result.classificationReason, "PORTFOLIO_ACTIVITY");
+  assert.equal(result.normalizedBusinessType, "PURCHASE");
+});
+
+test("明确失败的组合订单不能用于持有日期推导", () => {
+  assert.deepEqual(
+    classifyTransaction({
+      productShowName: "价值五剑",
+      productCode: "",
+      businessTypeText1: "组合一键买入",
+      appStateText: "失败",
+    }),
+    { category: "NON_POSTING", reason: "STATUS_失败" },
+  );
+});
+
 test("无法识别且没有基金代码的成功记录必须人工复核", () => {
   assert.deepEqual(
     classifyTransaction({
