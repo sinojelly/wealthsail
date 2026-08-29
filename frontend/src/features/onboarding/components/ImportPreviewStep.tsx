@@ -27,6 +27,35 @@ const STATUS_ICON: Record<TiantianComparisonStatus, ReactNode> = {
   CONFLICT: <TriangleAlert size={12} aria-hidden="true" />,
 };
 
+const BLOCKING_MESSAGE: Record<string, string> = {
+  UNKNOWN_FUND_CODE: "部分基金代码未通过权威主数据核验，请稍后重试",
+  ACCOUNT_LEDGER_CONFLICT:
+    "目标账户中存在其他来源的持仓事实，需要先处理账户冲突",
+  SOURCE_BINDING_ACCOUNT_CONFLICT: "该天天基金来源账号已绑定到另一个投资账户",
+  SOURCE_SNAPSHOT_OLDER_THAN_CONFIRMED:
+    "上传快照早于已经确认的快照，不能覆盖较新数据",
+  SOURCE_TRANSACTION_HASH_CONFLICT:
+    "同一来源流水编号对应了不同内容，需要人工核查",
+  HOLDING_SHARE_MISMATCH: "历史流水推导的份额与当前快照不一致，需要人工核查",
+  EMPTY_SNAPSHOT_WITHOUT_BASELINE: "空持仓快照不能用于创建新的账户基线",
+};
+
+const WARNING_MESSAGE: Record<string, string> = {
+  PARTIAL_HISTORY: "历史流水覆盖不完整，持有开始日期可能只能部分推导",
+  HOLDING_START_INSUFFICIENT: "部分基金缺少足够流水，持有开始日期可人工补充",
+  REVIEW_REQUIRED_RECORDS:
+    "存在无法安全分类的历史记录，已保留待复核且不会生成买卖或资金流水",
+};
+
+const POSITION_ERROR_MESSAGE: Record<string, string> = {
+  UNKNOWN_FUND_CODE: "基金代码未通过权威主数据核验，暂不能导入",
+  ACCOUNT_LEDGER_CONFLICT: "目标账户中存在其他来源的持仓事实",
+};
+
+function messageFor(code: string, messages: Record<string, string>): string {
+  return messages[code] ?? code;
+}
+
 type Tab = "positions" | "history" | "issues";
 
 interface Props {
@@ -86,6 +115,14 @@ export default function ImportPreviewStep({
               <div>
                 <strong>{position.name}</strong>
                 <small className="mono">{position.symbol}</small>
+                {position.validationErrors?.map((code) => (
+                  <small
+                    className="form-error import-position-error"
+                    key={`${position.itemId}-${code}`}
+                  >
+                    {messageFor(code, POSITION_ERROR_MESSAGE)}
+                  </small>
+                ))}
               </div>
               <span
                 className={`import-status status-${position.comparisonStatus.toLowerCase()}`}
@@ -152,12 +189,12 @@ export default function ImportPreviewStep({
           ) : null}
           {detail.blockingErrors.map((message) => (
             <p className="form-error" key={`blocking-${message}`}>
-              {message}
+              {messageFor(message, BLOCKING_MESSAGE)}
             </p>
           ))}
           {detail.warnings.map((message) => (
             <p className="import-warning" key={`warning-${message}`}>
-              {message}
+              {messageFor(message, WARNING_MESSAGE)}
             </p>
           ))}
         </div>

@@ -130,7 +130,7 @@ export type TiantianComparisonStatus =
 
 export interface TiantianImportPosition {
   itemId: string;
-  instrumentId: string;
+  instrumentId: string | null;
   symbol: string;
   name: string;
   quantity: DecimalString;
@@ -525,12 +525,7 @@ export interface FreshnessResponse {
 }
 
 export type OutboxStatus =
-  | "PENDING"
-  | "SENDING"
-  | "SENT"
-  | "UNKNOWN"
-  | "DEAD"
-  | "CANCELLED";
+  "PENDING" | "SENDING" | "SENT" | "UNKNOWN" | "DEAD" | "CANCELLED";
 
 export interface OutboxMessage {
   id: string;

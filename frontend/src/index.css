@@ -3228,6 +3228,10 @@ button:disabled {
   color: var(--slate-500);
   font-size: 9px;
 }
+.import-position-row > div:first-child .import-position-error {
+  color: #b91c1c;
+  font-size: 10px;
+}
 .import-position-values {
   display: grid;
   gap: 3px;

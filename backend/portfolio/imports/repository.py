@@ -390,36 +390,42 @@ async def persist_preview(
             batch_id,
         )
 
-    item_ids = [str(uuid.uuid4()) for _item in plan.items]
-    item_rows = [
-        (
-            item_ids[index - 1],
-            tenant_id,
-            batch_id,
-            item.instrument_id,
-            item.quantity,
-            item.unit_cost,
-            package.manifest.positions_as_of.date(),
-            index,
-            "INVALID" if item.comparison_status == "CONFLICT" else "VALID",
-            json.dumps(
-                ["ACCOUNT_LEDGER_CONFLICT"]
-                if item.comparison_status == "CONFLICT"
-                else [],
-                ensure_ascii=False,
-            ),
-            item.external_record_id,
-            item.product_code,
-            item.market_value,
-            item.source_nav,
-            item.source_nav_date,
-            item.comparison_status,
-            item.candidate_holding_started_on,
-            item.holding_start_status,
-            json.dumps(item.source_payload, ensure_ascii=False),
+    item_ids: list[str] = []
+    item_rows: list[tuple[Any, ...]] = []
+    for index, item in enumerate(plan.items, start=1):
+        if item.instrument_id is None:
+            item_ids.append(f"unresolved:{item.external_record_id}")
+            continue
+        item_id = str(uuid.uuid4())
+        item_ids.append(item_id)
+        item_rows.append(
+            (
+                item_id,
+                tenant_id,
+                batch_id,
+                item.instrument_id,
+                item.quantity,
+                item.unit_cost,
+                package.manifest.positions_as_of.date(),
+                index,
+                "INVALID" if item.comparison_status == "CONFLICT" else "VALID",
+                json.dumps(
+                    ["ACCOUNT_LEDGER_CONFLICT"]
+                    if item.comparison_status == "CONFLICT"
+                    else [],
+                    ensure_ascii=False,
+                ),
+                item.external_record_id,
+                item.product_code,
+                item.market_value,
+                item.source_nav,
+                item.source_nav_date,
+                item.comparison_status,
+                item.candidate_holding_started_on,
+                item.holding_start_status,
+                json.dumps(item.source_payload, ensure_ascii=False),
+            )
         )
-        for index, item in enumerate(plan.items, start=1)
-    ]
     await conn.executemany(
         """
         INSERT INTO ledger.portfolio_import_items (
@@ -1075,6 +1081,20 @@ async def get_import_batch(
         tenant_id,
         batch_id,
     )
+    unresolved_positions = await conn.fetch(
+        """
+        SELECT record.id AS source_record_id, record.external_record_id,
+               record.normalized_payload, record.validation_status,
+               record.validation_errors
+          FROM ledger.portfolio_import_source_records record
+         WHERE record.tenant_id = $1 AND record.batch_id = $2
+           AND record.record_type = 'POSITION_SNAPSHOT'
+           AND record.instrument_id IS NULL
+         ORDER BY record.external_record_id, record.id
+        """,
+        tenant_id,
+        batch_id,
+    )
     persisted_summary = _json_object(batch["preview_summary"])
     position_counts = persisted_summary.get("positionCounts", persisted_summary)
     if "total" not in position_counts:
@@ -1103,6 +1123,51 @@ async def get_import_batch(
             metrics_status = "READY"
         else:
             metrics_status = "PENDING"
+    position_dtos = [
+        {
+            "itemId": str(row["item_id"]),
+            "instrumentId": str(row["instrument_id"]),
+            "symbol": str(row["source_symbol"]),
+            "name": str(row["canonical_name"]),
+            "quantity": _decimal_text(row["quantity"]),
+            "unitCost": _decimal_text(row["unit_cost"]),
+            "marketValue": _decimal_text(row["source_market_value"]),
+            "sourceNav": _decimal_text(row["source_nav"]),
+            "sourceNavDate": row["source_nav_date"],
+            "comparisonStatus": str(row["comparison_status"]),
+            "candidateHoldingStartedOn": row["candidate_holding_started_on"],
+            "holdingStartStatus": str(row["holding_start_status"]),
+            "validationStatus": str(row["validation_status"]),
+            "validationErrors": _json_array(row["validation_errors"]),
+        }
+        for row in positions
+    ]
+    for row in unresolved_positions:
+        payload = _json_object(row["normalized_payload"])
+        position_dtos.append(
+            {
+                "itemId": f"unresolved:{row['source_record_id']}",
+                "instrumentId": None,
+                "symbol": str(payload.get("productCode", "")),
+                "name": str(payload.get("productName", "")),
+                "quantity": str(payload.get("quantity", "")),
+                "unitCost": str(payload.get("averageCost", "")),
+                "marketValue": str(payload.get("marketValue", "")),
+                "sourceNav": (
+                    str(payload["latestNav"])
+                    if payload.get("latestNav") is not None
+                    else None
+                ),
+                "sourceNavDate": payload.get("latestNavDate"),
+                "comparisonStatus": "CONFLICT",
+                "candidateHoldingStartedOn": None,
+                "holdingStartStatus": "INSUFFICIENT_DATA",
+                "validationStatus": str(row["validation_status"]),
+                "validationErrors": _json_array(row["validation_errors"]),
+            }
+        )
+    position_dtos.sort(key=lambda item: (item["symbol"], item["itemId"]))
+
     return {
         "batchId": str(batch["batch_id"]),
         "status": str(batch["status"]),
@@ -1134,25 +1199,7 @@ async def get_import_batch(
             "accountId": str(batch["account_id"]),
             "name": str(batch["account_name"]),
         },
-        "positions": [
-            {
-                "itemId": str(row["item_id"]),
-                "instrumentId": str(row["instrument_id"]),
-                "symbol": str(row["source_symbol"]),
-                "name": str(row["canonical_name"]),
-                "quantity": _decimal_text(row["quantity"]),
-                "unitCost": _decimal_text(row["unit_cost"]),
-                "marketValue": _decimal_text(row["source_market_value"]),
-                "sourceNav": _decimal_text(row["source_nav"]),
-                "sourceNavDate": row["source_nav_date"],
-                "comparisonStatus": str(row["comparison_status"]),
-                "candidateHoldingStartedOn": row["candidate_holding_started_on"],
-                "holdingStartStatus": str(row["holding_start_status"]),
-                "validationStatus": str(row["validation_status"]),
-                "validationErrors": _json_array(row["validation_errors"]),
-            }
-            for row in positions
-        ],
+        "positions": position_dtos,
         "createdAt": batch["created_at"],
         "updatedAt": batch["updated_at"],
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -55,8 +56,18 @@ async def test_search_merges_local_and_live_results_by_market_symbol_and_type() 
             "backend.portfolio.service._ak_search",
             AsyncMock(
                 return_value=[
-                    {"symbol": "510300", "name": "供应商名称", "market": "SSE", "type": "ETF"},
-                    {"symbol": "000300", "name": "沪深300", "market": "SZSE", "type": "STOCK"},
+                    {
+                        "symbol": "510300",
+                        "name": "供应商名称",
+                        "market": "SSE",
+                        "type": "ETF",
+                    },
+                    {
+                        "symbol": "000300",
+                        "name": "沪深300",
+                        "market": "SZSE",
+                        "type": "STOCK",
+                    },
                 ]
             ),
         ),
@@ -86,6 +97,27 @@ async def test_live_search_dataset_is_singleflight_cached_across_keywords() -> N
 
     assert first == second == [{"symbol": "600519", "name": "贵州茅台"}]
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fund_master_verification_accepts_fund_specific_provider_columns() -> (
+    None
+):
+    import pandas as pd
+
+    service._SEARCH_DATASET_CACHE.pop("fund_name_em", None)
+    provider = SimpleNamespace(
+        fund_name_em=lambda: pd.DataFrame(
+            {
+                "基金代码": ["110022", "000001"],
+                "基金简称": ["权威基金一", "权威基金二"],
+            }
+        )
+    )
+    with patch.dict(sys.modules, {"akshare": provider}):
+        verified = await service.verify_fund_master_names(["110022", "999999"])
+
+    assert verified == {"110022": "权威基金一"}
 
 
 @pytest.mark.asyncio

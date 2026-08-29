@@ -19,6 +19,8 @@ from backend.errors import (
     ValidationError_,
     VersionConflictError,
 )
+from backend.portfolio import repository as portfolio_repository
+from backend.portfolio import service as portfolio_service
 from backend.portfolio.imports import repository
 from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
 from backend.portfolio.imports.package import ImportLimits, parse_tiantian_package
@@ -62,7 +64,7 @@ class TargetAccount:
 
 @dataclass(frozen=True, slots=True)
 class PreviewItem:
-    instrument_id: str
+    instrument_id: str | None
     product_code: str
     product_name: str
     external_record_id: str
@@ -103,7 +105,10 @@ class PreviewPlan:
     @property
     def summary(self) -> dict[str, int]:
         statuses = (item.comparison_status for item in self.items)
-        counts = {status: 0 for status in ("NEW", "UNCHANGED", "CHANGED", "CLOSED", "CONFLICT")}
+        counts = {
+            status: 0
+            for status in ("NEW", "UNCHANGED", "CHANGED", "CLOSED", "CONFLICT")
+        }
         for status in statuses:
             counts[status] += 1
         return {key.lower(): value for key, value in counts.items()}
@@ -266,6 +271,24 @@ def analyze_preview(
                     validation_errors=("UNKNOWN_FUND_CODE",),
                 )
             )
+            holding = _holding_result(position, package.transactions)
+            items.append(
+                PreviewItem(
+                    instrument_id=None,
+                    product_code=position.product_code,
+                    product_name=position.product_name,
+                    external_record_id=position.source_record_id,
+                    quantity=position.quantity,
+                    unit_cost=position.average_cost,
+                    market_value=position.market_value,
+                    source_nav=position.latest_nav,
+                    source_nav_date=position.latest_nav_date,
+                    comparison_status="CONFLICT",
+                    candidate_holding_started_on=holding.started_on,
+                    holding_start_status=holding.status,
+                    source_payload=payload,
+                )
+            )
             continue
         instrument_id = str(resolved["instrument_id"])
         incoming_instrument_ids.add(instrument_id)
@@ -410,7 +433,9 @@ def analyze_preview(
             )
         )
     if package.review_required:
-        _append_unique(blocking, "REVIEW_REQUIRED_RECORDS")
+        # These records are retained for review but never fabricated as ledger
+        # trades, so they do not invalidate an authoritative position snapshot.
+        _append_unique(warnings, "REVIEW_REQUIRED_RECORDS")
 
     if not package.positions and not context.baselines:
         _append_unique(blocking, "EMPTY_SNAPSHOT_WITHOUT_BASELINE")
@@ -480,7 +505,9 @@ def _preview_response(
                 "quantity": format(item.quantity, "f"),
                 "unitCost": format(item.unit_cost, "f"),
                 "marketValue": (
-                    format(item.market_value, "f") if item.market_value is not None else None
+                    format(item.market_value, "f")
+                    if item.market_value is not None
+                    else None
                 ),
                 "comparisonStatus": item.comparison_status,
                 "candidateHoldingStartedOn": (
@@ -489,6 +516,16 @@ def _preview_response(
                     else None
                 ),
                 "holdingStartStatus": item.holding_start_status,
+                "validationStatus": (
+                    "INVALID" if item.comparison_status == "CONFLICT" else "VALID"
+                ),
+                "validationErrors": (
+                    ["UNKNOWN_FUND_CODE"]
+                    if item.instrument_id is None
+                    else ["ACCOUNT_LEDGER_CONFLICT"]
+                    if item.comparison_status == "CONFLICT"
+                    else []
+                ),
             }
             for item_id, item in zip(item_ids, plan.items, strict=True)
         ],
@@ -526,6 +563,15 @@ async def preview_tiantian_import(
 
     package = parse_tiantian_package(upload, limits=limits or ImportLimits())
     content_hash = _package_hash(upload)
+    product_codes = sorted(
+        {
+            *(position.product_code for position in package.positions),
+            *(transaction.product_code for transaction in package.transactions),
+        }
+    )
+    verified_fund_names = await portfolio_service.verify_fund_master_names(
+        product_codes
+    )
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         prior = await repository.find_preview_by_idempotency(
             conn,
@@ -541,6 +587,15 @@ async def preview_tiantian_import(
                 str(prior["batch_id"]),
             )
 
+        for product_code, canonical_name in verified_fund_names.items():
+            await portfolio_repository.upsert_instrument(
+                conn,
+                ticker=product_code,
+                name=canonical_name,
+                asset_type="OFF_EXCHANGE_FUND",
+                primary_market="FUND_CN",
+            )
+
         target = await repository.resolve_target_account(
             conn,
             tenant_id=ctx.tenant_id,
@@ -553,12 +608,7 @@ async def preview_tiantian_import(
             tenant_id=ctx.tenant_id,
             account_id=target.account_id,
             binding_id=target.binding_id,
-            product_codes=sorted(
-                {
-                    *(position.product_code for position in package.positions),
-                    *(transaction.product_code for transaction in package.transactions),
-                }
-            ),
+            product_codes=product_codes,
             external_transaction_ids=[
                 transaction.source_id for transaction in package.transactions
             ],

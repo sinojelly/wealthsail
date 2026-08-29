@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -170,7 +170,9 @@ def test_position_comparison_covers_new_unchanged_changed_closed_and_conflict() 
     assert "ACCOUNT_LEDGER_CONFLICT" in conflict.blocking_errors
 
 
-def test_preview_blocks_old_snapshot_binding_mismatch_unknown_code_and_hash_conflict() -> None:
+def test_preview_blocks_old_snapshot_binding_mismatch_unknown_code_and_hash_conflict() -> (
+    None
+):
     transaction = _transaction("tx-1")
     plan = analyze_preview(
         _package(
@@ -193,8 +195,8 @@ def test_preview_blocks_old_snapshot_binding_mismatch_unknown_code_and_hash_conf
         "SOURCE_BINDING_ACCOUNT_CONFLICT",
         "UNKNOWN_FUND_CODE",
         "SOURCE_TRANSACTION_HASH_CONFLICT",
-        "REVIEW_REQUIRED_RECORDS",
     }
+    assert "REVIEW_REQUIRED_RECORDS" in plan.warnings
     unknown = [
         record
         for record in plan.source_records
@@ -203,6 +205,46 @@ def test_preview_blocks_old_snapshot_binding_mismatch_unknown_code_and_hash_conf
     ]
     assert len(unknown) == 1
     assert unknown[0].validation_errors == ("UNKNOWN_FUND_CODE",)
+
+
+def test_unknown_fund_remains_visible_as_a_conflict_in_balanced_summary() -> None:
+    plan = analyze_preview(
+        _package([_position("999999")]),
+        _context(resolved_funds={}),
+        target_account_id="account-1",
+    )
+
+    assert len(plan.items) == 1
+    assert plan.items[0].instrument_id is None
+    assert plan.items[0].product_code == "999999"
+    assert plan.items[0].product_name == "来源名称-999999"
+    assert plan.items[0].comparison_status == "CONFLICT"
+    assert plan.summary == {
+        "new": 0,
+        "unchanged": 0,
+        "changed": 0,
+        "closed": 0,
+        "conflict": 1,
+    }
+    assert sum(plan.summary.values()) == len(plan.items)
+    assert plan.can_confirm is False
+
+
+def test_review_required_history_warns_without_hiding_a_valid_snapshot() -> None:
+    plan = analyze_preview(
+        _package(
+            [_position("110022")],
+            review_required=({"reason": "UNKNOWN_BUSINESS"},),
+        ),
+        _context(),
+        target_account_id="account-1",
+    )
+
+    assert len(plan.items) == 1
+    assert plan.items[0].comparison_status == "NEW"
+    assert plan.can_confirm is True
+    assert "REVIEW_REQUIRED_RECORDS" in plan.warnings
+    assert "REVIEW_REQUIRED_RECORDS" not in plan.blocking_errors
 
 
 def test_partial_history_warns_but_does_not_block_an_otherwise_valid_preview() -> None:
@@ -224,7 +266,9 @@ def test_same_source_transaction_hash_is_classified_as_duplicate() -> None:
     transaction = _transaction("tx-1")
     plan = analyze_preview(
         _package([_position("110022")], [transaction]),
-        _context(confirmed_transaction_hashes={"tx-1": source_record_hash(transaction)}),
+        _context(
+            confirmed_transaction_hashes={"tx-1": source_record_hash(transaction)}
+        ),
         target_account_id="account-1",
     )
 
@@ -239,7 +283,9 @@ async def _tx(_pool, _user_id, _tenant_id):
 
 
 @pytest.mark.asyncio
-async def test_viewer_is_rejected_before_package_parser_or_transaction(tmp_path: Path) -> None:
+async def test_viewer_is_rejected_before_package_parser_or_transaction(
+    tmp_path: Path,
+) -> None:
     package_path = tmp_path / "upload.zip"
     package_path.write_bytes(b"not parsed")
     ctx = TenantContext("viewer-1", "tenant-1", tenant_role="VIEWER")
@@ -310,7 +356,10 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
     )
 
     with (
-        patch("backend.portfolio.imports.service.parse_tiantian_package", return_value=package),
+        patch(
+            "backend.portfolio.imports.service.parse_tiantian_package",
+            return_value=package,
+        ),
         patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
         patch(
             "backend.portfolio.imports.service.repository.find_preview_by_idempotency",
@@ -329,6 +378,10 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
             AsyncMock(return_value="b" * 64),
         ),
         patch("backend.portfolio.imports.service.repository.persist_preview", persist),
+        patch(
+            "backend.portfolio.imports.service.portfolio_service.verify_fund_master_names",
+            AsyncMock(return_value={}),
+        ),
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
     ):
         result = await preview_tiantian_import(
@@ -366,6 +419,102 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_preview_verifies_and_creates_missing_fund_master_before_comparison(
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "upload.zip"
+    package_path.write_bytes(b"synthetic")
+    package = _package([_position("999999")])
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    target = TargetAccount(
+        account_id="account-1",
+        binding_id=None,
+        binding_status=None,
+        binding_account_id=None,
+    )
+    upsert = AsyncMock(return_value="fund-999999")
+
+    async def load_context(*_args, **_kwargs):
+        resolved = (
+            {
+                "999999": {
+                    "instrument_id": "fund-999999",
+                    "canonical_name": "权威基金名称",
+                }
+            }
+            if upsert.await_count
+            else {}
+        )
+        return _context(resolved_funds=resolved)
+
+    with (
+        patch(
+            "backend.portfolio.imports.service.parse_tiantian_package",
+            return_value=package,
+        ),
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch(
+            "backend.portfolio.imports.service.repository.find_preview_by_idempotency",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.resolve_target_account",
+            AsyncMock(return_value=target),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.load_preview_context",
+            side_effect=load_context,
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.account_fact_hash",
+            AsyncMock(return_value="b" * 64),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.persist_preview",
+            AsyncMock(
+                return_value={
+                    "batch_id": "batch-1",
+                    "binding_id": "binding-1",
+                    "item_ids": ["item-1"],
+                }
+            ),
+        ),
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()),
+        patch(
+            "backend.portfolio.service._load_search_dataset",
+            AsyncMock(return_value=[{"symbol": "999999", "name": "权威基金名称"}]),
+        ),
+        patch("backend.portfolio.repository.upsert_instrument", upsert),
+    ):
+        result = await preview_tiantian_import(
+            MagicMock(),
+            ctx,
+            package_path,
+            account_id="account-1",
+            account_name=None,
+            idempotency_key="preview-fund-master",
+        )
+
+    assert result["summary"] == {
+        "total": 1,
+        "new": 1,
+        "unchanged": 0,
+        "changed": 0,
+        "closed": 0,
+        "conflict": 0,
+    }
+    assert result["positions"][0]["name"] == "权威基金名称"
+    assert result["canConfirm"] is True
+    upsert.assert_awaited_once_with(
+        ANY,
+        ticker="999999",
+        name="权威基金名称",
+        asset_type="OFF_EXCHANGE_FUND",
+        primary_market="FUND_CN",
+    )
+
+
+@pytest.mark.asyncio
 async def test_account_target_fields_are_mutually_exclusive(tmp_path: Path) -> None:
     ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
 
@@ -391,7 +540,9 @@ def _confirmation_item(status: str, *, item_id: str = "item-1") -> ConfirmationI
     )
 
 
-def test_effect_plan_replaces_only_changed_funds_and_never_models_source_trades() -> None:
+def test_effect_plan_replaces_only_changed_funds_and_never_models_source_trades() -> (
+    None
+):
     effects = build_ledger_effects(
         [
             _confirmation_item("NEW", item_id="new"),
@@ -421,7 +572,9 @@ def test_effect_plan_replaces_only_changed_funds_and_never_models_source_trades(
 
 
 @pytest.mark.asyncio
-async def test_first_confirmation_rebuilds_inside_transaction_and_returns_pending_metrics() -> None:
+async def test_first_confirmation_rebuilds_inside_transaction_and_returns_pending_metrics() -> (
+    None
+):
     ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
     confirm = AsyncMock(
         return_value={
@@ -491,7 +644,9 @@ async def test_replayed_confirmation_does_not_rebuild_or_write_a_second_audit() 
     with (
         patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
         patch("backend.portfolio.imports.service.repository.confirm_draft", confirm),
-        patch("backend.portfolio.service.recompute_projections", AsyncMock()) as recompute,
+        patch(
+            "backend.portfolio.service.recompute_projections", AsyncMock()
+        ) as recompute,
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
     ):
         await confirm_tiantian_import(
@@ -509,7 +664,9 @@ async def test_replayed_confirmation_does_not_rebuild_or_write_a_second_audit() 
 
 
 @pytest.mark.asyncio
-async def test_draft_cancellation_is_terminal_and_has_no_projection_side_effect() -> None:
+async def test_draft_cancellation_is_terminal_and_has_no_projection_side_effect() -> (
+    None
+):
     ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
     cancel = AsyncMock(
         return_value={"batch_id": "batch-1", "version": 2, "already_applied": False}
@@ -542,7 +699,9 @@ async def test_confirmation_failure_writes_neither_projection_nor_audit() -> Non
             "backend.portfolio.imports.service.repository.confirm_draft",
             AsyncMock(side_effect=VersionConflictError("stale")),
         ),
-        patch("backend.portfolio.service.recompute_projections", AsyncMock()) as recompute,
+        patch(
+            "backend.portfolio.service.recompute_projections", AsyncMock()
+        ) as recompute,
         patch("backend.portfolio.imports.service.write_audit", AsyncMock()) as audit,
     ):
         with pytest.raises(VersionConflictError):

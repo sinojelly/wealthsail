@@ -98,9 +98,7 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
             "lowDate": _date_text(_row_value(row, "period_low_date")),
             "fromHighPct": _decimal_text(_row_value(row, "from_high_pct")),
             "fromLowPct": _decimal_text(_row_value(row, "from_low_pct")),
-            "rangePositionPct": _decimal_text(
-                _row_value(row, "range_position_pct")
-            ),
+            "rangePositionPct": _decimal_text(_row_value(row, "range_position_pct")),
             "status": str(calculation_status),
             "qualityReasons": list(_row_value(row, "quality_reasons", []) or []),
             # This is the official current-NAV disclosure date, not the API
@@ -110,7 +108,9 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
     )
 
 
-async def get_summary(conn: asyncpg.Connection, tenant_id: str, as_of: datetime) -> dict:
+async def get_summary(
+    conn: asyncpg.Connection, tenant_id: str, as_of: datetime
+) -> dict:
     """Aggregate the latest per-account NAV snapshots into the dashboard summary."""
     navs = await repository.latest_nav_per_account(conn, tenant_id)
     if not navs:
@@ -136,11 +136,12 @@ async def get_summary(conn: asyncpg.Connection, tenant_id: str, as_of: datetime)
         }
 
     complete = all(r["total_nav"] is not None for r in navs)
-    total_asset = (
-        sum((_d(r["total_nav"]) for r in navs), ZERO) if complete else None
-    )
+    total_asset = sum((_d(r["total_nav"]) for r in navs), ZERO) if complete else None
     known_value = sum(
-        (_d(r.get("known_value") if hasattr(r, "get") else r["known_value"]) for r in navs),
+        (
+            _d(r.get("known_value") if hasattr(r, "get") else r["known_value"])
+            for r in navs
+        ),
         ZERO,
     )
     cash = sum((_d(r["cash_balance"]) for r in navs), ZERO)
@@ -211,7 +212,9 @@ def _build_allocation(
         {
             "category": category,
             "amount": fmt_money(amount),
-            "value": fmt_money(pct(amount, total_asset)) if total_asset is not None else None,
+            "value": fmt_money(pct(amount, total_asset))
+            if total_asset is not None
+            else None,
         }
         for category, amount in sorted(
             by_category.items(), key=lambda kv: kv[1], reverse=True
@@ -243,7 +246,9 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
         quantity = _d(row["quantity"])
         avg_cost = _d(row["avg_cost"])
         price = row["market_price"]
-        market_value = _d(row["market_value"]) if row["market_value"] is not None else None
+        market_value = (
+            _d(row["market_value"]) if row["market_value"] is not None else None
+        )
         pnl = row["unrealized_pnl"]
 
         if market_value is None and price is not None:
@@ -262,7 +267,9 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
                 "quantity": fmt_qty(quantity),
                 "avgCost": fmt_money(avg_cost),
                 "price": fmt_money(_d(price)) if price is not None else None,
-                "marketValue": fmt_money(market_value) if market_value is not None else None,
+                "marketValue": fmt_money(market_value)
+                if market_value is not None
+                else None,
                 "weight": (
                     fmt_money(pct(market_value, total_asset))
                     if market_value is not None and total_asset is not None
@@ -347,7 +354,13 @@ def _primary_market(asset_type: str, symbol: str) -> str:
     return "SZSE"
 
 
-async def _load_search_dataset(cache_key: str, fetcher) -> list[dict[str, str]]:
+async def _load_search_dataset(
+    cache_key: str,
+    fetcher,
+    *,
+    code_column: str = "代码",
+    name_column: str = "名称",
+) -> list[dict[str, str]]:
     """Load one Provider master dataset with per-key TTL and single-flight.
 
     Search terms are applied after this cache boundary. Thus ten keystrokes do
@@ -363,15 +376,19 @@ async def _load_search_dataset(cache_key: str, fetcher) -> list[dict[str, str]]:
         if cached is not None and cached[0] > loop.time():
             return cached[1]
         df = await asyncio.wait_for(asyncio.to_thread(fetcher), timeout=15)
-        if df is None or df.empty or not {"代码", "名称"}.issubset(df.columns):
+        if (
+            df is None
+            or df.empty
+            or not {code_column, name_column}.issubset(df.columns)
+        ):
             return []
         rows = [
             {
-                "symbol": str(row["代码"]).strip().zfill(6),
-                "name": str(row["名称"]).strip(),
+                "symbol": str(row[code_column]).strip().zfill(6),
+                "name": str(row[name_column]).strip(),
             }
             for _, row in df.iterrows()
-            if str(row["代码"]).strip()
+            if str(row[code_column]).strip()
         ]
         _SEARCH_DATASET_CACHE[cache_key] = (
             loop.time() + _SEARCH_DATASET_TTL_SECONDS,
@@ -397,11 +414,25 @@ async def _ak_search(keyword: str) -> list[dict]:
     def _market(code: str) -> str:
         return _primary_market("CN_STOCK", code)
 
-    async def _run(cache_key: str, fetcher, asset_type: str, market_fn) -> None:
+    async def _run(
+        cache_key: str,
+        fetcher,
+        asset_type: str,
+        market_fn,
+        *,
+        code_column: str = "代码",
+        name_column: str = "名称",
+    ) -> None:
         try:
-            rows = await _load_search_dataset(cache_key, fetcher)
+            rows = await _load_search_dataset(
+                cache_key,
+                fetcher,
+                code_column=code_column,
+                name_column=name_column,
+            )
             matched = [
-                row for row in rows
+                row
+                for row in rows
                 if kw in row["symbol"] or kw.casefold() in row["name"].casefold()
             ][:10]
             for row in matched:
@@ -422,14 +453,47 @@ async def _ak_search(keyword: str) -> list[dict]:
     await asyncio.gather(
         _run("stock_zh_a_spot_em", lambda: ak.stock_zh_a_spot_em(), "STOCK", _market),
         _run("fund_etf_spot_em", lambda: ak.fund_etf_spot_em(), "ETF", _market),
-        _run("fund_name_em", lambda: ak.fund_name_em(), "FUND", lambda _code: "FUND_CN"),
+        _run(
+            "fund_name_em",
+            lambda: ak.fund_name_em(),
+            "FUND",
+            lambda _code: "FUND_CN",
+            code_column="基金代码",
+            name_column="基金简称",
+        ),
     )
     return list(results.values())
 
 
-async def search_instruments(
-    pool: asyncpg.Pool, ctx, keyword: str
-) -> dict:
+async def verify_fund_master_names(product_codes: list[str]) -> dict[str, str]:
+    """Return Provider-verified names for exact off-exchange fund codes.
+
+    Missing entries represent unavailable or unknown Provider data. Callers
+    can keep those source positions visible as blocking conflicts without
+    trusting an uploaded display name or failing the whole preview request.
+    """
+    codes = set(product_codes)
+    if not codes:
+        return {}
+    try:
+        import akshare as ak  # noqa: PLC0415
+
+        rows = await _load_search_dataset(
+            "fund_name_em",
+            lambda: ak.fund_name_em(),
+            code_column="基金代码",
+            name_column="基金简称",
+        )
+    except Exception:  # noqa: BLE001 - unresolved codes stay visible and blocking
+        return {}
+    return {
+        row["symbol"]: row["name"]
+        for row in rows
+        if row["symbol"] in codes and row["name"]
+    }
+
+
+async def search_instruments(pool: asyncpg.Pool, ctx, keyword: str) -> dict:
     """Search stocks/ETFs/funds by Chinese name or 6-digit code.
 
     Local instrument master first, then AkShare realtime enrichment

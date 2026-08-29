@@ -24,6 +24,7 @@ from backend.portfolio.imports.service import (
     LedgerEffect,
     PreviewItem,
     PreviewPlan,
+    PreviewSourceRecord,
 )
 
 
@@ -31,6 +32,7 @@ class _RecordingConnection:
     def __init__(self) -> None:
         self.sql: list[str] = []
         self.fetchval_results = iter(["batch-1", "binding-1"])
+        self.executemany_calls: list[tuple[str, list[tuple]]] = []
 
     async def execute(self, sql: str, *_args):
         self.sql.append(sql)
@@ -40,8 +42,9 @@ class _RecordingConnection:
         self.sql.append(sql)
         return next(self.fetchval_results)
 
-    async def executemany(self, sql: str, _rows):
+    async def executemany(self, sql: str, rows):
         self.sql.append(sql)
+        self.executemany_calls.append((sql, list(rows)))
 
 
 def _plan() -> PreviewPlan:
@@ -114,6 +117,97 @@ async def test_persist_preview_writes_draft_tables_and_never_ledger_events() -> 
     assert len(result["item_ids"]) == 1
 
 
+@pytest.mark.asyncio
+async def test_persist_preview_keeps_unknown_fund_out_of_instrument_items() -> None:
+    conn = _RecordingConnection()
+    package = SimpleNamespace(
+        manifest=SimpleNamespace(
+            schema_version="wealthsail-tiantian-import/v2",
+            collector_version="0.2.0",
+            positions_as_of=datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
+            external_account_key="1f8a8407-9d91-4a1d-b954-9ad46fbd9585",
+            source_window_start=datetime.fromisoformat("2020-01-01T00:00:00").date(),
+            source_window_end=datetime.fromisoformat("2026-08-28T00:00:00").date(),
+        ),
+        review_required=(),
+        excluded_summary=SimpleNamespace(cash_management=0, non_posting=0),
+    )
+    source_payload = {
+        "sourceProvider": "TIANTIAN_FUND",
+        "sourceRecordId": "holding-999999",
+        "productCode": "999999",
+        "productName": "来源基金",
+        "quantity": "100",
+        "averageCost": "1.2",
+        "costAmount": "120",
+        "marketValue": "130",
+        "capturedAt": "2026-08-28T08:00:00+08:00",
+    }
+    plan = PreviewPlan(
+        items=(
+            PreviewItem(
+                instrument_id=None,
+                product_code="999999",
+                product_name="来源基金",
+                external_record_id="holding-999999",
+                quantity=Decimal("100"),
+                unit_cost=Decimal("1.2"),
+                market_value=Decimal("130"),
+                source_nav=None,
+                source_nav_date=None,
+                comparison_status="CONFLICT",
+                candidate_holding_started_on=None,
+                holding_start_status="INSUFFICIENT_DATA",
+                source_payload=source_payload,
+            ),
+        ),
+        source_records=(
+            PreviewSourceRecord(
+                record_type="POSITION_SNAPSHOT",
+                external_record_id="holding-999999",
+                instrument_id=None,
+                occurred_at=datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
+                classification="UNKNOWN_FUND_CODE",
+                normalized_payload=source_payload,
+                content_hash="a" * 64,
+                validation_status="INVALID",
+                validation_errors=("UNKNOWN_FUND_CODE",),
+            ),
+        ),
+        warnings=(),
+        blocking_errors=("UNKNOWN_FUND_CODE",),
+        history_importable=0,
+        history_duplicated=0,
+        can_confirm=False,
+    )
+
+    result = await persist_preview(
+        conn,
+        tenant_id="tenant-1",
+        account_id="account-1",
+        created_by="user-1",
+        binding_id=None,
+        package=package,
+        package_content_hash="b" * 64,
+        target_account_state_hash="c" * 64,
+        idempotency_key="preview-unknown",
+        account_display_name="天天基金账户",
+        plan=plan,
+    )
+
+    item_rows = next(
+        rows for sql, rows in conn.executemany_calls if "portfolio_import_items" in sql
+    )
+    source_rows = next(
+        rows
+        for sql, rows in conn.executemany_calls
+        if "portfolio_import_source_records" in sql
+    )
+    assert item_rows == []
+    assert len(source_rows) == 1
+    assert result["item_ids"] == ["unresolved:holding-999999"]
+
+
 class _ReadConnection:
     def __init__(self, *, status: str = "DRAFT", job_status: str = "RUNNING") -> None:
         self.status = status
@@ -151,39 +245,45 @@ class _ReadConnection:
 
     async def fetch(self, sql: str, *_args):
         if "portfolio_import_items" in sql:
-            return [{
-                "item_id": "item-1",
-                "instrument_id": "fund-1",
-                "source_symbol": "110022",
-                "canonical_name": "标准基金",
-                "quantity": Decimal("100"),
-                "unit_cost": Decimal("1.20"),
-                "source_market_value": Decimal("130"),
-                "source_nav": None,
-                "source_nav_date": None,
-                "comparison_status": "NEW",
-                "candidate_holding_started_on": None,
-                "holding_start_status": "INSUFFICIENT_DATA",
+            return [
+                {
+                    "item_id": "item-1",
+                    "instrument_id": "fund-1",
+                    "source_symbol": "110022",
+                    "canonical_name": "标准基金",
+                    "quantity": Decimal("100"),
+                    "unit_cost": Decimal("1.20"),
+                    "source_market_value": Decimal("130"),
+                    "source_nav": None,
+                    "source_nav_date": None,
+                    "comparison_status": "NEW",
+                    "candidate_holding_started_on": None,
+                    "holding_start_status": "INSUFFICIENT_DATA",
+                    "validation_status": "VALID",
+                    "validation_errors": "[]",
+                }
+            ]
+        if "portfolio_import_source_records" in sql:
+            return []
+        return [
+            {
+                "batch_id": "batch-1",
+                "status": "DRAFT",
+                "version": 1,
+                "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
+                "preview_summary": {
+                    "positionCounts": {"total": 1, "new": 1},
+                    "history": {"importable": 0, "duplicated": 0, "reviewRequired": 0},
+                    "excluded": {"cashManagement": 10, "nonPosting": 2},
+                    "sourceWindow": {"start": "2020-01-01", "end": "2026-08-28"},
+                    "warnings": ["PARTIAL_HISTORY"],
+                },
                 "validation_status": "VALID",
-                "validation_errors": "[]",
-            }]
-        return [{
-            "batch_id": "batch-1",
-            "status": "DRAFT",
-            "version": 1,
-            "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
-            "preview_summary": {
-                "positionCounts": {"total": 1, "new": 1},
-                "history": {"importable": 0, "duplicated": 0, "reviewRequired": 0},
-                "excluded": {"cashManagement": 10, "nonPosting": 2},
-                "sourceWindow": {"start": "2020-01-01", "end": "2026-08-28"},
-                "warnings": ["PARTIAL_HISTORY"],
-            },
-            "validation_status": "VALID",
-            "account_id": "account-1",
-            "account_name": "天天基金账户",
-            "created_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
-        }]
+                "account_id": "account-1",
+                "account_name": "天天基金账户",
+                "created_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
+            }
+        ]
 
 
 @pytest.mark.asyncio
@@ -222,6 +322,56 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
         "batch-1",
     )
     assert confirmed["metricsStatus"] == "PENDING"
+
+
+class _UnresolvedReadConnection(_ReadConnection):
+    async def fetch(self, sql: str, *_args):
+        if "portfolio_import_items" in sql:
+            return []
+        if "portfolio_import_source_records" in sql:
+            return [
+                {
+                    "source_record_id": "source-1",
+                    "external_record_id": "holding-999999",
+                    "normalized_payload": {
+                        "productCode": "999999",
+                        "productName": "来源基金",
+                        "quantity": "100",
+                        "averageCost": "1.2",
+                        "marketValue": "130",
+                        "latestNav": "1.3",
+                        "latestNavDate": "2026-08-27",
+                    },
+                    "validation_status": "INVALID",
+                    "validation_errors": ["UNKNOWN_FUND_CODE"],
+                }
+            ]
+        return await super().fetch(sql, *_args)
+
+
+@pytest.mark.asyncio
+async def test_get_batch_restores_unknown_fund_as_visible_conflict() -> None:
+    conn = _UnresolvedReadConnection()
+    detail = await get_import_batch(conn, "tenant-1", "batch-1")
+
+    assert detail["positions"] == [
+        {
+            "itemId": "unresolved:source-1",
+            "instrumentId": None,
+            "symbol": "999999",
+            "name": "来源基金",
+            "quantity": "100",
+            "unitCost": "1.2",
+            "marketValue": "130",
+            "sourceNav": "1.3",
+            "sourceNavDate": "2026-08-27",
+            "comparisonStatus": "CONFLICT",
+            "candidateHoldingStartedOn": None,
+            "holdingStartStatus": "INSUFFICIENT_DATA",
+            "validationStatus": "INVALID",
+            "validationErrors": ["UNKNOWN_FUND_CODE"],
+        }
+    ]
 
 
 class _RetryMetricsConnection:
@@ -280,18 +430,22 @@ class _FirstBindingConflictConnection:
     async def fetch(self, sql: str, *_args):
         self.fetch_count += 1
         if self.fetch_count == 1:
-            return [{
-                "product_code": "110022",
-                "instrument_id": "fund-1",
-                "canonical_name": "标准基金",
-            }]
+            return [
+                {
+                    "product_code": "110022",
+                    "instrument_id": "fund-1",
+                    "canonical_name": "标准基金",
+                }
+            ]
         assert "ledger_legs" in sql
         assert "$4::uuid IS NULL OR" in sql
         return [{"instrument_id": "fund-1"}]
 
 
 @pytest.mark.asyncio
-async def test_first_binding_treats_existing_manual_account_facts_as_conflicts() -> None:
+async def test_first_binding_treats_existing_manual_account_facts_as_conflicts() -> (
+    None
+):
     context = await load_preview_context(
         _FirstBindingConflictConnection(),
         tenant_id="tenant-1",
@@ -322,7 +476,9 @@ class _EffectConnection:
 
 
 @pytest.mark.asyncio
-async def test_effect_writer_emits_reversal_without_leg_and_adjustment_with_one_leg() -> None:
+async def test_effect_writer_emits_reversal_without_leg_and_adjustment_with_one_leg() -> (
+    None
+):
     conn = _EffectConnection()
     item = ConfirmationItem(
         item_id="item-1",
@@ -407,7 +563,9 @@ async def test_confirm_command_replays_exact_terminal_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_same_confirm_key_with_different_decisions_is_an_idempotency_conflict() -> None:
+async def test_same_confirm_key_with_different_decisions_is_an_idempotency_conflict() -> (
+    None
+):
     with pytest.raises(IdempotencyConflictError):
         await confirm_draft(
             _TerminalConnection(_terminal_batch()),

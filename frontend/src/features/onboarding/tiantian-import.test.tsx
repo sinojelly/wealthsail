@@ -215,7 +215,73 @@ it("renders complete preview counts, three tabs and blocks conflicts", async () 
   ).toBeInTheDocument();
   await user.click(within(dialog).getByRole("tab", { name: "问题与提示" }));
   expect(
-    within(dialog).getByText("ACCOUNT_LEDGER_CONFLICT"),
+    within(dialog).getByText(
+      "目标账户中存在其他来源的持仓事实，需要先处理账户冲突",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("button", { name: "确认写入持仓基线" }),
+  ).toBeDisabled();
+});
+
+it("keeps an unresolved fund visible and explains the blocking conflict", async () => {
+  mocks.preview.mockResolvedValue(
+    preview({
+      summary: {
+        total: 1,
+        new: 0,
+        unchanged: 0,
+        changed: 0,
+        closed: 0,
+        conflict: 1,
+      },
+      positions: [
+        {
+          itemId: "unresolved:holding-999999",
+          instrumentId: null,
+          symbol: "999999",
+          name: "来源基金名称",
+          quantity: "100.00",
+          unitCost: "1.20",
+          marketValue: "130.00",
+          comparisonStatus: "CONFLICT",
+          candidateHoldingStartedOn: null,
+          holdingStartStatus: "INSUFFICIENT_DATA",
+          validationStatus: "INVALID",
+          validationErrors: ["UNKNOWN_FUND_CODE"],
+        },
+      ],
+      blockingErrors: ["UNKNOWN_FUND_CODE"],
+      warnings: [],
+      canConfirm: false,
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithSession(<TiantianImportWizard />);
+
+  await user.upload(
+    screen.getByLabelText("天天基金 ZIP 导入包"),
+    new File(["PK\u0003\u0004payload"], "snapshot.zip", {
+      type: "application/zip",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "解析并预览" }));
+
+  const dialog = await screen.findByRole("dialog", {
+    name: "导入或更新天天基金持仓",
+  });
+  expect(within(dialog).getByText("持仓 1")).toBeInTheDocument();
+  expect(within(dialog).getByText("冲突 1")).toBeInTheDocument();
+  expect(within(dialog).getByText("来源基金名称")).toBeInTheDocument();
+  expect(within(dialog).getByText("999999")).toBeInTheDocument();
+  expect(within(dialog).getByText("份额 100.00")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("基金代码未通过权威主数据核验，暂不能导入"),
+  ).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("tab", { name: "问题与提示" }));
+  expect(
+    within(dialog).getByText("部分基金代码未通过权威主数据核验，请稍后重试"),
   ).toBeInTheDocument();
   expect(
     within(dialog).getByRole("button", { name: "确认写入持仓基线" }),
