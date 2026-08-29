@@ -48,6 +48,30 @@ async def find_preview_by_idempotency(
     )
 
 
+async def find_active_preview_by_package(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    binding_id: str,
+    package_content_hash: str,
+) -> asyncpg.Record | None:
+    """Return the non-cancelled import protected by the package unique index."""
+    return await conn.fetchrow(
+        """
+        SELECT id AS batch_id
+          FROM ledger.portfolio_import_batches
+         WHERE tenant_id = $1
+           AND source_binding_id = $2
+           AND package_content_hash = $3
+           AND source_type = 'TIANTIAN_FUND_ZIP'
+           AND status <> 'CANCELLED'
+        """,
+        tenant_id,
+        binding_id,
+        package_content_hash,
+    )
+
+
 async def resolve_target_account(
     conn: asyncpg.Connection,
     *,

@@ -563,6 +563,84 @@ async def test_valid_preview_persists_only_a_recoverable_draft(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_reuploading_same_package_restores_active_draft(tmp_path: Path) -> None:
+    package_path = tmp_path / "upload.zip"
+    package_path.write_bytes(b"same-package")
+    package = _package([_position("110022")], [_transaction("tx-1")])
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    target = TargetAccount(
+        account_id="account-1",
+        binding_id="binding-1",
+        binding_status="ACTIVE",
+        binding_account_id="account-1",
+    )
+    existing_preview = {
+        "batchId": "batch-existing",
+        "status": "DRAFT",
+        "version": 1,
+        "canConfirm": True,
+    }
+
+    with (
+        patch(
+            "backend.portfolio.imports.service.parse_tiantian_package",
+            return_value=package,
+        ),
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch(
+            "backend.portfolio.imports.service.repository.find_preview_by_idempotency",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.resolve_target_account",
+            AsyncMock(return_value=target),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.find_active_preview_by_package",
+            AsyncMock(return_value={"batch_id": "batch-existing"}),
+            create=True,
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.get_import_batch",
+            AsyncMock(return_value=existing_preview),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.load_preview_context",
+            AsyncMock(return_value=_context()),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.account_fact_hash",
+            AsyncMock(return_value="b" * 64),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.persist_preview",
+            AsyncMock(
+                return_value={
+                    "batch_id": "batch-new",
+                    "binding_id": "binding-1",
+                    "item_ids": ["item-new"],
+                }
+            ),
+        ),
+        patch(
+            "backend.portfolio.imports.service.portfolio_service.verify_fund_master_names",
+            AsyncMock(return_value={}),
+        ),
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()),
+    ):
+        result = await preview_tiantian_import(
+            MagicMock(),
+            ctx,
+            package_path,
+            account_id="account-1",
+            account_name=None,
+            idempotency_key="preview-retry-with-new-key",
+        )
+
+    assert result == existing_preview
+
+
+@pytest.mark.asyncio
 async def test_preview_verifies_and_creates_missing_fund_master_before_comparison(
     tmp_path: Path,
 ) -> None:

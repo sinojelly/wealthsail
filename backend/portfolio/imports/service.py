@@ -727,6 +727,19 @@ async def preview_tiantian_import(
             account_id=account_id,
             account_name=account_name,
         )
+        if target.binding_id is not None:
+            active_preview = await repository.find_active_preview_by_package(
+                conn,
+                tenant_id=ctx.tenant_id,
+                binding_id=target.binding_id,
+                package_content_hash=content_hash,
+            )
+            if active_preview is not None:
+                return await repository.get_import_batch(
+                    conn,
+                    ctx.tenant_id,
+                    str(active_preview["batch_id"]),
+                )
         context = await repository.load_preview_context(
             conn,
             tenant_id=ctx.tenant_id,
