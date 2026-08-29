@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import asyncpg
 
@@ -24,13 +24,46 @@ from backend.portfolio import repository as portfolio_repository
 from backend.portfolio import service as portfolio_service
 from backend.portfolio.imports import repository
 from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
-from backend.portfolio.imports.freshness import PREVIEW_ENGINE_VERSION
+from backend.portfolio.imports.freshness import PREVIEW_ENGINE_VERSION, available_actions
 from backend.portfolio.imports.package import ImportLimits, parse_tiantian_package
 from backend.portfolio.imports.tiantian import (
     TiantianPackage,
     TiantianPosition,
     TiantianTransaction,
 )
+
+DuplicatePolicy = Literal["AUTO", "RESTORE", "REPARSE"]
+PreviewDisposition = Literal[
+    "CREATED",
+    "RESTORED_DRAFT",
+    "ALREADY_CONFIRMED",
+    "REPARSED",
+    "USER_DECISION_REQUIRED",
+]
+
+
+def choose_duplicate_action(
+    *,
+    policy: DuplicatePolicy,
+    status: str,
+    freshness: str,
+    validation_status: str,
+    binding_status: str | None,
+) -> PreviewDisposition:
+    """Choose a deterministic duplicate response without mutating old facts."""
+    if status == "CONFIRMED":
+        return "ALREADY_CONFIRMED"
+    if status != "DRAFT":
+        raise VersionConflictError("活动重复批次状态不支持恢复")
+    if policy == "REPARSE":
+        return "REPARSED"
+    if policy == "RESTORE":
+        if freshness != "FRESH" or binding_status == "DISABLED":
+            raise VersionConflictError("DRAFT_RESTORE_NOT_ALLOWED")
+        return "RESTORED_DRAFT"
+    if validation_status != "VALID" or binding_status == "DISABLED":
+        return "USER_DECISION_REQUIRED"
+    return "RESTORED_DRAFT" if freshness == "FRESH" else "REPARSED"
 
 @dataclass(frozen=True, slots=True)
 class ExistingBaseline:
@@ -591,13 +624,24 @@ def _preview_response(
     package: TiantianPackage | Any,
     plan: PreviewPlan,
     item_ids: list[str],
+    disposition: PreviewDisposition,
+    supersedes_batch_id: str | None = None,
 ) -> dict[str, Any]:
     if len(item_ids) != len(plan.items):
         raise RuntimeError("persisted preview item ids do not match analyzed positions")
+    binding_status = target.binding_status or "PENDING"
+    validation_status = "VALID" if plan.can_confirm else "INVALID"
+    actions = available_actions(
+        status="DRAFT",
+        validation_status=validation_status,
+        freshness="FRESH",
+        binding_status=binding_status,
+    )
     return {
         "batchId": batch_id,
         "status": "DRAFT",
         "version": 1,
+        "previewDisposition": disposition,
         "sourceAsOf": package.manifest.positions_as_of.isoformat(),
         "package": {
             "schemaVersion": package.manifest.schema_version,
@@ -608,7 +652,7 @@ def _preview_response(
         },
         "sourceBinding": {
             "bindingId": binding_id,
-            "status": target.binding_status or "PENDING",
+            "status": binding_status,
             "accountId": target.account_id,
             "displayName": target.account_display_name,
         },
@@ -660,7 +704,13 @@ def _preview_response(
         },
         "warnings": list(plan.warnings),
         "blockingErrors": list(plan.blocking_errors),
-        "canConfirm": plan.can_confirm,
+        "validationStatus": validation_status,
+        "freshness": "FRESH",
+        "freshnessReasons": [],
+        "availableActions": list(actions),
+        "canConfirm": "CONFIRM" in actions,
+        "terminalReason": None,
+        "supersedesBatchId": supersedes_batch_id,
     }
 
 
@@ -674,6 +724,7 @@ async def preview_tiantian_import(
     *,
     limits: ImportLimits | None = None,
     provider_timeout_seconds: float = 30.0,
+    duplicate_policy: DuplicatePolicy = "AUTO",
 ) -> dict[str, Any]:
     """Parse outside the DB, then atomically persist a recoverable DRAFT preview."""
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
@@ -703,11 +754,19 @@ async def preview_tiantian_import(
         if prior is not None:
             if prior["package_content_hash"] != content_hash:
                 raise IdempotencyConflictError("相同 Idempotency-Key 对应了不同导入包")
-            return await repository.get_import_batch(
+            replayed = await repository.get_import_batch(
                 conn,
                 ctx.tenant_id,
                 str(prior["batch_id"]),
             )
+            replayed["previewDisposition"] = (
+                "ALREADY_CONFIRMED"
+                if replayed["status"] == "CONFIRMED"
+                else "RESTORED_DRAFT"
+                if replayed["status"] == "DRAFT"
+                else "USER_DECISION_REQUIRED"
+            )
+            return replayed
 
         for product_code, canonical_name in verified_fund_names.items():
             await portfolio_repository.upsert_instrument(
@@ -725,6 +784,8 @@ async def preview_tiantian_import(
             account_id=account_id,
             account_name=account_name,
         )
+        old_detail: dict[str, Any] | None = None
+        duplicate_action: PreviewDisposition | None = None
         if target.binding_id is not None:
             active_preview = await repository.find_active_preview_by_package(
                 conn,
@@ -733,11 +794,21 @@ async def preview_tiantian_import(
                 package_content_hash=content_hash,
             )
             if active_preview is not None:
-                return await repository.get_import_batch(
+                old_detail = await repository.get_import_batch(
                     conn,
                     ctx.tenant_id,
                     str(active_preview["batch_id"]),
                 )
+                duplicate_action = choose_duplicate_action(
+                    policy=duplicate_policy,
+                    status=str(old_detail["status"]),
+                    freshness=str(old_detail["freshness"]),
+                    validation_status=str(old_detail["validationStatus"]),
+                    binding_status=str(old_detail["sourceBinding"]["status"]),
+                )
+                if duplicate_action != "REPARSED":
+                    old_detail["previewDisposition"] = duplicate_action
+                    return old_detail
         context = await repository.load_preview_context(
             conn,
             tenant_id=ctx.tenant_id,
@@ -759,25 +830,60 @@ async def preview_tiantian_import(
             tenant_id=ctx.tenant_id,
             account_id=target.account_id,
         )
-        persisted = await repository.persist_preview(
-            conn,
-            tenant_id=ctx.tenant_id,
-            account_id=target.account_id,
-            created_by=ctx.user_id,
-            binding_id=target.binding_id,
-            package=package,
-            package_content_hash=content_hash,
-            target_account_state_hash=account_state_hash,
-            idempotency_key=idempotency_key,
-            account_display_name=target.account_display_name,
-            plan=plan,
-        )
+        if old_detail is not None:
+            if duplicate_policy == "AUTO" and not plan.can_confirm:
+                old_detail["previewDisposition"] = "USER_DECISION_REQUIRED"
+                return old_detail
+            persisted = await repository.replace_draft_atomically(
+                conn,
+                tenant_id=ctx.tenant_id,
+                created_by=ctx.user_id,
+                old_batch_id=str(old_detail["batchId"]),
+                expected_old_version=int(old_detail["version"]),
+                target=target,
+                package=package,
+                package_content_hash=content_hash,
+                target_account_state_hash=account_state_hash,
+                idempotency_key=idempotency_key,
+                account_display_name=target.account_display_name,
+                plan=plan,
+            )
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="TIANTIAN_IMPORT_PREVIEW_SUPERSEDED",
+                resource_type="ledger.portfolio_import_batches",
+                resource_id=str(old_detail["batchId"]),
+                details={"replacementBatchId": persisted["batch_id"]},
+            )
+            disposition: PreviewDisposition = "REPARSED"
+        else:
+            persisted = await repository.persist_preview(
+                conn,
+                tenant_id=ctx.tenant_id,
+                account_id=target.account_id,
+                created_by=ctx.user_id,
+                binding_id=target.binding_id,
+                package=package,
+                package_content_hash=content_hash,
+                target_account_state_hash=account_state_hash,
+                idempotency_key=idempotency_key,
+                account_display_name=target.account_display_name,
+                plan=plan,
+            )
+            disposition = "CREATED"
         await write_audit(
             conn,
             tenant_id=ctx.tenant_id,
             actor_type="USER",
             actor_id=ctx.user_id,
-            action="TIANTIAN_IMPORT_PREVIEW_CREATED",
+            action=(
+                "TIANTIAN_IMPORT_PREVIEW_REPARSED"
+                if disposition == "REPARSED"
+                else "TIANTIAN_IMPORT_PREVIEW_CREATED"
+            ),
             resource_type="ledger.portfolio_import_batches",
             resource_id=persisted["batch_id"],
             details={
@@ -794,6 +900,10 @@ async def preview_tiantian_import(
         package=package,
         plan=plan,
         item_ids=persisted["item_ids"],
+        disposition=disposition,
+        supersedes_batch_id=(
+            str(old_detail["batchId"]) if old_detail is not None else None
+        ),
     )
 
 

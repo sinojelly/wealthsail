@@ -18,6 +18,7 @@ from backend.portfolio.imports.repository import (
     load_preview_context,
     list_import_batches,
     persist_preview,
+    replace_draft_atomically,
     retry_position_metrics,
     write_ledger_effects,
 )
@@ -27,6 +28,7 @@ from backend.portfolio.imports.service import (
     PreviewItem,
     PreviewPlan,
     PreviewSourceRecord,
+    TargetAccount,
 )
 
 
@@ -209,6 +211,74 @@ async def test_persist_preview_keeps_unknown_fund_out_of_instrument_items() -> N
     assert item_rows == []
     assert len(source_rows) == 1
     assert result["item_ids"] == ["unresolved:holding-999999"]
+
+
+class _ReplaceConnection(_RecordingConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetchval_results = iter(["batch-new"])
+
+    async def fetchrow(self, sql: str, *_args):
+        self.sql.append(sql)
+        return {
+            "batch_id": "batch-old",
+            "status": "DRAFT",
+            "version": 3,
+            "source_binding_id": "binding-1",
+            "package_content_hash": "a" * 64,
+        }
+
+    async def fetchval(self, sql: str, *_args):
+        self.sql.append(sql)
+        if "UPDATE ledger.portfolio_import_batches" in sql:
+            return "batch-old"
+        return next(self.fetchval_results)
+
+
+@pytest.mark.asyncio
+async def test_reparse_cancels_old_draft_before_inserting_linked_replacement() -> None:
+    conn = _ReplaceConnection()
+    package = SimpleNamespace(
+        manifest=SimpleNamespace(
+            schema_version="wealthsail-tiantian-import/v2",
+            collector_version="0.2.0",
+            positions_as_of=datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
+            external_account_key="1f8a8407-9d91-4a1d-b954-9ad46fbd9585",
+            source_window_start=datetime.fromisoformat("2020-01-01T00:00:00").date(),
+            source_window_end=datetime.fromisoformat("2026-08-28T00:00:00").date(),
+        ),
+        review_required=(),
+        excluded_summary=SimpleNamespace(cash_management=0, non_posting=0),
+    )
+    target = TargetAccount(
+        account_id="account-1",
+        binding_id="binding-1",
+        binding_status="ACTIVE",
+        binding_account_id="account-1",
+    )
+
+    result = await replace_draft_atomically(
+        conn,
+        tenant_id="tenant-1",
+        created_by="user-1",
+        old_batch_id="batch-old",
+        expected_old_version=3,
+        target=target,
+        package=package,
+        package_content_hash="a" * 64,
+        target_account_state_hash="b" * 64,
+        idempotency_key="preview-reparse",
+        account_display_name="天天基金账户",
+        plan=_plan(),
+    )
+
+    combined = "\n".join(conn.sql)
+    cancel_at = combined.index("UPDATE ledger.portfolio_import_batches")
+    insert_at = combined.index("INSERT INTO ledger.portfolio_import_batches")
+    assert cancel_at < insert_at
+    assert "SUPERSEDED_BY_REPARSE" in combined
+    assert "supersedes_batch_id" in combined
+    assert result["batch_id"] == "batch-new"
 
 
 class _ReadConnection:
@@ -617,6 +687,7 @@ async def test_effect_writer_emits_reversal_without_leg_and_adjustment_with_one_
 class _TerminalConnection:
     def __init__(self, batch: dict) -> None:
         self.batch = batch
+        self.sql: list[str] = []
 
     async def fetchrow(self, _sql: str, *_args):
         return self.batch
@@ -628,6 +699,7 @@ class _TerminalConnection:
         return []
 
     async def execute(self, _sql: str, *_args):
+        self.sql.append(_sql)
         return "SELECT 1"
 
 
@@ -739,3 +811,20 @@ async def test_confirmed_batch_cannot_be_cancelled() -> None:
             idempotency_key="cancel-1",
             command_content_hash="d" * 64,
         )
+
+
+@pytest.mark.asyncio
+async def test_user_cancellation_persists_an_explicit_terminal_reason() -> None:
+    conn = _TerminalConnection(_terminal_batch(status="DRAFT", version=1))
+
+    result = await cancel_draft(
+        conn,
+        tenant_id="tenant-1",
+        batch_id="batch-1",
+        expected_version=1,
+        idempotency_key="cancel-user",
+        command_content_hash="d" * 64,
+    )
+
+    assert result["version"] == 2
+    assert "terminal_reason = 'USER_CANCELLED'" in "\n".join(conn.sql)

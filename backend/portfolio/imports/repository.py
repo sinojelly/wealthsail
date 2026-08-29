@@ -388,6 +388,7 @@ async def persist_preview(
     idempotency_key: str,
     account_display_name: str,
     plan: PreviewPlan,
+    supersedes_batch_id: str | None = None,
 ) -> dict[str, Any]:
     batch_id = str(await conn.fetchval("SELECT gen_random_uuid()"))
     effective_binding_id = binding_id
@@ -401,11 +402,11 @@ async def persist_preview(
             source_content_hash, status, idempotency_key, source_binding_id,
             package_schema_version, package_content_hash, source_as_of,
             parser_version, preview_summary, validation_status,
-            validation_errors, target_account_state_hash
+            validation_errors, target_account_state_hash, supersedes_batch_id
         ) VALUES (
             $1, $2, $3, $4, 'TIANTIAN_FUND_ZIP', $5::text, 'DRAFT', $6, $7,
             $8, $5::text, $9, '{PREVIEW_ENGINE_VERSION}', $10::jsonb, $11,
-            $12::jsonb, $13
+            $12::jsonb, $13, $14
         )
         """,
         batch_id,
@@ -440,6 +441,7 @@ async def persist_preview(
         "VALID" if plan.can_confirm else "INVALID",
         json.dumps(list(plan.blocking_errors), ensure_ascii=False),
         target_account_state_hash,
+        supersedes_batch_id,
     )
     if binding_id is None:
         await conn.execute(
@@ -545,6 +547,90 @@ async def persist_preview(
         "binding_id": effective_binding_id,
         "item_ids": item_ids,
     }
+
+
+async def replace_draft_atomically(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    created_by: str,
+    old_batch_id: str,
+    expected_old_version: int,
+    target: TargetAccount,
+    package: TiantianPackage,
+    package_content_hash: str,
+    target_account_state_hash: str,
+    idempotency_key: str,
+    account_display_name: str,
+    plan: PreviewPlan,
+) -> dict[str, Any]:
+    """Cancel one locked DRAFT and insert its replacement in the caller transaction."""
+    if target.binding_id is None:
+        raise VersionConflictError("重新解析要求已有来源绑定")
+    old = await conn.fetchrow(
+        """
+        SELECT id AS batch_id, status, version, source_binding_id,
+               package_content_hash
+          FROM ledger.portfolio_import_batches
+         WHERE tenant_id = $1 AND id = $2
+           AND source_type = 'TIANTIAN_FUND_ZIP'
+         FOR UPDATE
+        """,
+        tenant_id,
+        old_batch_id,
+    )
+    if old is None:
+        raise NotFoundError("待替代的导入草稿不存在")
+    if old["status"] != "DRAFT" or int(old["version"]) != expected_old_version:
+        raise VersionConflictError("IMPORT_REPARSE_CONFLICT")
+    if str(old["source_binding_id"]) != target.binding_id:
+        raise VersionConflictError("来源绑定已变化，不能替代旧草稿")
+    if str(old["package_content_hash"]) != package_content_hash:
+        raise VersionConflictError("待替代草稿与上传 ZIP 不一致")
+
+    terminal_key = "reparse-" + hashlib.sha256(
+        idempotency_key.encode("utf-8")
+    ).hexdigest()
+    terminal_hash = hashlib.sha256(
+        f"REPARSE:{old_batch_id}:{package_content_hash}:{idempotency_key}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    cancelled = await conn.fetchval(
+        """
+        UPDATE ledger.portfolio_import_batches
+           SET status = 'CANCELLED', cancelled_at = now(),
+               version = version + 1, updated_at = now(),
+               terminal_command_type = 'CANCEL',
+               terminal_idempotency_key = $4,
+               terminal_content_hash = $5,
+               terminal_reason = 'SUPERSEDED_BY_REPARSE'
+         WHERE tenant_id = $1 AND id = $2
+           AND status = 'DRAFT' AND version = $3
+        RETURNING id
+        """,
+        tenant_id,
+        old_batch_id,
+        expected_old_version,
+        terminal_key,
+        terminal_hash,
+    )
+    if cancelled is None:
+        raise VersionConflictError("IMPORT_REPARSE_CONFLICT")
+    return await persist_preview(
+        conn,
+        tenant_id=tenant_id,
+        account_id=target.account_id,
+        created_by=created_by,
+        binding_id=target.binding_id,
+        package=package,
+        package_content_hash=package_content_hash,
+        target_account_state_hash=target_account_state_hash,
+        idempotency_key=idempotency_key,
+        account_display_name=account_display_name,
+        plan=plan,
+        supersedes_batch_id=old_batch_id,
+    )
 
 
 async def write_ledger_effects(
@@ -1080,7 +1166,8 @@ async def cancel_draft(
         UPDATE ledger.portfolio_import_batches
            SET status = 'CANCELLED', cancelled_at = now(), version = $3,
                updated_at = now(), terminal_command_type = 'CANCEL',
-               terminal_idempotency_key = $4, terminal_content_hash = $5
+               terminal_idempotency_key = $4, terminal_content_hash = $5,
+               terminal_reason = 'USER_CANCELLED'
          WHERE tenant_id = $1 AND id = $2 AND status = 'DRAFT' AND version = $6
         """,
         tenant_id,

@@ -20,6 +20,7 @@ from backend.portfolio.imports.service import (
     TargetAccount,
     analyze_preview,
     build_ledger_effects,
+    choose_duplicate_action,
     cancel_tiantian_import,
     confirm_tiantian_import,
     preview_tiantian_import,
@@ -578,8 +579,18 @@ async def test_reuploading_same_package_restores_active_draft(tmp_path: Path) ->
         "batchId": "batch-existing",
         "status": "DRAFT",
         "version": 1,
+        "validationStatus": "VALID",
+        "freshness": "FRESH",
+        "sourceBinding": {"status": "ACTIVE"},
         "canConfirm": True,
     }
+    persist = AsyncMock(
+        return_value={
+            "batch_id": "batch-new",
+            "binding_id": "binding-1",
+            "item_ids": ["item-new"],
+        }
+    )
 
     with (
         patch(
@@ -614,13 +625,7 @@ async def test_reuploading_same_package_restores_active_draft(tmp_path: Path) ->
         ),
         patch(
             "backend.portfolio.imports.service.repository.persist_preview",
-            AsyncMock(
-                return_value={
-                    "batch_id": "batch-new",
-                    "binding_id": "binding-1",
-                    "item_ids": ["item-new"],
-                }
-            ),
+            persist,
         ),
         patch(
             "backend.portfolio.imports.service.portfolio_service.verify_fund_master_names",
@@ -637,7 +642,168 @@ async def test_reuploading_same_package_restores_active_draft(tmp_path: Path) ->
             idempotency_key="preview-retry-with-new-key",
         )
 
-    assert result == existing_preview
+    assert result == {**existing_preview, "previewDisposition": "RESTORED_DRAFT"}
+    persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auto_keeps_existing_invalid_draft_for_user_decision(
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "upload.zip"
+    package_path.write_bytes(b"same-invalid-package")
+    package = _package([_position("110022")])
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    target = TargetAccount(
+        account_id="account-1",
+        binding_id="binding-1",
+        binding_status="ACTIVE",
+        binding_account_id="account-1",
+    )
+    existing_preview = {
+        "batchId": "batch-existing",
+        "status": "DRAFT",
+        "version": 1,
+        "validationStatus": "INVALID",
+        "freshness": "STALE",
+        "sourceBinding": {"status": "ACTIVE"},
+        "canConfirm": False,
+    }
+    replace = AsyncMock()
+
+    with (
+        patch(
+            "backend.portfolio.imports.service.parse_tiantian_package",
+            return_value=package,
+        ),
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch(
+            "backend.portfolio.imports.service.repository.find_preview_by_idempotency",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.resolve_target_account",
+            AsyncMock(return_value=target),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.find_active_preview_by_package",
+            AsyncMock(return_value={"batch_id": "batch-existing"}),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.get_import_batch",
+            AsyncMock(return_value=existing_preview),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.replace_draft_atomically",
+            replace,
+            create=True,
+        ),
+        patch(
+            "backend.portfolio.imports.service.portfolio_service.verify_fund_master_names",
+            AsyncMock(return_value={}),
+        ),
+    ):
+        result = await preview_tiantian_import(
+            MagicMock(),
+            ctx,
+            package_path,
+            account_id="account-1",
+            account_name=None,
+            idempotency_key="preview-invalid-repeat",
+            duplicate_policy="AUTO",
+        )
+
+    assert result["batchId"] == "batch-existing"
+    assert result["previewDisposition"] == "USER_DECISION_REQUIRED"
+    replace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auto_replaces_stale_valid_draft_after_new_plan_succeeds(
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "upload.zip"
+    package_path.write_bytes(b"same-stale-package")
+    package = _package([_position("110022")])
+    ctx = TenantContext("editor-1", "tenant-1", tenant_role="EDITOR")
+    target = TargetAccount(
+        account_id="account-1",
+        binding_id="binding-1",
+        binding_status="ACTIVE",
+        binding_account_id="account-1",
+    )
+    existing_preview = {
+        "batchId": "batch-old",
+        "status": "DRAFT",
+        "version": 3,
+        "validationStatus": "VALID",
+        "freshness": "STALE",
+        "sourceBinding": {"status": "ACTIVE"},
+        "canConfirm": False,
+    }
+    replace = AsyncMock(
+        return_value={
+            "batch_id": "batch-new",
+            "binding_id": "binding-1",
+            "item_ids": ["item-new"],
+        }
+    )
+
+    with (
+        patch(
+            "backend.portfolio.imports.service.parse_tiantian_package",
+            return_value=package,
+        ),
+        patch("backend.portfolio.imports.service.tenant_transaction", new=_tx),
+        patch(
+            "backend.portfolio.imports.service.repository.find_preview_by_idempotency",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.resolve_target_account",
+            AsyncMock(return_value=target),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.find_active_preview_by_package",
+            AsyncMock(return_value={"batch_id": "batch-old"}),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.get_import_batch",
+            AsyncMock(return_value=existing_preview),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.load_preview_context",
+            AsyncMock(return_value=_context()),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.account_fact_hash",
+            AsyncMock(return_value="b" * 64),
+        ),
+        patch(
+            "backend.portfolio.imports.service.repository.replace_draft_atomically",
+            replace,
+            create=True,
+        ),
+        patch(
+            "backend.portfolio.imports.service.portfolio_service.verify_fund_master_names",
+            AsyncMock(return_value={}),
+        ),
+        patch("backend.portfolio.imports.service.write_audit", AsyncMock()),
+    ):
+        result = await preview_tiantian_import(
+            MagicMock(),
+            ctx,
+            package_path,
+            account_id="account-1",
+            account_name=None,
+            idempotency_key="preview-reparse",
+            duplicate_policy="AUTO",
+        )
+
+    assert result["batchId"] == "batch-new"
+    assert result["previewDisposition"] == "REPARSED"
+    assert replace.await_args.kwargs["old_batch_id"] == "batch-old"
+    assert replace.await_args.kwargs["expected_old_version"] == 3
 
 
 @pytest.mark.asyncio
@@ -943,3 +1109,62 @@ async def test_confirmation_failure_writes_neither_projection_nor_audit() -> Non
 
     recompute.assert_not_awaited()
     audit.assert_not_awaited()
+def test_auto_restores_a_fresh_valid_draft() -> None:
+    assert choose_duplicate_action(
+        policy="AUTO",
+        status="DRAFT",
+        freshness="FRESH",
+        validation_status="VALID",
+        binding_status="ACTIVE",
+    ) == "RESTORED_DRAFT"
+
+
+def test_auto_returns_already_confirmed_without_replaying() -> None:
+    assert choose_duplicate_action(
+        policy="AUTO",
+        status="CONFIRMED",
+        freshness="FRESH",
+        validation_status="VALID",
+        binding_status="ACTIVE",
+    ) == "ALREADY_CONFIRMED"
+
+
+def test_auto_reparses_a_stale_valid_draft() -> None:
+    assert choose_duplicate_action(
+        policy="AUTO",
+        status="DRAFT",
+        freshness="STALE",
+        validation_status="VALID",
+        binding_status="ACTIVE",
+    ) == "REPARSED"
+
+
+def test_auto_keeps_an_invalid_draft_for_user_decision() -> None:
+    assert choose_duplicate_action(
+        policy="AUTO",
+        status="DRAFT",
+        freshness="STALE",
+        validation_status="INVALID",
+        binding_status="ACTIVE",
+    ) == "USER_DECISION_REQUIRED"
+
+
+def test_explicit_restore_rejects_a_stale_draft() -> None:
+    with pytest.raises(VersionConflictError, match="DRAFT_RESTORE_NOT_ALLOWED"):
+        choose_duplicate_action(
+            policy="RESTORE",
+            status="DRAFT",
+            freshness="STALE",
+            validation_status="VALID",
+            binding_status="ACTIVE",
+        )
+
+
+def test_explicit_reparse_can_replace_an_invalid_draft() -> None:
+    assert choose_duplicate_action(
+        policy="REPARSE",
+        status="DRAFT",
+        freshness="FRESH",
+        validation_status="INVALID",
+        binding_status="ACTIVE",
+    ) == "REPARSED"

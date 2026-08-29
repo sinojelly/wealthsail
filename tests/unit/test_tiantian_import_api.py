@@ -61,6 +61,7 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
         *,
         limits,
         provider_timeout_seconds,
+        duplicate_policy,
     ):
         observed.update(
             path=upload,
@@ -71,6 +72,7 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
             key=idempotency_key,
             max_compressed_bytes=limits.max_compressed_bytes,
             provider_timeout_seconds=provider_timeout_seconds,
+            duplicate_policy=duplicate_policy,
         )
         return {"batchId": "batch-1", "status": "DRAFT", "version": 1}
 
@@ -81,7 +83,7 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
         response = _client().post(
             "/api/v1/portfolio/imports/tiantian/preview",
             headers={"Idempotency-Key": "preview-1"},
-            data={"accountName": "天天基金账户"},
+            data={"accountName": "天天基金账户", "duplicatePolicy": "REPARSE"},
             files={"file": ("wealthsail-tiantian.zip", b"PK\x03\x04payload", "application/zip")},
         )
 
@@ -93,7 +95,31 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
     assert observed["key"] == "preview-1"
     assert observed["max_compressed_bytes"] == 1024 * 1024
     assert observed["provider_timeout_seconds"] == 30.0
+    assert observed["duplicate_policy"] == "REPARSE"
     assert not Path(observed["path"]).exists()
+
+
+def test_preview_rejects_an_unknown_duplicate_policy_before_service_call() -> None:
+    with patch(
+        "backend.portfolio.api.tiantian_import_service.preview_tiantian_import",
+        new_callable=AsyncMock,
+    ) as preview:
+        response = _client().post(
+            "/api/v1/portfolio/imports/tiantian/preview",
+            headers={"Idempotency-Key": "preview-policy"},
+            data={"accountName": "天天基金账户", "duplicatePolicy": "OVERWRITE"},
+            files={
+                "file": (
+                    "wealthsail-tiantian.zip",
+                    b"PK\x03\x04payload",
+                    "application/zip",
+                )
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    preview.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

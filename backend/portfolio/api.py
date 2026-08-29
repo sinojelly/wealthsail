@@ -209,6 +209,9 @@ async def portfolio_preview_tiantian_import(
     file: UploadFile = File(...),
     account_id: str | None = Form(None, alias="accountId"),
     account_name: str | None = Form(None, alias="accountName"),
+    duplicate_policy: Literal["AUTO", "RESTORE", "REPARSE"] = Form(
+        "AUTO", alias="duplicatePolicy"
+    ),
     idempotency_key: str = Header(
         ..., alias="Idempotency-Key", min_length=1, max_length=128
     ),
@@ -233,6 +236,7 @@ async def portfolio_preview_tiantian_import(
             idempotency_key,
             limits=_import_limits(settings),
             provider_timeout_seconds=settings.market_master_timeout_seconds,
+            duplicate_policy=duplicate_policy,
         )
     finally:
         upload_path.unlink(missing_ok=True)
