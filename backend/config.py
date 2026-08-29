@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     model_name: str = Field(default="deepseek-chat")
     model_timeout_seconds: float = Field(default=45.0)
 
+    # --- Market instrument master -------------------------------------------
+    # AkShare downloads whole-market symbol tables on a cold cache. Production
+    # cloud egress can take slightly more than 15 seconds, so keep this timeout
+    # independently configurable instead of coupling it to model/API timeouts.
+    market_master_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
+
     # --- WeCom callback / binding --------------------------------------------
     wecom_callback_token: str = Field(default="")
     wecom_callback_aes_key: str = Field(default="")

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.common.tenancy import TenantContext
+from backend.config import Settings
 from backend.errors import ForbiddenError, ValidationError_
 from backend.portfolio import service
 
@@ -97,6 +98,36 @@ async def test_live_search_dataset_is_singleflight_cached_across_keywords() -> N
 
     assert first == second == [{"symbol": "600519", "name": "贵州茅台"}]
     assert calls == 1
+
+
+def test_market_master_timeout_has_a_safe_configurable_default() -> None:
+    settings = Settings(_env_file=None)
+    overridden = Settings(_env_file=None, market_master_timeout_seconds=45)
+
+    assert settings.market_master_timeout_seconds == 30.0
+    assert overridden.market_master_timeout_seconds == 45.0
+
+
+@pytest.mark.asyncio
+async def test_live_search_dataset_uses_the_configured_timeout() -> None:
+    import pandas as pd
+
+    service._SEARCH_DATASET_CACHE.pop("timeout-config-test", None)
+    observed_timeouts: list[float] = []
+
+    async def capture_timeout(awaitable, timeout):
+        observed_timeouts.append(timeout)
+        return await awaitable
+
+    with patch("backend.portfolio.service.asyncio.wait_for", new=capture_timeout):
+        rows = await service._load_search_dataset(
+            "timeout-config-test",
+            lambda: pd.DataFrame({"代码": ["510300"], "名称": ["沪深300ETF"]}),
+            timeout_seconds=30.0,
+        )
+
+    assert rows == [{"symbol": "510300", "name": "沪深300ETF"}]
+    assert observed_timeouts == [30.0]
 
 
 @pytest.mark.asyncio

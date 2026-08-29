@@ -333,6 +333,7 @@ INTERNAL_ASSET_TYPE: dict[str, str] = {
 
 _SYMBOL_RE = re.compile(r"^(\d{6})(?:\.(?:SH|SZ|BJ))?$")
 _SEARCH_DATASET_TTL_SECONDS = 300.0
+_DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS = 30.0
 _SEARCH_DATASET_CACHE: dict[str, tuple[float, list[dict[str, str]]]] = {}
 _SEARCH_DATASET_LOCKS: dict[str, asyncio.Lock] = {}
 
@@ -366,6 +367,7 @@ async def _load_search_dataset(
     *,
     code_column: str = "代码",
     name_column: str = "名称",
+    timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
 ) -> list[dict[str, str]]:
     """Load one Provider master dataset with per-key TTL and single-flight.
 
@@ -381,7 +383,9 @@ async def _load_search_dataset(
         cached = _SEARCH_DATASET_CACHE.get(cache_key)
         if cached is not None and cached[0] > loop.time():
             return cached[1]
-        df = await asyncio.wait_for(asyncio.to_thread(fetcher), timeout=15)
+        df = await asyncio.wait_for(
+            asyncio.to_thread(fetcher), timeout=timeout_seconds
+        )
         if (
             df is None
             or df.empty
@@ -403,7 +407,11 @@ async def _load_search_dataset(
         return rows
 
 
-async def _ak_search(keyword: str) -> list[dict]:
+async def _ak_search(
+    keyword: str,
+    *,
+    timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> list[dict]:
     """Real-time instrument search via AkShare (A股/ETF/场外基金), fail-safe.
 
     Any vendor failure silently degrades to the local instrument master —
@@ -435,6 +443,7 @@ async def _ak_search(keyword: str) -> list[dict]:
                 fetcher,
                 code_column=code_column,
                 name_column=name_column,
+                timeout_seconds=timeout_seconds,
             )
             matched = [
                 row
@@ -471,7 +480,11 @@ async def _ak_search(keyword: str) -> list[dict]:
     return list(results.values())
 
 
-async def verify_fund_master_names(product_codes: list[str]) -> dict[str, str]:
+async def verify_fund_master_names(
+    product_codes: list[str],
+    *,
+    timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> dict[str, str]:
     """Return Provider-verified names for exact off-exchange fund codes.
 
     Missing entries represent unavailable or unknown Provider data. Callers
@@ -489,6 +502,7 @@ async def verify_fund_master_names(product_codes: list[str]) -> dict[str, str]:
             lambda: ak.fund_name_em(),
             code_column="基金代码",
             name_column="基金简称",
+            timeout_seconds=timeout_seconds,
         )
     except Exception:  # noqa: BLE001 - unresolved codes stay visible and blocking
         return {}
@@ -499,7 +513,13 @@ async def verify_fund_master_names(product_codes: list[str]) -> dict[str, str]:
     }
 
 
-async def search_instruments(pool: asyncpg.Pool, ctx, keyword: str) -> dict:
+async def search_instruments(
+    pool: asyncpg.Pool,
+    ctx,
+    keyword: str,
+    *,
+    provider_timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> dict:
     """Search stocks/ETFs/funds by Chinese name or 6-digit code.
 
     Local instrument master first, then AkShare realtime enrichment
@@ -528,7 +548,7 @@ async def search_instruments(pool: asyncpg.Pool, ctx, keyword: str) -> dict:
                 "type": INTERNAL_ASSET_TYPE.get(row["asset_type"], "STOCK"),
                 "source": "local",
             }
-    for item in await _ak_search(kw):
+    for item in await _ak_search(kw, timeout_seconds=provider_timeout_seconds):
         identity = f"{item['market']}:{item['symbol']}:{item['type']}"
         merged.setdefault(identity, item)
     items = sorted(merged.values(), key=lambda x: (x["type"], x["symbol"]))[:20]
@@ -562,6 +582,8 @@ async def _resolve_verified_instrument(
     ctx,
     symbol: str,
     asset_type: str,
+    *,
+    provider_timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
 ) -> dict:
     """Resolve canonical instrument data without trusting form display fields."""
     expected_market = _primary_market(asset_type, symbol)
@@ -587,7 +609,9 @@ async def _resolve_verified_instrument(
         }
 
     expected_public_type = INTERNAL_ASSET_TYPE[asset_type]
-    candidates = await _ak_search(symbol)
+    candidates = await _ak_search(
+        symbol, timeout_seconds=provider_timeout_seconds
+    )
     exact = next(
         (
             candidate
@@ -672,6 +696,7 @@ async def create_position_import(
     payload,
     *,
     idempotency_key: str,
+    provider_timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
 ) -> dict:
     """Create a reviewable position-import draft; do not publish ledger facts."""
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
@@ -707,7 +732,13 @@ async def create_position_import(
         _assert_same_position_import(previous, source_hash)
         return _position_import_replay_response(previous)
 
-    verified = await _resolve_verified_instrument(pool, ctx, symbol, internal_type)
+    verified = await _resolve_verified_instrument(
+        pool,
+        ctx,
+        symbol,
+        internal_type,
+        provider_timeout_seconds=provider_timeout_seconds,
+    )
 
     try:
         async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:

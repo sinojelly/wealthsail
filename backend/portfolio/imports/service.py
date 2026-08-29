@@ -675,6 +675,7 @@ async def preview_tiantian_import(
     idempotency_key: str,
     *,
     limits: ImportLimits | None = None,
+    provider_timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     """Parse outside the DB, then atomically persist a recoverable DRAFT preview."""
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
@@ -692,7 +693,8 @@ async def preview_tiantian_import(
         }
     )
     verified_fund_names = await portfolio_service.verify_fund_master_names(
-        product_codes
+        product_codes,
+        timeout_seconds=provider_timeout_seconds,
     )
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         prior = await repository.find_preview_by_idempotency(

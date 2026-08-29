@@ -85,6 +85,7 @@ async def portfolio_search(
     keyword: str = Query(..., min_length=2, max_length=32, description="股票/ETF/基金名称或代码"),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """搜索可添加的标的：本地主数据 + AkShare 实时（降级安全）。
@@ -92,7 +93,12 @@ async def portfolio_search(
     返回: { items: [{symbol, name, market, type: STOCK|ETF|FUND}], total }
     """
     as_of = now_shanghai()
-    data = await service.search_instruments(pool, ctx, keyword)
+    data = await service.search_instruments(
+        pool,
+        ctx,
+        keyword,
+        provider_timeout_seconds=settings.market_master_timeout_seconds,
+    )
     return ok(data, request_id=request_id, as_of=as_of)
 
 
@@ -226,6 +232,7 @@ async def portfolio_preview_tiantian_import(
             account_name,
             idempotency_key,
             limits=_import_limits(settings),
+            provider_timeout_seconds=settings.market_master_timeout_seconds,
         )
     finally:
         upload_path.unlink(missing_ok=True)
@@ -275,6 +282,7 @@ async def portfolio_create_import(
     idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """创建一个可预览的期初持仓草稿，不写入任何已确认经济事实。
@@ -288,6 +296,7 @@ async def portfolio_create_import(
         ctx,
         payload,
         idempotency_key=idempotency_key,
+        provider_timeout_seconds=settings.market_master_timeout_seconds,
     )
     return ok(data, request_id=request_id, as_of=as_of, quality_status="FRESH")
 

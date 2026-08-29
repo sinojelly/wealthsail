@@ -51,7 +51,17 @@ def _client(
 def test_preview_streams_zip_to_deleted_temporary_file() -> None:
     observed: dict[str, object] = {}
 
-    async def preview(pool, ctx, upload, account_id, account_name, idempotency_key, *, limits):
+    async def preview(
+        pool,
+        ctx,
+        upload,
+        account_id,
+        account_name,
+        idempotency_key,
+        *,
+        limits,
+        provider_timeout_seconds,
+    ):
         observed.update(
             path=upload,
             exists=upload.exists(),
@@ -60,6 +70,7 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
             account_name=account_name,
             key=idempotency_key,
             max_compressed_bytes=limits.max_compressed_bytes,
+            provider_timeout_seconds=provider_timeout_seconds,
         )
         return {"batchId": "batch-1", "status": "DRAFT", "version": 1}
 
@@ -81,6 +92,7 @@ def test_preview_streams_zip_to_deleted_temporary_file() -> None:
     assert observed["account_name"] == "天天基金账户"
     assert observed["key"] == "preview-1"
     assert observed["max_compressed_bytes"] == 1024 * 1024
+    assert observed["provider_timeout_seconds"] == 30.0
     assert not Path(observed["path"]).exists()
 
 
