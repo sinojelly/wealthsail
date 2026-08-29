@@ -31,6 +31,23 @@ def test_031_migration_requires_a_reason_only_for_cancelled_tiantian_batches() -
     assert "SET terminal_reason = 'USER_CANCELLED'" in sql
 
 
+def test_031_backfill_temporarily_bypasses_only_the_terminal_batch_guard() -> None:
+    sql = MIGRATION.read_text(encoding="utf-8")
+
+    disable = (
+        "DISABLE TRIGGER protect_portfolio_import_batches_trigger"
+    )
+    backfill = "SET terminal_reason = 'USER_CANCELLED'"
+    enable = "ENABLE TRIGGER protect_portfolio_import_batches_trigger"
+
+    assert disable in sql
+    assert enable in sql
+    assert sql.index(disable) < sql.index(backfill) < sql.index(enable)
+    assert sql.count(disable) == 1
+    assert sql.count(enable) == 1
+    assert "DISABLE TRIGGER ALL" not in sql
+
+
 def test_031_migration_grants_only_the_new_columns_to_the_api_role() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 

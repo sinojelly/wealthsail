@@ -13,11 +13,23 @@ ALTER TABLE ledger.portfolio_import_batches
 -- Historical cancellation commands predate explicit reasons.  Treat them as
 -- user cancellations so the new invariant can be enabled without rewriting
 -- any economic state or terminal command identity.
+--
+-- The runtime guard intentionally rejects UPDATEs to terminal batches.  The
+-- migration runner executes this file and its ledger INSERT in one PostgreSQL
+-- transaction, so bypass only that named user trigger for this one-time
+-- metadata backfill.  ENABLE is part of the same transaction: any failure
+-- before commit rolls the trigger state and the backfill back together.
+ALTER TABLE ledger.portfolio_import_batches
+    DISABLE TRIGGER protect_portfolio_import_batches_trigger;
+
 UPDATE ledger.portfolio_import_batches
    SET terminal_reason = 'USER_CANCELLED'
  WHERE source_type = 'TIANTIAN_FUND_ZIP'
    AND status = 'CANCELLED'
    AND terminal_reason IS NULL;
+
+ALTER TABLE ledger.portfolio_import_batches
+    ENABLE TRIGGER protect_portfolio_import_batches_trigger;
 
 ALTER TABLE ledger.portfolio_import_batches
     ADD CONSTRAINT portfolio_import_batches_terminal_reason_value_check CHECK (
