@@ -7,6 +7,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import EmptyState from "../../components/data-state/EmptyState";
 import PageHeader from "../../components/layout/PageHeader";
 import BatchPreviewModal from "./components/BatchPreviewModal";
 import ImportBatchForm from "./components/ImportBatchForm";
@@ -84,10 +85,12 @@ export default function OnboardingPage() {
               <h2>最近导入</h2>
             </div>
             <div className="panel-body">
-              <p className="muted">
-                后端导入命令与批次历史尚未接入；本页当前只做本地格式校验和预览，
-                不会写入账本。
-              </p>
+              <EmptyState
+                className="onboarding-empty-state"
+                title="暂无 CSV 批次记录"
+                detail="后端批次导入命令尚未接入；当前 CSV 仅做本地校验与预览，不会写入账本。"
+                icon={Clock3}
+              />
             </div>
           </section>
         </aside>

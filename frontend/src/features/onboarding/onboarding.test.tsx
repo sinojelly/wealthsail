@@ -22,3 +22,14 @@ it("previews an import batch without fabricating a successful ledger write", asy
   ).toBeDisabled();
   expect(screen.queryByText(/已导入 .* 条有效记录/)).not.toBeInTheDocument();
 });
+
+it("presents unavailable CSV batch history as a structured compact status", () => {
+  renderWithSession(<OnboardingPage />);
+
+  const emptyHistory = screen.getByRole("status", {
+    name: "暂无 CSV 批次记录",
+  });
+  expect(emptyHistory).toHaveTextContent(
+    "后端批次导入命令尚未接入；当前 CSV 仅做本地校验与预览，不会写入账本。",
+  );
+});

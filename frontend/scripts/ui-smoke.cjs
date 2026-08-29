@@ -1,5 +1,6 @@
-/* WealthSail read-only business smoke: login -> dashboard -> account -> refresh -> logout. */
+/* WealthSail read-only business smoke: login -> dashboard -> onboarding -> account -> refresh -> logout. */
 const { chromium } = require("playwright");
+const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -83,6 +84,102 @@ const path = require("node:path");
     await page.getByRole("button", { name: "登录工作台" }).click();
     await page.getByRole("heading", { name: "资产看板" }).waitFor({ timeout: 30_000 });
     step("dedicated smoke account logged in and dashboard rendered");
+
+    await page.getByRole("link", { name: "导入 / 更新持仓" }).first().click();
+    await page.getByRole("heading", { name: "持仓导入与更新" }).waitFor({
+      timeout: 30_000,
+    });
+    await page.setViewportSize({ width: 1048, height: 900 });
+    const onboardingLayout = await page.evaluate(() => {
+      const workflow = document.querySelector(".tiantian-import-workflow");
+      const packageStep = document.querySelector(".tiantian-package-step");
+      const packageForm = document.querySelector(".tiantian-package-form");
+      const history = document.querySelector(".tiantian-history");
+      const onboarding = document.querySelector(".onboarding-layout");
+      const emptyHistory = document.querySelector(".onboarding-empty-state");
+      const importList = document.querySelector(".import-history-list");
+      if (
+        !workflow ||
+        !packageStep ||
+        !packageForm ||
+        !history ||
+        !onboarding ||
+        !emptyHistory ||
+        !importList
+      ) {
+        throw new Error("onboarding layout fixtures did not render");
+      }
+      const packageRect = packageStep.getBoundingClientRect();
+      const historyRect = history.getBoundingClientRect();
+      const panelsOverlap = !(
+        packageRect.right <= historyRect.left ||
+        historyRect.right <= packageRect.left ||
+        packageRect.bottom <= historyRect.top ||
+        historyRect.bottom <= packageRect.top
+      );
+      const importButtons = Array.from(importList.querySelectorAll("button"));
+      return {
+        workflowColumns: getComputedStyle(workflow).gridTemplateColumns,
+        onboardingColumns: getComputedStyle(onboarding).gridTemplateColumns,
+        formOverflows: packageForm.scrollWidth > packageForm.clientWidth + 1,
+        panelsOverlap,
+        historyListColumns: getComputedStyle(importList).gridTemplateColumns,
+        historyButtonsFillRow: importButtons.every(
+          (button) =>
+            button.getBoundingClientRect().width >=
+            importList.getBoundingClientRect().width - 1,
+        ),
+        emptyHistoryColumns: getComputedStyle(emptyHistory).gridTemplateColumns,
+        emptyHistoryTitleSize: Number.parseFloat(
+          getComputedStyle(emptyHistory.querySelector("strong")).fontSize,
+        ),
+        emptyHistoryDetailSize: Number.parseFloat(
+          getComputedStyle(emptyHistory.querySelector("p")).fontSize,
+        ),
+      };
+    });
+    assert.equal(
+      onboardingLayout.formOverflows,
+      false,
+      "ZIP form must not overflow",
+    );
+    assert.equal(
+      onboardingLayout.panelsOverlap,
+      false,
+      "import panels must not overlap",
+    );
+    assert.equal(
+      onboardingLayout.historyButtonsFillRow,
+      true,
+      "each recent import must occupy a complete list row",
+    );
+    assert.equal(
+      onboardingLayout.historyListColumns.trim().split(/\s+/).length,
+      1,
+      "recent imports must use a one-column list even when the list is empty",
+    );
+    assert.equal(
+      onboardingLayout.workflowColumns.trim().split(/\s+/).length,
+      1,
+      "ZIP workflow must collapse to one column inside a narrow content container",
+    );
+    assert.equal(
+      onboardingLayout.onboardingColumns.trim().split(/\s+/).length,
+      1,
+      "CSV import and helper rail must collapse to one column",
+    );
+    assert.equal(
+      onboardingLayout.emptyHistoryColumns.trim().split(/\s+/).length,
+      1,
+      "CSV history empty state must keep the shared one-column layout",
+    );
+    assert.ok(
+      onboardingLayout.emptyHistoryTitleSize <= 10 &&
+        onboardingLayout.emptyHistoryDetailSize <= 9,
+      "CSV history empty-state typography must remain compact",
+    );
+    step("onboarding remains readable at the desktop-with-devtools width");
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.getByRole("link", { name: "账号安全" }).click();
     await page.getByRole("heading", { name: "账号安全" }).waitFor({ timeout: 15_000 });
