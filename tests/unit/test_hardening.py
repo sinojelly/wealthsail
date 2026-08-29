@@ -225,7 +225,16 @@ async def test_tenant_transaction_switches_to_dedicated_api_role() -> None:
     async with tenant_transaction(Pool(conn), "user-1", "tenant-1"):
         pass
 
-    assert conn.statements[0][0] == "SET LOCAL ROLE wealthsail_api;"
+    assert conn.statements == [
+        ("SET LOCAL ROLE wealthsail_api;", ()),
+        (
+            "SELECT set_config('request.jwt.claims', $1, true);",
+            (
+                '{"sub":"user-1","role":"wealthsail_api",'
+                '"tenant_id":"tenant-1"}',
+            ),
+        ),
+    ]
 
 
 @pytest.mark.asyncio
