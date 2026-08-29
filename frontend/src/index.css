@@ -563,6 +563,20 @@ button:disabled {
   color: var(--slate-400);
   text-align: center;
 }
+.empty-state-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--teal);
+  background: #ccfbf1;
+}
+.empty-state-copy {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
 .empty-state strong {
   color: var(--slate-600);
   font-size: 12px;
@@ -911,6 +925,36 @@ button:disabled {
   height: 245px;
   padding: 8px 12px 10px;
 }
+.dashboard-panel-empty {
+  min-height: 210px;
+  place-content: center;
+  gap: 9px;
+  padding: 22px;
+}
+.dashboard-panel-empty-chart {
+  height: 245px;
+}
+.dashboard-panel-empty-allocation {
+  min-height: 202px;
+}
+.dashboard-panel-empty .empty-state-copy {
+  gap: 3px;
+}
+.dashboard-panel-empty strong {
+  color: var(--slate-700);
+  font-size: 12px;
+}
+.dashboard-panel-empty p {
+  max-width: 280px;
+  color: var(--slate-400);
+  font-size: 9px;
+}
+.dashboard-data-loading {
+  display: grid;
+  place-items: center;
+  color: var(--slate-400);
+  font-size: 10px;
+}
 .allocation-content {
   display: flex;
   align-items: center;
@@ -965,6 +1009,33 @@ button:disabled {
 }
 .holdings-panel {
   margin-bottom: 16px;
+}
+.holdings-empty-state {
+  grid-template-columns: auto minmax(0, 1fr);
+  justify-items: start;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--slate-100);
+  text-align: left;
+}
+.holdings-empty-state .empty-state-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.holdings-empty-state .empty-state-copy {
+  align-self: center;
+  justify-items: start;
+  gap: 2px;
+}
+.holdings-empty-state strong {
+  color: var(--slate-700);
+  font-size: 11px;
+}
+.holdings-empty-state p {
+  max-width: none;
+  color: var(--slate-500);
+  font-size: 9px;
 }
 .holdings-toolbar {
   flex-wrap: wrap;
@@ -1025,7 +1096,7 @@ button:disabled {
   gap: 18px;
   padding: 13px 16px;
 }
-.dashboard-actions > div:first-child {
+.dashboard-action-copy {
   display: grid;
 }
 .dashboard-actions strong {
@@ -1034,6 +1105,23 @@ button:disabled {
 .dashboard-actions span {
   margin-top: 2px;
   color: var(--slate-500);
+  font-size: 9px;
+}
+.dashboard-action-status {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--slate-500);
+  background: var(--slate-50);
+  line-height: 1.35;
+}
+.dashboard-action-status span {
+  margin: 0;
+  color: inherit;
   font-size: 9px;
 }
 .action-buttons {

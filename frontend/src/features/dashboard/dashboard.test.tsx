@@ -73,7 +73,7 @@ it("never presents hard-coded fill drafts as confirmed financial facts", () => {
   ).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "录入成交草稿" })).toBeDisabled();
   expect(
-    screen.getByText("成交确认命令尚未接入，当前不会修改账本"),
+    screen.getByText("成交确认暂未开放，当前操作不会修改账本。"),
   ).toBeInTheDocument();
 });
 

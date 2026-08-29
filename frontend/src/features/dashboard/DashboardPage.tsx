@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowRightLeft,
+  CircleDashed,
   Download,
   RefreshCw,
   Upload,
@@ -72,7 +73,10 @@ export default function DashboardPage() {
         </div>
       ) : null}
       {isEmptyPortfolio ? (
-        <section className="empty-state panel" aria-labelledby="empty-portfolio-title">
+        <section
+          className="empty-state panel"
+          aria-labelledby="empty-portfolio-title"
+        >
           <Upload size={28} />
           <h2 id="empty-portfolio-title">尚未录入资产</h2>
           <p>完成首笔期初持仓导入后，这里会展示资产汇总和净值走势。</p>
@@ -123,10 +127,17 @@ export default function DashboardPage() {
         loading={positions.isLoading}
       />
       <div className="dashboard-actions panel">
-        <div>
+        <div className="dashboard-action-copy">
           <strong>资产事实维护</strong>
           <span>手工动作均先进入草稿或预览，不直接覆盖账本事实。</span>
-          <small>成交确认命令尚未接入，当前不会修改账本</small>
+          <div
+            className="dashboard-action-status"
+            role="note"
+            aria-label="成交录入状态"
+          >
+            <CircleDashed size={12} aria-hidden="true" />
+            <span>成交确认暂未开放，当前操作不会修改账本。</span>
+          </div>
         </div>
         <div className="action-buttons">
           <button className="btn-secondary" disabled title="出入金命令尚未接入">

@@ -7,8 +7,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartNoAxesCombined } from "lucide-react";
 import { toChartNumber } from "../../../domain/chart-number-adapter";
 import type { NavPoint } from "../../../api/types";
+import EmptyState from "../../../components/data-state/EmptyState";
 
 export default function EquityCurveChart({
   points,
@@ -17,11 +19,13 @@ export default function EquityCurveChart({
   points: NavPoint[];
   loading?: boolean;
 }) {
-  const chartData = points.filter((point) => point.totalNav !== null).map((point) => ({
-    date: point.date.slice(5), // ISO → MM-DD
-    portfolioChart: toChartNumber(point.totalNav as string),
-    totalNav: point.totalNav,
-  }));
+  const chartData = points
+    .filter((point) => point.totalNav !== null)
+    .map((point) => ({
+      date: point.date.slice(5), // ISO → MM-DD
+      portfolioChart: toChartNumber(point.totalNav as string),
+      totalNav: point.totalNav,
+    }));
 
   return (
     <section className="panel equity-panel">
@@ -38,9 +42,14 @@ export default function EquityCurveChart({
         </div>
       </div>
       {loading ? (
-        <div className="chart-container chart-empty">加载中…</div>
+        <div className="chart-container dashboard-data-loading">加载中…</div>
       ) : chartData.length === 0 ? (
-        <div className="chart-container chart-empty">暂无净值历史数据</div>
+        <EmptyState
+          className="dashboard-panel-empty dashboard-panel-empty-chart"
+          title="暂无净值记录"
+          detail="导入或录入持仓后，将从首个有效快照开始绘制趋势。"
+          icon={ChartNoAxesCombined}
+        />
       ) : (
         <div className="chart-container" aria-label="资产净值走势折线图">
           <ResponsiveContainer width="100%" height="100%">
@@ -69,10 +78,13 @@ export default function EquityCurveChart({
               <YAxis domain={["dataMin - 1", "dataMax + 1"]} hide />
               <Tooltip
                 formatter={(value, _name, item) => [
-                  `¥${Number(item?.payload?.totalNav ?? value).toLocaleString("zh-CN", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}`,
+                  `¥${Number(item?.payload?.totalNav ?? value).toLocaleString(
+                    "zh-CN",
+                    {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    },
+                  )}`,
                   "总资产",
                 ]}
                 contentStyle={{

@@ -1,15 +1,17 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { ChartPie } from "lucide-react";
 import { toChartNumber } from "../../../domain/chart-number-adapter";
 import { formatMoney } from "../../../domain/money";
 import type { AllocationItem } from "../../../api/types";
+import EmptyState from "../../../components/data-state/EmptyState";
 
 const CATEGORY_COLOR: Record<string, string> = {
-  "A股": "#0d9488",
-  "场内ETF": "#0ea5e9",
-  "场外基金": "#8b5cf6",
-  "现金": "#94a3b8",
-  "债券": "#f59e0b",
-  "黄金": "#eab308",
+  A股: "#0d9488",
+  场内ETF: "#0ea5e9",
+  场外基金: "#8b5cf6",
+  现金: "#94a3b8",
+  债券: "#f59e0b",
+  黄金: "#eab308",
 };
 
 export default function AssetDonutChart({
@@ -19,12 +21,14 @@ export default function AssetDonutChart({
   allocation: AllocationItem[];
   loading?: boolean;
 }) {
-  const chartData = allocation.filter((item) => item.value !== null).map((item) => ({
-    name: item.category,
-    value: toChartNumber(item.value as string),
-    color: CATEGORY_COLOR[item.category] ?? "#94a3b8",
-    amount: item.amount,
-  }));
+  const chartData = allocation
+    .filter((item) => item.value !== null)
+    .map((item) => ({
+      name: item.category,
+      value: toChartNumber(item.value as string),
+      color: CATEGORY_COLOR[item.category] ?? "#94a3b8",
+      amount: item.amount,
+    }));
 
   return (
     <section className="panel allocation-panel">
@@ -35,11 +39,14 @@ export default function AssetDonutChart({
         </div>
       </div>
       {loading ? (
-        <div className="allocation-content allocation-empty">加载中…</div>
+        <div className="allocation-content dashboard-data-loading">加载中…</div>
       ) : chartData.length === 0 ? (
-        <div className="allocation-content allocation-empty">
-          暂无配置数据
-        </div>
+        <EmptyState
+          className="dashboard-panel-empty dashboard-panel-empty-allocation"
+          title="暂无资产配置"
+          detail="持仓建立后，将按资产类型展示占比。"
+          icon={ChartPie}
+        />
       ) : (
         <div className="allocation-content">
           <div className="donut-wrap" aria-label="资产配置环形图">

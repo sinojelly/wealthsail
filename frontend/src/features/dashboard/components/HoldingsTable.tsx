@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useState } from "react";
-import { Plus, Search, Upload } from "lucide-react";
+import { Plus, Search, Upload, WalletCards } from "lucide-react";
 import { Link } from "react-router-dom";
 import QualityBadge from "../../../components/data-state/QualityBadge";
+import EmptyState from "../../../components/data-state/EmptyState";
 import { formatMoney, formatSignedMoney } from "../../../domain/money";
 import type { PositionDto } from "../../../api/types";
 import PositionDialog from "./PositionDialog";
@@ -73,13 +74,20 @@ export default function HoldingsTable({
       </div>
       <div className="table-wrap">
         {loading ? (
-          <div className="table-placeholder">加载中…</div>
-        ) : filtered.length === 0 ? (
-          <div className="table-placeholder">
-            {rows.length === 0
-              ? "暂无持仓，可导入天天基金 ZIP，或手工创建并确认期初基线"
-              : "无匹配持仓"}
+          <div className="table-placeholder dashboard-data-loading">
+            加载中…
           </div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            className="holdings-empty-state"
+            title={rows.length === 0 ? "还没有持仓" : "没有匹配的持仓"}
+            detail={
+              rows.length === 0
+                ? "导入天天基金 ZIP，或手工创建并确认期初基线。"
+                : "请调整搜索关键字或持仓类型后重试。"
+            }
+            icon={WalletCards}
+          />
         ) : (
           <table className="data-table">
             <thead>
