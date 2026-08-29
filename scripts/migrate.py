@@ -111,7 +111,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if set(role_map) != {"wealthsail_api", "wealthsail_worker"} or any(
         row["rolcanlogin"] for row in roles
     ):
-        raise RuntimeError("runtime group roles are missing or unexpectedly LOGIN-enabled")
+        raise RuntimeError(
+            "runtime group roles are missing or unexpectedly LOGIN-enabled"
+        )
     worker_role = role_map["wealthsail_worker"]
     if worker_role["rolinherit"] or not worker_role["rolbypassrls"]:
         raise RuntimeError("worker role must be NOINHERIT BYPASSRLS")
@@ -155,7 +157,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         )
     }
     if projection_columns != {"known_value"}:
-        raise RuntimeError("account NAV projection uses an incompatible known-value column")
+        raise RuntimeError(
+            "account NAV projection uses an incompatible known-value column"
+        )
 
     tiantian_columns = {
         "portfolio_source_bindings": {
@@ -283,7 +287,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "POSITION_PERIOD_METRICS_REBUILD",
     ):
         if token not in contract_definitions:
-            raise RuntimeError(f"Tiantian import database constraint missing token: {token}")
+            raise RuntimeError(
+                f"Tiantian import database constraint missing token: {token}"
+            )
 
     required_triggers = {
         "protect_portfolio_source_bindings_trigger",
@@ -378,6 +384,31 @@ async def _readback(conn: asyncpg.Connection) -> None:
         raise RuntimeError(
             "Tiantian import runtime privileges missing: "
             + ", ".join(missing_tiantian_privileges)
+        )
+
+    import_item_update_policy = await conn.fetchrow(
+        """
+        SELECT qual, with_check
+          FROM pg_policies
+         WHERE schemaname='ledger'
+           AND tablename='portfolio_import_items'
+           AND policyname='domain_api_update'
+           AND cmd='UPDATE'
+           AND 'wealthsail_api' = ANY(roles)
+        """
+    )
+    required_update_policy_tokens = (
+        "identity.has_tenant_role",
+        "portfolio_import_batches",
+        "status = 'DRAFT'",
+    )
+    if import_item_update_policy is None or any(
+        token not in str(import_item_update_policy[field] or "")
+        for field in ("qual", "with_check")
+        for token in required_update_policy_tokens
+    ):
+        raise RuntimeError(
+            "portfolio import item UPDATE policy is missing or too broad"
         )
 
     browser_import_writes = await conn.fetchval(
@@ -512,7 +543,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
           AND policyname='domain_api_update'
         """
     )
-    if not confirmation_policy or "confirmed_by = auth.uid()" not in confirmation_policy:
+    if (
+        not confirmation_policy
+        or "confirmed_by = auth.uid()" not in confirmation_policy
+    ):
         raise RuntimeError("trade fill confirmation policy does not bind auth.uid()")
 
     replay_table = await conn.fetchval(
@@ -653,8 +687,12 @@ def main() -> None:
         )
     if args.environment == "production" and is_loopback_database(dsn):
         raise SystemExit("production environment cannot target a loopback database")
-    print(f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}")
-    asyncio.run(migrate(dsn, load_migrations(ROOT / "migrations"), dry_run=args.dry_run))
+    print(
+        f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}"
+    )
+    asyncio.run(
+        migrate(dsn, load_migrations(ROOT / "migrations"), dry_run=args.dry_run)
+    )
 
 
 if __name__ == "__main__":

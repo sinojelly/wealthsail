@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 27
-    assert migrations[-1].path.name == "027_market_hot_read_model.sql"
+    assert versions[-1] == 28
+    assert migrations[-1].path.name == "028_portfolio_import_item_update_policy.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -73,9 +73,9 @@ def test_025_migration_contains_forward_fix_contracts() -> None:
 
 def test_027_migration_enforces_worker_owned_market_hot_projection() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations" / "027_market_hot_read_model.sql"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations" / "027_market_hot_read_model.sql").read_text(
+        encoding="utf-8"
+    )
 
     for contract in (
         "CREATE TABLE market.market_hot_snapshots",
@@ -85,6 +85,31 @@ def test_027_migration_enforces_worker_owned_market_hot_projection() -> None:
         "REVOKE ALL ON market.market_hot_snapshots FROM PUBLIC, authenticated",
     ):
         assert contract in migration
+
+
+def test_028_migration_allows_only_draft_import_item_updates() -> None:
+    """Confirmation row locks need UPDATE RLS without widening column grants."""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "028_portfolio_import_item_update_policy.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "DROP POLICY IF EXISTS domain_api_update ON ledger.portfolio_import_items",
+        "CREATE POLICY domain_api_update",
+        "ON ledger.portfolio_import_items",
+        "FOR UPDATE TO wealthsail_api",
+        "identity.has_tenant_role",
+        "batch.status = 'DRAFT'",
+    ):
+        assert contract in migration
+    assert "GRANT UPDATE ON ledger.portfolio_import_items" not in migration
+
+
+def test_readback_rejects_a_missing_import_item_update_policy() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "portfolio import item UPDATE policy is missing or too broad" in source
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:
@@ -112,6 +137,4 @@ def test_loopback_detection_cannot_be_bypassed_with_an_explicit_port() -> None:
     assert is_loopback_database("postgresql://postgres@127.0.0.1:55432/wealthsail")
     assert is_loopback_database("postgresql://postgres@localhost:5432/wealthsail")
     assert is_loopback_database("postgresql://postgres@[::1]:5432/wealthsail")
-    assert not is_loopback_database(
-        "postgresql://deploy@db.example:5432/wealthsail"
-    )
+    assert not is_loopback_database("postgresql://deploy@db.example:5432/wealthsail")
