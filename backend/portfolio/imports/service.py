@@ -24,15 +24,13 @@ from backend.portfolio import repository as portfolio_repository
 from backend.portfolio import service as portfolio_service
 from backend.portfolio.imports import repository
 from backend.portfolio.imports.analytics import ShareTransaction, derive_holding_start
+from backend.portfolio.imports.freshness import PREVIEW_ENGINE_VERSION
 from backend.portfolio.imports.package import ImportLimits, parse_tiantian_package
 from backend.portfolio.imports.tiantian import (
     TiantianPackage,
     TiantianPosition,
     TiantianTransaction,
 )
-
-PARSER_VERSION = "tiantian-package/v2"
-
 
 @dataclass(frozen=True, slots=True)
 class ExistingBaseline:
@@ -849,6 +847,7 @@ async def confirm_tiantian_import(
             confirm_empty=confirm_empty,
             idempotency_key=idempotency_key,
             command_content_hash=content_hash,
+            current_preview_engine_version=PREVIEW_ENGINE_VERSION,
         )
         if not confirmed["already_applied"]:
             from backend.portfolio.service import recompute_projections
@@ -933,6 +932,7 @@ async def list_tiantian_imports(
     ctx,
     *,
     source_type: str,
+    status: str | None,
     cursor: datetime | None,
     limit: int,
 ) -> dict[str, Any]:
@@ -946,6 +946,7 @@ async def list_tiantian_imports(
             conn,
             ctx.tenant_id,
             source_type=source_type,
+            status=status,
             cursor=cursor,
             limit=limit,
         )

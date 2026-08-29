@@ -839,6 +839,10 @@ async def test_first_confirmation_rebuilds_inside_transaction_and_returns_pendin
         "historyDuplicated": 1,
     }
     confirm.assert_awaited_once()
+    assert (
+        confirm.await_args.kwargs["current_preview_engine_version"]
+        == "tiantian-preview/3.0.0"
+    )
     recompute.assert_awaited_once()
     assert audit.await_args.kwargs["details"] == {
         "positionCount": 1,

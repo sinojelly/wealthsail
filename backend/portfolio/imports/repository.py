@@ -17,6 +17,12 @@ from backend.errors import (
     ValidationError_,
     VersionConflictError,
 )
+from backend.portfolio.imports.freshness import (
+    PREVIEW_ENGINE_VERSION,
+    FreshnessResult,
+    available_actions,
+    evaluate_freshness,
+)
 
 if TYPE_CHECKING:
     from backend.portfolio.imports.service import (
@@ -316,6 +322,10 @@ async def account_fact_hash(
         tenant_id,
         account_id,
     )
+    return _account_fact_rows_hash(rows)
+
+
+def _account_fact_rows_hash(rows: list[asyncpg.Record]) -> str:
     stable = [
         [
             str(row["id"]),
@@ -330,6 +340,39 @@ async def account_fact_hash(
     return hashlib.sha256(
         json.dumps(stable, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+async def account_fact_hashes(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_ids: list[str],
+) -> dict[str, str]:
+    """Hash all listed accounts with one query so draft-list reads avoid N+1 I/O."""
+    unique_ids = sorted(set(account_ids))
+    if not unique_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT event.account_id, event.id, event.event_type, event.status,
+               event.reverses_event_id, event.import_batch_id,
+               event.import_item_id
+          FROM ledger.ledger_events event
+         WHERE event.tenant_id = $1
+           AND event.account_id = ANY($2::uuid[])
+           AND event.status IN ('CONFIRMED', 'REVERSED')
+         ORDER BY event.account_id, event.id
+        """,
+        tenant_id,
+        unique_ids,
+    )
+    grouped: dict[str, list[asyncpg.Record]] = {account_id: [] for account_id in unique_ids}
+    for row in rows:
+        grouped[str(row["account_id"])].append(row)
+    return {
+        account_id: _account_fact_rows_hash(account_rows)
+        for account_id, account_rows in grouped.items()
+    }
 
 
 async def persist_preview(
@@ -352,7 +395,7 @@ async def persist_preview(
         effective_binding_id = str(await conn.fetchval("SELECT gen_random_uuid()"))
 
     await conn.execute(
-        """
+        f"""
         INSERT INTO ledger.portfolio_import_batches (
             id, tenant_id, account_id, created_by, source_type,
             source_content_hash, status, idempotency_key, source_binding_id,
@@ -361,7 +404,7 @@ async def persist_preview(
             validation_errors, target_account_state_hash
         ) VALUES (
             $1, $2, $3, $4, 'TIANTIAN_FUND_ZIP', $5::text, 'DRAFT', $6, $7,
-            $8, $5::text, $9, 'tiantian-package/v2', $10::jsonb, $11,
+            $8, $5::text, $9, '{PREVIEW_ENGINE_VERSION}', $10::jsonb, $11,
             $12::jsonb, $13
         )
         """,
@@ -680,6 +723,7 @@ async def confirm_draft(
     confirm_empty: bool,
     idempotency_key: str,
     command_content_hash: str,
+    current_preview_engine_version: str = PREVIEW_ENGINE_VERSION,
 ) -> dict[str, Any]:
     """Atomically confirm source facts, per-fund effects, binding, and data job."""
     from backend.portfolio.imports.service import ConfirmationItem, build_ledger_effects
@@ -689,9 +733,18 @@ async def confirm_draft(
         SELECT batch.id AS batch_id, batch.account_id, batch.source_binding_id,
                batch.source_as_of, batch.status, batch.version,
                batch.validation_status, batch.target_account_state_hash,
+               batch.parser_version,
                batch.preview_summary, batch.terminal_command_type,
                batch.terminal_idempotency_key, batch.terminal_content_hash,
-               binding.status AS binding_status
+               binding.status AS binding_status,
+               (
+                   SELECT max(confirmed.source_as_of)
+                     FROM ledger.portfolio_import_batches confirmed
+                    WHERE confirmed.tenant_id = batch.tenant_id
+                      AND confirmed.source_binding_id = batch.source_binding_id
+                      AND confirmed.source_type = 'TIANTIAN_FUND_ZIP'
+                      AND confirmed.status = 'CONFIRMED'
+               ) AS latest_confirmed_source_as_of
           FROM ledger.portfolio_import_batches batch
           JOIN ledger.portfolio_source_bindings binding
             ON binding.tenant_id = batch.tenant_id
@@ -742,8 +795,21 @@ async def confirm_draft(
         tenant_id=tenant_id,
         account_id=account_id,
     )
-    if current_hash != str(batch["target_account_state_hash"]):
-        raise VersionConflictError("账户事实在预览后已变化，请重新预览")
+    freshness = evaluate_freshness(
+        stored_account_hash=str(batch["target_account_state_hash"]),
+        current_account_hash=current_hash,
+        stored_engine_version=str(batch["parser_version"]),
+        current_engine_version=current_preview_engine_version,
+        source_as_of=batch["source_as_of"],
+        latest_confirmed_source_as_of=batch["latest_confirmed_source_as_of"],
+    )
+    if freshness.reasons:
+        messages = {
+            "ACCOUNT_FACTS_CHANGED": "账户事实在预览后已变化，请重新解析",
+            "PREVIEW_ENGINE_CHANGED": "预览引擎已升级，请重新解析",
+            "NEWER_SOURCE_SNAPSHOT_CONFIRMED": "已有更新的来源快照确认，请重新解析",
+        }
+        raise VersionConflictError(messages[freshness.reasons[0]])
 
     item_rows = await conn.fetch(
         """
@@ -1041,6 +1107,60 @@ def _json_array(value: Any) -> list[Any]:
     return decoded if isinstance(decoded, list) else []
 
 
+def _governance_from_hash(
+    batch: asyncpg.Record,
+    *,
+    current_account_hash: str | None,
+) -> dict[str, Any]:
+    status = str(batch["status"])
+    if status == "DRAFT":
+        if current_account_hash is None:
+            raise RuntimeError("DRAFT governance requires the current account fact hash")
+        freshness = evaluate_freshness(
+            stored_account_hash=str(batch["target_account_state_hash"]),
+            current_account_hash=current_account_hash,
+            stored_engine_version=str(batch["parser_version"]),
+            current_engine_version=PREVIEW_ENGINE_VERSION,
+            source_as_of=batch["source_as_of"],
+            latest_confirmed_source_as_of=batch["latest_confirmed_source_as_of"],
+        )
+    else:
+        # Freshness governs whether a DRAFT can still be confirmed.  Terminal
+        # batches are immutable facts and deliberately expose only VIEW.
+        freshness = FreshnessResult(freshness="FRESH", reasons=())
+    actions = available_actions(
+        status=status,
+        validation_status=str(batch["validation_status"]),
+        freshness=freshness.freshness,
+        binding_status=(
+            str(batch["binding_status"])
+            if batch["binding_status"] is not None
+            else None
+        ),
+    )
+    return {
+        "freshness": freshness.freshness,
+        "freshnessReasons": list(freshness.reasons),
+        "availableActions": list(actions),
+    }
+
+
+async def _batch_governance(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    batch: asyncpg.Record,
+) -> dict[str, Any]:
+    current_hash: str | None = None
+    if batch["status"] == "DRAFT":
+        current_hash = await account_fact_hash(
+            conn,
+            tenant_id=tenant_id,
+            account_id=str(batch["account_id"]),
+        )
+    return _governance_from_hash(batch, current_account_hash=current_hash)
+
+
 async def get_import_batch(
     conn: asyncpg.Connection,
     tenant_id: str,
@@ -1051,12 +1171,15 @@ async def get_import_batch(
         SELECT b.id AS batch_id, b.status, b.version, b.source_type, b.source_as_of,
                b.package_schema_version, b.parser_version,
                b.preview_summary, b.validation_status, b.validation_errors,
-               b.created_at, b.updated_at, binding.id AS binding_id,
+               b.target_account_state_hash, b.terminal_reason,
+               b.supersedes_batch_id, b.created_at, b.updated_at,
+               binding.id AS binding_id,
                binding.status AS binding_status,
                binding.display_name AS binding_display_name,
                account.id AS account_id, account.name AS account_name,
                data_job.status AS data_job_status,
-               metrics.metric_statuses
+               metrics.metric_statuses,
+               confirmed_source.latest_confirmed_source_as_of
           FROM ledger.portfolio_import_batches b
           JOIN identity.accounts account
             ON account.tenant_id = b.tenant_id AND account.id = b.account_id
@@ -1086,6 +1209,14 @@ async def get_import_batch(
                      ORDER BY metric.instrument_id, metric.as_of DESC
                 ) latest
           ) metrics ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT max(confirmed.source_as_of) AS latest_confirmed_source_as_of
+                FROM ledger.portfolio_import_batches confirmed
+               WHERE confirmed.tenant_id = b.tenant_id
+                 AND confirmed.source_binding_id = b.source_binding_id
+                 AND confirmed.source_type = 'TIANTIAN_FUND_ZIP'
+                 AND confirmed.status = 'CONFIRMED'
+          ) confirmed_source ON TRUE
          WHERE b.tenant_id = $1 AND b.id = $2
            AND b.source_type = 'TIANTIAN_FUND_ZIP'
         """,
@@ -1094,6 +1225,11 @@ async def get_import_batch(
     )
     if batch is None:
         raise NotFoundError("天天基金导入批次不存在")
+    governance = await _batch_governance(
+        conn,
+        tenant_id=tenant_id,
+        batch=batch,
+    )
     positions = await conn.fetch(
         """
         SELECT item.id AS item_id, item.instrument_id, item.source_symbol,
@@ -1225,8 +1361,16 @@ async def get_import_batch(
         "warnings": warnings,
         "validationStatus": str(batch["validation_status"]),
         "blockingErrors": _json_array(batch["validation_errors"]),
-        "canConfirm": batch["status"] == "DRAFT"
-        and batch["validation_status"] == "VALID",
+        "freshness": governance["freshness"],
+        "freshnessReasons": governance["freshnessReasons"],
+        "availableActions": governance["availableActions"],
+        "canConfirm": "CONFIRM" in governance["availableActions"],
+        "terminalReason": batch["terminal_reason"],
+        "supersedesBatchId": (
+            str(batch["supersedes_batch_id"])
+            if batch["supersedes_batch_id"] is not None
+            else None
+        ),
         "metricsStatus": metrics_status,
         "sourceBinding": {
             "bindingId": str(batch["binding_id"]),
@@ -1248,36 +1392,64 @@ async def list_import_batches(
     tenant_id: str,
     *,
     source_type: str,
+    status: str | None,
     cursor: datetime | None,
     limit: int,
 ) -> dict[str, Any]:
     rows = await conn.fetch(
         """
         SELECT b.id AS batch_id, b.status, b.version, b.source_as_of,
-               b.preview_summary, b.validation_status, b.created_at,
+               b.preview_summary, b.validation_status,
+               b.target_account_state_hash, b.parser_version,
+               b.terminal_reason, b.supersedes_batch_id,
+               b.created_at, b.updated_at,
+               binding.status AS binding_status,
+               confirmed_source.latest_confirmed_source_as_of,
                account.id AS account_id, account.name AS account_name
           FROM ledger.portfolio_import_batches b
           JOIN identity.accounts account
             ON account.tenant_id = b.tenant_id AND account.id = b.account_id
+          LEFT JOIN ledger.portfolio_source_bindings binding
+            ON binding.tenant_id = b.tenant_id AND binding.id = b.source_binding_id
+          LEFT JOIN LATERAL (
+              SELECT max(confirmed.source_as_of) AS latest_confirmed_source_as_of
+                FROM ledger.portfolio_import_batches confirmed
+               WHERE confirmed.tenant_id = b.tenant_id
+                 AND confirmed.source_binding_id = b.source_binding_id
+                 AND confirmed.source_type = 'TIANTIAN_FUND_ZIP'
+                 AND confirmed.status = 'CONFIRMED'
+          ) confirmed_source ON TRUE
          WHERE b.tenant_id = $1 AND b.source_type = $2
-           AND ($3::timestamptz IS NULL OR b.created_at < $3)
+           AND ($3::text IS NULL OR b.status = $3)
+           AND ($4::timestamptz IS NULL OR b.created_at < $4)
          ORDER BY b.created_at DESC, b.id DESC
-         LIMIT $4
+         LIMIT $5
         """,
         tenant_id,
         source_type,
+        status,
         cursor,
         limit + 1,
     )
     has_more = len(rows) > limit
     page = rows[:limit]
+    current_hashes = await account_fact_hashes(
+        conn,
+        tenant_id=tenant_id,
+        account_ids=[str(row["account_id"]) for row in page if row["status"] == "DRAFT"],
+    )
 
     def position_counts(row: asyncpg.Record) -> dict[str, int]:
         summary = _json_object(row["preview_summary"])
         return summary.get("positionCounts", summary)
 
-    return {
-        "items": [
+    items: list[dict[str, Any]] = []
+    for row in page:
+        governance = _governance_from_hash(
+            row,
+            current_account_hash=current_hashes.get(str(row["account_id"])),
+        )
+        items.append(
             {
                 "batchId": str(row["batch_id"]),
                 "status": str(row["status"]),
@@ -1285,14 +1457,25 @@ async def list_import_batches(
                 "sourceAsOf": row["source_as_of"],
                 "summary": position_counts(row),
                 "validationStatus": str(row["validation_status"]),
+                "freshness": governance["freshness"],
+                "freshnessReasons": governance["freshnessReasons"],
+                "availableActions": governance["availableActions"],
+                "terminalReason": row["terminal_reason"],
+                "supersedesBatchId": (
+                    str(row["supersedes_batch_id"])
+                    if row["supersedes_batch_id"] is not None
+                    else None
+                ),
                 "account": {
                     "accountId": str(row["account_id"]),
                     "name": str(row["account_name"]),
                 },
                 "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
             }
-            for row in page
-        ],
+        )
+    return {
+        "items": items,
         "nextCursor": page[-1]["created_at"].isoformat() if has_more else None,
     }
 

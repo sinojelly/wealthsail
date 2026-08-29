@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -112,6 +114,7 @@ async def test_persist_preview_writes_draft_tables_and_never_ledger_events() -> 
     assert "portfolio_import_source_records" in combined
     assert "ledger_events" not in combined
     assert combined.count("$5::text") >= 2
+    assert "tiantian-preview/3.0.0" in combined
     assert result["batch_id"] == "batch-1"
     assert result["binding_id"] == "binding-1"
     assert len(result["item_ids"]) == 1
@@ -209,9 +212,17 @@ async def test_persist_preview_keeps_unknown_fund_out_of_instrument_items() -> N
 
 
 class _ReadConnection:
-    def __init__(self, *, status: str = "DRAFT", job_status: str = "RUNNING") -> None:
+    def __init__(
+        self,
+        *,
+        status: str = "DRAFT",
+        job_status: str = "RUNNING",
+        parser_version: str = "tiantian-preview/3.0.0",
+    ) -> None:
         self.status = status
         self.job_status = job_status
+        self.parser_version = parser_version
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def fetchrow(self, sql: str, *_args):
         assert "WHERE b.tenant_id = $1 AND b.id = $2" in sql
@@ -222,7 +233,13 @@ class _ReadConnection:
             "source_type": "TIANTIAN_FUND_ZIP",
             "source_as_of": datetime.fromisoformat("2026-08-28T08:00:00+08:00"),
             "package_schema_version": "wealthsail-tiantian-import/v2",
-            "parser_version": "tiantian-package/v2",
+            "parser_version": self.parser_version,
+            "target_account_state_hash": hashlib.sha256(
+                json.dumps([], separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "latest_confirmed_source_as_of": None,
+            "terminal_reason": None,
+            "supersedes_batch_id": None,
             "preview_summary": (
                 '{"positionCounts":{"total":1,"new":1},'
                 '"history":{"importable":0,"duplicated":0,"reviewRequired":0},'
@@ -244,6 +261,9 @@ class _ReadConnection:
         }
 
     async def fetch(self, sql: str, *_args):
+        self.fetch_calls.append((sql, _args))
+        if "FROM ledger.ledger_events event" in sql:
+            return []
         if "portfolio_import_items" in sql:
             return [
                 {
@@ -282,9 +302,18 @@ class _ReadConnection:
                     "warnings": ["PARTIAL_HISTORY"],
                 },
                 "validation_status": "VALID",
+                "target_account_state_hash": hashlib.sha256(
+                    json.dumps([], separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+                "parser_version": self.parser_version,
+                "terminal_reason": None,
+                "supersedes_batch_id": None,
+                "binding_status": "PENDING",
+                "latest_confirmed_source_as_of": None,
                 "account_id": "account-1",
                 "account_name": "天天基金账户",
                 "created_at": datetime.fromisoformat("2026-08-28T08:01:00+08:00"),
+                "updated_at": datetime.fromisoformat("2026-08-28T08:02:00+08:00"),
             }
         ]
 
@@ -316,6 +345,7 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
         conn,
         "tenant-1",
         source_type="TIANTIAN_FUND_ZIP",
+        status=None,
         cursor=None,
         limit=20,
     )
@@ -333,8 +363,20 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
     assert detail["package"]["sourceWindowEnd"] == "2026-08-28"
     assert detail["warnings"] == ["PARTIAL_HISTORY"]
     assert detail["metricsStatus"] is None
+    assert detail["freshness"] == "FRESH"
+    assert detail["freshnessReasons"] == []
+    assert detail["availableActions"] == ["VIEW", "CONFIRM", "CANCEL", "REPARSE"]
+    assert detail["terminalReason"] is None
+    assert detail["supersedesBatchId"] is None
     assert listing["items"][0]["batchId"] == "batch-1"
     assert listing["items"][0]["summary"] == {"total": 1, "new": 1}
+    assert listing["items"][0]["freshness"] == "FRESH"
+    assert listing["items"][0]["availableActions"] == [
+        "VIEW",
+        "CONFIRM",
+        "CANCEL",
+        "REPARSE",
+    ]
     assert listing["nextCursor"] is None
 
     confirmed = await get_import_batch(
@@ -343,6 +385,43 @@ async def test_get_and_list_batch_support_page_refresh_and_history() -> None:
         "batch-1",
     )
     assert confirmed["metricsStatus"] == "PENDING"
+    assert confirmed["availableActions"] == ["VIEW"]
+
+
+@pytest.mark.asyncio
+async def test_old_preview_engine_marks_draft_stale_and_removes_confirm_action() -> None:
+    detail = await get_import_batch(
+        _ReadConnection(parser_version="tiantian-package/v2"),
+        "tenant-1",
+        "batch-1",
+    )
+
+    assert detail["freshness"] == "STALE"
+    assert detail["freshnessReasons"] == ["PREVIEW_ENGINE_CHANGED"]
+    assert detail["availableActions"] == ["VIEW", "CANCEL", "REPARSE"]
+
+
+@pytest.mark.asyncio
+async def test_list_batches_pushes_draft_status_into_the_database_query() -> None:
+    conn = _ReadConnection()
+
+    result = await list_import_batches(
+        conn,
+        "tenant-1",
+        source_type="TIANTIAN_FUND_ZIP",
+        status="DRAFT",
+        cursor=None,
+        limit=20,
+    )
+
+    list_sql, list_args = next(
+        (sql, args)
+        for sql, args in conn.fetch_calls
+        if "ORDER BY b.created_at DESC" in sql
+    )
+    assert "($3::text IS NULL OR b.status = $3)" in list_sql
+    assert list_args[2] == "DRAFT"
+    assert result["items"][0]["status"] == "DRAFT"
 
 
 class _UnresolvedReadConnection(_ReadConnection):
@@ -548,6 +627,9 @@ class _TerminalConnection:
     async def fetch(self, _sql: str, *_args):
         return []
 
+    async def execute(self, _sql: str, *_args):
+        return "SELECT 1"
+
 
 def _terminal_batch(**overrides) -> dict:
     batch = {
@@ -564,6 +646,8 @@ def _terminal_batch(**overrides) -> dict:
         "terminal_idempotency_key": "confirm-1",
         "terminal_content_hash": "b" * 64,
         "binding_status": "ACTIVE",
+        "parser_version": "tiantian-preview/3.0.0",
+        "latest_confirmed_source_as_of": None,
     }
     batch.update(overrides)
     return batch
@@ -614,6 +698,32 @@ async def test_stale_expected_version_fails_before_any_effect_write() -> None:
             decisions={},
             confirm_empty=False,
             idempotency_key="confirm-1",
+            command_content_hash="b" * 64,
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_rechecks_preview_engine_under_the_batch_lock() -> None:
+    empty_account_hash = hashlib.sha256(
+        json.dumps([], separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(VersionConflictError, match="预览引擎"):
+        await confirm_draft(
+            _TerminalConnection(
+                _terminal_batch(
+                    status="DRAFT",
+                    version=1,
+                    target_account_state_hash=empty_account_hash,
+                    parser_version="tiantian-package/v2",
+                )
+            ),
+            tenant_id="tenant-1",
+            batch_id="batch-1",
+            expected_version=1,
+            decisions={},
+            confirm_empty=False,
+            idempotency_key="confirm-stale-engine",
             command_content_hash="b" * 64,
         )
 

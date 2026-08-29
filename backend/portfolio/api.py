@@ -249,6 +249,7 @@ async def portfolio_list_tiantian_imports(
     source_type: Literal["TIANTIAN_FUND_ZIP"] = Query(
         default="TIANTIAN_FUND_ZIP", alias="sourceType"
     ),
+    status: Literal["DRAFT"] | None = Query(default=None),
     cursor: datetime | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     pool: Pool = Depends(get_pool),
@@ -259,6 +260,7 @@ async def portfolio_list_tiantian_imports(
         pool,
         ctx,
         source_type=source_type,
+        status=status,
         cursor=cursor,
         limit=limit,
     )

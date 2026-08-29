@@ -202,6 +202,7 @@ def test_list_imports_forwards_bounded_cursor_contract() -> None:
                 "sourceType": "TIANTIAN_FUND_ZIP",
                 "cursor": "2026-08-28T10:00:00+08:00",
                 "limit": 25,
+                "status": "DRAFT",
             },
         )
 
@@ -209,6 +210,17 @@ def test_list_imports_forwards_bounded_cursor_contract() -> None:
     assert response.json()["data"] == {"items": [], "nextCursor": None}
     assert listed.await_args.kwargs["source_type"] == "TIANTIAN_FUND_ZIP"
     assert listed.await_args.kwargs["limit"] == 25
+    assert listed.await_args.kwargs["status"] == "DRAFT"
+
+
+def test_list_imports_rejects_terminal_status_filter() -> None:
+    response = _client(enabled=False).get(
+        "/api/v1/portfolio/imports",
+        params={"sourceType": "TIANTIAN_FUND_ZIP", "status": "CONFIRMED"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_confirm_dispatches_tiantian_command_with_if_match_and_decisions() -> None:
