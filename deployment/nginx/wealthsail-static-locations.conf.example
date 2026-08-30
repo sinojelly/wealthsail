@@ -1,0 +1,22 @@
+# Copy these locations into the active WealthSail `server {}` block after
+# confirming its `root`. Do not include this file blindly when the server block
+# already defines one of the same locations.
+
+# HTML is the mutable release pointer and must be revalidated on every load.
+location = /index.html {
+    expires -1;
+    try_files $uri =404;
+}
+
+# Vite filenames contain a content hash. Missing assets must return 404 rather
+# than the SPA HTML fallback, otherwise browsers reject JavaScript as text/html.
+location ^~ /assets/ {
+    expires max;
+    try_files $uri =404;
+}
+
+# Only application routes use the SPA fallback.
+location / {
+    expires -1;
+    try_files $uri $uri/ /index.html;
+}

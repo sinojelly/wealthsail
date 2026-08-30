@@ -602,6 +602,67 @@ button:disabled {
   font-size: 10px;
 }
 
+.app-load-failure {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--slate-50);
+}
+.app-load-failure-card {
+  width: min(100%, 420px);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px;
+  border: 1px solid var(--slate-200);
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 10%);
+  text-align: center;
+}
+.app-load-failure-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--teal);
+  color: white;
+  font-size: 20px;
+  font-weight: 800;
+}
+.app-load-failure-card h1 {
+  margin: 4px 0 0;
+  color: var(--slate-900);
+  font-size: 20px;
+}
+.app-load-failure-card p {
+  margin: 0;
+  color: var(--slate-500);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.app-load-failure-card button {
+  min-height: 40px;
+  margin-top: 4px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--teal);
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.app-load-failure-card button:hover {
+  filter: brightness(0.94);
+}
+.app-load-failure-card button:focus-visible {
+  outline: 3px solid rgb(13 148 136 / 24%);
+  outline-offset: 2px;
+}
+
 .dialog-backdrop {
   position: fixed;
   inset: 0;
