@@ -11,22 +11,42 @@ import asyncio
 import logging
 import sys
 from datetime import datetime
+from pathlib import Path
 
-sys.path.insert(0, "/home/lenovo/wealthsail")
+# File-path execution sets sys.path[0] to ``scripts/``. Resolve the checkout
+# from this file so the documented command works in /opt/wealthsail, Windows
+# development checkouts, and any future deployment location.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from backend.common.database import create_pool  # noqa: E402
-from backend.config import get_settings  # noqa: E402
+from backend.common.database import (  # noqa: E402
+    create_pool,
+    verify_runtime_login_boundary,
+)
+from backend.config import get_settings, validate_runtime_settings  # noqa: E402
 from backend.jobs import runner  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 async def main() -> None:
-    settings = get_settings()
+    settings = validate_runtime_settings(get_settings(), process="worker")
     pool = await create_pool(
-        settings.worker_database_url, min_size=1, max_size=2
+        settings.worker_database_url,
+        min_size=1,
+        max_size=2,
+        statement_cache_size=settings.db_statement_cache_size,
+        runtime_role="wealthsail_worker",
     )
     try:
+        # Match the long-running Worker trust boundary before any privileged
+        # scheduler query reaches workflow/reporting tables.
+        await verify_runtime_login_boundary(
+            pool,
+            process="worker",
+            skip=not settings.is_production,
+        )
         now = datetime.now()
         outcomes = await runner.run_session(pool, settings, "POST_MARKET", now)
         print(f"POST_MARKET_OUTCOMES={outcomes}")
