@@ -58,8 +58,11 @@ def test_039_adds_append_only_account_performance_baselines() -> None:
         "AUTO_MIGRATION",
         "idx_ledger_events_performance_cash_flow",
         "idx_ledger_events_confirmed_reversal",
+        "pg_catalog.sha256",
+        "pg_catalog.convert_to",
     ):
         assert contract in migration
+    assert "public.digest" not in migration
     assert "GRANT UPDATE ON ledger.account_performance_baselines" not in migration
     assert "GRANT DELETE ON ledger.account_performance_baselines" not in migration
     assert "TO authenticated" not in migration

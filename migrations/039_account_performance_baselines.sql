@@ -93,16 +93,20 @@ SELECT latest_nav.tenant_id,
        1,
        NULL,
        'AUTO-MIGRATION-039:' || latest_nav.account_id::text,
-       encode(
-           public.digest(
-               concat_ws(
-                   ':', latest_nav.tenant_id::text,
-                   latest_nav.account_id::text,
-                   latest_nav.as_of::text,
-                   latest_nav.total_nav::text,
-                   'AUTO_MIGRATION'
-               ),
-               'sha256'
+       -- PostgreSQL core SHA-256 is schema-stable. Hosted databases such as
+       -- Supabase may install pgcrypto.digest outside public.
+       pg_catalog.encode(
+           pg_catalog.sha256(
+               pg_catalog.convert_to(
+                   concat_ws(
+                       ':', latest_nav.tenant_id::text,
+                       latest_nav.account_id::text,
+                       latest_nav.as_of::text,
+                       latest_nav.total_nav::text,
+                       'AUTO_MIGRATION'
+                   ),
+                   'UTF8'
+               )
            ),
            'hex'
        )
@@ -135,13 +139,16 @@ BEGIN
         1,
         NULL,
         'AUTO-NAV:' || NEW.account_id::text || ':' || NEW.as_of::text,
-        encode(
-            public.digest(
-                concat_ws(
-                    ':', NEW.tenant_id::text, NEW.account_id::text,
-                    NEW.as_of::text, NEW.total_nav::text, 'AUTO_NAV'
-                ),
-                'sha256'
+        -- Keep the trigger independent of the pgcrypto extension schema.
+        pg_catalog.encode(
+            pg_catalog.sha256(
+                pg_catalog.convert_to(
+                    concat_ws(
+                        ':', NEW.tenant_id::text, NEW.account_id::text,
+                        NEW.as_of::text, NEW.total_nav::text, 'AUTO_NAV'
+                    ),
+                    'UTF8'
+                )
             ),
             'hex'
         )
