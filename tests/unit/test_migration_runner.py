@@ -30,10 +30,31 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 35
+    assert versions[-1] == 36
     assert migrations[-1].path.name == (
-        "035_personal_tenant_job_privilege_hardening.sql"
+        "036_fund_nav_source_type_alignment.sql"
     )
+
+
+def test_036_aligns_existing_fund_nav_sources_without_widening_the_enum() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration_path = root / "migrations" / "036_fund_nav_source_type_alignment.sql"
+
+    assert migration_path.exists()
+    migration = migration_path.read_text(encoding="utf-8")
+    assert "UPDATE reference.data_sources" in migration
+    assert "TiantianFund-EastMoney" in migration
+    assert "WealthSail-Fund-Estimator" in migration
+    assert "source_type = 'FUND_NAV'" in migration
+    assert "DROP CONSTRAINT data_sources_source_type_check" not in migration
+
+
+def test_migration_readback_rejects_fund_nav_source_type_drift() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "fund NAV data source type alignment is missing" in source
+    assert "TiantianFund-EastMoney" in source
+    assert "WealthSail-Fund-Estimator" in source
 
 
 def test_034_migration_limits_tenant_rename_to_current_owner() -> None:

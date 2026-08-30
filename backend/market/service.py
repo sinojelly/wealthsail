@@ -62,15 +62,11 @@ async def refresh_market(
     result: dict = {"session": session, "startedAt": started}
 
     async with system_connection(pool) as conn:
-        for source_name in md.source_names():
+        for source_name, source_type in md.source_definitions():
             await repository.upsert_data_source(
                 conn,
                 name=source_name,
-                source_type=(
-                    "FUND_NAV"
-                    if source_name == md.ESTIMATOR_SOURCE_NAME
-                    else "MARKET_DATA"
-                ),
+                source_type=source_type,
             )
         instruments = await repository.get_active_instruments(conn)
         holdings = await repository.get_holdings_for_refresh(conn)

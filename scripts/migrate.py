@@ -898,6 +898,30 @@ async def _readback(conn: asyncpg.Connection) -> None:
             + ", ".join(invalid_personal_schedule_contracts)
         )
 
+    data_source_type_contract = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(c.oid)
+          FROM pg_constraint c
+         WHERE c.conrelid='reference.data_sources'::regclass
+           AND c.conname='data_sources_source_type_check'
+        """
+    )
+    fund_nav_source_drift = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM reference.data_sources
+         WHERE name IN ('TiantianFund-EastMoney', 'WealthSail-Fund-Estimator')
+           AND source_type <> 'FUND_NAV'
+        """
+    )
+    if (
+        not data_source_type_contract
+        or "FUND_NAV" not in data_source_type_contract
+        or "PUBLIC_API" in data_source_type_contract
+        or fund_nav_source_drift
+    ):
+        raise RuntimeError("fund NAV data source type alignment is missing")
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"

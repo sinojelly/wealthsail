@@ -21,12 +21,14 @@ from decimal import Decimal
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
+import asyncpg
 import httpx
 
 from backend.common.database import Pool, system_connection
 from backend.config import Settings
 from backend.integrations.market_data import (
     FUNDSOURCE_NAME,
+    FUNDSOURCE_TYPE,
     Observation,
     fetch_fund_nav_history,
 )
@@ -48,6 +50,12 @@ _DATABASE_USERINFO_PATTERN = re.compile(
 _SECRET_VALUE_PATTERN = re.compile(
     r"\b(password|passwd|token|secret|api[_-]?key|authorization)=([^\s&]+)",
     re.IGNORECASE,
+)
+_TERMINAL_DATABASE_ERRORS = (
+    asyncpg.IntegrityConstraintViolationError,
+    asyncpg.DataError,
+    asyncpg.SyntaxOrAccessError,
+    asyncpg.InvalidAuthorizationSpecificationError,
 )
 
 
@@ -230,7 +238,10 @@ async def fail_data_task(
     settings: Settings,
     exc: Exception,
 ) -> bool:
-    terminal = lease.attempt_count >= settings.data_task_max_attempts
+    terminal = (
+        lease.attempt_count >= settings.data_task_max_attempts
+        or isinstance(exc, _TERMINAL_DATABASE_ERRORS)
+    )
     backoff = settings.data_task_base_backoff_seconds * (
         2 ** max(lease.attempt_count - 1, 0)
     )
@@ -384,7 +395,7 @@ async def persist_nav_observations(
     async with system_connection(pool) as conn:
         async with conn.transaction():
             await market_repository.upsert_data_source(
-                conn, name=FUNDSOURCE_NAME, source_type="PUBLIC_API"
+                conn, name=FUNDSOURCE_NAME, source_type=FUNDSOURCE_TYPE
             )
             source_id = await market_repository.get_source_id(conn, FUNDSOURCE_NAME)
             if source_id is None:

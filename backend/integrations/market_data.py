@@ -46,6 +46,9 @@ AKSOURCE_NAME = "AkShare-OpenSource"
 FUNDSOURCE_NAME = "TiantianFund-EastMoney"
 SINASOURCE_NAME = "Sina-Finance-Quote"
 ESTIMATOR_SOURCE_NAME = "WealthSail-Fund-Estimator"
+AKSOURCE_TYPE = "MARKET_DATA"
+FUNDSOURCE_TYPE = "FUND_NAV"
+ESTIMATOR_SOURCE_TYPE = "FUND_NAV"
 
 _SINA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -970,8 +973,17 @@ async def fetch_all(
     return [obs for batch in results for obs in batch]
 
 
-def source_names() -> tuple[str, str, str]:
-    return AKSOURCE_NAME, FUNDSOURCE_NAME, ESTIMATOR_SOURCE_NAME
+def source_definitions() -> tuple[tuple[str, str], ...]:
+    """Return the canonical provider names and database source types."""
+    return (
+        (AKSOURCE_NAME, AKSOURCE_TYPE),
+        (FUNDSOURCE_NAME, FUNDSOURCE_TYPE),
+        (ESTIMATOR_SOURCE_NAME, ESTIMATOR_SOURCE_TYPE),
+    )
+
+
+def source_names() -> tuple[str, ...]:
+    return tuple(name for name, _source_type in source_definitions())
 
 
 _ak_module = None

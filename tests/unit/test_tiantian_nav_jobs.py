@@ -9,6 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 
 from backend.config import Settings
@@ -20,9 +21,15 @@ from backend.jobs.data_tasks import (
     complete_data_task,
     fail_data_task,
     materialize_position_metrics,
+    persist_nav_observations,
     process_data_task,
 )
-from backend.integrations.market_data import F_NAV, Observation, Q_STALE
+from backend.integrations.market_data import (
+    FUNDSOURCE_NAME,
+    F_NAV,
+    Observation,
+    Q_STALE,
+)
 
 
 class _Connection:
@@ -31,6 +38,8 @@ class _Connection:
         self.result = result
         self.sql: list[str] = []
         self.args: tuple = ()
+        self.execute_calls: list[tuple[str, tuple]] = []
+        self.fetchval_calls: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, sql: str, *args):
         self.sql.append(sql)
@@ -40,7 +49,18 @@ class _Connection:
     async def execute(self, sql: str, *args):
         self.sql.append(sql)
         self.args = args
+        self.execute_calls.append((sql, args))
         return self.result
+
+    async def fetchval(self, sql: str, *args):
+        self.sql.append(sql)
+        self.args = args
+        self.fetchval_calls.append((sql, args))
+        if "SELECT id FROM reference.data_sources" in sql:
+            return "source-1"
+        if "INSERT INTO market.source_snapshots" in sql:
+            return "snapshot-1"
+        return None
 
     def transaction(self):
         return _connection(self)
@@ -172,6 +192,45 @@ async def test_failure_logging_distinguishes_automatic_retry_from_terminal(
     assert "error_class=RuntimeError" in messages
 
 
+@pytest.mark.asyncio
+async def test_database_check_violation_is_terminal_on_the_first_attempt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn = _Connection()
+    lease = DataTaskLease(
+        run_id="run-1",
+        tenant_id="tenant-1",
+        job_type="FUND_NAV_BACKFILL",
+        payload={"batchId": "batch-1"},
+        attempt_count=1,
+        lease_token="lease-1",
+    )
+    settings = Settings(
+        _env_file=None,
+        data_task_max_attempts=5,
+        data_task_base_backoff_seconds=10,
+    )
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.system_connection",
+            return_value=_connection(conn),
+        ),
+        caplog.at_level(logging.WARNING, logger="wealthsail.data_tasks"),
+    ):
+        await fail_data_task(
+            MagicMock(),
+            lease,
+            settings,
+            asyncpg.CheckViolationError("invalid source type"),
+        )
+
+    assert conn.args[5] is True
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "data_task_failed_terminal" in messages
+    assert "data_task_retry_scheduled" not in messages
+
+
 def test_effective_holding_date_defaults_to_portfolio_estimate_until_user_overrides() -> (
     None
 ):
@@ -277,6 +336,32 @@ async def test_backfill_fetches_outside_db_and_materializes_only_open_source_pos
     materialize.assert_awaited_once()
     assert materialize.await_args.args[2] == [position]
     assert materialize.await_args.args[3] == {"fund-1": observations}
+
+
+@pytest.mark.asyncio
+async def test_nav_persistence_registers_tiantian_as_a_fund_nav_source() -> None:
+    conn = _Connection()
+    observation = Observation(
+        symbol="012733",
+        subject_type="FUND",
+        field_code=F_NAV,
+        value=Decimal("1.20"),
+        as_of=datetime.fromisoformat("2026-08-29T00:00:00+00:00"),
+        quality_status=Q_STALE,
+    )
+
+    with patch(
+        "backend.jobs.data_tasks.system_connection",
+        return_value=_connection(conn),
+    ):
+        await persist_nav_observations(MagicMock(), "fund-1", [observation])
+
+    source_registration = next(
+        args
+        for sql, args in conn.execute_calls
+        if "INSERT INTO reference.data_sources" in sql
+    )
+    assert source_registration == (FUNDSOURCE_NAME, "FUND_NAV")
 
 
 @pytest.mark.asyncio

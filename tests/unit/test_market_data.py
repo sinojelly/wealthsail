@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 import httpx
 
+from backend.integrations import market_data as md
 from backend.integrations.market_data import (
     F_NAV,
     Q_FRESH,
@@ -24,6 +25,14 @@ from backend.integrations.market_data import (
     fetch_fund_nav_history,
 )
 from backend.market import service
+
+
+def test_market_source_registry_uses_database_source_type_vocabulary() -> None:
+    assert md.source_definitions() == (
+        ("AkShare-OpenSource", "MARKET_DATA"),
+        ("TiantianFund-EastMoney", "FUND_NAV"),
+        ("WealthSail-Fund-Estimator", "FUND_NAV"),
+    )
 
 
 def test_decimal_never_via_float() -> None:
