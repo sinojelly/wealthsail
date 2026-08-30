@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 32
-    assert migrations[-1].path.name == "032_tenant_user_account_ownership.sql"
+    assert versions[-1] == 33
+    assert migrations[-1].path.name == "033_personal_tenant_report_jobs.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -167,6 +167,29 @@ def test_readback_checks_tenant_user_account_ownership_boundaries() -> None:
         "api_can_probe_platform_roles",
     ):
         assert contract in source
+
+
+def test_033_initializes_four_jobs_only_for_a_new_personal_tenant() -> None:
+    """Joining an existing tenant must not create a second schedule set."""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "033_personal_tenant_report_jobs.sql"
+    ).read_text(encoding="utf-8")
+
+    personal_branch = migration.split(
+        "IF v_inv.purpose = 'CREATE_PERSONAL_TENANT' THEN", 1
+    )[1].split("ELSE", 1)[0]
+    assert "INSERT INTO workflow.jobs" in personal_branch
+    for session in ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET"):
+        assert personal_branch.count(f"'{session}'") == 1
+    assert "GRANT INSERT ON workflow.jobs TO wealthsail_api" not in migration
+    assert "GRANT INSERT ON workflow.jobs TO authenticated" not in migration
+
+
+def test_readback_requires_personal_tenant_schedule_initialization() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "personal tenant report schedule initialization is missing" in source
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:

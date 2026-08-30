@@ -784,6 +784,43 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("platform personal-tenant invitation privilege boundary is invalid")
 
+    personal_tenant_acceptance = await conn.fetchrow(
+        """
+        SELECT p.prosecdef,
+               pg_get_functiondef(p.oid) AS definition,
+               has_table_privilege(
+                   'wealthsail_api', 'workflow.jobs', 'INSERT'
+               ) AS api_can_insert_jobs,
+               has_table_privilege(
+                   'authenticated', 'workflow.jobs', 'INSERT'
+               ) AS browser_can_insert_jobs
+          FROM pg_proc p
+         WHERE p.oid =
+               'identity.accept_invitation(text,text,text,text)'::regprocedure
+        """
+    )
+    required_personal_schedule_tokens = (
+        "IF v_inv.purpose = 'CREATE_PERSONAL_TENANT' THEN",
+        "INSERT INTO workflow.jobs",
+        "'PRE_MARKET'",
+        "'INTRADAY'",
+        "'FUND_1430'",
+        "'POST_MARKET'",
+    )
+    if (
+        personal_tenant_acceptance is None
+        or not personal_tenant_acceptance["prosecdef"]
+        or personal_tenant_acceptance["api_can_insert_jobs"]
+        or personal_tenant_acceptance["browser_can_insert_jobs"]
+        or any(
+            token not in str(personal_tenant_acceptance["definition"] or "")
+            for token in required_personal_schedule_tokens
+        )
+    ):
+        raise RuntimeError(
+            "personal tenant report schedule initialization is missing or unsafe"
+        )
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"
