@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import RiskPolicyPage from "./RiskPolicyPage";
+import type { PoliciesResponse } from "../../api/types";
 import { renderWithSession } from "../../test/render-with-session";
 import { policiesFixture, rulesFixture } from "../../test/fixtures";
 
@@ -23,11 +24,19 @@ const { previewRiskPolicy, confirmRiskPolicy } = vi.hoisted(() => ({
   }),
 }));
 
+const policyState = vi.hoisted(() => ({
+  data: null as PoliciesResponse | null,
+}));
+
 vi.mock("../../api/risk", () => ({ previewRiskPolicy, confirmRiskPolicy }));
 vi.mock("../../api/hooks", () => ({
-  usePolicies: () => ({ data: policiesFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
+  usePolicies: () => ({ data: policyState.data, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
   useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
 }));
+
+beforeEach(() => {
+  policyState.data = policiesFixture;
+});
 
 it("previews a draft through the policy service before a reauthenticated confirmation", async () => {
   const user = userEvent.setup();
@@ -55,4 +64,53 @@ it("previews a draft through the policy service before a reauthenticated confirm
       password: "owner-passphrase",
     }),
   );
+});
+
+it("explains the unconfigured policy and budget without placeholder metrics", () => {
+  policyState.data = {
+    current: null,
+    history: [],
+    budget: {
+      maxDrawdownLimit: null,
+      singlePositionLimit: null,
+      equityTargetPct: null,
+      bondTargetPct: null,
+      goldTargetPct: null,
+      cashTargetPct: null,
+      rebalanceTolerancePct: null,
+      minCashRatio: null,
+      investmentHorizonMonths: null,
+      cashNeedAmount: null,
+      allowedAssetTypes: null,
+      alertBudgetPerDay: null,
+    },
+  };
+
+  renderWithSession(<RiskPolicyPage />);
+
+  expect(
+    screen.getByRole("status", { name: "尚未配置投资政策" }),
+  ).toHaveTextContent("在左侧完成预览并确认后");
+  expect(
+    screen.getByRole("status", { name: "尚无风险预算" }),
+  ).toHaveTextContent("确认投资政策后");
+  expect(screen.getByText("尚未配置生效策略")).toBeInTheDocument();
+  expect(screen.queryByText(/当前生效版本 · v/)).not.toBeInTheDocument();
+  expect(screen.queryByText("—%", { exact: false })).not.toBeInTheDocument();
+});
+
+it("does not present a partially populated active budget as complete", () => {
+  policyState.data = {
+    ...policiesFixture,
+    budget: {
+      ...policiesFixture.budget,
+      minCashRatio: null,
+    },
+  };
+
+  renderWithSession(<RiskPolicyPage />);
+
+  expect(
+    screen.getByRole("status", { name: "尚无风险预算" }),
+  ).toBeInTheDocument();
 });

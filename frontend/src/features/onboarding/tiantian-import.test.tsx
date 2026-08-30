@@ -164,6 +164,14 @@ beforeEach(() => {
   }));
 });
 
+it("presents empty server import history as a compact guided state", () => {
+  renderWithSession(<TiantianImportWizard />);
+
+  expect(
+    screen.getByRole("status", { name: "暂无天天基金导入记录" }),
+  ).toHaveTextContent("确认写入持仓基线后，导入批次会显示在这里");
+});
+
 it("shows pending drafts before upload without asking for the ZIP again", () => {
   const draft = preview({
     blockingErrors: [],

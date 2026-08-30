@@ -18,6 +18,7 @@ import type {
   TiantianImportListItem,
 } from "../../../api/types";
 import Dialog from "../../../components/accessibility/Dialog";
+import EmptyState from "../../../components/data-state/EmptyState";
 import ImportConfirmStep from "./ImportConfirmStep";
 import ImportPackageStep from "./ImportPackageStep";
 import ImportPreviewStep from "./ImportPreviewStep";
@@ -352,7 +353,12 @@ export default function TiantianImportWizard() {
           {(history.data?.items ?? []).every(
             (item) => item.status === "DRAFT",
           ) ? (
-            <p className="muted">暂无服务器导入批次。</p>
+            <EmptyState
+              className="onboarding-empty-state tiantian-history-empty"
+              title="暂无天天基金导入记录"
+              detail="确认写入持仓基线后，导入批次会显示在这里。"
+              icon={History}
+            />
           ) : null}
           <div className="import-history-list">
             {history.data?.items

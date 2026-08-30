@@ -8,8 +8,10 @@ import {
 
 export default function RiskBudgetForm({
   onPreview,
+  currentPolicy,
 }: {
   onPreview: (values: RiskBudgetValues) => Promise<void>;
+  currentPolicy: { version: number; effectiveFrom: string } | null;
 }) {
   const {
     register,
@@ -27,10 +29,17 @@ export default function RiskBudgetForm({
           <span className="status-pill draft">DRAFT</span>
           <p>当前修改尚未生效。请先预览影响，再完成重新认证与确认。</p>
         </div>
-      ) : (
+      ) : currentPolicy ? (
         <div className="confirmed-banner">
           <span className="status-pill confirmed">CONFIRMED</span>
-          <p>当前生效版本 · v3 · 2026-07-15 09:26 确认</p>
+          <p>
+            当前生效版本 · v{currentPolicy.version} · {currentPolicy.effectiveFrom} 起
+          </p>
+        </div>
+      ) : (
+        <div className="unconfigured-banner">
+          <span className="status-pill unconfigured">未配置</span>
+          <p>尚未配置生效策略</p>
         </div>
       )}
       <section className="risk-form-section">
@@ -170,7 +179,13 @@ export default function RiskBudgetForm({
         </div>
       </section>
       <footer className="risk-form-actions">
-        <span>{isDirty ? "有未保存修改" : "当前配置与已确认版本一致"}</span>
+        <span>
+          {isDirty
+            ? "有未保存修改"
+            : currentPolicy
+              ? "当前配置与已确认版本一致"
+              : "填写或调整参数后可预览并确认"}
+        </span>
         <button
           type="submit"
           className="btn-primary"

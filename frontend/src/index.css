@@ -1581,6 +1581,23 @@ button:disabled {
   color: #059669;
   font-size: 8px;
 }
+.report-list-empty {
+  grid-column: 1 / -1;
+  min-height: 150px;
+  padding: 22px 12px;
+}
+.report-list-empty .empty-state-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.report-list-empty strong {
+  font-size: 10px;
+}
+.report-list-empty p {
+  max-width: 220px;
+  font-size: 9px;
+}
 .timeline-note {
   margin: 16px 14px;
   padding: 11px;
@@ -1593,6 +1610,23 @@ button:disabled {
 .report-viewer {
   min-width: 0;
   background: white;
+}
+.report-viewer-empty {
+  min-width: 0;
+  min-height: 360px;
+  align-content: center;
+  background: white;
+}
+.report-viewer-empty .empty-state-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+}
+.report-viewer-empty strong {
+  font-size: 13px;
+}
+.report-viewer-empty p {
+  max-width: 420px;
 }
 .report-viewer-header {
   min-height: 118px;
@@ -2216,16 +2250,23 @@ button:disabled {
 }
 @media (max-width: 700px) {
   .reports-workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     margin: -18px -12px -36px;
   }
   .report-timeline {
+    min-width: 0;
     border-right: 0;
     border-bottom: 1px solid var(--slate-200);
   }
   .report-list {
+    min-width: 0;
+    max-width: 100%;
     grid-template-columns: repeat(4, minmax(180px, 1fr));
     overflow: auto;
+  }
+  .report-list.is-empty {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: hidden;
   }
   .timeline-date,
   .timeline-note {
@@ -2267,7 +2308,8 @@ button:disabled {
   overflow: hidden;
 }
 .draft-banner,
-.confirmed-banner {
+.confirmed-banner,
+.unconfigured-banner {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -2282,8 +2324,13 @@ button:disabled {
   border-color: #a7f3d0;
   background: #ecfdf5;
 }
+.unconfigured-banner {
+  border-color: var(--slate-200);
+  background: var(--slate-50);
+}
 .draft-banner p,
-.confirmed-banner p {
+.confirmed-banner p,
+.unconfigured-banner p {
   margin: 0;
   color: var(--slate-600);
   font-size: 9px;
@@ -2295,6 +2342,10 @@ button:disabled {
 .status-pill.confirmed {
   color: #047857;
   background: #d1fae5;
+}
+.status-pill.unconfigured {
+  color: var(--slate-600);
+  background: var(--slate-200);
 }
 .status-pill.previewing {
   color: #0369a1;
@@ -2400,9 +2451,66 @@ button:disabled {
   font-size: 9px;
   overflow-wrap: anywhere;
 }
+.risk-card-empty {
+  min-height: 112px;
+  gap: 6px;
+  padding: 20px 12px;
+}
+.risk-card-empty .empty-state-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.risk-card-empty strong {
+  font-size: 10px;
+}
+.risk-card-empty p {
+  max-width: 245px;
+  color: var(--slate-500);
+  font-size: 9px;
+}
 .guardrail-card .panel-body {
   display: grid;
   gap: 12px;
+}
+.guardrail-card .panel-body > .risk-card-empty {
+  display: grid;
+  color: var(--slate-400);
+}
+.guardrail-card .panel-body > .budget-rows {
+  display: grid;
+  gap: 0;
+  color: inherit;
+}
+.budget-rows > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--slate-100);
+}
+.budget-rows > div:first-child {
+  padding-top: 0;
+}
+.budget-rows > div:last-child {
+  border-bottom: 0;
+}
+.budget-rows > div > strong {
+  color: var(--navy);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.guardrail-card .budget-scope-note {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--slate-50);
+}
+.guardrail-card .budget-scope-note strong {
+  font-size: 9px;
+  line-height: 1.45;
 }
 .guardrail-card .panel-body > div {
   display: flex;

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { FileSearch, RefreshCw, Sparkles } from "lucide-react";
 import { useGenerateReport, useReportDetail, useReportsList } from "../../api/hooks";
 import type { ReportSession } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
+import EmptyState from "../../components/data-state/EmptyState";
 import EvidenceDrawer from "./components/EvidenceDrawer";
 import ReportTimeline from "./components/ReportTimeline";
 import ReportViewer from "./components/ReportViewer";
@@ -62,9 +63,16 @@ export default function ReportsPage() {
         ) : detailQuery.data ? (
           <ReportViewer report={detailQuery.data} onEvidence={setEvidence} />
         ) : (
-          <div className="report-viewer report-loading">
-            {reports.length === 0 ? "暂无研报" : "请选择一份报告"}
-          </div>
+          <EmptyState
+            className="report-viewer-empty"
+            title={reports.length === 0 ? "暂无研报" : "请选择一份报告"}
+            detail={
+              reports.length === 0
+                ? "盘前、盘中、基金 2:30 和盘后报告生成后，会在这里集中查看并保留版本审计记录。"
+                : "从左侧时间线选择报告，即可查看摘要、证据链和历史版本。"
+            }
+            icon={FileSearch}
+          />
         )}
         <EvidenceDrawer evidence={evidence} onClose={() => setEvidence(null)} />
       </div>

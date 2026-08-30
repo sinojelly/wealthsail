@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   FileCheck2,
+  Gauge,
   LockKeyhole,
   ScrollText,
   ShieldCheck,
@@ -12,6 +13,7 @@ import type { RiskConfirmDto, RiskPreviewDto } from "../../api/types";
 import { confirmRiskPolicy, previewRiskPolicy } from "../../api/risk";
 import { usePolicies, useRules } from "../../api/hooks";
 import Dialog from "../../components/accessibility/Dialog";
+import EmptyState from "../../components/data-state/EmptyState";
 import PageHeader from "../../components/layout/PageHeader";
 import RiskBudgetForm from "./components/RiskBudgetForm";
 import type { RiskBudgetValues } from "./risk-budget-schema";
@@ -34,6 +36,15 @@ export default function RiskPolicyPage() {
 
   const current = policies.data?.current ?? null;
   const budget = policies.data?.budget;
+  const hasRiskBudget = Boolean(
+    current &&
+      budget &&
+      [
+        budget.singlePositionLimit,
+        budget.maxDrawdownLimit,
+        budget.minCashRatio,
+      ].every((value) => value !== null && value !== undefined),
+  );
 
   async function handlePreview(values: RiskBudgetValues) {
     setConfirmed(null);
@@ -122,7 +133,18 @@ export default function RiskPolicyPage() {
       ) : null}
       <div className="risk-layout">
         <div className="panel">
-          <RiskBudgetForm key={currentVersion ?? 0} onPreview={handlePreview} />
+          <RiskBudgetForm
+            key={currentVersion ?? 0}
+            onPreview={handlePreview}
+            currentPolicy={
+              current
+                ? {
+                    version: currentVersion ?? current.version,
+                    effectiveFrom: current.effectiveFrom,
+                  }
+                : null
+            }
+          />
         </div>
         <aside className="risk-aside">
           <section className="panel policy-state">
@@ -153,7 +175,12 @@ export default function RiskPolicyPage() {
                   </div>
                 </dl>
               ) : (
-                <p className="muted">当前租户尚未配置已确认的投资政策。</p>
+                <EmptyState
+                  className="risk-card-empty"
+                  title="尚未配置投资政策"
+                  detail="在左侧完成预览并确认后，此处将显示当前生效版本与审计信息。"
+                  icon={FileCheck2}
+                />
               )}
             </div>
           </section>
@@ -162,30 +189,35 @@ export default function RiskPolicyPage() {
               <h2>风险预算</h2>
             </div>
             <div className="panel-body">
-              <div className="budget-rows">
-                <div>
-                  <span>单一标的最大仓位</span>
-                  <strong className="mono">
-                    {budget?.singlePositionLimit ?? "—"}%
-                  </strong>
-                </div>
-                <div>
-                  <span>组合最大回撤</span>
-                  <strong className="mono">
-                    {budget?.maxDrawdownLimit ?? "—"}%
-                  </strong>
-                </div>
-                <div>
-                  <span>最低现金比例</span>
-                  <strong className="mono">
-                    {budget?.minCashRatio ?? "—"}%
-                  </strong>
-                </div>
-                <div>
-                  <span>L1 资产预算</span>
-                  <strong className="mono">股票/基金仓位上限 + 现金下限</strong>
-                </div>
-              </div>
+              {hasRiskBudget ? (
+                <>
+                  <div className="budget-rows">
+                    <div>
+                      <span>单一标的最大仓位</span>
+                      <strong className="mono">{budget?.singlePositionLimit}%</strong>
+                    </div>
+                    <div>
+                      <span>组合最大回撤</span>
+                      <strong className="mono">{budget?.maxDrawdownLimit}%</strong>
+                    </div>
+                    <div>
+                      <span>最低现金比例</span>
+                      <strong className="mono">{budget?.minCashRatio}%</strong>
+                    </div>
+                  </div>
+                  <p className="budget-scope-note">
+                    <span>L1 资产预算</span>
+                    <strong>股票/基金仓位上限 + 现金下限</strong>
+                  </p>
+                </>
+              ) : (
+                <EmptyState
+                  className="risk-card-empty"
+                  title="尚无风险预算"
+                  detail="确认投资政策后，此处将展示仓位、回撤和现金下限。"
+                  icon={Gauge}
+                />
+              )}
             </div>
           </section>
           <section className="panel guardrail-card">

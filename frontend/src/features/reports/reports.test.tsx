@@ -1,18 +1,23 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReportsPage from "./ReportsPage";
+import type { ReportSummary } from "../../api/types";
 import { renderWithSession } from "../../test/render-with-session";
 import { reportDetailFixture, reportsFixture } from "../../test/fixtures";
 
+const reportState = vi.hoisted(() => ({
+  reports: [] as ReportSummary[],
+}));
+
 vi.mock("../../api/hooks", () => ({
   useReportsList: () => ({
-    data: reportsFixture,
+    data: reportState.reports,
     isLoading: false,
     isError: false,
     error: null,
   }),
-  useReportDetail: () => ({
-    data: reportDetailFixture,
+  useReportDetail: (reportId: string | null) => ({
+    data: reportId ? reportDetailFixture : undefined,
     isLoading: false,
     isError: false,
     error: null,
@@ -24,6 +29,10 @@ vi.mock("../../api/hooks", () => ({
     error: null,
   }),
 }));
+
+beforeEach(() => {
+  reportState.reports = reportsFixture;
+});
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
   const user = userEvent.setup();
@@ -37,4 +46,21 @@ it("opens a report evidence record with traceable provenance metadata", async ()
   expect(drawer).toHaveTextContent("SHA-256");
   expect(drawer).toHaveTextContent("源快照");
   expect(drawer).toHaveTextContent("WealthSail-Fund-Estimator");
+});
+
+it("presents an empty report workspace with structured guidance", () => {
+  reportState.reports = [];
+
+  renderWithSession(<ReportsPage />);
+
+  const emptyTimeline = screen.getByRole("status", {
+    name: "暂无报告记录",
+  });
+  expect(emptyTimeline).toHaveTextContent(
+    "报告生成后会按交易日和版本显示在这里",
+  );
+  expect(emptyTimeline.closest(".report-list")).toHaveClass("is-empty");
+  expect(screen.getByRole("status", { name: "暂无研报" })).toHaveTextContent(
+    "盘前、盘中、基金 2:30 和盘后报告生成后",
+  );
 });

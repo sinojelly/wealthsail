@@ -1,6 +1,7 @@
-import { CheckCircle2, Search } from "lucide-react";
+import { CheckCircle2, FileClock, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ReportSummary } from "../../../api/types";
+import EmptyState from "../../../components/data-state/EmptyState";
 
 export default function ReportTimeline({
   reports,
@@ -22,7 +23,7 @@ export default function ReportTimeline({
   const tradeDate = reports[0]?.tradeDate;
   const displayDate = tradeDate
     ? `${tradeDate.slice(0, 4)}年${Number(tradeDate.slice(5, 7))}月${Number(tradeDate.slice(8, 10))}日`
-    : "—";
+    : null;
 
   return (
     <aside className="report-timeline" aria-label="报告时间线">
@@ -35,11 +36,13 @@ export default function ReportTimeline({
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
-      <div className="timeline-date">
-        <span>{displayDate}</span>
-        <i />
-      </div>
-      <div className="report-list">
+      {displayDate ? (
+        <div className="timeline-date">
+          <span>{displayDate}</span>
+          <i />
+        </div>
+      ) : null}
+      <div className={`report-list ${filtered.length === 0 ? "is-empty" : ""}`}>
         {filtered.map((report) => (
           <button
             key={report.id}
@@ -61,7 +64,16 @@ export default function ReportTimeline({
           </button>
         ))}
         {filtered.length === 0 ? (
-          <div className="report-list-empty">暂无报告</div>
+          <EmptyState
+            className="report-list-empty"
+            title={reports.length === 0 ? "暂无报告记录" : "未找到匹配报告"}
+            detail={
+              reports.length === 0
+                ? "报告生成后会按交易日和版本显示在这里。"
+                : "请尝试更换搜索关键词。"
+            }
+            icon={FileClock}
+          />
         ) : null}
       </div>
       <div className="timeline-note">
