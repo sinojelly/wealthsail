@@ -223,7 +223,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             confirm_tenant_name=args.confirm_tenant_name,
         )
 
-    conn = await asyncpg.connect(dsn)
+    # Supabase's 6543 transaction pooler can reuse server sessions across
+    # clients, so named prepared statements are unsafe for this one-shot tool.
+    conn = await asyncpg.connect(dsn, statement_cache_size=0)
     try:
         current_user = await conn.fetchval("SELECT current_user")
         if current_user in {

@@ -276,8 +276,10 @@ def _run_args() -> Namespace:
 @pytest.mark.asyncio
 async def test_runtime_database_role_is_rejected(monkeypatch) -> None:
     conn = RunConn(current_user="wealthsail_worker", migration_ready=True)
+    observed_cache_sizes: list[int] = []
 
-    async def connect(_dsn):
+    async def connect(_dsn, *, statement_cache_size):
+        observed_cache_sizes.append(statement_cache_size)
         return conn
 
     monkeypatch.setenv(
@@ -290,13 +292,15 @@ async def test_runtime_database_role_is_rejected(monkeypatch) -> None:
         await command._run(_run_args())
 
     assert conn.closed is True
+    assert observed_cache_sizes == [0]
 
 
 @pytest.mark.asyncio
 async def test_migration_033_is_required_before_backfill(monkeypatch) -> None:
     conn = RunConn(current_user="postgres", migration_ready=False)
 
-    async def connect(_dsn):
+    async def connect(_dsn, *, statement_cache_size):
+        assert statement_cache_size == 0
         return conn
 
     monkeypatch.setenv(
