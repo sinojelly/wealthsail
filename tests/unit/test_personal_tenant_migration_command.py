@@ -171,6 +171,14 @@ async def test_apply_changes_only_identity_session_and_audit_state() -> None:
     assert conn.fact_reads == 2
     assert not conn.rolled_back
 
+    personal_audit_sql, personal_audit_args = next(
+        call for call in conn.calls if "PERSONAL_TENANT_CREATED" in call[0]
+    )
+    assert "$4" in personal_audit_sql
+    assert isinstance(personal_audit_args[0], UUID)
+    assert isinstance(personal_audit_args[3], str)
+    assert personal_audit_args[3] == str(personal_audit_args[0])
+
 
 @pytest.mark.asyncio
 async def test_replay_is_read_only_when_the_exact_result_already_exists() -> None:

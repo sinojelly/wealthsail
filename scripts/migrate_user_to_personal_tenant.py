@@ -322,7 +322,7 @@ async def migrate_user(
                 resource_id, details
             ) VALUES (
                 $1, 'USER', $2, 'PERSONAL_TENANT_CREATED',
-                'identity.tenants', $1::text,
+                'identity.tenants', $4,
                 $3::jsonb
             )
             """,
@@ -335,6 +335,7 @@ async def migrate_user(
                     "platformAdminGranted": request.grant_platform_admin,
                 }
             ),
+            str(target_tenant_id),
         )
 
         after_facts = await _source_fact_counts(conn, request.source_tenant_id)
