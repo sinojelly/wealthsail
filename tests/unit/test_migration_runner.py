@@ -30,8 +30,10 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 34
-    assert migrations[-1].path.name == "034_tenant_name_management.sql"
+    assert versions[-1] == 35
+    assert migrations[-1].path.name == (
+        "035_personal_tenant_job_privilege_hardening.sql"
+    )
 
 
 def test_034_migration_limits_tenant_rename_to_current_owner() -> None:
@@ -53,6 +55,19 @@ def test_migration_readback_verifies_tenant_rename_least_privilege() -> None:
     assert "tenant name column privileges are missing or too broad" in runner
     assert "'identity.tenants','status','UPDATE'" in runner
     assert "'authenticated','identity.tenants','name','UPDATE'" in runner
+
+
+def test_035_removes_stale_api_job_insert_capability() -> None:
+    """Personal-tenant schedules must only be provisioned by the protected RPC."""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root
+        / "migrations"
+        / "035_personal_tenant_job_privilege_hardening.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "REVOKE INSERT ON workflow.jobs FROM wealthsail_api" in migration
+    assert "DROP POLICY IF EXISTS domain_api_insert ON workflow.jobs" in migration
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -211,6 +226,9 @@ def test_readback_requires_personal_tenant_schedule_initialization() -> None:
     source = inspect.getsource(_readback)
 
     assert "personal tenant report schedule initialization is missing" in source
+    assert "api_can_insert_jobs=" in source
+    assert "function_owner_can_insert" in source
+    assert "missing_definition_tokens=" in source
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:

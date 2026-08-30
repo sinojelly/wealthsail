@@ -843,6 +843,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         SELECT p.prosecdef,
                pg_get_functiondef(p.oid) AS definition,
                has_table_privilege(
+                   pg_get_userbyid(p.proowner), 'workflow.jobs', 'INSERT'
+               ) AS function_owner_can_insert,
+               has_table_privilege(
                    'wealthsail_api', 'workflow.jobs', 'INSERT'
                ) AS api_can_insert_jobs,
                has_table_privilege(
@@ -861,18 +864,38 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "'FUND_1430'",
         "'POST_MARKET'",
     )
-    if (
-        personal_tenant_acceptance is None
-        or not personal_tenant_acceptance["prosecdef"]
-        or personal_tenant_acceptance["api_can_insert_jobs"]
-        or personal_tenant_acceptance["browser_can_insert_jobs"]
-        or any(
-            token not in str(personal_tenant_acceptance["definition"] or "")
-            for token in required_personal_schedule_tokens
-        )
-    ):
+    if personal_tenant_acceptance is None:
         raise RuntimeError(
-            "personal tenant report schedule initialization is missing or unsafe"
+            "personal tenant report schedule initialization is missing or unsafe: "
+            "function_missing=true"
+        )
+    personal_schedule_definition = str(
+        personal_tenant_acceptance["definition"] or ""
+    )
+    missing_personal_schedule_tokens = [
+        token
+        for token in required_personal_schedule_tokens
+        if token not in personal_schedule_definition
+    ]
+    invalid_personal_schedule_contracts = []
+    if not personal_tenant_acceptance["prosecdef"]:
+        invalid_personal_schedule_contracts.append("security_definer=false")
+    if not personal_tenant_acceptance["function_owner_can_insert"]:
+        invalid_personal_schedule_contracts.append(
+            "function_owner_can_insert=false"
+        )
+    if personal_tenant_acceptance["api_can_insert_jobs"]:
+        invalid_personal_schedule_contracts.append("api_can_insert_jobs=true")
+    if personal_tenant_acceptance["browser_can_insert_jobs"]:
+        invalid_personal_schedule_contracts.append("browser_can_insert_jobs=true")
+    if missing_personal_schedule_tokens:
+        invalid_personal_schedule_contracts.append(
+            "missing_definition_tokens=" + repr(missing_personal_schedule_tokens)
+        )
+    if invalid_personal_schedule_contracts:
+        raise RuntimeError(
+            "personal tenant report schedule initialization is missing or unsafe: "
+            + ", ".join(invalid_personal_schedule_contracts)
         )
 
     privilege_checks = {
