@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date, datetime
@@ -123,6 +124,54 @@ async def test_completion_and_failure_are_lease_token_compare_and_set() -> None:
     assert terminal_conn.args[5] is True
 
 
+@pytest.mark.asyncio
+async def test_failure_logging_distinguishes_automatic_retry_from_terminal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    retry_conn = _Connection()
+    terminal_conn = _Connection()
+    lease = DataTaskLease(
+        run_id="run-1",
+        tenant_id="tenant-1",
+        job_type="FUND_NAV_BACKFILL",
+        payload={"batchId": "batch-1"},
+        attempt_count=2,
+        lease_token="lease-1",
+    )
+    settings = Settings(
+        _env_file=None,
+        data_task_max_attempts=3,
+        data_task_base_backoff_seconds=10,
+    )
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.system_connection",
+            side_effect=[_connection(retry_conn), _connection(terminal_conn)],
+        ),
+        caplog.at_level(logging.WARNING, logger="wealthsail.data_tasks"),
+    ):
+        await fail_data_task(
+            MagicMock(), lease, settings, RuntimeError("provider temporarily unavailable")
+        )
+        await fail_data_task(
+            MagicMock(),
+            replace(lease, attempt_count=3),
+            settings,
+            RuntimeError("provider still unavailable"),
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "data_task_retry_scheduled" in messages
+    assert "run_id=run-1" in messages
+    assert "batch_id=batch-1" in messages
+    assert "attempt=2" in messages
+    assert "retry_in_seconds=20" in messages
+    assert "data_task_failed_terminal" in messages
+    assert "attempt=3" in messages
+    assert "error_class=RuntimeError" in messages
+
+
 def test_effective_holding_date_defaults_to_portfolio_estimate_until_user_overrides() -> (
     None
 ):
@@ -228,6 +277,72 @@ async def test_backfill_fetches_outside_db_and_materializes_only_open_source_pos
     materialize.assert_awaited_once()
     assert materialize.await_args.args[2] == [position]
     assert materialize.await_args.args[3] == {"fund-1": observations}
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_logs_task_stage_and_fund_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    position = OpenFundPosition(
+        tenant_id="tenant-1",
+        account_id="account-1",
+        instrument_id="fund-1",
+        source_binding_id="binding-1",
+        symbol="110022",
+        holding_started_on=date(2024, 1, 2),
+        holding_start_method="TRANSACTION_RECONCILED",
+        holding_start_confidence="HIGH",
+        history_complete=True,
+    )
+    lease = DataTaskLease(
+        run_id="run-1",
+        tenant_id="tenant-1",
+        job_type="FUND_NAV_BACKFILL",
+        payload={"batchId": "batch-1", "sourceBindingId": "binding-1"},
+        attempt_count=1,
+        lease_token="lease-1",
+    )
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.load_open_fund_positions",
+            new=AsyncMock(return_value=[position]),
+        ),
+        patch(
+            "backend.jobs.data_tasks.fetch_fund_nav_history",
+            new=AsyncMock(
+                side_effect=RuntimeError(
+                    "GET https://api.example/fund?token=secret-value failed "
+                    "password=hunter2"
+                )
+            ),
+        ),
+        patch("backend.jobs.data_tasks.httpx.AsyncClient") as client_type,
+        caplog.at_level(logging.ERROR, logger="wealthsail.data_tasks"),
+    ):
+        client_type.return_value.__aenter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="secret-value"):
+            await process_data_task(
+                MagicMock(),
+                Settings(_env_file=None),
+                lease,
+                as_of=date(2026, 8, 30),
+            )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "data_task_stage_failed" in messages
+    assert "run_id=run-1" in messages
+    assert "batch_id=batch-1" in messages
+    assert "stage=fetch_fund_nav_history" in messages
+    assert "symbol=110022" in messages
+    assert "start=2024-01-02" in messages
+    assert "as_of=2026-08-30" in messages
+    assert "error_class=RuntimeError" in messages
+    assert "error=GET https://api.example/fund?<redacted> failed" in messages
+    assert "trace=" in messages
+    assert "account-1" not in messages
+    assert "secret-value" not in messages
+    assert "hunter2" not in messages
 
 
 @pytest.mark.asyncio

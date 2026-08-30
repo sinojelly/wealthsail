@@ -12,7 +12,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
+import traceback
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -38,6 +40,15 @@ from backend.portfolio.imports.analytics import (
 logger = logging.getLogger("wealthsail.data_tasks")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _SUPPORTED_JOB_TYPES = ("FUND_NAV_BACKFILL", "POSITION_PERIOD_METRICS_REBUILD")
+_ERROR_TEXT_LIMIT = 500
+_URL_QUERY_PATTERN = re.compile(r"(https?://[^\s?]+)\?[^\s]*", re.IGNORECASE)
+_DATABASE_USERINFO_PATTERN = re.compile(
+    r"(postgres(?:ql)?://)[^@\s]+@", re.IGNORECASE
+)
+_SECRET_VALUE_PATTERN = re.compile(
+    r"\b(password|passwd|token|secret|api[_-]?key|authorization)=([^\s&]+)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,55 @@ def _payload_object(raw: object) -> dict[str, Any]:
         except (TypeError, ValueError):
             return {}
     return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _safe_error_text(exc: Exception) -> str:
+    """Return one bounded diagnostic line without URLs, credentials, or tokens."""
+    text = " ".join(str(exc).split()) or "-"
+    text = _DATABASE_USERINFO_PATTERN.sub(r"\1<redacted>@", text)
+    text = _URL_QUERY_PATTERN.sub(r"\1?<redacted>", text)
+    text = _SECRET_VALUE_PATTERN.sub(r"\1=<redacted>", text)
+    return text[:_ERROR_TEXT_LIMIT]
+
+
+def _trace_path(exc: Exception) -> str:
+    """Keep useful code locations without traceback locals or raw exception text."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "-"
+    return ">".join(
+        f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
+        for frame in frames[-6:]
+    )
+
+
+def _log_stage_failure(
+    lease: DataTaskLease,
+    *,
+    stage: str,
+    exc: Exception,
+    symbol: str = "-",
+    start: date | None = None,
+    as_of: date | None = None,
+) -> None:
+    logger.error(
+        (
+            "data_task_stage_failed run_id=%s batch_id=%s job_type=%s "
+            "attempt=%d stage=%s symbol=%s start=%s as_of=%s "
+            "error_class=%s error=%s trace=%s"
+        ),
+        lease.run_id,
+        lease.payload.get("batchId", "-"),
+        lease.job_type,
+        lease.attempt_count,
+        stage,
+        symbol,
+        start.isoformat() if start is not None else "-",
+        as_of.isoformat() if as_of is not None else "-",
+        exc.__class__.__name__,
+        _safe_error_text(exc),
+        _trace_path(exc),
+    )
 
 
 def data_task_owner() -> str:
@@ -193,7 +253,29 @@ async def fail_data_task(
             backoff,
             terminal,
         )
-    return result.endswith("1")
+    updated = result.endswith("1")
+    if updated:
+        event = (
+            "data_task_failed_terminal"
+            if terminal
+            else "data_task_retry_scheduled"
+        )
+        logger.warning(
+            (
+                "%s run_id=%s batch_id=%s job_type=%s attempt=%d "
+                "max_attempts=%d retry_in_seconds=%d error_class=%s error=%s"
+            ),
+            event,
+            lease.run_id,
+            lease.payload.get("batchId", "-"),
+            lease.job_type,
+            lease.attempt_count,
+            settings.data_task_max_attempts,
+            0 if terminal else backoff,
+            exc.__class__.__name__,
+            _safe_error_text(exc),
+        )
+    return updated
 
 
 def _holding_method(
@@ -504,34 +586,113 @@ async def process_data_task(
         raise ValueError(f"unsupported data task: {lease.job_type}")
     as_of = as_of or datetime.now(_SHANGHAI).date()
     source_binding_id = lease.payload.get("sourceBindingId")
-    positions = await load_open_fund_positions(
-        pool,
-        tenant_id=lease.tenant_id,
-        source_binding_id=str(source_binding_id) if source_binding_id else None,
+    logger.info(
+        "data_task_started run_id=%s batch_id=%s job_type=%s attempt=%d as_of=%s",
+        lease.run_id,
+        lease.payload.get("batchId", "-"),
+        lease.job_type,
+        lease.attempt_count,
+        as_of.isoformat(),
+    )
+    try:
+        positions = await load_open_fund_positions(
+            pool,
+            tenant_id=lease.tenant_id,
+            source_binding_id=str(source_binding_id) if source_binding_id else None,
+        )
+    except Exception as exc:
+        _log_stage_failure(lease, stage="load_open_fund_positions", exc=exc, as_of=as_of)
+        raise
+    logger.info(
+        "data_task_positions_loaded run_id=%s batch_id=%s position_count=%d",
+        lease.run_id,
+        lease.payload.get("batchId", "-"),
+        len(positions),
     )
     observations_by_instrument: dict[str, list[Observation]] = {}
     if lease.job_type == "FUND_NAV_BACKFILL":
         async with httpx.AsyncClient(timeout=settings.model_timeout_seconds) as client:
             for position in positions:
                 start = position.holding_started_on or position.source_as_of or as_of
-                observations = await fetch_fund_nav_history(
+                logger.info(
+                    (
+                        "fund_nav_backfill_started run_id=%s batch_id=%s "
+                        "symbol=%s start=%s as_of=%s"
+                    ),
+                    lease.run_id,
+                    lease.payload.get("batchId", "-"),
                     position.symbol,
-                    start,
-                    as_of,
-                    client,
-                    page_size=settings.fund_nav_history_page_size,
-                    max_pages=settings.fund_nav_history_max_pages,
+                    start.isoformat(),
+                    as_of.isoformat(),
                 )
+                try:
+                    observations = await fetch_fund_nav_history(
+                        position.symbol,
+                        start,
+                        as_of,
+                        client,
+                        page_size=settings.fund_nav_history_page_size,
+                        max_pages=settings.fund_nav_history_max_pages,
+                    )
+                except Exception as exc:
+                    _log_stage_failure(
+                        lease,
+                        stage="fetch_fund_nav_history",
+                        exc=exc,
+                        symbol=position.symbol,
+                        start=start,
+                        as_of=as_of,
+                    )
+                    raise
                 observations_by_instrument[position.instrument_id] = observations
-                await persist_nav_observations(
-                    pool, position.instrument_id, observations
+                logger.info(
+                    (
+                        "fund_nav_backfill_fetched run_id=%s batch_id=%s "
+                        "symbol=%s observation_count=%d"
+                    ),
+                    lease.run_id,
+                    lease.payload.get("batchId", "-"),
+                    position.symbol,
+                    len(observations),
                 )
+                try:
+                    await persist_nav_observations(
+                        pool, position.instrument_id, observations
+                    )
+                except Exception as exc:
+                    _log_stage_failure(
+                        lease,
+                        stage="persist_nav_observations",
+                        exc=exc,
+                        symbol=position.symbol,
+                        start=start,
+                        as_of=as_of,
+                    )
+                    raise
     else:
-        observations_by_instrument = await load_persisted_nav(
-            pool, positions, as_of=as_of
+        try:
+            observations_by_instrument = await load_persisted_nav(
+                pool, positions, as_of=as_of
+            )
+        except Exception as exc:
+            _log_stage_failure(
+                lease, stage="load_persisted_nav", exc=exc, as_of=as_of
+            )
+            raise
+    try:
+        await materialize_position_metrics(
+            pool, as_of, positions, observations_by_instrument
         )
-    await materialize_position_metrics(
-        pool, as_of, positions, observations_by_instrument
+    except Exception as exc:
+        _log_stage_failure(
+            lease, stage="materialize_position_metrics", exc=exc, as_of=as_of
+        )
+        raise
+    logger.info(
+        "data_task_completed run_id=%s batch_id=%s position_count=%d",
+        lease.run_id,
+        lease.payload.get("batchId", "-"),
+        len(positions),
     )
 
 
@@ -570,12 +731,6 @@ class DataTaskConsumer:
             raise
         except Exception as exc:  # durable retry state is part of the contract
             await fail_data_task(self._pool, lease, self._settings, exc)
-            logger.warning(
-                "data task %s failed (%s), attempt=%d",
-                lease.run_id,
-                exc.__class__.__name__,
-                lease.attempt_count,
-            )
         finally:
             heartbeat.cancel()
             try:
