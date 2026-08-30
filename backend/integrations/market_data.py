@@ -713,7 +713,7 @@ async def fetch_fund_nav_history(
     client: httpx.AsyncClient,
     *,
     page_size: int = 100,
-    max_pages: int = 50,
+    max_pages: int = 200,
 ) -> list[Observation]:
     """Fetch a bounded inclusive interval of official disclosed unit NAV.
 
@@ -732,6 +732,8 @@ async def fetch_fund_nav_history(
     url = "https://api.fund.eastmoney.com/f10/lsjz"
     by_day: dict[date, Observation] = {}
     total_count: int | None = None
+    provider_page_size: int | None = None
+    required_pages: int | None = None
     received = 0
     completed = False
     for page_index in range(1, max_pages + 1):
@@ -761,16 +763,46 @@ async def fetch_fund_nav_history(
         if response is None:  # pragma: no cover - defensive type narrowing
             raise RuntimeError("fund NAV provider produced no response")
         try:
-            data = response.json()["Data"]
+            payload = response.json()
+            data = payload["Data"]
             rows = data["LSJZList"]
-            total_count = int(data.get("TotalCount", len(rows)))
+            response_page_index = int(payload["PageIndex"])
+            response_page_size = int(payload["PageSize"])
+            response_total_count = int(payload["TotalCount"])
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise RuntimeError("fund NAV provider returned an invalid payload") from exc
         if not isinstance(rows, list):
             raise RuntimeError("fund NAV provider rows are not a list")
-        if not rows:
+        if (
+            response_page_index != page_index
+            or response_page_size <= 0
+            or response_total_count < 0
+        ):
+            raise RuntimeError("fund NAV provider returned invalid pagination metadata")
+
+        if total_count is None:
+            total_count = response_total_count
+            provider_page_size = response_page_size
+            required_pages = (
+                0
+                if total_count == 0
+                else (total_count + provider_page_size - 1) // provider_page_size
+            )
+            if required_pages > max_pages:
+                raise RuntimeError("fund NAV provider page bound exceeded")
+        elif (
+            response_total_count != total_count
+            or response_page_size != provider_page_size
+        ):
+            raise RuntimeError("fund NAV provider pagination metadata changed")
+
+        if total_count == 0:
+            if rows:
+                raise RuntimeError("fund NAV provider returned invalid pagination metadata")
             completed = True
             break
+        if not rows:
+            raise RuntimeError("fund NAV provider pagination was truncated")
 
         received += len(rows)
         for raw in rows:
@@ -798,11 +830,13 @@ async def fetch_fund_nav_history(
                     metadata={"officialUnitNav": True},
                 ),
             )
-        if received >= total_count:
+        if required_pages is not None and page_index >= required_pages:
+            if received < total_count:
+                raise RuntimeError("fund NAV provider pagination was truncated")
             completed = True
             break
 
-    if total_count is not None and received < total_count and not completed:
+    if total_count is not None and not completed:
         raise RuntimeError("fund NAV provider page bound exceeded")
     return [by_day[day] for day in sorted(by_day)]
 

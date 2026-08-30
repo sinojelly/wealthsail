@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     data_task_max_attempts: int = Field(default=5, ge=1, le=20)
     data_task_base_backoff_seconds: int = Field(default=10, ge=1, le=3600)
     fund_nav_history_page_size: int = Field(default=100, ge=10, le=500)
-    fund_nav_history_max_pages: int = Field(default=50, ge=1, le=200)
+    fund_nav_history_max_pages: int = Field(default=200, ge=1, le=200)
 
     @property
     def is_production(self) -> bool:

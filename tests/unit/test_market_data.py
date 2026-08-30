@@ -239,8 +239,10 @@ async def test_fund_nav_history_is_paginated_official_decimal_and_inclusive() ->
         [
             _HistoryResponse(
                 {
+                    "PageIndex": 1,
+                    "PageSize": 2,
+                    "TotalCount": 4,
                     "Data": {
-                        "TotalCount": 4,
                         "LSJZList": [
                             {"FSRQ": "2026-08-28", "DWJZ": "1.2345"},
                             {"FSRQ": "2026-08-27", "DWJZ": "1.2000"},
@@ -250,8 +252,10 @@ async def test_fund_nav_history_is_paginated_official_decimal_and_inclusive() ->
             ),
             _HistoryResponse(
                 {
+                    "PageIndex": 2,
+                    "PageSize": 2,
+                    "TotalCount": 4,
                     "Data": {
-                        "TotalCount": 4,
                         "LSJZList": [
                             # Provider page overlap: first occurrence wins.
                             {"FSRQ": "2026-08-27", "DWJZ": "9.9999"},
@@ -268,7 +272,8 @@ async def test_fund_nav_history_is_paginated_official_decimal_and_inclusive() ->
         date(2026, 8, 26),
         date(2026, 8, 28),
         client,
-        page_size=2,
+        # EastMoney can cap this request hint; pagination follows response PageSize=2.
+        page_size=100,
         max_pages=3,
     )
 
@@ -280,6 +285,7 @@ async def test_fund_nav_history_is_paginated_official_decimal_and_inclusive() ->
     assert all(row.field_code == F_NAV for row in rows)
     assert all(row.method_version == "eastmoney/f10-lsjz-history/v1" for row in rows)
     assert [call["params"]["pageIndex"] for call in client.calls] == [1, 2]
+    assert all(call["params"]["pageSize"] == 100 for call in client.calls)
     assert all(call["timeout"] == 10.0 for call in client.calls)
 
 
@@ -291,8 +297,10 @@ async def test_fund_nav_history_retries_transient_failure_with_bounded_requests(
             httpx.ConnectError("temporary", request=request),
             _HistoryResponse(
                 {
+                    "PageIndex": 1,
+                    "PageSize": 20,
+                    "TotalCount": 1,
                     "Data": {
-                        "TotalCount": 1,
                         "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
                     }
                 }
@@ -314,8 +322,10 @@ async def test_fund_nav_history_fails_closed_when_provider_exceeds_page_bound() 
         [
             _HistoryResponse(
                 {
+                    "PageIndex": 1,
+                    "PageSize": 20,
+                    "TotalCount": 1000,
                     "Data": {
-                        "TotalCount": 1000,
                         "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
                     }
                 }
@@ -334,3 +344,61 @@ async def test_fund_nav_history_fails_closed_when_provider_exceeds_page_bound() 
         )
 
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_fund_nav_history_rejects_payload_without_top_level_pagination() -> None:
+    client = _HistoryClient(
+        [
+            _HistoryResponse(
+                {
+                    "Data": {
+                        "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
+                    }
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="invalid payload"):
+        await fetch_fund_nav_history(
+            "110022", date(2026, 8, 28), date(2026, 8, 28), client
+        )
+
+
+@pytest.mark.asyncio
+async def test_fund_nav_history_rejects_an_empty_page_before_total_count() -> None:
+    client = _HistoryClient(
+        [
+            _HistoryResponse(
+                {
+                    "PageIndex": 1,
+                    "PageSize": 1,
+                    "TotalCount": 2,
+                    "Data": {
+                        "LSJZList": [{"FSRQ": "2026-08-28", "DWJZ": "1.23"}],
+                    },
+                }
+            ),
+            _HistoryResponse(
+                {
+                    "PageIndex": 2,
+                    "PageSize": 1,
+                    "TotalCount": 2,
+                    "Data": {"LSJZList": []},
+                }
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="truncated"):
+        await fetch_fund_nav_history(
+            "110022",
+            date(2026, 8, 27),
+            date(2026, 8, 28),
+            client,
+            page_size=100,
+            max_pages=2,
+        )
+
+    assert [call["params"]["pageIndex"] for call in client.calls] == [1, 2]
