@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from backend.common.database import Pool, system_connection
+from backend.common.database import Pool, api_system_transaction, system_connection
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,7 @@ def alert_content(signals: Iterable[RuntimeSignal]) -> str:
     dead = kinds.count("OUTBOX_DEAD")
     unknown = kinds.count("OUTBOX_UNKNOWN")
     failed = kinds.count("JOB_FAILED")
+    tenants_without_jobs = kinds.count("TENANT_NO_ENABLED_JOBS")
     lines = ["WealthSail 运行告警"]
     if worker:
         lines.append("- Worker 服务已停止")
@@ -86,6 +87,8 @@ def alert_content(signals: Iterable[RuntimeSignal]) -> str:
         lines.append(f"- 推送结果未知：{unknown} 条（需要人工核对）")
     if failed:
         lines.append(f"- 后台任务失败：{failed} 条")
+    if tenants_without_jobs:
+        lines.append(f"- 无启用报告任务：{tenants_without_jobs} 个租户")
     lines.append("请登录运维页面或查看服务器日志。")
     return "\n".join(lines)
 
@@ -118,7 +121,7 @@ async def collect_database_signals(
             dead_outbox_window_hours,
             failed_job_window_minutes,
         )
-    return [
+    signals = [
         RuntimeSignal(
             kind=str(row["kind"]),
             object_id=str(row["object_id"]),
@@ -126,6 +129,45 @@ async def collect_database_signals(
         )
         for row in rows
     ]
+
+    # The Worker role intentionally cannot read identity.tenants directly.
+    # Downgrade through the sanctioned API role for the cross-tenant ACTIVE
+    # tenant inventory, then return to the Worker role for workflow metadata.
+    # Keeping the two reads in separate role-scoped acquisitions preserves the
+    # least-privilege boundary without adding a broader database grant.
+    async with api_system_transaction(pool) as conn:
+        active_tenant_rows = await conn.fetch(
+            """
+            SELECT id::text AS tenant_id
+              FROM identity.tenants
+             WHERE status = 'ACTIVE'
+            """
+        )
+    async with system_connection(pool) as conn:
+        enabled_job_rows = await conn.fetch(
+            """
+            SELECT DISTINCT tenant_id::text AS tenant_id
+              FROM workflow.jobs
+             WHERE is_enabled = TRUE
+            """
+        )
+
+    active_tenant_ids = {str(row["tenant_id"]) for row in active_tenant_rows}
+    enabled_job_tenant_ids = {
+        str(row["tenant_id"]) for row in enabled_job_rows
+    }
+    for tenant_id in sorted(active_tenant_ids - enabled_job_tenant_ids):
+        # The object ID is deliberately constant. The fingerprint already
+        # includes tenant_id, while user-facing content never exposes either
+        # value; this gives stable cooldown de-duplication per affected tenant.
+        signals.append(
+            RuntimeSignal(
+                "TENANT_NO_ENABLED_JOBS",
+                "enabled-report-jobs",
+                tenant_id,
+            )
+        )
+    return signals
 
 
 async def load_active_recipients(pool: Pool) -> list[dict[str, Any]]:
