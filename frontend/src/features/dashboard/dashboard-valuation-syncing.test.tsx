@@ -57,6 +57,7 @@ it("tells ordinary users that valuation will finish automatically", () => {
 
   expect(screen.getByText("估值正在自动更新")).toBeInTheDocument();
   expect(screen.getByText(/12 个持仓的官方净值已经获取/)).toBeInTheDocument();
+  expect(screen.getByText(/预计 1 分钟内完成/)).toBeInTheDocument();
   expect(screen.getByText(/无需操作/)).toBeInTheDocument();
   expect(screen.queryByText("总资产暂不发布")).not.toBeInTheDocument();
 });

@@ -148,7 +148,8 @@ export default function DashboardPage() {
             <strong>估值正在自动更新</strong>
             <p>
               {summary.data.valuationPendingCount} 个持仓的官方净值已经获取，
-              系统正在同步市值和总资产；无需操作，页面会自动刷新。
+              系统正在同步市值和总资产；预计 1 分钟内完成。无需操作，
+              页面会自动刷新。
             </p>
           </div>
         </div>
