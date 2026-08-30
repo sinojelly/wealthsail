@@ -187,3 +187,32 @@ export async function retryTiantianMetrics(
   });
   return envelope.data;
 }
+
+export async function confirmTiantianHoldingStart(
+  accountId: string,
+  instrumentId: string,
+  startedOn: string,
+  idempotencyKey: string,
+): Promise<{
+  accountId: string;
+  instrumentId: string;
+  startedOn: string;
+  metricsStatus: "PENDING";
+  jobKey: string;
+}> {
+  const envelope = await request<{
+    accountId: string;
+    instrumentId: string;
+    startedOn: string;
+    metricsStatus: "PENDING";
+    jobKey: string;
+  }>(
+    `/v1/portfolio/positions/${encodeURIComponent(accountId)}/${encodeURIComponent(instrumentId)}/holding-start/confirm`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ startedOn }),
+    },
+  );
+  return envelope.data;
+}

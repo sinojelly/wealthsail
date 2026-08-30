@@ -8,6 +8,7 @@ const holdingPeriod: HoldingPeriodDto = {
   days: 895,
   method: "TRANSACTION_RECONCILED",
   confidence: "HIGH",
+  canConfirm: true,
 };
 
 const readyMetrics: FundRangeMetricsDto = {
@@ -107,6 +108,7 @@ it("never turns unavailable pending metrics into a misleading zero", () => {
         days: null,
         method: "INSUFFICIENT_DATA",
         confidence: "NONE",
+        canConfirm: false,
       }}
       metrics={{
         ...readyMetrics,
@@ -129,21 +131,37 @@ it("never turns unavailable pending metrics into a misleading zero", () => {
   expect(screen.queryByText(/0%/)).not.toBeInTheDocument();
 });
 
-it("surfaces partial coverage and its quality reason beside usable facts", async () => {
+it("explains an estimated holding start and lets the user confirm or correct it", async () => {
   const user = userEvent.setup();
+  const confirmHoldingStart = vi.fn().mockResolvedValue(undefined);
   render(
     <FundRangeMetrics
-      holdingPeriod={{ ...holdingPeriod, method: "PARTIAL_HISTORY" }}
+      holdingPeriod={{
+        ...holdingPeriod,
+        startedOn: "2021-01-26",
+        method: "PORTFOLIO_ACTIVITY_ESTIMATE",
+        confidence: "LOW",
+        canConfirm: true,
+      }}
       metrics={{
         ...readyMetrics,
         status: "PARTIAL",
-        qualityReasons: ["基金净值序列起始晚于持有起点"],
+        qualityReasons: ["PARTIAL_HOLDING_HISTORY"],
       }}
       currentNav="1.4400"
+      onConfirmHoldingStart={confirmHoldingStart}
     />,
   );
 
-  expect(screen.getByText("数据不完整")).toBeInTheDocument();
+  expect(screen.getByText("持有起点为估算")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: /持有 895 天/ }));
-  expect(screen.getByText("基金净值序列起始晚于持有起点")).toBeInTheDocument();
+  expect(
+    screen.getByText(/当前区间按系统推导的持有开始日计算/),
+  ).toBeInTheDocument();
+  const dateInput = screen.getByLabelText("确认持有开始日期");
+  expect(dateInput).toHaveValue("2021-01-26");
+  await user.clear(dateInput);
+  await user.type(dateInput, "2021-02-23");
+  await user.click(screen.getByRole("button", { name: "确认并后台重算" }));
+  expect(confirmHoldingStart).toHaveBeenCalledWith("2021-02-23");
 });

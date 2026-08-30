@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import socket
+import time
 import traceback
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -33,6 +34,7 @@ from backend.integrations.market_data import (
     fetch_fund_nav_history,
 )
 from backend.market import repository as market_repository
+from backend.portfolio import repository as portfolio_repository
 from backend.portfolio.imports.analytics import (
     NAV_RANGE_ALGORITHM_VERSION,
     NavObservation,
@@ -81,6 +83,14 @@ class OpenFundPosition:
     holding_start_confidence: str
     history_complete: bool
     source_as_of: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NavPersistenceStats:
+    """Observable result of one idempotent historical NAV persistence batch."""
+
+    inserted_count: int
+    skipped_count: int
 
 
 def _payload_object(raw: object) -> dict[str, Any]:
@@ -292,7 +302,9 @@ async def fail_data_task(
 def _holding_method(
     row: Mapping[str, Any],
 ) -> tuple[date | None, str, str, bool]:
-    user_started = row.get("user_holding_started_on")
+    user_started = row.get("confirmed_holding_started_on") or row.get(
+        "user_holding_started_on"
+    )
     if user_started is not None:
         return user_started, "USER_CONFIRMED", "HIGH", True
     method = str(row.get("holding_start_method") or "INSUFFICIENT_DATA")
@@ -329,6 +341,7 @@ async def load_open_fund_positions(
             SELECT DISTINCT ON (item.instrument_id)
                    event.account_id, item.instrument_id,
                    batch.source_binding_id, item.source_symbol,
+                   decision.started_on AS confirmed_holding_started_on,
                    item.user_holding_started_on,
                    item.candidate_holding_started_on,
                    item.holding_start_status, item.holding_start_method,
@@ -345,6 +358,16 @@ async def load_open_fund_positions(
               JOIN ledger.portfolio_source_bindings binding
                 ON binding.tenant_id = batch.tenant_id
                AND binding.id = batch.source_binding_id
+              LEFT JOIN LATERAL (
+                  SELECT confirmed.started_on
+                    FROM ledger.position_holding_start_decisions confirmed
+                   WHERE confirmed.tenant_id = event.tenant_id
+                     AND confirmed.account_id = event.account_id
+                     AND confirmed.instrument_id = item.instrument_id
+                     AND confirmed.source_binding_id = batch.source_binding_id
+                   ORDER BY confirmed.created_at DESC, confirmed.id DESC
+                   LIMIT 1
+              ) decision ON TRUE
              WHERE event.tenant_id = $1
                AND ($2::uuid IS NULL OR batch.source_binding_id = $2::uuid)
                AND batch.source_type = 'TIANTIAN_FUND_ZIP'
@@ -387,10 +410,18 @@ async def persist_nav_observations(
     pool: Pool,
     instrument_id: str,
     observations: list[Observation],
-) -> None:
+) -> NavPersistenceStats:
     """Persist a source snapshot and append a revision only when NAV changed."""
     if not observations:
-        return
+        return NavPersistenceStats(inserted_count=0, skipped_count=0)
+    # Provider pages should already be unique by disclosure timestamp, but the
+    # persistence boundary defensively collapses duplicates so one batch can
+    # never create two competing revisions for the same observation instant.
+    observations_by_as_of = {item.as_of: item for item in observations}
+    normalized = [
+        observations_by_as_of[as_of]
+        for as_of in sorted(observations_by_as_of)
+    ]
     retrieved_at = datetime.now(_SHANGHAI)
     async with system_connection(pool) as conn:
         async with conn.transaction():
@@ -405,9 +436,9 @@ async def persist_nav_observations(
                 source_id=source_id,
                 retrieval_key=(
                     f"fund-nav-history:{instrument_id}:"
-                    f"{observations[0].as_of.date()}:{observations[-1].as_of.date()}"
+                    f"{normalized[0].as_of.date()}:{normalized[-1].as_of.date()}"
                 ),
-                observations=[item.to_payload() for item in observations],
+                observations=[item.to_payload() for item in normalized],
                 quality_status="FRESH",
                 retrieved_at=retrieved_at,
             )
@@ -415,22 +446,42 @@ async def persist_nav_observations(
                 "SELECT pg_advisory_xact_lock(hashtextextended('fund-nav:' || $1, 0))",
                 instrument_id,
             )
-            for item in observations:
-                latest = await conn.fetchrow(
-                    """
-                    SELECT value, revision
-                      FROM market.market_observations
-                     WHERE subject_type = 'FUND' AND subject_id = $1
-                       AND field_code = 'NAV' AND as_of = $2 AND source_id = $3
-                     ORDER BY revision DESC LIMIT 1
-                    """,
-                    instrument_id,
-                    item.as_of,
-                    source_id,
-                )
+            existing_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (as_of) as_of, value, revision
+                  FROM market.market_observations
+                 WHERE subject_type = 'FUND' AND subject_id = $1
+                   AND field_code = 'NAV' AND source_id = $2
+                   AND as_of = ANY($3::timestamptz[])
+                 ORDER BY as_of, revision DESC
+                """,
+                instrument_id,
+                source_id,
+                [item.as_of for item in normalized],
+            )
+            latest_by_as_of = {row["as_of"]: row for row in existing_rows}
+            insert_rows: list[tuple[Any, ...]] = []
+            for item in normalized:
+                latest = latest_by_as_of.get(item.as_of)
                 if latest is not None and Decimal(latest["value"]) == item.value:
                     continue
-                await conn.execute(
+                insert_rows.append(
+                    (
+                        instrument_id,
+                        item.value,
+                        item.unit,
+                        item.as_of,
+                        retrieved_at,
+                        snapshot_id,
+                        source_id,
+                        item.quality_status,
+                        item.method_version,
+                        json.dumps(item.metadata or {}, ensure_ascii=False),
+                        int(latest["revision"]) + 1 if latest is not None else 1,
+                    )
+                )
+            if insert_rows:
+                await conn.executemany(
                     """
                     INSERT INTO market.market_observations (
                         subject_type, subject_id, field_code, value, unit, currency,
@@ -441,18 +492,45 @@ async def persist_nav_observations(
                         $8, $9, $10::jsonb, $11
                     )
                     """,
-                    instrument_id,
-                    item.value,
-                    item.unit,
-                    item.as_of,
-                    retrieved_at,
-                    snapshot_id,
-                    source_id,
-                    item.quality_status,
-                    item.method_version,
-                    json.dumps(item.metadata or {}, ensure_ascii=False),
-                    int(latest["revision"]) + 1 if latest is not None else 1,
+                    insert_rows,
                 )
+    return NavPersistenceStats(
+        inserted_count=len(insert_rows),
+        skipped_count=len(observations) - len(insert_rows),
+    )
+
+
+async def refresh_fund_position_projections(
+    pool: Pool,
+    *,
+    tenant_id: str,
+    as_of: date,
+) -> tuple[int, int]:
+    """Revalue all tenant holdings after official fund NAV persistence.
+
+    The full quote set is loaded before the deterministic replay so updating a
+    single source-bound fund cannot degrade unrelated positions to UNAVAILABLE.
+    """
+    async with system_connection(pool) as conn:
+        async with conn.transaction():
+            held_ids = await portfolio_repository.holding_instrument_ids(
+                conn, tenant_id
+            )
+            quotes = await portfolio_repository.latest_observation_quotes(
+                conn, held_ids
+            )
+            positions_updated = await market_repository.refresh_positions(
+                conn,
+                tenant_id=tenant_id,
+                quotes=quotes,
+                as_of_date=as_of,
+            )
+            accounts_updated = await market_repository.refresh_account_nav(
+                conn,
+                tenant_id=tenant_id,
+                as_of_date=as_of,
+            )
+    return positions_updated, accounts_updated
 
 
 async def load_persisted_nav(
@@ -623,7 +701,7 @@ async def process_data_task(
     observations_by_instrument: dict[str, list[Observation]] = {}
     if lease.job_type == "FUND_NAV_BACKFILL":
         async with httpx.AsyncClient(timeout=settings.model_timeout_seconds) as client:
-            for position in positions:
+            for position_index, position in enumerate(positions, start=1):
                 start = position.holding_started_on or position.source_as_of or as_of
                 logger.info(
                     (
@@ -667,7 +745,8 @@ async def process_data_task(
                     len(observations),
                 )
                 try:
-                    await persist_nav_observations(
+                    persist_started = time.perf_counter()
+                    persistence = await persist_nav_observations(
                         pool, position.instrument_id, observations
                     )
                 except Exception as exc:
@@ -680,6 +759,23 @@ async def process_data_task(
                         as_of=as_of,
                     )
                     raise
+                logger.info(
+                    (
+                        "fund_nav_backfill_persisted run_id=%s batch_id=%s "
+                        "symbol=%s position_index=%d position_count=%d "
+                        "observation_count=%d inserted_count=%d skipped_count=%d "
+                        "duration_ms=%.1f"
+                    ),
+                    lease.run_id,
+                    lease.payload.get("batchId", "-"),
+                    position.symbol,
+                    position_index,
+                    len(positions),
+                    len(observations),
+                    persistence.inserted_count,
+                    persistence.skipped_count,
+                    (time.perf_counter() - persist_started) * 1000,
+                )
     else:
         try:
             observations_by_instrument = await load_persisted_nav(
@@ -699,6 +795,27 @@ async def process_data_task(
             lease, stage="materialize_position_metrics", exc=exc, as_of=as_of
         )
         raise
+    try:
+        positions_updated, accounts_updated = await refresh_fund_position_projections(
+            pool,
+            tenant_id=lease.tenant_id,
+            as_of=as_of,
+        )
+    except Exception as exc:
+        _log_stage_failure(
+            lease, stage="refresh_fund_position_projections", exc=exc, as_of=as_of
+        )
+        raise
+    logger.info(
+        (
+            "data_task_projections_refreshed run_id=%s batch_id=%s "
+            "positions_updated=%d accounts_updated=%d"
+        ),
+        lease.run_id,
+        lease.payload.get("batchId", "-"),
+        positions_updated,
+        accounts_updated,
+    )
     logger.info(
         "data_task_completed run_id=%s batch_id=%s position_count=%d",
         lease.run_id,

@@ -185,6 +185,10 @@ class TiantianConfirmRequest(BaseModel):
     confirmEmpty: bool = False
 
 
+class TiantianHoldingStartConfirmRequest(BaseModel):
+    startedOn: date
+
+
 def _require_tiantian_mutations(settings: Settings) -> None:
     if not settings.tiantian_import_enabled:
         raise DataUnavailableError("天天基金导入功能当前未启用", retryable=False)
@@ -445,6 +449,39 @@ async def portfolio_retry_tiantian_metrics(
         pool,
         ctx,
         batch_id,
+        idempotency_key=idempotency_key,
+    )
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=now_shanghai(),
+        quality_status="PENDING",
+    )
+
+
+@router.post(
+    "/positions/{account_id}/{instrument_id}/holding-start/confirm",
+    status_code=202,
+)
+async def portfolio_confirm_tiantian_holding_start(
+    account_id: str,
+    instrument_id: str,
+    payload: TiantianHoldingStartConfirmRequest,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    _require_tiantian_mutations(settings)
+    data = await tiantian_import_service.confirm_tiantian_holding_start(
+        pool,
+        ctx,
+        account_id,
+        instrument_id,
+        started_on=payload.startedOn,
         idempotency_key=idempotency_key,
     )
     return ok(

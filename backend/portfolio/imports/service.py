@@ -1097,3 +1097,51 @@ async def retry_tiantian_metrics(
         "metricsStatus": "PENDING",
         "jobKey": queued["job_key"],
     }
+
+
+async def confirm_tiantian_holding_start(
+    pool: asyncpg.Pool,
+    ctx,
+    account_id: str,
+    instrument_id: str,
+    *,
+    started_on: date,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Record a post-import start-date decision and rebuild in background."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        decision = await repository.confirm_holding_start(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_id=ctx.user_id,
+            account_id=account_id,
+            instrument_id=instrument_id,
+            started_on=started_on,
+            idempotency_key=idempotency_key,
+        )
+        if decision["created"]:
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="HOLDING_START_CONFIRMED",
+                resource_type="ledger.position_holding_start_decisions",
+                resource_id=decision["decision_id"],
+                details={
+                    "accountId": account_id,
+                    "instrumentId": instrument_id,
+                    "startedOn": started_on.isoformat(),
+                    "jobKey": decision["job_key"],
+                },
+            )
+    return {
+        "accountId": account_id,
+        "instrumentId": instrument_id,
+        "startedOn": started_on.isoformat(),
+        "metricsStatus": "PENDING",
+        "jobKey": decision["job_key"],
+    }

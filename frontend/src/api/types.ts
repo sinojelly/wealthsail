@@ -94,6 +94,7 @@ export interface PortfolioSummary {
 }
 
 export interface PositionDto {
+  instrumentId: string;
   symbol: string;
   name: string;
   type: string; // A股 / 场内ETF / 场外基金 / 现金 …
@@ -127,6 +128,7 @@ export interface HoldingPeriodDto {
     | "INSUFFICIENT_DATA"
     | "USER_CONFIRMED";
   confidence: "HIGH" | "MEDIUM" | "LOW" | "NONE";
+  canConfirm: boolean;
 }
 
 export interface FundRangeMetricsDto {

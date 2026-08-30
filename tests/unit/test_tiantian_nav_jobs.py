@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
@@ -23,6 +24,7 @@ from backend.jobs.data_tasks import (
     materialize_position_metrics,
     persist_nav_observations,
     process_data_task,
+    refresh_fund_position_projections,
 )
 from backend.integrations.market_data import (
     FUNDSOURCE_NAME,
@@ -33,12 +35,17 @@ from backend.integrations.market_data import (
 
 
 class _Connection:
-    def __init__(self, *, row=None, result: str = "UPDATE 1") -> None:
+    def __init__(
+        self, *, row=None, rows=None, result: str = "UPDATE 1"
+    ) -> None:
         self.row = row
+        self.rows = rows or []
         self.result = result
         self.sql: list[str] = []
         self.args: tuple = ()
         self.execute_calls: list[tuple[str, tuple]] = []
+        self.fetch_calls: list[tuple[str, tuple]] = []
+        self.executemany_calls: list[tuple[str, list[tuple]]] = []
         self.fetchval_calls: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, sql: str, *args):
@@ -51,6 +58,17 @@ class _Connection:
         self.args = args
         self.execute_calls.append((sql, args))
         return self.result
+
+    async def fetch(self, sql: str, *args):
+        self.sql.append(sql)
+        self.args = args
+        self.fetch_calls.append((sql, args))
+        return self.rows
+
+    async def executemany(self, sql: str, args):
+        rows = list(args)
+        self.sql.append(sql)
+        self.executemany_calls.append((sql, rows))
 
     async def fetchval(self, sql: str, *args):
         self.sql.append(sql)
@@ -252,6 +270,15 @@ def test_effective_holding_date_defaults_to_portfolio_estimate_until_user_overri
             "holding_start_confidence": "LOW",
         }
     )
+    post_import_decision = _holding_method(
+        {
+            "confirmed_holding_started_on": date(2021, 3, 15),
+            "user_holding_started_on": None,
+            "candidate_holding_started_on": date(2021, 1, 26),
+            "holding_start_method": "PORTFOLIO_ACTIVITY_ESTIMATE",
+            "holding_start_confidence": "LOW",
+        }
+    )
 
     assert estimated == (
         date(2021, 1, 26),
@@ -260,6 +287,12 @@ def test_effective_holding_date_defaults_to_portfolio_estimate_until_user_overri
         False,
     )
     assert overridden == (date(2021, 2, 23), "USER_CONFIRMED", "HIGH", True)
+    assert post_import_decision == (
+        date(2021, 3, 15),
+        "USER_CONFIRMED",
+        "HIGH",
+        True,
+    )
 
 
 @pytest.mark.asyncio
@@ -315,6 +348,7 @@ async def test_backfill_fetches_outside_db_and_materializes_only_open_source_pos
 
     async def persist(*_args, **_kwargs):
         order.append("persist")
+        return SimpleNamespace(inserted_count=2, skipped_count=0)
 
     materialize = AsyncMock()
     with (
@@ -322,6 +356,10 @@ async def test_backfill_fetches_outside_db_and_materializes_only_open_source_pos
         patch("backend.jobs.data_tasks.fetch_fund_nav_history", side_effect=fetch),
         patch("backend.jobs.data_tasks.persist_nav_observations", side_effect=persist),
         patch("backend.jobs.data_tasks.materialize_position_metrics", materialize),
+        patch(
+            "backend.jobs.data_tasks.refresh_fund_position_projections",
+            new=AsyncMock(return_value=(1, 1)),
+        ),
         patch("backend.jobs.data_tasks.httpx.AsyncClient") as client_type,
     ):
         client_type.return_value.__aenter__.return_value = MagicMock()
@@ -362,6 +400,188 @@ async def test_nav_persistence_registers_tiantian_as_a_fund_nav_source() -> None
         if "INSERT INTO reference.data_sources" in sql
     )
     assert source_registration == (FUNDSOURCE_NAME, "FUND_NAV")
+
+
+@pytest.mark.asyncio
+async def test_nav_persistence_reads_existing_revisions_once_and_bulk_inserts_changes() -> None:
+    existing_as_of = datetime.fromisoformat("2026-08-28T00:00:00+00:00")
+    changed_as_of = datetime.fromisoformat("2026-08-29T00:00:00+00:00")
+    new_as_of = datetime.fromisoformat("2026-08-30T00:00:00+00:00")
+    conn = _Connection(
+        rows=[
+            {"as_of": existing_as_of, "value": Decimal("1.20"), "revision": 3},
+            {"as_of": changed_as_of, "value": Decimal("1.30"), "revision": 2},
+        ]
+    )
+    observations = [
+        Observation(
+            symbol="012733",
+            subject_type="FUND",
+            field_code=F_NAV,
+            value=value,
+            as_of=as_of,
+            quality_status=Q_STALE,
+        )
+        for as_of, value in (
+            (existing_as_of, Decimal("1.20")),
+            (changed_as_of, Decimal("1.31")),
+            (new_as_of, Decimal("1.40")),
+        )
+    ]
+
+    with patch(
+        "backend.jobs.data_tasks.system_connection",
+        return_value=_connection(conn),
+    ):
+        result = await persist_nav_observations(
+            MagicMock(), "fund-1", observations
+        )
+
+    assert len(conn.fetch_calls) == 1
+    assert "as_of = ANY" in conn.fetch_calls[0][0]
+    assert len(conn.executemany_calls) == 1
+    inserted_rows = conn.executemany_calls[0][1]
+    assert [row[-1] for row in inserted_rows] == [3, 1]
+    assert result.inserted_count == 2
+    assert result.skipped_count == 1
+
+
+@pytest.mark.asyncio
+async def test_projection_refresh_revalues_the_full_tenant_quote_set() -> None:
+    conn = _Connection()
+    holding_ids = AsyncMock(return_value=["fund-1", "stock-1"])
+    quotes = {
+        "fund-1": {"price": Decimal("1.40"), "quality": "FRESH"},
+        "stock-1": {"price": Decimal("12.00"), "quality": "FRESH"},
+    }
+    load_quotes = AsyncMock(return_value=quotes)
+    refresh_positions = AsyncMock(return_value=2)
+    refresh_account_nav = AsyncMock(return_value=1)
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.system_connection",
+            return_value=_connection(conn),
+        ),
+        patch(
+            "backend.jobs.data_tasks.portfolio_repository.holding_instrument_ids",
+            new=holding_ids,
+        ),
+        patch(
+            "backend.jobs.data_tasks.portfolio_repository.latest_observation_quotes",
+            new=load_quotes,
+        ),
+        patch(
+            "backend.jobs.data_tasks.market_repository.refresh_positions",
+            new=refresh_positions,
+        ),
+        patch(
+            "backend.jobs.data_tasks.market_repository.refresh_account_nav",
+            new=refresh_account_nav,
+        ),
+    ):
+        result = await refresh_fund_position_projections(
+            MagicMock(), tenant_id="tenant-1", as_of=date(2026, 8, 30)
+        )
+
+    assert result == (2, 1)
+    holding_ids.assert_awaited_once_with(conn, "tenant-1")
+    load_quotes.assert_awaited_once_with(conn, ["fund-1", "stock-1"])
+    refresh_positions.assert_awaited_once_with(
+        conn,
+        tenant_id="tenant-1",
+        quotes=quotes,
+        as_of_date=date(2026, 8, 30),
+    )
+    refresh_account_nav.assert_awaited_once_with(
+        conn,
+        tenant_id="tenant-1",
+        as_of_date=date(2026, 8, 30),
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_logs_persistence_progress_and_refreshes_valuation_projection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    position = OpenFundPosition(
+        tenant_id="tenant-1",
+        account_id="account-1",
+        instrument_id="fund-1",
+        source_binding_id="binding-1",
+        symbol="110022",
+        holding_started_on=date(2024, 1, 2),
+        holding_start_method="TRANSACTION_RECONCILED",
+        holding_start_confidence="HIGH",
+        history_complete=True,
+    )
+    observations = [
+        Observation(
+            symbol="110022",
+            subject_type="FUND",
+            field_code=F_NAV,
+            value=Decimal("1.50"),
+            as_of=datetime.fromisoformat("2026-08-28T00:00:00+00:00"),
+            quality_status=Q_STALE,
+        )
+    ]
+    lease = DataTaskLease(
+        run_id="run-progress",
+        tenant_id="tenant-1",
+        job_type="FUND_NAV_BACKFILL",
+        payload={"batchId": "batch-1", "sourceBindingId": "binding-1"},
+        attempt_count=1,
+        lease_token="lease-1",
+    )
+    projection = AsyncMock(return_value=(1, 1))
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.load_open_fund_positions",
+            new=AsyncMock(return_value=[position]),
+        ),
+        patch(
+            "backend.jobs.data_tasks.fetch_fund_nav_history",
+            new=AsyncMock(return_value=observations),
+        ),
+        patch(
+            "backend.jobs.data_tasks.persist_nav_observations",
+            new=AsyncMock(
+                return_value=SimpleNamespace(inserted_count=1, skipped_count=0)
+            ),
+        ),
+        patch(
+            "backend.jobs.data_tasks.materialize_position_metrics",
+            new=AsyncMock(),
+        ),
+        patch(
+            "backend.jobs.data_tasks.refresh_fund_position_projections",
+            new=projection,
+            create=True,
+        ),
+        patch("backend.jobs.data_tasks.httpx.AsyncClient") as client_type,
+        caplog.at_level(logging.INFO, logger="wealthsail.data_tasks"),
+    ):
+        client_type.return_value.__aenter__.return_value = MagicMock()
+        await process_data_task(
+            MagicMock(),
+            Settings(_env_file=None),
+            lease,
+            as_of=date(2026, 8, 30),
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "fund_nav_backfill_persisted" in messages
+    assert "position_index=1" in messages
+    assert "position_count=1" in messages
+    assert "inserted_count=1" in messages
+    assert "skipped_count=0" in messages
+    assert "duration_ms=" in messages
+    projection.assert_awaited_once_with(
+        ANY,
+        tenant_id="tenant-1",
+        as_of=date(2026, 8, 30),
+    )
 
 
 @pytest.mark.asyncio

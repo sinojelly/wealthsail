@@ -62,6 +62,10 @@ vi.mock("../api/hooks", () => ({
     isFetching: false,
     refetch: vi.fn(),
   }),
+  useConfirmTiantianHoldingStart: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
   usePolicies: () => ({ data: policiesFixture, isLoading: false, isError: false, error: null }),
   useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null }),
   useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),

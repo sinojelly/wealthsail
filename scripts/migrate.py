@@ -922,6 +922,75 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("fund NAV data source type alignment is missing")
 
+    holding_start_boundary = await conn.fetchrow(
+        """
+        WITH boundary AS (
+            SELECT to_regclass(
+                'ledger.position_holding_start_decisions'
+            ) AS relation_id
+        )
+        SELECT relation_id IS NOT NULL AS table_exists,
+               COALESCE((
+                   SELECT relrowsecurity AND relforcerowsecurity
+                     FROM pg_class WHERE oid = relation_id
+               ), FALSE) AS forced_rls_exists,
+               EXISTS (
+                   SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = relation_id
+                      AND tgname = 'protect_holding_start_decisions_trigger'
+                      AND NOT tgisinternal
+               ) AS append_only_trigger_exists,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'INSERT'
+               ) ELSE FALSE END AS api_can_insert_holding_start_decision,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'UPDATE'
+               ) ELSE TRUE END AS api_can_update_holding_start_decision,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'DELETE'
+               ) ELSE TRUE END AS api_can_delete_holding_start_decision,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'authenticated', relation_id, 'SELECT'
+               ) ELSE TRUE END AS browser_can_read_holding_start_decision,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_worker', relation_id, 'SELECT'
+               ) ELSE FALSE END AS worker_can_read_holding_start_decision,
+               EXISTS (
+                   SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'ledger'
+                      AND tablename = 'position_holding_start_decisions'
+                      AND policyname = 'holding_start_decisions_api_select'
+                      AND cmd = 'SELECT'
+                      AND roles = ARRAY['wealthsail_api']::name[]
+               ) AS api_select_policy_exists,
+               EXISTS (
+                   SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'ledger'
+                      AND tablename = 'position_holding_start_decisions'
+                      AND policyname = 'holding_start_decisions_api_insert'
+                      AND cmd = 'INSERT'
+                      AND roles = ARRAY['wealthsail_api']::name[]
+               ) AS api_insert_policy_exists
+          FROM boundary
+        """
+    )
+    if (
+        holding_start_boundary is None
+        or not holding_start_boundary["table_exists"]
+        or not holding_start_boundary["forced_rls_exists"]
+        or not holding_start_boundary["append_only_trigger_exists"]
+        or not holding_start_boundary["api_can_insert_holding_start_decision"]
+        or holding_start_boundary["api_can_update_holding_start_decision"]
+        or holding_start_boundary["api_can_delete_holding_start_decision"]
+        or holding_start_boundary["browser_can_read_holding_start_decision"]
+        or not holding_start_boundary["worker_can_read_holding_start_decision"]
+        or not holding_start_boundary["api_select_policy_exists"]
+        or not holding_start_boundary["api_insert_policy_exists"]
+    ):
+        raise RuntimeError(
+            "post-import holding-start decision boundary is missing or unsafe"
+        )
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"

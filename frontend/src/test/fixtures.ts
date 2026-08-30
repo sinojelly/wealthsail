@@ -39,6 +39,7 @@ export const summaryFixture: PortfolioSummary = {
 
 export const positionsFixture: PositionDto[] = [
   {
+    instrumentId: "instrument-stock-1",
     symbol: "600036",
     name: "招商银行",
     type: "A股",
@@ -61,6 +62,7 @@ export const positionsFixture: PositionDto[] = [
     rangeMetrics: null,
   },
   {
+    instrumentId: "instrument-etf-1",
     symbol: "510300",
     name: "沪深300ETF",
     type: "场内ETF",
@@ -83,6 +85,7 @@ export const positionsFixture: PositionDto[] = [
     rangeMetrics: null,
   },
   {
+    instrumentId: "instrument-fund-1",
     symbol: "012349",
     name: "易方达高质量严选三年持有",
     type: "场外基金",
@@ -106,6 +109,7 @@ export const positionsFixture: PositionDto[] = [
       days: 895,
       method: "TRANSACTION_RECONCILED",
       confidence: "HIGH",
+      canConfirm: true,
     },
     rangeMetrics: {
       high: "1.8000",

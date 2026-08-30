@@ -66,6 +66,10 @@ vi.mock("../../api/hooks", () => ({
   }),
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useConfirmTiantianHoldingStart: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 it("presents an onboarding empty state instead of a valuation failure", () => {

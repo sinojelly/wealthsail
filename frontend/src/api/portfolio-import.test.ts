@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "./client";
 import {
+  confirmTiantianHoldingStart,
   confirmTiantianImport,
   listTiantianImports,
   previewTiantianImport,
@@ -106,5 +107,39 @@ describe("Tiantian import API", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("If-Match")).toBe('"3"');
     expect(headers.get("Idempotency-Key")).toBe("confirm-1");
+  });
+
+  it("sends an idempotent post-import holding-start decision", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            accountId: "account-1",
+            instrumentId: "fund-1",
+            startedOn: "2021-02-23",
+            metricsStatus: "PENDING",
+          },
+          meta,
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await confirmTiantianHoldingStart(
+      "account-1",
+      "fund-1",
+      "2021-02-23",
+      "holding-start-1",
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain(
+      "/positions/account-1/fund-1/holding-start/confirm",
+    );
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      "holding-start-1",
+    );
+    expect(JSON.parse(String(init.body))).toEqual({ startedOn: "2021-02-23" });
   });
 });

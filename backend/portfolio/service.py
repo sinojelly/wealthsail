@@ -77,6 +77,7 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
                 "days": None,
                 "method": "INSUFFICIENT_DATA",
                 "confidence": "NONE",
+                "canConfirm": False,
             },
             {
                 "high": None,
@@ -97,6 +98,7 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
             "days": _row_value(row, "holding_days"),
             "method": _row_value(row, "holding_start_method"),
             "confidence": _row_value(row, "holding_start_confidence", "NONE"),
+            "canConfirm": _row_value(row, "holding_source_binding_id") is not None,
         },
         {
             "high": _decimal_text(_row_value(row, "period_high_nav")),
@@ -301,6 +303,7 @@ async def get_positions(
 
         result.append(
             {
+                "instrumentId": str(row["instrument_id"]),
                 "symbol": row["ticker"],
                 "name": row["canonical_name"],
                 "type": ASSET_CATEGORY.get(row["asset_type"], row["asset_type"]),

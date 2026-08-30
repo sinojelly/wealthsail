@@ -351,6 +351,31 @@ export function useRetryTiantianMetrics() {
   });
 }
 
+export function useConfirmTiantianHoldingStart() {
+  const invalidatePortfolio = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: ({
+      accountId,
+      instrumentId,
+      startedOn,
+      idempotencyKey,
+    }: {
+      accountId: string;
+      instrumentId: string;
+      startedOn: string;
+      idempotencyKey: string;
+    }) =>
+      portfolioApi.confirmTiantianHoldingStart(
+        accountId,
+        instrumentId,
+        startedOn,
+        idempotencyKey,
+      ),
+    onSuccess: invalidatePortfolio,
+    onError: onAuthFailure,
+  });
+}
+
 export function useReportsList(params?: {
   tradeDate?: string;
   session?: ReportSession;

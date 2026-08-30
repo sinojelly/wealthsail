@@ -95,6 +95,10 @@ vi.mock("../../api/hooks", () => ({
   }),
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useConfirmTiantianHoldingStart: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 beforeEach(() => {

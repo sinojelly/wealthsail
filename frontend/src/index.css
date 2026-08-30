@@ -4053,6 +4053,47 @@ button:disabled {
   padding-left: 18px;
   color: #9a3412;
 }
+.holding-start-confirmation {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 160px auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fffaf5;
+}
+.holding-start-confirmation > div {
+  display: grid;
+  gap: 3px;
+}
+.holding-start-confirmation label {
+  color: var(--navy);
+  font-size: 10px;
+  font-weight: 700;
+}
+.holding-start-confirmation small {
+  color: var(--slate-500);
+  font-size: 8px;
+}
+.holding-start-confirmation input {
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--slate-200);
+  border-radius: 6px;
+  color: var(--navy);
+  background: white;
+}
+.holding-start-confirmation .holding-start-success,
+.holding-start-confirmation .form-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 9px;
+}
+.holding-start-success {
+  color: #047857;
+}
 .metric-caveat {
   display: flex;
   align-items: flex-start;
@@ -4075,6 +4116,12 @@ button:disabled {
   }
   .onboarding-aside {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container page-content (max-width: 700px) {
+  .holding-start-confirmation {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 }
 @media (max-width: 950px) {

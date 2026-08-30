@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { type FormEvent, useId, useState } from "react";
 import { ChevronDown, Info } from "lucide-react";
 import type {
   DecimalString,
@@ -11,6 +11,7 @@ interface FundRangeMetricsProps {
   metrics: FundRangeMetricsDto | null;
   currentNav: DecimalString | null;
   costReturnPct?: DecimalString | null;
+  onConfirmHoldingStart?: (startedOn: string) => Promise<void>;
 }
 
 function formatPct(value: DecimalString | null, signed = false) {
@@ -31,10 +32,30 @@ function holdingLabel(period: HoldingPeriodDto | null) {
   return `持有 ${period.days} 天`;
 }
 
-function statusLabel(status: FundRangeMetricsDto["status"]) {
-  if (status === "PARTIAL") return "数据不完整";
+function statusLabel(
+  status: FundRangeMetricsDto["status"],
+  qualityReasons: string[],
+) {
+  if (
+    status === "PARTIAL" &&
+    qualityReasons.includes("PARTIAL_HOLDING_HISTORY")
+  ) {
+    return "持有起点为估算";
+  }
+  if (status === "PARTIAL") return "区间数据不完整";
   if (status === "CONFLICT") return "数据口径冲突";
   return null;
+}
+
+function qualityReasonLabel(reason: string) {
+  const labels: Record<string, string> = {
+    PARTIAL_HOLDING_HISTORY:
+      "当前区间按系统推导的持有开始日计算；确认或修改日期后，系统会自动重新抓取净值并重算。",
+    NAV_DATE_GAP: "部分交易日缺少官方净值，区间结果可能不完整。",
+    HOLDING_START_NOT_AVAILABLE: "尚未取得可用的持有开始日期。",
+    METRICS_NOT_READY: "区间指标仍在后台生成。",
+  };
+  return labels[reason] ?? reason;
 }
 
 function methodLabel(method: HoldingPeriodDto["method"] | undefined) {
@@ -66,9 +87,34 @@ export default function FundRangeMetrics({
   metrics,
   currentNav,
   costReturnPct = null,
+  onConfirmHoldingStart,
 }: FundRangeMetricsProps) {
   const [expanded, setExpanded] = useState(false);
+  const [startedOn, setStartedOn] = useState(holdingPeriod?.startedOn ?? "");
+  const [confirming, setConfirming] = useState(false);
+  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(
+    null,
+  );
+  const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const detailId = useId();
+
+  async function submitHoldingStart(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!startedOn || !onConfirmHoldingStart) return;
+    setConfirming(true);
+    setConfirmationError(null);
+    setConfirmationMessage(null);
+    try {
+      await onConfirmHoldingStart(startedOn);
+      setConfirmationMessage("已确认，后台正在自动补齐净值并重新计算。");
+    } catch (error) {
+      setConfirmationError(
+        error instanceof Error ? error.message : "确认失败，请稍后重试。",
+      );
+    } finally {
+      setConfirming(false);
+    }
+  }
 
   if (!metrics || metrics.status === "PENDING") {
     return (
@@ -79,7 +125,7 @@ export default function FundRangeMetrics({
     );
   }
 
-  const qualityStatus = statusLabel(metrics.status);
+  const qualityStatus = statusLabel(metrics.status, metrics.qualityReasons);
   const position = formatPct(metrics.rangePositionPct);
   const accessibleName = `${holdingLabel(holdingPeriod)}，区间位置 ${position}`;
 
@@ -153,9 +199,45 @@ export default function FundRangeMetrics({
           {metrics.qualityReasons.length > 0 ? (
             <ul className="metric-quality-reasons">
               {metrics.qualityReasons.map((reason) => (
-                <li key={reason}>{reason}</li>
+                <li key={reason}>{qualityReasonLabel(reason)}</li>
               ))}
             </ul>
+          ) : null}
+          {holdingPeriod?.canConfirm && onConfirmHoldingStart ? (
+            <form
+              className="holding-start-confirmation"
+              onSubmit={submitHoldingStart}
+            >
+              <div>
+                <label htmlFor={`${detailId}-holding-start`}>
+                  确认持有开始日期
+                </label>
+                <small>日期准确可直接确认；有误时修改后再确认。</small>
+              </div>
+              <input
+                id={`${detailId}-holding-start`}
+                type="date"
+                value={startedOn}
+                onChange={(event) => setStartedOn(event.target.value)}
+              />
+              <button
+                className="btn-secondary"
+                type="submit"
+                disabled={!startedOn || confirming}
+              >
+                {confirming ? "正在提交…" : "确认并后台重算"}
+              </button>
+              {confirmationMessage ? (
+                <p className="holding-start-success" role="status">
+                  {confirmationMessage}
+                </p>
+              ) : null}
+              {confirmationError ? (
+                <p className="form-error" role="alert">
+                  {confirmationError}
+                </p>
+              ) : null}
+            </form>
           ) : null}
           <p className="metric-caveat">
             <Info size={12} aria-hidden="true" />

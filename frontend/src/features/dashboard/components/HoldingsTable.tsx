@@ -11,9 +11,14 @@ import FundRangeMetrics from "./FundRangeMetrics";
 export default function HoldingsTable({
   rows,
   loading,
+  onConfirmHoldingStart,
 }: {
   rows: PositionDto[];
   loading?: boolean;
+  onConfirmHoldingStart?: (
+    position: PositionDto,
+    startedOn: string,
+  ) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [type, setType] = useState("全部");
@@ -158,6 +163,12 @@ export default function HoldingsTable({
                           metrics={row.rangeMetrics}
                           currentNav={row.price}
                           costReturnPct={row.pnlRate}
+                          onConfirmHoldingStart={
+                            onConfirmHoldingStart
+                              ? (startedOn) =>
+                                  onConfirmHoldingStart(row, startedOn)
+                              : undefined
+                          }
                         />
                       </td>
                     </tr>

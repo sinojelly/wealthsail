@@ -13,6 +13,7 @@ import {
   usePortfolioSummary,
   usePositions,
   useMe,
+  useConfirmTiantianHoldingStart,
 } from "../../api/hooks";
 import type { PortfolioAssetScope } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
@@ -24,6 +25,7 @@ import SentimentCard from "./components/SentimentCard";
 import AdviceCard from "./components/AdviceCard";
 import AssetScopeSwitcher from "./components/AssetScopeSwitcher";
 import { useAiAdvice, useMarketSentiment } from "../../api/hooks";
+import { createIdempotencyKey } from "../../lib/idempotency";
 
 export default function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -40,6 +42,7 @@ export default function DashboardPage() {
   const navTrend = useNavTrend(30, scope);
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
+  const confirmHoldingStart = useConfirmTiantianHoldingStart();
   const activeTenantName =
     me.data?.tenants.find(
       (tenant) => tenant.tenantId === me.data?.activeTenantId,
@@ -172,6 +175,14 @@ export default function DashboardPage() {
       <HoldingsTable
         rows={positions.error ? [] : (positions.data ?? [])}
         loading={positions.isLoading}
+        onConfirmHoldingStart={async (position, startedOn) => {
+          await confirmHoldingStart.mutateAsync({
+            accountId: position.accountId,
+            instrumentId: position.instrumentId,
+            startedOn,
+            idempotencyKey: createIdempotencyKey(),
+          });
+        }}
       />
       <div className="dashboard-actions panel">
         <div className="dashboard-action-copy">

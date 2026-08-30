@@ -37,6 +37,7 @@ def _position(**overrides):
         "holding_days": 898,
         "holding_start_method": "TRANSACTION_RECONCILED",
         "holding_start_confidence": "HIGH",
+        "holding_source_binding_id": "binding-1",
         "current_nav": Decimal("1.2000"),
         "current_nav_date": date(2026, 8, 27),
         "period_high_nav": Decimal("1.5000"),
@@ -88,7 +89,9 @@ async def test_ready_metrics_are_nested_strings_and_never_relabeled_realtime(
         "days": 898,
         "method": "TRANSACTION_RECONCILED",
         "confidence": "HIGH",
+        "canConfirm": True,
     }
+    assert result["instrumentId"] == "fund-1"
     assert result["rangeMetrics"] == {
         "high": "1.5000",
         "highDate": "2025-10-08",

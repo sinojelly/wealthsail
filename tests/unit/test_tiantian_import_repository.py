@@ -22,6 +22,7 @@ from backend.portfolio.imports.repository import (
     retry_position_metrics,
     write_ledger_effects,
 )
+from backend.portfolio.imports import repository as import_repository
 from backend.portfolio.imports.service import (
     ConfirmationItem,
     LedgerEffect,
@@ -594,6 +595,71 @@ async def test_metrics_retry_is_durable_idempotent_and_never_replays_ledger() ->
     assert "POSITION_PERIOD_METRICS_REBUILD" not in combined
     assert "ON CONFLICT (tenant_id, job_key) DO NOTHING" in combined
     assert "ledger_events" not in combined
+
+
+class _HoldingStartDecisionConnection:
+    def __init__(self) -> None:
+        self.sql: list[str] = []
+        self.fetchrow_results = iter(
+            [
+                {
+                    "batch_id": "batch-1",
+                    "source_binding_id": "binding-1",
+                    "source_as_of": datetime.fromisoformat(
+                        "2026-08-28T08:00:00+08:00"
+                    ),
+                },
+                {
+                    "id": "decision-1",
+                    "request_hash": "expected-by-implementation",
+                    "started_on": datetime.fromisoformat(
+                        "2021-02-23T00:00:00+08:00"
+                    ).date(),
+                    "created": True,
+                },
+            ]
+        )
+        self.execute_calls: list[tuple[str, tuple]] = []
+
+    async def fetchrow(self, sql: str, *args):
+        self.sql.append(sql)
+        row = next(self.fetchrow_results)
+        if "position_holding_start_decisions" in sql:
+            row["request_hash"] = args[-1]
+        return row
+
+    async def execute(self, sql: str, *args):
+        self.sql.append(sql)
+        self.execute_calls.append((sql, args))
+        return "INSERT 0 1"
+
+
+@pytest.mark.asyncio
+async def test_post_import_holding_start_decision_is_append_only_and_queues_backfill() -> None:
+    conn = _HoldingStartDecisionConnection()
+
+    result = await import_repository.confirm_holding_start(
+        conn,
+        tenant_id="tenant-1",
+        actor_id="user-1",
+        account_id="account-1",
+        instrument_id="fund-1",
+        started_on=datetime.fromisoformat("2021-02-23T00:00:00+08:00").date(),
+        idempotency_key="holding-start-1",
+    )
+
+    combined = "\n".join(conn.sql)
+    assert "FROM ledger.position_snapshots current_position" in combined
+    assert "INSERT INTO ledger.position_holding_start_decisions" in combined
+    assert "INSERT INTO workflow.job_runs" in combined
+    assert "FUND_NAV_BACKFILL" in combined
+    assert "UPDATE ledger.portfolio_import_items" not in combined
+    assert result == {
+        "decision_id": "decision-1",
+        "batch_id": "batch-1",
+        "job_key": "holding-start-decision:decision-1",
+        "created": True,
+    }
 
 
 class _FirstBindingConflictConnection:

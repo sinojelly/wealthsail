@@ -30,6 +30,7 @@ _SELECT_POSITION_COLUMNS = """
     i.canonical_name, i.asset_type,
     COALESCE(a.ticker, '') AS ticker,
     metric.as_of AS metric_as_of,
+    metric.source_binding_id AS holding_source_binding_id,
     metric.holding_started_on, metric.holding_days,
     metric.holding_start_method, metric.holding_start_confidence,
     metric.current_nav, metric.current_nav_date,
@@ -174,7 +175,8 @@ async def latest_positions(
             LIMIT 1
         ) a ON TRUE
         LEFT JOIN LATERAL (
-            SELECT metric.as_of, metric.holding_started_on, metric.holding_days,
+            SELECT metric.as_of, metric.source_binding_id,
+                   metric.holding_started_on, metric.holding_days,
                    metric.holding_start_method, metric.holding_start_confidence,
                    metric.current_nav,
                    metric.current_nav_date, metric.period_high_nav,

@@ -30,9 +30,9 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 36
+    assert versions[-1] == 37
     assert migrations[-1].path.name == (
-        "036_fund_nav_source_type_alignment.sql"
+        "037_holding_start_decisions.sql"
     )
 
 
@@ -194,6 +194,47 @@ def test_030_migration_limits_api_job_reads_to_tenant_scoped_status_columns() ->
     ):
         assert contract in migration
     assert "GRANT SELECT ON workflow.job_runs TO wealthsail_api" not in migration
+
+
+def test_037_adds_append_only_holding_start_decisions_with_least_privilege() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "037_holding_start_decisions.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE TABLE ledger.position_holding_start_decisions",
+        "request_hash CHAR(64)",
+        "UNIQUE (tenant_id, idempotency_key)",
+        "REFERENCES identity.tenant_members(tenant_id, user_id)",
+        "CREATE POLICY holding_start_decisions_api_select",
+        "CREATE POLICY holding_start_decisions_api_insert",
+        "identity.has_tenant_role",
+        "GRANT SELECT, INSERT ON ledger.position_holding_start_decisions TO wealthsail_api",
+        "GRANT SELECT ON ledger.position_holding_start_decisions TO wealthsail_worker",
+        "holding-start decisions are append-only",
+    ):
+        assert contract in migration
+    assert "GRANT UPDATE" not in migration
+    assert "GRANT DELETE" not in migration
+
+
+def test_readback_checks_post_import_holding_start_decision_boundary() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "post-import holding-start decision boundary is missing or unsafe" in source
+    for contract in (
+        "position_holding_start_decisions",
+        "protect_holding_start_decisions_trigger",
+        "forced_rls_exists",
+        "api_can_insert_holding_start_decision",
+        "api_can_delete_holding_start_decision",
+        "browser_can_read_holding_start_decision",
+        "worker_can_read_holding_start_decision",
+        "api_select_policy_exists",
+        "api_insert_policy_exists",
+    ):
+        assert contract in source
 
 
 def test_readback_rejects_a_missing_import_item_update_policy() -> None:

@@ -318,6 +318,35 @@ def test_cancel_and_metrics_retry_require_versioned_idempotent_commands() -> Non
     assert retried.await_args.kwargs["idempotency_key"] == "retry-1"
 
 
+def test_confirm_holding_start_queues_an_auditable_background_recalculation() -> None:
+    confirmed = AsyncMock(
+        return_value={
+            "accountId": "account-1",
+            "instrumentId": "fund-1",
+            "startedOn": "2021-02-23",
+            "metricsStatus": "PENDING",
+        }
+    )
+    with patch(
+        "backend.portfolio.api.tiantian_import_service.confirm_tiantian_holding_start",
+        new=confirmed,
+        create=True,
+    ):
+        response = _client().post(
+            "/api/v1/portfolio/positions/account-1/fund-1/holding-start/confirm",
+            headers={"Idempotency-Key": "holding-start-1"},
+            json={"startedOn": "2021-02-23"},
+        )
+
+    assert response.status_code == 202
+    assert response.json()["data"]["metricsStatus"] == "PENDING"
+    assert confirmed.await_args.args[2:] == ("account-1", "fund-1")
+    assert confirmed.await_args.kwargs == {
+        "started_on": portfolio_api.date(2021, 2, 23),
+        "idempotency_key": "holding-start-1",
+    }
+
+
 def test_manual_import_confirm_remains_backward_compatible_without_if_match() -> None:
     manual_confirm = AsyncMock(
         return_value={"batchId": "manual-1", "status": "CONFIRMED"}

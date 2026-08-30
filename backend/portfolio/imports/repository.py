@@ -1660,3 +1660,150 @@ async def retry_position_metrics(
         ),
     )
     return {"job_key": job_key, "created": created is not None}
+
+
+async def confirm_holding_start(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    actor_id: str,
+    account_id: str,
+    instrument_id: str,
+    started_on: date,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Append one user decision and queue an idempotent full NAV backfill.
+
+    Confirmed import rows remain immutable.  The decision is scoped to the
+    active source binding and current open source position so a later account
+    replacement cannot accidentally inherit an earlier user's override.
+    """
+    source = await conn.fetchrow(
+        """
+        SELECT batch.id AS batch_id, batch.source_binding_id,
+               batch.source_as_of::date AS source_as_of
+          FROM ledger.portfolio_import_batches batch
+          JOIN ledger.portfolio_source_bindings binding
+            ON binding.tenant_id = batch.tenant_id
+           AND binding.id = batch.source_binding_id
+           AND binding.account_id = batch.account_id
+          JOIN ledger.portfolio_import_items item
+            ON item.tenant_id = batch.tenant_id AND item.batch_id = batch.id
+          JOIN ledger.ledger_events event
+            ON event.tenant_id = item.tenant_id
+           AND event.import_batch_id = item.batch_id
+           AND event.import_item_id = item.id
+         WHERE batch.tenant_id = $1 AND batch.account_id = $2
+           AND item.instrument_id = $3
+           AND batch.source_type = 'TIANTIAN_FUND_ZIP'
+           AND batch.status = 'CONFIRMED' AND binding.status = 'ACTIVE'
+           AND item.item_type = 'POSITION_SNAPSHOT' AND item.quantity > 0
+           AND event.status = 'CONFIRMED' AND event.event_type = 'ADJUSTMENT'
+           AND event.reverses_event_id IS NULL
+           AND EXISTS (
+               SELECT 1
+                 FROM ledger.position_snapshots current_position
+                WHERE current_position.tenant_id = batch.tenant_id
+                  AND current_position.account_id = batch.account_id
+                  AND current_position.instrument_id = item.instrument_id
+                  AND current_position.quantity > 0
+                  AND current_position.as_of = (
+                      SELECT max(latest_position.as_of)
+                        FROM ledger.position_snapshots latest_position
+                       WHERE latest_position.tenant_id = batch.tenant_id
+                         AND latest_position.account_id = batch.account_id
+                         AND latest_position.instrument_id = item.instrument_id
+                  )
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM ledger.ledger_events reversal
+                WHERE reversal.tenant_id = event.tenant_id
+                  AND reversal.reverses_event_id = event.id
+                  AND reversal.status = 'CONFIRMED'
+           )
+         ORDER BY event.created_at DESC, event.id DESC
+         LIMIT 1
+        """,
+        tenant_id,
+        account_id,
+        instrument_id,
+    )
+    if source is None:
+        raise NotFoundError("当前场外基金持仓不存在可确认的来源记录")
+    source_as_of = source["source_as_of"]
+    if isinstance(source_as_of, datetime):
+        source_as_of = source_as_of.date()
+    if started_on > source_as_of:
+        raise ValidationError_("持有开始日不能晚于当前来源持仓快照日期")
+
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "accountId": account_id,
+                "instrumentId": instrument_id,
+                "sourceBindingId": str(source["source_binding_id"]),
+                "startedOn": started_on.isoformat(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    decision = await conn.fetchrow(
+        """
+        INSERT INTO ledger.position_holding_start_decisions (
+            tenant_id, account_id, instrument_id, source_binding_id,
+            started_on, decided_by, idempotency_key, request_hash
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+        RETURNING id, request_hash, started_on, TRUE AS created
+        """,
+        tenant_id,
+        account_id,
+        instrument_id,
+        str(source["source_binding_id"]),
+        started_on,
+        actor_id,
+        idempotency_key,
+        request_hash,
+    )
+    if decision is None:
+        decision = await conn.fetchrow(
+            """
+            SELECT id, request_hash, started_on, FALSE AS created
+              FROM ledger.position_holding_start_decisions
+             WHERE tenant_id = $1 AND idempotency_key = $2
+            """,
+            tenant_id,
+            idempotency_key,
+        )
+    if decision is None or str(decision["request_hash"]).strip() != request_hash:
+        raise IdempotencyConflictError("相同 Idempotency-Key 对应了不同持有日期")
+
+    decision_id = str(decision["id"])
+    job_key = f"holding-start-decision:{decision_id}"
+    await conn.execute(
+        """
+        INSERT INTO workflow.job_runs (
+            tenant_id, job_key, status, job_type, payload, available_at
+        ) VALUES (
+            $1, $2, 'PENDING', 'FUND_NAV_BACKFILL', $3::jsonb, now()
+        ) ON CONFLICT (tenant_id, job_key) DO NOTHING
+        """,
+        tenant_id,
+        job_key,
+        json.dumps(
+            {
+                "batchId": str(source["batch_id"]),
+                "accountId": account_id,
+                "sourceBindingId": str(source["source_binding_id"]),
+                "holdingStartDecisionId": decision_id,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {
+        "decision_id": decision_id,
+        "batch_id": str(source["batch_id"]),
+        "job_key": job_key,
+        "created": bool(decision["created"]),
+    }
