@@ -22,6 +22,8 @@ vi.mock("../../api/hooks", () => ({
       holdingPnlRate: null,
       cumulativePnl: null,
       cumulativePnlRate: null,
+      performanceBaselineAsOf: null,
+      performanceBaselineMixed: false,
       allocation: [],
       qualityStatus: "MISSING",
       asOf: null,

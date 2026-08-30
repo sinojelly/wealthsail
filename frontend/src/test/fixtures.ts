@@ -30,6 +30,8 @@ export const summaryFixture: PortfolioSummary = {
   holdingPnlRate: "9.70",
   cumulativePnl: null,
   cumulativePnlRate: null,
+  performanceBaselineAsOf: null,
+  performanceBaselineMixed: false,
   allocation: [
     { category: "A股", amount: "928000.00", value: "48.3" },
     { category: "场内ETF", amount: "359384.00", value: "18.7" },

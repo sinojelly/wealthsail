@@ -89,15 +89,29 @@ export interface PortfolioSummary {
   dailyPnlRate: DecimalString | null;
   holdingPnl: DecimalString | null;
   holdingPnlRate: DecimalString | null;
-  // Reserved for a future cash-flow-aware performance projection. Current
-  // opening-balance imports cannot establish a reliable lifetime return.
+  // Cash-flow-aware result since the account baseline, plus the optional
+  // historical cumulative PnL explicitly supplied by the account owner.
   cumulativePnl: DecimalString | null;
+  // Reserved until a cash-flow-weighted/TWR denominator is implemented.
   cumulativePnlRate: DecimalString | null;
+  performanceBaselineAsOf: string | null;
+  performanceBaselineMixed: boolean;
   allocation: AllocationItem[];
   qualityStatus: QualityCode;
   // A new tenant has no observed portfolio date until its first confirmed import.
   asOf: string | null;
   positionCount: number;
+}
+
+export interface PerformanceBaselineDto {
+  accountId: string;
+  accountName: string;
+  baselineAsOf: string;
+  baselineTotalAsset: DecimalString;
+  initialCumulativePnl: DecimalString;
+  source: "AUTO_NAV" | "AUTO_MIGRATION" | "USER";
+  version: number;
+  createdAt: string | null;
 }
 
 export interface PositionDto {

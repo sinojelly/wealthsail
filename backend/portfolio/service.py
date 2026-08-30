@@ -22,6 +22,7 @@ from backend.errors import (
     IdempotencyConflictError,
     NotFoundError,
     ValidationError_,
+    VersionConflictError,
 )
 from backend.market import repository as market_repository
 from backend.portfolio import repository
@@ -84,6 +85,47 @@ def _aggregate_holding_pnl(
     holding_pnl = total_market_value - total_cost
     holding_pnl_rate = pct(holding_pnl, total_cost) if total_cost else None
     return holding_pnl, holding_pnl_rate
+
+
+def _aggregate_cumulative_pnl(
+    navs: list[asyncpg.Record] | list[dict],
+) -> tuple[Decimal | None, str | None, bool]:
+    """Aggregate account performance without inventing pre-baseline history.
+
+    Per account: ``initial historical PnL + current NAV - baseline NAV - net
+    external inflow``.  A missing current valuation or baseline invalidates the
+    portfolio aggregate; publishing a partial cumulative result would be more
+    misleading than returning no value.
+    """
+    if not navs:
+        return None, None, False
+    required = (
+        "total_nav",
+        "performance_baseline_as_of",
+        "performance_baseline_total_asset",
+        "initial_cumulative_pnl",
+    )
+    if any(
+        any(_row_value(row, field) is None for field in required)
+        for row in navs
+    ):
+        return None, None, False
+
+    result = sum(
+        (
+            _d(_row_value(row, "initial_cumulative_pnl"))
+            + _d(_row_value(row, "total_nav"))
+            - _d(_row_value(row, "performance_baseline_total_asset"))
+            - _d(_row_value(row, "net_external_flow"))
+            for row in navs
+        ),
+        ZERO,
+    )
+    baseline_dates = {
+        _row_value(row, "performance_baseline_as_of") for row in navs
+    }
+    earliest = min(baseline_dates)
+    return result, _date_text(earliest), len(baseline_dates) > 1
 
 
 def _position_display_quality(row: asyncpg.Record | dict) -> str:
@@ -233,6 +275,8 @@ async def get_summary(
             "holdingPnlRate": None,
             "cumulativePnl": None,
             "cumulativePnlRate": None,
+            "performanceBaselineAsOf": None,
+            "performanceBaselineMixed": False,
             "allocation": [],
             "qualityStatus": "MISSING",
             "asOf": None,
@@ -271,6 +315,7 @@ async def get_summary(
         else await repository.latest_positions(conn, tenant_id)
     )
     holding_pnl, holding_pnl_rate = _aggregate_holding_pnl(positions)
+    cumulative_pnl, baseline_as_of, baseline_mixed = _aggregate_cumulative_pnl(navs)
     allocation = _build_allocation(positions, cash, total_asset)
     valuation_pending_count = sum(
         1
@@ -310,11 +355,15 @@ async def get_summary(
         "holdingPnlRate": (
             fmt_money(holding_pnl_rate) if holding_pnl_rate is not None else None
         ),
-        # Kept in the wire contract for backward compatibility. A current
-        # holdings import is not sufficient to reconstruct lifetime cash-flow
-        # performance, so the old total_nav-principal approximation is hidden.
-        "cumulativePnl": None,
+        # Lifetime history before the first WealthSail baseline is optional;
+        # after that baseline, only confirmed external CASH_IN/CASH_OUT adjusts
+        # performance. Internal trades must never be treated as new capital.
+        "cumulativePnl": (
+            fmt_money(cumulative_pnl) if cumulative_pnl is not None else None
+        ),
         "cumulativePnlRate": None,
+        "performanceBaselineAsOf": baseline_as_of,
+        "performanceBaselineMixed": baseline_mixed,
         "allocation": allocation,
         "qualityStatus": quality,
         # A combined portfolio is only as current as its oldest account
@@ -322,6 +371,133 @@ async def get_summary(
         "asOf": min(r["as_of"] for r in navs),
         "positionCount": len(positions),
     }
+
+
+def _performance_baseline_dto(row: asyncpg.Record | dict) -> dict:
+    return {
+        "accountId": str(row["account_id"]),
+        "accountName": str(_row_value(row, "account_name") or "未命名账户"),
+        "baselineAsOf": _date_text(row["baseline_as_of"]),
+        "baselineTotalAsset": fmt_money(_d(row["baseline_total_asset"])),
+        "initialCumulativePnl": fmt_money(_d(row["initial_cumulative_pnl"])),
+        "source": str(row["source"]),
+        "version": int(row["version"]),
+        "createdAt": _date_text(_row_value(row, "created_at")),
+    }
+
+
+async def list_performance_baselines(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    owner_user_id: str,
+) -> list[dict]:
+    rows = await repository.list_performance_baselines(
+        conn, tenant_id=tenant_id, owner_user_id=owner_user_id
+    )
+    return [_performance_baseline_dto(row) for row in rows]
+
+
+def _performance_baseline_request_hash(
+    *, account_id: str, initial_cumulative_pnl: Decimal, expected_version: int
+) -> str:
+    canonical = json.dumps(
+        {
+            "accountId": account_id,
+            "initialCumulativePnl": format(initial_cumulative_pnl, "f"),
+            "expectedVersion": expected_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def revise_performance_baseline(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    actor_user_id: str,
+    account_id: str,
+    initial_cumulative_pnl: Decimal,
+    expected_version: int,
+    idempotency_key: str,
+) -> dict:
+    """Append one reviewed historical-PnL revision to an account baseline."""
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    if expected_version <= 0:
+        raise ValidationError_("If-Match 必须是正整数版本")
+    value = Decimal(str(initial_cumulative_pnl))
+    if not value.is_finite() or abs(value) >= Decimal("100000000000000000000"):
+        raise ValidationError_("跟踪前历史累计收益超出允许范围")
+    value = value.quantize(CENT)
+    request_hash = _performance_baseline_request_hash(
+        account_id=account_id,
+        initial_cumulative_pnl=value,
+        expected_version=expected_version,
+    )
+
+    await repository.lock_performance_baseline_command(
+        conn, tenant_id=tenant_id, idempotency_key=idempotency_key
+    )
+
+    replay = await repository.find_performance_baseline_by_idempotency(
+        conn,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        owner_user_id=actor_user_id,
+        idempotency_key=idempotency_key,
+    )
+    if replay is not None:
+        if str(replay["request_hash"]) != request_hash:
+            raise IdempotencyConflictError(
+                "Idempotency-Key 已用于不同的累计收益基线设置"
+            )
+        return _performance_baseline_dto(replay)
+
+    current = await repository.lock_latest_performance_baseline(
+        conn,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        owner_user_id=actor_user_id,
+    )
+    if current is None:
+        raise NotFoundError("账户累计收益基线不存在或当前用户无权设置")
+    current_version = int(current["version"])
+    if current_version != expected_version:
+        raise VersionConflictError(
+            f"累计收益基线已更新（当前版本 {current_version}），请刷新后重试"
+        )
+
+    inserted = await repository.insert_performance_baseline_revision(
+        conn,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        baseline_as_of=current["baseline_as_of"],
+        baseline_total_asset=_d(current["baseline_total_asset"]),
+        initial_cumulative_pnl=value,
+        version=current_version + 1,
+        created_by=actor_user_id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    await write_audit(
+        conn,
+        tenant_id=tenant_id,
+        actor_type="USER",
+        actor_id=actor_user_id,
+        action="PERFORMANCE_BASELINE_REVISED",
+        resource_type="ledger.account_performance_baselines",
+        resource_id=account_id,
+        correlation_id=idempotency_key,
+        details={
+            "version": current_version + 1,
+            "baselineAsOf": current["baseline_as_of"].isoformat(),
+            "initialCumulativePnl": format(value, "f"),
+        },
+    )
+    return _performance_baseline_dto(inserted)
 
 
 def _build_allocation(

@@ -30,10 +30,55 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 38
+    assert versions[-1] == 39
     assert migrations[-1].path.name == (
-        "038_worker_projection_and_holding_confirmation.sql"
+        "039_account_performance_baselines.sql"
     )
+
+
+def test_039_adds_append_only_account_performance_baselines() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration_path = root / "migrations" / "039_account_performance_baselines.sql"
+
+    assert migration_path.exists()
+    migration = migration_path.read_text(encoding="utf-8")
+    for contract in (
+        "CREATE TABLE ledger.account_performance_baselines",
+        "baseline_total_asset NUMERIC(28, 8)",
+        "initial_cumulative_pnl NUMERIC(28, 8)",
+        "UNIQUE (tenant_id, account_id, version)",
+        "UNIQUE (tenant_id, idempotency_key)",
+        "performance baselines are append-only",
+        "CREATE POLICY performance_baselines_api_select",
+        "CREATE POLICY performance_baselines_api_insert",
+        "created_by = auth.uid()",
+        "CREATE FUNCTION ledger.initialize_account_performance_baseline",
+        "AFTER INSERT OR UPDATE OF total_nav",
+        "SECURITY DEFINER",
+        "AUTO_MIGRATION",
+        "idx_ledger_events_performance_cash_flow",
+        "idx_ledger_events_confirmed_reversal",
+    ):
+        assert contract in migration
+    assert "GRANT UPDATE ON ledger.account_performance_baselines" not in migration
+    assert "GRANT DELETE ON ledger.account_performance_baselines" not in migration
+    assert "TO authenticated" not in migration
+
+
+def test_readback_checks_performance_baseline_security_boundary() -> None:
+    source = inspect.getsource(_readback)
+
+    for contract in (
+        "account performance baseline boundary is missing or unsafe",
+        "account_performance_baselines",
+        "initialize_account_performance_baseline_trigger",
+        "api_can_read_performance_baselines",
+        "api_can_insert_performance_baselines",
+        "api_cannot_update_performance_baselines",
+        "browser_cannot_read_performance_baselines",
+        "worker_cannot_insert_performance_baselines",
+    ):
+        assert contract in source
 
 
 def test_036_aligns_existing_fund_nav_sources_without_widening_the_enum() -> None:

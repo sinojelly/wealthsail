@@ -14,6 +14,7 @@ import InvitationCard from "./components/InvitationCard";
 import PersonalTenantInvitationCard from "./components/PersonalTenantInvitationCard";
 import TenantRoleCard from "./components/TenantRoleCard";
 import WeComBindingCard from "./components/WeComBindingCard";
+import PerformanceBaselineCard from "./components/PerformanceBaselineCard";
 
 export default function SettingsPage() {
   const me = useMe();
@@ -52,6 +53,9 @@ export default function SettingsPage() {
             activeTenantId={data?.activeTenantId ?? ""}
             activeRole={data?.activeRole ?? "VIEWER"}
             onChanged={() => me.refetch()}
+          />
+          <PerformanceBaselineCard
+            canEdit={data?.activeRole !== "VIEWER"}
           />
           <InvitationCard
             activeRole={data?.activeRole ?? "VIEWER"}

@@ -10,6 +10,7 @@ const {
   createPersonalTenantInvitation,
   revokeBinding,
   updateTenantName,
+  revisePerformanceBaseline,
 } = vi.hoisted(() => ({
   createInvitation: vi.fn().mockResolvedValue({
     invitationId: "invite-001",
@@ -33,6 +34,16 @@ const {
   updateTenantName: vi.fn().mockResolvedValue({
     tenantId: "tenant-demo-001",
     name: "Jelly家庭投资账户",
+  }),
+  revisePerformanceBaseline: vi.fn().mockResolvedValue({
+    accountId: "account-fund-1",
+    accountName: "天天基金账户",
+    baselineAsOf: "2026-08-30",
+    baselineTotalAsset: "87888.32",
+    initialCumulativePnl: "-1200.00",
+    source: "USER",
+    version: 2,
+    createdAt: "2026-08-30T20:00:00+08:00",
   }),
 }));
 
@@ -74,6 +85,27 @@ vi.mock("../../api/hooks", () => ({
   }),
   useUpdateTenantName: () => ({
     mutateAsync: updateTenantName,
+    isPending: false,
+    error: null,
+  }),
+  usePerformanceBaselines: () => ({
+    data: [
+      {
+        accountId: "account-fund-1",
+        accountName: "天天基金账户",
+        baselineAsOf: "2026-08-30",
+        baselineTotalAsset: "87888.32",
+        initialCumulativePnl: "0.00",
+        source: "AUTO_MIGRATION",
+        version: 1,
+        createdAt: "2026-08-30T18:56:52+08:00",
+      },
+    ],
+    isLoading: false,
+    error: null,
+  }),
+  useRevisePerformanceBaseline: () => ({
+    mutateAsync: revisePerformanceBaseline,
     isPending: false,
     error: null,
   }),
@@ -134,6 +166,25 @@ it("lets the active tenant owner rename the tenant", async () => {
 
   expect(updateTenantName).toHaveBeenCalledWith({ name: "Jelly家庭投资账户" });
   expect(await screen.findByText("租户名称已更新")).toBeInTheDocument();
+});
+
+it("lets an owner optionally set historical cumulative PnL without changing the tracking baseline", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<SettingsPage />);
+
+  const input = screen.getByLabelText("跟踪前历史累计收益（天天基金账户）");
+  expect(input).toHaveValue(0);
+  expect(screen.getByText("从 2026-08-30 起自动跟踪")).toBeInTheDocument();
+  await user.clear(input);
+  await user.type(input, "-1200");
+  await user.click(screen.getByRole("button", { name: "保存历史累计收益" }));
+
+  expect(revisePerformanceBaseline).toHaveBeenCalledWith({
+    accountId: "account-fund-1",
+    initialCumulativePnl: "-1200",
+    version: 1,
+  });
+  expect(await screen.findByText("历史累计收益已更新")).toBeInTheDocument();
 });
 
 it("lets a platform administrator create an independent personal-tenant invitation", async () => {

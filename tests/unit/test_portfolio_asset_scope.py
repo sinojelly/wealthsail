@@ -136,6 +136,22 @@ async def test_tenant_nav_starts_from_snapshots_not_owner_join_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_latest_nav_carries_append_only_baseline_and_non_reversed_external_flows() -> None:
+    conn = QueryConn()
+
+    await repository.latest_nav_per_account(conn, "tenant-1")
+
+    sql, _args = conn.calls[0]
+    assert "ledger.account_performance_baselines" in sql
+    assert "initial_cumulative_pnl" in sql
+    assert "event.event_type IN ('CASH_IN', 'CASH_OUT')" in sql
+    assert "event.status = 'CONFIRMED'" in sql
+    assert "reversal.reverses_event_id = event.id" in sql
+    assert "event.trade_date > performance.baseline_as_of" in sql
+    assert "event.trade_date <= nav.as_of" in sql
+
+
+@pytest.mark.asyncio
 async def test_position_service_applies_scope_and_returns_account_owners(
     monkeypatch,
 ) -> None:

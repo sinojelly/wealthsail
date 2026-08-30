@@ -31,6 +31,17 @@ from backend.portfolio.imports.package import ImportLimits
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
+class PerformanceBaselineUpdateRequest(BaseModel):
+    """Optional cumulative PnL known before WealthSail began tracking."""
+
+    initialCumulativePnl: Decimal = Field(
+        ...,
+        max_digits=28,
+        decimal_places=8,
+        description="跟踪基线日之前已实现和未实现的历史累计收益，可为负数",
+    )
+
+
 @router.get("/summary")
 async def portfolio_summary(
     scope: Literal["MINE", "TENANT", "MEMBER"] = "MINE",
@@ -65,6 +76,51 @@ async def portfolio_summary(
             "tenantId": ctx.tenant_id,
         },
     )
+
+
+@router.get("/performance-baselines")
+async def portfolio_performance_baselines(
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Return the actor's account baselines; other members' values stay private."""
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.list_performance_baselines(
+            conn,
+            tenant_id=ctx.tenant_id,
+            owner_user_id=ctx.user_id,
+        )
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.put("/performance-baselines/{account_id}")
+async def portfolio_revise_performance_baseline(
+    account_id: str,
+    payload: PerformanceBaselineUpdateRequest,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Append a reviewed pre-tracking cumulative PnL value for one account."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.revise_performance_baseline(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.user_id,
+            account_id=account_id,
+            initial_cumulative_pnl=payload.initialCumulativePnl,
+            expected_version=_parse_if_match(if_match),
+            idempotency_key=idempotency_key,
+        )
+    return ok(data, request_id=request_id, as_of=as_of)
 
 
 @router.get("/positions")

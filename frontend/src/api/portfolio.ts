@@ -6,6 +6,7 @@ import type {
   InstrumentSearchResult,
   NavTrend,
   PortfolioSummary,
+  PerformanceBaselineDto,
   PositionDto,
   PositionImportConfirmation,
   PositionImportDraft,
@@ -17,6 +18,7 @@ import type {
   TiantianImportList,
   TiantianDuplicatePolicy,
 } from "./types";
+import { createIdempotencyKey } from "../lib/idempotency";
 
 function scopeQuery(scope: PortfolioAssetScope): string {
   const params = new URLSearchParams({ scope: scope.kind });
@@ -31,6 +33,36 @@ export async function getSummary(
 ): Promise<PortfolioSummary> {
   const envelope = await request<PortfolioSummary>(
     `/v1/portfolio/summary?${scopeQuery(scope)}`,
+  );
+  return envelope.data;
+}
+
+export async function getPerformanceBaselines(): Promise<
+  PerformanceBaselineDto[]
+> {
+  const envelope = await request<PerformanceBaselineDto[]>(
+    "/v1/portfolio/performance-baselines",
+  );
+  return envelope.data;
+}
+
+export async function revisePerformanceBaseline(input: {
+  accountId: string;
+  initialCumulativePnl: string;
+  version: number;
+}): Promise<PerformanceBaselineDto> {
+  const envelope = await request<PerformanceBaselineDto>(
+    `/v1/portfolio/performance-baselines/${encodeURIComponent(input.accountId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Idempotency-Key": createIdempotencyKey(),
+        "If-Match": `"${input.version}"`,
+      },
+      body: JSON.stringify({
+        initialCumulativePnl: input.initialCumulativePnl,
+      }),
+    },
   );
   return envelope.data;
 }

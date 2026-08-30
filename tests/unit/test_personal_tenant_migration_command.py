@@ -155,6 +155,7 @@ async def test_apply_changes_only_identity_session_and_audit_state() -> None:
     assert "INSERT INTO identity.tenant_members" in sql
     assert "INSERT INTO identity.user_preferences" in sql
     assert "INSERT INTO identity.platform_roles" in sql
+    assert "INSERT INTO workflow.jobs" in sql
     assert "UPDATE identity.tenant_members" in sql
     assert "status = 'SUSPENDED'" in sql
     assert "auth_version = auth_version + 1" in sql
@@ -170,6 +171,18 @@ async def test_apply_changes_only_identity_session_and_audit_state() -> None:
         assert forbidden not in sql
     assert conn.fact_reads == 2
     assert not conn.rolled_back
+    assert result["reportSchedulesInitialized"] is True
+
+    schedule_sql, schedule_args = next(
+        call for call in conn.calls if "INSERT INTO workflow.jobs" in call[0]
+    )
+    assert "unnest" in schedule_sql
+    assert set(schedule_args[3]) == {
+        "PRE_MARKET",
+        "INTRADAY",
+        "FUND_1430",
+        "POST_MARKET",
+    }
 
     personal_audit_sql, personal_audit_args = next(
         call for call in conn.calls if "PERSONAL_TENANT_CREATED" in call[0]

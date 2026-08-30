@@ -246,6 +246,105 @@ async def test_summary_aggregates_current_holding_pnl_from_market_value_and_cost
 
 
 @pytest.mark.asyncio
+async def test_summary_aggregates_cash_flow_aware_cumulative_pnl_from_account_baselines(
+    monkeypatch,
+) -> None:
+    """Cumulative PnL must adjust NAV changes for external cash flows per account."""
+
+    async def latest_nav(_conn, _tenant):
+        return [
+            {
+                "account_id": "account-1",
+                "total_nav": Decimal("118000"),
+                "known_value": Decimal("118000"),
+                "valuation_coverage_pct": Decimal("100"),
+                "unpriced_position_count": 0,
+                "cash_balance": Decimal("18000"),
+                "positions_market_value": Decimal("100000"),
+                "daily_pnl": Decimal("0"),
+                "data_quality_status": "FRESH",
+                "as_of": date(2026, 8, 30),
+                "performance_baseline_as_of": date(2026, 8, 1),
+                "performance_baseline_total_asset": Decimal("100000"),
+                "initial_cumulative_pnl": Decimal("-2000"),
+                "net_external_flow": Decimal("10000"),
+            },
+            {
+                "account_id": "account-2",
+                "total_nav": Decimal("56000"),
+                "known_value": Decimal("56000"),
+                "valuation_coverage_pct": Decimal("100"),
+                "unpriced_position_count": 0,
+                "cash_balance": Decimal("6000"),
+                "positions_market_value": Decimal("50000"),
+                "daily_pnl": Decimal("0"),
+                "data_quality_status": "FRESH",
+                "as_of": date(2026, 8, 30),
+                "performance_baseline_as_of": date(2026, 8, 5),
+                "performance_baseline_total_asset": Decimal("50000"),
+                "initial_cumulative_pnl": Decimal("1000"),
+                "net_external_flow": Decimal("0"),
+            },
+        ]
+
+    async def no_positions(_conn, _tenant):
+        return []
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+    monkeypatch.setattr(repository, "latest_positions", no_positions)
+
+    result = await service.get_summary(
+        object(), "tenant-1", as_of=date(2026, 8, 30)  # type: ignore[arg-type]
+    )
+
+    # account-1: -2000 + 118000 - 100000 - 10000 = 6000
+    # account-2:  1000 +  56000 -  50000 -     0 = 7000
+    assert result["cumulativePnl"] == "13000.00"
+    assert result["cumulativePnlRate"] is None
+    assert result["performanceBaselineAsOf"] == "2026-08-01"
+    assert result["performanceBaselineMixed"] is True
+
+
+@pytest.mark.asyncio
+async def test_summary_abstains_from_cumulative_pnl_when_any_account_lacks_baseline(
+    monkeypatch,
+) -> None:
+    async def latest_nav(_conn, _tenant):
+        return [
+            {
+                "account_id": "account-1",
+                "total_nav": Decimal("100"),
+                "known_value": Decimal("100"),
+                "valuation_coverage_pct": Decimal("100"),
+                "unpriced_position_count": 0,
+                "cash_balance": Decimal("0"),
+                "positions_market_value": Decimal("100"),
+                "daily_pnl": Decimal("0"),
+                "data_quality_status": "FRESH",
+                "as_of": date(2026, 8, 30),
+                "performance_baseline_as_of": None,
+                "performance_baseline_total_asset": None,
+                "initial_cumulative_pnl": None,
+                "net_external_flow": None,
+            }
+        ]
+
+    async def no_positions(_conn, _tenant):
+        return []
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+    monkeypatch.setattr(repository, "latest_positions", no_positions)
+
+    result = await service.get_summary(
+        object(), "tenant-1", as_of=date(2026, 8, 30)  # type: ignore[arg-type]
+    )
+
+    assert result["cumulativePnl"] is None
+    assert result["performanceBaselineAsOf"] is None
+    assert result["performanceBaselineMixed"] is False
+
+
+@pytest.mark.asyncio
 async def test_summary_abstains_from_aggregate_holding_pnl_when_a_position_is_unpriced(
     monkeypatch,
 ) -> None:
@@ -406,6 +505,8 @@ async def test_empty_portfolio_summary_is_a_missing_read_model_not_an_error(
         "holdingPnlRate": None,
         "cumulativePnl": None,
         "cumulativePnlRate": None,
+        "performanceBaselineAsOf": None,
+        "performanceBaselineMixed": False,
         "allocation": [],
         "qualityStatus": "MISSING",
         "asOf": None,
@@ -490,6 +591,8 @@ def test_empty_summary_api_returns_the_complete_missing_success_contract(
             "holdingPnlRate": None,
             "cumulativePnl": None,
             "cumulativePnlRate": None,
+            "performanceBaselineAsOf": None,
+            "performanceBaselineMixed": False,
             "allocation": [],
             "qualityStatus": "MISSING",
             "asOf": None,
@@ -525,6 +628,8 @@ def test_empty_summary_api_returns_the_complete_missing_success_contract(
         "holdingPnlRate": None,
         "cumulativePnl": None,
         "cumulativePnlRate": None,
+        "performanceBaselineAsOf": None,
+        "performanceBaselineMixed": False,
         "allocation": [],
         "qualityStatus": "MISSING",
         "asOf": None,

@@ -25,8 +25,10 @@ import asyncpg
 # pytest and ``python -m``.
 if __package__:
     from scripts.migrate import safe_target_name
+    from scripts.standard_report_jobs import STANDARD_REPORT_JOBS, standard_job_arrays
 else:
     from migrate import safe_target_name
+    from standard_report_jobs import STANDARD_REPORT_JOBS, standard_job_arrays
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,22 @@ async def migrate_user(
             target_tenant_id,
             user_id,
         )
+        names, crons, sessions = standard_job_arrays()
+        await conn.execute(
+            """
+            INSERT INTO workflow.jobs(
+                tenant_id, job_name, cron_expr, report_session, is_enabled
+            )
+            SELECT $1, definition.job_name, definition.cron_expr,
+                   definition.report_session, TRUE
+              FROM unnest($2::text[], $3::text[], $4::text[])
+                   AS definition(job_name, cron_expr, report_session)
+            """,
+            target_tenant_id,
+            names,
+            crons,
+            sessions,
+        )
         await conn.execute(
             """
             INSERT INTO identity.user_preferences(
@@ -333,6 +351,8 @@ async def migrate_user(
                     "sourceTenantId": str(request.source_tenant_id),
                     "tenantRole": "OWNER",
                     "platformAdminGranted": request.grant_platform_admin,
+                    "reportSchedulesInitialized": True,
+                    "reportSessions": [job.session for job in STANDARD_REPORT_JOBS],
                 }
             ),
             str(target_tenant_id),
@@ -344,6 +364,7 @@ async def migrate_user(
 
         plan["status"] = "APPLIED"
         plan["sourceFactsUnchanged"] = True
+        plan["reportSchedulesInitialized"] = True
         return plan
 
 

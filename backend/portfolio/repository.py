@@ -23,7 +23,45 @@ from backend.integrations.market_data import (
 _SELECT_NAV_COLUMNS = """
     nav.account_id, nav.as_of, nav.cash_balance, nav.positions_market_value,
     nav.total_nav, nav.daily_pnl, nav.cumulative_pnl, nav.data_quality_status,
-    nav.known_value, nav.valuation_coverage_pct, nav.unpriced_position_count
+    nav.known_value, nav.valuation_coverage_pct, nav.unpriced_position_count,
+    performance.baseline_as_of AS performance_baseline_as_of,
+    performance.baseline_total_asset AS performance_baseline_total_asset,
+    performance.initial_cumulative_pnl,
+    performance.version AS performance_baseline_version,
+    COALESCE(external_flow.net_external_flow, 0) AS net_external_flow
+"""
+
+_SELECT_NAV_PERFORMANCE_JOINS = """
+    LEFT JOIN LATERAL (
+        SELECT baseline.baseline_as_of, baseline.baseline_total_asset,
+               baseline.initial_cumulative_pnl, baseline.version
+          FROM ledger.account_performance_baselines baseline
+         WHERE baseline.tenant_id = nav.tenant_id
+           AND baseline.account_id = nav.account_id
+         ORDER BY baseline.version DESC, baseline.created_at DESC, baseline.id DESC
+         LIMIT 1
+    ) performance ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(leg.amount), 0) AS net_external_flow
+          FROM ledger.ledger_events event
+          JOIN ledger.ledger_legs leg
+            ON leg.tenant_id = event.tenant_id AND leg.event_id = event.id
+         WHERE event.tenant_id = nav.tenant_id
+           AND event.account_id = nav.account_id
+           AND event.event_type IN ('CASH_IN', 'CASH_OUT')
+           AND event.status = 'CONFIRMED'
+           AND leg.amount IS NOT NULL
+           AND event.trade_date > performance.baseline_as_of
+           AND event.trade_date <= nav.as_of
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM ledger.ledger_events reversal
+                WHERE reversal.tenant_id = event.tenant_id
+                  AND reversal.event_type = 'REVERSAL'
+                  AND reversal.status = 'CONFIRMED'
+                  AND reversal.reverses_event_id = event.id
+           )
+    ) external_flow ON performance.baseline_as_of IS NOT NULL
 """
 
 _SELECT_POSITION_COLUMNS = """
@@ -66,27 +104,208 @@ async def latest_nav_per_account(
     """Latest NAV snapshot per account (the current portfolio state)."""
     return await conn.fetch(
         f"""
-        SELECT DISTINCT ON (nav.account_id)
-            {_SELECT_NAV_COLUMNS}
-        FROM ledger.account_nav_snapshots nav
-        WHERE nav.tenant_id = $1
-          AND (
-              $2::uuid IS NULL OR EXISTS (
-                  SELECT 1
-                    FROM identity.account_members scoped_owner
-                   WHERE scoped_owner.tenant_id = nav.tenant_id
-                     AND scoped_owner.account_id = nav.account_id
-                     AND scoped_owner.user_id = $2
-                     AND scoped_owner.effective_to IS NULL
-                     AND scoped_owner.relationship IN (
-                         'BENEFICIAL_OWNER', 'JOINT_OWNER'
-                     )
-              )
-          )
-        ORDER BY nav.account_id, nav.as_of DESC
+        WITH latest_nav AS (
+            SELECT DISTINCT ON (nav.account_id) nav.*
+              FROM ledger.account_nav_snapshots nav
+             WHERE nav.tenant_id = $1
+               AND (
+                   $2::uuid IS NULL OR EXISTS (
+                       SELECT 1
+                         FROM identity.account_members scoped_owner
+                        WHERE scoped_owner.tenant_id = nav.tenant_id
+                          AND scoped_owner.account_id = nav.account_id
+                          AND scoped_owner.user_id = $2
+                          AND scoped_owner.effective_to IS NULL
+                          AND scoped_owner.relationship IN (
+                              'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                          )
+                   )
+               )
+             ORDER BY nav.account_id, nav.as_of DESC, nav.created_at DESC
+        )
+        SELECT {_SELECT_NAV_COLUMNS}
+          FROM latest_nav nav
+          {_SELECT_NAV_PERFORMANCE_JOINS}
+         ORDER BY nav.account_id
         """,
         tenant_id,
         owner_user_id,
+    )
+
+
+async def list_performance_baselines(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    owner_user_id: str,
+) -> list[asyncpg.Record]:
+    """Latest append-only baseline for every active account owned by one user."""
+    return await conn.fetch(
+        """
+        SELECT DISTINCT ON (baseline.account_id)
+               baseline.account_id, account.name AS account_name,
+               baseline.baseline_as_of, baseline.baseline_total_asset,
+               baseline.initial_cumulative_pnl, baseline.source,
+               baseline.version, baseline.created_at
+          FROM ledger.account_performance_baselines baseline
+          JOIN identity.accounts account
+            ON account.tenant_id = baseline.tenant_id
+           AND account.id = baseline.account_id
+          JOIN identity.account_members owner
+            ON owner.tenant_id = baseline.tenant_id
+           AND owner.account_id = baseline.account_id
+           AND owner.user_id = $2
+           AND owner.effective_to IS NULL
+           AND owner.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+         WHERE baseline.tenant_id = $1
+           AND account.status = 'ACTIVE'
+         ORDER BY baseline.account_id, baseline.version DESC,
+                  baseline.created_at DESC, baseline.id DESC
+        """,
+        tenant_id,
+        owner_user_id,
+    )
+
+
+async def find_performance_baseline_by_idempotency(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_id: str,
+    owner_user_id: str,
+    idempotency_key: str,
+) -> asyncpg.Record | None:
+    return await conn.fetchrow(
+        """
+        SELECT baseline.account_id, account.name AS account_name,
+               baseline.baseline_as_of, baseline.baseline_total_asset,
+               baseline.initial_cumulative_pnl, baseline.source,
+               baseline.version, baseline.created_at, baseline.request_hash
+          FROM ledger.account_performance_baselines baseline
+          JOIN identity.accounts account
+            ON account.tenant_id = baseline.tenant_id
+           AND account.id = baseline.account_id
+         WHERE baseline.tenant_id = $1
+           AND baseline.account_id = $2
+           AND baseline.idempotency_key = $4
+           AND EXISTS (
+               SELECT 1
+                 FROM identity.account_members owner
+                WHERE owner.tenant_id = baseline.tenant_id
+                  AND owner.account_id = baseline.account_id
+                  AND owner.user_id = $3
+                  AND owner.effective_to IS NULL
+                  AND owner.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+           )
+        """,
+        tenant_id,
+        account_id,
+        owner_user_id,
+        idempotency_key,
+    )
+
+
+async def lock_performance_baseline_command(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+) -> None:
+    """Serialize concurrent retries before checking the append-only unique key."""
+    await conn.execute(
+        """
+        SELECT pg_advisory_xact_lock(
+            hashtextextended(
+                'performance-baseline:' || $1::text || ':' || $2::text, 0
+            )
+        )
+        """,
+        tenant_id,
+        idempotency_key,
+    )
+
+
+async def lock_latest_performance_baseline(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_id: str,
+    owner_user_id: str,
+) -> asyncpg.Record | None:
+    """Lock the latest revision after rechecking account-level ownership."""
+    return await conn.fetchrow(
+        """
+        SELECT baseline.account_id, account.name AS account_name,
+               baseline.baseline_as_of, baseline.baseline_total_asset,
+               baseline.initial_cumulative_pnl, baseline.source,
+               baseline.version, baseline.created_at
+          FROM ledger.account_performance_baselines baseline
+          JOIN identity.accounts account
+            ON account.tenant_id = baseline.tenant_id
+           AND account.id = baseline.account_id
+         WHERE baseline.tenant_id = $1
+           AND baseline.account_id = $2
+           AND account.status = 'ACTIVE'
+           AND EXISTS (
+               SELECT 1
+                 FROM identity.account_members owner
+                WHERE owner.tenant_id = baseline.tenant_id
+                  AND owner.account_id = baseline.account_id
+                  AND owner.user_id = $3
+                  AND owner.effective_to IS NULL
+                  AND owner.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+           )
+         ORDER BY baseline.version DESC, baseline.created_at DESC, baseline.id DESC
+         LIMIT 1
+         FOR UPDATE OF baseline
+        """,
+        tenant_id,
+        account_id,
+        owner_user_id,
+    )
+
+
+async def insert_performance_baseline_revision(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_id: str,
+    baseline_as_of: date,
+    baseline_total_asset: Decimal,
+    initial_cumulative_pnl: Decimal,
+    version: int,
+    created_by: str,
+    idempotency_key: str,
+    request_hash: str,
+) -> asyncpg.Record:
+    return await conn.fetchrow(
+        """
+        WITH inserted AS (
+            INSERT INTO ledger.account_performance_baselines(
+                tenant_id, account_id, baseline_as_of, baseline_total_asset,
+                initial_cumulative_pnl, source, version, created_by,
+                idempotency_key, request_hash
+            ) VALUES ($1, $2, $3, $4, $5, 'USER', $6, $7, $8, $9)
+            RETURNING *
+        )
+        SELECT inserted.account_id, account.name AS account_name,
+               inserted.baseline_as_of, inserted.baseline_total_asset,
+               inserted.initial_cumulative_pnl, inserted.source,
+               inserted.version, inserted.created_at, inserted.request_hash
+          FROM inserted
+          JOIN identity.accounts account
+            ON account.tenant_id = inserted.tenant_id
+           AND account.id = inserted.account_id
+        """,
+        tenant_id,
+        account_id,
+        baseline_as_of,
+        baseline_total_asset,
+        initial_cumulative_pnl,
+        version,
+        created_by,
+        idempotency_key,
+        request_hash,
     )
 
 

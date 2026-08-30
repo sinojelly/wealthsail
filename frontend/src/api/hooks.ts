@@ -28,6 +28,7 @@ import type {
   OutboxResponse,
   PoliciesResponse,
   PortfolioSummary,
+  PerformanceBaselineDto,
   PortfolioAssetScope,
   PositionDto,
   PositionMutationPayload,
@@ -71,6 +72,39 @@ export function usePortfolioSummary(
       query.state.data?.valuationStatus === "SYNCING" ? 2_000 : false,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+export function usePerformanceBaselines(): UseQueryResult<
+  PerformanceBaselineDto[]
+> {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(session, "portfolio", "performance-baselines"),
+    queryFn: portfolioApi.getPerformanceBaselines,
+    retry: (count, error) =>
+      !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+export function useRevisePerformanceBaseline() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: portfolioApi.revisePerformanceBaseline,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(
+          session,
+          "portfolio",
+          "performance-baselines",
+        ),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "portfolio", "summary"),
+      });
+    },
+    onError: onAuthFailure,
   });
 }
 

@@ -1057,6 +1057,96 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "worker valuation projection or holding confirmation boundary is missing"
         )
 
+    performance_baseline_boundary = await conn.fetchrow(
+        """
+        WITH boundary AS (
+            SELECT to_regclass(
+                'ledger.account_performance_baselines'
+            ) AS relation_id
+        )
+        SELECT relation_id IS NOT NULL AS table_exists,
+               COALESCE((
+                   SELECT relrowsecurity AND relforcerowsecurity
+                     FROM pg_class WHERE oid = relation_id
+               ), FALSE) AS forced_rls_exists,
+               EXISTS (
+                   SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = 'ledger.account_nav_snapshots'::regclass
+                      AND tgname =
+                          'initialize_account_performance_baseline_trigger'
+                      AND NOT tgisinternal
+               ) AS initialize_account_performance_baseline_trigger,
+               EXISTS (
+                   SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = relation_id
+                      AND tgname =
+                          'protect_account_performance_baselines_trigger'
+                      AND NOT tgisinternal
+               ) AS append_only_trigger_exists,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'SELECT'
+               ) ELSE FALSE END AS api_can_read_performance_baselines,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'INSERT'
+               ) ELSE FALSE END AS api_can_insert_performance_baselines,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_api', relation_id, 'UPDATE'
+               ) ELSE FALSE END AS api_cannot_update_performance_baselines,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'authenticated', relation_id, 'SELECT'
+               ) ELSE FALSE END AS browser_cannot_read_performance_baselines,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_worker', relation_id, 'INSERT'
+               ) ELSE FALSE END AS worker_cannot_insert_performance_baselines,
+               EXISTS (
+                   SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'ledger'
+                      AND tablename = 'account_performance_baselines'
+                      AND policyname = 'performance_baselines_api_select'
+                      AND cmd = 'SELECT'
+                      AND roles = ARRAY['wealthsail_api']::name[]
+               ) AS api_select_policy_exists,
+               EXISTS (
+                   SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'ledger'
+                      AND tablename = 'account_performance_baselines'
+                      AND policyname = 'performance_baselines_api_insert'
+                      AND cmd = 'INSERT'
+                      AND roles = ARRAY['wealthsail_api']::name[]
+               ) AS api_insert_policy_exists
+          FROM boundary
+        """
+    )
+    if (
+        performance_baseline_boundary is None
+        or not performance_baseline_boundary["table_exists"]
+        or not performance_baseline_boundary["forced_rls_exists"]
+        or not performance_baseline_boundary[
+            "initialize_account_performance_baseline_trigger"
+        ]
+        or not performance_baseline_boundary["append_only_trigger_exists"]
+        or not performance_baseline_boundary[
+            "api_can_read_performance_baselines"
+        ]
+        or not performance_baseline_boundary[
+            "api_can_insert_performance_baselines"
+        ]
+        or not performance_baseline_boundary[
+            "api_cannot_update_performance_baselines"
+        ]
+        or not performance_baseline_boundary[
+            "browser_cannot_read_performance_baselines"
+        ]
+        or not performance_baseline_boundary[
+            "worker_cannot_insert_performance_baselines"
+        ]
+        or not performance_baseline_boundary["api_select_policy_exists"]
+        or not performance_baseline_boundary["api_insert_policy_exists"]
+    ):
+        raise RuntimeError(
+            "account performance baseline boundary is missing or unsafe"
+        )
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"

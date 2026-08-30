@@ -30,6 +30,12 @@ export default function MetricCards({
     if (value.isZero()) return "pnl-flat";
     return value.isPositive() ? "pnl-gain" : "pnl-loss";
   })();
+  const cumulativePnlTone = (() => {
+    if (summary?.cumulativePnl == null) return "";
+    const value = new Decimal(summary.cumulativePnl);
+    if (value.isZero()) return "pnl-flat";
+    return value.isPositive() ? "pnl-gain" : "pnl-loss";
+  })();
 
   const metrics = [
     {
@@ -70,6 +76,18 @@ export default function MetricCards({
       icon: LineChart,
       tone: "amber",
       valueClassName: `holding-pnl ${holdingPnlTone}`,
+    },
+    {
+      label: "累计收益",
+      value: summary?.cumulativePnl
+        ? formatSignedMoney(summary.cumulativePnl)
+        : "—",
+      hint: summary?.performanceBaselineAsOf
+        ? `${summary.performanceBaselineMixed ? "最早" : "自"} ${summary.performanceBaselineAsOf} 跟踪`
+        : "等待首个完整估值基线",
+      icon: LineChart,
+      tone: "teal",
+      valueClassName: `holding-pnl ${cumulativePnlTone}`,
     },
   ];
 
