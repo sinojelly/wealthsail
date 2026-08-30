@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { BadgeCheck, Plus, Search, Upload, WalletCards } from "lucide-react";
+import Decimal from "decimal.js";
 import { Link } from "react-router-dom";
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import EmptyState from "../../../components/data-state/EmptyState";
@@ -11,6 +12,23 @@ import type {
 } from "../../../api/types";
 import PositionDialog from "./PositionDialog";
 import FundRangeMetrics from "./FundRangeMetrics";
+
+function holdingPnlTone(value: string | null): string {
+  if (value === null) {
+    return "pnl-flat";
+  }
+  const pnl = new Decimal(value);
+  if (pnl.isZero()) {
+    return "pnl-flat";
+  }
+  if (pnl.isPositive()) {
+    return "pnl-gain";
+  }
+  if (pnl.isNegative()) {
+    return "pnl-loss";
+  }
+  return "pnl-flat";
+}
 
 export default function HoldingsTable({
   rows,
@@ -134,8 +152,7 @@ export default function HoldingsTable({
           </button>
         </div>
       </div>
-      {estimatedHoldingStarts.length > 0 &&
-      onConfirmEstimatedHoldingStarts ? (
+      {estimatedHoldingStarts.length > 0 && onConfirmEstimatedHoldingStarts ? (
         <div className="holding-start-batch-banner">
           <BadgeCheck size={18} aria-hidden="true" />
           <div>
@@ -221,7 +238,7 @@ export default function HoldingsTable({
                             ? "待认领"
                             : row.account.ownershipScope === "SHARED"
                               ? `共同 · ${row.account.owners.map((owner) => owner.name ?? "未命名成员").join("、")}`
-                              : row.account.owners[0]?.name ?? "归属待核对"}
+                              : (row.account.owners[0]?.name ?? "归属待核对")}
                         </span>
                       </div>
                     </td>
@@ -235,12 +252,14 @@ export default function HoldingsTable({
                       {row.weight ? `${row.weight}%` : "—"}
                     </td>
                     <td
-                      className={`mono numeric ${row.pnl?.startsWith("-") ? "negative" : row.pnl ? "positive" : ""}`}
+                      className={`mono numeric holding-pnl ${holdingPnlTone(row.pnl)}`}
                     >
                       <strong>
                         {row.pnl ? formatSignedMoney(row.pnl) : "—"}
                       </strong>
-                      <small>{row.pnlRate ? `${row.pnlRate}%` : "—"}</small>
+                      <small className="holding-pnl-rate">
+                        {row.pnlRate ? `${row.pnlRate}%` : "—"}
+                      </small>
                     </td>
                     <td>
                       {row.valuationStatus === "SYNCING" ? (

@@ -55,6 +55,27 @@ def _row_value(row: asyncpg.Record | dict, key: str, default=None):
     return row.get(key, default)
 
 
+def _position_display_quality(row: asyncpg.Record | dict) -> str:
+    """Apply trading-day freshness to the current fund-position read model.
+
+    Historical observations retain their persisted provenance quality.  A
+    Friday official NAV, however, is still the current disclosed valuation on
+    a weekend or exchange holiday and must not be shown to users as expired.
+    """
+    persisted = str(_row_value(row, "data_quality_status", "UNAVAILABLE"))
+    if persisted != "STALE" or _row_value(row, "asset_type") != "OFF_EXCHANGE_FUND":
+        return persisted
+    current_nav_date = _row_value(row, "current_nav_date")
+    latest_trading_date = _row_value(row, "latest_trading_date")
+    if (
+        current_nav_date is not None
+        and latest_trading_date is not None
+        and current_nav_date == latest_trading_date
+    ):
+        return "FRESH"
+    return persisted
+
+
 def _date_text(value) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -375,7 +396,7 @@ async def get_positions(
                 ),
                 "pnl": fmt_money(_d(pnl)) if pnl is not None else None,
                 "pnlRate": fmt_money(pnl_rate) if pnl_rate is not None else None,
-                "quality": merge_quality([row["data_quality_status"]]),
+                "quality": merge_quality([_position_display_quality(row)]),
                 "valuationStatus": valuation_status,
                 "accountId": str(row["account_id"]),
                 "account": {

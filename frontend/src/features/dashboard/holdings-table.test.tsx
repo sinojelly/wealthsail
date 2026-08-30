@@ -61,3 +61,49 @@ it("shows a projection gap as automatic valuation syncing instead of missing dat
   expect(screen.getByText("估值同步中")).toBeInTheDocument();
   expect(screen.queryByText("缺失")).not.toBeInTheDocument();
 });
+
+it("uses China-market gain and loss colors and emphasizes the return rate", () => {
+  const base = positionsFixture[0];
+  const gain = {
+    ...base,
+    instrumentId: "instrument-gain",
+    symbol: "000001",
+    name: "正收益持仓",
+    pnl: "123.00",
+    pnlRate: "4.50",
+  };
+  const loss = {
+    ...base,
+    instrumentId: "instrument-loss",
+    symbol: "000002",
+    name: "负收益持仓",
+    pnl: "-200.00",
+    pnlRate: "-6.25",
+  };
+  const flat = {
+    ...base,
+    instrumentId: "instrument-flat",
+    symbol: "000003",
+    name: "零收益持仓",
+    pnl: "0.00",
+    pnlRate: "0.00",
+  };
+
+  renderWithSession(<HoldingsTable rows={[gain, loss, flat]} />);
+
+  expect(screen.getByText("+¥123.00").closest("td")).toHaveClass(
+    "holding-pnl",
+    "pnl-gain",
+  );
+  expect(screen.getByText("-¥200.00").closest("td")).toHaveClass(
+    "holding-pnl",
+    "pnl-loss",
+  );
+  expect(screen.getByText("+¥0.00").closest("td")).toHaveClass(
+    "holding-pnl",
+    "pnl-flat",
+  );
+  expect(screen.getByText("4.50%")).toHaveClass("holding-pnl-rate");
+  expect(screen.getByText("-6.25%")).toHaveClass("holding-pnl-rate");
+  expect(screen.getByText("0.00%")).toHaveClass("holding-pnl-rate");
+});

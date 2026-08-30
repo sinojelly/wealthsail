@@ -2001,6 +2001,30 @@ button:disabled {
   color: var(--slate-400);
   font-size: 8px;
 }
+.holding-pnl {
+  color: var(--navy);
+}
+.holding-pnl.pnl-gain {
+  color: #dc2626;
+}
+.holding-pnl.pnl-loss {
+  color: #059669;
+}
+.holding-pnl.pnl-flat {
+  color: var(--navy);
+}
+.data-table .holding-pnl > strong {
+  color: inherit;
+  font-weight: 700;
+}
+.data-table .holding-pnl > .holding-pnl-rate {
+  margin-top: 4px;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  opacity: 0.82;
+}
 .method-note {
   display: flex;
   gap: 10px;

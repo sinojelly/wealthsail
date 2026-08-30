@@ -15,6 +15,8 @@ from backend.integrations.market_data import (
     F_CLOSE,
     F_ESTIMATED_NAV,
     F_NAV,
+    Q_FRESH,
+    Q_STALE,
     Q_UNAVAILABLE,
 )
 
@@ -39,11 +41,19 @@ _SELECT_POSITION_COLUMNS = """
     metric.period_low_nav, metric.period_low_date,
     metric.from_high_pct, metric.from_low_pct, metric.range_position_pct,
     metric.calculation_status, metric.quality_reasons,
-    metric.calculation_version
-    , account.name AS account_name
-    , account.ownership_scope
-    , COALESCE(owners.owner_user_ids, ARRAY[]::uuid[]) AS owner_user_ids
-    , COALESCE(owners.owner_names, ARRAY[]::text[]) AS owner_names
+    metric.calculation_version,
+    (
+        SELECT max(calendar.calendar_date)
+          FROM reference.trading_calendars calendar
+         WHERE calendar.market = 'SSE'
+           AND calendar.is_trading_day = TRUE
+           AND calendar.calendar_date <=
+               (now() AT TIME ZONE 'Asia/Shanghai')::date
+    ) AS latest_trading_date,
+    account.name AS account_name,
+    account.ownership_scope,
+    COALESCE(owners.owner_user_ids, ARRAY[]::uuid[]) AS owner_user_ids,
+    COALESCE(owners.owner_names, ARRAY[]::text[]) AS owner_names
 """
 
 
@@ -696,24 +706,52 @@ async def latest_observation_quotes(
         return {}
     rows = await conn.fetch(
         """
-        SELECT DISTINCT ON (subject_id) subject_id, field_code, value, quality_status
+        SELECT DISTINCT ON (subject_id)
+               subject_id, field_code, value, quality_status, as_of
         FROM market.market_observations
         WHERE subject_id = ANY($1::uuid[]) AND value IS NOT NULL
         ORDER BY subject_id, as_of DESC
         """,
         instrument_ids,
     )
+    latest_trading_day = None
+    if any(
+        row["field_code"] == F_NAV and row["quality_status"] == Q_STALE
+        for row in rows
+    ):
+        # An official Friday NAV is still the latest valid valuation on a
+        # weekend or exchange holiday.  The source observation remains an
+        # immutable historical fact marked STALE; only the current-position
+        # projection upgrades it when its date is the latest SSE trading day.
+        latest_trading_day = await conn.fetchval(
+            """
+            SELECT max(calendar_date)
+              FROM reference.trading_calendars
+             WHERE market = 'SSE'
+               AND is_trading_day = TRUE
+               AND calendar_date <=
+                   (now() AT TIME ZONE 'Asia/Shanghai')::date
+            """
+        )
     best: dict[str, dict] = {}
     for row in rows:
         if row["quality_status"] == Q_UNAVAILABLE:
             continue
         instrument_id = str(row["subject_id"])
         priority = _FIELD_PRIORITY.get(row["field_code"], 9)
+        quality = row["quality_status"]
+        if (
+            quality == Q_STALE
+            and row["field_code"] == F_NAV
+            and latest_trading_day is not None
+            and row["as_of"].date() == latest_trading_day
+        ):
+            quality = Q_FRESH
         current = best.get(instrument_id)
         if current is None or priority < current["_priority"]:
             best[instrument_id] = {
                 "price": row["value"],
-                "quality": row["quality_status"],
+                "quality": quality,
                 "_priority": priority,
             }
     return {
