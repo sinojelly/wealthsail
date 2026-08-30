@@ -15,11 +15,13 @@ import pytest
 
 from backend.config import Settings
 from backend.jobs.data_tasks import (
+    DataTaskConsumer,
     DataTaskLease,
     OpenFundPosition,
     _holding_method,
     claim_data_task,
     complete_data_task,
+    enqueue_valuation_projection_repairs,
     fail_data_task,
     load_open_fund_positions,
     materialize_position_metrics,
@@ -83,6 +85,95 @@ class _Connection:
 
     def transaction(self):
         return _connection(self)
+
+
+@pytest.mark.asyncio
+async def test_projection_gap_reconciliation_enqueues_one_idempotent_db_only_repair() -> None:
+    conn = _Connection(rows=[{"tenant_id": "tenant-1", "gap_count": 12}])
+
+    with patch(
+        "backend.jobs.data_tasks.system_connection",
+        return_value=_connection(conn),
+    ):
+        enqueued = await enqueue_valuation_projection_repairs(MagicMock())
+
+    assert enqueued == 1
+    sql = conn.fetch_calls[0][0]
+    normalized_sql = " ".join(sql.split())
+    assert "DISTINCT ON ( snapshot.tenant_id, snapshot.account_id, snapshot.instrument_id )" in normalized_sql
+    assert "metric.current_nav IS NOT NULL" in normalized_sql
+    assert "position.market_price IS NULL OR position.market_value IS NULL" in normalized_sql
+    assert "'POSITION_PERIOD_METRICS_REBUILD'" in normalized_sql
+    assert "'projectionOnly', true" in normalized_sql
+    assert "'VALUATION_PROJECTION_GAP'" in normalized_sql
+    assert "ON CONFLICT (tenant_id, job_key) DO NOTHING" in normalized_sql
+
+
+@pytest.mark.asyncio
+async def test_projection_only_repair_never_refetches_or_rematerializes_nav() -> None:
+    lease = DataTaskLease(
+        run_id="repair-1",
+        tenant_id="tenant-1",
+        job_type="POSITION_PERIOD_METRICS_REBUILD",
+        payload={"projectionOnly": True, "reason": "VALUATION_PROJECTION_GAP"},
+        attempt_count=1,
+        lease_token="lease-1",
+    )
+    position_loader = AsyncMock()
+    nav_loader = AsyncMock()
+    materialize = AsyncMock()
+    projection = AsyncMock(return_value=(12, 1))
+
+    with (
+        patch(
+            "backend.jobs.data_tasks.load_open_fund_positions",
+            new=position_loader,
+        ),
+        patch("backend.jobs.data_tasks.load_persisted_nav", new=nav_loader),
+        patch(
+            "backend.jobs.data_tasks.materialize_position_metrics",
+            new=materialize,
+        ),
+        patch(
+            "backend.jobs.data_tasks.refresh_fund_position_projections",
+            new=projection,
+        ),
+        patch(
+            "backend.jobs.data_tasks.fetch_fund_nav_history",
+            new=AsyncMock(),
+        ) as provider_fetch,
+    ):
+        await process_data_task(
+            MagicMock(),
+            Settings(_env_file=None),
+            lease,
+            as_of=date(2026, 8, 30),
+        )
+
+    position_loader.assert_not_awaited()
+    nav_loader.assert_not_awaited()
+    materialize.assert_not_awaited()
+    provider_fetch.assert_not_awaited()
+    projection.assert_awaited_once_with(
+        ANY,
+        tenant_id="tenant-1",
+        as_of=date(2026, 8, 30),
+    )
+
+
+@pytest.mark.asyncio
+async def test_consumer_reconciles_projection_gaps_without_user_action() -> None:
+    pool = MagicMock()
+    consumer = DataTaskConsumer(pool, Settings(_env_file=None))
+    enqueue = AsyncMock(return_value=1)
+
+    with patch(
+        "backend.jobs.data_tasks.enqueue_valuation_projection_repairs",
+        new=enqueue,
+    ):
+        assert await consumer.reconcile_projection_repairs_once() == 1
+
+    enqueue.assert_awaited_once_with(pool)
 
 
 @pytest.mark.asyncio

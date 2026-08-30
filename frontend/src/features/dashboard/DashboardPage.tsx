@@ -40,7 +40,11 @@ export default function DashboardPage() {
   }, [searchParams]);
   const summary = usePortfolioSummary(scope);
   const positions = usePositions(scope);
-  const navTrend = useNavTrend(30, scope);
+  const navTrend = useNavTrend(
+    30,
+    scope,
+    summary.data?.valuationStatus === "SYNCING",
+  );
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
   const confirmHoldingStart = useConfirmTiantianHoldingStart();
@@ -137,6 +141,17 @@ export default function DashboardPage() {
             导入首笔持仓
           </Link>
         </section>
+      ) : summary.data?.valuationStatus === "SYNCING" ? (
+        <div className="alert alert-info" role="status">
+          <RefreshCw size={16} aria-hidden="true" />
+          <div>
+            <strong>估值正在自动更新</strong>
+            <p>
+              {summary.data.valuationPendingCount} 个持仓的官方净值已经获取，
+              系统正在同步市值和总资产；无需操作，页面会自动刷新。
+            </p>
+          </div>
+        </div>
       ) : summary.data && summary.data.totalAsset === null ? (
         <div className="alert alert-warning">
           <AlertTriangle size={16} />

@@ -44,6 +44,7 @@ from backend.portfolio.imports.analytics import (
 logger = logging.getLogger("wealthsail.data_tasks")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _SUPPORTED_JOB_TYPES = ("FUND_NAV_BACKFILL", "POSITION_PERIOD_METRICS_REBUILD")
+_PROJECTION_REPAIR_INTERVAL_SECONDS = 60.0
 _ERROR_TEXT_LIMIT = 500
 _URL_QUERY_PATTERN = re.compile(r"(https?://[^\s?]+)\?[^\s]*", re.IGNORECASE)
 _DATABASE_USERINFO_PATTERN = re.compile(
@@ -153,6 +154,125 @@ def _log_stage_failure(
 
 def data_task_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:data-task"
+
+
+async def enqueue_valuation_projection_repairs(pool: Pool) -> int:
+    """Enqueue one durable, DB-only repair for each tenant projection gap.
+
+    A completed NAV backfill can leave the hot position projection empty when
+    its final transaction fails.  The official NAV is already durable in that
+    case, so fetching the provider again would add latency and failure modes.
+    This reconciler detects that exact mismatch and schedules an idempotent
+    projection-only task.  The metric update timestamp forms the repair
+    generation: a terminal failure is not retried forever, while newly
+    materialized facts create a new, independently retryable generation.
+    """
+    async with system_connection(pool) as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest_positions AS (
+                SELECT DISTINCT ON (
+                           snapshot.tenant_id,
+                           snapshot.account_id,
+                           snapshot.instrument_id
+                       )
+                       snapshot.tenant_id, snapshot.account_id,
+                       snapshot.instrument_id, snapshot.market_price,
+                       snapshot.market_value
+                  FROM ledger.position_snapshots snapshot
+                 WHERE snapshot.quantity > 0
+                 ORDER BY snapshot.tenant_id, snapshot.account_id,
+                          snapshot.instrument_id, snapshot.as_of DESC
+            ),
+            latest_metrics AS (
+                SELECT DISTINCT ON (
+                           metric.tenant_id,
+                           metric.account_id,
+                           metric.instrument_id
+                       )
+                       metric.tenant_id, metric.account_id,
+                       metric.instrument_id, metric.source_binding_id,
+                       metric.as_of, metric.current_nav, metric.updated_at
+                  FROM ledger.position_period_metrics metric
+                 WHERE metric.as_of <= CURRENT_DATE
+                 ORDER BY metric.tenant_id, metric.account_id,
+                          metric.instrument_id, metric.as_of DESC,
+                          metric.updated_at DESC
+            ),
+            projection_gaps AS (
+                SELECT position.tenant_id,
+                       count(*)::integer AS gap_count,
+                       max(metric.as_of) AS metric_as_of,
+                       max(metric.updated_at) AS gap_revision,
+                       (array_agg(
+                           metric.source_binding_id
+                           ORDER BY metric.updated_at DESC
+                       ))[1] AS source_binding_id
+                  FROM latest_positions position
+                  JOIN latest_metrics metric
+                    ON metric.tenant_id = position.tenant_id
+                   AND metric.account_id = position.account_id
+                   AND metric.instrument_id = position.instrument_id
+                  JOIN ledger.portfolio_source_bindings binding
+                    ON binding.tenant_id = metric.tenant_id
+                   AND binding.id = metric.source_binding_id
+                   AND binding.status = 'ACTIVE'
+                 WHERE metric.current_nav IS NOT NULL
+                   AND (
+                       position.market_price IS NULL
+                       OR position.market_value IS NULL
+                   )
+                 GROUP BY position.tenant_id
+            ),
+            repair_context AS (
+                SELECT gap.*,
+                       batch.id AS batch_id,
+                       batch.account_id,
+                       batch.source_as_of
+                  FROM projection_gaps gap
+                  LEFT JOIN LATERAL (
+                      SELECT confirmed.id, confirmed.account_id,
+                             confirmed.source_as_of
+                        FROM ledger.portfolio_import_batches confirmed
+                       WHERE confirmed.tenant_id = gap.tenant_id
+                         AND confirmed.source_binding_id = gap.source_binding_id
+                         AND confirmed.source_type = 'TIANTIAN_FUND_ZIP'
+                         AND confirmed.status = 'CONFIRMED'
+                       ORDER BY confirmed.source_as_of DESC,
+                                confirmed.confirmed_at DESC,
+                                confirmed.id DESC
+                       LIMIT 1
+                  ) batch ON TRUE
+            )
+            INSERT INTO workflow.job_runs (
+                tenant_id, job_key, status, job_type, payload, available_at
+            )
+            SELECT context.tenant_id,
+                   'valuation-projection-repair:'
+                       || context.source_binding_id::text || ':'
+                       || to_char(
+                           context.gap_revision AT TIME ZONE 'UTC',
+                           'YYYYMMDDHH24MISSUS'
+                       ),
+                   'PENDING',
+                   'POSITION_PERIOD_METRICS_REBUILD',
+                   jsonb_strip_nulls(jsonb_build_object(
+                       'batchId', context.batch_id::text,
+                       'accountId', context.account_id::text,
+                       'sourceBindingId', context.source_binding_id::text,
+                       'sourceAsOf', context.source_as_of::text,
+                       'metricAsOf', context.metric_as_of::text,
+                       'projectionOnly', true,
+                       'reason', 'VALUATION_PROJECTION_GAP',
+                       'gapCount', context.gap_count
+                   )),
+                   now()
+              FROM repair_context context
+            ON CONFLICT (tenant_id, job_key) DO NOTHING
+            RETURNING tenant_id, (payload->>'gapCount')::integer AS gap_count
+            """
+        )
+    return len(rows)
 
 
 async def claim_data_task(
@@ -687,6 +807,34 @@ async def process_data_task(
         lease.attempt_count,
         as_of.isoformat(),
     )
+    if lease.payload.get("projectionOnly") is True:
+        try:
+            positions_updated, accounts_updated = (
+                await refresh_fund_position_projections(
+                    pool,
+                    tenant_id=lease.tenant_id,
+                    as_of=as_of,
+                )
+            )
+        except Exception as exc:
+            _log_stage_failure(
+                lease,
+                stage="refresh_fund_position_projections",
+                exc=exc,
+                as_of=as_of,
+            )
+            raise
+        logger.info(
+            (
+                "valuation_projection_repair_completed run_id=%s "
+                "reason=%s positions_updated=%d accounts_updated=%d"
+            ),
+            lease.run_id,
+            lease.payload.get("reason", "-"),
+            positions_updated,
+            accounts_updated,
+        )
+        return
     try:
         positions = await load_open_fund_positions(
             pool,
@@ -879,6 +1027,12 @@ class DataTaskConsumer:
             asyncio.create_task(self._loop(), name=f"wealthsail-data-task-{index}")
             for index in range(self._settings.data_task_concurrency)
         ]
+        self._tasks.append(
+            asyncio.create_task(
+                self._projection_repair_loop(),
+                name="wealthsail-valuation-projection-reconciler",
+            )
+        )
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -892,3 +1046,25 @@ class DataTaskConsumer:
             handled = await self.poll_once()
             if not handled:
                 await asyncio.sleep(self._settings.data_task_poll_interval_seconds)
+
+    async def reconcile_projection_repairs_once(self) -> int:
+        enqueued = await enqueue_valuation_projection_repairs(self._pool)
+        if enqueued:
+            logger.info("valuation_projection_repairs_enqueued count=%d", enqueued)
+        return enqueued
+
+    async def _projection_repair_loop(self) -> None:
+        while True:
+            try:
+                await self.reconcile_projection_repairs_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "valuation_projection_reconciliation_failed "
+                    "error_class=%s error=%s trace=%s",
+                    exc.__class__.__name__,
+                    _safe_error_text(exc),
+                    _trace_path(exc),
+                )
+            await asyncio.sleep(_PROJECTION_REPAIR_INTERVAL_SECONDS)

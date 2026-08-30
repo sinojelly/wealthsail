@@ -439,6 +439,11 @@ button:disabled {
   border-color: #fecaca;
   background: #fef2f2;
 }
+.valuation-syncing {
+  color: #0369a1;
+  border-color: #bae6fd;
+  background: #f0f9ff;
+}
 .tag {
   padding: 4px 6px;
   color: var(--slate-600);

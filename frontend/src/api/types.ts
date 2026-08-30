@@ -3,6 +3,7 @@
 
 export type DecimalString = string;
 export type QualityCode = "FRESH" | "ESTIMATED" | "STALE" | "MISSING";
+export type ValuationStatus = "READY" | "SYNCING" | "PARTIAL" | "UNAVAILABLE";
 export type ReportSession =
   "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
 export type TenantRole = "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
@@ -79,6 +80,8 @@ export interface PortfolioSummary {
   knownValue: DecimalString;
   valuationCoveragePct: DecimalString;
   unpricedPositionCount: number;
+  valuationStatus: ValuationStatus;
+  valuationPendingCount: number;
   currency: string;
   cashBalance: DecimalString;
   positionsMarketValue: DecimalString | null;
@@ -106,6 +109,7 @@ export interface PositionDto {
   pnl: DecimalString | null;
   pnlRate: DecimalString | null;
   quality: QualityCode;
+  valuationStatus: Exclude<ValuationStatus, "PARTIAL">;
   accountId: string;
   account: {
     id: string;

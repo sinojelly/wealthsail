@@ -19,6 +19,8 @@ export const summaryFixture: PortfolioSummary = {
   knownValue: "1921840.00",
   valuationCoveragePct: "100.00",
   unpricedPositionCount: 0,
+  valuationStatus: "READY",
+  valuationPendingCount: 0,
   currency: "CNY",
   cashBalance: "201382.00",
   positionsMarketValue: "1720458.00",
@@ -51,6 +53,7 @@ export const positionsFixture: PositionDto[] = [
     pnl: "28472.00",
     pnlRate: "9.56",
     quality: "FRESH",
+    valuationStatus: "READY",
     accountId: "acc-1",
     account: {
       id: "acc-1",
@@ -74,6 +77,7 @@ export const positionsFixture: PositionDto[] = [
     pnl: "21806.00",
     pnlRate: "9.28",
     quality: "FRESH",
+    valuationStatus: "READY",
     accountId: "acc-1",
     account: {
       id: "acc-1",
@@ -97,6 +101,7 @@ export const positionsFixture: PositionDto[] = [
     pnl: "1300.00",
     pnlRate: "9.92",
     quality: "FRESH",
+    valuationStatus: "READY",
     accountId: "acc-fund-1",
     account: {
       id: "acc-fund-1",

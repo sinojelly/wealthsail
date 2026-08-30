@@ -170,6 +170,8 @@ async def get_summary(
             "knownValue": "0.00",
             "valuationCoveragePct": "0.00",
             "unpricedPositionCount": 0,
+            "valuationStatus": "UNAVAILABLE",
+            "valuationPendingCount": 0,
             "currency": "CNY",
             "cashBalance": "0.00",
             "positionsMarketValue": None,
@@ -220,12 +222,31 @@ async def get_summary(
         else await repository.latest_positions(conn, tenant_id)
     )
     allocation = _build_allocation(positions, cash, total_asset)
+    valuation_pending_count = sum(
+        1
+        for row in positions
+        if (
+            _row_value(row, "market_price") is None
+            or _row_value(row, "market_value") is None
+        )
+        and _row_value(row, "current_nav") is not None
+    )
+    if total_asset is not None and unpriced_count == 0:
+        valuation_status = "READY"
+    elif unpriced_count > 0 and valuation_pending_count == unpriced_count:
+        valuation_status = "SYNCING"
+    elif known_value > 0:
+        valuation_status = "PARTIAL"
+    else:
+        valuation_status = "UNAVAILABLE"
 
     return {
         "totalAsset": fmt_money(total_asset) if total_asset is not None else None,
         "knownValue": fmt_money(known_value),
         "valuationCoveragePct": fmt_money(coverage),
         "unpricedPositionCount": unpriced_count,
+        "valuationStatus": valuation_status,
+        "valuationPendingCount": valuation_pending_count,
         "currency": "CNY",
         "cashBalance": fmt_money(cash),
         "positionsMarketValue": (
@@ -323,6 +344,12 @@ async def get_positions(
             market_value = (quantity * _d(price)).quantize(CENT)
         if pnl is None and market_value is not None:
             pnl = market_value - (quantity * avg_cost)
+        if price is not None and market_value is not None:
+            valuation_status = "READY"
+        elif _row_value(row, "current_nav") is not None:
+            valuation_status = "SYNCING"
+        else:
+            valuation_status = "UNAVAILABLE"
         cost_value = quantity * avg_cost
         pnl_rate = pct(_d(pnl), cost_value) if pnl is not None and cost_value else None
         holding_period, range_metrics = _position_period_dto(row)
@@ -349,6 +376,7 @@ async def get_positions(
                 "pnl": fmt_money(_d(pnl)) if pnl is not None else None,
                 "pnlRate": fmt_money(pnl_rate) if pnl_rate is not None else None,
                 "quality": merge_quality([row["data_quality_status"]]),
+                "valuationStatus": valuation_status,
                 "accountId": str(row["account_id"]),
                 "account": {
                     "id": str(row["account_id"]),

@@ -43,3 +43,21 @@ it("accepts all visible estimated holding starts with one explicit action", asyn
     },
   ]);
 });
+
+it("shows a projection gap as automatic valuation syncing instead of missing data", () => {
+  const syncing = {
+    ...positionsFixture.at(-1)!,
+    price: null,
+    marketValue: null,
+    weight: null,
+    pnl: null,
+    pnlRate: null,
+    quality: "MISSING" as const,
+    valuationStatus: "SYNCING" as const,
+  };
+
+  renderWithSession(<HoldingsTable rows={[syncing]} />);
+
+  expect(screen.getByText("估值同步中")).toBeInTheDocument();
+  expect(screen.queryByText("缺失")).not.toBeInTheDocument();
+});

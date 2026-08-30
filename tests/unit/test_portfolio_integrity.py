@@ -108,6 +108,44 @@ async def test_missing_quote_is_not_rendered_as_zero_and_sort_is_numeric(monkeyp
     assert unpriced["pnl"] is None
     assert unpriced["weight"] is None
     assert unpriced["quality"] == "MISSING"
+    assert unpriced["valuationStatus"] == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_persisted_current_nav_marks_projection_gap_as_automatic_sync(
+    monkeypatch,
+) -> None:
+    rows = [
+        {
+            "instrument_id": "fund-1",
+            "account_id": "account-1",
+            "ticker": "012733",
+            "canonical_name": "测试基金",
+            "asset_type": "OFF_EXCHANGE_FUND",
+            "quantity": Decimal("100"),
+            "avg_cost": Decimal("1"),
+            "market_price": None,
+            "market_value": None,
+            "unrealized_pnl": None,
+            "data_quality_status": "UNAVAILABLE",
+            "current_nav": Decimal("1.23"),
+            "current_nav_date": date(2026, 8, 28),
+        }
+    ]
+
+    async def latest_positions(_conn, _tenant):
+        return rows
+
+    async def latest_nav(_conn, _tenant):
+        return [{"total_nav": None, "as_of": date(2026, 8, 30)}]
+
+    monkeypatch.setattr(repository, "latest_positions", latest_positions)
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+
+    result = await service.get_positions(object(), "tenant-1")
+
+    assert result[0]["price"] is None
+    assert result[0]["valuationStatus"] == "SYNCING"
 
 
 @pytest.mark.asyncio
@@ -178,6 +216,50 @@ async def test_summary_exposes_known_value_and_coverage_without_fake_total(monke
     assert result["valuationCoveragePct"] == "50.00"
     assert result["unpricedPositionCount"] == 1
     assert result["qualityStatus"] == "MISSING"
+    assert result["valuationStatus"] == "PARTIAL"
+    assert result["valuationPendingCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_automatic_sync_when_every_missing_price_has_nav(
+    monkeypatch,
+) -> None:
+    async def latest_nav(_conn, _tenant):
+        return [
+            {
+                "total_nav": None,
+                "known_value": Decimal("0"),
+                "valuation_coverage_pct": Decimal("0"),
+                "unpriced_position_count": 1,
+                "cash_balance": Decimal("0"),
+                "positions_market_value": None,
+                "daily_pnl": None,
+                "cumulative_pnl": None,
+                "data_quality_status": "UNAVAILABLE",
+                "as_of": date(2026, 8, 30),
+            }
+        ]
+
+    async def latest_positions(_conn, _tenant):
+        return [
+            {
+                "market_price": None,
+                "market_value": None,
+                "current_nav": Decimal("1.23"),
+                "asset_type": "OFF_EXCHANGE_FUND",
+            }
+        ]
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+    monkeypatch.setattr(repository, "latest_positions", latest_positions)
+
+    result = await service.get_summary(
+        object(), "tenant-1", as_of=date(2026, 8, 30)  # type: ignore[arg-type]
+    )
+
+    assert result["totalAsset"] is None
+    assert result["valuationStatus"] == "SYNCING"
+    assert result["valuationPendingCount"] == 1
 
 
 @pytest.mark.asyncio
@@ -200,6 +282,8 @@ async def test_empty_portfolio_summary_is_a_missing_read_model_not_an_error(
         "knownValue": "0.00",
         "valuationCoveragePct": "0.00",
         "unpricedPositionCount": 0,
+        "valuationStatus": "UNAVAILABLE",
+        "valuationPendingCount": 0,
         "currency": "CNY",
         "cashBalance": "0.00",
         "positionsMarketValue": None,

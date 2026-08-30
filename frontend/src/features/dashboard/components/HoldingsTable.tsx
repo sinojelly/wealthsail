@@ -243,7 +243,16 @@ export default function HoldingsTable({
                       <small>{row.pnlRate ? `${row.pnlRate}%` : "—"}</small>
                     </td>
                     <td>
-                      <QualityBadge quality={row.quality} />
+                      {row.valuationStatus === "SYNCING" ? (
+                        <span
+                          className="quality-badge valuation-syncing"
+                          title="官方净值已获取，系统正在自动同步市值"
+                        >
+                          估值同步中
+                        </span>
+                      ) : (
+                        <QualityBadge quality={row.quality} />
+                      )}
                     </td>
                   </tr>
                   {row.type === "场外基金" ? (

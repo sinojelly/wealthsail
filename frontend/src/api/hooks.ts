@@ -67,6 +67,8 @@ export function usePortfolioSummary(
       scope.memberId ?? "",
     ),
     queryFn: () => portfolioApi.getSummary(scope),
+    refetchInterval: (query) =>
+      query.state.data?.valuationStatus === "SYNCING" ? 2_000 : false,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
@@ -85,6 +87,10 @@ export function usePositions(
       scope.memberId ?? "",
     ),
     queryFn: () => portfolioApi.getPositions(scope),
+    refetchInterval: (query) =>
+      query.state.data?.some((position) => position.valuationStatus === "SYNCING")
+        ? 2_000
+        : false,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
@@ -93,6 +99,7 @@ export function usePositions(
 export function useNavTrend(
   days = 60,
   scope: PortfolioAssetScope = MINE_SCOPE,
+  refreshWhileValuationSyncs = false,
 ): UseQueryResult<NavTrend> {
   const session = usePrivateSession();
   return useQuery({
@@ -105,6 +112,7 @@ export function useNavTrend(
       scope.memberId ?? "",
     ),
     queryFn: () => portfolioApi.getNavTrend(days, scope),
+    refetchInterval: refreshWhileValuationSyncs ? 2_000 : false,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });

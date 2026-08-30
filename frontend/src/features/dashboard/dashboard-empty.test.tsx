@@ -11,6 +11,8 @@ vi.mock("../../api/hooks", () => ({
       knownValue: "0.00",
       valuationCoveragePct: "0.00",
       unpricedPositionCount: 0,
+      valuationStatus: "UNAVAILABLE",
+      valuationPendingCount: 0,
       currency: "CNY",
       cashBalance: "0.00",
       positionsMarketValue: null,
