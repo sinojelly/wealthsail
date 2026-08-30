@@ -99,6 +99,10 @@ vi.mock("../../api/hooks", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useConfirmTiantianHoldingStartEstimates: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 beforeEach(() => {

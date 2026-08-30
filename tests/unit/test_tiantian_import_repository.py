@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -598,8 +598,9 @@ async def test_metrics_retry_is_durable_idempotent_and_never_replays_ledger() ->
 
 
 class _HoldingStartDecisionConnection:
-    def __init__(self) -> None:
+    def __init__(self, *, current_started_on=date(2021, 1, 26)) -> None:
         self.sql: list[str] = []
+        self.current_started_on = current_started_on
         self.fetchrow_results = iter(
             [
                 {
@@ -608,6 +609,7 @@ class _HoldingStartDecisionConnection:
                     "source_as_of": datetime.fromisoformat(
                         "2026-08-28T08:00:00+08:00"
                     ),
+                    "current_started_on": current_started_on,
                 },
                 {
                     "id": "decision-1",
@@ -615,6 +617,7 @@ class _HoldingStartDecisionConnection:
                     "started_on": datetime.fromisoformat(
                         "2021-02-23T00:00:00+08:00"
                     ).date(),
+                    "recalculation_required": True,
                     "created": True,
                 },
             ]
@@ -626,6 +629,8 @@ class _HoldingStartDecisionConnection:
         row = next(self.fetchrow_results)
         if "position_holding_start_decisions" in sql:
             row["request_hash"] = args[-1]
+            if "INSERT INTO ledger.position_holding_start_decisions" in sql:
+                row["recalculation_required"] = bool(args[6])
         return row
 
     async def execute(self, sql: str, *args):
@@ -653,13 +658,35 @@ async def test_post_import_holding_start_decision_is_append_only_and_queues_back
     assert "INSERT INTO ledger.position_holding_start_decisions" in combined
     assert "INSERT INTO workflow.job_runs" in combined
     assert "FUND_NAV_BACKFILL" in combined
+    job_payload = json.loads(conn.execute_calls[0][1][2])
+    assert job_payload["instrumentId"] == "fund-1"
     assert "UPDATE ledger.portfolio_import_items" not in combined
     assert result == {
         "decision_id": "decision-1",
         "batch_id": "batch-1",
         "job_key": "holding-start-decision:decision-1",
+        "recalculation_required": True,
         "created": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_confirming_the_existing_estimate_does_not_queue_recalculation() -> None:
+    conn = _HoldingStartDecisionConnection(current_started_on=date(2021, 2, 23))
+
+    result = await import_repository.confirm_holding_start(
+        conn,
+        tenant_id="tenant-1",
+        actor_id="user-1",
+        account_id="account-1",
+        instrument_id="fund-1",
+        started_on=date(2021, 2, 23),
+        idempotency_key="accept-estimate-1",
+    )
+
+    assert not any("INSERT INTO workflow.job_runs" in sql for sql in conn.sql)
+    assert result["job_key"] is None
+    assert result["recalculation_required"] is False
 
 
 class _FirstBindingConflictConnection:

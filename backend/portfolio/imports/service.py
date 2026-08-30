@@ -1136,12 +1136,87 @@ async def confirm_tiantian_holding_start(
                     "instrumentId": instrument_id,
                     "startedOn": started_on.isoformat(),
                     "jobKey": decision["job_key"],
+                    "recalculationRequired": decision[
+                        "recalculation_required"
+                    ],
                 },
             )
     return {
         "accountId": account_id,
         "instrumentId": instrument_id,
         "startedOn": started_on.isoformat(),
-        "metricsStatus": "PENDING",
+        "metricsStatus": (
+            "PENDING" if decision["recalculation_required"] else "UNCHANGED"
+        ),
+        "recalculationRequired": decision["recalculation_required"],
         "jobKey": decision["job_key"],
+    }
+
+
+async def confirm_tiantian_holding_start_estimates(
+    pool: asyncpg.Pool,
+    ctx,
+    *,
+    items: list[dict[str, Any]],
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Accept multiple current estimates atomically without recalculation."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    if not items or len(items) > 100:
+        raise ValidationError_("批量确认必须包含 1–100 个持仓")
+    identities = [
+        (str(item["account_id"]), str(item["instrument_id"])) for item in items
+    ]
+    if len(identities) != len(set(identities)):
+        raise ValidationError_("批量确认中不能包含重复持仓")
+
+    decisions: list[dict[str, Any]] = []
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        for item in items:
+            account_id = str(item["account_id"])
+            instrument_id = str(item["instrument_id"])
+            started_on = item["started_on"]
+            item_key = "accept-estimate:" + hashlib.sha256(
+                (
+                    f"{idempotency_key}|{account_id}|{instrument_id}|"
+                    f"{started_on.isoformat()}"
+                ).encode("utf-8")
+            ).hexdigest()
+            decision = await repository.confirm_holding_start(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_id=ctx.user_id,
+                account_id=account_id,
+                instrument_id=instrument_id,
+                started_on=started_on,
+                idempotency_key=item_key,
+                require_unchanged=True,
+            )
+            decisions.append(decision)
+            if decision["created"]:
+                await write_audit(
+                    conn,
+                    tenant_id=ctx.tenant_id,
+                    actor_type="USER",
+                    actor_id=ctx.user_id,
+                    action="HOLDING_START_ESTIMATE_ACCEPTED",
+                    resource_type="ledger.position_holding_start_decisions",
+                    resource_id=decision["decision_id"],
+                    details={
+                        "accountId": account_id,
+                        "instrumentId": instrument_id,
+                        "startedOn": started_on.isoformat(),
+                        "recalculationRequired": False,
+                        "batchCommandKeyHash": hashlib.sha256(
+                            idempotency_key.encode("utf-8")
+                        ).hexdigest(),
+                    },
+                )
+    return {
+        "confirmedCount": len(decisions),
+        "createdCount": sum(1 for decision in decisions if decision["created"]),
+        "recalculationCount": 0,
+        "status": "CONFIRMED",
     }

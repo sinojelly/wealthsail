@@ -3,6 +3,7 @@ import { ChevronDown, Info } from "lucide-react";
 import type {
   DecimalString,
   FundRangeMetricsDto,
+  HoldingStartConfirmationResult,
   HoldingPeriodDto,
 } from "../../../api/types";
 
@@ -11,7 +12,9 @@ interface FundRangeMetricsProps {
   metrics: FundRangeMetricsDto | null;
   currentNav: DecimalString | null;
   costReturnPct?: DecimalString | null;
-  onConfirmHoldingStart?: (startedOn: string) => Promise<void>;
+  onConfirmHoldingStart?: (
+    startedOn: string,
+  ) => Promise<HoldingStartConfirmationResult>;
 }
 
 function formatPct(value: DecimalString | null, signed = false) {
@@ -50,7 +53,7 @@ function statusLabel(
 function qualityReasonLabel(reason: string) {
   const labels: Record<string, string> = {
     PARTIAL_HOLDING_HISTORY:
-      "当前区间按系统推导的持有开始日计算；确认或修改日期后，系统会自动重新抓取净值并重算。",
+      "当前区间按系统推导的持有开始日计算；若认可可直接确认且无需重算，修改日期后系统只重算该基金。",
     NAV_DATE_GAP: "部分交易日缺少官方净值，区间结果可能不完整。",
     HOLDING_START_NOT_AVAILABLE: "尚未取得可用的持有开始日期。",
     METRICS_NOT_READY: "区间指标仍在后台生成。",
@@ -105,8 +108,12 @@ export default function FundRangeMetrics({
     setConfirmationError(null);
     setConfirmationMessage(null);
     try {
-      await onConfirmHoldingStart(startedOn);
-      setConfirmationMessage("已确认，后台正在自动补齐净值并重新计算。");
+      const result = await onConfirmHoldingStart(startedOn);
+      setConfirmationMessage(
+        result.recalculationRequired
+          ? "日期已修改，后台正在重算该基金。"
+          : "估算日期已确认，无需重新计算。",
+      );
     } catch (error) {
       setConfirmationError(
         error instanceof Error ? error.message : "确认失败，请稍后重试。",
@@ -128,6 +135,7 @@ export default function FundRangeMetrics({
   const qualityStatus = statusLabel(metrics.status, metrics.qualityReasons);
   const position = formatPct(metrics.rangePositionPct);
   const accessibleName = `${holdingLabel(holdingPeriod)}，区间位置 ${position}`;
+  const dateChanged = startedOn !== (holdingPeriod?.startedOn ?? "");
 
   return (
     <div className="fund-range-metrics">
@@ -212,7 +220,9 @@ export default function FundRangeMetrics({
                 <label htmlFor={`${detailId}-holding-start`}>
                   确认持有开始日期
                 </label>
-                <small>日期准确可直接确认；有误时修改后再确认。</small>
+                <small>
+                  日期准确可直接确认且不重算；有误时修改，系统仅重算该基金。
+                </small>
               </div>
               <input
                 id={`${detailId}-holding-start`}
@@ -225,7 +235,11 @@ export default function FundRangeMetrics({
                 type="submit"
                 disabled={!startedOn || confirming}
               >
-                {confirming ? "正在提交…" : "确认并后台重算"}
+                {confirming
+                  ? "正在提交…"
+                  : dateChanged
+                    ? "保存并重算该基金"
+                    : "确认估算日期"}
               </button>
               {confirmationMessage ? (
                 <p className="holding-start-success" role="status">

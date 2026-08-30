@@ -1,10 +1,14 @@
 import { Fragment, useMemo, useState } from "react";
-import { Plus, Search, Upload, WalletCards } from "lucide-react";
+import { BadgeCheck, Plus, Search, Upload, WalletCards } from "lucide-react";
 import { Link } from "react-router-dom";
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import EmptyState from "../../../components/data-state/EmptyState";
 import { formatMoney, formatSignedMoney } from "../../../domain/money";
-import type { PositionDto } from "../../../api/types";
+import type {
+  HoldingStartEstimateConfirmation,
+  HoldingStartConfirmationResult,
+  PositionDto,
+} from "../../../api/types";
 import PositionDialog from "./PositionDialog";
 import FundRangeMetrics from "./FundRangeMetrics";
 
@@ -12,17 +16,24 @@ export default function HoldingsTable({
   rows,
   loading,
   onConfirmHoldingStart,
+  onConfirmEstimatedHoldingStarts,
 }: {
   rows: PositionDto[];
   loading?: boolean;
   onConfirmHoldingStart?: (
     position: PositionDto,
     startedOn: string,
+  ) => Promise<HoldingStartConfirmationResult>;
+  onConfirmEstimatedHoldingStarts?: (
+    items: HoldingStartEstimateConfirmation[],
   ) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [type, setType] = useState("全部");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [confirmingEstimates, setConfirmingEstimates] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const filtered = useMemo(
     () =>
@@ -34,9 +45,55 @@ export default function HoldingsTable({
       }),
     [query, rows, type],
   );
+  const estimatedHoldingStarts = useMemo<HoldingStartEstimateConfirmation[]>(
+    () =>
+      rows.flatMap((row) => {
+        const startedOn = row.holdingPeriod?.startedOn;
+        const isEstimatedWarning =
+          row.type === "场外基金" &&
+          Boolean(row.holdingPeriod?.canConfirm) &&
+          Boolean(startedOn) &&
+          row.rangeMetrics?.status === "PARTIAL" &&
+          row.rangeMetrics.qualityReasons.includes("PARTIAL_HOLDING_HISTORY");
+        return isEstimatedWarning && startedOn
+          ? [
+              {
+                accountId: row.accountId,
+                instrumentId: row.instrumentId,
+                startedOn,
+              },
+            ]
+          : [];
+      }),
+    [rows],
+  );
 
   function openAdd() {
     setDialogOpen(true);
+  }
+
+  async function confirmAllEstimates() {
+    if (
+      !onConfirmEstimatedHoldingStarts ||
+      estimatedHoldingStarts.length === 0
+    ) {
+      return;
+    }
+    setConfirmingEstimates(true);
+    setBatchMessage(null);
+    setBatchError(null);
+    try {
+      await onConfirmEstimatedHoldingStarts(estimatedHoldingStarts);
+      setBatchMessage(
+        `已确认 ${estimatedHoldingStarts.length} 个估算日期，未触发净值重算。`,
+      );
+    } catch (error) {
+      setBatchError(
+        error instanceof Error ? error.message : "批量确认失败，请刷新后重试。",
+      );
+    } finally {
+      setConfirmingEstimates(false);
+    }
   }
 
   return (
@@ -77,6 +134,40 @@ export default function HoldingsTable({
           </button>
         </div>
       </div>
+      {estimatedHoldingStarts.length > 0 &&
+      onConfirmEstimatedHoldingStarts ? (
+        <div className="holding-start-batch-banner">
+          <BadgeCheck size={18} aria-hidden="true" />
+          <div>
+            <strong>
+              有 {estimatedHoldingStarts.length} 只基金的持有起点来自系统估算
+            </strong>
+            <span>
+              认可系统推荐日期，可一次确认并消除提示；确认本身不会重新抓取净值或重算指标。
+            </span>
+          </div>
+          <button
+            className="btn-secondary"
+            type="button"
+            disabled={confirmingEstimates}
+            onClick={() => void confirmAllEstimates()}
+          >
+            {confirmingEstimates
+              ? "正在确认…"
+              : `确认全部估算日期（${estimatedHoldingStarts.length}）`}
+          </button>
+        </div>
+      ) : null}
+      {batchMessage ? (
+        <p className="holding-start-batch-message" role="status">
+          {batchMessage}
+        </p>
+      ) : null}
+      {batchError ? (
+        <p className="holding-start-batch-error" role="alert">
+          {batchError}
+        </p>
+      ) : null}
       <div className="table-wrap">
         {loading ? (
           <div className="table-placeholder dashboard-data-loading">

@@ -14,6 +14,7 @@ import {
   usePositions,
   useMe,
   useConfirmTiantianHoldingStart,
+  useConfirmTiantianHoldingStartEstimates,
 } from "../../api/hooks";
 import type { PortfolioAssetScope } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
@@ -43,6 +44,8 @@ export default function DashboardPage() {
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
   const confirmHoldingStart = useConfirmTiantianHoldingStart();
+  const confirmHoldingStartEstimates =
+    useConfirmTiantianHoldingStartEstimates();
   const activeTenantName =
     me.data?.tenants.find(
       (tenant) => tenant.tenantId === me.data?.activeTenantId,
@@ -176,10 +179,16 @@ export default function DashboardPage() {
         rows={positions.error ? [] : (positions.data ?? [])}
         loading={positions.isLoading}
         onConfirmHoldingStart={async (position, startedOn) => {
-          await confirmHoldingStart.mutateAsync({
+          return await confirmHoldingStart.mutateAsync({
             accountId: position.accountId,
             instrumentId: position.instrumentId,
             startedOn,
+            idempotencyKey: createIdempotencyKey(),
+          });
+        }}
+        onConfirmEstimatedHoldingStarts={async (items) => {
+          await confirmHoldingStartEstimates.mutateAsync({
+            items,
             idempotencyKey: createIdempotencyKey(),
           });
         }}

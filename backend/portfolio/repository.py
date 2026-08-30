@@ -31,6 +31,7 @@ _SELECT_POSITION_COLUMNS = """
     COALESCE(a.ticker, '') AS ticker,
     metric.as_of AS metric_as_of,
     metric.source_binding_id AS holding_source_binding_id,
+    holding_decision.started_on AS confirmed_holding_started_on,
     metric.holding_started_on, metric.holding_days,
     metric.holding_start_method, metric.holding_start_confidence,
     metric.current_nav, metric.current_nav_date,
@@ -193,6 +194,16 @@ async def latest_positions(
              ORDER BY metric.as_of DESC
              LIMIT 1
         ) metric ON i.asset_type = 'OFF_EXCHANGE_FUND'
+        LEFT JOIN LATERAL (
+            SELECT decision.started_on
+              FROM ledger.position_holding_start_decisions decision
+             WHERE decision.tenant_id = ps.tenant_id
+               AND decision.account_id = ps.account_id
+               AND decision.instrument_id = ps.instrument_id
+               AND decision.source_binding_id = metric.source_binding_id
+             ORDER BY decision.created_at DESC, decision.id DESC
+             LIMIT 1
+        ) holding_decision ON metric.source_binding_id IS NOT NULL
         LEFT JOIN LATERAL (
             SELECT array_agg(am.user_id ORDER BY am.is_primary DESC, p.nickname)
                        AS owner_user_ids,

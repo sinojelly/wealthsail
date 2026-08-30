@@ -189,6 +189,18 @@ class TiantianHoldingStartConfirmRequest(BaseModel):
     startedOn: date
 
 
+class TiantianHoldingStartEstimateItem(BaseModel):
+    accountId: str = Field(min_length=1, max_length=64)
+    instrumentId: str = Field(min_length=1, max_length=64)
+    startedOn: date
+
+
+class TiantianHoldingStartEstimateBatchRequest(BaseModel):
+    items: list[TiantianHoldingStartEstimateItem] = Field(
+        min_length=1, max_length=100
+    )
+
+
 def _require_tiantian_mutations(settings: Settings) -> None:
     if not settings.tiantian_import_enabled:
         raise DataUnavailableError("天天基金导入功能当前未启用", retryable=False)
@@ -488,5 +500,42 @@ async def portfolio_confirm_tiantian_holding_start(
         data,
         request_id=request_id,
         as_of=now_shanghai(),
-        quality_status="PENDING",
+        quality_status=(
+            "PENDING" if data["recalculationRequired"] else "FRESH"
+        ),
+    )
+
+
+@router.post("/positions/holding-start/confirm-estimates")
+async def portfolio_confirm_tiantian_holding_start_estimates(
+    payload: TiantianHoldingStartEstimateBatchRequest,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    _require_tiantian_mutations(settings)
+    data = (
+        await tiantian_import_service.confirm_tiantian_holding_start_estimates(
+            pool,
+            ctx,
+            items=[
+                {
+                    "account_id": item.accountId,
+                    "instrument_id": item.instrumentId,
+                    "started_on": item.startedOn,
+                }
+                for item in payload.items
+            ],
+            idempotency_key=idempotency_key,
+        )
+    )
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=now_shanghai(),
+        quality_status="FRESH",
     )

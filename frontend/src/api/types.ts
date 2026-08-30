@@ -144,6 +144,28 @@ export interface FundRangeMetricsDto {
   asOf: string | null;
 }
 
+export interface HoldingStartConfirmationResult {
+  accountId: string;
+  instrumentId: string;
+  startedOn: string;
+  metricsStatus: "PENDING" | "UNCHANGED";
+  recalculationRequired: boolean;
+  jobKey: string | null;
+}
+
+export interface HoldingStartEstimateConfirmation {
+  accountId: string;
+  instrumentId: string;
+  startedOn: string;
+}
+
+export interface HoldingStartEstimateBatchResult {
+  confirmedCount: number;
+  createdCount: number;
+  recalculationCount: 0;
+  status: "CONFIRMED";
+}
+
 export type TiantianComparisonStatus =
   "NEW" | "UNCHANGED" | "CHANGED" | "CLOSED" | "CONFLICT";
 

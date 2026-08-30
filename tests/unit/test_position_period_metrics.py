@@ -38,6 +38,7 @@ def _position(**overrides):
         "holding_start_method": "TRANSACTION_RECONCILED",
         "holding_start_confidence": "HIGH",
         "holding_source_binding_id": "binding-1",
+        "confirmed_holding_started_on": None,
         "current_nav": Decimal("1.2000"),
         "current_nav_date": date(2026, 8, 27),
         "period_high_nav": Decimal("1.5000"),
@@ -160,6 +161,36 @@ async def test_pending_and_partial_metrics_preserve_nulls_and_reasons(
         "NAV_DATE_GAP",
         "PARTIAL_HOLDING_HISTORY",
     ]
+
+
+@pytest.mark.asyncio
+async def test_accepting_the_same_estimated_date_removes_only_that_quality_warning(
+    monkeypatch,
+) -> None:
+    async def positions(_conn, _tenant):
+        return [
+            _position(
+                holding_started_on=date(2021, 1, 26),
+                holding_start_method="PORTFOLIO_ACTIVITY_ESTIMATE",
+                holding_start_confidence="LOW",
+                confirmed_holding_started_on=date(2021, 1, 26),
+                calculation_status="PARTIAL",
+                quality_reasons=["PARTIAL_HOLDING_HISTORY"],
+            )
+        ]
+
+    async def nav(_conn, _tenant):
+        return [{"total_nav": Decimal("120.00"), "as_of": date(2026, 8, 28)}]
+
+    monkeypatch.setattr(repository, "latest_positions", positions)
+    monkeypatch.setattr(repository, "latest_nav_per_account", nav)
+
+    result = (await service.get_positions(object(), "tenant-1"))[0]
+
+    assert result["holdingPeriod"]["method"] == "USER_CONFIRMED"
+    assert result["holdingPeriod"]["confidence"] == "HIGH"
+    assert result["rangeMetrics"]["status"] == "READY"
+    assert result["rangeMetrics"]["qualityReasons"] == []
 
 
 @pytest.mark.asyncio

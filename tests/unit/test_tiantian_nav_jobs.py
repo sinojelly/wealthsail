@@ -21,6 +21,7 @@ from backend.jobs.data_tasks import (
     claim_data_task,
     complete_data_task,
     fail_data_task,
+    load_open_fund_positions,
     materialize_position_metrics,
     persist_nav_observations,
     process_data_task,
@@ -82,6 +83,24 @@ class _Connection:
 
     def transaction(self):
         return _connection(self)
+
+
+@pytest.mark.asyncio
+async def test_open_fund_position_loader_can_scope_one_confirmation_to_one_fund() -> None:
+    conn = _Connection(rows=[])
+    with patch(
+        "backend.jobs.data_tasks.system_connection",
+        return_value=_connection(conn),
+    ):
+        await load_open_fund_positions(
+            MagicMock(),
+            tenant_id="tenant-1",
+            source_binding_id="binding-1",
+            instrument_id="fund-1",
+        )
+
+    assert "$3::uuid IS NULL OR item.instrument_id = $3::uuid" in conn.sql[0]
+    assert conn.fetch_calls[0][1] == ("tenant-1", "binding-1", "fund-1")
 
 
 @asynccontextmanager
@@ -529,16 +548,21 @@ async def test_backfill_logs_persistence_progress_and_refreshes_valuation_projec
         run_id="run-progress",
         tenant_id="tenant-1",
         job_type="FUND_NAV_BACKFILL",
-        payload={"batchId": "batch-1", "sourceBindingId": "binding-1"},
+        payload={
+            "batchId": "batch-1",
+            "sourceBindingId": "binding-1",
+            "instrumentId": "fund-1",
+        },
         attempt_count=1,
         lease_token="lease-1",
     )
     projection = AsyncMock(return_value=(1, 1))
+    position_loader = AsyncMock(return_value=[position])
 
     with (
         patch(
             "backend.jobs.data_tasks.load_open_fund_positions",
-            new=AsyncMock(return_value=[position]),
+            new=position_loader,
         ),
         patch(
             "backend.jobs.data_tasks.fetch_fund_nav_history",
@@ -577,6 +601,12 @@ async def test_backfill_logs_persistence_progress_and_refreshes_valuation_projec
     assert "inserted_count=1" in messages
     assert "skipped_count=0" in messages
     assert "duration_ms=" in messages
+    position_loader.assert_awaited_once_with(
+        ANY,
+        tenant_id="tenant-1",
+        source_binding_id="binding-1",
+        instrument_id="fund-1",
+    )
     projection.assert_awaited_once_with(
         ANY,
         tenant_id="tenant-1",

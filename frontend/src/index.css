@@ -1193,6 +1193,43 @@ button:disabled {
 .holdings-toolbar {
   flex-wrap: wrap;
 }
+.holding-start-batch-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  color: #0c4a6e;
+  background: #f0f9ff;
+}
+.holding-start-batch-banner > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.holding-start-batch-banner strong {
+  color: var(--navy);
+  font-size: 10px;
+}
+.holding-start-batch-banner span {
+  color: var(--slate-600);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.holding-start-batch-message,
+.holding-start-batch-error {
+  margin: 8px 14px 0;
+  font-size: 9px;
+}
+.holding-start-batch-message {
+  color: #047857;
+}
+.holding-start-batch-error {
+  color: #b91c1c;
+}
 .table-filters {
   display: flex;
   gap: 7px;
@@ -4119,6 +4156,13 @@ button:disabled {
   }
 }
 @container page-content (max-width: 700px) {
+  .holding-start-batch-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .holding-start-batch-banner .btn-secondary {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
   .holding-start-confirmation {
     grid-template-columns: 1fr;
     align-items: stretch;

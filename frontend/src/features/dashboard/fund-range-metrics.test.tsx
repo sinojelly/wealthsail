@@ -133,7 +133,11 @@ it("never turns unavailable pending metrics into a misleading zero", () => {
 
 it("explains an estimated holding start and lets the user confirm or correct it", async () => {
   const user = userEvent.setup();
-  const confirmHoldingStart = vi.fn().mockResolvedValue(undefined);
+  const confirmHoldingStart = vi.fn().mockResolvedValue({
+    recalculationRequired: false,
+    metricsStatus: "UNCHANGED",
+    jobKey: null,
+  });
   render(
     <FundRangeMetrics
       holdingPeriod={{
@@ -160,8 +164,46 @@ it("explains an estimated holding start and lets the user confirm or correct it"
   ).toBeInTheDocument();
   const dateInput = screen.getByLabelText("确认持有开始日期");
   expect(dateInput).toHaveValue("2021-01-26");
+  await user.click(screen.getByRole("button", { name: "确认估算日期" }));
+  expect(confirmHoldingStart).toHaveBeenCalledWith("2021-01-26");
+  expect(
+    screen.getByText("估算日期已确认，无需重新计算。"),
+  ).toBeInTheDocument();
+});
+
+it("recalculates only when the user changes the estimated date", async () => {
+  const user = userEvent.setup();
+  const confirmHoldingStart = vi.fn().mockResolvedValue({
+    recalculationRequired: true,
+    metricsStatus: "PENDING",
+    jobKey: "holding-start-decision:decision-1",
+  });
+  render(
+    <FundRangeMetrics
+      holdingPeriod={{
+        ...holdingPeriod,
+        startedOn: "2021-01-26",
+        method: "PORTFOLIO_ACTIVITY_ESTIMATE",
+        confidence: "LOW",
+        canConfirm: true,
+      }}
+      metrics={{
+        ...readyMetrics,
+        status: "PARTIAL",
+        qualityReasons: ["PARTIAL_HOLDING_HISTORY"],
+      }}
+      currentNav="1.4400"
+      onConfirmHoldingStart={confirmHoldingStart}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: /持有 895 天/ }));
+  const dateInput = screen.getByLabelText("确认持有开始日期");
   await user.clear(dateInput);
   await user.type(dateInput, "2021-02-23");
-  await user.click(screen.getByRole("button", { name: "确认并后台重算" }));
+  await user.click(screen.getByRole("button", { name: "保存并重算该基金" }));
   expect(confirmHoldingStart).toHaveBeenCalledWith("2021-02-23");
+  expect(
+    screen.getByText("日期已修改，后台正在重算该基金。"),
+  ).toBeInTheDocument();
 });

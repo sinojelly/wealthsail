@@ -70,6 +70,10 @@ vi.mock("../../api/hooks", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useConfirmTiantianHoldingStartEstimates: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 it("presents an onboarding empty state instead of a valuation failure", () => {

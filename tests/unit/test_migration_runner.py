@@ -30,9 +30,9 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 37
+    assert versions[-1] == 38
     assert migrations[-1].path.name == (
-        "037_holding_start_decisions.sql"
+        "038_worker_projection_and_holding_confirmation.sql"
     )
 
 
@@ -217,6 +217,39 @@ def test_037_adds_append_only_holding_start_decisions_with_least_privilege() -> 
         assert contract in migration
     assert "GRANT UPDATE" not in migration
     assert "GRANT DELETE" not in migration
+
+
+def test_038_grants_worker_only_the_projection_writes_used_by_revaluation() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "038_worker_projection_and_holding_confirmation.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "GRANT INSERT, DELETE ON ledger.position_snapshots" in migration
+    assert "GRANT UPDATE (" in migration
+    assert "market_price, market_value, unrealized_pnl, data_quality_status" in migration
+    assert "GRANT INSERT ON ledger.account_nav_snapshots" in migration
+    assert "GRANT SELECT ON identity.accounts TO wealthsail_worker" in migration
+    assert "recalculation_required BOOLEAN" in migration
+
+
+def test_readback_checks_038_capabilities_and_least_privilege() -> None:
+    source = inspect.getsource(_readback)
+
+    for contract in (
+        "worker valuation projection or holding confirmation boundary is missing",
+        "worker_can_read_accounts",
+        "worker_can_insert_positions",
+        "worker_can_delete_positions",
+        "worker_can_update_position_prices",
+        "worker_cannot_update_position_facts",
+        "worker_can_insert_account_nav",
+        "worker_can_update_account_nav",
+        "worker_cannot_reassign_account_nav",
+        "confirmation_mode_exists",
+        "previous_start_exists",
+    ):
+        assert contract in source
 
 
 def test_readback_checks_post_import_holding_start_decision_boundary() -> None:

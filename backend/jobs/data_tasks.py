@@ -333,6 +333,7 @@ async def load_open_fund_positions(
     *,
     tenant_id: str,
     source_binding_id: str | None,
+    instrument_id: str | None = None,
 ) -> list[OpenFundPosition]:
     """Load only unreversed source baselines; closed/manual positions are excluded."""
     async with system_connection(pool) as conn:
@@ -370,6 +371,7 @@ async def load_open_fund_positions(
               ) decision ON TRUE
              WHERE event.tenant_id = $1
                AND ($2::uuid IS NULL OR batch.source_binding_id = $2::uuid)
+               AND ($3::uuid IS NULL OR item.instrument_id = $3::uuid)
                AND batch.source_type = 'TIANTIAN_FUND_ZIP'
                AND batch.status = 'CONFIRMED' AND binding.status = 'ACTIVE'
                AND item.item_type = 'POSITION_SNAPSHOT' AND item.quantity > 0
@@ -385,6 +387,7 @@ async def load_open_fund_positions(
             """,
             tenant_id,
             source_binding_id,
+            instrument_id,
         )
     positions: list[OpenFundPosition] = []
     for row in rows:
@@ -675,6 +678,7 @@ async def process_data_task(
         raise ValueError(f"unsupported data task: {lease.job_type}")
     as_of = as_of or datetime.now(_SHANGHAI).date()
     source_binding_id = lease.payload.get("sourceBindingId")
+    instrument_id = lease.payload.get("instrumentId")
     logger.info(
         "data_task_started run_id=%s batch_id=%s job_type=%s attempt=%d as_of=%s",
         lease.run_id,
@@ -688,6 +692,7 @@ async def process_data_task(
             pool,
             tenant_id=lease.tenant_id,
             source_binding_id=str(source_binding_id) if source_binding_id else None,
+            instrument_id=str(instrument_id) if instrument_id else None,
         )
     except Exception as exc:
         _log_stage_failure(lease, stage="load_open_fund_positions", exc=exc, as_of=as_of)

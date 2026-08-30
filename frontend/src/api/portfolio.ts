@@ -1,5 +1,8 @@
 import { request } from "./client";
 import type {
+  HoldingStartConfirmationResult,
+  HoldingStartEstimateBatchResult,
+  HoldingStartEstimateConfirmation,
   InstrumentSearchResult,
   NavTrend,
   PortfolioSummary,
@@ -193,25 +196,28 @@ export async function confirmTiantianHoldingStart(
   instrumentId: string,
   startedOn: string,
   idempotencyKey: string,
-): Promise<{
-  accountId: string;
-  instrumentId: string;
-  startedOn: string;
-  metricsStatus: "PENDING";
-  jobKey: string;
-}> {
-  const envelope = await request<{
-    accountId: string;
-    instrumentId: string;
-    startedOn: string;
-    metricsStatus: "PENDING";
-    jobKey: string;
-  }>(
+): Promise<HoldingStartConfirmationResult> {
+  const envelope = await request<HoldingStartConfirmationResult>(
     `/v1/portfolio/positions/${encodeURIComponent(accountId)}/${encodeURIComponent(instrumentId)}/holding-start/confirm`,
     {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ startedOn }),
+    },
+  );
+  return envelope.data;
+}
+
+export async function confirmTiantianHoldingStartEstimates(
+  items: HoldingStartEstimateConfirmation[],
+  idempotencyKey: string,
+): Promise<HoldingStartEstimateBatchResult> {
+  const envelope = await request<HoldingStartEstimateBatchResult>(
+    "/v1/portfolio/positions/holding-start/confirm-estimates",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ items }),
     },
   );
   return envelope.data;

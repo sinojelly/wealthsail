@@ -991,6 +991,72 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "post-import holding-start decision boundary is missing or unsafe"
         )
 
+    worker_projection_boundary = await conn.fetchrow(
+        """
+        SELECT has_table_privilege(
+                   'wealthsail_worker', 'identity.accounts', 'SELECT'
+               ) AS worker_can_read_accounts,
+               has_table_privilege(
+                   'wealthsail_worker', 'ledger.position_snapshots', 'INSERT'
+               ) AS worker_can_insert_positions,
+               has_table_privilege(
+                   'wealthsail_worker', 'ledger.position_snapshots', 'DELETE'
+               ) AS worker_can_delete_positions,
+               has_column_privilege(
+                   'wealthsail_worker', 'ledger.position_snapshots',
+                   'market_price', 'UPDATE'
+               ) AS worker_can_update_position_prices,
+               NOT has_column_privilege(
+                   'wealthsail_worker', 'ledger.position_snapshots',
+                   'quantity', 'UPDATE'
+               ) AS worker_cannot_update_position_facts,
+               has_table_privilege(
+                   'wealthsail_worker', 'ledger.account_nav_snapshots', 'INSERT'
+               ) AS worker_can_insert_account_nav,
+               has_column_privilege(
+                   'wealthsail_worker', 'ledger.account_nav_snapshots',
+                   'known_value', 'UPDATE'
+               ) AS worker_can_update_account_nav,
+               NOT has_column_privilege(
+                   'wealthsail_worker', 'ledger.account_nav_snapshots',
+                   'tenant_id', 'UPDATE'
+               ) AS worker_cannot_reassign_account_nav,
+               EXISTS (
+                   SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'ledger'
+                      AND table_name = 'position_holding_start_decisions'
+                      AND column_name = 'recalculation_required'
+                      AND data_type = 'boolean'
+                      AND is_nullable = 'NO'
+                      AND column_default ILIKE '%true%'
+               ) AS confirmation_mode_exists,
+               EXISTS (
+                   SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'ledger'
+                      AND table_name = 'position_holding_start_decisions'
+                      AND column_name = 'previous_started_on'
+                      AND data_type = 'date'
+                      AND is_nullable = 'YES'
+               ) AS previous_start_exists
+        """
+    )
+    if (
+        worker_projection_boundary is None
+        or not worker_projection_boundary["worker_can_read_accounts"]
+        or not worker_projection_boundary["worker_can_insert_positions"]
+        or not worker_projection_boundary["worker_can_delete_positions"]
+        or not worker_projection_boundary["worker_can_update_position_prices"]
+        or not worker_projection_boundary["worker_cannot_update_position_facts"]
+        or not worker_projection_boundary["worker_can_insert_account_nav"]
+        or not worker_projection_boundary["worker_can_update_account_nav"]
+        or not worker_projection_boundary["worker_cannot_reassign_account_nav"]
+        or not worker_projection_boundary["confirmation_mode_exists"]
+        or not worker_projection_boundary["previous_start_exists"]
+    ):
+        raise RuntimeError(
+            "worker valuation projection or holding confirmation boundary is missing"
+        )
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"

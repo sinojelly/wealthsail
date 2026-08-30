@@ -325,6 +325,8 @@ def test_confirm_holding_start_queues_an_auditable_background_recalculation() ->
             "instrumentId": "fund-1",
             "startedOn": "2021-02-23",
             "metricsStatus": "PENDING",
+            "recalculationRequired": True,
+            "jobKey": "holding-start-decision:decision-1",
         }
     )
     with patch(
@@ -344,6 +346,74 @@ def test_confirm_holding_start_queues_an_auditable_background_recalculation() ->
     assert confirmed.await_args.kwargs == {
         "started_on": portfolio_api.date(2021, 2, 23),
         "idempotency_key": "holding-start-1",
+    }
+
+
+def test_confirming_an_unchanged_estimate_is_reported_as_fresh() -> None:
+    confirmed = AsyncMock(
+        return_value={
+            "accountId": "account-1",
+            "instrumentId": "fund-1",
+            "startedOn": "2021-01-26",
+            "metricsStatus": "UNCHANGED",
+            "recalculationRequired": False,
+            "jobKey": None,
+        }
+    )
+    with patch(
+        "backend.portfolio.api.tiantian_import_service.confirm_tiantian_holding_start",
+        new=confirmed,
+    ):
+        response = _client().post(
+            "/api/v1/portfolio/positions/account-1/fund-1/holding-start/confirm",
+            headers={"Idempotency-Key": "accept-estimate-1"},
+            json={"startedOn": "2021-01-26"},
+        )
+
+    assert response.status_code == 202
+    assert response.json()["data"]["metricsStatus"] == "UNCHANGED"
+    assert response.json()["meta"]["qualityStatus"] == "FRESH"
+
+
+def test_batch_accepts_estimated_dates_without_requesting_recalculation() -> None:
+    confirmed = AsyncMock(
+        return_value={
+            "confirmedCount": 2,
+            "recalculationCount": 0,
+            "status": "CONFIRMED",
+        }
+    )
+    with patch(
+        "backend.portfolio.api.tiantian_import_service.confirm_tiantian_holding_start_estimates",
+        new=confirmed,
+        create=True,
+    ):
+        response = _client().post(
+            "/api/v1/portfolio/positions/holding-start/confirm-estimates",
+            headers={"Idempotency-Key": "accept-estimates-1"},
+            json={
+                "items": [
+                    {
+                        "accountId": "account-1",
+                        "instrumentId": "fund-1",
+                        "startedOn": "2021-01-26",
+                    },
+                    {
+                        "accountId": "account-1",
+                        "instrumentId": "fund-2",
+                        "startedOn": "2021-01-26",
+                    },
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["confirmedCount"] == 2
+    assert confirmed.await_args.kwargs["idempotency_key"] == "accept-estimates-1"
+    assert confirmed.await_args.kwargs["items"][0] == {
+        "account_id": "account-1",
+        "instrument_id": "fund-1",
+        "started_on": portfolio_api.date(2021, 1, 26),
     }
 
 

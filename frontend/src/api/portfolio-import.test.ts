@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "./client";
 import {
   confirmTiantianHoldingStart,
+  confirmTiantianHoldingStartEstimates,
   confirmTiantianImport,
   listTiantianImports,
   previewTiantianImport,
@@ -141,5 +142,58 @@ describe("Tiantian import API", () => {
       "holding-start-1",
     );
     expect(JSON.parse(String(init.body))).toEqual({ startedOn: "2021-02-23" });
+  });
+
+  it("accepts multiple unchanged estimates in one idempotent command", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            confirmedCount: 2,
+            recalculationCount: 0,
+            status: "CONFIRMED",
+          },
+          meta,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await confirmTiantianHoldingStartEstimates(
+      [
+        {
+          accountId: "account-1",
+          instrumentId: "fund-1",
+          startedOn: "2021-01-26",
+        },
+        {
+          accountId: "account-1",
+          instrumentId: "fund-2",
+          startedOn: "2021-01-26",
+        },
+      ],
+      "accept-estimates-1",
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/positions/holding-start/confirm-estimates");
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      "accept-estimates-1",
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      items: [
+        {
+          accountId: "account-1",
+          instrumentId: "fund-1",
+          startedOn: "2021-01-26",
+        },
+        {
+          accountId: "account-1",
+          instrumentId: "fund-2",
+          startedOn: "2021-01-26",
+        },
+      ],
+    });
   });
 });

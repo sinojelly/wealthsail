@@ -92,12 +92,40 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
                 "asOf": None,
             },
         )
+    holding_started_on = _row_value(row, "holding_started_on")
+    confirmed_started_on = _row_value(row, "confirmed_holding_started_on")
+    confirmation_matches_metric = (
+        confirmed_started_on is not None
+        and confirmed_started_on == holding_started_on
+    )
+    quality_reasons = list(_row_value(row, "quality_reasons", []) or [])
+    if confirmation_matches_metric:
+        quality_reasons = [
+            reason
+            for reason in quality_reasons
+            if reason != "PARTIAL_HOLDING_HISTORY"
+        ]
+    effective_status = str(calculation_status)
+    if (
+        confirmation_matches_metric
+        and effective_status == "PARTIAL"
+        and not quality_reasons
+    ):
+        effective_status = "READY"
     return (
         {
-            "startedOn": _date_text(_row_value(row, "holding_started_on")),
+            "startedOn": _date_text(holding_started_on),
             "days": _row_value(row, "holding_days"),
-            "method": _row_value(row, "holding_start_method"),
-            "confidence": _row_value(row, "holding_start_confidence", "NONE"),
+            "method": (
+                "USER_CONFIRMED"
+                if confirmation_matches_metric
+                else _row_value(row, "holding_start_method")
+            ),
+            "confidence": (
+                "HIGH"
+                if confirmation_matches_metric
+                else _row_value(row, "holding_start_confidence", "NONE")
+            ),
             "canConfirm": _row_value(row, "holding_source_binding_id") is not None,
         },
         {
@@ -108,8 +136,8 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
             "fromHighPct": _decimal_text(_row_value(row, "from_high_pct")),
             "fromLowPct": _decimal_text(_row_value(row, "from_low_pct")),
             "rangePositionPct": _decimal_text(_row_value(row, "range_position_pct")),
-            "status": str(calculation_status),
-            "qualityReasons": list(_row_value(row, "quality_reasons", []) or []),
+            "status": effective_status,
+            "qualityReasons": quality_reasons,
             # This is the official current-NAV disclosure date, not the API
             # request time and never an intraday/realtime label.
             "asOf": _date_text(_row_value(row, "current_nav_date")),

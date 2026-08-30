@@ -17,6 +17,7 @@ import type {
   AuditRow,
   BindingCredential,
   FreshnessResponse,
+  HoldingStartEstimateConfirmation,
   InstrumentSearchResult,
   InvitationCredential,
   InvitableTenantRole,
@@ -369,6 +370,25 @@ export function useConfirmTiantianHoldingStart() {
         accountId,
         instrumentId,
         startedOn,
+        idempotencyKey,
+      ),
+    onSuccess: invalidatePortfolio,
+    onError: onAuthFailure,
+  });
+}
+
+export function useConfirmTiantianHoldingStartEstimates() {
+  const invalidatePortfolio = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: ({
+      items,
+      idempotencyKey,
+    }: {
+      items: HoldingStartEstimateConfirmation[];
+      idempotencyKey: string;
+    }) =>
+      portfolioApi.confirmTiantianHoldingStartEstimates(
+        items,
         idempotencyKey,
       ),
     onSuccess: invalidatePortfolio,
