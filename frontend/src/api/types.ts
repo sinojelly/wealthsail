@@ -87,6 +87,10 @@ export interface PortfolioSummary {
   positionsMarketValue: DecimalString | null;
   dailyPnl: DecimalString | null;
   dailyPnlRate: DecimalString | null;
+  holdingPnl: DecimalString | null;
+  holdingPnlRate: DecimalString | null;
+  // Reserved for a future cash-flow-aware performance projection. Current
+  // opening-balance imports cannot establish a reliable lifetime return.
   cumulativePnl: DecimalString | null;
   cumulativePnlRate: DecimalString | null;
   allocation: AllocationItem[];

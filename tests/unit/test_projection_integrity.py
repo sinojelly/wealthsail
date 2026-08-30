@@ -170,6 +170,7 @@ def test_cash_only_account_has_complete_fresh_nav() -> None:
 class _NavConnection:
     def __init__(self) -> None:
         self.cash_sql = ""
+        self.nav_write_args: tuple[object, ...] | None = None
 
     async def fetch(self, _sql: str, *_args):
         return [{"account_id": "account-a"}]
@@ -183,7 +184,9 @@ class _NavConnection:
             return {"positions_value": 0, "total": 0, "priced_count": 0}
         return None
 
-    async def execute(self, _sql: str, *_args):
+    async def execute(self, sql: str, *args):
+        if "ledger.account_nav_snapshots" in sql:
+            self.nav_write_args = args
         return "INSERT 0 1"
 
 
@@ -198,3 +201,20 @@ async def test_account_nav_excludes_reversal_legs_from_cash() -> None:
     ) == 1
     assert "ev.event_type <> 'REVERSAL'" in conn.cash_sql
     assert "reversal.reverses_event_id = ev.id" in conn.cash_sql
+
+
+@pytest.mark.asyncio
+async def test_account_nav_does_not_fabricate_cumulative_pnl_from_opening_import() -> None:
+    """An opening-balance import is not a lifetime performance baseline."""
+    conn = _NavConnection()
+
+    assert await refresh_account_nav(
+        conn,
+        tenant_id="tenant-a",
+        as_of_date=date(2026, 8, 28),
+    ) == 1
+
+    assert conn.nav_write_args is not None
+    # INSERT argument $8 is cumulative_pnl. It must remain unknown until a
+    # cash-flow-aware performance ledger is available.
+    assert conn.nav_write_args[7] is None

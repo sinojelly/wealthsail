@@ -208,6 +208,8 @@ def test_summary_api_defaults_to_the_authenticated_users_assets(monkeypatch) -> 
             "positionsMarketValue": None,
             "dailyPnl": None,
             "dailyPnlRate": None,
+            "holdingPnl": None,
+            "holdingPnlRate": None,
             "cumulativePnl": None,
             "cumulativePnlRate": None,
             "allocation": [],

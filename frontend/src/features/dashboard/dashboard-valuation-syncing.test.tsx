@@ -18,6 +18,8 @@ vi.mock("../../api/hooks", () => ({
       positionsMarketValue: null,
       dailyPnl: null,
       dailyPnlRate: null,
+      holdingPnl: null,
+      holdingPnlRate: null,
       cumulativePnl: null,
       cumulativePnlRate: null,
       allocation: [],
@@ -29,14 +31,29 @@ vi.mock("../../api/hooks", () => ({
     isError: false,
     error: null,
   }),
-  usePositions: () => ({ data: [], isLoading: false, isError: false, error: null }),
-  useNavTrend: () => ({
-    data: { points: [], benchmark: null, currency: "CNY", timezone: "Asia/Shanghai" },
+  usePositions: () => ({
+    data: [],
     isLoading: false,
     isError: false,
     error: null,
   }),
-  useMarketSentiment: () => ({ data: undefined, isLoading: false, isError: false, error: null }),
+  useNavTrend: () => ({
+    data: {
+      points: [],
+      benchmark: null,
+      currency: "CNY",
+      timezone: "Asia/Shanghai",
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useMarketSentiment: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
   useAiAdvice: () => ({
     data: { items: [], disclaimer: "", generatedAt: null, model: null },
     isLoading: false,
@@ -45,11 +62,22 @@ vi.mock("../../api/hooks", () => ({
     isFetching: false,
     refetch: vi.fn(),
   }),
-  useInstrumentSearch: () => ({ data: [], isLoading: false, isError: false, error: null }),
+  useInstrumentSearch: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useConfirmTiantianHoldingStart: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useConfirmTiantianHoldingStartEstimates: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useConfirmTiantianHoldingStart: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+  useConfirmTiantianHoldingStartEstimates: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 it("tells ordinary users that valuation will finish automatically", () => {

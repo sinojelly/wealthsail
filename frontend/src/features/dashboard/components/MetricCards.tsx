@@ -17,12 +17,19 @@ export default function MetricCards({
   loading?: boolean;
 }) {
   const total = summary?.totalAsset;
-  const cashPct = summary?.totalAsset && !new Decimal(summary.totalAsset).isZero()
-    ? new Decimal(summary.cashBalance)
-        .div(summary.totalAsset)
-        .mul(100)
-        .toFixed(1)
-    : null;
+  const cashPct =
+    summary?.totalAsset && !new Decimal(summary.totalAsset).isZero()
+      ? new Decimal(summary.cashBalance)
+          .div(summary.totalAsset)
+          .mul(100)
+          .toFixed(1)
+      : null;
+  const holdingPnlTone = (() => {
+    if (summary?.holdingPnl == null) return "";
+    const value = new Decimal(summary.holdingPnl);
+    if (value.isZero()) return "pnl-flat";
+    return value.isPositive() ? "pnl-gain" : "pnl-loss";
+  })();
 
   const metrics = [
     {
@@ -57,35 +64,41 @@ export default function MetricCards({
       positive: summary?.dailyPnl ? !summary.dailyPnl.startsWith("-") : false,
     },
     {
-      label: "累计收益",
-      value: summary?.cumulativePnl
-        ? formatSignedMoney(summary.cumulativePnl)
-        : "—",
-      hint: summary?.cumulativePnlRate
-        ? `${summary.cumulativePnlRate}% TWR`
-        : "—",
+      label: "持仓收益",
+      value: summary?.holdingPnl ? formatSignedMoney(summary.holdingPnl) : "—",
+      hint: summary?.holdingPnlRate ? `${summary.holdingPnlRate}%` : "—",
       icon: LineChart,
       tone: "amber",
-      positive: summary?.cumulativePnl
-        ? !summary.cumulativePnl.startsWith("-")
-        : false,
+      valueClassName: `holding-pnl ${holdingPnlTone}`,
     },
   ];
 
   return (
     <section className="metric-grid" aria-label="资产指标">
-      {metrics.map(({ label, value, hint, icon: Icon, tone, positive }) => (
-        <article className="metric-card panel" key={label}>
-          <div className={`metric-icon tone-${tone}`}>
-            <Icon size={17} />
-          </div>
-          <div className="metric-label">{label}</div>
-          <strong className={`metric-value mono ${positive ? "positive" : ""}`}>
-            {value}
-          </strong>
-          <span className="metric-hint">{hint}</span>
-        </article>
-      ))}
+      {metrics.map(
+        ({
+          label,
+          value,
+          hint,
+          icon: Icon,
+          tone,
+          positive,
+          valueClassName,
+        }) => (
+          <article className="metric-card panel" key={label}>
+            <div className={`metric-icon tone-${tone}`}>
+              <Icon size={17} />
+            </div>
+            <div className="metric-label">{label}</div>
+            <strong
+              className={`metric-value mono ${positive ? "positive" : ""} ${valueClassName ?? ""}`}
+            >
+              {value}
+            </strong>
+            <span className="metric-hint">{hint}</span>
+          </article>
+        ),
+      )}
     </section>
   );
 }

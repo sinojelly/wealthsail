@@ -55,6 +55,37 @@ def _row_value(row: asyncpg.Record | dict, key: str, default=None):
     return row.get(key, default)
 
 
+def _aggregate_holding_pnl(
+    positions: list[asyncpg.Record] | list[dict],
+) -> tuple[Decimal | None, Decimal | None]:
+    """Aggregate unrealized PnL from current value and imported cost basis.
+
+    This is intentionally a current-position metric, not lifetime performance:
+    ``sum(market value - quantity * average cost)``. A partial portfolio must
+    not be presented as a complete aggregate, so one missing valuation makes
+    both results unavailable.
+    """
+    if not positions:
+        return ZERO, None
+    if any(_row_value(row, "market_value") is None for row in positions):
+        return None, None
+
+    total_market_value = sum(
+        (_d(_row_value(row, "market_value")) for row in positions), ZERO
+    )
+    total_cost = sum(
+        (
+            _d(_row_value(row, "quantity"))
+            * _d(_row_value(row, "avg_cost"))
+            for row in positions
+        ),
+        ZERO,
+    )
+    holding_pnl = total_market_value - total_cost
+    holding_pnl_rate = pct(holding_pnl, total_cost) if total_cost else None
+    return holding_pnl, holding_pnl_rate
+
+
 def _position_display_quality(row: asyncpg.Record | dict) -> str:
     """Apply trading-day freshness to the current fund-position read model.
 
@@ -198,6 +229,8 @@ async def get_summary(
             "positionsMarketValue": None,
             "dailyPnl": None,
             "dailyPnlRate": None,
+            "holdingPnl": None,
+            "holdingPnlRate": None,
             "cumulativePnl": None,
             "cumulativePnlRate": None,
             "allocation": [],
@@ -226,11 +259,6 @@ async def get_summary(
         if all(r["daily_pnl"] is not None for r in navs)
         else None
     )
-    cumulative_pnl = (
-        sum((_d(r["cumulative_pnl"]) for r in navs), ZERO)
-        if all(r["cumulative_pnl"] is not None for r in navs)
-        else None
-    )
     quality = merge_quality(r["data_quality_status"] for r in navs)
     coverage = min(_d(r.get("valuation_coverage_pct", Decimal("100"))) for r in navs)
     unpriced_count = sum(int(r.get("unpriced_position_count", 0) or 0) for r in navs)
@@ -242,6 +270,7 @@ async def get_summary(
         if owner_user_id is not None
         else await repository.latest_positions(conn, tenant_id)
     )
+    holding_pnl, holding_pnl_rate = _aggregate_holding_pnl(positions)
     allocation = _build_allocation(positions, cash, total_asset)
     valuation_pending_count = sum(
         1
@@ -277,14 +306,15 @@ async def get_summary(
         # A reliable daily return requires cash-flow-adjusted/TWR data. Until
         # that projection is available, do not publish a fabricated ratio.
         "dailyPnlRate": None,
-        "cumulativePnl": (
-            fmt_money(cumulative_pnl) if cumulative_pnl is not None else None
+        "holdingPnl": fmt_money(holding_pnl) if holding_pnl is not None else None,
+        "holdingPnlRate": (
+            fmt_money(holding_pnl_rate) if holding_pnl_rate is not None else None
         ),
-        "cumulativePnlRate": (
-            fmt_money(pct(cumulative_pnl, total_asset - cumulative_pnl))
-            if cumulative_pnl is not None and total_asset is not None
-            else None
-        ),
+        # Kept in the wire contract for backward compatibility. A current
+        # holdings import is not sufficient to reconstruct lifetime cash-flow
+        # performance, so the old total_nav-principal approximation is hidden.
+        "cumulativePnl": None,
+        "cumulativePnlRate": None,
         "allocation": allocation,
         "qualityStatus": quality,
         # A combined portfolio is only as current as its oldest account

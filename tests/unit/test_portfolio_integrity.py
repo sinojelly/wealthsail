@@ -186,6 +186,119 @@ async def test_summary_as_of_is_oldest_account_snapshot_not_request_clock(monkey
 
 
 @pytest.mark.asyncio
+async def test_summary_aggregates_current_holding_pnl_from_market_value_and_cost(
+    monkeypatch,
+) -> None:
+    """An imported opening balance must report unrealized holding PnL, not NAV."""
+
+    async def latest_nav(_conn, _tenant):
+        return [
+            {
+                "total_nav": Decimal("230"),
+                "known_value": Decimal("230"),
+                "valuation_coverage_pct": Decimal("100"),
+                "unpriced_position_count": 0,
+                "cash_balance": Decimal("0"),
+                "positions_market_value": Decimal("230"),
+                "daily_pnl": Decimal("0"),
+                # This persisted legacy value is deliberately wrong: the
+                # opening import had no CASH_IN, so it equals the whole NAV.
+                "cumulative_pnl": Decimal("230"),
+                "data_quality_status": "FRESH",
+                "as_of": date(2026, 8, 30),
+            }
+        ]
+
+    async def latest_positions(_conn, _tenant):
+        return [
+            {
+                "asset_type": "OFF_EXCHANGE_FUND",
+                "quantity": Decimal("100"),
+                "avg_cost": Decimal("2"),
+                "market_value": Decimal("150"),
+                "unrealized_pnl": Decimal("-50"),
+                "market_price": Decimal("1.5"),
+                "current_nav": Decimal("1.5"),
+            },
+            {
+                "asset_type": "OFF_EXCHANGE_FUND",
+                "quantity": Decimal("10"),
+                "avg_cost": Decimal("5"),
+                "market_value": Decimal("80"),
+                "unrealized_pnl": Decimal("30"),
+                "market_price": Decimal("8"),
+                "current_nav": Decimal("8"),
+            },
+        ]
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+    monkeypatch.setattr(repository, "latest_positions", latest_positions)
+
+    result = await service.get_summary(
+        object(), "tenant-1", as_of=date(2026, 8, 30)  # type: ignore[arg-type]
+    )
+
+    # Total cost = 100*2 + 10*5 = 250; current value = 230.
+    assert result["holdingPnl"] == "-20.00"
+    assert result["holdingPnlRate"] == "-8.00"
+    assert result["cumulativePnl"] is None
+    assert result["cumulativePnlRate"] is None
+
+
+@pytest.mark.asyncio
+async def test_summary_abstains_from_aggregate_holding_pnl_when_a_position_is_unpriced(
+    monkeypatch,
+) -> None:
+    async def latest_nav(_conn, _tenant):
+        return [
+            {
+                "total_nav": None,
+                "known_value": Decimal("150"),
+                "valuation_coverage_pct": Decimal("50"),
+                "unpriced_position_count": 1,
+                "cash_balance": Decimal("0"),
+                "positions_market_value": None,
+                "daily_pnl": None,
+                "cumulative_pnl": None,
+                "data_quality_status": "UNAVAILABLE",
+                "as_of": date(2026, 8, 30),
+            }
+        ]
+
+    async def latest_positions(_conn, _tenant):
+        return [
+            {
+                "asset_type": "OFF_EXCHANGE_FUND",
+                "quantity": Decimal("100"),
+                "avg_cost": Decimal("2"),
+                "market_value": Decimal("150"),
+                "unrealized_pnl": Decimal("-50"),
+                "market_price": Decimal("1.5"),
+                "current_nav": Decimal("1.5"),
+            },
+            {
+                "asset_type": "OFF_EXCHANGE_FUND",
+                "quantity": Decimal("10"),
+                "avg_cost": Decimal("5"),
+                "market_value": None,
+                "unrealized_pnl": None,
+                "market_price": None,
+                "current_nav": None,
+            },
+        ]
+
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+    monkeypatch.setattr(repository, "latest_positions", latest_positions)
+
+    result = await service.get_summary(
+        object(), "tenant-1", as_of=date(2026, 8, 30)  # type: ignore[arg-type]
+    )
+
+    assert result["holdingPnl"] is None
+    assert result["holdingPnlRate"] is None
+
+
+@pytest.mark.asyncio
 async def test_summary_exposes_known_value_and_coverage_without_fake_total(monkeypatch) -> None:
     async def latest_nav(_conn, _tenant):
         return [
@@ -289,6 +402,8 @@ async def test_empty_portfolio_summary_is_a_missing_read_model_not_an_error(
         "positionsMarketValue": None,
         "dailyPnl": None,
         "dailyPnlRate": None,
+        "holdingPnl": None,
+        "holdingPnlRate": None,
         "cumulativePnl": None,
         "cumulativePnlRate": None,
         "allocation": [],
@@ -371,6 +486,8 @@ def test_empty_summary_api_returns_the_complete_missing_success_contract(
             "positionsMarketValue": None,
             "dailyPnl": None,
             "dailyPnlRate": None,
+            "holdingPnl": None,
+            "holdingPnlRate": None,
             "cumulativePnl": None,
             "cumulativePnlRate": None,
             "allocation": [],
@@ -404,6 +521,8 @@ def test_empty_summary_api_returns_the_complete_missing_success_contract(
         "positionsMarketValue": None,
         "dailyPnl": None,
         "dailyPnlRate": None,
+        "holdingPnl": None,
+        "holdingPnlRate": None,
         "cumulativePnl": None,
         "cumulativePnlRate": None,
         "allocation": [],

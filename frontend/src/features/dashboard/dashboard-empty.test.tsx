@@ -18,6 +18,8 @@ vi.mock("../../api/hooks", () => ({
       positionsMarketValue: null,
       dailyPnl: null,
       dailyPnlRate: null,
+      holdingPnl: null,
+      holdingPnlRate: null,
       cumulativePnl: null,
       cumulativePnlRate: null,
       allocation: [],

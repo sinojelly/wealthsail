@@ -396,9 +396,11 @@ async def refresh_account_nav(
 
     cash_balance: net cash from confirmed CASH legs (ledger is the source of
     truth, not the previous projection);
-    principal: net invested capital (CASH_IN − CASH_OUT);
-    cumulative_pnl = total_nav − principal;
     daily_pnl     = total_nav − previous trading day total_nav.
+
+    ``cumulative_pnl`` deliberately remains NULL. An opening-balance import
+    supplies the remaining position cost, but not a complete lifetime external
+    cash-flow history; treating the whole imported NAV as profit is invalid.
     """
     accounts = await conn.fetch(
         """
@@ -490,11 +492,7 @@ async def refresh_account_nav(
             if total_nav is not None and prev_total is not None
             else None
         )
-        cumulative_pnl = (
-            (total_nav - principal).quantize(Decimal("0.01"))
-            if total_nav is not None
-            else None
-        )
+        cumulative_pnl = None
 
         await conn.execute(
             """
