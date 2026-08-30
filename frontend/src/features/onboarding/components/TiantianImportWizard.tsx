@@ -422,6 +422,7 @@ export default function TiantianImportWizard() {
           <ImportResultStep
             result={displayedResult}
             restored={restored.data}
+            allowRecalculate={canWrite}
             retrying={retryMutation.isPending}
             onRetry={() => void retryMetrics()}
           />

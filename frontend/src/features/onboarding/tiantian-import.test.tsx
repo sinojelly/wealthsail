@@ -664,12 +664,75 @@ it("can target an existing account and reuses the preview command key after tran
   );
 });
 
-it("distinguishes a confirmed ledger from failed metrics and retries only the metric job", async () => {
+it.each([
+  { metricsStatus: "FAILED" as const, buttonName: "重试区间指标" },
+  { metricsStatus: "PARTIAL" as const, buttonName: "重新计算区间指标" },
+  { metricsStatus: "CONFLICT" as const, buttonName: "重新计算区间指标" },
+  { metricsStatus: "READY" as const, buttonName: "重新计算区间指标" },
+])(
+  "keeps the confirmed ledger intact when $metricsStatus metrics are requeued",
+  async ({ metricsStatus, buttonName }) => {
+    const confirmed = preview({
+      status: "CONFIRMED",
+      version: 2,
+      canConfirm: false,
+      metricsStatus,
+    });
+    mocks.historyHook.mockReturnValue({
+      data: {
+        items: [
+          {
+            batchId: confirmed.batchId,
+            status: "CONFIRMED",
+            version: 2,
+            sourceAsOf: "2026-08-28T08:00:00+08:00",
+            summary: confirmed.summary,
+            validationStatus: "VALID",
+            account: { accountId: "account-1", name: "已确认账户" },
+            createdAt: "2026-08-28T08:01:00+08:00",
+          },
+        ],
+        nextCursor: null,
+      },
+      isLoading: false,
+      error: null,
+    });
+    mocks.detailHook.mockImplementation((batchId: string | null) => ({
+      data: batchId === confirmed.batchId ? confirmed : undefined,
+      refetch: mocks.refetch,
+      isLoading: false,
+      error: null,
+    }));
+    mocks.retry.mockResolvedValue({
+      batchId: confirmed.batchId,
+      metricsStatus: "PENDING",
+    });
+    const user = userEvent.setup();
+    renderWithSession(<TiantianImportWizard />);
+
+    await user.click(
+      screen.getByRole("button", { name: /已确认账户.*CONFIRMED/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "导入或更新天天基金持仓",
+    });
+    expect(within(dialog).getByText("账本基线已确认")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: buttonName }));
+
+    expect(mocks.retry).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: "batch-1" }),
+    );
+    expect(mocks.confirm).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps metric recalculation read-only for a viewer", async () => {
+  mocks.role.value = "VIEWER";
   const confirmed = preview({
     status: "CONFIRMED",
     version: 2,
     canConfirm: false,
-    metricsStatus: "FAILED",
+    metricsStatus: "PARTIAL",
   });
   mocks.historyHook.mockReturnValue({
     data: {
@@ -681,7 +744,7 @@ it("distinguishes a confirmed ledger from failed metrics and retries only the me
           sourceAsOf: "2026-08-28T08:00:00+08:00",
           summary: confirmed.summary,
           validationStatus: "VALID",
-          account: { accountId: "account-1", name: "已确认账户" },
+          account: { accountId: "account-1", name: "只读账户" },
           createdAt: "2026-08-28T08:01:00+08:00",
         },
       ],
@@ -696,28 +759,17 @@ it("distinguishes a confirmed ledger from failed metrics and retries only the me
     isLoading: false,
     error: null,
   }));
-  mocks.retry.mockResolvedValue({
-    batchId: confirmed.batchId,
-    metricsStatus: "PENDING",
-  });
   const user = userEvent.setup();
   renderWithSession(<TiantianImportWizard />);
 
-  await user.click(
-    screen.getByRole("button", { name: /已确认账户.*CONFIRMED/ }),
-  );
+  await user.click(screen.getByRole("button", { name: /只读账户.*CONFIRMED/ }));
   const dialog = await screen.findByRole("dialog", {
     name: "导入或更新天天基金持仓",
   });
-  expect(within(dialog).getByText("账本基线已确认")).toBeInTheDocument();
-  await user.click(
-    within(dialog).getByRole("button", { name: "重试区间指标" }),
-  );
 
-  expect(mocks.retry).toHaveBeenCalledWith(
-    expect.objectContaining({ batchId: "batch-1" }),
-  );
-  expect(mocks.confirm).not.toHaveBeenCalled();
+  expect(
+    within(dialog).queryByRole("button", { name: "重新计算区间指标" }),
+  ).not.toBeInTheDocument();
 });
 
 it("turns a stale confirmation into an explicit refresh path", async () => {

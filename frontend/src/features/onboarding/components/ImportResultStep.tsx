@@ -9,6 +9,7 @@ interface Props {
     metricsStatus: NonNullable<TiantianImportDetail["metricsStatus"]>;
   };
   restored?: TiantianImportDetail;
+  allowRecalculate: boolean;
   retrying: boolean;
   onRetry: () => void;
 }
@@ -16,10 +17,14 @@ interface Props {
 export default function ImportResultStep({
   result,
   restored,
+  allowRecalculate,
   retrying,
   onRetry,
 }: Props) {
   const metricsStatus = restored?.metricsStatus ?? result.metricsStatus;
+  const canRecalculate = allowRecalculate && metricsStatus !== "PENDING";
+  const actionLabel =
+    metricsStatus === "FAILED" ? "重试区间指标" : "重新计算区间指标";
   return (
     <div className="import-result-step">
       <CheckCircle2 size={28} aria-hidden="true" />
@@ -45,7 +50,7 @@ export default function ImportResultStep({
             指标已生成，但存在数据质量提示。
           </p>
         ) : null}
-        {metricsStatus === "FAILED" ? (
+        {canRecalculate ? (
           <button
             className="btn-secondary"
             type="button"
@@ -53,7 +58,7 @@ export default function ImportResultStep({
             onClick={onRetry}
           >
             <RefreshCw size={14} />
-            {retrying ? "正在重试…" : "重试区间指标"}
+            {retrying ? "正在提交…" : actionLabel}
           </button>
         ) : null}
       </div>
