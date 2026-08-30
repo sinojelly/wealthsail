@@ -123,10 +123,14 @@ it("lets the active tenant owner rename the tenant", async () => {
   renderWithSession(<SettingsPage />);
 
   const input = screen.getByLabelText("租户名称");
+  const saveButton = screen.getByRole("button", { name: "保存租户名称" });
+  const controls = input.closest(".tenant-name-controls");
+  expect(controls).not.toBeNull();
+  expect(controls).toContainElement(saveButton);
   expect(input).toHaveValue("明远家庭账户");
   await user.clear(input);
   await user.type(input, "Jelly家庭投资账户");
-  await user.click(screen.getByRole("button", { name: "保存租户名称" }));
+  await user.click(saveButton);
 
   expect(updateTenantName).toHaveBeenCalledWith({ name: "Jelly家庭投资账户" });
   expect(await screen.findByText("租户名称已更新")).toBeInTheDocument();

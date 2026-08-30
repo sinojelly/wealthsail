@@ -85,31 +85,33 @@ export default function TenantRoleCard({
         >
           <div className="field">
             <label htmlFor="active-tenant-name">租户名称</label>
-            <input
-              id="active-tenant-name"
-              className="input"
-              value={tenantName}
-              minLength={2}
-              maxLength={64}
-              onChange={(event) => {
-                setTenantName(event.target.value);
-                setRenameMessage(null);
-              }}
-              aria-describedby="active-tenant-name-hint"
-              required
-            />
+            <div className="tenant-name-controls">
+              <input
+                id="active-tenant-name"
+                className="input"
+                value={tenantName}
+                minLength={2}
+                maxLength={64}
+                onChange={(event) => {
+                  setTenantName(event.target.value);
+                  setRenameMessage(null);
+                }}
+                aria-describedby="active-tenant-name-hint"
+                required
+              />
+              <button
+                className="btn-primary btn-sm tenant-name-submit"
+                type="submit"
+                disabled={!canRename || updateTenantName.isPending}
+              >
+                <Save size={14} />
+                {updateTenantName.isPending ? "保存中…" : "保存租户名称"}
+              </button>
+            </div>
             <small id="active-tenant-name-hint">
               2–64 个字符；只修改显示名称，不改变成员、账户或资产。
             </small>
           </div>
-          <button
-            className="btn-primary btn-sm tenant-name-submit"
-            type="submit"
-            disabled={!canRename || updateTenantName.isPending}
-          >
-            <Save size={14} />
-            {updateTenantName.isPending ? "保存中…" : "保存租户名称"}
-          </button>
           {updateTenantName.error instanceof Error ? (
             <p className="field-error" role="alert">
               {updateTenantName.error.message}

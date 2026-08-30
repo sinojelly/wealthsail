@@ -2722,16 +2722,19 @@ button:disabled {
   white-space: nowrap;
 }
 .tenant-name-form {
-  display: grid;
-  grid-template-columns: minmax(240px, 480px) auto;
-  align-items: end;
-  justify-content: start;
-  gap: 10px 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--slate-100);
 }
 .tenant-name-form .field {
+  width: min(100%, 680px);
   min-width: 0;
+}
+.tenant-name-controls {
+  display: grid;
+  grid-template-columns: minmax(240px, 480px) auto;
+  align-items: stretch;
+  justify-content: start;
+  gap: 12px;
 }
 .tenant-name-form .field small {
   color: var(--slate-400);
@@ -2744,8 +2747,7 @@ button:disabled {
 }
 .tenant-name-form > .field-error,
 .tenant-name-form > .form-ok {
-  grid-column: 1 / -1;
-  margin: 0;
+  margin: 8px 0 0;
 }
 .member-list {
   display: grid;
@@ -3041,7 +3043,7 @@ button:disabled {
   }
   .binding-methods,
   .invitation-body,
-  .tenant-name-form {
+  .tenant-name-controls {
     grid-template-columns: 1fr;
   }
   .tenant-name-submit {
