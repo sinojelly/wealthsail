@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -11,6 +15,31 @@ from scripts.migrate_user_to_personal_tenant import (
     migrate_user,
     personal_tenant_id,
 )
+
+
+def test_migration_command_can_be_launched_by_file_path() -> None:
+    """The documented ``python scripts/...py`` form must resolve sibling imports."""
+
+    root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "migrate_user_to_personal_tenant.py"),
+            "--help",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--source-tenant-id" in result.stdout
 
 
 class _Transaction:

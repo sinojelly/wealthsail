@@ -19,7 +19,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import asyncpg
 
-from scripts.migrate import safe_target_name
+# ``python scripts/migrate_user_to_personal_tenant.py`` puts the scripts
+# directory—not the repository root—at sys.path[0].  Use the sibling import for
+# that documented operational form, while retaining the package import used by
+# pytest and ``python -m``.
+if __package__:
+    from scripts.migrate import safe_target_name
+else:
+    from migrate import safe_target_name
 
 
 @dataclass(frozen=True)
