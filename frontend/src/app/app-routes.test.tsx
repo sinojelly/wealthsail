@@ -17,6 +17,7 @@ const testSession: AuthSession = {
   tenantId: "tenant-demo-001",
   tenantName: "明远家庭账户",
   role: "OWNER",
+  platformRoles: [],
   accessToken: "test-token",
   expiresIn: 3600,
 };

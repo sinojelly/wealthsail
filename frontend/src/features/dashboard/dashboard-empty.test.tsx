@@ -1,8 +1,10 @@
 import { screen } from "@testing-library/react";
 import DashboardPage from "./DashboardPage";
 import { renderWithSession } from "../../test/render-with-session";
+import { meFixture } from "../../test/fixtures";
 
 vi.mock("../../api/hooks", () => ({
+  useMe: () => ({ data: meFixture, isLoading: false, error: null }),
   usePortfolioSummary: () => ({
     data: {
       totalAsset: null,
@@ -70,10 +72,12 @@ it("presents an onboarding empty state instead of a valuation failure", () => {
   renderWithSession(<DashboardPage />);
 
   expect(
-    screen.getByRole("heading", { name: "尚未录入资产" }),
+    screen.getByRole("heading", { name: "你还没有归属到自己的资产" }),
   ).toBeInTheDocument();
   expect(
-    screen.getByText("完成首笔期初持仓导入后，这里会展示资产汇总和净值走势。"),
+    screen.getByText(
+      "新建或导入个人账户后，这里会展示你的资产；历史待认领账户可在租户总览查看。",
+    ),
   ).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "导入首笔持仓" })).toHaveAttribute(
     "href",

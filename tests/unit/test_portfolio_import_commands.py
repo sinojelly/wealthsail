@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.common.tenancy import TenantContext
+from backend.errors import ForbiddenError
 from backend.portfolio import repository, service
+from backend.portfolio.imports import repository as import_repository
 
 
 def _payload() -> SimpleNamespace:
@@ -181,6 +183,134 @@ async def test_instrument_creation_serializes_on_market_and_ticker_identity() ->
     assert result == "instrument-1"
     assert "pg_advisory_xact_lock" in conn.executed[0]
     assert conn.fetchval_calls == 2
+
+
+class _AccountConnection:
+    def __init__(self) -> None:
+        self.fetchval_calls: list[tuple[str, tuple]] = []
+        self.executed: list[tuple[str, tuple]] = []
+
+    async def fetchval(self, sql: str, *args):
+        self.fetchval_calls.append((sql, args))
+        if len(self.fetchval_calls) == 1:
+            return None
+        return "account-personal-1"
+
+    async def execute(self, sql: str, *args):
+        self.executed.append((sql, args))
+        return "INSERT 0 1"
+
+
+@pytest.mark.asyncio
+async def test_new_automatic_account_is_owned_by_the_importing_user() -> None:
+    """A newly imported position must be visible in the actor's MINE scope."""
+    conn = _AccountConnection()
+
+    account_id = await repository.pick_or_create_account(
+        conn,
+        tenant_id="tenant-1",
+        asset_type="CN_STOCK",
+        owner_user_id="user-1",
+    )
+
+    lookup_sql, lookup_args = conn.fetchval_calls[0]
+    insert_sql, insert_args = conn.fetchval_calls[1]
+    member_sql, member_args = conn.executed[0]
+    assert account_id == "account-personal-1"
+    assert "identity.account_members" in lookup_sql
+    assert lookup_args == ("tenant-1", "BROKERAGE", "user-1")
+    assert "ownership_scope" in insert_sql
+    assert "'PERSONAL'" in insert_sql
+    assert insert_args == ("tenant-1", "BROKERAGE", "证券账户")
+    assert "INSERT INTO identity.account_members" in member_sql
+    assert "'BENEFICIAL_OWNER', 'OWNER'" in member_sql
+    assert member_args == (
+        "tenant-1",
+        "account-personal-1",
+        "user-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_existing_account_write_access_requires_actor_membership() -> None:
+    conn = _AccountConnection()
+    conn.fetchval_calls.clear()
+
+    await repository.find_writable_account(
+        conn,
+        tenant_id="tenant-1",
+        account_id="account-1",
+        user_id="user-1",
+    )
+
+    sql, args = conn.fetchval_calls[0]
+    assert "identity.account_members" in sql
+    assert "permission_role IN ('OWNER', 'EDITOR')" in sql
+    assert "effective_to IS NULL" in sql
+    assert args == ("tenant-1", "account-1", "user-1")
+
+
+class _TiantianAccountConnection:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple]] = []
+
+    async def fetchrow(self, _sql: str, *_args):
+        return None
+
+    async def fetchval(self, sql: str, *args):
+        assert "INSERT INTO identity.accounts" in sql
+        assert "ownership_scope" in sql
+        assert "'PERSONAL'" in sql
+        assert args == ("tenant-1", "天天基金账户")
+        return "fund-account-1"
+
+    async def execute(self, sql: str, *args):
+        self.executed.append((sql, args))
+        return "INSERT 0 1"
+
+
+@pytest.mark.asyncio
+async def test_new_tiantian_account_is_owned_by_the_importing_user() -> None:
+    conn = _TiantianAccountConnection()
+
+    target = await import_repository.resolve_target_account(
+        conn,
+        tenant_id="tenant-1",
+        external_account_key="00000000-0000-0000-0000-000000000001",
+        account_id=None,
+        account_name="天天基金账户",
+        owner_user_id="user-1",
+    )
+
+    member_sql, member_args = conn.executed[0]
+    assert target.account_id == "fund-account-1"
+    assert "INSERT INTO identity.account_members" in member_sql
+    assert member_args == ("tenant-1", "fund-account-1", "user-1")
+
+
+class _UnauthorizedBoundAccountConnection:
+    async def fetchrow(self, _sql: str, *_args):
+        return {
+            "binding_id": "binding-1",
+            "binding_account_id": "account-other",
+            "binding_status": "ACTIVE",
+            "display_name": "另一位成员的天天基金",
+            "account_name": "另一位成员的天天基金",
+            "actor_can_write": False,
+        }
+
+
+@pytest.mark.asyncio
+async def test_tiantian_binding_cannot_be_reused_by_another_tenant_member() -> None:
+    with pytest.raises(ForbiddenError):
+        await import_repository.resolve_target_account(
+            _UnauthorizedBoundAccountConnection(),
+            tenant_id="tenant-1",
+            external_account_key="00000000-0000-0000-0000-000000000001",
+            account_id=None,
+            account_name=None,
+            owner_user_id="user-2",
+        )
 
 
 class _ConfirmConnection:

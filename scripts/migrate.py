@@ -668,6 +668,122 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if not market_hot_table:
         raise RuntimeError("Worker-owned market-hot read model is missing")
 
+    ownership_tables = {
+        row["table_name"]: (row["relrowsecurity"], row["relforcerowsecurity"])
+        for row in await conn.fetch(
+            """
+            SELECT c.relname AS table_name,
+                   c.relrowsecurity, c.relforcerowsecurity
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'identity'
+               AND c.relname = ANY($1::text[])
+            """,
+            ["platform_roles", "user_preferences", "account_members"],
+        )
+    }
+    if set(ownership_tables) != {
+        "platform_roles",
+        "user_preferences",
+        "account_members",
+    } or any(not all(flags) for flags in ownership_tables.values()):
+        raise RuntimeError("tenant user account ownership tables or forced RLS are missing")
+
+    account_ownership_scope = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM information_schema.columns
+         WHERE table_schema='identity' AND table_name='accounts'
+           AND column_name='ownership_scope' AND is_nullable='NO'
+        """
+    )
+    if account_ownership_scope != 1:
+        raise RuntimeError("identity.accounts ownership_scope is missing or nullable")
+
+    invitation_contract = "\n".join(
+        row["definition"]
+        for row in await conn.fetch(
+            """
+            SELECT pg_get_constraintdef(c.oid) AS definition
+              FROM pg_constraint c
+             WHERE c.conrelid='identity.invitations'::regclass
+               AND c.conname IN (
+                   'invitations_purpose_check',
+                   'invitations_role_check',
+                   'invitations_purpose_shape_check'
+               )
+            """
+        )
+    )
+    if not all(
+        token in invitation_contract
+        for token in ("JOIN_TENANT", "CREATE_PERSONAL_TENANT", "OWNER")
+    ):
+        raise RuntimeError("personal tenant invitation shape constraints are missing")
+
+    default_tenant_fk = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM pg_constraint c
+         WHERE c.conrelid='identity.user_preferences'::regclass
+           AND c.contype='f'
+           AND c.confrelid='identity.tenant_members'::regclass
+        """
+    )
+    if default_tenant_fk != 1:
+        raise RuntimeError("default tenant preference is not membership-bound")
+
+    browser_ownership_writes = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM information_schema.role_table_grants
+         WHERE grantee='authenticated'
+           AND table_schema='identity'
+           AND table_name IN (
+               'platform_roles', 'user_preferences', 'account_members'
+           )
+           AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE')
+        """
+    )
+    if browser_ownership_writes:
+        raise RuntimeError("identity ownership tables expose browser writes")
+
+    platform_invitation_function = await conn.fetchrow(
+        """
+        SELECT p.prosecdef,
+               COALESCE(
+                   p.proconfig @> ARRAY['search_path=identity, pg_temp'], false
+               ) AS fixed_search_path,
+               has_function_privilege(
+                   'wealthsail_api',
+                   'identity.create_personal_tenant_invitation(uuid,text,text,text,timestamptz)',
+                   'EXECUTE'
+               ) AS api_can_execute,
+               has_function_privilege(
+                   'authenticated',
+                   'identity.create_personal_tenant_invitation(uuid,text,text,text,timestamptz)',
+                   'EXECUTE'
+               ) AS browser_can_execute,
+               has_function_privilege(
+                   'wealthsail_api',
+                   'identity.is_platform_admin(uuid)',
+                   'EXECUTE'
+               ) AS api_can_probe_platform_roles
+          FROM pg_proc p
+         WHERE p.oid =
+               'identity.create_personal_tenant_invitation(uuid,text,text,text,timestamptz)'::regprocedure
+        """
+    )
+    if (
+        platform_invitation_function is None
+        or not platform_invitation_function["prosecdef"]
+        or not platform_invitation_function["fixed_search_path"]
+        or not platform_invitation_function["api_can_execute"]
+        or platform_invitation_function["browser_can_execute"]
+        or platform_invitation_function["api_can_probe_platform_roles"]
+    ):
+        raise RuntimeError("platform personal-tenant invitation privilege boundary is invalid")
+
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(
             "SELECT has_table_privilege('wealthsail_worker','market.source_snapshots','INSERT')"

@@ -783,6 +783,7 @@ async def preview_tiantian_import(
             external_account_key=str(package.manifest.external_account_key),
             account_id=account_id,
             account_name=account_name,
+            owner_user_id=ctx.user_id,
         )
         old_detail: dict[str, Any] | None = None
         duplicate_action: PreviewDisposition | None = None

@@ -17,7 +17,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -181,16 +181,20 @@ def ok(
     request_id: str,
     as_of: datetime,
     quality_status: str = "FRESH",
+    metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the standard success envelope."""
+    meta = {
+        "requestId": request_id,
+        "asOf": as_of,
+        "qualityStatus": quality_status,
+        "schemaVersion": SCHEMA_VERSION,
+    }
+    if metadata:
+        meta.update(metadata)
     return {
         "data": data,
-        "meta": {
-            "requestId": request_id,
-            "asOf": as_of,
-            "qualityStatus": quality_status,
-            "schemaVersion": SCHEMA_VERSION,
-        },
+        "meta": meta,
     }
 
 

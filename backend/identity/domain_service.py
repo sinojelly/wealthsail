@@ -286,6 +286,85 @@ class IdentityService:
             "expiresAt": expires_at,
         }
 
+    async def create_personal_tenant_invitation(
+        self,
+        *,
+        actor_user_id: str,
+        actor_tenant_id: str,
+        email: str,
+        tenant_name: str,
+    ) -> dict:
+        """Create a platform-governed invitation that provisions one tenant.
+
+        Platform authority is checked again by the SECURITY DEFINER function;
+        a tenant ``ADMIN`` claim is intentionally insufficient.
+        """
+
+        email = (email or "").strip().lower()
+        tenant_name = (tenant_name or "").strip()
+        if not email or "@" not in email:
+            raise ValidationError("邮箱格式不正确")
+        if not 2 <= len(tenant_name) <= 64:
+            raise ValidationError("个人租户名称须为 2 至 64 个字符")
+
+        token = generate_token(32)
+        token_hash = hmac_digest(self.settings.binding_hmac_key, token)
+        expires_at = _now() + timedelta(days=7)
+        try:
+            # Apply the authenticated actor as PostgreSQL claims so the
+            # SECURITY DEFINER function can reject a spoofed actor id.
+            async with self._tenant_transaction(
+                actor_user_id, actor_tenant_id
+            ) as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT * FROM identity.create_personal_tenant_invitation(
+                        $1, $2, $3, $4, $5
+                    )
+                    """,
+                    actor_user_id,
+                    email,
+                    tenant_name,
+                    token_hash,
+                    expires_at,
+                )
+                if row is not None:
+                    await self._write_audit(
+                        conn,
+                        tenant_id=actor_tenant_id,
+                        actor_type="USER",
+                        actor_id=actor_user_id,
+                        action="PERSONAL_TENANT_INVITATION_CREATED",
+                        resource_type="identity.invitations",
+                        resource_id=str(row["out_invitation_id"]),
+                        details={
+                            "purpose": "CREATE_PERSONAL_TENANT",
+                            "tenantName": tenant_name,
+                            "expiresAt": expires_at.isoformat(),
+                        },
+                    )
+        except asyncpg.PostgresError as exc:
+            message = str(exc)
+            if "PLATFORM_ADMIN_REQUIRED" in message:
+                raise ForbiddenError("仅平台管理员可创建个人租户邀请") from exc
+            if "EMAIL_ALREADY_REGISTERED" in message:
+                raise ConflictError("该邮箱已注册，请使用租户成员邀请") from exc
+            if "INVITATION_INVALID" in message:
+                raise ValidationError("个人租户邀请参数无效") from exc
+            raise
+        if row is None:
+            raise ForbiddenError("个人租户邀请创建失败")
+
+        return {
+            "invitationId": str(row["out_invitation_id"]),
+            "token": token,
+            "email": email,
+            "tenantName": tenant_name,
+            "purpose": "CREATE_PERSONAL_TENANT",
+            "role": "OWNER",
+            "expiresAt": expires_at,
+        }
+
     # -- 登录 / 会话 ----------------------------------------------------------
     async def login(self, *, email: str, password: str | None) -> dict:
         """口令登录：校验 bcrypt 哈希，签发 access token + refresh session。
@@ -304,14 +383,23 @@ class IdentityService:
                 """
                 SELECT p.id AS user_id, p.email, p.nickname, p.password_hash,
                        p.auth_version,
-                       tm.tenant_id, t.name AS tenant_name, tm.role AS tenant_role
+                       tm.tenant_id, t.name AS tenant_name, tm.role AS tenant_role,
+                       up.default_tenant_id, up.default_asset_scope,
+                       ARRAY(
+                           SELECT pr.role
+                             FROM identity.platform_roles pr
+                            WHERE pr.user_id = p.id AND pr.status = 'ACTIVE'
+                            ORDER BY pr.role
+                       ) AS platform_roles
                 FROM identity.profiles p
                 JOIN identity.tenant_members tm
                   ON tm.user_id = p.id AND tm.status = 'ACTIVE'
                 JOIN identity.tenants t
                   ON t.id = tm.tenant_id AND t.status = 'ACTIVE'
+                LEFT JOIN identity.user_preferences up ON up.user_id = p.id
                 WHERE lower(p.email) = lower($1)
-                ORDER BY tm.created_at ASC
+                ORDER BY (tm.tenant_id = up.default_tenant_id) DESC,
+                         tm.created_at ASC, tm.id ASC
                 """,
                 email,
             )
@@ -326,6 +414,24 @@ class IdentityService:
 
         user_id = str(row["user_id"])
         tenant_id = str(row["tenant_id"])
+
+        # A missing/stale preference must not make login fail.  Repair it only
+        # after the password has been verified, so unauthenticated requests
+        # cannot mutate identity state.
+        if str(row.get("default_tenant_id") or "") != tenant_id:
+            async with self._api_transaction() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO identity.user_preferences(
+                        user_id, default_tenant_id, default_asset_scope
+                    ) VALUES ($1, $2, 'MINE')
+                    ON CONFLICT (user_id) DO UPDATE
+                       SET default_tenant_id = EXCLUDED.default_tenant_id,
+                           updated_at = now()
+                    """,
+                    user_id,
+                    tenant_id,
+                )
 
         async with self._tenant_transaction(user_id, tenant_id) as conn:
             await self._write_audit(
@@ -397,6 +503,7 @@ class IdentityService:
                 "tenantId": active_tenant,
                 "tenantName": row["tenant_name"],
                 "role": row["tenant_role"],
+                "platformRoles": list(row.get("platform_roles") or []),
             },
         }
 
@@ -416,7 +523,13 @@ class IdentityService:
                     SELECT rs.id AS refresh_session_id, rs.user_id, rs.tenant_id,
                            p.email, p.nickname, p.auth_version,
                            t.name AS tenant_name,
-                           tm.role AS tenant_role
+                           tm.role AS tenant_role,
+                           ARRAY(
+                               SELECT pr.role
+                                 FROM identity.platform_roles pr
+                                WHERE pr.user_id = p.id AND pr.status = 'ACTIVE'
+                                ORDER BY pr.role
+                           ) AS platform_roles
                     FROM identity.refresh_sessions rs
                     JOIN identity.profiles p ON p.id = rs.user_id
                     JOIN identity.tenants t
@@ -529,7 +642,13 @@ class IdentityService:
             row = await conn.fetchrow(
                 """
                 SELECT p.id AS user_id, p.email, p.nickname, p.auth_version,
-                       tm.tenant_id, tm.role AS tenant_role, t.name AS tenant_name
+                       tm.tenant_id, tm.role AS tenant_role, t.name AS tenant_name,
+                       ARRAY(
+                           SELECT pr.role
+                             FROM identity.platform_roles pr
+                            WHERE pr.user_id = p.id AND pr.status = 'ACTIVE'
+                            ORDER BY pr.role
+                       ) AS platform_roles
                 FROM identity.profiles p
                 JOIN identity.tenant_members tm ON tm.user_id=p.id AND tm.status='ACTIVE'
                 JOIN identity.tenants t ON t.id=tm.tenant_id AND t.status='ACTIVE'
@@ -554,6 +673,18 @@ class IdentityService:
                 )
                 if updated.endswith("0"):
                     raise AuthRequiredError("刷新会话无效，请重新登录")
+            await conn.execute(
+                """
+                INSERT INTO identity.user_preferences(
+                    user_id, default_tenant_id, default_asset_scope
+                ) VALUES ($1, $2, 'MINE')
+                ON CONFLICT (user_id) DO UPDATE
+                   SET default_tenant_id = EXCLUDED.default_tenant_id,
+                       updated_at = now()
+                """,
+                actor.user_id,
+                tenant_id,
+            )
 
         access_token, expires_in = create_access_token(
             user_id=str(row["user_id"]),
@@ -781,9 +912,17 @@ class IdentityService:
         """个人资料 + 活动租户 + 成员关系 + 绑定列表（须在租户事务内）。"""
         profile = await conn.fetchrow(
             """
-            SELECT id, email, nickname, avatar_url, created_at
-            FROM identity.profiles
-            WHERE id = $1
+            SELECT p.id, p.email, p.nickname, p.avatar_url, p.created_at,
+                   up.default_tenant_id, up.default_asset_scope,
+                   ARRAY(
+                       SELECT pr.role
+                         FROM identity.platform_roles pr
+                        WHERE pr.user_id = p.id AND pr.status = 'ACTIVE'
+                        ORDER BY pr.role
+                   ) AS platform_roles
+            FROM identity.profiles p
+            LEFT JOIN identity.user_preferences up ON up.user_id = p.id
+            WHERE p.id = $1
             """,
             actor.user_id,
         )
@@ -798,6 +937,21 @@ class IdentityService:
             ORDER BY tm.created_at ASC
             """,
             actor.user_id,
+        )
+        members = await conn.fetch(
+            """
+            SELECT tm.user_id, p.nickname, p.email, tm.role, tm.status
+            FROM identity.tenant_members tm
+            JOIN identity.profiles p ON p.id = tm.user_id
+            WHERE tm.tenant_id = $1 AND tm.status = 'ACTIVE'
+            ORDER BY
+                CASE tm.role
+                    WHEN 'OWNER' THEN 1 WHEN 'ADMIN' THEN 2
+                    WHEN 'EDITOR' THEN 3 ELSE 4
+                END,
+                lower(p.nickname), tm.user_id
+            """,
+            actor.tenant_id,
         )
         bindings = await conn.fetch(
             """
@@ -819,6 +973,13 @@ class IdentityService:
             },
             "activeTenantId": actor.tenant_id,
             "activeRole": actor.tenant_role,
+            "defaultTenantId": (
+                str(profile["default_tenant_id"])
+                if profile.get("default_tenant_id") is not None
+                else None
+            ),
+            "defaultAssetScope": profile.get("default_asset_scope") or "MINE",
+            "platformRoles": list(profile.get("platform_roles") or []),
             "tenants": [
                 {
                     "tenantId": str(t["tenant_id"]),
@@ -827,6 +988,16 @@ class IdentityService:
                     "status": t["status"],
                 }
                 for t in tenants
+            ],
+            "members": [
+                {
+                    "userId": str(member["user_id"]),
+                    "nickname": member["nickname"],
+                    "email": member["email"],
+                    "role": member["role"],
+                    "status": member["status"],
+                }
+                for member in members
             ],
             "bindings": [
                 {

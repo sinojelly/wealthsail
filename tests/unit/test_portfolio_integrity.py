@@ -242,8 +242,9 @@ async def test_empty_nav_api_marks_success_envelope_as_missing(monkeypatch) -> N
     async def fake_tenant_transaction(_pool, _user_id, _tenant_id):
         yield object()
 
-    async def empty_nav(_conn, _tenant_id, *, days):
+    async def empty_nav(_conn, _tenant_id, *, days, scope):
         assert days == 30
+        assert scope.kind == "MINE"
         return {
             "points": [],
             "benchmark": None,
@@ -274,7 +275,8 @@ def test_empty_summary_api_returns_the_complete_missing_success_contract(
     async def fake_tenant_transaction(_pool, _user_id, _tenant_id):
         yield object()
 
-    async def empty_summary(_conn, _tenant_id, _as_of):
+    async def empty_summary(_conn, _tenant_id, _as_of, *, scope):
+        assert scope.kind == "MINE"
         return {
             "totalAsset": None,
             "knownValue": "0.00",

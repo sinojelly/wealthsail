@@ -51,6 +51,12 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.56",
     quality: "FRESH",
     accountId: "acc-1",
+    account: {
+      id: "acc-1",
+      name: "张明证券账户",
+      ownershipScope: "PERSONAL",
+      owners: [{ userId: "usr-owner-001", name: "张明" }],
+    },
     holdingPeriod: null,
     rangeMetrics: null,
   },
@@ -67,6 +73,12 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.28",
     quality: "FRESH",
     accountId: "acc-1",
+    account: {
+      id: "acc-1",
+      name: "张明证券账户",
+      ownershipScope: "PERSONAL",
+      owners: [{ userId: "usr-owner-001", name: "张明" }],
+    },
     holdingPeriod: null,
     rangeMetrics: null,
   },
@@ -83,6 +95,12 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.92",
     quality: "FRESH",
     accountId: "acc-fund-1",
+    account: {
+      id: "acc-fund-1",
+      name: "张明基金账户",
+      ownershipScope: "PERSONAL",
+      owners: [{ userId: "usr-owner-001", name: "张明" }],
+    },
     holdingPeriod: {
       startedOn: "2024-03-16",
       days: 895,
@@ -320,10 +338,22 @@ export const meFixture: MeResponse = {
   },
   activeTenantId: "tenant-demo-001",
   activeRole: "OWNER",
+  defaultTenantId: "tenant-demo-001",
+  defaultAssetScope: "MINE",
+  platformRoles: [],
   tenants: [
     {
       tenantId: "tenant-demo-001",
       name: "明远家庭账户",
+      role: "OWNER",
+      status: "ACTIVE",
+    },
+  ],
+  members: [
+    {
+      userId: "usr-owner-001",
+      nickname: "张明",
+      email: "zhangming@example.com",
       role: "OWNER",
       status: "ACTIVE",
     },

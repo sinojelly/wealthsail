@@ -25,6 +25,7 @@ from backend.errors import (
 )
 from backend.market import repository as market_repository
 from backend.portfolio import repository
+from backend.portfolio.scope import AssetScope
 
 # Asset type → frontend allocation category (A股 / 场内ETF / 场外基金 / 现金).
 ASSET_CATEGORY: dict[str, str] = {
@@ -115,10 +116,21 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
 
 
 async def get_summary(
-    conn: asyncpg.Connection, tenant_id: str, as_of: datetime
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    as_of: datetime,
+    *,
+    scope: AssetScope | None = None,
 ) -> dict:
     """Aggregate the latest per-account NAV snapshots into the dashboard summary."""
-    navs = await repository.latest_nav_per_account(conn, tenant_id)
+    owner_user_id = scope.owner_user_id if scope is not None else None
+    navs = (
+        await repository.latest_nav_per_account(
+            conn, tenant_id, owner_user_id=owner_user_id
+        )
+        if owner_user_id is not None
+        else await repository.latest_nav_per_account(conn, tenant_id)
+    )
     if not navs:
         # A newly created tenant has no observed portfolio facts yet. Preserve
         # that distinction with null valuations instead of fabricating zeros or
@@ -170,7 +182,13 @@ async def get_summary(
     coverage = min(_d(r.get("valuation_coverage_pct", Decimal("100"))) for r in navs)
     unpriced_count = sum(int(r.get("unpriced_position_count", 0) or 0) for r in navs)
 
-    positions = await repository.latest_positions(conn, tenant_id)
+    positions = (
+        await repository.latest_positions(
+            conn, tenant_id, owner_user_id=owner_user_id
+        )
+        if owner_user_id is not None
+        else await repository.latest_positions(conn, tenant_id)
+    )
     allocation = _build_allocation(positions, cash, total_asset)
 
     return {
@@ -228,10 +246,24 @@ def _build_allocation(
     ]
 
 
-async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
+async def get_positions(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    *,
+    scope: AssetScope | None = None,
+) -> list[dict]:
     """Latest holdings with market value, weight, PnL and quality status."""
-    rows = await repository.latest_positions(conn, tenant_id)
-    navs = await repository.latest_nav_per_account(conn, tenant_id)
+    owner_user_id = scope.owner_user_id if scope is not None else None
+    if owner_user_id is None:
+        rows = await repository.latest_positions(conn, tenant_id)
+        navs = await repository.latest_nav_per_account(conn, tenant_id)
+    else:
+        rows = await repository.latest_positions(
+            conn, tenant_id, owner_user_id=owner_user_id
+        )
+        navs = await repository.latest_nav_per_account(
+            conn, tenant_id, owner_user_id=owner_user_id
+        )
     total_asset = (
         sum((_d(r["total_nav"]) for r in navs), ZERO)
         if all(r["total_nav"] is not None for r in navs)
@@ -264,6 +296,8 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
         cost_value = quantity * avg_cost
         pnl_rate = pct(_d(pnl), cost_value) if pnl is not None and cost_value else None
         holding_period, range_metrics = _position_period_dto(row)
+        owner_ids = list(_row_value(row, "owner_user_ids", []) or [])
+        owner_names = list(_row_value(row, "owner_names", []) or [])
 
         result.append(
             {
@@ -285,6 +319,22 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
                 "pnlRate": fmt_money(pnl_rate) if pnl_rate is not None else None,
                 "quality": merge_quality([row["data_quality_status"]]),
                 "accountId": str(row["account_id"]),
+                "account": {
+                    "id": str(row["account_id"]),
+                    "name": _row_value(row, "account_name"),
+                    "ownershipScope": _row_value(
+                        row, "ownership_scope", "UNASSIGNED"
+                    ),
+                    "owners": [
+                        {
+                            "userId": str(owner_id),
+                            "name": owner_names[index]
+                            if index < len(owner_names)
+                            else None,
+                        }
+                        for index, owner_id in enumerate(owner_ids)
+                    ],
+                },
                 "holdingPeriod": holding_period,
                 "rangeMetrics": range_metrics,
             }
@@ -293,10 +343,21 @@ async def get_positions(conn: asyncpg.Connection, tenant_id: str) -> list[dict]:
 
 
 async def get_nav_trend(
-    conn: asyncpg.Connection, tenant_id: str, days: int = 60
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    days: int = 60,
+    *,
+    scope: AssetScope | None = None,
 ) -> dict:
     """Daily NAV trend (points) — benchmark left null until index data exists."""
-    rows = await repository.nav_history(conn, tenant_id, limit=days)
+    owner_user_id = scope.owner_user_id if scope is not None else None
+    rows = (
+        await repository.nav_history(
+            conn, tenant_id, limit=days, owner_user_id=owner_user_id
+        )
+        if owner_user_id is not None
+        else await repository.nav_history(conn, tenant_id, limit=days)
+    )
     points = [
         {
             "date": r["as_of"].isoformat(),
@@ -760,20 +821,20 @@ async def create_position_import(
                 )
             )
             if payload.accountId:
-                account_id = await conn.fetchval(
-                    """
-                    SELECT id FROM identity.accounts
-                    WHERE id = $1 AND tenant_id = $2 AND status = 'ACTIVE'
-                    """,
-                    payload.accountId,
-                    ctx.tenant_id,
+                account_id = await repository.find_writable_account(
+                    conn,
+                    tenant_id=ctx.tenant_id,
+                    account_id=payload.accountId,
+                    user_id=ctx.user_id,
                 )
                 if account_id is None:
-                    raise ValidationError_("账户不存在或不属于当前租户")
-                account_id = str(account_id)
+                    raise ValidationError_("账户不存在、不可用或当前用户没有写入权限")
             else:
                 account_id = await repository.pick_or_create_account(
-                    conn, tenant_id=ctx.tenant_id, asset_type=internal_type
+                    conn,
+                    tenant_id=ctx.tenant_id,
+                    asset_type=internal_type,
+                    owner_user_id=ctx.user_id,
                 )
             draft = await repository.create_import_draft(
                 conn,

@@ -6,12 +6,15 @@ import {
   RefreshCw,
   Upload,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useNavTrend,
   usePortfolioSummary,
   usePositions,
+  useMe,
 } from "../../api/hooks";
+import type { PortfolioAssetScope } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
 import AssetDonutChart from "./components/AssetDonutChart";
 import EquityCurveChart from "./components/EquityCurveChart";
@@ -19,14 +22,33 @@ import HoldingsTable from "./components/HoldingsTable";
 import MetricCards from "./components/MetricCards";
 import SentimentCard from "./components/SentimentCard";
 import AdviceCard from "./components/AdviceCard";
+import AssetScopeSwitcher from "./components/AssetScopeSwitcher";
 import { useAiAdvice, useMarketSentiment } from "../../api/hooks";
 
 export default function DashboardPage() {
-  const summary = usePortfolioSummary();
-  const positions = usePositions();
-  const navTrend = useNavTrend(30);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const me = useMe();
+  const scope = useMemo<PortfolioAssetScope>(() => {
+    const kind = searchParams.get("scope")?.toUpperCase();
+    const memberId = searchParams.get("memberId") ?? undefined;
+    if (kind === "TENANT") return { kind: "TENANT" };
+    if (kind === "MEMBER" && memberId) return { kind: "MEMBER", memberId };
+    return { kind: "MINE" };
+  }, [searchParams]);
+  const summary = usePortfolioSummary(scope);
+  const positions = usePositions(scope);
+  const navTrend = useNavTrend(30, scope);
   const sentiment = useMarketSentiment();
   const advice = useAiAdvice();
+  const activeTenantName =
+    me.data?.tenants.find(
+      (tenant) => tenant.tenantId === me.data?.activeTenantId,
+    )?.name ?? "";
+  const selectedMemberName =
+    scope.kind === "MEMBER"
+      ? me.data?.members.find((member) => member.userId === scope.memberId)
+          ?.nickname
+      : null;
   const isEmptyPortfolio =
     summary.data?.qualityStatus === "MISSING" &&
     summary.data.positionCount === 0 &&
@@ -63,6 +85,21 @@ export default function DashboardPage() {
           </>
         }
       />
+      <AssetScopeSwitcher
+        scope={scope}
+        tenantName={activeTenantName}
+        members={me.data?.members ?? []}
+        onChange={(next) => {
+          const params = new URLSearchParams(searchParams);
+          params.set("scope", next.kind);
+          if (next.kind === "MEMBER" && next.memberId) {
+            params.set("memberId", next.memberId);
+          } else {
+            params.delete("memberId");
+          }
+          setSearchParams(params, { replace: true });
+        }}
+      />
       {errors.length > 0 ? (
         <div className="alert alert-warning">
           <AlertTriangle size={16} />
@@ -78,8 +115,18 @@ export default function DashboardPage() {
           aria-labelledby="empty-portfolio-title"
         >
           <Upload size={28} />
-          <h2 id="empty-portfolio-title">尚未录入资产</h2>
-          <p>完成首笔期初持仓导入后，这里会展示资产汇总和净值走势。</p>
+          <h2 id="empty-portfolio-title">
+            {scope.kind === "MINE"
+              ? "你还没有归属到自己的资产"
+              : scope.kind === "MEMBER"
+                ? `${selectedMemberName ?? "该成员"}暂无归属资产`
+                : "当前租户尚未录入资产"}
+          </h2>
+          <p>
+            {scope.kind === "MINE"
+              ? "新建或导入个人账户后，这里会展示你的资产；历史待认领账户可在租户总览查看。"
+              : "切换查看范围，或完成首笔期初持仓导入后查看资产汇总和净值走势。"}
+          </p>
           <Link className="btn-primary" to="/onboarding">
             导入首笔持仓
           </Link>

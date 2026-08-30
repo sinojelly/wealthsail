@@ -94,6 +94,7 @@ export default function HoldingsTable({
               <tr>
                 <th>标的</th>
                 <th>类型</th>
+                <th>账户 / 归属</th>
                 <th className="numeric">持有份额</th>
                 <th className="numeric">成本价</th>
                 <th className="numeric">最新价/净值</th>
@@ -115,6 +116,18 @@ export default function HoldingsTable({
                     </td>
                     <td>
                       <span className="tag">{row.type}</span>
+                    </td>
+                    <td>
+                      <div className="account-owner-cell">
+                        <strong>{row.account.name ?? "未命名账户"}</strong>
+                        <span>
+                          {row.account.ownershipScope === "UNASSIGNED"
+                            ? "待认领"
+                            : row.account.ownershipScope === "SHARED"
+                              ? `共同 · ${row.account.owners.map((owner) => owner.name ?? "未命名成员").join("、")}`
+                              : row.account.owners[0]?.name ?? "归属待核对"}
+                        </span>
+                      </div>
                     </td>
                     <td className="mono numeric">{row.quantity}</td>
                     <td className="mono numeric">{row.avgCost}</td>
@@ -139,7 +152,7 @@ export default function HoldingsTable({
                   </tr>
                   {row.type === "场外基金" ? (
                     <tr className="fund-range-row">
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         <FundRangeMetrics
                           holdingPeriod={row.holdingPeriod}
                           metrics={row.rangeMetrics}

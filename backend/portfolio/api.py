@@ -24,6 +24,7 @@ from backend.dependencies import (
 )
 from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.portfolio import service
+from backend.portfolio.scope import resolve_asset_scope
 from backend.portfolio.imports import service as tiantian_import_service
 from backend.portfolio.imports.package import ImportLimits
 
@@ -32,6 +33,8 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 @router.get("/summary")
 async def portfolio_summary(
+    scope: Literal["MINE", "TENANT", "MEMBER"] = "MINE",
+    memberId: str | None = None,
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
@@ -39,17 +42,35 @@ async def portfolio_summary(
     """资产看板总览：总资产、现金、持仓市值、当日/累计收益、配置与质量状态。"""
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.get_summary(conn, ctx.tenant_id, as_of)
+        resolved_scope = await resolve_asset_scope(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.user_id,
+            kind=scope,
+            member_id=memberId,
+        )
+        data = await service.get_summary(
+            conn, ctx.tenant_id, as_of, scope=resolved_scope
+        )
     return ok(
         data,
         request_id=request_id,
         as_of=as_of,
         quality_status=data["qualityStatus"],
+        metadata={
+            "scope": resolved_scope.kind,
+            "memberId": resolved_scope.owner_user_id
+            if resolved_scope.kind == "MEMBER"
+            else None,
+            "tenantId": ctx.tenant_id,
+        },
     )
 
 
 @router.get("/positions")
 async def portfolio_positions(
+    scope: Literal["MINE", "TENANT", "MEMBER"] = "MINE",
+    memberId: str | None = None,
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
@@ -57,13 +78,35 @@ async def portfolio_positions(
     """当前持仓列表（含质量状态），按市值降序。"""
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.get_positions(conn, ctx.tenant_id)
-    return ok(data, request_id=request_id, as_of=as_of)
+        resolved_scope = await resolve_asset_scope(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.user_id,
+            kind=scope,
+            member_id=memberId,
+        )
+        data = await service.get_positions(
+            conn, ctx.tenant_id, scope=resolved_scope
+        )
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=as_of,
+        metadata={
+            "scope": resolved_scope.kind,
+            "memberId": resolved_scope.owner_user_id
+            if resolved_scope.kind == "MEMBER"
+            else None,
+            "tenantId": ctx.tenant_id,
+        },
+    )
 
 
 @router.get("/nav-trend")
 async def portfolio_nav_trend(
     days: int = Query(default=60, ge=1, le=365, description="返回最近 N 个交易日"),
+    scope: Literal["MINE", "TENANT", "MEMBER"] = "MINE",
+    memberId: str | None = None,
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
@@ -71,12 +114,28 @@ async def portfolio_nav_trend(
     """资产净值走势（日频）。"""
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.get_nav_trend(conn, ctx.tenant_id, days=days)
+        resolved_scope = await resolve_asset_scope(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.user_id,
+            kind=scope,
+            member_id=memberId,
+        )
+        data = await service.get_nav_trend(
+            conn, ctx.tenant_id, days=days, scope=resolved_scope
+        )
     return ok(
         data,
         request_id=request_id,
         as_of=as_of,
         quality_status="MISSING" if not data["points"] else "FRESH",
+        metadata={
+            "scope": resolved_scope.kind,
+            "memberId": resolved_scope.owner_user_id
+            if resolved_scope.kind == "MEMBER"
+            else None,
+            "tenantId": ctx.tenant_id,
+        },
     )
 
 

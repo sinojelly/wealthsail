@@ -25,6 +25,7 @@ from backend.config import Settings, get_settings, validate_runtime_settings
 from backend.errors import MoneyJSONResponse, register_exception_handlers, request_id_of
 from backend.chat.api import router as chat_router
 from backend.identity.api import router as identity_router
+from backend.identity.platform_api import router as platform_identity_router
 from backend.integrations.wecom import close_http_client, router as wecom_router
 from backend.market.api import router as market_router
 from backend.operations.api import router as operations_router
@@ -146,6 +147,7 @@ def create_app() -> FastAPI:
     app.include_router(research_router, prefix=prefix)
     app.include_router(risk_router, prefix=prefix)
     app.include_router(identity_router, prefix=prefix)
+    app.include_router(platform_identity_router, prefix=prefix)
     app.include_router(operations_router, prefix=prefix)
     app.include_router(wecom_router, prefix=prefix)
     app.include_router(chat_router, prefix=prefix)

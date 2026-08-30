@@ -19,9 +19,9 @@ from backend.integrations.market_data import (
 )
 
 _SELECT_NAV_COLUMNS = """
-    account_id, as_of, cash_balance, positions_market_value,
-    total_nav, daily_pnl, cumulative_pnl, data_quality_status,
-    known_value, valuation_coverage_pct, unpriced_position_count
+    nav.account_id, nav.as_of, nav.cash_balance, nav.positions_market_value,
+    nav.total_nav, nav.daily_pnl, nav.cumulative_pnl, nav.data_quality_status,
+    nav.known_value, nav.valuation_coverage_pct, nav.unpriced_position_count
 """
 
 _SELECT_POSITION_COLUMNS = """
@@ -38,67 +38,122 @@ _SELECT_POSITION_COLUMNS = """
     metric.from_high_pct, metric.from_low_pct, metric.range_position_pct,
     metric.calculation_status, metric.quality_reasons,
     metric.calculation_version
+    , account.name AS account_name
+    , account.ownership_scope
+    , COALESCE(owners.owner_user_ids, ARRAY[]::uuid[]) AS owner_user_ids
+    , COALESCE(owners.owner_names, ARRAY[]::text[]) AS owner_names
 """
 
 
 async def latest_nav_per_account(
-    conn: asyncpg.Connection, tenant_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    *,
+    owner_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
     """Latest NAV snapshot per account (the current portfolio state)."""
     return await conn.fetch(
         f"""
-        SELECT DISTINCT ON (account_id)
+        SELECT DISTINCT ON (nav.account_id)
             {_SELECT_NAV_COLUMNS}
-        FROM ledger.account_nav_snapshots
-        WHERE tenant_id = $1
-        ORDER BY account_id, as_of DESC
+        FROM ledger.account_nav_snapshots nav
+        WHERE nav.tenant_id = $1
+          AND (
+              $2::uuid IS NULL OR EXISTS (
+                  SELECT 1
+                    FROM identity.account_members scoped_owner
+                   WHERE scoped_owner.tenant_id = nav.tenant_id
+                     AND scoped_owner.account_id = nav.account_id
+                     AND scoped_owner.user_id = $2
+                     AND scoped_owner.effective_to IS NULL
+                     AND scoped_owner.relationship IN (
+                         'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                     )
+              )
+          )
+        ORDER BY nav.account_id, nav.as_of DESC
         """,
         tenant_id,
+        owner_user_id,
     )
 
 
 async def nav_history(
-    conn: asyncpg.Connection, tenant_id: str, since: date | None = None, limit: int = 90
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    since: date | None = None,
+    limit: int = 90,
+    *,
+    owner_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
     """Chronological daily NAV history (aggregated across accounts)."""
     if since is not None:
         rows = await conn.fetch(
             """
-            SELECT as_of,
+            SELECT nav.as_of,
                    CASE WHEN COUNT(*) = COUNT(total_nav)
                         THEN SUM(total_nav) END AS total_nav,
                    CASE WHEN COUNT(*) = COUNT(daily_pnl)
                         THEN SUM(daily_pnl) END AS daily_pnl,
                    SUM(cash_balance) AS cash_balance
-            FROM ledger.account_nav_snapshots
-            WHERE tenant_id = $1 AND as_of >= $2
-            GROUP BY as_of
-            ORDER BY as_of ASC
+            FROM ledger.account_nav_snapshots nav
+            WHERE nav.tenant_id = $1 AND nav.as_of >= $3
+              AND (
+                  $2::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM identity.account_members scoped_owner
+                       WHERE scoped_owner.tenant_id = nav.tenant_id
+                         AND scoped_owner.account_id = nav.account_id
+                         AND scoped_owner.user_id = $2
+                         AND scoped_owner.effective_to IS NULL
+                         AND scoped_owner.relationship IN (
+                             'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                         )
+                  )
+              )
+            GROUP BY nav.as_of
+            ORDER BY nav.as_of ASC
             """,
             tenant_id,
+            owner_user_id,
             since,
         )
     else:
         rows = await conn.fetch(
             """
-            SELECT as_of,
+            SELECT nav.as_of,
                    CASE WHEN COUNT(*) = COUNT(total_nav)
                         THEN SUM(total_nav) END AS total_nav,
                    CASE WHEN COUNT(*) = COUNT(daily_pnl)
                         THEN SUM(daily_pnl) END AS daily_pnl,
                    SUM(cash_balance) AS cash_balance
-            FROM ledger.account_nav_snapshots
-            WHERE tenant_id = $1
-            GROUP BY as_of
-            ORDER BY as_of ASC
+            FROM ledger.account_nav_snapshots nav
+            WHERE nav.tenant_id = $1
+              AND (
+                  $2::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM identity.account_members scoped_owner
+                       WHERE scoped_owner.tenant_id = nav.tenant_id
+                         AND scoped_owner.account_id = nav.account_id
+                         AND scoped_owner.user_id = $2
+                         AND scoped_owner.effective_to IS NULL
+                         AND scoped_owner.relationship IN (
+                             'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                         )
+                  )
+              )
+            GROUP BY nav.as_of
+            ORDER BY nav.as_of ASC
             """,
             tenant_id,
+            owner_user_id,
         )
     return rows[-limit:] if limit else rows
 
 
 async def latest_positions(
-    conn: asyncpg.Connection, tenant_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    *,
+    owner_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
     """Latest position snapshot per account+instrument with metadata."""
     return await conn.fetch(
@@ -107,6 +162,8 @@ async def latest_positions(
             {_SELECT_POSITION_COLUMNS}
         FROM ledger.position_snapshots ps
         JOIN reference.instruments i ON i.id = ps.instrument_id
+        JOIN identity.accounts account
+          ON account.tenant_id = ps.tenant_id AND account.id = ps.account_id
         LEFT JOIN LATERAL (
             SELECT alias_value AS ticker
             FROM reference.instrument_aliases
@@ -134,10 +191,36 @@ async def latest_positions(
              ORDER BY metric.as_of DESC
              LIMIT 1
         ) metric ON i.asset_type = 'OFF_EXCHANGE_FUND'
+        LEFT JOIN LATERAL (
+            SELECT array_agg(am.user_id ORDER BY am.is_primary DESC, p.nickname)
+                       AS owner_user_ids,
+                   array_agg(p.nickname ORDER BY am.is_primary DESC, p.nickname)
+                       AS owner_names
+              FROM identity.account_members am
+              JOIN identity.profiles p ON p.id = am.user_id
+             WHERE am.tenant_id = ps.tenant_id
+               AND am.account_id = ps.account_id
+               AND am.effective_to IS NULL
+               AND am.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+        ) owners ON TRUE
         WHERE ps.tenant_id = $1
+          AND (
+              $2::uuid IS NULL OR EXISTS (
+                  SELECT 1
+                    FROM identity.account_members scoped_owner
+                   WHERE scoped_owner.tenant_id = ps.tenant_id
+                     AND scoped_owner.account_id = ps.account_id
+                     AND scoped_owner.user_id = $2
+                     AND scoped_owner.effective_to IS NULL
+                     AND scoped_owner.relationship IN (
+                         'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                     )
+              )
+          )
         ORDER BY ps.account_id, ps.instrument_id, ps.as_of DESC
         """,
         tenant_id,
+        owner_user_id,
     )
 
 
@@ -271,9 +354,13 @@ async def find_position_import_by_idempotency_key(
 
 
 async def pick_or_create_account(
-    conn: asyncpg.Connection, *, tenant_id: str, asset_type: str
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    asset_type: str,
+    owner_user_id: str,
 ) -> str:
-    """Pick the tenant's active account matching the asset type, else create one."""
+    """Pick the actor's compatible account, or atomically create one they own."""
     account_type = (
         "BROKERAGE" if asset_type in ("CN_STOCK", "EXCHANGE_FUND") else "FUND_PLATFORM"
     )
@@ -282,21 +369,30 @@ async def pick_or_create_account(
         SELECT id
         FROM identity.accounts
         WHERE tenant_id = $1 AND status = 'ACTIVE' AND account_type = $2
+          AND EXISTS (
+              SELECT 1 FROM identity.account_members am
+               WHERE am.tenant_id = identity.accounts.tenant_id
+                 AND am.account_id = identity.accounts.id
+                 AND am.user_id = $3
+                 AND am.effective_to IS NULL
+                 AND am.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+          )
         ORDER BY created_at
         LIMIT 1
         """,
         tenant_id,
         account_type,
+        owner_user_id,
     )
     if account_id is not None:
         return str(account_id)
     default_name = "证券账户" if account_type == "BROKERAGE" else "基金账户"
-    return str(
+    account_id = str(
         await conn.fetchval(
             """
             INSERT INTO identity.accounts
-                (tenant_id, account_type, name, base_currency)
-            VALUES ($1, $2, $3, 'CNY')
+                (tenant_id, account_type, name, base_currency, ownership_scope)
+            VALUES ($1, $2, $3, 'CNY', 'PERSONAL')
             RETURNING id
             """,
             tenant_id,
@@ -304,6 +400,53 @@ async def pick_or_create_account(
             default_name,
         )
     )
+    await conn.execute(
+        """
+        INSERT INTO identity.account_members(
+            tenant_id, account_id, user_id, relationship,
+            permission_role, is_primary, created_by
+        ) VALUES (
+            $1, $2, $3, 'BENEFICIAL_OWNER', 'OWNER', true, $3
+        )
+        """,
+        tenant_id,
+        account_id,
+        owner_user_id,
+    )
+    return account_id
+
+
+async def find_writable_account(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_id: str,
+    user_id: str,
+) -> str | None:
+    """Return an active account only when the actor has account-level write access."""
+
+    value = await conn.fetchval(
+        """
+        SELECT account.id
+          FROM identity.accounts account
+         WHERE account.tenant_id = $1
+           AND account.id = $2
+           AND account.status = 'ACTIVE'
+           AND EXISTS (
+               SELECT 1
+                 FROM identity.account_members am
+                WHERE am.tenant_id = account.tenant_id
+                  AND am.account_id = account.id
+                  AND am.user_id = $3
+                  AND am.effective_to IS NULL
+                  AND am.permission_role IN ('OWNER', 'EDITOR')
+           )
+        """,
+        tenant_id,
+        account_id,
+        user_id,
+    )
+    return str(value) if value is not None else None
 
 
 async def create_import_draft(

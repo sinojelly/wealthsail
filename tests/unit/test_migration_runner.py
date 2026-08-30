@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 31
-    assert migrations[-1].path.name == "031_import_draft_governance.sql"
+    assert versions[-1] == 32
+    assert migrations[-1].path.name == "032_tenant_user_account_ownership.sql"
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:
@@ -150,6 +150,23 @@ def test_readback_checks_tenant_scoped_job_status_access() -> None:
 
     assert "Tiantian job status SELECT policy is missing or too broad" in source
     assert "Tiantian job status column privileges missing" in source
+
+
+def test_readback_checks_tenant_user_account_ownership_boundaries() -> None:
+    """Deploy success requires the new identity model and no browser write path."""
+    source = inspect.getsource(_readback)
+
+    for contract in (
+        "platform_roles",
+        "user_preferences",
+        "account_members",
+        "ownership_scope",
+        "CREATE_PERSONAL_TENANT",
+        "identity ownership tables expose browser writes",
+        "platform personal-tenant invitation privilege boundary is invalid",
+        "api_can_probe_platform_roles",
+    ):
+        assert contract in source
 
 
 def test_safe_target_name_never_contains_password_or_query_secret() -> None:

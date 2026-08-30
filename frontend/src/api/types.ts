@@ -7,6 +7,12 @@ export type ReportSession =
   "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
 export type TenantRole = "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
 export type InvitableTenantRole = Exclude<TenantRole, "OWNER">;
+export type PlatformRole = "PLATFORM_ADMIN" | "SUPPORT";
+export type AssetScopeKind = "MINE" | "TENANT" | "MEMBER";
+export interface PortfolioAssetScope {
+  kind: AssetScopeKind;
+  memberId?: string;
+}
 
 // ---------------------------------------------------------------------------
 // 统一信封
@@ -16,6 +22,9 @@ export interface ApiMeta {
   asOf: string;
   qualityStatus: QualityCode;
   schemaVersion: number;
+  scope?: AssetScopeKind;
+  memberId?: string | null;
+  tenantId?: string;
 }
 
 export interface ApiEnvelope<T> {
@@ -97,6 +106,12 @@ export interface PositionDto {
   pnlRate: DecimalString | null;
   quality: QualityCode;
   accountId: string;
+  account: {
+    id: string;
+    name: string | null;
+    ownershipScope: "UNASSIGNED" | "PERSONAL" | "SHARED";
+    owners: Array<{ userId: string; name: string | null }>;
+  };
   holdingPeriod: HoldingPeriodDto | null;
   rangeMetrics: FundRangeMetricsDto | null;
 }
@@ -467,6 +482,7 @@ export interface LoginUser {
   tenantId: string;
   tenantName: string;
   role: TenantRole;
+  platformRoles: PlatformRole[];
 }
 
 export interface LoginResponse {
@@ -487,6 +503,16 @@ export interface InvitationCredential {
   token: string;
   email: string;
   role: InvitableTenantRole;
+  expiresAt: string;
+}
+
+export interface PersonalTenantInvitationCredential {
+  invitationId: string;
+  token: string;
+  email: string;
+  tenantName: string;
+  purpose: "CREATE_PERSONAL_TENANT";
+  role: "OWNER";
   expiresAt: string;
 }
 
@@ -514,11 +540,23 @@ export interface MeBinding {
   lastUsedAt: string | null;
 }
 
+export interface MeMember {
+  userId: string;
+  nickname: string;
+  email: string | null;
+  role: TenantRole;
+  status: string;
+}
+
 export interface MeResponse {
   profile: MeProfile;
   activeTenantId: string;
   activeRole: TenantRole;
+  defaultTenantId: string | null;
+  defaultAssetScope: "MINE" | "TENANT";
+  platformRoles: PlatformRole[];
   tenants: MeTenant[];
+  members: MeMember[];
   bindings: MeBinding[];
 }
 

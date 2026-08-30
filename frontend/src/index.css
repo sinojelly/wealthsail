@@ -902,6 +902,96 @@ button:disabled {
   gap: 16px;
   margin-bottom: 16px;
 }
+.asset-scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+}
+.asset-scope-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 220px;
+}
+.asset-scope-copy strong {
+  color: var(--navy);
+  font-size: 12px;
+}
+.asset-scope-copy span {
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.asset-scope-controls,
+.asset-scope-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.asset-scope-buttons {
+  padding: 3px;
+  border: 1px solid var(--slate-200);
+  border-radius: 9px;
+  background: var(--slate-50);
+}
+.asset-scope-buttons button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--slate-500);
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+.asset-scope-buttons button[aria-pressed="true"] {
+  color: #087f74;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 8%);
+}
+.asset-scope-buttons small {
+  max-width: 100px;
+  overflow: hidden;
+  color: var(--slate-400);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-scope-member {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.asset-scope-member select {
+  min-width: 150px;
+  height: 38px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--slate-200);
+  border-radius: 8px;
+  color: var(--navy);
+  background: #fff;
+  font-size: 10px;
+}
+.account-owner-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 110px;
+}
+.account-owner-cell strong {
+  color: var(--navy);
+  font-size: 9px;
+  font-weight: 600;
+}
+.account-owner-cell span {
+  color: var(--slate-400);
+  font-size: 8px;
+}
 .chart-legend {
   display: flex;
   gap: 13px;
@@ -1279,6 +1369,18 @@ button:disabled {
   }
 }
 @media (max-width: 700px) {
+  .asset-scope-bar,
+  .asset-scope-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .asset-scope-buttons button,
+  .asset-scope-member select {
+    flex: 1;
+  }
+  .asset-scope-member {
+    justify-content: space-between;
+  }
   .metric-grid {
     grid-template-columns: repeat(2, 1fr);
   }

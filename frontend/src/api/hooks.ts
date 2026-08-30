@@ -27,6 +27,7 @@ import type {
   OutboxResponse,
   PoliciesResponse,
   PortfolioSummary,
+  PortfolioAssetScope,
   PositionDto,
   PositionMutationPayload,
   ReportDetail,
@@ -39,6 +40,8 @@ import type {
   TiantianDuplicatePolicy,
 } from "./types";
 
+const MINE_SCOPE: PortfolioAssetScope = { kind: "MINE" };
+
 /** 401 统一处理：令牌失效 → 清会话（页面守卫会自动跳转登录页）。 */
 function onAuthFailure(error: unknown) {
   if (error instanceof HttpError && error.status === 401) {
@@ -50,31 +53,57 @@ function usePrivateSession() {
   return useAuthSession();
 }
 
-export function usePortfolioSummary(): UseQueryResult<PortfolioSummary> {
+export function usePortfolioSummary(
+  scope: PortfolioAssetScope = MINE_SCOPE,
+): UseQueryResult<PortfolioSummary> {
   const session = usePrivateSession();
   return useQuery({
-    queryKey: privateQueryKey(session, "portfolio", "summary"),
-    queryFn: portfolioApi.getSummary,
+    queryKey: privateQueryKey(
+      session,
+      "portfolio",
+      "summary",
+      scope.kind,
+      scope.memberId ?? "",
+    ),
+    queryFn: () => portfolioApi.getSummary(scope),
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
 }
 
-export function usePositions(): UseQueryResult<PositionDto[]> {
+export function usePositions(
+  scope: PortfolioAssetScope = MINE_SCOPE,
+): UseQueryResult<PositionDto[]> {
   const session = usePrivateSession();
   return useQuery({
-    queryKey: privateQueryKey(session, "portfolio", "positions"),
-    queryFn: portfolioApi.getPositions,
+    queryKey: privateQueryKey(
+      session,
+      "portfolio",
+      "positions",
+      scope.kind,
+      scope.memberId ?? "",
+    ),
+    queryFn: () => portfolioApi.getPositions(scope),
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
 }
 
-export function useNavTrend(days = 60): UseQueryResult<NavTrend> {
+export function useNavTrend(
+  days = 60,
+  scope: PortfolioAssetScope = MINE_SCOPE,
+): UseQueryResult<NavTrend> {
   const session = usePrivateSession();
   return useQuery({
-    queryKey: privateQueryKey(session, "portfolio", "nav-trend", days),
-    queryFn: () => portfolioApi.getNavTrend(days),
+    queryKey: privateQueryKey(
+      session,
+      "portfolio",
+      "nav-trend",
+      days,
+      scope.kind,
+      scope.memberId ?? "",
+    ),
+    queryFn: () => portfolioApi.getNavTrend(days, scope),
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
   });
@@ -407,6 +436,14 @@ export function useCreateInvitation() {
       email: string;
       role: InvitableTenantRole;
     }): Promise<InvitationCredential> => identityApi.createInvitation(input),
+    onError: onAuthFailure,
+  });
+}
+
+export function useCreatePersonalTenantInvitation() {
+  return useMutation({
+    mutationFn: (input: { email: string; tenantName: string }) =>
+      identityApi.createPersonalTenantInvitation(input),
     onError: onAuthFailure,
   });
 }

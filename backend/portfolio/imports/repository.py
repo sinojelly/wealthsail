@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 
 from backend.errors import (
+    ForbiddenError,
     IdempotencyConflictError,
     NotFoundError,
     ValidationError_,
@@ -85,6 +86,7 @@ async def resolve_target_account(
     external_account_key: str,
     account_id: str | None,
     account_name: str | None,
+    owner_user_id: str,
 ) -> TargetAccount:
     from backend.portfolio.imports.service import TargetAccount
 
@@ -92,7 +94,16 @@ async def resolve_target_account(
         """
         SELECT b.id AS binding_id, b.account_id AS binding_account_id,
                b.status AS binding_status, b.display_name,
-               account.name AS account_name
+               account.name AS account_name,
+               EXISTS (
+                   SELECT 1
+                     FROM identity.account_members am
+                    WHERE am.tenant_id = b.tenant_id
+                      AND am.account_id = b.account_id
+                      AND am.user_id = $3
+                      AND am.effective_to IS NULL
+                      AND am.permission_role IN ('OWNER', 'EDITOR')
+               ) AS actor_can_write
           FROM ledger.portfolio_source_bindings b
           JOIN identity.accounts account
             ON account.tenant_id = b.tenant_id AND account.id = b.account_id
@@ -103,21 +114,36 @@ async def resolve_target_account(
         """,
         tenant_id,
         external_account_key,
+        owner_user_id,
     )
+
+    if binding is not None and not bool(binding["actor_can_write"]):
+        raise ForbiddenError("该天天基金来源已绑定到其他成员的账户")
 
     if account_id:
         account = await conn.fetchrow(
             """
-            SELECT id, name
-              FROM identity.accounts
-             WHERE tenant_id = $1 AND id = $2
-               AND account_type = 'FUND_PLATFORM' AND status = 'ACTIVE'
+            SELECT account.id, account.name
+              FROM identity.accounts account
+             WHERE account.tenant_id = $1 AND account.id = $2
+               AND account.account_type = 'FUND_PLATFORM'
+               AND account.status = 'ACTIVE'
+               AND EXISTS (
+                   SELECT 1
+                     FROM identity.account_members am
+                    WHERE am.tenant_id = account.tenant_id
+                      AND am.account_id = account.id
+                      AND am.user_id = $3
+                      AND am.effective_to IS NULL
+                      AND am.permission_role IN ('OWNER', 'EDITOR')
+               )
             """,
             tenant_id,
             account_id,
+            owner_user_id,
         )
         if account is None:
-            raise NotFoundError("目标基金账户不存在或不可用")
+            raise NotFoundError("目标基金账户不存在、不可用或当前用户没有写入权限")
         target_account_id = str(account["id"])
         display_name = str(account["name"])
     elif binding is not None:
@@ -131,13 +157,29 @@ async def resolve_target_account(
             await conn.fetchval(
                 """
                 INSERT INTO identity.accounts
-                    (tenant_id, account_type, name, base_currency, provider_ref)
-                VALUES ($1, 'FUND_PLATFORM', $2, 'CNY', 'TIANTIAN_FUND')
+                    (tenant_id, account_type, name, base_currency, provider_ref,
+                     ownership_scope)
+                VALUES (
+                    $1, 'FUND_PLATFORM', $2, 'CNY', 'TIANTIAN_FUND', 'PERSONAL'
+                )
                 RETURNING id
                 """,
                 tenant_id,
                 normalized_name,
             )
+        )
+        await conn.execute(
+            """
+            INSERT INTO identity.account_members(
+                tenant_id, account_id, user_id, relationship,
+                permission_role, is_primary, created_by
+            ) VALUES (
+                $1, $2, $3, 'BENEFICIAL_OWNER', 'OWNER', true, $3
+            )
+            """,
+            tenant_id,
+            target_account_id,
+            owner_user_id,
         )
         display_name = normalized_name
 

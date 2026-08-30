@@ -5,13 +5,22 @@ import WeComBindingCard from "./components/WeComBindingCard";
 import { renderWithSession } from "../../test/render-with-session";
 import { meFixture } from "../../test/fixtures";
 
-const { createInvitation, revokeBinding } = vi.hoisted(() => ({
+const { createInvitation, createPersonalTenantInvitation, revokeBinding } = vi.hoisted(() => ({
   createInvitation: vi.fn().mockResolvedValue({
     invitationId: "invite-001",
     token: "INVITE-OWNER-ONLY-TEST-TOKEN",
     email: "new.admin@example.com",
     role: "ADMIN",
     expiresAt: "2026-09-02T09:30:00+08:00",
+  }),
+  createPersonalTenantInvitation: vi.fn().mockResolvedValue({
+    invitationId: "invite-personal-001",
+    token: "INVITE-PERSONAL-TENANT-TEST-TOKEN",
+    email: "personal@example.com",
+    tenantName: "个人投资账户",
+    purpose: "CREATE_PERSONAL_TENANT",
+    role: "OWNER",
+    expiresAt: "2026-09-06T09:30:00+08:00",
   }),
   revokeBinding: vi.fn().mockResolvedValue({ bindingId: "binding-001", status: "REVOKED" }),
 }));
@@ -41,10 +50,16 @@ vi.mock("../../api/hooks", () => ({
     isPending: false,
     error: null,
   }),
+  useCreatePersonalTenantInvitation: () => ({
+    mutateAsync: createPersonalTenantInvitation,
+    isPending: false,
+    error: null,
+  }),
 }));
 
 afterEach(() => {
   meFixture.activeRole = "OWNER";
+  meFixture.platformRoles = [];
   vi.clearAllMocks();
 });
 
@@ -70,6 +85,28 @@ it("does not render invitation controls for a viewer", () => {
 
   expect(screen.queryByRole("heading", { name: "邀请成员" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "生成邀请码" })).not.toBeInTheDocument();
+});
+
+it("lets a platform administrator create an independent personal-tenant invitation", async () => {
+  meFixture.platformRoles = ["PLATFORM_ADMIN"];
+  const user = userEvent.setup();
+  renderWithSession(<SettingsPage />);
+
+  await user.type(screen.getByLabelText("独立租户受邀邮箱"), "personal@example.com");
+  await user.type(screen.getByLabelText("个人租户名称"), "个人投资账户");
+  await user.click(screen.getByRole("button", { name: "创建独立租户邀请码" }));
+
+  expect(createPersonalTenantInvitation).toHaveBeenCalledWith({
+    email: "personal@example.com",
+    tenantName: "个人投资账户",
+  });
+  expect(await screen.findByText("INVITE-PERSONAL-TENANT-TEST-TOKEN")).toBeInTheDocument();
+});
+
+it("does not expose platform governance controls to a tenant owner", () => {
+  renderWithSession(<SettingsPage />);
+
+  expect(screen.queryByRole("heading", { name: "创建独立租户" })).not.toBeInTheDocument();
 });
 
 it("waits for a verified WeCom callback instead of simulating an external identity", async () => {

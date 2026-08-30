@@ -11,6 +11,7 @@ import { useMe } from "../../api/hooks";
 import PageHeader from "../../components/layout/PageHeader";
 import ProfileCard from "./components/ProfileCard";
 import InvitationCard from "./components/InvitationCard";
+import PersonalTenantInvitationCard from "./components/PersonalTenantInvitationCard";
 import TenantRoleCard from "./components/TenantRoleCard";
 import WeComBindingCard from "./components/WeComBindingCard";
 
@@ -50,6 +51,9 @@ export default function SettingsPage() {
               data?.tenants.find((tenant) => tenant.tenantId === data.activeTenantId)?.name ?? ""
             }
           />
+          {data?.platformRoles.includes("PLATFORM_ADMIN") ? (
+            <PersonalTenantInvitationCard />
+          ) : null}
         </div>
         <aside className="settings-aside">
           <section className="panel security-card">

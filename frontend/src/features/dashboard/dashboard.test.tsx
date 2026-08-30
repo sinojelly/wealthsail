@@ -3,28 +3,61 @@ import userEvent from "@testing-library/user-event";
 import DashboardPage from "./DashboardPage";
 import { renderWithSession } from "../../test/render-with-session";
 import {
+  meFixture,
   navTrendFixture,
   positionsFixture,
   summaryFixture,
 } from "../../test/fixtures";
 
+const scopeCalls = vi.hoisted(() => ({
+  summary: [] as unknown[],
+  positions: [] as unknown[],
+  nav: [] as unknown[],
+}));
+
 vi.mock("../../api/hooks", () => ({
-  usePortfolioSummary: () => ({
+  usePortfolioSummary: (scope: unknown) => {
+    scopeCalls.summary.push(scope);
+    return {
     data: summaryFixture,
     isLoading: false,
     isError: false,
     error: null,
-  }),
-  usePositions: () => ({
+    };
+  },
+  usePositions: (scope: unknown) => {
+    scopeCalls.positions.push(scope);
+    return {
     data: positionsFixture,
     isLoading: false,
     isError: false,
     error: null,
-  }),
-  useNavTrend: () => ({
+    };
+  },
+  useNavTrend: (_days: number, scope: unknown) => {
+    scopeCalls.nav.push(scope);
+    return {
     data: navTrendFixture,
     isLoading: false,
     isError: false,
+    error: null,
+    };
+  },
+  useMe: () => ({
+    data: {
+      ...meFixture,
+      members: [
+        ...(meFixture.members ?? []),
+        {
+          userId: "user-family-2",
+          nickname: "家庭成员A",
+          email: "member@example.test",
+          role: "VIEWER",
+          status: "ACTIVE",
+        },
+      ],
+    },
+    isLoading: false,
     error: null,
   }),
   useMarketSentiment: () => ({
@@ -63,6 +96,45 @@ vi.mock("../../api/hooks", () => ({
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
+
+beforeEach(() => {
+  scopeCalls.summary.length = 0;
+  scopeCalls.positions.length = 0;
+  scopeCalls.nav.length = 0;
+});
+
+it("defaults to my assets and keeps every portfolio query on one scope", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<DashboardPage />);
+
+  expect(screen.getByRole("button", { name: "我的资产" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(scopeCalls.summary.at(-1)).toEqual({ kind: "MINE" });
+  expect(scopeCalls.positions.at(-1)).toEqual({ kind: "MINE" });
+  expect(scopeCalls.nav.at(-1)).toEqual({ kind: "MINE" });
+
+  await user.click(screen.getByRole("button", { name: "租户总览" }));
+  expect(scopeCalls.summary.at(-1)).toEqual({ kind: "TENANT" });
+
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "成员资产" }),
+    "user-family-2",
+  );
+  expect(scopeCalls.summary.at(-1)).toEqual({
+    kind: "MEMBER",
+    memberId: "user-family-2",
+  });
+  expect(scopeCalls.positions.at(-1)).toEqual({
+    kind: "MEMBER",
+    memberId: "user-family-2",
+  });
+  expect(scopeCalls.nav.at(-1)).toEqual({
+    kind: "MEMBER",
+    memberId: "user-family-2",
+  });
+});
 
 it("never presents hard-coded fill drafts as confirmed financial facts", () => {
   renderWithSession(<DashboardPage />);

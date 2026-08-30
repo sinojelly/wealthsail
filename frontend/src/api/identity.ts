@@ -6,6 +6,7 @@ import type {
   LoginResponse,
   MeProfile,
   MeResponse,
+  PersonalTenantInvitationCredential,
 } from "./types";
 
 export async function login(
@@ -66,6 +67,21 @@ export async function createInvitation(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+  return envelope.data;
+}
+
+/** 平台管理员创建“注册即新建独立租户”的一次性邀请。 */
+export async function createPersonalTenantInvitation(input: {
+  email: string;
+  tenantName: string;
+}): Promise<PersonalTenantInvitationCredential> {
+  const envelope = await request<PersonalTenantInvitationCredential>(
+    "/v1/platform/personal-tenant-invitations",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
   return envelope.data;
 }
 

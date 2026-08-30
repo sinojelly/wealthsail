@@ -13,6 +13,7 @@ const session: AuthSession = {
   tenantId: "tenant-a",
   tenantName: "A tenant",
   role: "OWNER",
+  platformRoles: [],
   accessToken: "token-a",
   expiresIn: 3600,
 };

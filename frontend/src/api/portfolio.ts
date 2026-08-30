@@ -7,6 +7,7 @@ import type {
   PositionImportConfirmation,
   PositionImportDraft,
   PositionMutationPayload,
+  PortfolioAssetScope,
   TiantianConfirmPayload,
   TiantianImportConfirmation,
   TiantianImportDetail,
@@ -14,19 +15,38 @@ import type {
   TiantianDuplicatePolicy,
 } from "./types";
 
-export async function getSummary(): Promise<PortfolioSummary> {
-  const envelope = await request<PortfolioSummary>("/v1/portfolio/summary");
+function scopeQuery(scope: PortfolioAssetScope): string {
+  const params = new URLSearchParams({ scope: scope.kind });
+  if (scope.kind === "MEMBER" && scope.memberId) {
+    params.set("memberId", scope.memberId);
+  }
+  return params.toString();
+}
+
+export async function getSummary(
+  scope: PortfolioAssetScope = { kind: "MINE" },
+): Promise<PortfolioSummary> {
+  const envelope = await request<PortfolioSummary>(
+    `/v1/portfolio/summary?${scopeQuery(scope)}`,
+  );
   return envelope.data;
 }
 
-export async function getPositions(): Promise<PositionDto[]> {
-  const envelope = await request<PositionDto[]>("/v1/portfolio/positions");
+export async function getPositions(
+  scope: PortfolioAssetScope = { kind: "MINE" },
+): Promise<PositionDto[]> {
+  const envelope = await request<PositionDto[]>(
+    `/v1/portfolio/positions?${scopeQuery(scope)}`,
+  );
   return envelope.data;
 }
 
-export async function getNavTrend(days = 60): Promise<NavTrend> {
+export async function getNavTrend(
+  days = 60,
+  scope: PortfolioAssetScope = { kind: "MINE" },
+): Promise<NavTrend> {
   const envelope = await request<NavTrend>(
-    `/v1/portfolio/nav-trend?days=${days}`,
+    `/v1/portfolio/nav-trend?days=${days}&${scopeQuery(scope)}`,
   );
   return envelope.data;
 }

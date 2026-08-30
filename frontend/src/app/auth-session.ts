@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { configureAuthLifecycle, setAccessToken } from "../api/client";
 import * as identityApi from "../api/identity";
-import type { LoginResponse, TenantRole } from "../api/types";
+import type { LoginResponse, PlatformRole, TenantRole } from "../api/types";
 import { queryClient } from "./query-client";
 
 export interface AuthSession {
@@ -11,6 +11,7 @@ export interface AuthSession {
   tenantId: string;
   tenantName: string;
   role: TenantRole;
+  platformRoles: PlatformRole[];
   accessToken: string;
   expiresIn: number;
 }
@@ -57,6 +58,7 @@ function sessionFromLogin(result: LoginResponse): AuthSession {
     tenantId: result.user.tenantId,
     tenantName: result.user.tenantName,
     role: result.user.role,
+    platformRoles: result.user.platformRoles ?? [],
     accessToken: result.accessToken,
     expiresIn: result.expiresIn,
   };

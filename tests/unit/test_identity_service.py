@@ -184,6 +184,33 @@ async def test_register_maps_db_errors() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_platform_admin_can_create_a_personal_tenant_invitation() -> None:
+    """The personal-tenant path must use the platform-guarded database function."""
+    conn = FakeConn()
+    conn._fetchrow = {"out_invitation_id": "invite-personal-1"}
+
+    result = await _service(conn).create_personal_tenant_invitation(
+        actor_user_id="platform-admin-1",
+        actor_tenant_id="tenant-1",
+        email=" NEW@example.test ",
+        tenant_name="新用户个人空间",
+    )
+
+    rpc = next(
+        call
+        for call in conn.calls
+        if "identity.create_personal_tenant_invitation" in call[0]
+    )
+    assert rpc[1][0] == "platform-admin-1"
+    assert rpc[1][1] == "new@example.test"
+    assert rpc[1][2] == "新用户个人空间"
+    assert rpc[1][3] != result["token"]
+    assert result["purpose"] == "CREATE_PERSONAL_TENANT"
+    assert result["role"] == "OWNER"
+    assert any("request.jwt.claims" in call[0] for call in conn.calls)
+    assert any("PERSONAL_TENANT_INVITATION_CREATED" in call[1] for call in conn.calls)
+
 # ---------------------------------------------------------------------------
 # 登录 / 凭据校验
 # ---------------------------------------------------------------------------
@@ -235,6 +262,51 @@ async def test_login_mints_jwt_and_persists_refresh_hash() -> None:
     assert "SESSION_LOGIN" in audit[1]
     assert isinstance(audit[1][7], str)
     assert json.loads(audit[1][7]) == {"method": "password"}
+
+
+@pytest.mark.asyncio
+async def test_login_prefers_the_users_active_default_tenant() -> None:
+    """Changing membership creation order must not move the user's landing tenant."""
+    conn = FakeConn()
+    password_hash = hash_password("demo1234")
+    conn._fetch = [
+        {
+            "user_id": "user-1",
+            "email": "jelly@example.test",
+            "nickname": "Jelly",
+            "password_hash": password_hash,
+            "auth_version": 1,
+            "tenant_id": "tenant-personal",
+            "tenant_name": "Jelly 的个人空间",
+            "tenant_role": "OWNER",
+            "default_tenant_id": "tenant-personal",
+            "default_asset_scope": "MINE",
+            "platform_roles": ["PLATFORM_ADMIN"],
+        },
+        {
+            "user_id": "user-1",
+            "email": "jelly@example.test",
+            "nickname": "Jelly",
+            "password_hash": password_hash,
+            "auth_version": 1,
+            "tenant_id": "tenant-older",
+            "tenant_name": "较早加入的租户",
+            "tenant_role": "VIEWER",
+            "default_tenant_id": "tenant-personal",
+            "default_asset_scope": "MINE",
+            "platform_roles": ["PLATFORM_ADMIN"],
+        },
+    ]
+
+    result = await _service(conn).login(
+        email="jelly@example.test", password="demo1234"
+    )
+
+    login_query = next(sql for sql, _args in conn.calls if "password_hash" in sql)
+    assert "identity.user_preferences" in login_query
+    assert "tm.tenant_id = up.default_tenant_id" in login_query
+    assert result["user"]["tenantId"] == "tenant-personal"
+    assert result["user"]["platformRoles"] == ["PLATFORM_ADMIN"]
 
 
 @pytest.mark.asyncio
@@ -331,6 +403,71 @@ async def test_switch_tenant_rebinds_refresh_session() -> None:
     assert update[1][0] == "tenant-2"
     assert update[1][1] != "refresh-token"  # 库中只有摘要
     assert result["user"]["tenantId"] == "tenant-2"
+    preference = next(
+        c for c in conn.calls if "INSERT INTO identity.user_preferences" in c[0]
+    )
+    assert preference[1] == ("user-1", "tenant-2")
+
+
+@pytest.mark.asyncio
+async def test_get_me_keeps_platform_and_tenant_roles_separate() -> None:
+    class MeConn(FakeConn):
+        async def fetchrow(self, sql, *args):
+            self.calls.append((sql, args))
+            return {
+                "id": "user-1",
+                "email": "jelly@example.test",
+                "nickname": "Jelly",
+                "avatar_url": None,
+                "created_at": "2026-08-30T00:00:00Z",
+                "default_tenant_id": "tenant-personal",
+                "default_asset_scope": "MINE",
+                "platform_roles": ["PLATFORM_ADMIN"],
+            }
+
+        async def fetch(self, sql, *args):
+            self.calls.append((sql, args))
+            if "tm.tenant_id = $1" in sql:
+                return [
+                    {
+                        "user_id": "user-1",
+                        "nickname": "Jelly",
+                        "email": "jelly@example.test",
+                        "role": "OWNER",
+                        "status": "ACTIVE",
+                    }
+                ]
+            if "tenant_members" in sql:
+                return [
+                    {
+                        "tenant_id": "tenant-personal",
+                        "name": "Jelly 的个人空间",
+                        "role": "OWNER",
+                        "status": "ACTIVE",
+                    }
+                ]
+            return []
+
+    conn = MeConn()
+    actor = TenantContext(
+        tenant_id="tenant-personal", user_id="user-1", tenant_role="OWNER"
+    )
+
+    result = await _service(conn).get_me(conn, actor)  # type: ignore[arg-type]
+
+    assert result["activeRole"] == "OWNER"
+    assert result["platformRoles"] == ["PLATFORM_ADMIN"]
+    assert result["defaultTenantId"] == "tenant-personal"
+    assert result["defaultAssetScope"] == "MINE"
+    assert result["members"] == [
+        {
+            "userId": "user-1",
+            "nickname": "Jelly",
+            "email": "jelly@example.test",
+            "role": "OWNER",
+            "status": "ACTIVE",
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
