@@ -7,7 +7,7 @@
   * 注册（一次性邀请）与登录（bcrypt 校验 + JWT + refresh session）
   * 试点成员邀请与活动租户切换
   * 企业微信绑定（一次性绑定码，仅存 HMAC 摘要）
-  * 资料更新（昵称/头像）
+  * 资料更新（昵称/头像）与 OWNER 租户治理（名称）
   * 密码重置（一次性重置令牌 + SECURITY DEFINER 消费，撤销全部会话）
   * 会话管理（refresh token 轮换、登出、会话列表）
 
@@ -1068,6 +1068,55 @@ class IdentityService:
             "nickname": row["nickname"],
             "avatarUrl": row["avatar_url"],
         }
+
+    async def update_tenant_name(
+        self,
+        conn: AsyncConnection,
+        actor: TenantContext,
+        *,
+        name: str,
+    ) -> dict:
+        """重命名当前活动租户；仅 OWNER 可执行且全程受 tenant RLS 限制。"""
+        actor.require_roles("OWNER")
+        normalized_name = (name or "").strip()
+        if len(normalized_name) < 2:
+            raise ValidationError("租户名称至少需要 2 个字符")
+        if len(normalized_name) > 64:
+            raise ValidationError("租户名称不能超过 64 个字符")
+
+        existing = await conn.fetchrow(
+            "SELECT name FROM identity.tenants WHERE id = $1",
+            actor.tenant_id,
+        )
+        if existing is None:
+            raise NotFoundError("当前租户不存在或无权访问")
+        old_name = str(existing["name"])
+        if old_name == normalized_name:
+            return {"tenantId": actor.tenant_id, "name": old_name}
+
+        row = await conn.fetchrow(
+            """
+            UPDATE identity.tenants
+               SET name = $1, updated_at = now()
+             WHERE id = $2
+            RETURNING id, name
+            """,
+            normalized_name,
+            actor.tenant_id,
+        )
+        if row is None:
+            raise NotFoundError("当前租户不存在或无权更新")
+        await self._write_audit(
+            conn,
+            tenant_id=actor.tenant_id,
+            actor_type="USER",
+            actor_id=actor.user_id,
+            action="TENANT_NAME_UPDATED",
+            resource_type="identity.tenants",
+            resource_id=str(row["id"]),
+            details={"old_name": old_name, "new_name": normalized_name},
+        )
+        return {"tenantId": str(row["id"]), "name": row["name"]}
 
     # -- 密码重置 --------------------------------------------------------------
     async def request_password_reset(self, *, email: str) -> dict:

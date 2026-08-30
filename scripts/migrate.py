@@ -748,6 +748,60 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if browser_ownership_writes:
         raise RuntimeError("identity ownership tables expose browser writes")
 
+    tenant_name_policy = await conn.fetchrow(
+        """
+        SELECT roles, qual, with_check
+          FROM pg_policies
+         WHERE schemaname='identity'
+           AND tablename='tenants'
+           AND policyname='domain_api_tenant_owner_update'
+           AND cmd='UPDATE'
+        """
+    )
+    tenant_name_policy_text = (
+        " ".join(
+            (
+                str(tenant_name_policy["qual"] or ""),
+                str(tenant_name_policy["with_check"] or ""),
+            )
+        )
+        if tenant_name_policy
+        else ""
+    )
+    if (
+        tenant_name_policy is None
+        or "wealthsail_api" not in tenant_name_policy["roles"]
+        or "has_tenant_role" not in tenant_name_policy_text
+        or "OWNER" not in tenant_name_policy_text
+    ):
+        raise RuntimeError("tenant name update policy is missing or not owner-scoped")
+
+    tenant_name_privileges = {
+        "api_name": await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_api','identity.tenants','name','UPDATE')"
+        ),
+        "api_updated_at": await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_api','identity.tenants','updated_at','UPDATE')"
+        ),
+        "api_status_denied": not await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_api','identity.tenants','status','UPDATE')"
+        ),
+        "api_currency_denied": not await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_api','identity.tenants','base_currency','UPDATE')"
+        ),
+        "browser_name_denied": not await conn.fetchval(
+            "SELECT has_column_privilege('authenticated','identity.tenants','name','UPDATE')"
+        ),
+    }
+    invalid_tenant_name_privileges = [
+        name for name, allowed in tenant_name_privileges.items() if not allowed
+    ]
+    if invalid_tenant_name_privileges:
+        raise RuntimeError(
+            "tenant name column privileges are missing or too broad: "
+            + ", ".join(invalid_tenant_name_privileges)
+        )
+
     platform_invitation_function = await conn.fetchrow(
         """
         SELECT p.prosecdef,
@@ -902,7 +956,7 @@ async def migrate(dsn: str, migrations: list[Migration], *, dry_run: bool) -> No
             await _readback(conn)
             print(
                 "READBACK OK: roles, RLS, runtime grants, Tiantian import, "
-                "identity session and trade-integrity contracts"
+                "identity session, tenant governance and trade-integrity contracts"
             )
     finally:
         try:

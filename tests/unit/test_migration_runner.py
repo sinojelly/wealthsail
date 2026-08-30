@@ -30,8 +30,29 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 33
-    assert migrations[-1].path.name == "033_personal_tenant_report_jobs.sql"
+    assert versions[-1] == 34
+    assert migrations[-1].path.name == "034_tenant_name_management.sql"
+
+
+def test_034_migration_limits_tenant_rename_to_current_owner() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "migrations" / "034_tenant_name_management.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "FOR UPDATE TO wealthsail_api" in migration
+    assert "identity.has_tenant_role(id, ARRAY['OWNER'])" in migration
+    assert "GRANT UPDATE (name, updated_at)" in migration
+
+
+def test_migration_readback_verifies_tenant_rename_least_privilege() -> None:
+    root = Path(__file__).resolve().parents[2]
+    runner = (root / "scripts" / "migrate.py").read_text(encoding="utf-8")
+
+    assert "tenant name update policy is missing or not owner-scoped" in runner
+    assert "tenant name column privileges are missing or too broad" in runner
+    assert "'identity.tenants','status','UPDATE'" in runner
+    assert "'authenticated','identity.tenants','name','UPDATE'" in runner
 
 
 def test_readback_covers_identity_and_trade_hardening() -> None:

@@ -7,6 +7,7 @@ import type {
   MeProfile,
   MeResponse,
   PersonalTenantInvitationCredential,
+  TenantUpdateResult,
 } from "./types";
 
 export async function login(
@@ -25,7 +26,13 @@ export async function register(input: {
   password: string;
   invitationToken: string;
   nickname?: string;
-}): Promise<{ userId: string; email: string; nickname: string; tenantId: string; tenantName: string }> {
+}): Promise<{
+  userId: string;
+  email: string;
+  nickname: string;
+  tenantId: string;
+  tenantName: string;
+}> {
   const envelope = await request<{
     userId: string;
     email: string;
@@ -121,6 +128,17 @@ export async function updateProfile(input: {
   return envelope.data;
 }
 
+/** 由当前租户 OWNER 重命名活动租户。 */
+export async function updateTenantName(input: {
+  name: string;
+}): Promise<TenantUpdateResult> {
+  const envelope = await request<TenantUpdateResult>("/v1/auth/tenant", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
 /** 上传头像（multipart）；成功后后端已同步 avatar_url。 */
 export async function uploadAvatar(file: File): Promise<{ avatarUrl: string }> {
   const form = new FormData();
@@ -162,7 +180,7 @@ export async function revokeBinding(
   const envelope = await request<{ bindingId: string; status: string }>(
     `/v1/auth/wecom/bindings/${bindingId}/revoke`,
     {
-    method: "POST",
+      method: "POST",
       body: JSON.stringify({ password }),
     },
   );

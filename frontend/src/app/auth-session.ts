@@ -135,6 +135,13 @@ export function updateSessionDisplayName(displayName: string) {
   }
 }
 
+/** 租户治理变更后同步当前会话名称（侧栏与页面无需等待重新登录）。 */
+export function updateSessionTenantName(tenantName: string) {
+  if (currentSession) {
+    setSession({ ...currentSession, tenantName });
+  }
+}
+
 export function canViewOperations(session: AuthSession | null): boolean {
   return session?.role === "OWNER" || session?.role === "ADMIN";
 }

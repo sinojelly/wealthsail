@@ -10,6 +10,7 @@ import pytest
 from backend.common import auth as jwt_module
 from backend.errors import (
     AuthRequiredError,
+    ForbiddenError,
     IdempotencyConflictError as ConflictError,
     NotFoundError,
     ValidationError_ as ValidationError,
@@ -582,6 +583,50 @@ async def test_update_profile_validates_and_updates() -> None:
     assert result["nickname"] == "新昵称"
     update = next(c for c in conn.calls if "UPDATE identity.profiles" in c[0])
     assert update[1][0] == "新昵称"
+
+
+@pytest.mark.asyncio
+async def test_update_tenant_name_is_owner_only_scoped_and_audited() -> None:
+    class RenameConn(FakeConn):
+        async def fetchrow(self, sql, *args) -> Any:
+            self.calls.append((sql, args))
+            if "SELECT name" in sql:
+                return {"name": "Jelly 个人投资账户"}
+            if "UPDATE identity.tenants" in sql:
+                return {"id": "tenant-1", "name": "Jelly家庭投资账户"}
+            return None
+
+    conn = RenameConn()
+    service = _service(conn)
+    actor = TenantContext(tenant_id="tenant-1", user_id="user-1", tenant_role="OWNER")
+
+    result = await service.update_tenant_name(  # type: ignore[attr-defined]
+        conn, actor, name=" Jelly家庭投资账户 "
+    )
+
+    assert result == {"tenantId": "tenant-1", "name": "Jelly家庭投资账户"}
+    update = next(c for c in conn.calls if "UPDATE identity.tenants" in c[0])
+    assert update[1] == ("Jelly家庭投资账户", "tenant-1")
+    audit = next(c for c in conn.calls if "INSERT INTO audit.audit_log" in c[0])
+    assert audit[1][3] == "TENANT_NAME_UPDATED"
+    assert json.loads(audit[1][7]) == {
+        "old_name": "Jelly 个人投资账户",
+        "new_name": "Jelly家庭投资账户",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_tenant_name_rejects_non_owner_and_invalid_name() -> None:
+    service = _service()
+    viewer = TenantContext(tenant_id="tenant-1", user_id="user-1", tenant_role="VIEWER")
+    owner = TenantContext(tenant_id="tenant-1", user_id="user-1", tenant_role="OWNER")
+
+    with pytest.raises(ForbiddenError):
+        await service.update_tenant_name(FakeConn(), viewer, name="家庭投资账户")  # type: ignore[attr-defined,arg-type]
+    with pytest.raises(ValidationError):
+        await service.update_tenant_name(FakeConn(), owner, name="A")  # type: ignore[attr-defined,arg-type]
+    with pytest.raises(ValidationError):
+        await service.update_tenant_name(FakeConn(), owner, name="租" * 65)  # type: ignore[attr-defined,arg-type]
 
 
 @pytest.mark.asyncio

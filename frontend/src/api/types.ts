@@ -531,6 +531,11 @@ export interface MeTenant {
   status: string;
 }
 
+export interface TenantUpdateResult {
+  tenantId: string;
+  name: string;
+}
+
 export interface MeBinding {
   id: string;
   channelType: string;

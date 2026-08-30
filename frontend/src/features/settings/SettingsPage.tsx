@@ -28,27 +28,37 @@ export default function SettingsPage() {
       {me.error instanceof Error ? (
         <div className="alert alert-danger" role="alert">
           <AlertTriangle size={16} />
-          <div><strong>账号信息加载失败</strong><p>{me.error.message}</p></div>
+          <div>
+            <strong>账号信息加载失败</strong>
+            <p>{me.error.message}</p>
+          </div>
         </div>
       ) : null}
       <div className="settings-grid">
         <div className="settings-main">
           {data ? (
-            <ProfileCard profile={data.profile} onChanged={() => me.refetch()} />
+            <ProfileCard
+              profile={data.profile}
+              onChanged={() => me.refetch()}
+            />
           ) : null}
           <WeComBindingCard
             bindings={data?.bindings ?? []}
             onBound={() => me.refetch()}
           />
           <TenantRoleCard
+            key={data?.activeTenantId ?? "tenant-role-loading"}
             tenants={data?.tenants ?? []}
             activeTenantId={data?.activeTenantId ?? ""}
             activeRole={data?.activeRole ?? "VIEWER"}
+            onChanged={() => me.refetch()}
           />
           <InvitationCard
             activeRole={data?.activeRole ?? "VIEWER"}
             tenantName={
-              data?.tenants.find((tenant) => tenant.tenantId === data.activeTenantId)?.name ?? ""
+              data?.tenants.find(
+                (tenant) => tenant.tenantId === data.activeTenantId,
+              )?.name ?? ""
             }
           />
           {data?.platformRoles.includes("PLATFORM_ADMIN") ? (
@@ -93,7 +103,13 @@ export default function SettingsPage() {
                   <strong>可信设备</strong>
                   <small>由后端设备管理接管（未接入）</small>
                 </p>
-                <button className="btn-ghost" disabled title="可信设备管理尚未接入">管理</button>
+                <button
+                  className="btn-ghost"
+                  disabled
+                  title="可信设备管理尚未接入"
+                >
+                  管理
+                </button>
               </div>
             </div>
           </section>

@@ -20,6 +20,7 @@ def test_l1_trade_decision_and_password_reset_routes_are_mounted() -> None:
     assert "post" in paths["/api/v1/auth/password-reset/request"]
     assert "post" in paths["/api/v1/auth/password-reset/confirm"]
     assert "post" in paths["/api/v1/platform/personal-tenant-invitations"]
+    assert "patch" in paths["/api/v1/auth/tenant"]
     assert "/api/v1/auth/register-with-tenant" not in paths
     assert "/api/v1/auth/tenants" not in paths
 

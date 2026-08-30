@@ -80,6 +80,10 @@ class ProfileUpdateRequest(BaseModel):
     avatar_url: str | None = Field(default=None, max_length=500, description="头像 URL")
 
 
+class TenantUpdateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=64, description="当前活动租户的新名称")
+
+
 @router.post("/register")
 async def register(
     body: RegisterRequest,
@@ -322,6 +326,26 @@ async def update_profile(
             domain_tenant(ctx),
             nickname=body.nickname,
             avatar_url=body.avatar_url,
+        )
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.patch("/tenant")
+async def update_tenant(
+    body: TenantUpdateRequest,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """由当前租户 OWNER 重命名活动租户。"""
+    ctx.require_roles("OWNER")
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await identity_service(pool, settings).update_tenant_name(
+            conn,
+            domain_tenant(ctx),
+            name=body.name,
         )
     return ok(data, request_id=request_id, as_of=as_of)
 

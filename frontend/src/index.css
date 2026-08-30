@@ -2714,8 +2714,38 @@ button:disabled {
   line-height: 1.55;
 }
 .status-pill.tenant-pill {
+  max-width: min(360px, 48%);
+  overflow: hidden;
   color: #0f766e;
   background: #ccfbf1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tenant-name-form {
+  display: grid;
+  grid-template-columns: minmax(240px, 480px) auto;
+  align-items: end;
+  justify-content: start;
+  gap: 10px 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--slate-100);
+}
+.tenant-name-form .field {
+  min-width: 0;
+}
+.tenant-name-form .field small {
+  color: var(--slate-400);
+  font-size: 8px;
+  line-height: 1.45;
+}
+.tenant-name-submit {
+  min-height: 36px;
+  white-space: nowrap;
+}
+.tenant-name-form > .field-error,
+.tenant-name-form > .form-ok {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 .member-list {
   display: grid;
@@ -2985,6 +3015,50 @@ button:disabled {
   }
   .invitation-body {
     grid-template-columns: 1fr;
+  }
+}
+
+/* 设置页的可用宽度会受侧栏、DevTools 和分屏影响；使用内容容器而非
+   浏览器 viewport 决定列数，避免窗口仍宽但主内容已经被挤窄。 */
+@container page-content (max-width: 1050px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .settings-aside {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-aside > .alert {
+    grid-column: 1 / -1;
+  }
+}
+
+@container page-content (max-width: 700px) {
+  .settings-aside {
+    grid-template-columns: 1fr;
+  }
+  .settings-aside > .alert {
+    grid-column: auto;
+  }
+  .binding-methods,
+  .invitation-body,
+  .tenant-name-form {
+    grid-template-columns: 1fr;
+  }
+  .tenant-name-submit {
+    justify-self: start;
+  }
+  .binding-active {
+    grid-template-columns: auto 1fr;
+  }
+  .binding-active > .btn-danger {
+    grid-column: 1 / -1;
+  }
+  .member-row {
+    grid-template-columns: auto 1fr auto;
+  }
+  .member-row > small {
+    grid-column: 2;
+    text-align: left;
   }
 }
 
@@ -4259,8 +4333,10 @@ button:disabled {
 }
 
 .profile-nickname-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 52px minmax(220px, 480px) auto;
   align-items: center;
+  justify-content: start;
   gap: 10px;
   padding: 14px 0;
   border-top: 1px solid var(--slate-100);
@@ -4273,7 +4349,7 @@ button:disabled {
 }
 
 .profile-input {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   padding: 8px 12px;
   border: 1px solid var(--slate-200);
@@ -4299,6 +4375,15 @@ button:disabled {
 .profile-actions {
   padding-top: 14px;
   border-top: 1px solid var(--slate-100);
+}
+
+@container page-content (max-width: 700px) {
+  .profile-nickname-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .profile-nickname-row label {
+    grid-column: 1 / -1;
+  }
 }
 
 .form-error {

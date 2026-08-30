@@ -409,6 +409,14 @@ export function useMe(): UseQueryResult<MeResponse> {
   });
 }
 
+export function useUpdateTenantName() {
+  return useMutation({
+    mutationFn: (input: { name: string }) =>
+      identityApi.updateTenantName(input),
+    onError: onAuthFailure,
+  });
+}
+
 export function useLogin() {
   return useMutation({
     mutationFn: ({
