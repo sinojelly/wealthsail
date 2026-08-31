@@ -365,6 +365,15 @@ export interface PositionImportConfirmation {
   eventId: string;
 }
 
+export interface CsvPositionImportResult {
+  batchId: string;
+  status: "CONFIRMED";
+  version: number;
+  importedCount: number;
+  eventIds: string[];
+  replayed: boolean;
+}
+
 export interface NavPoint {
   date: string;
   totalNav: DecimalString | null;

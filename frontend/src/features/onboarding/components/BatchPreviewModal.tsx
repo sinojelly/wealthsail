@@ -6,10 +6,18 @@ export default function BatchPreviewModal({
   open,
   rows,
   onClose,
+  onSubmit,
+  submitting,
+  error,
+  canSubmit,
 }: {
   open: boolean;
   rows: ImportRow[];
   onClose: () => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  error: string | null;
+  canSubmit: boolean;
 }) {
   const validCount = rows.filter((row) => row.valid).length;
   const invalidCount = rows.length - validCount;
@@ -28,7 +36,7 @@ export default function BatchPreviewModal({
             <AlertCircle size={18} />
             <p>
               <strong>{invalidCount} 条需修正</strong>
-              <span>本次提交将自动跳过</span>
+              <span>整批提交前必须修正</span>
             </p>
           </div>
         </div>
@@ -82,26 +90,38 @@ export default function BatchPreviewModal({
           <p>
             <strong>提交边界</strong>
             <span>
-              当前仅执行浏览器本地格式预览，不写入账本。正式导入命令接入后，
-              将采用单租户事务、幂等批次和逐行审计结果。
+              服务端会重新核验全部代码；任一行失败则整批不入账。
+              成功导入使用单租户事务、幂等批次并保留审计记录。
             </span>
           </p>
         </div>
+        {error ? (
+          <p className="field-error" role="alert">
+            {error}
+          </p>
+        ) : null}
       </div>
       <footer className="dialog-footer">
         <span className="commit-note">
           <Database size={12} />
-          可预览 {validCount} 条有效记录 · 当前不会写入
+          将原子提交 {validCount} 条有效记录
         </span>
-        <button className="btn-secondary" onClick={onClose}>
+        <button
+          className="btn-secondary"
+          disabled={submitting}
+          onClick={onClose}
+        >
           返回修正
         </button>
         <button
           className="btn-primary"
-          disabled
-          title="后端导入命令尚未接入"
+          disabled={
+            submitting || !canSubmit || rows.length === 0 || invalidCount > 0
+          }
+          title={!canSubmit ? "VIEWER 角色仅可查看持仓" : undefined}
+          onClick={onSubmit}
         >
-          导入命令尚未接入
+          {submitting ? "提交中…" : "批次提交"}
         </button>
       </footer>
     </Dialog>

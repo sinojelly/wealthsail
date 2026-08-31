@@ -6,6 +6,7 @@ import {
   confirmTiantianImport,
   listTiantianImports,
   previewTiantianImport,
+  submitCsvPositions,
 } from "./portfolio";
 
 const meta = {
@@ -18,6 +19,41 @@ const meta = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Tiantian import API", () => {
+  it("submits the raw CSV with a stable idempotency key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            batchId: "csv-batch-1",
+            status: "CONFIRMED",
+            version: 2,
+            importedCount: 3,
+            eventIds: ["event-1", "event-2", "event-3"],
+            replayed: false,
+          },
+          meta,
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await submitCsvPositions(
+      "STOCK,600036,招商银行,8500,38.82",
+      "csv-command-1",
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/v1/portfolio/imports/csv");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      "csv-command-1",
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      csvData: "STOCK,600036,招商银行,8500,38.82",
+    });
+  });
+
   it("sends FormData without overriding its multipart boundary", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -135,9 +171,7 @@ describe("Tiantian import API", () => {
     );
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain(
-      "/positions/account-1/fund-1/holding-start/confirm",
-    );
+    expect(url).toContain("/positions/account-1/fund-1/holding-start/confirm");
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
       "holding-start-1",
     );

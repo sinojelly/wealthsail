@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -46,6 +47,38 @@ def _client(
     app.dependency_overrides[get_request_id] = lambda: "req_tiantian_api"
     app.dependency_overrides[get_settings_dep] = lambda: settings
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_csv_import_forwards_raw_data_baseline_and_idempotency_key() -> None:
+    submitted = AsyncMock(
+        return_value={
+            "batchId": "csv-batch-1",
+            "status": "CONFIRMED",
+            "version": 2,
+            "importedCount": 1,
+            "eventIds": ["event-1"],
+            "replayed": False,
+        }
+    )
+    with patch(
+        "backend.portfolio.api.service.import_csv_positions",
+        new=submitted,
+    ):
+        response = _client().post(
+            "/api/v1/portfolio/imports/csv",
+            headers={"Idempotency-Key": "csv-command-1"},
+            json={
+                "csvData": "STOCK,600036,招商银行,8500,38.82",
+                "baselineDate": "2026-08-30",
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["data"]["importedCount"] == 1
+    assert submitted.await_args.args[2] == "STOCK,600036,招商银行,8500,38.82"
+    assert submitted.await_args.kwargs["baseline_date"] == date(2026, 8, 30)
+    assert submitted.await_args.kwargs["idempotency_key"] == "csv-command-1"
+    assert submitted.await_args.kwargs["provider_timeout_seconds"] == 30.0
 
 
 def test_preview_streams_zip_to_deleted_temporary_file() -> None:

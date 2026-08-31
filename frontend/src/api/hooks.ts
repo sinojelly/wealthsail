@@ -122,7 +122,9 @@ export function usePositions(
     ),
     queryFn: () => portfolioApi.getPositions(scope),
     refetchInterval: (query) =>
-      query.state.data?.some((position) => position.valuationStatus === "SYNCING")
+      query.state.data?.some(
+        (position) => position.valuationStatus === "SYNCING",
+      )
         ? 2_000
         : false,
     retry: (count, error) =>
@@ -211,6 +213,24 @@ export function useConfirmPositionImport() {
       batchId: string;
       idempotencyKey: string;
     }) => portfolioApi.confirmPositionImport(batchId, idempotencyKey),
+    onSuccess: invalidate,
+    onError: onAuthFailure,
+  });
+}
+
+export function useCsvPositionImport() {
+  const invalidate = usePortfolioInvalidate();
+  return useMutation({
+    mutationFn: ({
+      csvData,
+      idempotencyKey,
+      baselineDate,
+    }: {
+      csvData: string;
+      idempotencyKey: string;
+      baselineDate?: string;
+    }) =>
+      portfolioApi.submitCsvPositions(csvData, idempotencyKey, baselineDate),
     onSuccess: invalidate,
     onError: onAuthFailure,
   });
@@ -429,10 +449,7 @@ export function useConfirmTiantianHoldingStartEstimates() {
       items: HoldingStartEstimateConfirmation[];
       idempotencyKey: string;
     }) =>
-      portfolioApi.confirmTiantianHoldingStartEstimates(
-        items,
-        idempotencyKey,
-      ),
+      portfolioApi.confirmTiantianHoldingStartEstimates(items, idempotencyKey),
     onSuccess: invalidatePortfolio,
     onError: onAuthFailure,
   });

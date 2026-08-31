@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeft,
   Clock3,
@@ -7,19 +7,65 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { HttpError } from "../../api/client";
+import { useCsvPositionImport } from "../../api/hooks";
+import type { CsvPositionImportResult } from "../../api/types";
+import { useAuthSession } from "../../app/auth-session";
 import EmptyState from "../../components/data-state/EmptyState";
 import PageHeader from "../../components/layout/PageHeader";
 import BatchPreviewModal from "./components/BatchPreviewModal";
 import ImportBatchForm from "./components/ImportBatchForm";
 import TiantianImportWizard from "./components/TiantianImportWizard";
 import { parseImportRows, type ImportRow } from "./import-parser";
+import { createIdempotencyKey } from "../../lib/idempotency";
 
 export default function OnboardingPage() {
   const [rows, setRows] = useState<ImportRow[]>([]);
+  const [source, setSource] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvResult, setCsvResult] = useState<CsvPositionImportResult | null>(
+    null,
+  );
+  const commandRef = useRef<{ source: string; key: string } | null>(null);
+  const session = useAuthSession();
+  const canSubmit = Boolean(session && session.role !== "VIEWER");
+  const csvImport = useCsvPositionImport();
+
   function preview(source: string) {
+    setSource(source);
     setRows(parseImportRows(source));
+    setCsvError(null);
     setPreviewOpen(true);
+  }
+
+  async function submitCsv() {
+    if (!canSubmit || rows.length === 0 || rows.some((row) => !row.valid)) {
+      return;
+    }
+    if (commandRef.current?.source !== source) {
+      commandRef.current = {
+        source,
+        key: `csv-import-${createIdempotencyKey()}`,
+      };
+    }
+    setCsvError(null);
+    try {
+      const result = await csvImport.mutateAsync({
+        csvData: source,
+        idempotencyKey: commandRef.current.key,
+      });
+      setCsvResult(result);
+      setPreviewOpen(false);
+    } catch (error) {
+      const detail =
+        error instanceof HttpError && error.fieldErrors.length > 0
+          ? error.fieldErrors.map((item) => item.message).join("；")
+          : error instanceof Error
+            ? error.message
+            : "CSV 导入失败，请稍后重试";
+      setCsvError(detail);
+    }
   }
   return (
     <>
@@ -85,12 +131,24 @@ export default function OnboardingPage() {
               <h2>最近导入</h2>
             </div>
             <div className="panel-body">
-              <EmptyState
-                className="onboarding-empty-state"
-                title="暂无 CSV 批次记录"
-                detail="后端批次导入命令尚未接入；当前 CSV 仅做本地校验与预览，不会写入账本。"
-                icon={Clock3}
-              />
+              {csvResult ? (
+                <div className="import-history-list">
+                  <div>
+                    <strong>已导入 {csvResult.importedCount} 条有效记录</strong>
+                    <span>批次 {csvResult.batchId}</span>
+                    <small>
+                      {csvResult.replayed ? "幂等重放" : "已确认并写入账本"}
+                    </small>
+                  </div>
+                </div>
+              ) : (
+                <EmptyState
+                  className="onboarding-empty-state"
+                  title="暂无 CSV 批次记录"
+                  detail="成功提交 CSV 后，最近一次确认结果会显示在这里。"
+                  icon={Clock3}
+                />
+              )}
             </div>
           </section>
         </aside>
@@ -99,6 +157,10 @@ export default function OnboardingPage() {
         open={previewOpen}
         rows={rows}
         onClose={() => setPreviewOpen(false)}
+        onSubmit={() => void submitCsv()}
+        submitting={csvImport.isPending}
+        error={csvError}
+        canSubmit={canSubmit}
       />
     </>
   );

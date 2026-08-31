@@ -1,5 +1,6 @@
 import { request } from "./client";
 import type {
+  CsvPositionImportResult,
   HoldingStartConfirmationResult,
   HoldingStartEstimateBatchResult,
   HoldingStartEstimateConfirmation,
@@ -117,6 +118,25 @@ export async function confirmPositionImport(
     {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
+    },
+  );
+  return envelope.data;
+}
+
+export async function submitCsvPositions(
+  csvData: string,
+  idempotencyKey: string,
+  baselineDate?: string,
+): Promise<CsvPositionImportResult> {
+  const envelope = await request<CsvPositionImportResult>(
+    "/v1/portfolio/imports/csv",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({
+        csvData,
+        ...(baselineDate ? { baselineDate } : {}),
+      }),
     },
   );
   return envelope.data;

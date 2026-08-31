@@ -152,6 +152,107 @@ async def test_fund_master_verification_accepts_fund_specific_provider_columns()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("asset_type", "symbol", "provider_name", "expected_market"),
+    [
+        ("CN_STOCK", "600036", "招商银行", "SSE"),
+        ("EXCHANGE_FUND", "510300", "沪深300ETF华泰柏瑞", "SSE"),
+    ],
+)
+async def test_targeted_master_fallback_verifies_listed_instruments_via_sina(
+    asset_type: str,
+    symbol: str,
+    provider_name: str,
+    expected_market: str,
+) -> None:
+    identity = {
+        "symbol": symbol,
+        "name": provider_name,
+        "type": service.INTERNAL_ASSET_TYPE[asset_type],
+        "source": "sina/suggest",
+    }
+    with patch(
+        "backend.portfolio.service.market_data_adapter.get_sina_instrument_identity",
+        AsyncMock(return_value=identity),
+    ) as get_identity:
+        verified = await service._verify_authoritative_instrument(
+            symbol,
+            asset_type,
+            timeout_seconds=5.0,
+        )
+
+    assert verified == {
+        "symbol": symbol,
+        "name": provider_name,
+        "market": expected_market,
+        "type": service.INTERNAL_ASSET_TYPE[asset_type],
+        "source": "sina/suggest",
+    }
+    get_identity.assert_awaited_once_with(
+        symbol, service.INTERNAL_ASSET_TYPE[asset_type]
+    )
+
+
+@pytest.mark.asyncio
+async def test_targeted_master_fallback_rejects_exchange_asset_type_mismatch() -> None:
+    with patch(
+        "backend.portfolio.service.market_data_adapter.get_sina_instrument_identity",
+        AsyncMock(),
+    ) as get_identity:
+        verified = await service._verify_authoritative_instrument(
+            "510300",
+            "CN_STOCK",
+            timeout_seconds=5.0,
+        )
+
+    assert verified is None
+    get_identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_targeted_master_rejects_convertible_bond_submitted_as_etf() -> None:
+    with patch(
+        "backend.portfolio.service.market_data_adapter.get_sina_instrument_identity",
+        AsyncMock(return_value=None),
+    ):
+        verified = await service._verify_authoritative_instrument(
+            "123001",
+            "EXCHANGE_FUND",
+            timeout_seconds=5.0,
+        )
+
+    assert verified is None
+
+
+@pytest.mark.asyncio
+async def test_targeted_master_fallback_verifies_fund_via_direct_provider() -> None:
+    import pandas as pd
+
+    provider = SimpleNamespace(
+        fund_individual_basic_info_xq=lambda symbol, timeout: pd.DataFrame(
+            {
+                "item": ["基金代码", "基金名称"],
+                "value": [symbol, "易方达消费行业"],
+            }
+        )
+    )
+    with patch.dict(sys.modules, {"akshare": provider}):
+        verified = await service._verify_authoritative_instrument(
+            "110022",
+            "OFF_EXCHANGE_FUND",
+            timeout_seconds=5.0,
+        )
+
+    assert verified == {
+        "symbol": "110022",
+        "name": "易方达消费行业",
+        "market": "FUND_CN",
+        "type": "FUND",
+        "source": "danjuan/fund-basic",
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("command", ["create", "confirm"])
 async def test_viewer_cannot_mutate_portfolio_imports(command: str) -> None:
     ctx = TenantContext("viewer-1", "tenant-1", tenant_role="VIEWER")

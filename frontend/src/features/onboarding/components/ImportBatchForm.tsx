@@ -41,10 +41,10 @@ export default function ImportBatchForm({
         <div className="alert alert-info">
           <Info size={15} />
           <div>
-            <strong>当前为本地预览，不写入事实账本</strong>
+            <strong>预览通过后可整批写入事实账本</strong>
             <p>
-              浏览器会逐行校验资产类型、标识符、份额和价格；后端导入命令接入前，
-              所有输入都只保留在当前页面内存中。
+              浏览器先检查字段与十进制格式，提交时服务端会再次校验代码，
+              并在单个事务内写入全部持仓。
             </p>
           </div>
         </div>

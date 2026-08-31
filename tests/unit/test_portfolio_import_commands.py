@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.common.tenancy import TenantContext
-from backend.errors import ForbiddenError
+from backend.errors import ForbiddenError, ValidationError_
 from backend.portfolio import repository, service
 from backend.portfolio.imports import repository as import_repository
 
@@ -161,10 +161,13 @@ class _InstrumentConnection:
         self.executed.append(sql)
         return "OK"
 
-    async def fetchval(self, sql: str, *_args):
+    async def fetchrow(self, _sql: str, *_args):
         self.fetchval_calls += 1
         if self.fetchval_calls == 1:
             return None
+
+    async def fetchval(self, _sql: str, *_args):
+        self.fetchval_calls += 1
         return "instrument-1"
 
 
@@ -183,6 +186,26 @@ async def test_instrument_creation_serializes_on_market_and_ticker_identity() ->
     assert result == "instrument-1"
     assert "pg_advisory_xact_lock" in conn.executed[0]
     assert conn.fetchval_calls == 2
+
+
+class _ConflictingInstrumentConnection:
+    async def execute(self, _sql: str, *_args):
+        return "OK"
+
+    async def fetchrow(self, _sql: str, *_args):
+        return {"id": "instrument-1", "asset_type": "CN_STOCK"}
+
+
+@pytest.mark.asyncio
+async def test_instrument_upsert_rejects_existing_type_conflict() -> None:
+    with pytest.raises(ValidationError_):
+        await repository.upsert_instrument(
+            _ConflictingInstrumentConnection(),
+            ticker="123001",
+            name="错误 ETF",
+            asset_type="EXCHANGE_FUND",
+            primary_market="SZSE",
+        )
 
 
 class _AccountConnection:

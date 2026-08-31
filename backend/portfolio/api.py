@@ -229,6 +229,13 @@ class PositionCreateRequest(BaseModel):
     accountId: str | None = Field(None, description="账户 id（可选，默认按类型自动选择/创建）")
 
 
+class CsvPositionImportRequest(BaseModel):
+    """One bounded five-column CSV opening-position command."""
+
+    csvData: str = Field(..., min_length=1, max_length=100_000)
+    baselineDate: date | None = None
+
+
 class TiantianHoldingStartDecision(BaseModel):
     """A user-reviewed holding episode start for one preview item."""
 
@@ -371,6 +378,34 @@ async def portfolio_preview_tiantian_import(
         )
     finally:
         upload_path.unlink(missing_ok=True)
+    return ok(
+        data,
+        request_id=request_id,
+        as_of=now_shanghai(),
+        quality_status="FRESH",
+    )
+
+
+@router.post("/imports/csv", status_code=201)
+async def portfolio_import_csv(
+    payload: CsvPositionImportRequest,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128
+    ),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Validate and atomically publish one CSV opening-position batch."""
+    data = await service.import_csv_positions(
+        pool,
+        ctx,
+        payload.csvData,
+        baseline_date=payload.baselineDate,
+        idempotency_key=idempotency_key,
+        provider_timeout_seconds=settings.market_master_timeout_seconds,
+    )
     return ok(
         data,
         request_id=request_id,

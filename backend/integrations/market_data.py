@@ -304,6 +304,72 @@ async def get_quote(symbol: str) -> dict:
     return _quote_unavailable(query, "akshare-name-unresolved")
 
 
+async def get_sina_quote(symbol: str) -> dict:
+    """Resolve one listed security directly through Sina's exact-code quote.
+
+    This intentionally skips the AkShare/EastMoney whole-market snapshot so
+    instrument verification keeps an independent provider path during a bulk
+    dataset outage. Invalid or unavailable symbols retain the fail-closed
+    quote contract.
+    """
+    code, suffix = _split_symbol((symbol or "").strip())
+    if code is None:
+        return _quote_unavailable((symbol or "").strip(), "sina/invalid-symbol")
+    return await _fetch_sina_quote(code, suffix)
+
+
+async def get_sina_instrument_identity(
+    symbol: str, expected_type: str
+) -> dict | None:
+    """Resolve an exact listed-security identity with Sina's typed catalog.
+
+    The quote endpoint proves that a code is tradable but does not distinguish
+    stocks, ETFs and convertible bonds. Sina's suggest catalog carries a
+    security type code: 11 for A shares and 22 for exchange-traded funds.
+    Returning only the caller's expected class keeps verification fail closed.
+    """
+    code, _suffix = _split_symbol((symbol or "").strip())
+    type_code = {"STOCK": "11", "ETF": "22"}.get(expected_type)
+    if code is None or type_code is None:
+        return None
+    url = (
+        "https://suggest3.sinajs.cn/suggest/"
+        f"type={type_code}&key={code}&name=wealthsail_identity"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
+            )
+            response.raise_for_status()
+            text = response.content.decode("gbk", errors="replace")
+    except httpx.HTTPError as exc:
+        logger.warning("新浪标的身份查询失败（%s）: %s", code, exc)
+        return None
+    match = re.search(r'"([^"]*)"', text)
+    if not match:
+        return None
+    for candidate in match.group(1).split(";"):
+        fields = candidate.split(",")
+        if (
+            len(fields) >= 5
+            and fields[1] == type_code
+            and fields[2] == code
+            and fields[4].strip()
+        ):
+            return {
+                "symbol": code,
+                "name": fields[4].strip(),
+                "type": expected_type,
+                "source": "sina/suggest",
+            }
+    return None
+
+
 def _split_symbol(query: str) -> tuple[str | None, str | None]:
     """'300308.SZ' → ('300308', 'SZ')；'中际旭创' → (None, None)。"""
     m = _SYMBOL_ONLY_RE.match(query)

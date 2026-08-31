@@ -7,10 +7,14 @@ serializes them as decimal strings. No float is used anywhere in this module.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
+import io
 import json
+import logging
 import re
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
 
 import asyncpg
@@ -19,11 +23,13 @@ from backend.common.database import tenant_transaction
 from backend.common.formatting import fmt_money, fmt_qty, merge_quality, pct
 from backend.dependencies import SHANGHAI_TZ, now_shanghai, write_audit
 from backend.errors import (
+    DataUnavailableError,
     IdempotencyConflictError,
     NotFoundError,
     ValidationError_,
     VersionConflictError,
 )
+from backend.integrations import market_data as market_data_adapter
 from backend.market import repository as market_repository
 from backend.portfolio import repository
 from backend.portfolio.scope import AssetScope
@@ -39,6 +45,154 @@ ASSET_CATEGORY: dict[str, str] = {
 
 ZERO = Decimal("0.00")
 CENT = Decimal("0.01")
+_CSV_IMPORT_MAX_ROWS = 200
+_CSV_IMPORT_MAX_CHARS = 100_000
+_CSV_IMPORT_VERIFY_CONCURRENCY = 8
+_CSV_IMPORT_MAX_PROVIDER_SECONDS = 45.0
+
+logger = logging.getLogger("wealthsail.portfolio")
+
+
+@dataclass(frozen=True)
+class CsvPositionRow:
+    row_number: int
+    asset_type: str
+    symbol: str
+    display_name: str
+    quantity: Decimal
+    unit_cost: Decimal
+
+
+def _csv_decimal(value: str, *, row_number: int, field: str) -> Decimal:
+    try:
+        parsed = Decimal(value)
+    except Exception as exc:  # Decimal exposes several syntax exceptions.
+        raise ValidationError_(
+            "CSV 包含无效字段",
+            field_errors=[
+                {"field": f"rows[{row_number}].{field}", "message": "必须是十进制数"}
+            ],
+        ) from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise ValidationError_(
+            "CSV 包含无效字段",
+            field_errors=[
+                {"field": f"rows[{row_number}].{field}", "message": "必须大于 0"}
+            ],
+        )
+    _sign, _digits, exponent = parsed.as_tuple()
+    if exponent < -10 or parsed >= Decimal("1000000000000000000"):
+        raise ValidationError_(
+            "CSV 包含无效字段",
+            field_errors=[
+                {
+                    "field": f"rows[{row_number}].{field}",
+                    "message": "整数最多 18 位且小数不超过 10 位",
+                }
+            ],
+        )
+    return parsed
+
+
+def parse_csv_position_rows(csv_data: str) -> list[CsvPositionRow]:
+    """Parse the bounded five-column CSV contract without retaining raw input."""
+    if not csv_data.strip():
+        raise ValidationError_(
+            "CSV 数据不能为空",
+            field_errors=[{"field": "csvData", "message": "请输入至少一行持仓数据"}],
+        )
+    if len(csv_data) > _CSV_IMPORT_MAX_CHARS:
+        raise ValidationError_(
+            "CSV 数据过大",
+            field_errors=[
+                {
+                    "field": "csvData",
+                    "message": f"不能超过 {_CSV_IMPORT_MAX_CHARS} 个字符",
+                }
+            ],
+        )
+    try:
+        parsed_rows = list(
+            csv.reader(io.StringIO(csv_data.lstrip("\ufeff")), strict=True)
+        )
+    except csv.Error as exc:
+        raise ValidationError_(
+            "CSV 格式无效",
+            field_errors=[{"field": "csvData", "message": str(exc)}],
+        ) from exc
+    non_empty = [row for row in parsed_rows if any(cell.strip() for cell in row)]
+    if len(non_empty) > _CSV_IMPORT_MAX_ROWS:
+        raise ValidationError_(
+            "CSV 行数超过限制",
+            field_errors=[
+                {
+                    "field": "csvData",
+                    "message": f"每批最多 {_CSV_IMPORT_MAX_ROWS} 行",
+                }
+            ],
+        )
+
+    result: list[CsvPositionRow] = []
+    for row_number, raw in enumerate(non_empty, start=1):
+        if len(raw) != 5:
+            raise ValidationError_(
+                "CSV 每行必须包含 5 列",
+                field_errors=[
+                    {
+                        "field": f"rows[{row_number}]",
+                        "message": "格式应为资产类型,代码,名称,份额,成本价",
+                    }
+                ],
+            )
+        asset_type, raw_symbol, display_name, raw_quantity, raw_cost = (
+            value.strip() for value in raw
+        )
+        asset_type = asset_type.upper()
+        if asset_type not in PUBLIC_ASSET_TYPE:
+            raise ValidationError_(
+                "CSV 包含不支持的资产类型",
+                field_errors=[
+                    {
+                        "field": f"rows[{row_number}].assetType",
+                        "message": "仅支持 STOCK / ETF / FUND",
+                    }
+                ],
+            )
+        if not re.fullmatch(r"\d{6}", raw_symbol):
+            raise ValidationError_(
+                "CSV 包含无效证券代码",
+                field_errors=[
+                    {
+                        "field": f"rows[{row_number}].symbol",
+                        "message": "须为 6 位数字代码",
+                    }
+                ],
+            )
+        if not display_name or len(display_name) > 200:
+            raise ValidationError_(
+                "CSV 包含无效名称",
+                field_errors=[
+                    {
+                        "field": f"rows[{row_number}].name",
+                        "message": "名称必填且不能超过 200 个字符",
+                    }
+                ],
+            )
+        result.append(
+            CsvPositionRow(
+                row_number=row_number,
+                asset_type=asset_type,
+                symbol=raw_symbol,
+                display_name=display_name,
+                quantity=_csv_decimal(
+                    raw_quantity, row_number=row_number, field="quantity"
+                ),
+                unit_cost=_csv_decimal(
+                    raw_cost, row_number=row_number, field="avgCost"
+                ),
+            )
+        )
+    return result
 
 
 def _d(value: object) -> Decimal:
@@ -809,7 +963,12 @@ async def _ak_search(
                         "source": "live",
                     },
                 )
-        except Exception:  # noqa: BLE001 — 搜索失败静默降级到本地主数据
+        except Exception as exc:  # noqa: BLE001 — 搜索失败降级到其他权威源
+            logger.warning(
+                "instrument master dataset unavailable source=%s error=%s",
+                cache_key,
+                exc,
+            )
             return
 
     await asyncio.gather(
@@ -825,6 +984,114 @@ async def _ak_search(
         ),
     )
     return list(results.values())
+
+
+def _listed_symbol_matches_asset_type(symbol: str, asset_type: str) -> bool:
+    """Reject obvious stock/ETF type mismatches before quote-only lookup."""
+    if asset_type == "EXCHANGE_FUND":
+        return symbol.startswith(("1", "5"))
+    if asset_type != "CN_STOCK":
+        return False
+    return symbol.startswith(
+        (
+            "000",
+            "001",
+            "002",
+            "003",
+            "300",
+            "301",
+            "4",
+            "8",
+            "92",
+            "600",
+            "601",
+            "603",
+            "605",
+            "688",
+            "689",
+        )
+    )
+
+
+async def _verify_authoritative_instrument(
+    symbol: str,
+    asset_type: str,
+    *,
+    timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> dict | None:
+    """Verify one exact code without trusting a user-supplied display name."""
+    public_type = INTERNAL_ASSET_TYPE[asset_type]
+    market = _primary_market(asset_type, symbol)
+
+    if asset_type in {"CN_STOCK", "EXCHANGE_FUND"}:
+        # The Sina quote route used here has no reliable BSE addressing mode.
+        if market == "BSE" or not _listed_symbol_matches_asset_type(
+            symbol, asset_type
+        ):
+            return None
+        try:
+            identity = await asyncio.wait_for(
+                market_data_adapter.get_sina_instrument_identity(
+                    symbol, public_type
+                ),
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 — broad master may still work
+            logger.warning(
+                "targeted instrument verification unavailable source=sina symbol=%s error=%s",
+                symbol,
+                exc,
+            )
+            return None
+        if identity is None or identity.get("symbol") != symbol:
+            return None
+        return {
+            "symbol": symbol,
+            "name": str(identity["name"]).strip(),
+            "market": market,
+            "type": public_type,
+            "source": str(identity.get("source") or "sina/suggest"),
+        }
+
+    if asset_type != "OFF_EXCHANGE_FUND":
+        return None
+    try:
+        import akshare as ak  # noqa: PLC0415
+
+        def _load_fund_basic_info():
+            return ak.fund_individual_basic_info_xq(
+                symbol=symbol,
+                timeout=timeout_seconds,
+            )
+
+        df = await asyncio.wait_for(
+            asyncio.to_thread(_load_fund_basic_info),
+            timeout=timeout_seconds,
+        )
+        if df is None or df.empty or len(df.columns) < 2:
+            return None
+        fields = {
+            str(row.iloc[0]).strip(): str(row.iloc[1]).strip()
+            for _, row in df.iterrows()
+        }
+    except Exception as exc:  # noqa: BLE001 — broad master may still work
+        logger.warning(
+            "targeted instrument verification unavailable source=danjuan symbol=%s error=%s",
+            symbol,
+            exc,
+        )
+        return None
+    provider_symbol = fields.get("基金代码", "").zfill(6)
+    provider_name = fields.get("基金名称", "")
+    if provider_symbol != symbol or not provider_name:
+        return None
+    return {
+        "symbol": symbol,
+        "name": provider_name,
+        "market": "FUND_CN",
+        "type": public_type,
+        "source": "danjuan/fund-basic",
+    }
 
 
 async def verify_fund_master_names(
@@ -939,7 +1206,7 @@ async def _resolve_verified_instrument(
             conn,
             symbol,
             primary_market=expected_market,
-            asset_type=asset_type,
+            asset_type=None,
         )
     if existing is not None:
         if existing["asset_type"] != asset_type:
@@ -956,18 +1223,24 @@ async def _resolve_verified_instrument(
         }
 
     expected_public_type = INTERNAL_ASSET_TYPE[asset_type]
-    candidates = await _ak_search(
-        symbol, timeout_seconds=provider_timeout_seconds
+    exact = await _verify_authoritative_instrument(
+        symbol,
+        asset_type,
+        timeout_seconds=provider_timeout_seconds,
     )
-    exact = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate["symbol"] == symbol
-            and candidate["type"] == expected_public_type
-        ),
-        None,
-    )
+    if exact is None:
+        candidates = await _ak_search(
+            symbol, timeout_seconds=provider_timeout_seconds
+        )
+        exact = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate["symbol"] == symbol
+                and candidate["type"] == expected_public_type
+            ),
+            None,
+        )
     if exact is None:
         raise ValidationError_(
             "暂时无法从行情源验证该标的，请稍后重试或等待主数据同步",
@@ -1037,6 +1310,246 @@ def _assert_same_position_import(row, source_hash: str) -> None:
         )
 
 
+def _csv_import_content_hash(rows: list[CsvPositionRow], *, baseline_date: date) -> str:
+    """Hash normalized economic fields; uploaded names are display-only input."""
+    canonical = json.dumps(
+        {
+            "baselineDate": baseline_date.isoformat(),
+            "positions": [
+                {
+                    "row": row.row_number,
+                    "assetType": row.asset_type,
+                    "symbol": row.symbol,
+                    "quantity": format(row.quantity, "f"),
+                    "unitCost": format(row.unit_cost, "f"),
+                }
+                for row in rows
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _csv_import_replay_response(row, *, replayed: bool) -> dict:
+    if str(row.get("source_type", "")) != "CSV":
+        raise IdempotencyConflictError(
+            "Idempotency-Key 已用于其他类型的持仓导入，请刷新后重试"
+        )
+    if str(row["status"]) != "CONFIRMED":
+        raise IdempotencyConflictError("此前 CSV 导入尚未完成，请刷新后重试")
+    return {
+        "batchId": str(row["batch_id"]),
+        "status": "CONFIRMED",
+        "version": int(row["version"]),
+        "importedCount": int(row["position_count"]),
+        "eventIds": [str(event_id) for event_id in row.get("event_ids", [])],
+        "replayed": replayed,
+    }
+
+
+def _assert_same_csv_import(row, source_hash: str) -> None:
+    if (
+        str(row.get("source_type", "")) != "CSV"
+        or str(row["source_content_hash"]) != source_hash
+    ):
+        raise IdempotencyConflictError(
+            "Idempotency-Key 已用于不同的 CSV 导入内容，请刷新后重试"
+        )
+
+
+async def _resolve_csv_instruments(
+    pool: asyncpg.Pool,
+    ctx,
+    rows: list[CsvPositionRow],
+    *,
+    provider_timeout_seconds: float,
+    batch_timeout_seconds: float | None = None,
+) -> list[tuple[CsvPositionRow, dict]]:
+    """Deduplicate and resolve one batch under bounded concurrency/deadline."""
+    keys = list(dict.fromkeys((row.asset_type, row.symbol) for row in rows))
+    semaphore = asyncio.Semaphore(_CSV_IMPORT_VERIFY_CONCURRENCY)
+
+    async def resolve(key: tuple[str, str]) -> dict:
+        asset_type, symbol = key
+        async with semaphore:
+            return await _resolve_verified_instrument(
+                pool,
+                ctx,
+                symbol,
+                PUBLIC_ASSET_TYPE[asset_type],
+                provider_timeout_seconds=provider_timeout_seconds,
+            )
+
+    deadline = batch_timeout_seconds
+    if deadline is None:
+        deadline = min(
+            max(provider_timeout_seconds * 2, 10.0),
+            _CSV_IMPORT_MAX_PROVIDER_SECONDS,
+        )
+    tasks = [asyncio.create_task(resolve(key)) for key in keys]
+    try:
+        try:
+            resolved = await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=deadline,
+            )
+        except TimeoutError as exc:
+            raise DataUnavailableError(
+                "行情主数据核验超时，请稍后使用同一批次重新提交"
+            ) from exc
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    by_key = dict(zip(keys, resolved, strict=True))
+    return [(row, by_key[(row.asset_type, row.symbol)]) for row in rows]
+
+
+async def import_csv_positions(
+    pool: asyncpg.Pool,
+    ctx,
+    csv_data: str,
+    *,
+    baseline_date: date | None,
+    idempotency_key: str,
+    provider_timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> dict:
+    """Validate and atomically confirm one mixed-asset CSV opening baseline."""
+    ctx.require_roles("OWNER", "ADMIN", "EDITOR")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise ValidationError_("Idempotency-Key 必填且不能超过 128 个字符")
+    rows = parse_csv_position_rows(csv_data)
+    trade_date = baseline_date or now_shanghai().date()
+    source_hash = _csv_import_content_hash(rows, baseline_date=trade_date)
+
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        previous = await repository.find_csv_import_by_idempotency_key(
+            conn,
+            tenant_id=ctx.tenant_id,
+            idempotency_key=idempotency_key,
+        )
+    if previous is not None:
+        _assert_same_csv_import(previous, source_hash)
+        return _csv_import_replay_response(previous, replayed=True)
+
+    verified_rows = await _resolve_csv_instruments(
+        pool,
+        ctx,
+        rows,
+        provider_timeout_seconds=provider_timeout_seconds,
+    )
+
+    try:
+        async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+            previous = await repository.find_csv_import_by_idempotency_key(
+                conn,
+                tenant_id=ctx.tenant_id,
+                idempotency_key=idempotency_key,
+            )
+            if previous is not None:
+                _assert_same_csv_import(previous, source_hash)
+                return _csv_import_replay_response(previous, replayed=True)
+
+            account_id = await repository.pick_or_create_manual_account(
+                conn,
+                tenant_id=ctx.tenant_id,
+                owner_user_id=ctx.user_id,
+            )
+            items: list[dict] = []
+            for row, verified in verified_rows:
+                internal_type = PUBLIC_ASSET_TYPE[row.asset_type]
+                current = await repository.find_instrument_by_ticker(
+                    conn,
+                    row.symbol,
+                    primary_market=verified["market"],
+                    asset_type=None,
+                )
+                if current is not None and current["asset_type"] != internal_type:
+                    raise ValidationError_(
+                        f"标的 {row.symbol} 的资产类型与主数据不一致",
+                        field_errors=[
+                            {
+                                "field": f"rows[{row.row_number}].assetType",
+                                "message": "与主数据不一致",
+                            }
+                        ],
+                    )
+                instrument_id = (
+                    str(current["id"])
+                    if current is not None
+                    else await repository.upsert_instrument(
+                        conn,
+                        ticker=row.symbol,
+                        name=verified["name"],
+                        asset_type=internal_type,
+                        primary_market=verified["market"],
+                    )
+                )
+                items.append(
+                    {
+                        "row_number": row.row_number,
+                        "instrument_id": instrument_id,
+                        "quantity": row.quantity,
+                        "unit_cost": row.unit_cost,
+                        "trade_date": trade_date,
+                    }
+                )
+            batch_id = await repository.create_csv_import_draft(
+                conn,
+                tenant_id=ctx.tenant_id,
+                account_id=account_id,
+                created_by=ctx.user_id,
+                idempotency_key=idempotency_key,
+                source_content_hash=source_hash,
+                items=items,
+            )
+            confirmed = await repository.confirm_import_batch(
+                conn,
+                tenant_id=ctx.tenant_id,
+                batch_id=batch_id,
+                idempotency_key=f"{idempotency_key}:confirm",
+            )
+            if not confirmed or confirmed.get("status") in {"INVALID", "CANCELLED"}:
+                raise ValidationError_("CSV 批次未通过确认校验，未写入任何持仓")
+            await recompute_projections(conn, tenant_id=ctx.tenant_id)
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="PORTFOLIO_CSV_IMPORT_CONFIRMED",
+                resource_type="ledger.portfolio_import_batches",
+                resource_id=batch_id,
+                details={
+                    "positionCount": len(items),
+                    "eventIds": confirmed.get("event_ids", []),
+                },
+            )
+    except asyncpg.exceptions.UniqueViolationError:
+        async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+            previous = await repository.find_csv_import_by_idempotency_key(
+                conn,
+                tenant_id=ctx.tenant_id,
+                idempotency_key=idempotency_key,
+            )
+        if previous is None:
+            raise
+        _assert_same_csv_import(previous, source_hash)
+        return _csv_import_replay_response(previous, replayed=True)
+
+    return {
+        "batchId": batch_id,
+        "status": "CONFIRMED",
+        "version": int(confirmed["version"]),
+        "importedCount": len(items),
+        "eventIds": [str(event_id) for event_id in confirmed.get("event_ids", [])],
+        "replayed": False,
+    }
+
+
 async def create_position_import(
     pool: asyncpg.Pool,
     ctx,
@@ -1093,8 +1606,15 @@ async def create_position_import(
                 conn,
                 symbol,
                 primary_market=verified["market"],
-                asset_type=internal_type,
+                asset_type=None,
             )
+            if current is not None and current["asset_type"] != internal_type:
+                raise ValidationError_(
+                    f"标的 {symbol} 的资产类型与主数据不一致",
+                    field_errors=[
+                        {"field": "assetType", "message": "与主数据不一致"}
+                    ],
+                )
             instrument_id = (
                 str(current["id"])
                 if current is not None

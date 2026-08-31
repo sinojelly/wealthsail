@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import asyncpg
 
+from backend.errors import ValidationError_
 from backend.integrations.market_data import (
     F_CLOSE,
     F_ESTIMATED_NAV,
@@ -519,9 +520,9 @@ async def upsert_instrument(
         primary_market,
         ticker,
     )
-    instrument_id = await conn.fetchval(
+    existing = await conn.fetchrow(
         """
-        SELECT i.id
+        SELECT i.id, i.asset_type
         FROM reference.instruments i
         JOIN reference.instrument_aliases a ON a.instrument_id = i.id
         WHERE a.alias_type = 'TICKER'
@@ -534,8 +535,15 @@ async def upsert_instrument(
         ticker,
         primary_market,
     )
-    if instrument_id is not None:
-        return str(instrument_id)
+    if existing is not None:
+        if str(existing["asset_type"]) != asset_type:
+            raise ValidationError_(
+                f"标的 {ticker} 的资产类型与已有主数据不一致",
+                field_errors=[
+                    {"field": "assetType", "message": "与已有主数据不一致"}
+                ],
+            )
+        return str(existing["id"])
 
     instrument_id = await conn.fetchval(
         """
@@ -589,6 +597,41 @@ async def find_position_import_by_idempotency_key(
         WHERE b.tenant_id = $1 AND b.idempotency_key = $2
         ORDER BY item.source_row NULLS LAST, item.id
         LIMIT 1
+        """,
+        tenant_id,
+        idempotency_key,
+    )
+
+
+async def find_csv_import_by_idempotency_key(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+) -> asyncpg.Record | None:
+    """Load a CSV batch summary without multiplying item and event rows."""
+    return await conn.fetchrow(
+        """
+        SELECT batch.id AS batch_id, batch.source_type,
+               batch.source_content_hash, batch.status, batch.version,
+               (
+                   SELECT count(*)
+                     FROM ledger.portfolio_import_items item
+                    WHERE item.tenant_id = batch.tenant_id
+                      AND item.batch_id = batch.id
+                      AND item.item_type = 'POSITION'
+               ) AS position_count,
+               COALESCE((
+                   SELECT array_agg(event.id ORDER BY event.created_at, event.id)
+                     FROM ledger.ledger_events event
+                    WHERE event.tenant_id = batch.tenant_id
+                      AND event.import_batch_id = batch.id
+                      AND event.status = 'CONFIRMED'
+               ), ARRAY[]::uuid[]) AS event_ids
+          FROM ledger.portfolio_import_batches batch
+         WHERE batch.tenant_id = $1
+           AND batch.idempotency_key = $2
+         LIMIT 1
         """,
         tenant_id,
         idempotency_key,
@@ -650,6 +693,61 @@ async def pick_or_create_account(
         ) VALUES (
             $1, $2, $3, 'BENEFICIAL_OWNER', 'OWNER', true, $3
         )
+        """,
+        tenant_id,
+        account_id,
+        owner_user_id,
+    )
+    return account_id
+
+
+async def pick_or_create_manual_account(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    owner_user_id: str,
+) -> str:
+    """Pick or create the actor's personal mixed-asset manual account."""
+    account_id = await conn.fetchval(
+        """
+        SELECT account.id
+          FROM identity.accounts account
+         WHERE account.tenant_id = $1
+           AND account.status = 'ACTIVE'
+           AND account.account_type = 'MANUAL'
+           AND EXISTS (
+               SELECT 1 FROM identity.account_members member
+                WHERE member.tenant_id = account.tenant_id
+                  AND member.account_id = account.id
+                  AND member.user_id = $2
+                  AND member.effective_to IS NULL
+                  AND member.permission_role IN ('OWNER', 'EDITOR')
+           )
+         ORDER BY account.created_at
+         LIMIT 1
+        """,
+        tenant_id,
+        owner_user_id,
+    )
+    if account_id is not None:
+        return str(account_id)
+    account_id = str(
+        await conn.fetchval(
+            """
+            INSERT INTO identity.accounts(
+                tenant_id, account_type, name, base_currency, ownership_scope
+            ) VALUES ($1, 'MANUAL', '手工导入账户', 'CNY', 'PERSONAL')
+            RETURNING id
+            """,
+            tenant_id,
+        )
+    )
+    await conn.execute(
+        """
+        INSERT INTO identity.account_members(
+            tenant_id, account_id, user_id, relationship,
+            permission_role, is_primary, created_by
+        ) VALUES ($1, $2, $3, 'BENEFICIAL_OWNER', 'OWNER', true, $3)
         """,
         tenant_id,
         account_id,
@@ -744,6 +842,58 @@ async def create_import_draft(
         )
     )
     return {"batch_id": batch_id, "item_id": item_id}
+
+
+async def create_csv_import_draft(
+    conn: asyncpg.Connection,
+    *,
+    tenant_id: str,
+    account_id: str,
+    created_by: str,
+    idempotency_key: str,
+    source_content_hash: str,
+    items: list[dict],
+) -> str:
+    """Persist one validated CSV batch and all rows before confirmation."""
+    batch_id = str(
+        await conn.fetchval(
+            """
+            INSERT INTO ledger.portfolio_import_batches(
+                tenant_id, account_id, created_by, source_type,
+                source_content_hash, status, idempotency_key,
+                validation_status, validation_errors
+            ) VALUES ($1, $2, $3, 'CSV', $4, 'DRAFT', $5, 'VALID', '[]'::jsonb)
+            RETURNING id
+            """,
+            tenant_id,
+            account_id,
+            created_by,
+            source_content_hash,
+            idempotency_key,
+        )
+    )
+    await conn.executemany(
+        """
+        INSERT INTO ledger.portfolio_import_items(
+            tenant_id, batch_id, item_type, instrument_id, quantity,
+            unit_cost, trade_date, source_row, validation_status,
+            validation_errors
+        ) VALUES ($1, $2, 'POSITION', $3, $4, $5, $6, $7, 'VALID', '[]'::jsonb)
+        """,
+        [
+            (
+                tenant_id,
+                batch_id,
+                item["instrument_id"],
+                item["quantity"],
+                item["unit_cost"],
+                item["trade_date"],
+                item["row_number"],
+            )
+            for item in items
+        ],
+    )
+    return batch_id
 
 
 async def confirm_import_batch(
