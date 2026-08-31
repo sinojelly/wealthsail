@@ -238,6 +238,9 @@ async def generate_report(
         shared_cache_hit = shared_result.cache_hit
         push_content = shared_market_brief.format_push_content(draft, session=session)
     else:
+        # The notification preview is deterministic and grounded in the same
+        # persisted context as the report. It never adds a second model call.
+        push_content = _format_personalized_push_content(context, session=session)
         model_result = None
         error_class: str | None = None
         try:
@@ -368,11 +371,9 @@ async def _build_context(
         "positions": positions,
         "policy": dict(policy) if policy else None,
         "fundEstimates": fund_estimates,
+        # Read-only persisted snapshot; this never performs provider I/O.
+        "marketSentiment": await market_service.get_market_sentiment(conn),
     }
-    if not positions:
-        # These are persisted Worker-owned snapshots. Report reads never call
-        # external providers while the tenant RLS transaction is open.
-        result["marketSentiment"] = await market_service.get_market_sentiment(conn)
     return result
 
 
@@ -383,6 +384,176 @@ def _active_positions(positions: list[dict]) -> list[dict]:
         for position in positions
         if Decimal(str(position.get("quantity") or "0")) > ZERO
     ]
+
+
+def _safe_decimal(value: object) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _position_label(position: dict) -> str:
+    name = str(position.get("name") or "未命名标的")
+    compact_name = name if len(name) <= 12 else f"{name[:11]}…"
+    symbol = _compact_symbol(position.get("symbol"))
+    return f"{compact_name}({symbol})"
+
+
+def _compact_symbol(value: object, limit: int = 9) -> str:
+    """Keep long identifiers recognisable without consuming a push line."""
+    symbol = str(value or "--")
+    if len(symbol) <= limit:
+        return symbol
+    side = (limit - 1) // 2
+    return f"{symbol[:side]}…{symbol[-side:]}"
+
+
+def _clip_push_line(value: str, limit: int = 72) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 1].rstrip('；，。')}…"
+
+
+def _personalized_summary(summary: dict) -> str:
+    daily_rate = _safe_decimal(summary.get("dailyPnlRate"))
+    daily_pnl = _safe_decimal(summary.get("dailyPnl"))
+    if daily_rate is not None:
+        performance = f"组合当日 {daily_rate:+.2f}%"
+    elif daily_pnl is not None:
+        performance = f"组合当日涨跌幅暂不可用（盈亏 {daily_pnl:+.2f} 元）"
+    else:
+        performance = "组合当日涨跌幅暂不可用"
+    return f"{performance}；主要贡献标的暂无法可靠归因。"
+
+
+def _personalized_health(context: dict) -> tuple[str, list[dict], list[dict]]:
+    positions = context.get("positions") or []
+    stale = [
+        position
+        for position in positions
+        if str(position.get("quality") or "") == "STALE"
+    ]
+    policy = context.get("policy")
+    limit = (
+        _safe_decimal(policy.get("single_position_limit"))
+        if policy is not None
+        else None
+    )
+    overweight: list[dict] = []
+    if limit is not None:
+        overweight = sorted(
+            (
+                position
+                for position in positions
+                if (_safe_decimal(position.get("weight")) or ZERO) > limit
+            ),
+            key=lambda position: _safe_decimal(position.get("weight")) or ZERO,
+            reverse=True,
+        )
+
+    parts: list[str] = []
+    if stale:
+        # Preserve the friendly name for a single stale holding, but switch to
+        # compact symbols when several holdings need attention.  This keeps the
+        # overweight holding and its policy threshold visible in the same
+        # WeCom line instead of letting the generic line clip hide them.
+        if len(stale) == 1:
+            labels = _position_label(stale[0])
+        else:
+            labels = "、".join(
+                _compact_symbol(position.get("symbol")) for position in stale[:3]
+            )
+        extra = f"等{len(stale)}只" if len(stale) > 3 else ""
+        parts.append(f"估值过期：{labels}{extra}")
+    else:
+        parts.append("无估值过期持仓")
+    if overweight and limit is not None:
+        position = overweight[0]
+        weight = _safe_decimal(position.get("weight")) or ZERO
+        symbol = _compact_symbol(position.get("symbol"))
+        parts.append(
+            f"仓位偏高：{symbol} {weight:.2f}%＞{limit:.2f}%"
+        )
+    elif limit is None:
+        parts.append("未配置单一持仓上限")
+    else:
+        parts.append("无仓位超限")
+    return "；".join(parts) + "。", stale, overweight
+
+
+def _personalized_actions(
+    context: dict,
+    stale: list[dict],
+    overweight: list[dict],
+) -> str:
+    actions: list[str] = []
+    if stale:
+        symbol = _compact_symbol(stale[0].get("symbol") or "该标的")
+        actions.append(f"等待{symbol}估值更新后再决策")
+    policy = context.get("policy")
+    limit = (
+        _safe_decimal(policy.get("single_position_limit"))
+        if policy is not None
+        else None
+    )
+    if overweight and limit is not None:
+        symbol = _compact_symbol(overweight[0].get("symbol") or "该标的")
+        actions.append(
+            f"{symbol}暂停增加暴露，按{limit:.2f}%上限评估再平衡"
+        )
+    if not actions:
+        actions.append("维持观察，按既定风险规则复核持仓")
+    return "；".join(f"{index + 1}) {action}" for index, action in enumerate(actions[:2])) + "。"
+
+
+def _personalized_market_signal(sentiment: dict) -> str:
+    up = _safe_decimal(sentiment.get("totalUp"))
+    down = _safe_decimal(sentiment.get("totalDown"))
+    score = _safe_decimal(sentiment.get("sentimentScore"))
+    if up is None or down is None:
+        return "市场广度数据暂不可用，等待 Worker 快照更新。"
+    if up > down * Decimal("1.2"):
+        breadth = "偏强"
+    elif down > up * Decimal("1.2"):
+        breadth = "偏弱"
+    else:
+        breadth = "均衡"
+    freshness = (
+        ""
+        if sentiment.get("qualityStatus") == "FRESH"
+        else f"截至{sentiment.get('tradeDate') or '未知日期'}（非实时），"
+    )
+    score_text = f"，情绪 {score:.2f}" if score is not None else ""
+    return (
+        f"{freshness}上涨 {int(up)} 家、下跌 {int(down)} 家，"
+        f"市场广度{breadth}{score_text}。"
+    )
+
+
+def _format_personalized_push_content(context: dict, *, session: str) -> str:
+    """Render a four-line, model-free holding summary for WeCom."""
+    del session  # The four-section contract is shared by every report session.
+    active_context = {
+        **context,
+        "positions": _active_positions(context.get("positions") or []),
+    }
+    health, stale, overweight = _personalized_health(active_context)
+    lines = [
+        f"1. 一句话总结：{_personalized_summary(active_context.get('summary') or {})}",
+        f"2. 持仓健康度：{health}",
+        f"3. 具体行动建议：{_personalized_actions(active_context, stale, overweight)}",
+        "4. 今日市场信号："
+        f"{_personalized_market_signal(active_context.get('marketSentiment') or {})}",
+    ]
+    # Allocate more room to health details while keeping the complete message
+    # below 300 characters (the three newlines bring the maximum to 298).
+    line_limits = (70, 80, 75, 70)
+    return "\n".join(
+        _clip_push_line(line, limit)
+        for line, limit in zip(lines, line_limits, strict=True)
+    )
 
 
 def _render_prompts(session: str, context: dict) -> tuple[str, str]:
