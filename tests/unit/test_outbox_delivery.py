@@ -11,7 +11,12 @@ import pytest
 from backend.common.security import envelope_encrypt
 from backend.config import Settings
 from backend.integrations import wecom, wecom_bot
-from backend.jobs.outbox import build_delivery_command, claim_batch
+from backend.jobs.outbox import (
+    DeliveryCommand,
+    _send,
+    build_delivery_command,
+    claim_batch,
+)
 from backend.reports.repository import insert_report_outbox_deliveries
 from backend.reports.service import _delivery_audit_details
 
@@ -148,6 +153,153 @@ async def test_wecom_rejects_oversized_utf8_text_before_network(monkeypatch) -> 
     assert called is False
 
 
+@pytest.mark.asyncio
+async def test_wecom_rejects_oversized_utf8_markdown_before_network(monkeypatch) -> None:
+    called = False
+
+    async def should_not_send(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return "unexpected"
+
+    monkeypatch.setattr(wecom, "_send_app_message", should_not_send)
+    settings = Settings(_env_file=None)
+
+    with pytest.raises(wecom.DeliveryRejectedError, match="2048"):
+        await wecom.send_message(
+            settings,
+            "user-1",
+            "中" * 683,
+            msg_type="markdown",
+        )
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_report_delivery_renders_a_clickable_internal_markdown_link(
+    monkeypatch,
+) -> None:
+    key = "routing-key-with-at-least-32-bytes!"
+    binding = {
+        "id": "binding-1",
+        "tenant_id": "tenant-a",
+        "channel_type": "wecom",
+        "status": "ACTIVE",
+        "external_user_ciphertext": envelope_encrypt(key, "wecom-user-7"),
+    }
+    row = {
+        "tenant_id": "tenant-a",
+        "channel_binding_id": "binding-1",
+        "topic": "REPORT_PUBLISHED",
+        "payload": {
+            "report_id": "report-1",
+            "session": "POST_MARKET",
+            "message_type": "markdown",
+            "link_path": "/reports?reportId=report-1",
+            "content": "盘后报告 [外部链接](https://attacker.example) 已经生成。",
+        },
+    }
+    command = build_delivery_command(row, binding, routing_key=key)
+    captured: dict[str, str] = {}
+
+    async def capture_send(_settings, recipient, content, *, msg_type="text"):
+        captured.update(
+            recipient=recipient,
+            content=content,
+            msg_type=msg_type,
+        )
+        return "message-1"
+
+    monkeypatch.setattr(wecom, "send_message", capture_send)
+
+    receipt = await _send(
+        command,
+        Settings(
+            _env_file=None,
+            wecom_corp_secret="configured",
+            web_base_url="https://wealthsail.example.com",
+        ),
+    )
+
+    assert receipt == "message-1"
+    assert captured["recipient"] == "wecom-user-7"
+    assert captured["msg_type"] == "markdown"
+    assert "盘后报告" in captured["content"]
+    assert "https://attacker.example" not in captured["content"]
+    assert (
+        "[查看完整报告](https://wealthsail.example.com/reports?reportId=report-1)"
+        in captured["content"]
+    )
+    assert len(captured["content"].encode("utf-8")) <= 2048
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "web_base_url",
+    [
+        "https://user:password@wealthsail.example.com",
+        "https://wealthsail.example.com/app",
+        "https://wealthsail.example.com?next=external",
+        "https://wealthsail.example.com#fragment",
+    ],
+)
+async def test_report_delivery_requires_web_base_url_to_be_a_pure_origin(
+    monkeypatch,
+    web_base_url: str,
+) -> None:
+    called = False
+
+    async def should_not_send(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return "unexpected"
+
+    monkeypatch.setattr(wecom, "send_message", should_not_send)
+    command = DeliveryCommand(
+        channel_type="wecom",
+        recipient="wecom-user-7",
+        content="报告已生成。",
+        message_type="markdown",
+        link_path="/reports?reportId=report-1",
+    )
+
+    with pytest.raises(wecom.DeliveryRejectedError, match="WEB_BASE_URL"):
+        await _send(
+            command,
+            Settings(
+                _env_file=None,
+                wecom_corp_secret="configured",
+                web_base_url=web_base_url,
+            ),
+        )
+    assert called is False
+
+
+def test_report_delivery_rejects_an_external_link_path() -> None:
+    key = "routing-key-with-at-least-32-bytes!"
+    binding = {
+        "id": "binding-1",
+        "tenant_id": "tenant-a",
+        "channel_type": "wecom",
+        "status": "ACTIVE",
+        "external_user_ciphertext": envelope_encrypt(key, "wecom-user-7"),
+    }
+    row = {
+        "tenant_id": "tenant-a",
+        "channel_binding_id": "binding-1",
+        "topic": "REPORT_PUBLISHED",
+        "payload": {
+            "report_id": "report-1",
+            "session": "POST_MARKET",
+            "message_type": "markdown",
+            "link_path": "https://attacker.example/reports?reportId=report-1",
+        },
+    }
+
+    with pytest.raises(ValueError, match="link path"):
+        build_delivery_command(row, binding, routing_key=key)
+
+
 class _JsonResponse:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
@@ -270,6 +422,13 @@ async def test_report_publication_expands_one_outbox_per_active_member_binding()
     assert len({row[-1] for row in conn.inserted}) == 2
     assert all("touser" not in row[5] for row in conn.inserted)
     assert all("content" not in json.loads(row[5]) for row in conn.inserted)
+    assert all(
+        json.loads(row[5])["message_type"] == "markdown" for row in conn.inserted
+    )
+    assert all(
+        json.loads(row[5])["link_path"] == "/reports?reportId=report-1"
+        for row in conn.inserted
+    )
 
 
 @pytest.mark.asyncio
@@ -292,6 +451,8 @@ async def test_no_holdings_report_publication_includes_shared_brief_content() ->
     payload = json.loads(conn.inserted[0][5])
     assert payload["content"].startswith("今日大盘风向")
     assert payload["report_id"] == "report-1"
+    assert payload["message_type"] == "markdown"
+    assert payload["link_path"] == "/reports?reportId=report-1"
 
 
 @pytest.mark.asyncio

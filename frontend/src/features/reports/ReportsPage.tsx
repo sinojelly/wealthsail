@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { FileSearch, RefreshCw, Sparkles } from "lucide-react";
-import { useGenerateReport, useReportDetail, useReportsList } from "../../api/hooks";
+import { useSearchParams } from "react-router-dom";
+import {
+  useGenerateReport,
+  useReportDetail,
+  useReportsList,
+} from "../../api/hooks";
 import type { ReportSession } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
 import EmptyState from "../../components/data-state/EmptyState";
@@ -12,7 +17,8 @@ import type { EvidenceRecord } from "./report-data";
 export default function ReportsPage() {
   const reportsQuery = useReportsList();
   const reports = reportsQuery.data ?? [];
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("reportId");
   const selected = reports.find((report) => report.id === selectedId) ?? null;
   const detailQuery = useReportDetail(selected?.id ?? null);
   const generate = useGenerateReport();
@@ -42,14 +48,21 @@ export default function ReportsPage() {
       {generate.isError ? (
         <div className="alert alert-danger">
           <Sparkles size={15} />
-          生成失败：{generate.error instanceof Error ? generate.error.message : "未知错误"}
+          生成失败：
+          {generate.error instanceof Error
+            ? generate.error.message
+            : "未知错误"}
         </div>
       ) : null}
       <div className="reports-workspace">
         <ReportTimeline
           reports={reports}
           selectedId={selected?.id ?? ""}
-          onSelect={(report) => setSelectedId(report.id)}
+          onSelect={(report) => {
+            const next = new URLSearchParams(searchParams);
+            next.set("reportId", report.id);
+            setSearchParams(next);
+          }}
         />
         {detailQuery.isLoading ? (
           <div className="report-viewer report-loading">正在加载报告…</div>

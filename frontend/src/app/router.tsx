@@ -1,7 +1,8 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
 import { canViewOperations, useAuthSession } from "./auth-session";
+import { loginRedirectPath } from "./navigation";
 
 const DashboardPage = lazy(() => import("../features/dashboard/DashboardPage"));
 const OnboardingPage = lazy(
@@ -35,7 +36,19 @@ function LazyPage({ children }: { children: ReactNode }) {
 /** 未登录访问受保护路由时回到登录页。 */
 function RequireSession({ children }: { children: ReactNode }) {
   const session = useAuthSession();
-  if (!session) return <Navigate replace to="/login" />;
+  const location = useLocation();
+  if (!session) {
+    return (
+      <Navigate
+        replace
+        to={loginRedirectPath(
+          location.pathname,
+          location.search,
+          location.hash,
+        )}
+      />
+    );
+  }
   return <>{children}</>;
 }
 

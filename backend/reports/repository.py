@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 from datetime import date
 
 import asyncpg
@@ -401,7 +402,13 @@ async def insert_report_outbox_deliveries(
         """,
         tenant_id,
     )
-    payload = {"report_id": report_id, "session": session, "version": version}
+    payload = {
+        "report_id": report_id,
+        "session": session,
+        "version": version,
+        "message_type": "markdown",
+        "link_path": f"/reports?reportId={quote(report_id, safe='')}",
+    }
     if content:
         payload["content"] = content
     rows = [

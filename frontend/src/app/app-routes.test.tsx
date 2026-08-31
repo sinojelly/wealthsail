@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppRoutes } from "./router";
+import { loginRedirectPath } from "./navigation";
 import { renderWithSession } from "../test/render-with-session";
 import {
   meFixture,
@@ -32,9 +33,24 @@ vi.mock("./auth-session", async (importOriginal) => {
 });
 
 vi.mock("../api/hooks", () => ({
-  usePortfolioSummary: () => ({ data: summaryFixture, isLoading: false, isError: false, error: null }),
-  usePositions: () => ({ data: [], isLoading: false, isError: false, error: null }),
-  useNavTrend: () => ({ data: null, isLoading: false, isError: false, error: null }),
+  usePortfolioSummary: () => ({
+    data: summaryFixture,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  usePositions: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useNavTrend: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
   useMarketSentiment: () => ({
     data: {
       tradeDate: null,
@@ -70,25 +86,111 @@ vi.mock("../api/hooks", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
-  usePolicies: () => ({ data: policiesFixture, isLoading: false, isError: false, error: null }),
-  useRules: () => ({ data: rulesFixture, isLoading: false, isError: false, error: null }),
-  useMe: () => ({ data: meFixture, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
-  useCreateBindingCredential: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useRevokeBinding: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useReportsList: () => ({ data: [], isLoading: false, isError: false, error: null }),
-  useReportDetail: () => ({ data: null, isLoading: false, isError: false, error: null }),
-  useGenerateReport: () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null }),
-  useOpsJobs: () => ({ data: { jobs: [], runs: [] }, isLoading: false, isError: false, error: null }),
-  useOpsFreshness: () => ({ data: null, isLoading: false, isError: false, error: null }),
-  useOpsOutbox: () => ({ data: null, isLoading: false, isError: false, error: null }),
-  useOpsAudit: () => ({ data: [], isLoading: false, isError: false, error: null }),
-  useInstrumentSearch: () => ({ data: [], isLoading: false, isError: false, error: null }),
-  useAddPosition: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
-  useConfirmPositionImport: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, isError: false, error: null }),
+  usePolicies: () => ({
+    data: policiesFixture,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useRules: () => ({
+    data: rulesFixture,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useMe: () => ({
+    data: meFixture,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  useCreateBindingCredential: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useRevokeBinding: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useReportsList: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useReportDetail: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useGenerateReport: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useOpsJobs: () => ({
+    data: { jobs: [], runs: [] },
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useOpsFreshness: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useOpsOutbox: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useOpsAudit: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useInstrumentSearch: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useAddPosition: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useConfirmPositionImport: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
 }));
 
 afterEach(() => {
   testSession.role = "OWNER";
+});
+
+it("preserves a report deep link when redirecting to login", () => {
+  expect(loginRedirectPath("/reports", "?reportId=R-POST-20260823")).toBe(
+    "/login?returnTo=%2Freports%3FreportId%3DR-POST-20260823",
+  );
 });
 
 it("navigates between the main workspaces without losing the application shell", async () => {
@@ -121,5 +223,7 @@ it("blocks a viewer who enters the operations URL directly", async () => {
   expect(
     await screen.findByRole("heading", { name: "无权访问运维页面" }),
   ).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "运维中心" })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "运维中心" }),
+  ).not.toBeInTheDocument();
 });

@@ -15,15 +15,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from backend.common.database import Pool, system_connection
 from backend.common.security import envelope_decrypt
 from backend.config import Settings
-from backend.integrations.wecom import DeliveryRejectedError, DeliveryUnknownError
+from backend.integrations.wecom import (
+    MAX_WECOM_TEXT_BYTES,
+    DeliveryRejectedError,
+    DeliveryUnknownError,
+)
 
 logger = logging.getLogger("wealthsail.outbox")
+
+_URL_SCHEME_PATTERN = re.compile(r"\b([a-z][a-z0-9+.-]{1,31}):(?=//)", re.I)
+_MARKDOWN_LINK_CHARS = str.maketrans(
+    {"[": "【", "]": "】", "(": "（", ")": "）", "<": "＜", ">": "＞"}
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +42,8 @@ class DeliveryCommand:
     channel_type: str
     recipient: str
     content: str
+    message_type: str = "text"
+    link_path: str | None = None
 
 
 def _payload_dict(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -53,6 +66,33 @@ def _default_content(row: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
     return f"🔔 WealthSail 新消息（{topic}）"
 
 
+def _report_link_path(payload: Mapping[str, Any], message_type: str) -> str | None:
+    """Accept only the canonical same-site report link used by new outbox rows."""
+    if message_type == "text":
+        return None
+    if message_type != "markdown":
+        raise ValueError("unsupported outbox message type")
+
+    report_id = str(payload.get("report_id") or "")
+    link_path = str(payload.get("link_path") or "")
+    parsed = urlsplit(link_path)
+    try:
+        query = parse_qs(parsed.query, strict_parsing=True)
+    except ValueError as exc:
+        raise ValueError("invalid report link path") from exc
+    if (
+        not report_id
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or parsed.path != "/reports"
+        or set(query) != {"reportId"}
+        or query["reportId"] != [report_id]
+    ):
+        raise ValueError("invalid report link path")
+    return link_path
+
+
 def build_delivery_command(
     row: Mapping[str, Any],
     binding: Mapping[str, Any],
@@ -70,11 +110,56 @@ def build_delivery_command(
     if not ciphertext:
         raise ValueError("channel binding has no encrypted route")
     payload = _payload_dict(row)
+    message_type = str(payload.get("message_type") or "text")
     return DeliveryCommand(
         channel_type=str(binding["channel_type"]),
         recipient=envelope_decrypt(routing_key, str(ciphertext)),
         content=str(payload.get("content") or _default_content(row, payload)),
+        message_type=message_type,
+        link_path=_report_link_path(payload, message_type),
     )
+
+
+def _truncate_utf8(value: str, byte_limit: int) -> str:
+    if byte_limit <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= byte_limit:
+        return value
+    return encoded[:byte_limit].decode("utf-8", errors="ignore").rstrip()
+
+
+def _plain_markdown_body(value: str) -> str:
+    """Keep the report preview readable without allowing payload-defined links."""
+    without_link_syntax = value.translate(_MARKDOWN_LINK_CHARS)
+    return _URL_SCHEME_PATTERN.sub(r"\1：", without_link_syntax)
+
+
+def _render_delivery_content(command: DeliveryCommand, settings: Settings) -> str:
+    if command.message_type == "text":
+        return command.content
+    if command.message_type != "markdown" or not command.link_path:
+        raise DeliveryRejectedError("invalid WeCom report message")
+
+    base = urlsplit(settings.web_base_url)
+    if (
+        base.scheme not in {"http", "https"}
+        or not base.netloc
+        or base.username is not None
+        or base.password is not None
+        or base.path not in {"", "/"}
+        or base.query
+        or base.fragment
+    ):
+        raise DeliveryRejectedError("WEB_BASE_URL is not a valid web origin")
+    report_url = f"{base.scheme}://{base.netloc}{command.link_path}"
+    link = f"[查看完整报告]({report_url})"
+    suffix = f"\n\n{link}"
+    remaining = MAX_WECOM_TEXT_BYTES - len(suffix.encode("utf-8"))
+    if remaining <= 0:
+        raise DeliveryRejectedError("WeCom report link exceeds the message limit")
+    body = _truncate_utf8(_plain_markdown_body(command.content), remaining)
+    return f"{body}{suffix}"
 
 
 async def claim_batch(
@@ -161,7 +246,13 @@ async def _send(command: DeliveryCommand, settings: Settings) -> str:
         raise DeliveryRejectedError("WECOM_CORP_SECRET is not configured")
     from backend.integrations.wecom import send_message
 
-    return await send_message(settings, command.recipient, command.content)
+    content = _render_delivery_content(command, settings)
+    return await send_message(
+        settings,
+        command.recipient,
+        content,
+        msg_type=command.message_type,
+    )
 
 
 async def _cas_sent(pool: Pool, row: Mapping[str, Any], receipt: str) -> None:

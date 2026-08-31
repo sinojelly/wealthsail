@@ -152,9 +152,12 @@ async def send_message(
     """
     if not user_id.strip():
         raise DeliveryRejectedError("WeCom recipient must not be empty")
-    if msg_type == "text" and len(content.encode("utf-8")) > MAX_WECOM_TEXT_BYTES:
+    if msg_type not in {"text", "markdown"}:
+        raise DeliveryRejectedError(f"unsupported WeCom message type: {msg_type}")
+    if len(content.encode("utf-8")) > MAX_WECOM_TEXT_BYTES:
         raise DeliveryRejectedError(
-            f"WeCom text exceeds the {MAX_WECOM_TEXT_BYTES}-byte UTF-8 limit"
+            f"WeCom {msg_type} exceeds the "
+            f"{MAX_WECOM_TEXT_BYTES}-byte UTF-8 limit"
         )
     try:
         return await _send_app_message(settings, user_id, content, msg_type=msg_type)

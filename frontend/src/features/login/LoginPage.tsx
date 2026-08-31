@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   KeyRound,
   LoaderCircle,
@@ -12,6 +12,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { login } from "../../app/auth-session";
+import { safeReturnTo } from "../../app/navigation";
 import {
   confirmPasswordReset,
   register,
@@ -42,8 +43,11 @@ function consumeResetTokenFromLocation(): string {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [initialResetToken] = useState(consumeResetTokenFromLocation);
-  const [mode, setMode] = useState<Mode>(initialResetToken ? "password-reset" : "login");
+  const [mode, setMode] = useState<Mode>(
+    initialResetToken ? "password-reset" : "login",
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
@@ -53,10 +57,10 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const needsNewPassword =
-    mode === "invited-register" || Boolean(resetToken);
+  const needsNewPassword = mode === "invited-register" || Boolean(resetToken);
   const passwordLength = Array.from(password).length;
-  const passwordValid = !needsNewPassword || passwordLength >= MIN_PASSWORD_LENGTH;
+  const passwordValid =
+    !needsNewPassword || passwordLength >= MIN_PASSWORD_LENGTH;
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const invitationValid = invitationToken.trim().length >= 16;
   const formValid =
@@ -105,7 +109,7 @@ export default function LoginPage() {
         setNotice("如果该邮箱已注册，重置邮件将很快送达");
       } else {
         await login(email.trim(), password);
-        navigate("/dashboard", { replace: true });
+        navigate(safeReturnTo(searchParams.get("returnTo")), { replace: true });
       }
       setPassword("");
       setInvitationToken("");
@@ -120,10 +124,10 @@ export default function LoginPage() {
     mode === "invited-register"
       ? "接受邀请并创建账号"
       : mode === "password-reset"
-          ? resetToken
-            ? "确认重置密码"
-            : "发送重置邮件"
-          : "登录工作台";
+        ? resetToken
+          ? "确认重置密码"
+          : "发送重置邮件"
+        : "登录工作台";
 
   return (
     <div className="login-page">
@@ -136,13 +140,27 @@ export default function LoginPage() {
             <span className="login-logo-name">WealthSail</span>
           </div>
           <h1>让每一笔投资，都有据可依</h1>
-          <p className="login-slogan">资产看板 · 研报审计 · 风控政策 · 个人投研工作台</p>
+          <p className="login-slogan">
+            资产看板 · 研报审计 · 风控政策 · 个人投研工作台
+          </p>
         </header>
 
         <div className="login-card glass">
           <div className="login-tabs">
-            <button className={mode === "login" ? "active" : ""} type="button" onClick={() => switchMode("login")}>登录</button>
-            <button className={mode === "invited-register" ? "active" : ""} type="button" onClick={() => switchMode("invited-register")}>受邀注册</button>
+            <button
+              className={mode === "login" ? "active" : ""}
+              type="button"
+              onClick={() => switchMode("login")}
+            >
+              登录
+            </button>
+            <button
+              className={mode === "invited-register" ? "active" : ""}
+              type="button"
+              onClick={() => switchMode("invited-register")}
+            >
+              受邀注册
+            </button>
           </div>
 
           <form onSubmit={submit} className="login-form" noValidate>
@@ -151,7 +169,13 @@ export default function LoginPage() {
                 <span>邀请令牌</span>
                 <div className="login-input">
                   <KeyRound size={15} />
-                  <input value={invitationToken} onChange={(event) => setInvitationToken(event.target.value)} required minLength={16} autoComplete="one-time-code" />
+                  <input
+                    value={invitationToken}
+                    onChange={(event) => setInvitationToken(event.target.value)}
+                    required
+                    minLength={16}
+                    autoComplete="one-time-code"
+                  />
                 </div>
               </label>
             ) : null}
@@ -161,7 +185,11 @@ export default function LoginPage() {
                 <span>昵称（可选）</span>
                 <div className="login-input">
                   <UserRound size={15} />
-                  <input value={nickname} onChange={(event) => setNickname(event.target.value)} autoComplete="nickname" />
+                  <input
+                    value={nickname}
+                    onChange={(event) => setNickname(event.target.value)}
+                    autoComplete="nickname"
+                  />
                 </div>
               </label>
             ) : null}
@@ -171,7 +199,14 @@ export default function LoginPage() {
                 <span>邮箱</span>
                 <div className="login-input">
                   <Mail size={15} />
-                  <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="username" required />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="username"
+                    required
+                  />
                 </div>
               </label>
             ) : null}
@@ -185,32 +220,86 @@ export default function LoginPage() {
                     type="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
-                    autoComplete={needsNewPassword ? "new-password" : "current-password"}
+                    autoComplete={
+                      needsNewPassword ? "new-password" : "current-password"
+                    }
                     minLength={needsNewPassword ? MIN_PASSWORD_LENGTH : 1}
                     required
-                    aria-describedby={needsNewPassword ? "password-requirement" : undefined}
+                    aria-describedby={
+                      needsNewPassword ? "password-requirement" : undefined
+                    }
                   />
                 </div>
               </label>
             ) : null}
 
             {needsNewPassword ? (
-              <small id="password-requirement" className={`password-requirement ${passwordValid ? "valid" : "invalid"}`} aria-live="polite">
-                {passwordValid ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
-                <span>{passwordLength === 0 ? "密码要求：至少 8 个字符" : passwordValid ? "已满足：至少 8 个字符" : `还需 ${8 - passwordLength} 个字符（至少 8 个字符）`}</span>
+              <small
+                id="password-requirement"
+                className={`password-requirement ${passwordValid ? "valid" : "invalid"}`}
+                aria-live="polite"
+              >
+                {passwordValid ? (
+                  <ShieldCheck size={13} />
+                ) : (
+                  <ShieldAlert size={13} />
+                )}
+                <span>
+                  {passwordLength === 0
+                    ? "密码要求：至少 8 个字符"
+                    : passwordValid
+                      ? "已满足：至少 8 个字符"
+                      : `还需 ${8 - passwordLength} 个字符（至少 8 个字符）`}
+                </span>
               </small>
             ) : null}
 
-            {error ? <div className="alert alert-danger login-alert" role="alert"><ShieldAlert size={15} />{error}</div> : null}
-            {notice ? <div className="alert alert-info login-alert" role="status"><Sparkles size={15} />{notice}</div> : null}
+            {error ? (
+              <div className="alert alert-danger login-alert" role="alert">
+                <ShieldAlert size={15} />
+                {error}
+              </div>
+            ) : null}
+            {notice ? (
+              <div className="alert alert-info login-alert" role="status">
+                <Sparkles size={15} />
+                {notice}
+              </div>
+            ) : null}
 
-            <button type="submit" className="btn-primary login-submit" disabled={busy || !formValid}>
-              {busy ? <LoaderCircle size={15} className="spin" /> : mode === "login" ? <LogIn size={15} /> : <UserRound size={15} />}
+            <button
+              type="submit"
+              className="btn-primary login-submit"
+              disabled={busy || !formValid}
+            >
+              {busy ? (
+                <LoaderCircle size={15} className="spin" />
+              ) : mode === "login" ? (
+                <LogIn size={15} />
+              ) : (
+                <UserRound size={15} />
+              )}
               {busy ? "处理中…" : submitLabel}
             </button>
 
-            {mode === "login" ? <button type="button" className="btn-ghost" onClick={() => switchMode("password-reset")}>忘记密码？</button> : null}
-            {mode === "password-reset" ? <button type="button" className="btn-ghost" onClick={() => switchMode("login")}>返回登录</button> : null}
+            {mode === "login" ? (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => switchMode("password-reset")}
+              >
+                忘记密码？
+              </button>
+            ) : null}
+            {mode === "password-reset" ? (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => switchMode("login")}
+              >
+                返回登录
+              </button>
+            ) : null}
           </form>
         </div>
       </div>
