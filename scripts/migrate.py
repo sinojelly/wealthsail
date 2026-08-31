@@ -455,8 +455,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         )
     ]
     broad_job_status_select = await conn.fetchval(
-        "SELECT has_table_privilege("
-        "'wealthsail_api','workflow.job_runs','SELECT')"
+        "SELECT has_table_privilege('wealthsail_api','workflow.job_runs','SELECT')"
     )
     if missing_job_status_columns or broad_job_status_select:
         details = ", ".join(missing_job_status_columns) or "table-wide SELECT"
@@ -475,13 +474,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
            AND 'wealthsail_api' = ANY(roles)
         """
     )
-    if (
-        job_status_policy is None
-        or "identity.is_tenant_member" not in str(job_status_policy["qual"] or "")
+    if job_status_policy is None or "identity.is_tenant_member" not in str(
+        job_status_policy["qual"] or ""
     ):
-        raise RuntimeError(
-            "Tiantian job status SELECT policy is missing or too broad"
-        )
+        raise RuntimeError("Tiantian job status SELECT policy is missing or too broad")
 
     import_item_update_policy = await conn.fetchrow(
         """
@@ -687,7 +683,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "user_preferences",
         "account_members",
     } or any(not all(flags) for flags in ownership_tables.values()):
-        raise RuntimeError("tenant user account ownership tables or forced RLS are missing")
+        raise RuntimeError(
+            "tenant user account ownership tables or forced RLS are missing"
+        )
 
     account_ownership_scope = await conn.fetchval(
         """
@@ -836,7 +834,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         or platform_invitation_function["browser_can_execute"]
         or platform_invitation_function["api_can_probe_platform_roles"]
     ):
-        raise RuntimeError("platform personal-tenant invitation privilege boundary is invalid")
+        raise RuntimeError(
+            "platform personal-tenant invitation privilege boundary is invalid"
+        )
 
     personal_tenant_acceptance = await conn.fetchrow(
         """
@@ -869,9 +869,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "personal tenant report schedule initialization is missing or unsafe: "
             "function_missing=true"
         )
-    personal_schedule_definition = str(
-        personal_tenant_acceptance["definition"] or ""
-    )
+    personal_schedule_definition = str(personal_tenant_acceptance["definition"] or "")
     missing_personal_schedule_tokens = [
         token
         for token in required_personal_schedule_tokens
@@ -881,9 +879,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if not personal_tenant_acceptance["prosecdef"]:
         invalid_personal_schedule_contracts.append("security_definer=false")
     if not personal_tenant_acceptance["function_owner_can_insert"]:
-        invalid_personal_schedule_contracts.append(
-            "function_owner_can_insert=false"
-        )
+        invalid_personal_schedule_contracts.append("function_owner_can_insert=false")
     if personal_tenant_acceptance["api_can_insert_jobs"]:
         invalid_personal_schedule_contracts.append("api_can_insert_jobs=true")
     if personal_tenant_acceptance["browser_can_insert_jobs"]:
@@ -896,6 +892,21 @@ async def _readback(conn: asyncpg.Connection) -> None:
         raise RuntimeError(
             "personal tenant report schedule initialization is missing or unsafe: "
             + ", ".join(invalid_personal_schedule_contracts)
+        )
+
+    report_job_session_constraint = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(c.oid)
+          FROM pg_constraint c
+         WHERE c.conrelid = 'workflow.jobs'::regclass
+           AND c.conname = 'uq_jobs_tenant_report_session'
+           AND c.contype = 'u'
+           AND c.convalidated
+        """
+    )
+    if report_job_session_constraint != "UNIQUE (tenant_id, report_session)":
+        raise RuntimeError(
+            "report job session uniqueness constraint is missing or unsafe"
         )
 
     data_source_type_contract = await conn.fetchval(
@@ -1125,15 +1136,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "initialize_account_performance_baseline_trigger"
         ]
         or not performance_baseline_boundary["append_only_trigger_exists"]
-        or not performance_baseline_boundary[
-            "api_can_read_performance_baselines"
-        ]
-        or not performance_baseline_boundary[
-            "api_can_insert_performance_baselines"
-        ]
-        or not performance_baseline_boundary[
-            "api_cannot_update_performance_baselines"
-        ]
+        or not performance_baseline_boundary["api_can_read_performance_baselines"]
+        or not performance_baseline_boundary["api_can_insert_performance_baselines"]
+        or not performance_baseline_boundary["api_cannot_update_performance_baselines"]
         or not performance_baseline_boundary[
             "browser_cannot_read_performance_baselines"
         ]
@@ -1143,9 +1148,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         or not performance_baseline_boundary["api_select_policy_exists"]
         or not performance_baseline_boundary["api_insert_policy_exists"]
     ):
-        raise RuntimeError(
-            "account performance baseline boundary is missing or unsafe"
-        )
+        raise RuntimeError("account performance baseline boundary is missing or unsafe")
 
     privilege_checks = {
         "worker_snapshot_insert": await conn.fetchval(

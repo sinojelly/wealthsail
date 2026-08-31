@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from backend.common.database import Pool, api_system_transaction, system_connection
+from scripts.standard_report_jobs import is_complete_canonical_schedule
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ def alert_content(signals: Iterable[RuntimeSignal]) -> str:
     unknown = kinds.count("OUTBOX_UNKNOWN")
     failed = kinds.count("JOB_FAILED")
     tenants_without_jobs = kinds.count("TENANT_NO_ENABLED_JOBS")
+    tenants_with_incomplete_jobs = kinds.count("TENANT_INCOMPLETE_REPORT_JOBS")
     lines = ["WealthSail 运行告警"]
     if worker:
         lines.append("- Worker 服务已停止")
@@ -89,6 +91,8 @@ def alert_content(signals: Iterable[RuntimeSignal]) -> str:
         lines.append(f"- 后台任务失败：{failed} 条")
     if tenants_without_jobs:
         lines.append(f"- 无启用报告任务：{tenants_without_jobs} 个租户")
+    if tenants_with_incomplete_jobs:
+        lines.append(f"- 四时段报告任务不完整：{tenants_with_incomplete_jobs} 个租户")
     lines.append("请登录运维页面或查看服务器日志。")
     return "\n".join(lines)
 
@@ -144,29 +148,57 @@ async def collect_database_signals(
             """
         )
     async with system_connection(pool) as conn:
-        enabled_job_rows = await conn.fetch(
+        report_job_rows = await conn.fetch(
+            """
+            SELECT tenant_id::text AS tenant_id, job_name, cron_expr,
+                   report_session, is_enabled
+              FROM workflow.jobs
+             WHERE report_session IN (
+                 'PRE_MARKET', 'INTRADAY', 'FUND_1430', 'POST_MARKET'
+             )
+            """
+        )
+        active_binding_rows = await conn.fetch(
             """
             SELECT DISTINCT tenant_id::text AS tenant_id
-              FROM workflow.jobs
-             WHERE is_enabled = TRUE
+              FROM identity.channel_bindings
+             WHERE status = 'ACTIVE'
+               AND channel_type = 'wecom'
+               AND external_user_ciphertext IS NOT NULL
             """
         )
 
     active_tenant_ids = {str(row["tenant_id"]) for row in active_tenant_rows}
-    enabled_job_tenant_ids = {
-        str(row["tenant_id"]) for row in enabled_job_rows
-    }
-    for tenant_id in sorted(active_tenant_ids - enabled_job_tenant_ids):
+    bound_tenant_ids = {str(row["tenant_id"]) for row in active_binding_rows}
+    monitored_tenant_ids = active_tenant_ids & bound_tenant_ids
+    jobs_by_tenant: dict[str, list[Any]] = {}
+    for row in report_job_rows:
+        jobs_by_tenant.setdefault(str(row["tenant_id"]), []).append(row)
+
+    for tenant_id in sorted(monitored_tenant_ids):
+        tenant_jobs = jobs_by_tenant.get(tenant_id, [])
+        if is_complete_canonical_schedule(tenant_jobs):
+            continue
+
         # The object ID is deliberately constant. The fingerprint already
         # includes tenant_id, while user-facing content never exposes either
         # value; this gives stable cooldown de-duplication per affected tenant.
-        signals.append(
-            RuntimeSignal(
-                "TENANT_NO_ENABLED_JOBS",
-                "enabled-report-jobs",
-                tenant_id,
+        if not any(row["is_enabled"] is True for row in tenant_jobs):
+            signals.append(
+                RuntimeSignal(
+                    "TENANT_NO_ENABLED_JOBS",
+                    "enabled-report-jobs",
+                    tenant_id,
+                )
             )
-        )
+        else:
+            signals.append(
+                RuntimeSignal(
+                    "TENANT_INCOMPLETE_REPORT_JOBS",
+                    "standard-report-jobs",
+                    tenant_id,
+                )
+            )
     return signals
 
 

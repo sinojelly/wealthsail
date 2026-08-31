@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -42,6 +43,8 @@ class FakeConn:
         self.transaction_exits = 0
         self.rolled_back = False
         self.tenant_lock_used = False
+        self.job_locks_used = False
+        self.inserted_sessions: list[str] = []
 
     def transaction(self):
         return _Transaction(self)
@@ -54,12 +57,14 @@ class FakeConn:
 
     async def fetch(self, sql: str, *_args):
         if "FROM workflow.jobs" in sql:
+            self.job_locks_used = "FOR UPDATE" in sql
             return list(self.jobs)
         raise AssertionError(f"unexpected fetch: {sql}")
 
     async def execute(self, sql: str, *args):
         if "INSERT INTO workflow.jobs" in sql:
             names, crons, sessions = args[1], args[2], args[3]
+            self.inserted_sessions.extend(sessions)
             for index, (name, cron, session) in enumerate(
                 zip(names, crons, sessions, strict=True), start=1
             ):
@@ -72,7 +77,7 @@ class FakeConn:
                         "is_enabled": True,
                     }
                 )
-            return "INSERT 0 4"
+            return f"INSERT 0 {len(sessions)}"
         if "INSERT INTO audit.audit_log" in sql:
             self.audit_rows.append(
                 {
@@ -141,6 +146,46 @@ def test_canonical_schedule_contains_four_unique_sessions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_command_refuses_to_run_until_migration_040_is_applied(
+    monkeypatch,
+) -> None:
+    """The operator command must not bypass database session uniqueness."""
+
+    from scripts import backfill_standard_report_jobs as command
+
+    class GateConn:
+        async def fetchval(self, sql: str):
+            if "current_user" in sql:
+                return "postgres"
+            # Simulate the production failure mode: 033 exists but the new
+            # database uniqueness boundary has not yet reached migration 040.
+            return "version = 33" in sql
+
+        async def close(self):
+            return None
+
+    async def connect(*_args, **_kwargs):
+        return GateConn()
+
+    monkeypatch.setenv(
+        "MIGRATION_DATABASE_URL",
+        "postgresql://postgres@db.example:5432/postgres",
+    )
+    monkeypatch.setattr(command.asyncpg, "connect", connect)
+    args = SimpleNamespace(
+        tenant_id=TENANT_ID,
+        tenant_name="Jelly家庭投资账户",
+        apply=False,
+        confirm_target=None,
+        confirm_tenant_id=None,
+        confirm_tenant_name=None,
+    )
+
+    with pytest.raises(SystemExit, match="migration 040"):
+        await command._run(args)
+
+
+@pytest.mark.asyncio
 async def test_preflight_is_read_only_for_an_exact_empty_tenant() -> None:
     from scripts import backfill_standard_report_jobs as command
 
@@ -176,6 +221,9 @@ async def test_apply_inserts_all_four_jobs_and_one_audit_record() -> None:
     assert len(conn.audit_rows) == 1
     assert conn.audit_rows[0]["resource_id"] == str(TENANT_ID)
     assert conn.audit_rows[0]["details"]["sessions"] == result["sessions"]
+    assert conn.audit_rows[0]["details"]["existingSessions"] == []
+    assert conn.audit_rows[0]["details"]["insertedSessions"] == result["sessions"]
+    assert conn.job_locks_used is True
     assert conn.rolled_back is False
 
 
@@ -194,16 +242,59 @@ async def test_exact_existing_schedule_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_repairs_an_exact_canonical_subset_without_replacing_it() -> None:
+    """A historical POST-only tenant must gain the other three sessions safely."""
+
+    from scripts import backfill_standard_report_jobs as command
+
+    existing_post_market = _canonical_jobs()[3]
+    conn = FakeConn(jobs=[existing_post_market])
+    request = command.BackfillRequest(TENANT_ID, "Jelly家庭投资账户")
+
+    result = await command.backfill_standard_report_jobs(conn, request, apply=True)
+
+    assert result["status"] == "APPLIED"
+    assert result["existingSessions"] == ["POST_MARKET"]
+    assert result["insertedSessions"] == [
+        "PRE_MARKET",
+        "INTRADAY",
+        "FUND_1430",
+    ]
+    assert conn.inserted_sessions == result["insertedSessions"]
+    assert existing_post_market in conn.jobs
+    assert {
+        (
+            row["job_name"],
+            row["cron_expr"],
+            row["report_session"],
+            row["is_enabled"],
+        )
+        for row in conn.jobs
+    } == {
+        ("pre_market_brief", "0 30 8 * * 1-5", "PRE_MARKET", True),
+        ("intraday_tracking", "*/5 9-14 * * 1-5", "INTRADAY", True),
+        ("fund_1430_estimate", "0 30 14 * * 1-5", "FUND_1430", True),
+        ("post_market_review", "0 30 15 * * 1-5", "POST_MARKET", True),
+    }
+    assert len(conn.audit_rows) == 1
+    assert conn.audit_rows[0]["details"]["existingSessions"] == ["POST_MARKET"]
+    assert (
+        conn.audit_rows[0]["details"]["insertedSessions"] == result["insertedSessions"]
+    )
+    assert conn.rolled_back is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "jobs",
     [
-        _canonical_jobs()[:1],
         [{**_canonical_jobs()[0], "is_enabled": False}],
         [{**_canonical_jobs()[0], "cron_expr": "0 0 9 * * 1-5"}],
+        [{**_canonical_jobs()[0], "job_name": "custom_pre_market"}],
         _canonical_jobs() + [{**_canonical_jobs()[0], "id": UUID(int=99)}],
     ],
 )
-async def test_partial_or_conflicting_schedule_aborts_without_writes(jobs) -> None:
+async def test_conflicting_schedule_aborts_without_writes(jobs) -> None:
     from scripts import backfill_standard_report_jobs as command
 
     conn = FakeConn(jobs=jobs)
@@ -214,4 +305,26 @@ async def test_partial_or_conflicting_schedule_aborts_without_writes(jobs) -> No
 
     assert conn.jobs == jobs
     assert conn.audit_rows == []
+    assert conn.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_failed_readback_aborts_the_backfill_transaction() -> None:
+    """A lost or corrupted insert must not be reported as successfully applied."""
+
+    from scripts import backfill_standard_report_jobs as command
+
+    class BrokenReadbackConn(FakeConn):
+        async def fetch(self, sql: str, *_args):
+            rows = await super().fetch(sql)
+            if "FROM workflow.jobs" in sql and self.audit_rows:
+                return rows[:-1]
+            return rows
+
+    conn = BrokenReadbackConn()
+    request = command.BackfillRequest(TENANT_ID, "Jelly家庭投资账户")
+
+    with pytest.raises(RuntimeError, match="readback failed"):
+        await command.backfill_standard_report_jobs(conn, request, apply=True)
+
     assert conn.rolled_back is True

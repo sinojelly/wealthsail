@@ -20,9 +20,9 @@ def test_runtime_signals_are_deduplicated_during_cooldown() -> None:
     new = RuntimeSignal("JOB_FAILED", "job-new", "tenant-a")
     state = {old.fingerprint: (now - timedelta(minutes=5)).isoformat()}
 
-    assert due_signals(
-        [old, new], state, now=now, cooldown=timedelta(minutes=60)
-    ) == [new]
+    assert due_signals([old, new], state, now=now, cooldown=timedelta(minutes=60)) == [
+        new
+    ]
 
 
 def test_mark_sent_records_only_successful_signals() -> None:
@@ -47,6 +47,11 @@ def test_alert_content_has_counts_without_internal_identifiers() -> None:
                 "enabled-report-jobs",
                 "secret-tenant-id",
             ),
+            RuntimeSignal(
+                "TENANT_INCOMPLETE_REPORT_JOBS",
+                "standard-report-jobs",
+                "another-secret-tenant-id",
+            ),
         ]
     )
 
@@ -55,6 +60,7 @@ def test_alert_content_has_counts_without_internal_identifiers() -> None:
     assert "推送结果未知：1 条" in content
     assert "后台任务失败：1 条" in content
     assert "无启用报告任务：1 个租户" in content
+    assert "四时段报告任务不完整：1 个租户" in content
     assert "secret-row-id" not in content
     assert "tenant-a" not in content
     assert "secret-tenant-id" not in content
@@ -81,7 +87,11 @@ async def test_database_monitor_collects_unknown_outbox_results() -> None:
 
         async def fetch(self, sql, *_args):
             self.sql.append(sql)
-            if "FROM identity.tenants" in sql or "FROM workflow.jobs" in sql:
+            if (
+                "FROM identity.tenants" in sql
+                or "FROM workflow.jobs" in sql
+                or "FROM identity.channel_bindings" in sql
+            ):
                 return []
             return [
                 {
@@ -111,8 +121,10 @@ async def test_database_monitor_collects_unknown_outbox_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_database_monitor_reports_active_tenants_without_enabled_jobs() -> None:
-    """An enabled job for one tenant must not hide another tenant's outage."""
+async def test_database_monitor_reports_incomplete_jobs_only_for_bound_tenants() -> (
+    None
+):
+    """Bound tenants need all four canonical jobs; unbound fixtures stay out."""
 
     class Transaction:
         async def __aenter__(self):
@@ -122,9 +134,9 @@ async def test_database_monitor_reports_active_tenants_without_enabled_jobs() ->
             return False
 
     class Conn:
-        def __init__(self, rows) -> None:
-            self.rows = rows
-            self.sql = ""
+        def __init__(self, responses) -> None:
+            self.responses = responses
+            self.sql: list[str] = []
 
         def transaction(self):
             return Transaction()
@@ -133,21 +145,72 @@ async def test_database_monitor_reports_active_tenants_without_enabled_jobs() ->
             return "SET"
 
         async def fetch(self, sql, *_args):
-            self.sql = sql
-            return self.rows
+            self.sql.append(sql)
+            for marker, rows in self.responses.items():
+                if marker in sql:
+                    return rows
+            raise AssertionError(f"unexpected fetch: {sql}")
 
     class Pool:
         def __init__(self) -> None:
             self.connections = [
-                Conn([]),
+                Conn({"FROM workflow.outbox": []}),
                 Conn(
-                    [
-                        {"tenant_id": "tenant-with-no-jobs"},
-                        {"tenant_id": "tenant-with-disabled-jobs"},
-                        {"tenant_id": "tenant-with-enabled-job"},
-                    ]
+                    {
+                        "FROM identity.tenants": [
+                            {"tenant_id": "bound-complete"},
+                            {"tenant_id": "bound-partial"},
+                            {"tenant_id": "bound-with-no-jobs"},
+                            {"tenant_id": "unbound-with-no-jobs"},
+                        ]
+                    }
                 ),
-                Conn([{"tenant_id": "tenant-with-enabled-job"}]),
+                Conn(
+                    {
+                        "FROM workflow.jobs": [
+                            {
+                                "tenant_id": "bound-complete",
+                                "job_name": "pre_market_brief",
+                                "cron_expr": "0 30 8 * * 1-5",
+                                "report_session": "PRE_MARKET",
+                                "is_enabled": True,
+                            },
+                            {
+                                "tenant_id": "bound-complete",
+                                "job_name": "intraday_tracking",
+                                "cron_expr": "*/5 9-14 * * 1-5",
+                                "report_session": "INTRADAY",
+                                "is_enabled": True,
+                            },
+                            {
+                                "tenant_id": "bound-complete",
+                                "job_name": "fund_1430_estimate",
+                                "cron_expr": "0 30 14 * * 1-5",
+                                "report_session": "FUND_1430",
+                                "is_enabled": True,
+                            },
+                            {
+                                "tenant_id": "bound-complete",
+                                "job_name": "post_market_review",
+                                "cron_expr": "0 30 15 * * 1-5",
+                                "report_session": "POST_MARKET",
+                                "is_enabled": True,
+                            },
+                            {
+                                "tenant_id": "bound-partial",
+                                "job_name": "post_market_review",
+                                "cron_expr": "0 30 15 * * 1-5",
+                                "report_session": "POST_MARKET",
+                                "is_enabled": True,
+                            },
+                        ],
+                        "FROM identity.channel_bindings": [
+                            {"tenant_id": "bound-complete"},
+                            {"tenant_id": "bound-partial"},
+                            {"tenant_id": "bound-with-no-jobs"},
+                        ],
+                    }
+                ),
             ]
             self.acquired: list[Conn] = []
 
@@ -165,17 +228,18 @@ async def test_database_monitor_reports_active_tenants_without_enabled_jobs() ->
         dead_outbox_window_hours=24,
     )
 
-    assert signals == [
+    assert set(signals) == {
         RuntimeSignal(
             "TENANT_NO_ENABLED_JOBS",
             "enabled-report-jobs",
-            "tenant-with-disabled-jobs",
+            "bound-with-no-jobs",
         ),
         RuntimeSignal(
-            "TENANT_NO_ENABLED_JOBS",
-            "enabled-report-jobs",
-            "tenant-with-no-jobs",
+            "TENANT_INCOMPLETE_REPORT_JOBS",
+            "standard-report-jobs",
+            "bound-partial",
         ),
-    ]
-    assert "status = 'ACTIVE'" in pool.acquired[1].sql
-    assert "is_enabled = TRUE" in pool.acquired[2].sql
+    }
+    assert any("status = 'ACTIVE'" in sql for sql in pool.acquired[1].sql)
+    assert any("FROM workflow.jobs" in sql for sql in pool.acquired[2].sql)
+    assert any("channel_type = 'wecom'" in sql for sql in pool.acquired[2].sql)

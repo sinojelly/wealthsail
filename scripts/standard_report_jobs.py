@@ -20,38 +20,58 @@ STANDARD_REPORT_JOBS = (
 )
 
 
-def standard_job_arrays() -> tuple[list[str], list[str], list[str]]:
+def standard_job_arrays(
+    jobs: tuple[StandardReportJob, ...] = STANDARD_REPORT_JOBS,
+) -> tuple[list[str], list[str], list[str]]:
     """Return asyncpg-friendly arrays in canonical session order."""
 
     return (
-        [job.name for job in STANDARD_REPORT_JOBS],
-        [job.cron for job in STANDARD_REPORT_JOBS],
-        [job.session for job in STANDARD_REPORT_JOBS],
+        [job.name for job in jobs],
+        [job.cron for job in jobs],
+        [job.session for job in jobs],
+    )
+
+
+def missing_canonical_jobs(
+    rows: list[object],
+) -> tuple[StandardReportJob, ...] | None:
+    """Return missing jobs for an exact canonical subset, or reject conflicts.
+
+    A subset is safe to repair only when every observed session occurs once and
+    already matches its canonical name, cron expression and enabled state.
+    Returning ``None`` distinguishes a conflicting state from a complete set,
+    whose missing tuple is empty.
+    """
+
+    expected = {job.session: job for job in STANDARD_REPORT_JOBS}
+    observed_sessions: set[str] = set()
+    for row in rows:
+        session = str(row["report_session"])
+        definition = expected.get(session)
+        if definition is None or session in observed_sessions:
+            return None
+        if (
+            str(row["job_name"]) != definition.name
+            or str(row["cron_expr"]) != definition.cron
+            or row["is_enabled"] is not True
+        ):
+            return None
+        observed_sessions.add(session)
+    return tuple(
+        job for job in STANDARD_REPORT_JOBS if job.session not in observed_sessions
     )
 
 
 def is_complete_canonical_schedule(rows: list[object]) -> bool:
     """Accept exactly one enabled canonical row for every standard session."""
 
-    if len(rows) != len(STANDARD_REPORT_JOBS):
-        return False
-    observed = {
-        str(row["report_session"]): (
-            str(row["job_name"]),
-            str(row["cron_expr"]),
-            row["is_enabled"] is True,
-        )
-        for row in rows
-    }
-    expected = {
-        job.session: (job.name, job.cron, True) for job in STANDARD_REPORT_JOBS
-    }
-    return observed == expected and len(observed) == len(rows)
+    return missing_canonical_jobs(rows) == ()
 
 
 __all__ = [
     "STANDARD_REPORT_JOBS",
     "StandardReportJob",
     "is_complete_canonical_schedule",
+    "missing_canonical_jobs",
     "standard_job_arrays",
 ]

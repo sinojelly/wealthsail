@@ -30,10 +30,28 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 39
-    assert migrations[-1].path.name == (
-        "039_account_performance_baselines.sql"
-    )
+    assert versions[-1] == 40
+    assert migrations[-1].path.name == "040_report_job_session_uniqueness.sql"
+
+
+def test_040_rejects_duplicate_report_sessions_before_adding_uniqueness() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration_path = root / "migrations" / "040_report_job_session_uniqueness.sql"
+
+    assert migration_path.exists()
+    migration = migration_path.read_text(encoding="utf-8")
+    assert "GROUP BY tenant_id, report_session" in migration
+    assert "HAVING count(*) > 1" in migration
+    assert "duplicate workflow.jobs report sessions" in migration
+    assert "ADD CONSTRAINT uq_jobs_tenant_report_session" in migration
+    assert "UNIQUE (tenant_id, report_session)" in migration
+
+
+def test_readback_requires_report_job_session_uniqueness() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "report job session uniqueness constraint is missing" in source
+    assert "uq_jobs_tenant_report_session" in source
 
 
 def test_039_adds_append_only_account_performance_baselines() -> None:
@@ -130,9 +148,7 @@ def test_035_removes_stale_api_job_insert_capability() -> None:
     """Personal-tenant schedules must only be provisioned by the protected RPC."""
     root = Path(__file__).resolve().parents[2]
     migration = (
-        root
-        / "migrations"
-        / "035_personal_tenant_job_privilege_hardening.sql"
+        root / "migrations" / "035_personal_tenant_job_privilege_hardening.sql"
     ).read_text(encoding="utf-8")
 
     assert "REVOKE INSERT ON workflow.jobs FROM wealthsail_api" in migration
@@ -246,9 +262,9 @@ def test_030_migration_limits_api_job_reads_to_tenant_scoped_status_columns() ->
 
 def test_037_adds_append_only_holding_start_decisions_with_least_privilege() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations" / "037_holding_start_decisions.sql"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations" / "037_holding_start_decisions.sql").read_text(
+        encoding="utf-8"
+    )
 
     for contract in (
         "CREATE TABLE ledger.position_holding_start_decisions",
@@ -275,7 +291,9 @@ def test_038_grants_worker_only_the_projection_writes_used_by_revaluation() -> N
 
     assert "GRANT INSERT, DELETE ON ledger.position_snapshots" in migration
     assert "GRANT UPDATE (" in migration
-    assert "market_price, market_value, unrealized_pnl, data_quality_status" in migration
+    assert (
+        "market_price, market_value, unrealized_pnl, data_quality_status" in migration
+    )
     assert "GRANT INSERT ON ledger.account_nav_snapshots" in migration
     assert "GRANT SELECT ON identity.accounts TO wealthsail_worker" in migration
     assert "recalculation_required BOOLEAN" in migration
@@ -351,9 +369,9 @@ def test_readback_checks_tenant_user_account_ownership_boundaries() -> None:
 def test_033_initializes_four_jobs_only_for_a_new_personal_tenant() -> None:
     """Joining an existing tenant must not create a second schedule set."""
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations" / "033_personal_tenant_report_jobs.sql"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations" / "033_personal_tenant_report_jobs.sql").read_text(
+        encoding="utf-8"
+    )
 
     personal_branch = migration.split(
         "IF v_inv.purpose = 'CREATE_PERSONAL_TENANT' THEN", 1

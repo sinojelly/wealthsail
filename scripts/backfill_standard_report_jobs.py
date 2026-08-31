@@ -2,8 +2,9 @@
 
 This is a migration-role operation, not an application endpoint. The default
 mode is a read-only preflight. ``--apply`` requires exact database-target,
-tenant-id and tenant-name confirmations, writes one audit record, and refuses
-to overwrite any partial, disabled, modified or duplicate job configuration.
+tenant-id and tenant-name confirmations, writes one audit record, and only
+repairs an empty or exact canonical subset. Disabled, modified and duplicate
+job configurations are never overwritten.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ if __package__:
     from scripts.standard_report_jobs import (
         STANDARD_REPORT_JOBS,
         is_complete_canonical_schedule,
+        missing_canonical_jobs,
         standard_job_arrays,
     )
 else:
@@ -30,6 +32,7 @@ else:
     from standard_report_jobs import (
         STANDARD_REPORT_JOBS,
         is_complete_canonical_schedule,
+        missing_canonical_jobs,
         standard_job_arrays,
     )
 
@@ -46,13 +49,25 @@ class BackfillRequest:
         object.__setattr__(self, "tenant_name", normalized_name)
 
 
-def _result(request: BackfillRequest, status: str) -> dict[str, Any]:
+def _result(
+    request: BackfillRequest,
+    status: str,
+    *,
+    existing_sessions: tuple[str, ...] = (),
+    inserted_sessions: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    all_sessions = tuple(job.session for job in STANDARD_REPORT_JOBS)
     return {
         "status": status,
         "tenantId": str(request.tenant_id),
         "tenantName": request.tenant_name,
         "jobCount": len(STANDARD_REPORT_JOBS),
-        "sessions": [job.session for job in STANDARD_REPORT_JOBS],
+        "sessions": list(all_sessions),
+        "existingSessions": list(existing_sessions),
+        "missingSessions": [
+            session for session in all_sessions if session not in existing_sessions
+        ],
+        "insertedSessions": list(inserted_sessions),
     }
 
 
@@ -67,6 +82,7 @@ async def _load_jobs(conn: asyncpg.Connection, tenant_id: UUID) -> list[Any]:
                    'PRE_MARKET', 'INTRADAY', 'FUND_1430', 'POST_MARKET'
                )
              ORDER BY report_session, created_at, id
+             FOR UPDATE
             """,
             tenant_id,
         )
@@ -74,11 +90,13 @@ async def _load_jobs(conn: asyncpg.Connection, tenant_id: UUID) -> list[Any]:
 
 
 async def insert_standard_report_jobs(
-    conn: asyncpg.Connection, tenant_id: UUID
+    conn: asyncpg.Connection,
+    tenant_id: UUID,
+    jobs=STANDARD_REPORT_JOBS,
 ) -> None:
-    """Insert the canonical set; callers own transaction and conflict checks."""
+    """Insert selected canonical jobs; callers own transaction and checks."""
 
-    names, crons, sessions = standard_job_arrays()
+    names, crons, sessions = standard_job_arrays(tuple(jobs))
     await conn.execute(
         """
         INSERT INTO workflow.jobs(
@@ -102,7 +120,7 @@ async def backfill_standard_report_jobs(
     *,
     apply: bool,
 ) -> dict[str, Any]:
-    """Preflight or atomically add the exact four-session schedule."""
+    """Preflight or atomically complete an exact canonical schedule subset."""
 
     async with conn.transaction():
         tenant = await conn.fetchrow(
@@ -118,18 +136,36 @@ async def backfill_standard_report_jobs(
             raise RuntimeError("tenant identity did not match an exact ACTIVE tenant")
 
         jobs = await _load_jobs(conn, request.tenant_id)
-        if jobs:
-            if is_complete_canonical_schedule(jobs):
-                return _result(request, "ALREADY_APPLIED")
+        missing_jobs = missing_canonical_jobs(jobs)
+        if missing_jobs is None:
             raise RuntimeError(
                 "existing standard report job state requires manual review"
             )
+        existing_sessions = tuple(
+            job.session for job in STANDARD_REPORT_JOBS if job not in missing_jobs
+        )
+        if not missing_jobs:
+            return _result(
+                request,
+                "ALREADY_APPLIED",
+                existing_sessions=existing_sessions,
+            )
 
         if not apply:
-            return _result(request, "READY")
+            return _result(
+                request,
+                "READY",
+                existing_sessions=existing_sessions,
+            )
 
-        await insert_standard_report_jobs(conn, request.tenant_id)
-        result = _result(request, "APPLIED")
+        await insert_standard_report_jobs(conn, request.tenant_id, missing_jobs)
+        inserted_sessions = tuple(job.session for job in missing_jobs)
+        result = _result(
+            request,
+            "APPLIED",
+            existing_sessions=existing_sessions,
+            inserted_sessions=inserted_sessions,
+        )
         await conn.execute(
             """
             INSERT INTO audit.audit_log(
@@ -147,6 +183,8 @@ async def backfill_standard_report_jobs(
                     "operation": "MANUAL_STANDARD_JOB_BACKFILL",
                     "tenantName": request.tenant_name,
                     "sessions": result["sessions"],
+                    "existingSessions": result["existingSessions"],
+                    "insertedSessions": result["insertedSessions"],
                     "jobs": [
                         {
                             "jobName": job.name,
@@ -162,7 +200,9 @@ async def backfill_standard_report_jobs(
 
         readback = await _load_jobs(conn, request.tenant_id)
         if not is_complete_canonical_schedule(readback):
-            raise RuntimeError("standard report job readback failed; transaction aborted")
+            raise RuntimeError(
+                "standard report job readback failed; transaction aborted"
+            )
         return result
 
 
@@ -175,7 +215,9 @@ def validate_apply_confirmations(
     confirm_tenant_name: str | None,
 ) -> None:
     if confirm_target != target:
-        raise SystemExit(f"target confirmation mismatch; expected --confirm-target {target}")
+        raise SystemExit(
+            f"target confirmation mismatch; expected --confirm-target {target}"
+        )
     if (confirm_tenant_id or "").strip() != str(request.tenant_id):
         raise SystemExit(
             "tenant id confirmation mismatch; --confirm-tenant-id must match exactly"
@@ -227,13 +269,13 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             """
             SELECT EXISTS (
                 SELECT 1 FROM public.wealthsail_schema_migrations
-                 WHERE version = 33
-                   AND filename = '033_personal_tenant_report_jobs.sql'
+                 WHERE version = 40
+                   AND filename = '040_report_job_session_uniqueness.sql'
             )
             """
         )
         if not migration_ready:
-            raise SystemExit("migration 033 must be applied before the backfill")
+            raise SystemExit("migration 040 must be applied before the backfill")
         return await backfill_standard_report_jobs(conn, request, apply=args.apply)
     finally:
         await conn.close()
