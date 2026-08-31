@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
 import httpx
 
 from backend.integrations import market_data as md
+from backend.market import service
 from backend.integrations.market_data import (
     F_NAV,
     Q_FRESH,
@@ -17,14 +18,99 @@ from backend.integrations.market_data import (
     _change_pct,
     _decimal,
     _match_ak_quote,
+    _major_indices_quality,
+    _major_indices_source_as_of,
     _parse_ak_spot,
+    _parse_sector_focus_payload,
+    _parse_major_indices_payload,
     _quote_unavailable,
     _rank_ak_spot,
     _sina_prefix,
     _split_symbol,
     fetch_fund_nav_history,
 )
-from backend.market import service
+
+
+def test_parse_major_indices_payload_normalizes_authoritative_fields() -> None:
+    payload = {
+        "data": {
+            "diff": [
+                {"f12": "000001", "f14": "上证指数", "f2": 3298.31, "f3": 0.52, "f6": 486000000000},
+                {"f12": "399001", "f14": "深证成指", "f2": 10523.4, "f3": -0.18, "f6": 594000000000},
+                {"f12": "", "f14": "坏数据", "f2": "-", "f3": None, "f6": None},
+            ]
+        }
+    }
+
+    rows = _parse_major_indices_payload(payload)
+
+    assert rows == [
+        {
+            "symbol": "000001",
+            "name": "上证指数",
+            "price": "3298.31",
+            "changePct": "0.52",
+            "turnover": "486000000000",
+        },
+        {
+            "symbol": "399001",
+            "name": "深证成指",
+            "price": "10523.4",
+            "changePct": "-0.18",
+            "turnover": "594000000000",
+        },
+    ]
+
+
+def test_major_indices_are_fresh_only_when_source_timestamp_is_today() -> None:
+    now = datetime(2026, 8, 31, 7, tzinfo=timezone.utc)
+
+    assert (
+        _major_indices_quality(
+            datetime(2026, 8, 31, 6, tzinfo=timezone.utc), now
+        )
+        == Q_FRESH
+    )
+    assert (
+        _major_indices_quality(
+            datetime(2026, 8, 28, 7, tzinfo=timezone.utc), now
+        )
+        == Q_STALE
+    )
+    assert _major_indices_quality(None, now) == Q_STALE
+
+
+def test_parse_sector_focus_payload_uses_only_authoritative_board_fields() -> None:
+    payload = {
+        "data": {
+            "diff": [
+                {"f12": "BK1036", "f14": "半导体", "f3": 2.18, "f124": 1788145200}
+            ]
+        }
+    }
+
+    assert _parse_sector_focus_payload(payload) == {
+        "symbol": "BK1036",
+        "name": "半导体",
+        "changePct": "2.18",
+    }
+    assert _parse_sector_focus_payload({"data": {"diff": []}}) is None
+
+
+def test_major_index_snapshot_uses_oldest_component_timestamp() -> None:
+    payload = {
+        "data": {
+            "diff": [
+                {"f124": 1788145200},
+                {"f124": 1788058800},
+                {"f124": 1788141600},
+            ]
+        }
+    }
+
+    assert _major_indices_source_as_of(payload) == datetime.fromtimestamp(
+        1788058800, tz=timezone.utc
+    )
 
 
 def test_market_source_registry_uses_database_source_type_vocabulary() -> None:

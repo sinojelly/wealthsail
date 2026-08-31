@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 
 import httpx
 import pytest
@@ -268,6 +269,29 @@ async def test_report_publication_expands_one_outbox_per_active_member_binding()
     assert {row[1] for row in conn.inserted} == {"binding-1", "binding-2"}
     assert len({row[-1] for row in conn.inserted}) == 2
     assert all("touser" not in row[5] for row in conn.inserted)
+    assert all("content" not in json.loads(row[5]) for row in conn.inserted)
+
+
+@pytest.mark.asyncio
+async def test_no_holdings_report_publication_includes_shared_brief_content() -> None:
+    conn = _DeliveryConnection(
+        bindings=[{"id": "binding-1", "user_id": "user-1"}]
+    )
+
+    count = await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        report_id="report-1",
+        session="POST_MARKET",
+        version=1,
+        trade_date="2026-08-31",
+        content="今日大盘风向：震荡。仅为市场信息，不构成投资建议。",
+    )
+
+    assert count == 1
+    payload = json.loads(conn.inserted[0][5])
+    assert payload["content"].startswith("今日大盘风向")
+    assert payload["report_id"] == "report-1"
 
 
 @pytest.mark.asyncio

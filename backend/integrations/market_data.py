@@ -46,11 +46,162 @@ AKSOURCE_NAME = "AkShare-OpenSource"
 FUNDSOURCE_NAME = "TiantianFund-EastMoney"
 SINASOURCE_NAME = "Sina-Finance-Quote"
 ESTIMATOR_SOURCE_NAME = "WealthSail-Fund-Estimator"
+EASTMONEY_INDEX_SOURCE_NAME = "EastMoney-Major-Indices"
+EASTMONEY_SECTOR_SOURCE_NAME = "EastMoney-Industry-Boards"
 AKSOURCE_TYPE = "MARKET_DATA"
 FUNDSOURCE_TYPE = "FUND_NAV"
 ESTIMATOR_SOURCE_TYPE = "FUND_NAV"
 
 _SINA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_EASTMONEY_INDEX_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+_EASTMONEY_SECTOR_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_MAJOR_INDEX_SECIDS = "1.000001,0.399001,0.399006"
+
+
+def _optional_decimal_text(value: object) -> str | None:
+    try:
+        return str(_decimal(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return None
+
+
+def _parse_major_indices_payload(payload: dict) -> list[dict]:
+    """Normalize EastMoney's major-index response without inventing values."""
+    diff = (payload.get("data") or {}).get("diff") or []
+    rows: list[dict] = []
+    for raw in diff:
+        symbol = str(raw.get("f12") or "").strip()
+        name = str(raw.get("f14") or "").strip()
+        price = _optional_decimal_text(raw.get("f2"))
+        change_pct = _optional_decimal_text(raw.get("f3"))
+        turnover = _optional_decimal_text(raw.get("f6"))
+        if not symbol or not name or price is None or change_pct is None:
+            continue
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "price": price,
+                "changePct": change_pct,
+                "turnover": turnover,
+            }
+        )
+    return rows
+
+
+def _major_indices_source_as_of(payload: dict) -> datetime | None:
+    timestamps: list[int] = []
+    for raw in (payload.get("data") or {}).get("diff") or []:
+        try:
+            timestamp = int(raw.get("f124"))
+        except (TypeError, ValueError):
+            continue
+        if timestamp > 0:
+            timestamps.append(timestamp)
+    # The oldest adopted component controls whole-snapshot freshness; one
+    # current row must never mask another stale index row.
+    return datetime.fromtimestamp(min(timestamps), tz=timezone.utc) if timestamps else None
+
+
+def _major_indices_quality(source_as_of: datetime | None, now: datetime) -> str:
+    """Only same-Shanghai-date quotes can be described as fresh."""
+    if source_as_of is None:
+        return Q_STALE
+    shanghai = ZoneInfo("Asia/Shanghai")
+    source_date = source_as_of.astimezone(shanghai).date()
+    return Q_FRESH if source_date == now.astimezone(shanghai).date() else Q_STALE
+
+
+async def get_major_indices_snapshot() -> dict:
+    """Fetch the three headline A-share indices for the daily public brief."""
+    retrieved_at = datetime.now(timezone.utc)
+    source_as_of: datetime | None = None
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                _EASTMONEY_INDEX_URL,
+                params={
+                    "fltt": "2",
+                    "invt": "2",
+                    "fields": "f12,f14,f2,f3,f6,f124",
+                    "secids": _MAJOR_INDEX_SECIDS,
+                },
+                headers={"User-Agent": _SINA_UA},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            items = _parse_major_indices_payload(payload)
+            source_as_of = _major_indices_source_as_of(payload)
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+        logger.warning("major indices fetch failed: %s", exc)
+        items = []
+        source_as_of = None
+    return {
+        "items": items,
+        "source": EASTMONEY_INDEX_SOURCE_NAME if items else "unavailable",
+        "sourceAsOf": source_as_of.isoformat() if source_as_of else None,
+        "retrievedAt": retrieved_at.isoformat(),
+        "qualityStatus": (
+            _major_indices_quality(source_as_of, retrieved_at)
+            if items
+            else Q_UNAVAILABLE
+        ),
+        "methodVersion": "eastmoney-major-indices/v1",
+    }
+
+
+def _parse_sector_focus_payload(payload: dict) -> dict | None:
+    """Normalize the top EastMoney industry-board row."""
+    diff = (payload.get("data") or {}).get("diff") or []
+    for raw in diff:
+        symbol = str(raw.get("f12") or "").strip()
+        name = str(raw.get("f14") or "").strip()
+        change_pct = _optional_decimal_text(raw.get("f3"))
+        if symbol and name and change_pct is not None:
+            return {"symbol": symbol, "name": name, "changePct": change_pct}
+    return None
+
+
+async def get_sector_focus_snapshot() -> dict:
+    """Fetch the leading governed EastMoney industry board once per cache miss."""
+    retrieved_at = datetime.now(timezone.utc)
+    source_as_of: datetime | None = None
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                _EASTMONEY_SECTOR_URL,
+                params={
+                    "pn": "1",
+                    "pz": "1",
+                    "po": "1",
+                    "np": "1",
+                    "fltt": "2",
+                    "invt": "2",
+                    "fid": "f3",
+                    "fs": "m:90+t:2+f:!50",
+                    "fields": "f12,f14,f3,f124",
+                },
+                headers={"User-Agent": _SINA_UA},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            item = _parse_sector_focus_payload(payload)
+            source_as_of = _major_indices_source_as_of(payload)
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+        logger.warning("industry sector snapshot fetch failed: %s", exc)
+        item = None
+    return {
+        "item": item,
+        "source": EASTMONEY_SECTOR_SOURCE_NAME if item else "unavailable",
+        "sourceAsOf": source_as_of.isoformat() if source_as_of else None,
+        "retrievedAt": retrieved_at.isoformat(),
+        "qualityStatus": (
+            _major_indices_quality(source_as_of, retrieved_at)
+            if item
+            else Q_UNAVAILABLE
+        ),
+        "methodVersion": "eastmoney-industry-board/v1",
+    }
 
 
 @dataclass(frozen=True)

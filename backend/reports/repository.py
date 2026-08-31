@@ -10,6 +10,69 @@ import asyncpg
 REPORT_SESSIONS = ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET")
 
 
+async def get_shared_market_brief(
+    conn: asyncpg.Connection, trade_date: date
+) -> asyncpg.Record | None:
+    return await conn.fetchrow(
+        """
+        SELECT id, trade_date, draft, source_context, context_hash, provider,
+               model, generation_status, token_usage, cost_cny,
+               quality_status, generated_at
+          FROM reporting.shared_market_briefs
+         WHERE trade_date = $1
+        """,
+        trade_date,
+    )
+
+
+async def insert_shared_market_brief(
+    conn: asyncpg.Connection,
+    *,
+    trade_date: date,
+    draft: dict,
+    source_context: dict,
+    context_hash: str,
+    provider: str,
+    model: str,
+    generation_status: str,
+    token_usage: dict,
+    cost_cny: object,
+    quality_status: str,
+    generated_at: object,
+) -> asyncpg.Record:
+    row = await conn.fetchrow(
+        """
+        INSERT INTO reporting.shared_market_briefs
+            (trade_date, draft, source_context, context_hash, provider, model,
+             generation_status, token_usage, cost_cny, quality_status,
+             generated_at)
+        VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7, $8::jsonb,
+                $9, $10, $11)
+        ON CONFLICT (trade_date) DO NOTHING
+        RETURNING id, trade_date, draft, source_context, context_hash, provider,
+                  model, generation_status, token_usage, cost_cny,
+                  quality_status, generated_at
+        """,
+        trade_date,
+        json.dumps(draft, ensure_ascii=False, default=str),
+        json.dumps(source_context, ensure_ascii=False, default=str),
+        context_hash,
+        provider,
+        model,
+        generation_status,
+        json.dumps(token_usage, ensure_ascii=False),
+        cost_cny,
+        quality_status,
+        generated_at,
+    )
+    if row is not None:
+        return row
+    existing = await get_shared_market_brief(conn, trade_date)
+    if existing is None:
+        raise RuntimeError("shared market brief insert lost without a winner")
+    return existing
+
+
 async def list_reports(
     conn: asyncpg.Connection,
     tenant_id: str,
@@ -320,6 +383,7 @@ async def insert_report_outbox_deliveries(
     session: str,
     version: int,
     trade_date: object,
+    content: str | None = None,
 ) -> int:
     """Expand one tenant report into one delivery per ACTIVE member binding.
 
@@ -337,6 +401,9 @@ async def insert_report_outbox_deliveries(
         """,
         tenant_id,
     )
+    payload = {"report_id": report_id, "session": session, "version": version}
+    if content:
+        payload["content"] = content
     rows = [
         (
             tenant_id,
@@ -344,10 +411,7 @@ async def insert_report_outbox_deliveries(
             report_id,
             "REPORT_PUBLISHED",
             "reporting.reports",
-            json.dumps(
-                {"report_id": report_id, "session": session, "version": version},
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, ensure_ascii=False),
             f"{session}:{trade_date}:{version}:binding:{binding['id']}",
         )
         for binding in bindings

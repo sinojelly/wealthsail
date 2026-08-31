@@ -34,8 +34,9 @@ from backend.integrations.model_gateway import (
     ModelResult,
     chat_completion,
 )
+from backend.market import service as market_service
 from backend.portfolio.service import get_positions, get_summary
-from backend.reports import repository
+from backend.reports import repository, shared_market_brief
 
 logger = logging.getLogger("wealthsail.reports")
 
@@ -216,20 +217,40 @@ async def generate_report(
             async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
                 return await get_report_detail(conn, ctx.tenant_id, str(latest["id"]))
 
-    # Phase 2: model gateway (outside any transaction) or deterministic fallback.
-    model_result = None
-    error_class: str | None = None
-    try:
-        system_prompt, user_prompt = _render_prompts(session, context)
-        model_result = await chat_completion(
-            settings=settings, system_prompt=system_prompt, user_prompt=user_prompt
+    # Phase 2: holdings stay personalized; no-holdings tenants reuse one
+    # tenant-neutral daily market brief to avoid duplicate model spend.
+    generation_mode = (
+        "NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED"
+    )
+    shared_brief_id: str | None = None
+    shared_cache_hit = False
+    shared_context_hash: str | None = None
+    push_content: str | None = None
+    if generation_mode == "NO_HOLDINGS_SHARED":
+        shared_result = await shared_market_brief.get_or_generate(
+            pool, trade_date, context
         )
-        draft = _parse_llm_draft(model_result.content, session)
-    except (ModelNotConfiguredError, ModelCallError, ValueError) as exc:
-        logger.warning("report generation degraded for %s: %s", session, exc)
-        error_class = exc.__class__.__name__
-        draft = _fallback_draft(session, context)
-    draft = _attach_deterministic_fund_items(session, draft, context)
+        draft = shared_result.draft
+        model_result = shared_result.model_result
+        error_class = shared_result.error_class
+        shared_brief_id = shared_result.id
+        shared_context_hash = shared_result.context_hash
+        shared_cache_hit = shared_result.cache_hit
+        push_content = shared_market_brief.format_push_content(draft, session=session)
+    else:
+        model_result = None
+        error_class: str | None = None
+        try:
+            system_prompt, user_prompt = _render_prompts(session, context)
+            model_result = await chat_completion(
+                settings=settings, system_prompt=system_prompt, user_prompt=user_prompt
+            )
+            draft = _parse_llm_draft(model_result.content, session)
+        except (ModelNotConfiguredError, ModelCallError, ValueError) as exc:
+            logger.warning("report generation degraded for %s: %s", session, exc)
+            error_class = exc.__class__.__name__
+            draft = _fallback_draft(session, context)
+        draft = _attach_deterministic_fund_items(session, draft, context)
 
     # Phase 3: write with version-conflict retry.
     last_error: Exception | None = None
@@ -248,6 +269,11 @@ async def generate_report(
                     error_class=error_class,
                     job_run_id=job_run_id,
                     actor_type=actor_type,
+                    generation_mode=generation_mode,
+                    shared_brief_id=shared_brief_id,
+                    shared_cache_hit=shared_cache_hit,
+                    shared_context_hash=shared_context_hash,
+                    push_content=push_content,
                 )
         except asyncpg.UniqueViolationError as exc:
             last_error = exc
@@ -262,7 +288,9 @@ async def _build_context(
     conn: asyncpg.Connection, tenant_id: str, session: str
 ) -> dict:
     summary = await get_summary(conn, tenant_id, now_shanghai())
-    positions = await get_positions(conn, tenant_id)
+    # Historical zero-quantity snapshots are not active holdings. Filtering
+    # here keeps fully closed portfolios in the no-holdings report mode.
+    positions = _active_positions(await get_positions(conn, tenant_id))
     policy = await conn.fetchrow(
         """
         SELECT max_drawdown_limit, single_position_limit, equity_target_pct,
@@ -334,13 +362,27 @@ async def _build_context(
             }
             for row in rows
         ]
-    return {
+    result = {
         "session": session,
         "summary": summary,
         "positions": positions,
         "policy": dict(policy) if policy else None,
         "fundEstimates": fund_estimates,
     }
+    if not positions:
+        # These are persisted Worker-owned snapshots. Report reads never call
+        # external providers while the tenant RLS transaction is open.
+        result["marketSentiment"] = await market_service.get_market_sentiment(conn)
+    return result
+
+
+def _active_positions(positions: list[dict]) -> list[dict]:
+    """Exclude historical zero/negative snapshots from report-mode selection."""
+    return [
+        position
+        for position in positions
+        if Decimal(str(position.get("quantity") or "0")) > ZERO
+    ]
 
 
 def _render_prompts(session: str, context: dict) -> tuple[str, str]:
@@ -584,16 +626,29 @@ def _database_quality(value: object) -> str:
 
 
 def _delivery_audit_details(
-    *, session: str, version: int, degraded: bool, delivery_count: int
+    *,
+    session: str,
+    version: int,
+    degraded: bool,
+    delivery_count: int,
+    generation_mode: str | None = None,
+    shared_brief_id: str | None = None,
+    shared_cache_hit: bool | None = None,
 ) -> dict:
     """Describe report delivery fan-out, including the zero-recipient case."""
-    return {
+    details = {
         "session": session,
         "version": version,
         "degraded": degraded,
         "deliveryCount": delivery_count,
         "deliveryStatus": "QUEUED" if delivery_count else "NO_ACTIVE_BINDING",
     }
+    if generation_mode is not None:
+        details["generationMode"] = generation_mode
+    if shared_brief_id is not None:
+        details["sharedBriefId"] = shared_brief_id
+        details["sharedCacheHit"] = bool(shared_cache_hit)
+    return details
 
 
 async def _persist_generation(
@@ -609,6 +664,11 @@ async def _persist_generation(
     error_class: str | None,
     job_run_id: str | None,
     actor_type: str,
+    generation_mode: str,
+    shared_brief_id: str | None,
+    shared_cache_hit: bool,
+    shared_context_hash: str | None,
+    push_content: str | None,
 ) -> dict:
     latest = await repository.latest_report(conn, ctx.tenant_id, trade_date, session)
     version = (latest["version"] + 1) if latest else 1
@@ -621,11 +681,32 @@ async def _persist_generation(
         model_run_id = await repository.insert_model_run(
             conn,
             tenant_id=ctx.tenant_id,
-            provider="deepseek",
+            provider=(
+                "shared-brief"
+                if generation_mode == "NO_HOLDINGS_SHARED"
+                else "deepseek"
+            ),
             model=model_result.model,
-            prompt_template_version=f"report.{session.lower()}.v1",
+            prompt_template_version=(
+                "report.no_holdings.v1"
+                if generation_mode == "NO_HOLDINGS_SHARED"
+                else f"report.{session.lower()}.v1"
+            ),
             input_snapshot_hashes={
-                "context": canonical_context_hash(context),
+                (
+                    "sharedContext"
+                    if generation_mode == "NO_HOLDINGS_SHARED"
+                    else "context"
+                ): (
+                    shared_context_hash
+                    if generation_mode == "NO_HOLDINGS_SHARED"
+                    else canonical_context_hash(context)
+                ),
+                **(
+                    {"sharedBriefId": shared_brief_id}
+                    if shared_brief_id is not None
+                    else {}
+                ),
             },
             token_usage=model_result.usage,
             cost_cny=model_result.cost_cny,
@@ -641,7 +722,11 @@ async def _persist_generation(
             tenant_id=ctx.tenant_id,
             provider="deepseek",
             model="fallback-template",
-            prompt_template_version=f"report.{session.lower()}.v1",
+            prompt_template_version=(
+                "report.no_holdings.v1"
+                if generation_mode == "NO_HOLDINGS_SHARED"
+                else f"report.{session.lower()}.v1"
+            ),
             input_snapshot_hashes={},
             token_usage={},
             cost_cny=Decimal("0.0000"),
@@ -682,6 +767,7 @@ async def _persist_generation(
         session=session,
         version=version,
         trade_date=trade_date.isoformat(),
+        content=push_content,
     )
     await write_audit(
         conn,
@@ -697,6 +783,9 @@ async def _persist_generation(
             version=version,
             degraded=model_result is None,
             delivery_count=delivery_count,
+            generation_mode=generation_mode,
+            shared_brief_id=shared_brief_id,
+            shared_cache_hit=shared_cache_hit,
         ),
     )
     return await get_report_detail(conn, ctx.tenant_id, report_id)

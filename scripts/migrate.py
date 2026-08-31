@@ -909,6 +909,59 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "report job session uniqueness constraint is missing or unsafe"
         )
 
+    shared_market_brief_boundary = await conn.fetchrow(
+        """
+        WITH boundary AS (
+            SELECT to_regclass('reporting.shared_market_briefs') AS relation_id
+        )
+        SELECT relation_id IS NOT NULL AS table_exists,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'SELECT'
+               ) ELSE FALSE END AS api_can_select,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_api', relation_id, 'INSERT'
+               ) ELSE FALSE END AS api_can_insert,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_worker', relation_id, 'SELECT'
+               ) ELSE FALSE END AS worker_can_select,
+               CASE WHEN relation_id IS NOT NULL THEN has_table_privilege(
+                   'wealthsail_worker', relation_id, 'INSERT'
+               ) ELSE FALSE END AS worker_can_insert,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_api', relation_id, 'UPDATE'
+               ) ELSE FALSE END AS api_cannot_update,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_api', relation_id, 'DELETE'
+               ) ELSE FALSE END AS api_cannot_delete,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_worker', relation_id, 'UPDATE'
+               ) ELSE FALSE END AS worker_cannot_update,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'wealthsail_worker', relation_id, 'DELETE'
+               ) ELSE FALSE END AS worker_cannot_delete,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'authenticated', relation_id, 'SELECT'
+               ) ELSE FALSE END AS browser_cannot_select,
+               CASE WHEN relation_id IS NOT NULL THEN NOT has_table_privilege(
+                   'authenticated', relation_id, 'INSERT'
+               ) ELSE FALSE END AS browser_cannot_insert,
+               EXISTS (
+                   SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = relation_id
+                      AND tgname = 'protect_shared_market_briefs_trigger'
+                      AND NOT tgisinternal
+               ) AS append_only_trigger_exists
+          FROM boundary
+        """
+    )
+    if (
+        shared_market_brief_boundary is None
+        or not all(shared_market_brief_boundary.values())
+    ):
+        raise RuntimeError(
+            "shared market brief cache boundary is missing or unsafe"
+        )
+
     data_source_type_contract = await conn.fetchval(
         """
         SELECT pg_get_constraintdef(c.oid)

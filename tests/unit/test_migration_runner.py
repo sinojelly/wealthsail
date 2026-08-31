@@ -30,8 +30,34 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 40
-    assert migrations[-1].path.name == "040_report_job_session_uniqueness.sql"
+    assert versions[-1] == 41
+    assert migrations[-1].path.name == "041_shared_market_briefs.sql"
+
+
+def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "migrations" / "041_shared_market_briefs.sql").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "CREATE TABLE reporting.shared_market_briefs",
+        "trade_date DATE NOT NULL UNIQUE",
+        "source_context JSONB NOT NULL",
+        "generation_status TEXT NOT NULL",
+        "GRANT SELECT, INSERT ON reporting.shared_market_briefs TO wealthsail_api, wealthsail_worker",
+        "REVOKE ALL ON reporting.shared_market_briefs FROM PUBLIC, authenticated",
+    ):
+        assert contract in migration
+    assert "GRANT UPDATE" not in migration
+    assert "GRANT DELETE" not in migration
+
+
+def test_readback_requires_shared_market_brief_cache_boundary() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "shared market brief cache boundary is missing or unsafe" in source
+    assert "shared_market_briefs" in source
 
 
 def test_040_rejects_duplicate_report_sessions_before_adding_uniqueness() -> None:
