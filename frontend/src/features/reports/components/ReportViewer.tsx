@@ -12,6 +12,10 @@ import {
 import QualityBadge from "../../../components/data-state/QualityBadge";
 import type { EvidenceRecord } from "../report-data";
 import type { ReportDetail, ReportEvidence, ReportItem } from "../../../api/types";
+import {
+  formatShanghaiDateTime,
+  formatShanghaiTime,
+} from "../../../lib/shanghai-time";
 
 const ITEM_TYPE_META: Record<string, { label: string; icon: typeof Info }> = {
   FACT: { label: "事实", icon: BookOpen },
@@ -48,7 +52,7 @@ export default function ReportViewer({
   report: ReportDetail;
   onEvidence: (evidence: EvidenceRecord) => void;
 }) {
-  const asOfLabel = report.asOf.replace("T", " ").slice(0, 16);
+  const asOfLabel = formatShanghaiDateTime(report.asOf);
   return (
     <article className="report-viewer">
       <header className="report-viewer-header">
@@ -186,7 +190,7 @@ export default function ReportViewer({
               {report.versionHistory.map((version) => (
                 <span key={version.id} className="version-chip mono">
                   v{version.version} · {version.status} ·{" "}
-                  {version.asOf.slice(11, 16)}
+                  {formatShanghaiTime(version.asOf)}
                 </span>
               ))}
               <span className="version-chip mono current">

@@ -1,12 +1,13 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReportsPage from "./ReportsPage";
-import type { ReportSummary } from "../../api/types";
+import type { ReportDetail, ReportSummary } from "../../api/types";
 import { renderWithSession } from "../../test/render-with-session";
 import { reportDetailFixture, reportsFixture } from "../../test/fixtures";
 
 const reportState = vi.hoisted(() => ({
   reports: [] as ReportSummary[],
+  detail: null as ReportDetail | null,
 }));
 
 vi.mock("../../api/hooks", () => ({
@@ -17,7 +18,7 @@ vi.mock("../../api/hooks", () => ({
     error: null,
   }),
   useReportDetail: (reportId: string | null) => ({
-    data: reportId ? reportDetailFixture : undefined,
+    data: reportId ? (reportState.detail ?? undefined) : undefined,
     isLoading: false,
     isError: false,
     error: null,
@@ -32,6 +33,7 @@ vi.mock("../../api/hooks", () => ({
 
 beforeEach(() => {
   reportState.reports = reportsFixture;
+  reportState.detail = reportDetailFixture;
 });
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
@@ -59,6 +61,94 @@ it("opens the report selected by a reportId deep link", () => {
   expect(screen.getByRole("button", { name: /盘后交互复盘/ })).toHaveClass(
     "selected",
   );
+});
+
+it("renders report audit timestamps in Asia/Shanghai", () => {
+  reportState.reports = [
+    {
+      ...reportsFixture[0],
+      tradeDate: "2026-08-31",
+      generatedAt: "2026-08-31T00:30:00Z",
+    },
+    {
+      ...reportsFixture[0],
+      id: "R-INTRADAY-20260831",
+      session: "INTRADAY",
+      title: "盘中跟踪",
+      tradeDate: "2026-08-31",
+      generatedAt: "2026-08-31T06:55:00Z",
+    },
+    {
+      ...reportsFixture[0],
+      id: "R-FUND-20260831",
+      session: "FUND_1430",
+      title: "基金 2:30 报告",
+      tradeDate: "2026-08-31",
+      generatedAt: "2026-08-31T06:30:00Z",
+    },
+    {
+      ...reportsFixture[1],
+      id: "R-POST-20260831",
+      tradeDate: "2026-08-31",
+      generatedAt: "2026-08-31T07:30:00Z",
+    },
+  ];
+  reportState.detail = {
+    ...reportDetailFixture,
+    id: "R-POST-20260831",
+    tradeDate: "2026-08-31",
+    asOf: "2026-08-31T07:30:00Z",
+    versionHistory: [
+      {
+        ...reportDetailFixture.versionHistory[0],
+        asOf: "2026-08-31T07:00:00Z",
+      },
+    ],
+  };
+
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-POST-20260831");
+
+  expect(screen.getByText("08:30")).toBeInTheDocument();
+  expect(screen.getByText("14:30")).toBeInTheDocument();
+  expect(screen.getByText("14:55")).toBeInTheDocument();
+  expect(screen.getByText("15:30")).toBeInTheDocument();
+  expect(screen.getByText(/2026-08-31 15:30 生成/)).toBeInTheDocument();
+  expect(screen.getByText(/v1 · PUBLISHED · 15:00/)).toBeInTheDocument();
+});
+
+it("renders a safe placeholder for an invalid report timestamp", () => {
+  reportState.reports = [
+    {
+      ...reportsFixture[0],
+      generatedAt: "2026-08-31T07:30:00",
+    },
+    {
+      ...reportsFixture[1],
+      generatedAt: "2026-02-30T07:30:00Z",
+    },
+  ];
+
+  renderWithSession(<ReportsPage />);
+
+  expect(screen.getAllByText("--:--")).toHaveLength(2);
+});
+
+it("renders safe placeholders for invalid detail and version timestamps", () => {
+  reportState.detail = {
+    ...reportDetailFixture,
+    asOf: "2026-08-31T07:30:00",
+    versionHistory: [
+      {
+        ...reportDetailFixture.versionHistory[0],
+        asOf: "2026-02-30T07:30:00Z",
+      },
+    ],
+  };
+
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-POST-20260823");
+
+  expect(screen.getByText(/时间不可用 生成/)).toBeInTheDocument();
+  expect(screen.getByText(/v1 · PUBLISHED · --:--/)).toBeInTheDocument();
 });
 
 it("presents an empty report workspace with structured guidance", () => {

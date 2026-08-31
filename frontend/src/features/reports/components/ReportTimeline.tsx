@@ -2,6 +2,7 @@ import { CheckCircle2, FileClock, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ReportSummary } from "../../../api/types";
 import EmptyState from "../../../components/data-state/EmptyState";
+import { formatShanghaiTime } from "../../../lib/shanghai-time";
 
 export default function ReportTimeline({
   reports,
@@ -43,26 +44,27 @@ export default function ReportTimeline({
         </div>
       ) : null}
       <div className={`report-list ${filtered.length === 0 ? "is-empty" : ""}`}>
-        {filtered.map((report) => (
-          <button
-            key={report.id}
-            aria-label={`${report.title} ${report.generatedAt}`}
-            className={`report-item ${report.id === selectedId ? "selected" : ""}`}
-            onClick={() => onSelect(report)}
-          >
-            <div className="report-time mono">
-              {report.generatedAt.slice(11, 16)}
-            </div>
-            <div className="report-item-copy">
-              <strong>{report.title}</strong>
-              <span>{report.subtitle}</span>
-              <small>
-                <CheckCircle2 size={10} />
-                {report.status} · v{report.version}
-              </small>
-            </div>
-          </button>
-        ))}
+        {filtered.map((report) => {
+          const generatedTime = formatShanghaiTime(report.generatedAt);
+          return (
+            <button
+              key={report.id}
+              aria-label={`${report.title} ${generatedTime}`}
+              className={`report-item ${report.id === selectedId ? "selected" : ""}`}
+              onClick={() => onSelect(report)}
+            >
+              <div className="report-time mono">{generatedTime}</div>
+              <div className="report-item-copy">
+                <strong>{report.title}</strong>
+                <span>{report.subtitle}</span>
+                <small>
+                  <CheckCircle2 size={10} />
+                  {report.status} · v{report.version}
+                </small>
+              </div>
+            </button>
+          );
+        })}
         {filtered.length === 0 ? (
           <EmptyState
             className="report-list-empty"
