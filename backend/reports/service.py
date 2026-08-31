@@ -36,15 +36,21 @@ from backend.integrations.model_gateway import (
 )
 from backend.market import service as market_service
 from backend.portfolio.service import get_positions, get_summary
-from backend.reports import repository, shared_market_brief
+from backend.reports import pre_market, repository, shared_market_brief
 
 logger = logging.getLogger("wealthsail.reports")
 
 SESSION_META: dict[str, dict[str, str]] = {
     "PRE_MARKET": {"title": "盘前简报", "subtitle": "隔夜市场、今日事件与持仓风险"},
     "INTRADAY": {"title": "盘中跟踪", "subtitle": "持仓异动与风险预算触点"},
-    "FUND_1430": {"title": "基金 2:30 报告", "subtitle": "场外基金估值、覆盖率与截止时间"},
-    "POST_MARKET": {"title": "盘后交互复盘", "subtitle": "计划—决策—执行闭环与证据回看"},
+    "FUND_1430": {
+        "title": "基金 2:30 报告",
+        "subtitle": "场外基金估值、覆盖率与截止时间",
+    },
+    "POST_MARKET": {
+        "title": "盘后交互复盘",
+        "subtitle": "计划—决策—执行闭环与证据回看",
+    },
 }
 
 _ALLOWED_ITEM_TYPES = {"FACT", "RISK", "ACTION_PLAN", "TODO", "FUND_ESTIMATE", "ALERT"}
@@ -61,6 +67,7 @@ def canonical_context_hash(context: dict) -> str:
         default=str,
     )
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 # Idempotent replay window: a generate request for the same (session, trade_date)
 # within this window returns the existing report instead of minting a new version.
@@ -173,7 +180,9 @@ async def get_report_detail(
                 "status": h["status"],
                 "asOf": h["as_of"],
                 "supersedesReportId": (
-                    str(h["supersedes_report_id"]) if h["supersedes_report_id"] else None
+                    str(h["supersedes_report_id"])
+                    if h["supersedes_report_id"]
+                    else None
                 ),
             }
             for h in history
@@ -217,16 +226,24 @@ async def generate_report(
             async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
                 return await get_report_detail(conn, ctx.tenant_id, str(latest["id"]))
 
-    # Phase 2: holdings stay personalized; no-holdings tenants reuse one
+    # Phase 2: PRE_MARKET is always deterministic. For the other sessions,
+    # holdings stay personalized while no-holdings tenants reuse one
     # tenant-neutral daily market brief to avoid duplicate model spend.
     generation_mode = (
-        "NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED"
+        "PRE_MARKET_DETERMINISTIC"
+        if session == "PRE_MARKET"
+        else ("NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED")
     )
     shared_brief_id: str | None = None
     shared_cache_hit = False
     shared_context_hash: str | None = None
     push_content: str | None = None
-    if generation_mode == "NO_HOLDINGS_SHARED":
+    if generation_mode == "PRE_MARKET_DETERMINISTIC":
+        draft = pre_market.build_report(context)
+        push_content = pre_market.format_push_content(context)
+        model_result = None
+        error_class = None
+    elif generation_mode == "NO_HOLDINGS_SHARED":
         shared_result = await shared_market_brief.get_or_generate(
             pool, trade_date, context
         )
@@ -349,14 +366,10 @@ async def _build_context(
                 "name": row["name"],
                 "value": str(row["value"]) if row["value"] is not None else None,
                 "lowerValue": (
-                    str(row["lower_value"])
-                    if row["lower_value"] is not None
-                    else None
+                    str(row["lower_value"]) if row["lower_value"] is not None else None
                 ),
                 "upperValue": (
-                    str(row["upper_value"])
-                    if row["upper_value"] is not None
-                    else None
+                    str(row["upper_value"]) if row["upper_value"] is not None else None
                 ),
                 "quality": row["quality_status"],
                 "asOf": row["as_of"],
@@ -365,6 +378,30 @@ async def _build_context(
             }
             for row in rows
         ]
+    pre_market_context: dict = {}
+    if session == "PRE_MARKET":
+        instrument_ids = [
+            str(position["instrumentId"])
+            for position in positions
+            if position.get("instrumentId")
+        ]
+        report_date = now_shanghai().date()
+        corporate_actions = await repository.get_pre_market_corporate_actions(
+            conn, instrument_ids, report_date
+        )
+        cutoff_rules = await repository.get_pre_market_cutoff_rules(
+            conn, instrument_ids, report_date
+        )
+        pre_market_context = {
+            # No governed providers exist for these fields yet. Their explicit
+            # empty values are rendered as "暂无" instead of inferred facts.
+            "usIndices": [],
+            "a50Future": None,
+            "economicEvents": [],
+            "subscriptionRedemptionChanges": [],
+            "corporateActions": corporate_actions,
+            "fundCutoffRules": cutoff_rules,
+        }
     result = {
         "session": session,
         "summary": summary,
@@ -374,6 +411,8 @@ async def _build_context(
         # Read-only persisted snapshot; this never performs provider I/O.
         "marketSentiment": await market_service.get_market_sentiment(conn),
     }
+    if session == "PRE_MARKET":
+        result["preMarket"] = pre_market_context
     return result
 
 
@@ -473,9 +512,7 @@ def _personalized_health(context: dict) -> tuple[str, list[dict], list[dict]]:
         position = overweight[0]
         weight = _safe_decimal(position.get("weight")) or ZERO
         symbol = _compact_symbol(position.get("symbol"))
-        parts.append(
-            f"仓位偏高：{symbol} {weight:.2f}%＞{limit:.2f}%"
-        )
+        parts.append(f"仓位偏高：{symbol} {weight:.2f}%＞{limit:.2f}%")
     elif limit is None:
         parts.append("未配置单一持仓上限")
     else:
@@ -500,12 +537,13 @@ def _personalized_actions(
     )
     if overweight and limit is not None:
         symbol = _compact_symbol(overweight[0].get("symbol") or "该标的")
-        actions.append(
-            f"{symbol}暂停增加暴露，按{limit:.2f}%上限评估再平衡"
-        )
+        actions.append(f"{symbol}暂停增加暴露，按{limit:.2f}%上限评估再平衡")
     if not actions:
         actions.append("维持观察，按既定风险规则复核持仓")
-    return "；".join(f"{index + 1}) {action}" for index, action in enumerate(actions[:2])) + "。"
+    return (
+        "；".join(f"{index + 1}) {action}" for index, action in enumerate(actions[:2]))
+        + "。"
+    )
 
 
 def _personalized_market_signal(sentiment: dict) -> str:
@@ -633,7 +671,9 @@ def _fallback_draft(session: str, context: dict) -> dict:
     total_asset = summary.get("totalAsset")
     known_value = summary.get("knownValue")
     if total_asset is None:
-        known_suffix = f"（已知价值 {known_value} 元）" if known_value is not None else ""
+        known_suffix = (
+            f"（已知价值 {known_value} 元）" if known_value is not None else ""
+        )
         total_text = f"当前组合总资产不可完整估值{known_suffix}"
     else:
         total_text = f"当前组合总资产 {total_asset} 元"
@@ -687,9 +727,7 @@ def _fallback_draft(session: str, context: dict) -> dict:
         }
     ]
     known_weights = [
-        Decimal(p["weight"])
-        for p in positions
-        if p.get("weight") is not None
+        Decimal(p["weight"]) for p in positions if p.get("weight") is not None
     ]
     if known_weights and policy and policy["single_position_limit"] is not None:
         max_weight = max(known_weights, default=ZERO)
@@ -725,14 +763,13 @@ def _fallback_draft(session: str, context: dict) -> dict:
     }
 
 
-def _attach_deterministic_fund_items(
-    session: str, draft: dict, context: dict
-) -> dict:
+def _attach_deterministic_fund_items(session: str, draft: dict, context: dict) -> dict:
     """Replace model-authored fund estimates with persisted calculator output."""
     if session != "FUND_1430":
         return draft
     items = [
-        item for item in draft.get("items", [])
+        item
+        for item in draft.get("items", [])
         if item.get("item_type") != "FUND_ESTIMATE"
     ]
     estimates = context.get("fundEstimates") or []
@@ -816,6 +853,8 @@ def _delivery_audit_details(
     }
     if generation_mode is not None:
         details["generationMode"] = generation_mode
+    if generation_mode == "PRE_MARKET_DETERMINISTIC":
+        details["generatorVersion"] = "pre-market-deterministic-v1"
     if shared_brief_id is not None:
         details["sharedBriefId"] = shared_brief_id
         details["sharedCacheHit"] = bool(shared_cache_hit)
@@ -848,7 +887,12 @@ async def _persist_generation(
     correlation_id = "req_" + uuid.uuid4().hex[:16]
     finished_at = now_shanghai()
 
-    if model_result is not None:
+    if generation_mode == "PRE_MARKET_DETERMINISTIC":
+        # Deterministic structured-data generation is not a model execution.
+        # Keep model_run_id nullable and record the generator version in the
+        # report audit event instead of inflating model-run counts.
+        model_run_id = None
+    elif model_result is not None:
         model_run_id = await repository.insert_model_run(
             conn,
             tenant_id=ctx.tenant_id,
@@ -952,7 +996,7 @@ async def _persist_generation(
         details=_delivery_audit_details(
             session=session,
             version=version,
-            degraded=model_result is None,
+            degraded=error_class is not None,
             delivery_count=delivery_count,
             generation_mode=generation_mode,
             shared_brief_id=shared_brief_id,

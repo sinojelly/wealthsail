@@ -79,7 +79,7 @@ export default function ReportTimeline({
         ) : null}
       </div>
       <div className="timeline-note">
-        所有报告保留生成版本、事实快照、证据锚点与模型运行标识。
+        所有报告保留生成版本、事实快照与证据锚点；发生模型调用时同时保留模型运行标识。
       </div>
     </aside>
   );

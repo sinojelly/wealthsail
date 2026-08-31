@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -51,7 +52,9 @@ def _context() -> dict:
     }
 
 
-def test_personalized_push_has_four_grounded_sections_and_stays_under_300_chars() -> None:
+def test_personalized_push_has_four_grounded_sections_and_stays_under_300_chars() -> (
+    None
+):
     formatter = getattr(report_service, "_format_personalized_push_content", None)
     assert formatter is not None, "personalized push formatter is not implemented"
 
@@ -74,7 +77,9 @@ def test_personalized_push_has_four_grounded_sections_and_stays_under_300_chars(
     assert "…" not in action_line
 
 
-def test_personalized_push_does_not_invent_missing_daily_return_or_contributor() -> None:
+def test_personalized_push_does_not_invent_missing_daily_return_or_contributor() -> (
+    None
+):
     formatter = getattr(report_service, "_format_personalized_push_content", None)
     assert formatter is not None, "personalized push formatter is not implemented"
     context = _context()
@@ -109,7 +114,9 @@ def test_personalized_push_ignores_closed_positions_in_health_and_actions() -> N
     assert "已清仓旧标的" not in content
 
 
-def test_personalized_push_keeps_overweight_threshold_after_multiple_stale_positions() -> None:
+def test_personalized_push_keeps_overweight_threshold_after_multiple_stale_positions() -> (
+    None
+):
     formatter = getattr(report_service, "_format_personalized_push_content", None)
     assert formatter is not None, "personalized push formatter is not implemented"
     context = _context()
@@ -133,7 +140,9 @@ def test_personalized_push_keeps_overweight_threshold_after_multiple_stale_posit
     assert "…" not in health_line
 
 
-def test_personalized_push_compacts_long_symbols_without_hiding_actions_or_limits() -> None:
+def test_personalized_push_compacts_long_symbols_without_hiding_actions_or_limits() -> (
+    None
+):
     formatter = getattr(report_service, "_format_personalized_push_content", None)
     assert formatter is not None, "personalized push formatter is not implemented"
     context = _context()
@@ -197,8 +206,12 @@ async def test_holdings_generation_uses_one_report_model_call_and_deterministic_
         )
     )
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
-    monkeypatch.setattr(report_service, "_build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr(report_service.repository, "latest_report", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        report_service, "_build_context", AsyncMock(return_value=context)
+    )
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(report_service, "chat_completion", model)
     monkeypatch.setattr(report_service, "_persist_generation", persist)
 
@@ -214,6 +227,131 @@ async def test_holdings_generation_uses_one_report_model_call_and_deterministic_
     assert captured["generation_mode"] == "PERSONALIZED"
     assert captured["push_content"].startswith("1. 一句话总结：")
     assert len(captured["push_content"]) <= 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("positions", [[], _context()["positions"]])
+async def test_pre_market_generation_is_deterministic_for_every_holdings_mode(
+    monkeypatch,
+    positions,
+) -> None:
+    context = {
+        **_context(),
+        "positions": positions,
+        "preMarket": {
+            "usIndices": [],
+            "a50Future": None,
+            "economicEvents": [],
+            "subscriptionRedemptionChanges": [],
+            "corporateActions": [],
+            "fundCutoffRules": [],
+        },
+    }
+    captured: dict = {}
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield object()
+
+    async def persist(_conn, **kwargs):
+        captured.update(kwargs)
+        return {"id": "pre-market-report"}
+
+    model = AsyncMock()
+    shared_generate = AsyncMock()
+    monkeypatch.setattr(report_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        report_service, "_build_context", AsyncMock(return_value=context)
+    )
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        report_service.shared_market_brief, "get_or_generate", shared_generate
+    )
+    monkeypatch.setattr(report_service, "chat_completion", model)
+    monkeypatch.setattr(report_service, "_persist_generation", persist)
+
+    result = await report_service.generate_report(
+        object(),
+        TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        Settings(_env_file=None),
+        "PRE_MARKET",
+    )
+
+    assert result == {"id": "pre-market-report"}
+    model.assert_not_awaited()
+    shared_generate.assert_not_awaited()
+    assert captured["generation_mode"] == "PRE_MARKET_DETERMINISTIC"
+    assert captured["model_result"] is None
+    assert len(captured["push_content"]) <= 200
+    assert captured["draft"]["summary"].startswith("1. 隔夜市场速览：")
+
+
+def test_pre_market_audit_names_the_deterministic_generator_without_a_model_run() -> (
+    None
+):
+    details = report_service._delivery_audit_details(
+        session="PRE_MARKET",
+        version=1,
+        degraded=False,
+        delivery_count=1,
+        generation_mode="PRE_MARKET_DETERMINISTIC",
+    )
+
+    assert details["generationMode"] == "PRE_MARKET_DETERMINISTIC"
+    assert details["generatorVersion"] == "pre-market-deterministic-v1"
+
+
+@pytest.mark.asyncio
+async def test_pre_market_persistence_does_not_create_a_model_run(monkeypatch) -> None:
+    insert_model_run = AsyncMock()
+    insert_report = AsyncMock(return_value="report-1")
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(report_service.repository, "insert_model_run", insert_model_run)
+    monkeypatch.setattr(report_service.repository, "insert_report", insert_report)
+    monkeypatch.setattr(report_service.repository, "insert_report_items", AsyncMock())
+    monkeypatch.setattr(
+        report_service.repository,
+        "insert_report_outbox_deliveries",
+        AsyncMock(return_value=0),
+    )
+    monkeypatch.setattr(report_service, "write_audit", AsyncMock())
+    monkeypatch.setattr(
+        report_service,
+        "get_report_detail",
+        AsyncMock(return_value={"id": "report-1"}),
+    )
+
+    await report_service._persist_generation(
+        object(),
+        ctx=TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        session="PRE_MARKET",
+        trade_date=date(2026, 9, 1),
+        started_at=report_service.now_shanghai(),
+        context={"positions": [], "preMarket": {}},
+        draft={
+            "summary": "盘前摘要",
+            "items": [],
+            "quality": "UNAVAILABLE",
+            "status": "PARTIAL",
+            "policy_check_status": "WARNING",
+        },
+        model_result=None,
+        error_class=None,
+        job_run_id=None,
+        actor_type="USER",
+        generation_mode="PRE_MARKET_DETERMINISTIC",
+        shared_brief_id=None,
+        shared_cache_hit=False,
+        shared_context_hash=None,
+        push_content="摘要",
+    )
+
+    insert_model_run.assert_not_awaited()
+    assert insert_report.await_args.kwargs["model_run_id"] is None
 
 
 @pytest.mark.asyncio
@@ -251,9 +389,15 @@ async def test_no_holdings_generation_keeps_shared_brief_path(monkeypatch) -> No
     model = AsyncMock()
     shared_generate = AsyncMock(return_value=shared_result)
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
-    monkeypatch.setattr(report_service, "_build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr(report_service.repository, "latest_report", AsyncMock(return_value=None))
-    monkeypatch.setattr(report_service.shared_market_brief, "get_or_generate", shared_generate)
+    monkeypatch.setattr(
+        report_service, "_build_context", AsyncMock(return_value=context)
+    )
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        report_service.shared_market_brief, "get_or_generate", shared_generate
+    )
     monkeypatch.setattr(report_service, "chat_completion", model)
     monkeypatch.setattr(report_service, "_persist_generation", persist)
 
@@ -301,6 +445,18 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
         "get_market_sentiment",
         sentiment,
     )
+    corporate_actions = AsyncMock(return_value=[])
+    cutoff_rules = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_corporate_actions",
+        corporate_actions,
+    )
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_cutoff_rules",
+        cutoff_rules,
+    )
 
     context = await report_service._build_context(
         _ContextConnection(),
@@ -310,3 +466,7 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
 
     assert context["positions"] == [{"symbol": "600036", "quantity": "1"}]
     assert context["marketSentiment"]["totalDown"] == 3000
+    assert context["preMarket"]["corporateActions"] == []
+    assert context["preMarket"]["fundCutoffRules"] == []
+    corporate_actions.assert_awaited_once()
+    cutoff_rules.assert_awaited_once()

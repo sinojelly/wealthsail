@@ -11,6 +11,115 @@ import asyncpg
 REPORT_SESSIONS = ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET")
 
 
+async def get_pre_market_corporate_actions(
+    conn: asyncpg.Connection,
+    instrument_ids: list[str],
+    trade_date: date,
+) -> list[dict]:
+    """Read the latest revision of today's held-instrument corporate actions."""
+    if not instrument_ids:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (ca.instrument_id, ca.action_type, ca.ex_date)
+               ca.instrument_id, COALESCE(alias.ticker, '') AS symbol,
+               instrument.canonical_name AS name, ca.action_type, ca.ex_date,
+               ca.record_date, ca.pay_date, ca.params, ca.revision
+          FROM market.corporate_actions ca
+          JOIN reference.instruments instrument ON instrument.id = ca.instrument_id
+          LEFT JOIN LATERAL (
+              SELECT ia.alias_value AS ticker
+                FROM reference.instrument_aliases ia
+               WHERE ia.instrument_id = ca.instrument_id
+                 AND ia.alias_type = 'TICKER'
+                 AND ia.effective_from <= $2
+                 AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
+               ORDER BY ia.effective_from DESC
+               LIMIT 1
+          ) alias ON TRUE
+         WHERE ca.instrument_id = ANY($1::uuid[])
+           AND ca.ex_date = $2
+         ORDER BY ca.instrument_id, ca.action_type, ca.ex_date, ca.revision DESC
+        """,
+        instrument_ids,
+        trade_date,
+    )
+    result: list[dict] = []
+    for row in rows:
+        params = row["params"]
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (TypeError, ValueError):
+                params = {}
+        result.append(
+            {
+                "instrumentId": str(row["instrument_id"]),
+                "symbol": str(row["symbol"] or ""),
+                "name": str(row["name"]),
+                "actionType": str(row["action_type"]),
+                "exDate": row["ex_date"].isoformat(),
+                "recordDate": row["record_date"].isoformat()
+                if row["record_date"]
+                else None,
+                "payDate": row["pay_date"].isoformat() if row["pay_date"] else None,
+                "params": params if isinstance(params, dict) else {},
+                "revision": int(row["revision"]),
+            }
+        )
+    return result
+
+
+async def get_pre_market_cutoff_rules(
+    conn: asyncpg.Connection,
+    instrument_ids: list[str],
+    trade_date: date,
+) -> list[dict]:
+    """Read effective held-fund deadlines without asserting channel availability."""
+    if not instrument_ids:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (rule.instrument_id, rule.sales_channel)
+               rule.instrument_id, COALESCE(alias.ticker, '') AS symbol,
+               instrument.canonical_name AS name, rule.sales_channel,
+               rule.cutoff_time, rule.timezone, rule.rule_version
+          FROM reference.instrument_cutoff_rules rule
+          JOIN reference.instruments instrument ON instrument.id = rule.instrument_id
+          LEFT JOIN LATERAL (
+              SELECT ia.alias_value AS ticker
+                FROM reference.instrument_aliases ia
+               WHERE ia.instrument_id = rule.instrument_id
+                 AND ia.alias_type = 'TICKER'
+                 AND ia.effective_from <= $2
+                 AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
+               ORDER BY ia.effective_from DESC
+               LIMIT 1
+          ) alias ON TRUE
+         WHERE rule.instrument_id = ANY($1::uuid[])
+           AND rule.effective_from <= $2
+           AND (rule.effective_to IS NULL OR rule.effective_to >= $2)
+           AND rule.cutoff_time <= TIME '15:00'
+         ORDER BY rule.instrument_id, rule.sales_channel,
+                  rule.effective_from DESC, rule.rule_version DESC
+        """,
+        instrument_ids,
+        trade_date,
+    )
+    return [
+        {
+            "instrumentId": str(row["instrument_id"]),
+            "symbol": str(row["symbol"] or ""),
+            "name": str(row["name"]),
+            "salesChannel": str(row["sales_channel"]),
+            "cutoffTime": row["cutoff_time"].isoformat(),
+            "timezone": str(row["timezone"]),
+            "ruleVersion": int(row["rule_version"]),
+        }
+        for row in rows
+    ]
+
+
 async def get_shared_market_brief(
     conn: asyncpg.Connection, trade_date: date
 ) -> asyncpg.Record | None:
@@ -311,7 +420,9 @@ async def insert_report_items(
             item.get("severity", "INFO"),
             item["title"],
             item["body"],
-            json.dumps(item["action_plan"], ensure_ascii=False) if item.get("action_plan") else None,
+            json.dumps(item["action_plan"], ensure_ascii=False)
+            if item.get("action_plan")
+            else None,
             item.get("quality", "FRESH"),
             index * 10,
         )

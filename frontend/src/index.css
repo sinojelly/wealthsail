@@ -1713,6 +1713,9 @@ button:disabled {
 .report-section {
   margin-bottom: 28px;
 }
+.report-summary-text {
+  white-space: pre-line;
+}
 .section-title {
   margin-bottom: 13px;
 }

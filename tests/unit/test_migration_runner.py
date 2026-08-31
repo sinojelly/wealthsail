@@ -30,8 +30,46 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 41
-    assert migrations[-1].path.name == "041_shared_market_briefs.sql"
+    assert versions[-1] == 42
+    assert migrations[-1].path.name == "042_pre_market_reference_read_grants.sql"
+
+
+def test_042_grants_only_runtime_read_access_for_pre_market_reference_data() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "042_pre_market_reference_read_grants.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "GRANT SELECT ON market.corporate_actions" in migration
+    assert "GRANT SELECT ON reference.instrument_cutoff_rules" in migration
+    assert "TO wealthsail_api;" in migration
+    assert (
+        "GRANT SELECT ON market.corporate_actions TO wealthsail_worker" not in migration
+    )
+    assert (
+        "GRANT SELECT ON reference.instrument_cutoff_rules TO wealthsail_worker"
+        not in migration
+    )
+    assert (
+        "REVOKE ALL ON market.corporate_actions FROM PUBLIC, authenticated" in migration
+    )
+    assert (
+        "REVOKE ALL ON reference.instrument_cutoff_rules FROM PUBLIC, authenticated"
+        in migration
+    )
+    assert "GRANT INSERT" not in migration
+    assert "GRANT UPDATE" not in migration
+    assert "GRANT DELETE" not in migration
+
+
+def test_readback_requires_pre_market_reference_read_boundary() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "pre-market reference read boundary is missing or unsafe" in source
+    assert "market.corporate_actions" in source
+    assert "reference.instrument_cutoff_rules" in source
+    assert "aclexplode" in source
+    assert "has_table_privilege($1, $2, $3)" in source
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:

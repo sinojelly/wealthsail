@@ -122,6 +122,66 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("worker cannot explicitly SET ROLE wealthsail_api")
 
+    pre_market_tables = (
+        "market.corporate_actions",
+        "reference.instrument_cutoff_rules",
+    )
+    pre_market_reference_boundary: dict[str, bool] = {}
+    for table in pre_market_tables:
+        safe_name = table.replace(".", "_")
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            pre_market_reference_boundary[f"{role}_{safe_name}_read"] = bool(
+                await conn.fetchval(
+                    "SELECT has_table_privilege($1, $2, $3)",
+                    role,
+                    table,
+                    "SELECT",
+                )
+            )
+        for role in ("wealthsail_api", "wealthsail_worker"):
+            for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+                pre_market_reference_boundary[
+                    f"{role}_{safe_name}_{privilege.lower()}"
+                ] = bool(
+                    await conn.fetchval(
+                        "SELECT has_table_privilege($1, $2, $3)",
+                        role,
+                        table,
+                        privilege,
+                    )
+                )
+    public_pre_market_read = bool(
+        await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM pg_class relation
+                  JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+                  CROSS JOIN LATERAL aclexplode(
+                      COALESCE(relation.relacl, acldefault('r', relation.relowner))
+                  ) privilege
+                 WHERE (namespace.nspname, relation.relname) IN (
+                           ('market', 'corporate_actions'),
+                           ('reference', 'instrument_cutoff_rules')
+                       )
+                   AND privilege.grantee = 0
+                   AND privilege.privilege_type = 'SELECT'
+            )
+            """
+        )
+    )
+    api_reads = all(
+        pre_market_reference_boundary[f"wealthsail_api_{table.replace('.', '_')}_read"]
+        for table in pre_market_tables
+    )
+    forbidden_effective_privileges = any(
+        allowed
+        for name, allowed in pre_market_reference_boundary.items()
+        if not name.startswith("wealthsail_api_") or not name.endswith("_read")
+    )
+    if not api_reads or public_pre_market_read or forbidden_effective_privileges:
+        raise RuntimeError("pre-market reference read boundary is missing or unsafe")
+
     exposed_writes = await conn.fetchval(
         """
         SELECT COUNT(*)
@@ -954,13 +1014,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
           FROM boundary
         """
     )
-    if (
-        shared_market_brief_boundary is None
-        or not all(shared_market_brief_boundary.values())
+    if shared_market_brief_boundary is None or not all(
+        shared_market_brief_boundary.values()
     ):
-        raise RuntimeError(
-            "shared market brief cache boundary is missing or unsafe"
-        )
+        raise RuntimeError("shared market brief cache boundary is missing or unsafe")
 
     data_source_type_contract = await conn.fetchval(
         """
