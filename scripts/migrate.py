@@ -843,6 +843,107 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "report subscription preference boundary is missing or unsafe"
         )
 
+    watchlist_columns = {
+        row["column_name"]
+        for row in await conn.fetch(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_schema='identity'
+               AND table_name='watchlist'
+            """
+        )
+    }
+    watchlist_primary_key = await conn.fetchval(
+        """
+        SELECT array_agg(attribute.attname ORDER BY key_column.ordinality)
+          FROM pg_constraint constraint
+          JOIN LATERAL unnest(constraint.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+            ON TRUE
+          JOIN pg_attribute attribute
+            ON attribute.attrelid = constraint.conrelid
+           AND attribute.attnum = key_column.attnum
+         WHERE constraint.conrelid='identity.watchlist'::regclass
+           AND constraint.contype='p'
+        """
+    )
+    watchlist_rls_enabled = await conn.fetchval(
+        """
+        SELECT relrowsecurity
+          FROM pg_class
+         WHERE oid='identity.watchlist'::regclass
+        """
+    )
+    watchlist_policies = {
+        row["policyname"]: (row["cmd"], tuple(row["roles"]), row["qual"], row["with_check"])
+        for row in await conn.fetch(
+            """
+            SELECT policyname, cmd, roles, qual, with_check
+              FROM pg_policies
+             WHERE schemaname='identity'
+               AND tablename='watchlist'
+            """
+        )
+    }
+    required_watchlist_policies = {
+        "watchlist_self_select": ("SELECT", ("authenticated",), "qual"),
+        "watchlist_self_insert": ("INSERT", ("authenticated",), "with_check"),
+        "watchlist_self_delete": ("DELETE", ("authenticated",), "qual"),
+        "watchlist_domain_api_select": ("SELECT", ("wealthsail_api",), "qual"),
+        "watchlist_domain_api_insert": ("INSERT", ("wealthsail_api",), "with_check"),
+        "watchlist_domain_api_delete": ("DELETE", ("wealthsail_api",), "qual"),
+    }
+    watchlist_policies_valid = set(watchlist_policies) == set(
+        required_watchlist_policies
+    )
+    for name, (command, roles, expression_field) in required_watchlist_policies.items():
+        policy = watchlist_policies.get(name)
+        if policy is None:
+            continue
+        actual_command, actual_roles, qual, with_check = policy
+        expression = qual if expression_field == "qual" else with_check
+        required_token = (
+            "auth.uid" if roles == ("authenticated",) else "app.user_id"
+        )
+        watchlist_policies_valid = watchlist_policies_valid and (
+            actual_command == command
+            and actual_roles == roles
+            and required_token in str(expression or "")
+        )
+    watchlist_privileges = {
+        (role, privilege): bool(
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, $3)",
+                role,
+                "identity.watchlist",
+                privilege,
+            )
+        )
+        for role in ("wealthsail_api", "authenticated", "public")
+        for privilege in ("SELECT", "INSERT", "DELETE", "UPDATE")
+    }
+    watchlist_privileges_valid = (
+        all(
+            watchlist_privileges[("wealthsail_api", privilege)]
+            for privilege in ("SELECT", "INSERT", "DELETE")
+        )
+        and not watchlist_privileges[("wealthsail_api", "UPDATE")]
+        and not any(
+            allowed
+            for (role, _privilege), allowed in watchlist_privileges.items()
+            if role in ("authenticated", "public")
+        )
+    )
+    if (
+        watchlist_columns
+        != {"user_id", "symbol", "asset_name", "asset_type", "added_at"}
+        or watchlist_primary_key != ["user_id", "symbol"]
+        or not watchlist_rls_enabled
+        or not watchlist_policies_valid
+        or not watchlist_privileges_valid
+    ):
+        raise RuntimeError("watchlist ownership boundary is missing or unsafe")
+
     browser_ownership_writes = await conn.fetchval(
         """
         SELECT COUNT(*)

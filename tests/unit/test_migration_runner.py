@@ -30,8 +30,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 43
-    assert migrations[-1].path.name == "043_user_report_subscriptions.sql"
+    assert versions[-1] == 44
+    assert migrations[-1].path.name == "044_user_watchlist.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -51,6 +51,13 @@ def test_readback_requires_secure_report_subscription_preferences() -> None:
         "public",
     ):
         assert contract in source
+
+
+def test_readback_checks_watchlist_shape_rls_and_privileges() -> None:
+    source = inspect.getsource(_readback)
+    assert "watchlist ownership boundary is missing or unsafe" in source
+    assert "identity.watchlist" in source
+    assert '("SELECT", "INSERT", "DELETE", "UPDATE")' in source
 
 
 def test_042_grants_only_runtime_read_access_for_pre_market_reference_data() -> None:
