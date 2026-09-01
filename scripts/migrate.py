@@ -116,6 +116,106 @@ def _watchlist_policy_has_required_ownership(
     return False
 
 
+def _report_policy_has_required_audience(
+    table_name: str, expression: str | None, roles: tuple[str, ...]
+) -> bool:
+    """Accept only the four audience-scoped report SELECT predicates."""
+
+    policy_expression = (expression or "").lower().replace('"', "")
+    policy_expression = re.sub(r"::(?:text|name)\b", "", policy_expression)
+    normalized = policy_expression
+    normalized = re.sub(r"[\s()]", "", normalized)
+
+    if roles == ("authenticated",):
+        actor_guard = "current_user='authenticated'and"
+        actor_id = "auth.uid"
+    elif roles == ("wealthsail_api",):
+        actor_guard = ""
+        actor_id = "nullifcurrent_setting'app.user_id',true,''::uuid"
+    else:
+        return False
+
+    membership = f"{actor_guard}identity.is_tenant_membertenant_idand"
+    if table_name == "reports":
+        expected = (
+            f"{membership}audience_user_idisnullor"
+            f"audience_user_id={actor_id}"
+        )
+    elif table_name == "report_items":
+        expected = (
+            f"{membership}existsselect1fromreporting.reportsparent_reportwhere"
+            "parent_report.tenant_id=report_items.tenant_idand"
+            "parent_report.id=report_items.report_idand"
+            "parent_report.audience_user_idisnullor"
+            f"parent_report.audience_user_id={actor_id}"
+        )
+    else:
+        return False
+    required_or_depth = 1 if table_name == "reports" else 2
+    return normalized == expected and _boolean_operator_depth(
+        policy_expression, "or"
+    ) >= required_or_depth
+
+
+def _boolean_operator_depth(expression: str, operator: str) -> int:
+    """Return the minimum nesting depth of an SQL boolean operator."""
+
+    value = expression.strip()
+    while value.startswith("(") and value.endswith(")"):
+        depth = 0
+        quote = False
+        encloses_expression = True
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char == "'":
+                if quote and index + 1 < len(value) and value[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = not quote
+            elif not quote:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and index != len(value) - 1:
+                        encloses_expression = False
+                        break
+            index += 1
+        if not encloses_expression or depth != 0:
+            break
+        value = value[1:-1].strip()
+
+    depths: list[int] = []
+    depth = 0
+    quote = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "'":
+            if quote and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            quote = not quote
+        elif not quote:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif value.startswith(operator, index):
+                before = value[index - 1] if index else " "
+                after_index = index + len(operator)
+                after = value[after_index] if after_index < len(value) else " "
+                if not (before.isalnum() or before == "_") and not (
+                    after.isalnum() or after == "_"
+                ):
+                    depths.append(depth)
+                    index = after_index
+                    continue
+        index += 1
+    return min(depths, default=-1)
+
+
 async def _readback(conn: asyncpg.Connection) -> None:
     roles = await conn.fetch(
         """
@@ -959,6 +1059,366 @@ async def _readback(conn: asyncpg.Connection) -> None:
         or not watchlist_privileges_valid
     ):
         raise RuntimeError("watchlist ownership boundary is missing or unsafe")
+
+    split_report_columns = {
+        row["column_name"]: (
+            row["data_type"],
+            row["is_nullable"],
+            row["column_default"],
+        )
+        for row in await conn.fetch(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+              FROM information_schema.columns
+             WHERE table_schema='reporting'
+               AND table_name='reports'
+               AND column_name IN ('report_variant', 'audience_user_id')
+            """
+        )
+    }
+    split_report_constraints = {
+        row["conname"]: (
+            row["contype"],
+            row["convalidated"],
+            row["definition"],
+        )
+        for row in await conn.fetch(
+            """
+            SELECT conname, contype, convalidated,
+                   pg_get_constraintdef(oid) AS definition
+              FROM pg_constraint
+             WHERE conrelid='reporting.reports'::regclass
+               AND conname IN (
+                   'reports_report_variant_check',
+                   'reports_variant_audience_check',
+                   'fk_reports_audience_profile',
+                   'fk_reports_tenant_audience'
+               )
+            """
+        )
+    }
+    variant_constraint = split_report_constraints.get(
+        "reports_report_variant_check"
+    )
+    variant_audience_constraint = split_report_constraints.get(
+        "reports_variant_audience_check"
+    )
+    audience_profile_constraint = split_report_constraints.get(
+        "fk_reports_audience_profile"
+    )
+    audience_constraint = split_report_constraints.get(
+        "fk_reports_tenant_audience"
+    )
+
+    def compact_contract(value: object) -> str:
+        compact = str(value or "").lower().replace('"', "")
+        compact = re.sub(r"::text\b", "", compact)
+        return re.sub(r"[\s()]", "", compact)
+
+    expected_variant_check = (
+        "checkreport_variant=anyarray["
+        "'standard','pre_market_macro','pre_market_personalized']"
+    )
+    expected_audience_fk = (
+        "foreignkeytenant_id,audience_user_idreferences"
+        "identity.tenant_memberstenant_id,user_idondeleterestrict"
+    )
+    expected_audience_profile_fk = (
+        "foreignkeyaudience_user_idreferences"
+        "identity.profilesidondeleterestrict"
+    )
+    expected_variant_audience_check = (
+        "checkreport_variant='standard'andaudience_user_idisnullor"
+        "report_variant='pre_market_macro'andaudience_user_idisnullor"
+        "report_variant='pre_market_personalized'and"
+        "audience_user_idisnotnull"
+    )
+    old_report_uniqueness_exists = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM pg_constraint
+             WHERE conrelid='reporting.reports'::regclass
+               AND conname=
+                   'reports_tenant_id_trade_date_report_session_version_key'
+        )
+        """
+    )
+    report_variant_index = await conn.fetchval(
+        """
+        SELECT pg_get_indexdef(indexrelid)
+          FROM pg_index
+         WHERE indrelid='reporting.reports'::regclass
+           AND indexrelid=
+               to_regclass('reporting.uq_reports_variant_audience_version')
+           AND indisunique
+           AND indisvalid
+        """
+    )
+    expected_report_variant_index = (
+        "createuniqueindexuq_reports_variant_audience_versionon"
+        "reporting.reportsusingbtreetenant_id,trade_date,report_session,"
+        "report_variant,coalesceaudience_user_id,"
+        "'00000000-0000-0000-0000-000000000000'::uuid,version"
+    )
+    split_report_shape_valid = (
+        set(split_report_columns) == {"report_variant", "audience_user_id"}
+        and split_report_columns["report_variant"][0:2] == ("text", "NO")
+        and "standard"
+        in str(split_report_columns["report_variant"][2] or "").lower()
+        and split_report_columns["audience_user_id"][0:2] == ("uuid", "YES")
+        and variant_constraint is not None
+        and variant_constraint[0:2] == ("c", True)
+        and compact_contract(variant_constraint[2]) == expected_variant_check
+        and variant_audience_constraint is not None
+        and variant_audience_constraint[0:2] == ("c", True)
+        and compact_contract(variant_audience_constraint[2])
+        == expected_variant_audience_check
+        and audience_profile_constraint is not None
+        and audience_profile_constraint[0:2] == ("f", True)
+        and compact_contract(audience_profile_constraint[2])
+        == expected_audience_profile_fk
+        and audience_constraint is not None
+        and audience_constraint[0:2] == ("f", True)
+        and compact_contract(audience_constraint[2]) == expected_audience_fk
+        and not old_report_uniqueness_exists
+        and compact_contract(report_variant_index) == expected_report_variant_index
+    )
+
+    report_select_policies = {
+        (row["tablename"], row["policyname"]): (
+            tuple(row["roles"]),
+            row["qual"],
+        )
+        for row in await conn.fetch(
+            """
+            SELECT tablename, policyname, roles, qual
+              FROM pg_policies
+             WHERE schemaname='reporting'
+               AND tablename IN ('reports', 'report_items')
+               AND cmd='SELECT'
+            """
+        )
+    }
+    required_report_select_policies = {
+        ("reports", "reports_audience_select"): ("authenticated",),
+        ("reports", "reports_audience_api_select"): ("wealthsail_api",),
+        ("report_items", "report_items_audience_select"): ("authenticated",),
+        ("report_items", "report_items_audience_api_select"): (
+            "wealthsail_api",
+        ),
+    }
+    report_select_policies_valid = set(report_select_policies) == set(
+        required_report_select_policies
+    )
+    for key, expected_roles in required_report_select_policies.items():
+        actual = report_select_policies.get(key)
+        if actual is None:
+            continue
+        actual_roles, expression = actual
+        report_select_policies_valid = report_select_policies_valid and (
+            actual_roles == expected_roles
+            and _report_policy_has_required_audience(
+                key[0], str(expression or ""), actual_roles
+            )
+        )
+
+    browser_report_writes = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+          FROM information_schema.role_table_grants
+         WHERE grantee='authenticated'
+           AND table_schema='reporting'
+           AND table_name IN ('reports', 'report_items')
+           AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+        """
+    )
+    direct_report_grants = {
+        (row["grantee"], row["table_name"], row["privilege_type"])
+        for row in await conn.fetch(
+            """
+            SELECT grantee, table_name, privilege_type
+              FROM information_schema.role_table_grants
+             WHERE grantee IN (
+                       'authenticated', 'wealthsail_api', 'wealthsail_worker'
+                   )
+               AND table_schema='reporting'
+               AND table_name IN ('reports', 'report_items')
+            """
+        )
+    }
+    required_direct_report_grants = {
+        (role, table_name, privilege)
+        for role, privileges in (
+            ("authenticated", ("SELECT",)),
+            ("wealthsail_api", ("SELECT", "INSERT")),
+        )
+        for table_name in ("reports", "report_items")
+        for privilege in privileges
+    }
+    public_report_privileges = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM pg_class relation
+              JOIN pg_namespace namespace
+                ON namespace.oid = relation.relnamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(relation.relacl, acldefault('r', relation.relowner))
+              ) privilege
+             WHERE namespace.nspname='reporting'
+               AND relation.relname IN ('reports', 'report_items')
+               AND privilege.grantee=0
+               AND privilege.privilege_type IN (
+                   'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'
+               )
+        )
+        """
+    )
+    if (
+        not split_report_shape_valid
+        or not report_select_policies_valid
+        or browser_report_writes
+        or direct_report_grants != required_direct_report_grants
+        or public_report_privileges
+    ):
+        raise RuntimeError("split pre-market report boundary is missing or unsafe")
+
+    shared_pre_market_columns = {
+        row["column_name"]: (
+            row["data_type"],
+            row["is_nullable"],
+            row["character_maximum_length"],
+        )
+        for row in await conn.fetch(
+            """
+            SELECT column_name, data_type, is_nullable,
+                   character_maximum_length
+              FROM information_schema.columns
+             WHERE table_schema='reporting'
+               AND table_name='shared_pre_market_briefs'
+            """
+        )
+    }
+    shared_pre_market_constraints = {
+        row["conname"]: row["definition"]
+        for row in await conn.fetch(
+            """
+            SELECT conname, pg_get_constraintdef(oid) AS definition
+              FROM pg_constraint
+             WHERE conrelid=
+                   to_regclass('reporting.shared_pre_market_briefs')
+            """
+        )
+    }
+    shared_pre_market_trigger = await conn.fetchrow(
+        """
+        SELECT trigger.tgenabled,
+               pg_get_triggerdef(trigger.oid) AS trigger_definition,
+               pg_get_functiondef(trigger.tgfoid) AS function_definition
+          FROM pg_trigger trigger
+         WHERE trigger.tgrelid=
+               to_regclass('reporting.shared_pre_market_briefs')
+           AND trigger.tgname='protect_shared_pre_market_briefs_trigger'
+           AND NOT trigger.tgisinternal
+        """
+    )
+    shared_pre_market_privileges = {
+        (role, privilege): bool(
+            await conn.fetchval(
+                """
+                SELECT CASE
+                    WHEN to_regclass($2) IS NULL THEN FALSE
+                    ELSE has_table_privilege($1, to_regclass($2), $3)
+                END
+                """,
+                role,
+                "reporting.shared_pre_market_briefs",
+                privilege,
+            )
+        )
+        for role in (
+            "wealthsail_api",
+            "wealthsail_worker",
+            "authenticated",
+        )
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    }
+    public_shared_pre_market_privileges = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM pg_class relation
+              JOIN pg_namespace namespace
+                ON namespace.oid = relation.relnamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(relation.relacl, acldefault('r', relation.relowner))
+              ) privilege
+             WHERE namespace.nspname='reporting'
+               AND relation.relname='shared_pre_market_briefs'
+               AND privilege.grantee=0
+               AND privilege.privilege_type IN (
+                   'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'
+               )
+        )
+        """
+    )
+    shared_pre_market_privileges_valid = all(
+        allowed
+        == (
+            role in ("wealthsail_api", "wealthsail_worker")
+            and privilege in ("SELECT", "INSERT")
+        )
+        for (role, privilege), allowed in shared_pre_market_privileges.items()
+    ) and not public_shared_pre_market_privileges
+    expected_shared_pre_market_columns = {
+        "id",
+        "trade_date",
+        "draft",
+        "source_context",
+        "context_hash",
+        "quality_status",
+        "generated_at",
+        "created_at",
+    }
+    cache_contract = " ".join(shared_pre_market_constraints.values()).lower()
+    shared_pre_market_shape_valid = (
+        set(shared_pre_market_columns) == expected_shared_pre_market_columns
+        and shared_pre_market_columns["draft"][0:2] == ("jsonb", "NO")
+        and shared_pre_market_columns["source_context"][0:2] == ("jsonb", "NO")
+        and shared_pre_market_columns["context_hash"]
+        == ("character", "NO", 64)
+        and shared_pre_market_columns["quality_status"][0:2] == ("text", "NO")
+        and shared_pre_market_columns["generated_at"][0:2]
+        == ("timestamp with time zone", "NO")
+        and shared_pre_market_constraints.get(
+            "shared_pre_market_briefs_trade_date_key"
+        )
+        == "UNIQUE (trade_date)"
+        and "^[0-9a-f]{64}$" in cache_contract
+        and all(
+            token in cache_contract
+            for token in ("fresh", "estimated", "stale", "unavailable")
+        )
+    )
+    shared_pre_market_trigger_valid = (
+        shared_pre_market_trigger is not None
+        and shared_pre_market_trigger["tgenabled"] in ("O", "A")
+        and "BEFORE UPDATE OR DELETE"
+        in str(shared_pre_market_trigger["trigger_definition"] or "").upper()
+        and "RAISE EXCEPTION"
+        in str(shared_pre_market_trigger["function_definition"] or "").upper()
+        and "APPEND-ONLY"
+        in str(shared_pre_market_trigger["function_definition"] or "").upper()
+    )
+    if (
+        not shared_pre_market_shape_valid
+        or not shared_pre_market_trigger_valid
+        or not shared_pre_market_privileges_valid
+    ):
+        raise RuntimeError(
+            "shared pre-market brief cache boundary is missing or unsafe"
+        )
 
     browser_ownership_writes = await conn.fetchval(
         """

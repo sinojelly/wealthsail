@@ -3,6 +3,7 @@
 import inspect
 from pathlib import Path
 
+import scripts.migrate as migration_runner
 from scripts.migrate import (
     _readback,
     _watchlist_policy_has_required_ownership,
@@ -31,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 44
-    assert migrations[-1].path.name == "044_user_watchlist.sql"
+    assert versions[-1] == 45
+    assert migrations[-1].path.name == "045_split_pre_market_reports.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -75,6 +76,35 @@ def test_watchlist_policy_readback_rejects_non_ownership_predicates() -> None:
     assert not _watchlist_policy_has_required_ownership(
         "(current_setting('app.user_id'::text, true) IS NOT NULL)",
         ("wealthsail_api",),
+    )
+
+
+def test_readback_requires_split_pre_market_boundary() -> None:
+    """Deploy readback must reject schema, cache, grant, or audience-policy drift."""
+    source = inspect.getsource(_readback)
+
+    for contract in (
+        "split pre-market report boundary is missing or unsafe",
+        "shared pre-market brief cache boundary is missing or unsafe",
+        "reports_report_variant_check",
+        "reports_variant_audience_check",
+        "fk_reports_audience_profile",
+        "fk_reports_tenant_audience",
+        "uq_reports_variant_audience_version",
+        "protect_shared_pre_market_briefs_trigger",
+        "browser_report_writes",
+        "required_direct_report_grants",
+        "public_report_privileges",
+        "_report_policy_has_required_audience",
+    ):
+        assert contract in source
+
+    assert migration_runner._report_policy_has_required_audience(
+        "reports",
+        "current_user = 'authenticated' AND "
+        "identity.is_tenant_member(tenant_id) AND "
+        "(audience_user_id IS NULL OR audience_user_id = auth.uid())",
+        ("authenticated",),
     )
 
 
