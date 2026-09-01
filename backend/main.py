@@ -35,6 +35,7 @@ from backend.reports.api import router as reports_router
 from backend.research.api import router as research_router
 from backend.risk.api import router as risk_router
 from backend.trading.api import router as trading_router
+from backend.watchlist.api import router as watchlist_router
 
 logger = logging.getLogger("wealthsail.main")
 http_logger = logging.getLogger("wealthsail.http")
@@ -154,6 +155,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix=prefix)
     app.include_router(market_router, prefix=prefix)
     app.include_router(trading_router, prefix=prefix)
+    app.include_router(watchlist_router, prefix=prefix)
     app.include_router(debug_router, prefix=prefix)
 
     @app.get("/healthz", tags=["system"])
