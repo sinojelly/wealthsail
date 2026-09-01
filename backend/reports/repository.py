@@ -496,6 +496,7 @@ async def insert_report_outbox_deliveries(
     version: int,
     trade_date: object,
     content: str | None = None,
+    target_user_id: str | None = None,
 ) -> int:
     """Expand one tenant report into one delivery per ACTIVE member binding.
 
@@ -505,13 +506,30 @@ async def insert_report_outbox_deliveries(
     """
     bindings = await conn.fetch(
         """
-        SELECT id, user_id
-        FROM identity.channel_bindings
-        WHERE tenant_id = $1
-          AND channel_type = 'wecom' AND status = 'ACTIVE'
-        ORDER BY user_id, id
+        SELECT binding.id, binding.user_id
+          FROM identity.channel_bindings binding
+          LEFT JOIN identity.user_preferences preference
+            ON preference.user_id = binding.user_id
+         WHERE binding.tenant_id = $1
+           AND binding.channel_type = 'wecom'
+           AND binding.status = 'ACTIVE'
+           AND ($3::uuid IS NULL OR binding.user_id = $3::uuid)
+           AND CASE $2
+               WHEN 'PRE_MARKET' THEN
+                   COALESCE(preference.pre_market_report_enabled, TRUE)
+               WHEN 'INTRADAY' THEN
+                   COALESCE(preference.intraday_report_enabled, TRUE)
+               WHEN 'FUND_1430' THEN
+                   COALESCE(preference.fund_1430_report_enabled, TRUE)
+               WHEN 'POST_MARKET' THEN
+                   COALESCE(preference.post_market_report_enabled, TRUE)
+               ELSE FALSE
+           END
+         ORDER BY binding.user_id, binding.id
         """,
         tenant_id,
+        session,
+        target_user_id,
     )
     payload = {
         "report_id": report_id,
@@ -547,3 +565,31 @@ async def insert_report_outbox_deliveries(
         rows,
     )
     return len(rows)
+
+
+async def get_report_outbox_id(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    report_id: str,
+    user_id: str,
+) -> str | None:
+    """Return the queued delivery for one report recipient, if eligible."""
+    value = await conn.fetchval(
+        """
+        SELECT outbox.id
+          FROM workflow.outbox outbox
+          JOIN identity.channel_bindings binding
+            ON binding.id = outbox.channel_binding_id
+           AND binding.tenant_id = outbox.tenant_id
+         WHERE outbox.tenant_id = $1
+           AND outbox.aggregate_id = $2
+           AND outbox.topic = 'REPORT_PUBLISHED'
+           AND binding.user_id = $3
+         ORDER BY outbox.created_at DESC, outbox.id DESC
+         LIMIT 1
+        """,
+        tenant_id,
+        report_id,
+        user_id,
+    )
+    return str(value) if value is not None else None

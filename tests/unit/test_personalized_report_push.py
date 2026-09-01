@@ -230,6 +230,60 @@ async def test_holdings_generation_uses_one_report_model_call_and_deterministic_
 
 
 @pytest.mark.asyncio
+async def test_forced_generation_bypasses_recent_replay_and_targets_delivery_user(
+    monkeypatch,
+) -> None:
+    context = _context()
+    captured: dict = {}
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield object()
+
+    async def persist(_conn, **kwargs):
+        captured.update(kwargs)
+        return {"id": "report-forced"}
+
+    recent = {
+        "id": "report-recent",
+        "version": 1,
+        "created_at": report_service.now_shanghai(),
+    }
+    monkeypatch.setattr(report_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        report_service, "_build_context", AsyncMock(return_value=context)
+    )
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=recent)
+    )
+    monkeypatch.setattr(
+        report_service,
+        "chat_completion",
+        AsyncMock(
+            return_value=ModelResult(
+                content='{"summary":"摘要","items":[]}',
+                model="test-model",
+                usage={},
+                cost_cny=Decimal("0"),
+            )
+        ),
+    )
+    monkeypatch.setattr(report_service, "_persist_generation", persist)
+
+    result = await report_service.generate_report(
+        object(),
+        TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        Settings(_env_file=None),
+        "POST_MARKET",
+        force=True,
+        delivery_user_id="user-2",
+    )
+
+    assert result == {"id": "report-forced"}
+    assert captured["delivery_user_id"] == "user-2"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("positions", [[], _context()["positions"]])
 async def test_pre_market_generation_is_deterministic_for_every_holdings_mode(
     monkeypatch,

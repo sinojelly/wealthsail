@@ -201,6 +201,8 @@ async def generate_report(
     *,
     job_run_id: str | None = None,
     actor_type: str = "USER",
+    force: bool = False,
+    delivery_user_id: str | None = None,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -220,7 +222,7 @@ async def generate_report(
         )
 
     # Idempotent replay: same (session, trade_date) generated moments ago.
-    if latest is not None:
+    if latest is not None and not force:
         age = (started_at - latest["created_at"]).total_seconds()
         if age < IDEMPOTENT_WINDOW_SECONDS:
             async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
@@ -301,6 +303,7 @@ async def generate_report(
                     shared_cache_hit=shared_cache_hit,
                     shared_context_hash=shared_context_hash,
                     push_content=push_content,
+                    delivery_user_id=delivery_user_id,
                 )
         except asyncpg.UniqueViolationError as exc:
             last_error = exc
@@ -901,6 +904,7 @@ async def _persist_generation(
     shared_cache_hit: bool,
     shared_context_hash: str | None,
     push_content: str | None,
+    delivery_user_id: str | None = None,
 ) -> dict:
     latest = await repository.latest_report(conn, ctx.tenant_id, trade_date, session)
     version = (latest["version"] + 1) if latest else 1
@@ -1008,6 +1012,7 @@ async def _persist_generation(
         version=version,
         trade_date=trade_date.isoformat(),
         content=push_content,
+        target_user_id=delivery_user_id,
     )
     await write_audit(
         conn,

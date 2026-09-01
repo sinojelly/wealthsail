@@ -17,7 +17,10 @@ from backend.jobs.outbox import (
     build_delivery_command,
     claim_batch,
 )
-from backend.reports.repository import insert_report_outbox_deliveries
+from backend.reports.repository import (
+    get_report_outbox_id,
+    insert_report_outbox_deliveries,
+)
 from backend.reports.service import _delivery_audit_details
 
 
@@ -387,9 +390,18 @@ class _DeliveryConnection:
         self.inserted: list[tuple] = []
         self.sql = ""
 
-    async def fetch(self, sql: str, tenant_id: str):
+    async def fetch(
+        self, sql: str, tenant_id: str, session: str, target_user_id: str | None
+    ):
         self.sql = sql
         assert tenant_id == "tenant-a"
+        assert session in {"PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET"}
+        if target_user_id is not None:
+            return [
+                binding
+                for binding in self.bindings
+                if binding["user_id"] == target_user_id
+            ]
         return self.bindings
 
     async def executemany(self, _sql: str, rows):
@@ -417,7 +429,7 @@ async def test_report_publication_expands_one_outbox_per_active_member_binding()
 
     assert count == 2
     sql = " ".join(conn.sql.split()).upper()
-    assert "USER_ID =" not in sql
+    assert "$3::UUID IS NULL OR BINDING.USER_ID = $3::UUID" in sql
     assert {row[1] for row in conn.inserted} == {"binding-1", "binding-2"}
     assert len({row[-1] for row in conn.inserted}) == 2
     assert all("touser" not in row[5] for row in conn.inserted)
@@ -471,6 +483,90 @@ async def test_report_publication_without_active_binding_queues_nothing() -> Non
 
     assert count == 0
     assert conn.inserted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session", "disabled_column"),
+    [
+        ("PRE_MARKET", "pre_market_report_enabled"),
+        ("INTRADAY", "intraday_report_enabled"),
+        ("FUND_1430", "fund_1430_report_enabled"),
+        ("POST_MARKET", "post_market_report_enabled"),
+    ],
+)
+async def test_delivery_query_filters_the_matching_disabled_session(
+    session: str, disabled_column: str
+) -> None:
+    conn = _DeliveryConnection(
+        bindings=[{"id": "binding-enabled", "user_id": "user-enabled"}]
+    )
+
+    count = await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        report_id="report-1",
+        session=session,
+        version=1,
+        trade_date="2026-09-01",
+    )
+
+    assert count == 1
+    assert conn.inserted[0][1] == "binding-enabled"
+    assert "LEFT JOIN identity.user_preferences" in conn.sql
+    assert "COALESCE" in conn.sql
+    assert "CASE $2" in conn.sql
+    assert disabled_column in conn.sql
+
+
+@pytest.mark.asyncio
+async def test_delivery_can_target_one_user_without_changing_payload_contract() -> None:
+    conn = _DeliveryConnection(
+        bindings=[
+            {"id": "binding-1", "user_id": "user-1"},
+            {"id": "binding-2", "user_id": "user-2"},
+        ]
+    )
+
+    count = await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        report_id="report-1",
+        session="POST_MARKET",
+        version=1,
+        trade_date="2026-09-01",
+        target_user_id="user-2",
+    )
+
+    assert count == 1
+    assert conn.inserted[0][1] == "binding-2"
+    assert "$3::uuid IS NULL OR binding.user_id = $3::uuid" in conn.sql
+
+
+@pytest.mark.asyncio
+async def test_report_outbox_lookup_is_tenant_report_and_user_scoped() -> None:
+    class LookupConnection:
+        def __init__(self) -> None:
+            self.call: tuple[str, tuple] | None = None
+
+        async def fetchval(self, sql: str, *args):
+            self.call = (sql, args)
+            return "outbox-1"
+
+    conn = LookupConnection()
+
+    result = await get_report_outbox_id(  # type: ignore[arg-type]
+        conn, "tenant-a", "report-1", "user-2"
+    )
+
+    assert result == "outbox-1"
+    assert conn.call is not None
+    sql, args = conn.call
+    assert "JOIN identity.channel_bindings" in sql
+    assert "outbox.tenant_id = $1" in sql
+    assert "outbox.aggregate_id = $2" in sql
+    assert "binding.user_id = $3" in sql
+    assert args == ("tenant-a", "report-1", "user-2")
 
 
 def test_zero_delivery_is_explicit_in_report_audit_details() -> None:
