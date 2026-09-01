@@ -36,7 +36,7 @@ from backend.integrations.model_gateway import (
 )
 from backend.market import service as market_service
 from backend.portfolio.service import get_positions, get_summary
-from backend.reports import pre_market, repository, shared_market_brief
+from backend.reports import fund_1430, pre_market, repository, shared_market_brief
 
 logger = logging.getLogger("wealthsail.reports")
 
@@ -226,14 +226,16 @@ async def generate_report(
             async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
                 return await get_report_detail(conn, ctx.tenant_id, str(latest["id"]))
 
-    # Phase 2: PRE_MARKET is always deterministic. For the other sessions,
-    # holdings stay personalized while no-holdings tenants reuse one
-    # tenant-neutral daily market brief to avoid duplicate model spend.
-    generation_mode = (
-        "PRE_MARKET_DETERMINISTIC"
-        if session == "PRE_MARKET"
-        else ("NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED")
-    )
+    # Phase 2: PRE_MARKET and FUND_1430 are deterministic. The other sessions
+    # keep personalized generation for holdings and a shared brief otherwise.
+    if session == "PRE_MARKET":
+        generation_mode = "PRE_MARKET_DETERMINISTIC"
+    elif session == "FUND_1430":
+        generation_mode = "FUND_1430_DETERMINISTIC"
+    else:
+        generation_mode = (
+            "NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED"
+        )
     shared_brief_id: str | None = None
     shared_cache_hit = False
     shared_context_hash: str | None = None
@@ -241,6 +243,11 @@ async def generate_report(
     if generation_mode == "PRE_MARKET_DETERMINISTIC":
         draft = pre_market.build_report(context)
         push_content = pre_market.format_push_content(context)
+        model_result = None
+        error_class = None
+    elif generation_mode == "FUND_1430_DETERMINISTIC":
+        draft = fund_1430.build_report(context)
+        push_content = fund_1430.format_push_content(context)
         model_result = None
         error_class = None
     elif generation_mode == "NO_HOLDINGS_SHARED":
@@ -379,6 +386,7 @@ async def _build_context(
             for row in rows
         ]
     pre_market_context: dict = {}
+    fund_1430_context: dict = {}
     if session == "PRE_MARKET":
         instrument_ids = [
             str(position["instrumentId"])
@@ -402,6 +410,16 @@ async def _build_context(
             "corporateActions": corporate_actions,
             "fundCutoffRules": cutoff_rules,
         }
+    if session == "FUND_1430":
+        fund_ids = [
+            str(position["instrumentId"])
+            for position in positions
+            if position.get("instrumentId") and position.get("type") == "场外基金"
+        ]
+        cutoff_rules = await repository.get_pre_market_cutoff_rules(
+            conn, fund_ids, now_shanghai().date()
+        )
+        fund_1430_context = {"fundCutoffRules": cutoff_rules}
     result = {
         "session": session,
         "summary": summary,
@@ -413,6 +431,8 @@ async def _build_context(
     }
     if session == "PRE_MARKET":
         result["preMarket"] = pre_market_context
+    if session == "FUND_1430":
+        result["fund1430"] = fund_1430_context
     return result
 
 
@@ -855,6 +875,8 @@ def _delivery_audit_details(
         details["generationMode"] = generation_mode
     if generation_mode == "PRE_MARKET_DETERMINISTIC":
         details["generatorVersion"] = "pre-market-deterministic-v1"
+    elif generation_mode == "FUND_1430_DETERMINISTIC":
+        details["generatorVersion"] = "fund-1430-deterministic-v1"
     if shared_brief_id is not None:
         details["sharedBriefId"] = shared_brief_id
         details["sharedCacheHit"] = bool(shared_cache_hit)
@@ -887,7 +909,10 @@ async def _persist_generation(
     correlation_id = "req_" + uuid.uuid4().hex[:16]
     finished_at = now_shanghai()
 
-    if generation_mode == "PRE_MARKET_DETERMINISTIC":
+    if generation_mode in {
+        "PRE_MARKET_DETERMINISTIC",
+        "FUND_1430_DETERMINISTIC",
+    }:
         # Deterministic structured-data generation is not a model execution.
         # Keep model_run_id nullable and record the generator version in the
         # report audit event instead of inflating model-run counts.

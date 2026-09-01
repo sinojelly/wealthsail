@@ -288,6 +288,59 @@ async def test_pre_market_generation_is_deterministic_for_every_holdings_mode(
     assert captured["draft"]["summary"].startswith("1. 隔夜市场速览：")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("positions", [[], _context()["positions"]])
+async def test_fund_1430_generation_is_deterministic_for_every_holdings_mode(
+    monkeypatch,
+    positions,
+) -> None:
+    context = {
+        **_context(),
+        "positions": positions,
+        "fundEstimates": [],
+        "fund1430": {"fundCutoffRules": []},
+    }
+    captured: dict = {}
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield object()
+
+    async def persist(_conn, **kwargs):
+        captured.update(kwargs)
+        return {"id": "fund-report"}
+
+    model = AsyncMock()
+    shared_generate = AsyncMock()
+    monkeypatch.setattr(report_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        report_service, "_build_context", AsyncMock(return_value=context)
+    )
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        report_service.shared_market_brief, "get_or_generate", shared_generate
+    )
+    monkeypatch.setattr(report_service, "chat_completion", model)
+    monkeypatch.setattr(report_service, "_persist_generation", persist)
+
+    result = await report_service.generate_report(
+        object(),
+        TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        Settings(_env_file=None),
+        "FUND_1430",
+    )
+
+    assert result == {"id": "fund-report"}
+    model.assert_not_awaited()
+    shared_generate.assert_not_awaited()
+    assert captured["generation_mode"] == "FUND_1430_DETERMINISTIC"
+    assert captured["model_result"] is None
+    assert len(captured["push_content"]) <= 200
+    assert captured["draft"]["summary"].startswith("1. 今日估值概览：")
+
+
 def test_pre_market_audit_names_the_deterministic_generator_without_a_model_run() -> (
     None
 ):
@@ -303,8 +356,30 @@ def test_pre_market_audit_names_the_deterministic_generator_without_a_model_run(
     assert details["generatorVersion"] == "pre-market-deterministic-v1"
 
 
+def test_fund_1430_audit_names_deterministic_generator_without_model_run() -> None:
+    details = report_service._delivery_audit_details(
+        session="FUND_1430",
+        version=1,
+        degraded=False,
+        delivery_count=1,
+        generation_mode="FUND_1430_DETERMINISTIC",
+    )
+
+    assert details["generationMode"] == "FUND_1430_DETERMINISTIC"
+    assert details["generatorVersion"] == "fund-1430-deterministic-v1"
+
+
 @pytest.mark.asyncio
-async def test_pre_market_persistence_does_not_create_a_model_run(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("session", "generation_mode"),
+    [
+        ("PRE_MARKET", "PRE_MARKET_DETERMINISTIC"),
+        ("FUND_1430", "FUND_1430_DETERMINISTIC"),
+    ],
+)
+async def test_deterministic_report_persistence_does_not_create_a_model_run(
+    monkeypatch, session, generation_mode
+) -> None:
     insert_model_run = AsyncMock()
     insert_report = AsyncMock(return_value="report-1")
     monkeypatch.setattr(
@@ -328,7 +403,7 @@ async def test_pre_market_persistence_does_not_create_a_model_run(monkeypatch) -
     await report_service._persist_generation(
         object(),
         ctx=TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
-        session="PRE_MARKET",
+        session=session,
         trade_date=date(2026, 9, 1),
         started_at=report_service.now_shanghai(),
         context={"positions": [], "preMarket": {}},
@@ -343,7 +418,7 @@ async def test_pre_market_persistence_does_not_create_a_model_run(monkeypatch) -
         error_class=None,
         job_run_id=None,
         actor_type="USER",
-        generation_mode="PRE_MARKET_DETERMINISTIC",
+        generation_mode=generation_mode,
         shared_brief_id=None,
         shared_cache_hit=False,
         shared_context_hash=None,
@@ -420,6 +495,9 @@ class _ContextConnection:
     async def fetchrow(self, _sql: str, _tenant_id: str):
         return None
 
+    async def fetch(self, _sql: str, _tenant_id: str):
+        return []
+
 
 @pytest.mark.asyncio
 async def test_holdings_context_reads_persisted_market_signal_without_provider_call(
@@ -470,3 +548,50 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
     assert context["preMarket"]["fundCutoffRules"] == []
     corporate_actions.assert_awaited_once()
     cutoff_rules.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
+    monkeypatch,
+) -> None:
+    async def summary(*_args, **_kwargs):
+        return {"qualityStatus": "UNAVAILABLE"}
+
+    async def positions(*_args, **_kwargs):
+        return [
+            {
+                "instrumentId": "11111111-1111-1111-1111-111111111111",
+                "symbol": "110011",
+                "type": "场外基金",
+                "quantity": "1",
+            },
+            {
+                "instrumentId": "22222222-2222-2222-2222-222222222222",
+                "symbol": "600036",
+                "type": "A股",
+                "quantity": "1",
+            },
+        ]
+
+    monkeypatch.setattr(report_service, "get_summary", summary)
+    monkeypatch.setattr(report_service, "get_positions", positions)
+    monkeypatch.setattr(
+        report_service.market_service,
+        "get_market_sentiment",
+        AsyncMock(return_value={"qualityStatus": "UNAVAILABLE"}),
+    )
+    cutoff_rules = AsyncMock(return_value=[{"symbol": "110011"}])
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_cutoff_rules",
+        cutoff_rules,
+    )
+
+    context = await report_service._build_context(
+        _ContextConnection(),
+        "tenant-1",
+        "FUND_1430",
+    )
+
+    assert context["fund1430"]["fundCutoffRules"] == [{"symbol": "110011"}]
+    assert cutoff_rules.await_args.args[1] == ["11111111-1111-1111-1111-111111111111"]
