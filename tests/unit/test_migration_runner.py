@@ -30,8 +30,24 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 42
-    assert migrations[-1].path.name == "042_pre_market_reference_read_grants.sql"
+    assert versions[-1] == 43
+    assert migrations[-1].path.name == "043_user_report_subscriptions.sql"
+
+
+def test_readback_requires_secure_report_subscription_preferences() -> None:
+    source = inspect.getsource(_readback)
+
+    assert "report subscription preference boundary is missing or unsafe" in source
+    for contract in (
+        "pre_market_report_enabled",
+        "intraday_report_enabled",
+        "fund_1430_report_enabled",
+        "post_market_report_enabled",
+        "wealthsail_api",
+        "authenticated",
+        "PUBLIC",
+    ):
+        assert contract in source
 
 
 def test_042_grants_only_runtime_read_access_for_pre_market_reference_data() -> None:

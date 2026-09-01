@@ -791,6 +791,57 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if default_tenant_fk != 1:
         raise RuntimeError("default tenant preference is not membership-bound")
 
+    report_subscription_columns = (
+        "pre_market_report_enabled",
+        "intraday_report_enabled",
+        "fund_1430_report_enabled",
+        "post_market_report_enabled",
+    )
+    subscription_columns = {
+        row["column_name"]: (row["is_nullable"], row["column_default"])
+        for row in await conn.fetch(
+            """
+            SELECT column_name, is_nullable, column_default
+              FROM information_schema.columns
+             WHERE table_schema='identity'
+               AND table_name='user_preferences'
+               AND column_name = ANY($1::text[])
+            """,
+            list(report_subscription_columns),
+        )
+    }
+    subscription_privileges = {
+        (role, privilege): bool(
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, $3)",
+                role,
+                "identity.user_preferences",
+                privilege,
+            )
+        )
+        for role in ("wealthsail_api", "authenticated", "PUBLIC")
+        for privilege in ("SELECT", "UPDATE")
+    }
+    subscription_shape_valid = set(subscription_columns) == set(
+        report_subscription_columns
+    ) and all(
+        nullable == "NO" and str(default).lower() in {"true", "true::boolean"}
+        for nullable, default in subscription_columns.values()
+    )
+    subscription_privileges_valid = (
+        subscription_privileges[("wealthsail_api", "SELECT")]
+        and subscription_privileges[("wealthsail_api", "UPDATE")]
+        and not any(
+            allowed
+            for (role, _privilege), allowed in subscription_privileges.items()
+            if role != "wealthsail_api"
+        )
+    )
+    if not subscription_shape_valid or not subscription_privileges_valid:
+        raise RuntimeError(
+            "report subscription preference boundary is missing or unsafe"
+        )
+
     browser_ownership_writes = await conn.fetchval(
         """
         SELECT COUNT(*)
