@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.common.database import Pool, tenant_transaction
@@ -76,7 +84,9 @@ class RevokeBindingRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    nickname: str | None = Field(default=None, min_length=1, max_length=32, description="新昵称")
+    nickname: str | None = Field(
+        default=None, min_length=1, max_length=32, description="新昵称"
+    )
     avatar_url: str | None = Field(default=None, max_length=500, description="头像 URL")
 
 
@@ -129,7 +139,9 @@ async def request_password_reset(
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    result = await identity_service(pool, settings).request_password_reset(email=body.email)
+    result = await identity_service(pool, settings).request_password_reset(
+        email=body.email
+    )
     token = result.pop("token", None)
     if token:
         background_tasks.add_task(
@@ -267,7 +279,9 @@ async def wecom_binding(
 ) -> dict:
     """创建企业微信一次性绑定口令（仅返回一次，库中只存 HMAC 摘要）。"""
     as_of = now_shanghai()
-    data = await identity_service(pool, settings).create_binding_challenge(domain_tenant(ctx))
+    data = await identity_service(pool, settings).create_binding_challenge(
+        domain_tenant(ctx)
+    )
     return ok(data, request_id=request_id, as_of=as_of)
 
 

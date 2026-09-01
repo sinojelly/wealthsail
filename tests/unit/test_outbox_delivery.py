@@ -126,7 +126,9 @@ async def test_uncertain_app_delivery_never_falls_back_to_bot(monkeypatch) -> No
             return "bot-receipt"
 
     monkeypatch.setattr(wecom, "_send_app_message", timeout)
-    monkeypatch.setattr("backend.integrations.wecom_bot.get_bot_client", lambda *_: _Bot())
+    monkeypatch.setattr(
+        "backend.integrations.wecom_bot.get_bot_client", lambda *_: _Bot()
+    )
 
     settings = Settings(
         _env_file=None,
@@ -157,7 +159,9 @@ async def test_wecom_rejects_oversized_utf8_text_before_network(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_wecom_rejects_oversized_utf8_markdown_before_network(monkeypatch) -> None:
+async def test_wecom_rejects_oversized_utf8_markdown_before_network(
+    monkeypatch,
+) -> None:
     called = False
 
     async def should_not_send(*_args, **_kwargs):
@@ -327,7 +331,9 @@ class _SequenceClient:
 
 
 @pytest.mark.asyncio
-async def test_definitive_invalid_token_is_refreshed_and_retried_once(monkeypatch) -> None:
+async def test_definitive_invalid_token_is_refreshed_and_retried_once(
+    monkeypatch,
+) -> None:
     issued = iter(["expired-token", "fresh-token"])
     client = _SequenceClient()
 
@@ -409,7 +415,9 @@ class _DeliveryConnection:
 
 
 @pytest.mark.asyncio
-async def test_report_publication_expands_one_outbox_per_active_member_binding() -> None:
+async def test_report_publication_expands_one_outbox_per_active_member_binding() -> (
+    None
+):
     """A tenant report independently reaches every member with an ACTIVE binding."""
     conn = _DeliveryConnection(
         bindings=[
@@ -445,9 +453,7 @@ async def test_report_publication_expands_one_outbox_per_active_member_binding()
 
 @pytest.mark.asyncio
 async def test_no_holdings_report_publication_includes_shared_brief_content() -> None:
-    conn = _DeliveryConnection(
-        bindings=[{"id": "binding-1", "user_id": "user-1"}]
-    )
+    conn = _DeliveryConnection(bindings=[{"id": "binding-1", "user_id": "user-1"}])
 
     count = await insert_report_outbox_deliveries(
         conn,
@@ -541,6 +547,8 @@ async def test_delivery_can_target_one_user_without_changing_payload_contract() 
     assert count == 1
     assert conn.inserted[0][1] == "binding-2"
     assert "$3::uuid IS NULL OR binding.user_id = $3::uuid" in conn.sql
+    assert "JOIN identity.tenant_members membership" in conn.sql
+    assert "membership.status = 'ACTIVE'" in conn.sql
 
 
 @pytest.mark.asyncio
@@ -579,6 +587,9 @@ def test_zero_delivery_is_explicit_in_report_audit_details() -> None:
         "deliveryCount": 0,
         "deliveryStatus": "NO_ACTIVE_BINDING",
     }
-    assert _delivery_audit_details(
-        session="PRE_MARKET", version=1, degraded=True, delivery_count=2
-    )["deliveryStatus"] == "QUEUED"
+    assert (
+        _delivery_audit_details(
+            session="PRE_MARKET", version=1, degraded=True, delivery_count=2
+        )["deliveryStatus"]
+        == "QUEUED"
+    )

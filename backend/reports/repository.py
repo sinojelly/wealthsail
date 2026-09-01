@@ -508,6 +508,10 @@ async def insert_report_outbox_deliveries(
         """
         SELECT binding.id, binding.user_id
           FROM identity.channel_bindings binding
+          JOIN identity.tenant_members membership
+            ON membership.tenant_id = binding.tenant_id
+           AND membership.user_id = binding.user_id
+           AND membership.status = 'ACTIVE'
           LEFT JOIN identity.user_preferences preference
             ON preference.user_id = binding.user_id
          WHERE binding.tenant_id = $1

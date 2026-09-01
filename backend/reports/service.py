@@ -203,6 +203,8 @@ async def generate_report(
     actor_type: str = "USER",
     force: bool = False,
     delivery_user_id: str | None = None,
+    trigger_audit_action: str | None = None,
+    trigger_audit_details: dict | None = None,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -304,6 +306,8 @@ async def generate_report(
                     shared_context_hash=shared_context_hash,
                     push_content=push_content,
                     delivery_user_id=delivery_user_id,
+                    trigger_audit_action=trigger_audit_action,
+                    trigger_audit_details=trigger_audit_details,
                 )
         except asyncpg.UniqueViolationError as exc:
             last_error = exc
@@ -905,6 +909,8 @@ async def _persist_generation(
     shared_context_hash: str | None,
     push_content: str | None,
     delivery_user_id: str | None = None,
+    trigger_audit_action: str | None = None,
+    trigger_audit_details: dict | None = None,
 ) -> dict:
     latest = await repository.latest_report(conn, ctx.tenant_id, trade_date, session)
     version = (latest["version"] + 1) if latest else 1
@@ -1014,6 +1020,11 @@ async def _persist_generation(
         content=push_content,
         target_user_id=delivery_user_id,
     )
+    delivery_outbox_id = None
+    if delivery_user_id is not None:
+        delivery_outbox_id = await repository.get_report_outbox_id(
+            conn, ctx.tenant_id, report_id, delivery_user_id
+        )
     await write_audit(
         conn,
         tenant_id=ctx.tenant_id,
@@ -1033,7 +1044,26 @@ async def _persist_generation(
             shared_cache_hit=shared_cache_hit,
         ),
     )
-    return await get_report_detail(conn, ctx.tenant_id, report_id)
+    if trigger_audit_action is not None:
+        await write_audit(
+            conn,
+            tenant_id=ctx.tenant_id,
+            actor_type="USER",
+            actor_id=ctx.user_id,
+            action=trigger_audit_action,
+            resource_type="reporting.reports",
+            resource_id=report_id,
+            correlation_id=correlation_id,
+            details={
+                **(trigger_audit_details or {}),
+                "session": session,
+                "outboxId": delivery_outbox_id,
+            },
+        )
+    report = await get_report_detail(conn, ctx.tenant_id, report_id)
+    if trigger_audit_action is not None:
+        report["_deliveryOutboxId"] = delivery_outbox_id
+    return report
 
 
 def _parse_jsonb(value: object) -> dict:

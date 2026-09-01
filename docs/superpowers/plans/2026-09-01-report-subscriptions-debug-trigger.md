@@ -390,7 +390,7 @@ git push origin master
 - Modify: `backend/main.py`
 
 **Interfaces:**
-- Consumes: Task 3 `generate_report(pool, ctx, settings, session, actor_type="DEBUG_USER", force=True, delivery_user_id=target_user_id)` and `get_report_outbox_id(conn, tenant_id, report_id, user_id)`.
+- Consumes: Task 3 `generate_report(pool, ctx, settings, session, actor_type="USER", force=True, delivery_user_id=target_user_id)` and `get_report_outbox_id(conn, tenant_id, report_id, user_id)`. The separate `DEBUG_REPORT_TRIGGERED` action distinguishes this path because `audit.audit_log.actor_type` has a closed vocabulary.
 - Produces: `POST /api/v1/debug/reports/trigger/{session}?user_id=<uuid>` returning `{reportId, outboxId}`.
 
 - [ ] **Step 1: Write failing service and API tests**
@@ -411,7 +411,7 @@ async def test_debug_trigger_role_boundary(role, status):
     assert response.status_code == status
 ```
 
-Test an unknown session returns 422, omitted `user_id` passes the caller ID, an inactive/cross-tenant member returns 404, and a successful service call invokes:
+Test an unknown session returns the canonical WealthSail 400 validation envelope, omitted `user_id` passes the caller ID, an inactive/cross-tenant member returns 404, and a successful service call invokes:
 
 ```python
 await generate_report(
@@ -419,7 +419,7 @@ await generate_report(
     ctx,
     settings,
     "POST_MARKET",
-    actor_type="DEBUG_USER",
+    actor_type="USER",
     force=True,
     delivery_user_id="target-user",
 )
@@ -466,7 +466,7 @@ async def trigger_report_once(pool, ctx, settings, session, target_user_id=None)
         ctx,
         settings,
         session,
-        actor_type="DEBUG_USER",
+        actor_type="USER",
         force=True,
         delivery_user_id=target,
     )

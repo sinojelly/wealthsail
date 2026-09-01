@@ -6,7 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_043_adds_default_true_report_subscription_columns_without_broad_grants() -> None:
+def test_043_adds_default_true_report_subscription_columns_without_broad_grants() -> (
+    None
+):
     sql = (ROOT / "migrations/043_user_report_subscriptions.sql").read_text(
         encoding="utf-8"
     )

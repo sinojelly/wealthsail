@@ -38,6 +38,9 @@ def test_readback_requires_secure_report_subscription_preferences() -> None:
     source = inspect.getsource(_readback)
 
     assert "report subscription preference boundary is missing or unsafe" in source
+    assert '("wealthsail_api", "authenticated", "public")' in source
+    assert 'for privilege in ("SELECT", "INSERT", "UPDATE")' in source
+    assert 'subscription_privileges[("wealthsail_api", "INSERT")]' in source
     for contract in (
         "pre_market_report_enabled",
         "intraday_report_enabled",
@@ -45,7 +48,7 @@ def test_readback_requires_secure_report_subscription_preferences() -> None:
         "post_market_report_enabled",
         "wealthsail_api",
         "authenticated",
-        "PUBLIC",
+        "public",
     ):
         assert contract in source
 

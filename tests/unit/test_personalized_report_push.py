@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -481,6 +481,76 @@ async def test_deterministic_report_persistence_does_not_create_a_model_run(
 
     insert_model_run.assert_not_awaited()
     assert insert_report.await_args.kwargs["model_run_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_debug_delivery_receipt_and_audit_share_report_transaction(
+    monkeypatch,
+) -> None:
+    """A successful debug response must describe the atomically persisted delivery."""
+    audit = AsyncMock()
+    outbox_lookup = AsyncMock(return_value="outbox-1")
+    monkeypatch.setattr(
+        report_service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        report_service.repository,
+        "insert_report",
+        AsyncMock(return_value="report-1"),
+    )
+    monkeypatch.setattr(report_service.repository, "insert_report_items", AsyncMock())
+    monkeypatch.setattr(
+        report_service.repository,
+        "insert_report_outbox_deliveries",
+        AsyncMock(return_value=1),
+    )
+    monkeypatch.setattr(
+        report_service.repository, "get_report_outbox_id", outbox_lookup
+    )
+    monkeypatch.setattr(report_service, "write_audit", audit)
+    monkeypatch.setattr(
+        report_service,
+        "get_report_detail",
+        AsyncMock(return_value={"id": "report-1"}),
+    )
+
+    result = await report_service._persist_generation(
+        object(),
+        ctx=TenantContext("user-1", "tenant-1", tenant_role="OWNER"),
+        session="PRE_MARKET",
+        trade_date=date(2026, 9, 1),
+        started_at=report_service.now_shanghai(),
+        context={"positions": [], "preMarket": {}},
+        draft={
+            "summary": "盘前摘要",
+            "items": [],
+            "quality": "UNAVAILABLE",
+            "status": "PARTIAL",
+            "policy_check_status": "WARNING",
+        },
+        model_result=None,
+        error_class=None,
+        job_run_id=None,
+        actor_type="USER",
+        generation_mode="PRE_MARKET_DETERMINISTIC",
+        shared_brief_id=None,
+        shared_cache_hit=False,
+        shared_context_hash=None,
+        push_content="摘要",
+        delivery_user_id="user-2",
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": "user-2"},
+    )
+
+    assert result == {"id": "report-1", "_deliveryOutboxId": "outbox-1"}
+    outbox_lookup.assert_awaited_once_with(ANY, "tenant-1", "report-1", "user-2")
+    assert audit.await_count == 2
+    assert audit.await_args_list[1].kwargs["action"] == "DEBUG_REPORT_TRIGGERED"
+    assert audit.await_args_list[1].kwargs["details"] == {
+        "targetUserId": "user-2",
+        "session": "PRE_MARKET",
+        "outboxId": "outbox-1",
+    }
 
 
 @pytest.mark.asyncio

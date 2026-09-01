@@ -8,7 +8,11 @@ from pydantic import ValidationError as PydanticValidationError
 
 from backend.errors import ValidationError_
 from backend.identity.api import ReportSubscriptionsUpdateRequest
-from backend.identity.domain_service import IdentityService, IdentitySettings, TenantContext
+from backend.identity.domain_service import (
+    IdentityService,
+    IdentitySettings,
+    TenantContext,
+)
 
 
 class SubscriptionConn:
@@ -55,7 +59,9 @@ def profile_row(**subscriptions: bool | None) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_get_me_maps_report_subscriptions_and_defaults_missing_values_true() -> None:
+async def test_get_me_maps_report_subscriptions_and_defaults_missing_values_true() -> (
+    None
+):
     conn = SubscriptionConn(
         profile_row(
             pre_market_report_enabled=True,
@@ -96,10 +102,13 @@ async def test_viewer_can_update_own_report_subscription_and_audit_full_state() 
 
     assert result["INTRADAY"] is False
     update_sql, update_args = next(
-        call for call in conn.calls if "INSERT INTO identity.user_preferences" in call[0]
+        call
+        for call in conn.calls
+        if "INSERT INTO identity.user_preferences" in call[0]
     )
+    assert "user_id, default_tenant_id" in update_sql
     assert "intraday_report_enabled" in update_sql
-    assert update_args == ("user-1", False)
+    assert update_args == ("user-1", "tenant-1", False)
     audit_sql, audit_args = next(
         call for call in conn.calls if "INSERT INTO audit.audit_log" in call[0]
     )

@@ -319,9 +319,7 @@ class IdentityService:
         try:
             # Apply the authenticated actor as PostgreSQL claims so the
             # SECURITY DEFINER function can reject a spoofed actor id.
-            async with self._tenant_transaction(
-                actor_user_id, actor_tenant_id
-            ) as conn:
+            async with self._tenant_transaction(actor_user_id, actor_tenant_id) as conn:
                 row = await conn.fetchrow(
                     """
                     SELECT * FROM identity.create_personal_tenant_invitation(
@@ -704,7 +702,10 @@ class IdentityService:
             algorithm=self.settings.jwt_algorithm,
         )
         return self._login_payload(
-            row, access_token, expires_in, refresh_token or "",
+            row,
+            access_token,
+            expires_in,
+            refresh_token or "",
             tenant_id=str(row["tenant_id"]),
         )
 
@@ -778,9 +779,7 @@ class IdentityService:
             raise ValidationError("绑定令牌或外部用户标识缺失")
 
         token_hash = hmac_digest(self.settings.binding_hmac_key, token.strip())
-        external_hash = hmac_digest(
-            self.settings.binding_hmac_key, external_user_id
-        )
+        external_hash = hmac_digest(self.settings.binding_hmac_key, external_user_id)
         external_ciphertext = _envelope_encrypt(
             self.settings.routing_encryption_key or self.settings.binding_hmac_key,
             external_user_id,
@@ -1044,13 +1043,11 @@ class IdentityService:
             raise ValidationError("研报订阅类型无效")
 
         columns = [REPORT_SUBSCRIPTION_COLUMNS[session] for session in changes]
-        insert_columns = ", ".join(("user_id", *columns))
-        placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 2))
-        updates = ", ".join(
-            f"{column} = EXCLUDED.{column}" for column in columns
-        )
+        insert_columns = ", ".join(("user_id", "default_tenant_id", *columns))
+        placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 3))
+        updates = ", ".join(f"{column} = EXCLUDED.{column}" for column in columns)
         returning = ", ".join(REPORT_SUBSCRIPTION_COLUMNS.values())
-        values: list[object] = [actor.user_id, *changes.values()]
+        values: list[object] = [actor.user_id, actor.tenant_id, *changes.values()]
         row = await conn.fetchrow(
             f"""
             INSERT INTO identity.user_preferences({insert_columns})
@@ -1278,4 +1275,6 @@ def _envelope_encrypt(key: str, plaintext: str) -> str:
     aes = AESGCM(hashlib.sha256(key.encode("utf-8")).digest())
     nonce = secrets.token_bytes(12)
     ct = aes.encrypt(nonce, plaintext.encode("utf-8"), None)
-    return "v1:" + base64.b64encode(nonce).decode() + ":" + base64.b64encode(ct).decode()
+    return (
+        "v1:" + base64.b64encode(nonce).decode() + ":" + base64.b64encode(ct).decode()
+    )

@@ -48,9 +48,7 @@ def client(role: str) -> TestClient:
 def test_debug_trigger_role_boundary(role: str, status: int) -> None:
     trigger = AsyncMock(return_value={"reportId": "report-1", "outboxId": None})
     with patch("backend.debug.api.trigger_report_once", new=trigger):
-        response = client(role).post(
-            "/api/v1/debug/reports/trigger/POST_MARKET"
-        )
+        response = client(role).post("/api/v1/debug/reports/trigger/POST_MARKET")
 
     assert response.status_code == status
     if status == 200:
@@ -63,9 +61,7 @@ def test_debug_trigger_role_boundary(role: str, status: int) -> None:
 def test_debug_trigger_rejects_unknown_session_before_service_call() -> None:
     trigger = AsyncMock()
     with patch("backend.debug.api.trigger_report_once", new=trigger):
-        response = client("OWNER").post(
-            "/api/v1/debug/reports/trigger/UNKNOWN"
-        )
+        response = client("OWNER").post("/api/v1/debug/reports/trigger/UNKNOWN")
 
     # WealthSail normalizes FastAPI request validation to its canonical 400 envelope.
     assert response.status_code == 400
@@ -73,9 +69,7 @@ def test_debug_trigger_rejects_unknown_session_before_service_call() -> None:
 
 
 def test_debug_trigger_forwards_explicit_target_user() -> None:
-    trigger = AsyncMock(
-        return_value={"reportId": "report-1", "outboxId": "outbox-1"}
-    )
+    trigger = AsyncMock(return_value={"reportId": "report-1", "outboxId": "outbox-1"})
     with patch("backend.debug.api.trigger_report_once", new=trigger):
         response = client("ADMIN").post(
             f"/api/v1/debug/reports/trigger/PRE_MARKET?user_id={TARGET_ID}"
@@ -105,13 +99,13 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
     async def transaction(*_args, **_kwargs):
         yield conn
 
-    generate = AsyncMock(return_value={"id": "report-1"})
-    lookup = AsyncMock(return_value="outbox-1")
-    audit = AsyncMock()
+    generate = AsyncMock(
+        return_value={"id": "report-1", "_deliveryOutboxId": "outbox-1"}
+    )
+    lookup = AsyncMock(side_effect=AssertionError("post-commit lookup is unsafe"))
     monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
     monkeypatch.setattr(debug_service.report_service, "generate_report", generate)
     monkeypatch.setattr(debug_service.repository, "get_report_outbox_id", lookup)
-    monkeypatch.setattr(debug_service, "write_audit", audit)
     ctx = TenantContext(USER_ID, TENANT_ID, tenant_role="OWNER")
     settings = Settings(_env_file=None, app_env="test")
     pool = object()
@@ -126,17 +120,13 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
         ctx,
         settings,
         "POST_MARKET",
-        actor_type="DEBUG_USER",
+        actor_type="USER",
         force=True,
         delivery_user_id=TARGET_ID,
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": TARGET_ID},
     )
-    lookup.assert_awaited_once_with(conn, TENANT_ID, "report-1", TARGET_ID)
-    assert audit.await_args.kwargs["action"] == "DEBUG_REPORT_TRIGGERED"
-    assert audit.await_args.kwargs["details"] == {
-        "session": "POST_MARKET",
-        "targetUserId": TARGET_ID,
-        "outboxId": "outbox-1",
-    }
+    lookup.assert_not_awaited()
     assert all("workflow.jobs" not in sql for sql, _args in conn.calls)
 
 

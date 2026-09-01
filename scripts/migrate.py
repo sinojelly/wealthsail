@@ -819,8 +819,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
                 privilege,
             )
         )
-        for role in ("wealthsail_api", "authenticated", "PUBLIC")
-        for privilege in ("SELECT", "UPDATE")
+        for role in ("wealthsail_api", "authenticated", "public")
+        for privilege in ("SELECT", "INSERT", "UPDATE")
     }
     subscription_shape_valid = set(subscription_columns) == set(
         report_subscription_columns
@@ -830,6 +830,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     )
     subscription_privileges_valid = (
         subscription_privileges[("wealthsail_api", "SELECT")]
+        and subscription_privileges[("wealthsail_api", "INSERT")]
         and subscription_privileges[("wealthsail_api", "UPDATE")]
         and not any(
             allowed
