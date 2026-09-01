@@ -25,6 +25,7 @@ import MetricCards from "./components/MetricCards";
 import SentimentCard from "./components/SentimentCard";
 import AdviceCard from "./components/AdviceCard";
 import AssetScopeSwitcher from "./components/AssetScopeSwitcher";
+import WatchlistPanel from "./components/WatchlistPanel";
 import { useAiAdvice, useMarketSentiment } from "../../api/hooks";
 import { createIdempotencyKey } from "../../lib/idempotency";
 
@@ -181,6 +182,7 @@ export default function DashboardPage() {
         error={advice.error instanceof Error ? advice.error.message : null}
         onRefresh={() => void advice.refetch()}
       />
+      <WatchlistPanel />
       <div className="dashboard-chart-grid">
         <EquityCurveChart
           points={navTrend.error ? [] : (navTrend.data?.points ?? [])}

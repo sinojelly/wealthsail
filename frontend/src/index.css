@@ -345,6 +345,49 @@ textarea:focus-visible {
 .panel-body {
   padding: 17px;
 }
+.watchlist-panel {
+  margin-top: 16px;
+}
+.watchlist-search {
+  width: 100%;
+}
+.watchlist-search-results,
+.watchlist-items {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.watchlist-search-result,
+.watchlist-items li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--slate-200);
+  border-radius: 8px;
+  background: var(--slate-50);
+}
+.watchlist-search-result > span:first-child,
+.watchlist-items li > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.watchlist-search-result small,
+.watchlist-items small {
+  color: var(--slate-500);
+  font-size: 10px;
+}
+.watchlist-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 0;
+  color: var(--slate-500);
+  font-size: 12px;
+}
 .btn-primary,
 .btn-secondary,
 .btn-danger,

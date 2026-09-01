@@ -326,6 +326,13 @@ export interface TiantianImportConfirmation {
 
 export type InstrumentType = "STOCK" | "ETF" | "FUND";
 
+export interface WatchlistItem {
+  symbol: string;
+  assetName: string;
+  assetType: InstrumentType;
+  addedAt: string;
+}
+
 export interface InstrumentSearchResult {
   symbol: string;
   name: string;

@@ -13,6 +13,7 @@ import * as portfolioApi from "./portfolio";
 import * as reportsApi from "./reports";
 import { reportQueryKeys } from "./reports";
 import * as riskApi from "./risk";
+import * as watchlistApi from "./watchlist";
 import type {
   AuditRow,
   BindingCredential,
@@ -41,6 +42,7 @@ import type {
   TiantianImportDetail,
   TiantianImportList,
   TiantianDuplicatePolicy,
+  WatchlistItem,
 } from "./types";
 
 const MINE_SCOPE: PortfolioAssetScope = { kind: "MINE" };
@@ -168,6 +170,48 @@ export function useInstrumentSearch(
     staleTime: 60_000,
     retry: (count, error) =>
       !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+function watchlistQueryKey(session: ReturnType<typeof usePrivateSession>) {
+  return privateQueryKey(session, "watchlist", "mine");
+}
+
+export function useWatchlist(): UseQueryResult<WatchlistItem[]> {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: watchlistQueryKey(session),
+    queryFn: watchlistApi.list,
+    retry: (count, error) =>
+      !(error instanceof HttpError && error.status === 401) && count < 1,
+  });
+}
+
+export function useAddWatchlist() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: watchlistApi.add,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: watchlistQueryKey(session),
+      });
+    },
+    onError: onAuthFailure,
+  });
+}
+
+export function useRemoveWatchlist() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: watchlistApi.remove,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: watchlistQueryKey(session),
+      });
+    },
+    onError: onAuthFailure,
   });
 }
 
