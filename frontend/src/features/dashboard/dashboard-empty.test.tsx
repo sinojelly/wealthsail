@@ -70,6 +70,17 @@ vi.mock("../../api/hooks", () => ({
     isError: false,
     error: null,
   }),
+  useWatchlist: () => ({ data: [], isLoading: false, error: null }),
+  useAddWatchlist: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    variables: undefined,
+  }),
+  useRemoveWatchlist: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    variables: undefined,
+  }),
   useAddPosition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmPositionImport: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useConfirmTiantianHoldingStart: () => ({

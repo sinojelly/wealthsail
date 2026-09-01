@@ -23,3 +23,13 @@ The focused dashboard test was added before the implementation. Its RED run fail
 ## Deployment gate
 
 Production must apply and read back migration 044 before deploying the corresponding API or frontend build.
+
+## Review round 1 regression fix
+
+The initial panel change added three hook dependencies to every dashboard render: `useWatchlist`, `useAddWatchlist`, and `useRemoveWatchlist`. Three tests fully mock the hooks module, so missing exports caused `WatchlistPanel` to throw during rendering. No production behavior was changed.
+
+- Added neutral, stable watchlist hook mocks to `dashboard-empty.test.tsx`, `dashboard-valuation-syncing.test.tsx`, and the full-route mock in `app-routes.test.tsx`.
+- Focused dashboard verification: 4 files, 10 tests passed.
+- Route regression verification: 1 file, 3 tests passed.
+- Complete frontend suite: 28 files, 105 tests passed.
+- `npm run lint` and `npm run build` both passed.
