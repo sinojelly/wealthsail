@@ -23,6 +23,8 @@ def test_045_adds_report_variants_audiences_and_append_only_shared_cache() -> No
         "reports_variant_audience_check",
         "CREATE UNIQUE INDEX uq_reports_variant_audience_version",
         "CREATE TABLE reporting.shared_pre_market_briefs",
+        "CONSTRAINT shared_pre_market_briefs_draft_check",
+        "CONSTRAINT shared_pre_market_briefs_source_context_check",
         "protect_shared_pre_market_brief",
         "audience_user_id IS NULL",
         "audience_user_id = auth.uid()",
@@ -40,6 +42,8 @@ def test_045_adds_report_variants_audiences_and_append_only_shared_cache() -> No
     assert (
         "ON reporting.reports, reporting.report_items TO wealthsail_api" in sql
     )
+    assert sql.count("audience_member.user_id =") == 2
+    assert sql.count("audience_member.status = 'ACTIVE'") == 2
     assert not re.search(
         r"GRANT\s+(?:[^;]*\b)?(?:UPDATE|DELETE|TRUNCATE)\b[^;]*"
         r"reporting\.shared_pre_market_briefs",
@@ -62,7 +66,13 @@ def test_report_policy_validator_rejects_tenant_wide_or_cross_audience_reads() -
         AND (audience_user_id IS NULL OR audience_user_id = auth.uid())
     """
     api_report = """
-        identity.is_tenant_member(tenant_id)
+        EXISTS (
+            SELECT 1 FROM identity.tenant_members audience_member
+             WHERE audience_member.tenant_id = reports.tenant_id
+               AND audience_member.user_id =
+                   NULLIF(current_setting('app.user_id', true), '')::uuid
+               AND audience_member.status = 'ACTIVE'
+        )
         AND (audience_user_id IS NULL OR audience_user_id =
              NULLIF(current_setting('app.user_id', true), '')::uuid)
     """
@@ -77,6 +87,23 @@ def test_report_policy_validator_rejects_tenant_wide_or_cross_audience_reads() -
                     OR parent_report.audience_user_id = auth.uid())
         )
     """
+    api_items = """
+        EXISTS (
+            SELECT 1 FROM identity.tenant_members audience_member
+             WHERE audience_member.tenant_id = report_items.tenant_id
+               AND audience_member.user_id =
+                   NULLIF(current_setting('app.user_id', true), '')::uuid
+               AND audience_member.status = 'ACTIVE'
+        )
+        AND EXISTS (
+            SELECT 1 FROM reporting.reports parent_report
+             WHERE parent_report.tenant_id = report_items.tenant_id
+               AND parent_report.id = report_items.report_id
+               AND (parent_report.audience_user_id IS NULL
+                    OR parent_report.audience_user_id =
+                       NULLIF(current_setting('app.user_id', true), '')::uuid)
+        )
+    """
 
     assert migration_runner._report_policy_has_required_audience(
         "reports", browser_report, ("authenticated",)
@@ -86,6 +113,9 @@ def test_report_policy_validator_rejects_tenant_wide_or_cross_audience_reads() -
     )
     assert migration_runner._report_policy_has_required_audience(
         "report_items", browser_items, ("authenticated",)
+    )
+    assert migration_runner._report_policy_has_required_audience(
+        "report_items", api_items, ("wealthsail_api",)
     )
     assert not migration_runner._report_policy_has_required_audience(
         "reports", "identity.is_tenant_member(tenant_id)", ("authenticated",)
@@ -112,6 +142,13 @@ def test_report_policy_validator_rejects_tenant_wide_or_cross_audience_reads() -
         "reports", browser_report, ("wealthsail_api",)
     )
     assert not migration_runner._report_policy_has_required_audience(
+        "reports",
+        "identity.is_tenant_member(tenant_id) AND "
+        "(audience_user_id IS NULL OR audience_user_id = "
+        "NULLIF(current_setting('app.user_id', true), '')::uuid)",
+        ("wealthsail_api",),
+    )
+    assert not migration_runner._report_policy_has_required_audience(
         "report_items",
         browser_items.replace("auth.uid()", "parent_report.audience_user_id"),
         ("authenticated",),
@@ -125,4 +162,100 @@ def test_report_policy_validator_rejects_tenant_wide_or_cross_audience_reads() -
             "                    OR parent_report.audience_user_id = auth.uid()",
         ),
         ("authenticated",),
+    )
+
+
+def test_trigger_readback_rejects_when_clause_and_conditional_raise() -> None:
+    canonical = {
+        "tgenabled": "O",
+        "tgtype": 27,
+        "tgqual": None,
+        "function_schema": "reporting",
+        "function_name": "protect_shared_pre_market_brief",
+        "return_type": "trigger",
+        "language_name": "plpgsql",
+        "provolatile": "v",
+        "prosecdef": False,
+        "pronargs": 0,
+        "proconfig": ["search_path=reporting, pg_catalog"],
+        "prosrc": """
+            BEGIN
+                RAISE EXCEPTION 'shared pre-market briefs are append-only';
+            END;
+        """,
+    }
+
+    assert migration_runner._shared_pre_market_trigger_is_canonical(canonical)
+    assert not migration_runner._shared_pre_market_trigger_is_canonical(
+        {**canonical, "tgqual": "false"}
+    )
+    assert not migration_runner._shared_pre_market_trigger_is_canonical(
+        {**canonical, "tgenabled": "A"}
+    )
+    assert not migration_runner._shared_pre_market_trigger_is_canonical(
+        {
+            **canonical,
+            "prosrc": """
+                BEGIN
+                    IF OLD.trade_date IS NULL THEN
+                        RAISE EXCEPTION 'shared pre-market briefs are append-only';
+                    END IF;
+                    RETURN OLD;
+                END;
+            """,
+        }
+    )
+
+
+def test_acl_readback_rejects_any_grantee_or_privilege_outside_allowlist() -> None:
+    allowed = {
+        ("reports", "authenticated", "SELECT", False),
+        ("reports", "wealthsail_api", "SELECT", False),
+        ("reports", "wealthsail_api", "INSERT", False),
+    }
+
+    assert migration_runner._acl_matches_allowlist(allowed, allowed)
+    assert not migration_runner._acl_matches_allowlist(
+        allowed | {("reports", "analytics_reader", "SELECT", False)}, allowed
+    )
+    assert not migration_runner._acl_matches_allowlist(
+        allowed | {("reports", "wealthsail_api", "UPDATE", False)}, allowed
+    )
+    assert not migration_runner._acl_matches_allowlist(
+        (
+            allowed
+            - {("reports", "wealthsail_api", "SELECT", False)}
+            | {("reports", "wealthsail_api", "SELECT", True)}
+        ),
+        allowed,
+    )
+
+
+def test_cache_json_constraint_readback_requires_both_exact_object_checks() -> None:
+    canonical = {
+        "shared_pre_market_briefs_draft_check": (
+            "CHECK ((jsonb_typeof(draft) = 'object'::text))"
+        ),
+        "shared_pre_market_briefs_source_context_check": (
+            "CHECK ((jsonb_typeof(source_context) = 'object'::text))"
+        ),
+    }
+
+    assert migration_runner._shared_pre_market_json_constraints_are_canonical(
+        canonical
+    )
+    assert not migration_runner._shared_pre_market_json_constraints_are_canonical(
+        {
+            "shared_pre_market_briefs_draft_check": canonical[
+                "shared_pre_market_briefs_draft_check"
+            ]
+        }
+    )
+    assert not migration_runner._shared_pre_market_json_constraints_are_canonical(
+        {
+            **canonical,
+            "shared_pre_market_briefs_source_context_check": (
+                "CHECK ((jsonb_typeof(source_context) IS NOT NULL))"
+            ),
+        }
     )

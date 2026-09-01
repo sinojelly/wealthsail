@@ -16,6 +16,7 @@ import hashlib
 import ipaddress
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -126,16 +127,24 @@ def _report_policy_has_required_audience(
     normalized = policy_expression
     normalized = re.sub(r"[\s()]", "", normalized)
 
+    if table_name not in ("reports", "report_items"):
+        return False
+
     if roles == ("authenticated",):
         actor_guard = "current_user='authenticated'and"
         actor_id = "auth.uid"
+        membership = f"{actor_guard}identity.is_tenant_membertenant_idand"
     elif roles == ("wealthsail_api",):
-        actor_guard = ""
         actor_id = "nullifcurrent_setting'app.user_id',true,''::uuid"
+        membership = (
+            "existsselect1fromidentity.tenant_membersaudience_memberwhere"
+            f"audience_member.tenant_id={table_name}.tenant_idand"
+            f"audience_member.user_id={actor_id}and"
+            "audience_member.status='active'and"
+        )
     else:
         return False
 
-    membership = f"{actor_guard}identity.is_tenant_membertenant_idand"
     if table_name == "reports":
         expected = (
             f"{membership}audience_user_idisnullor"
@@ -149,8 +158,6 @@ def _report_policy_has_required_audience(
             "parent_report.audience_user_idisnullor"
             f"parent_report.audience_user_id={actor_id}"
         )
-    else:
-        return False
     required_or_depth = 1 if table_name == "reports" else 2
     return normalized == expected and _boolean_operator_depth(
         policy_expression, "or"
@@ -214,6 +221,61 @@ def _boolean_operator_depth(expression: str, operator: str) -> int:
                     continue
         index += 1
     return min(depths, default=-1)
+
+
+def _shared_pre_market_trigger_is_canonical(
+    trigger: Mapping[str, object] | None,
+) -> bool:
+    """Require one unconditional trigger whose function can only reject."""
+
+    if trigger is None:
+        return False
+    compact_source = re.sub(r"[\s()]", "", str(trigger.get("prosrc") or "").lower())
+    return (
+        trigger.get("tgenabled") == "O"
+        and trigger.get("tgtype") == 27
+        and trigger.get("tgqual") is None
+        and trigger.get("function_schema") == "reporting"
+        and trigger.get("function_name") == "protect_shared_pre_market_brief"
+        and trigger.get("return_type") == "trigger"
+        and trigger.get("language_name") == "plpgsql"
+        and trigger.get("provolatile") == "v"
+        and trigger.get("prosecdef") is False
+        and trigger.get("pronargs") == 0
+        and trigger.get("proconfig") == ["search_path=reporting, pg_catalog"]
+        and compact_source
+        == "beginraiseexception'sharedpre-marketbriefsareappend-only';end;"
+    )
+
+
+def _acl_matches_allowlist(
+    actual: set[tuple[str, str, str, bool]],
+    allowed: set[tuple[str, str, str, bool]],
+) -> bool:
+    """Reject missing grants and every grant to an unlisted role."""
+
+    return actual == allowed
+
+
+def _shared_pre_market_json_constraints_are_canonical(
+    constraints: Mapping[str, object],
+) -> bool:
+    """Require both named JSON fields to accept objects only."""
+
+    expected = {
+        "shared_pre_market_briefs_draft_check": (
+            "checkjsonb_typeofdraft='object'"
+        ),
+        "shared_pre_market_briefs_source_context_check": (
+            "checkjsonb_typeofsource_context='object'"
+        ),
+    }
+    actual = {}
+    for name in expected:
+        definition = str(constraints.get(name) or "").lower().replace('"', "")
+        definition = re.sub(r"::text\b", "", definition)
+        actual[name] = re.sub(r"[\s()]", "", definition)
+    return actual == expected
 
 
 async def _readback(conn: asyncpg.Connection) -> None:
@@ -1223,32 +1285,39 @@ async def _readback(conn: asyncpg.Connection) -> None:
             )
         )
 
-    browser_report_writes = await conn.fetchval(
-        """
-        SELECT COUNT(*)
-          FROM information_schema.role_table_grants
-         WHERE grantee='authenticated'
-           AND table_schema='reporting'
-           AND table_name IN ('reports', 'report_items')
-           AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
-        """
-    )
-    direct_report_grants = {
-        (row["grantee"], row["table_name"], row["privilege_type"])
+    reporting_runtime_acl = {
+        (
+            row["table_name"],
+            row["grantee"],
+            row["privilege_type"],
+            bool(row["is_grantable"]),
+        )
         for row in await conn.fetch(
             """
-            SELECT grantee, table_name, privilege_type
-              FROM information_schema.role_table_grants
-             WHERE grantee IN (
-                       'authenticated', 'wealthsail_api', 'wealthsail_worker'
-                   )
-               AND table_schema='reporting'
-               AND table_name IN ('reports', 'report_items')
+            SELECT relation.relname AS table_name,
+                   CASE
+                       WHEN privilege.grantee=0 THEN 'PUBLIC'
+                       ELSE grantee.rolname
+                   END AS grantee,
+                   privilege.privilege_type,
+                   privilege.is_grantable
+              FROM pg_class relation
+              JOIN pg_namespace namespace
+                ON namespace.oid=relation.relnamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(relation.relacl, acldefault('r', relation.relowner))
+              ) privilege
+              LEFT JOIN pg_roles grantee ON grantee.oid=privilege.grantee
+             WHERE namespace.nspname='reporting'
+               AND relation.relname IN (
+                   'reports', 'report_items', 'shared_pre_market_briefs'
+               )
+               AND privilege.grantee <> relation.relowner
             """
         )
     }
-    required_direct_report_grants = {
-        (role, table_name, privilege)
+    allowed_report_acl = {
+        (table_name, role, privilege, False)
         for role, privileges in (
             ("authenticated", ("SELECT",)),
             ("wealthsail_api", ("SELECT", "INSERT")),
@@ -1256,31 +1325,15 @@ async def _readback(conn: asyncpg.Connection) -> None:
         for table_name in ("reports", "report_items")
         for privilege in privileges
     }
-    public_report_privileges = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1
-              FROM pg_class relation
-              JOIN pg_namespace namespace
-                ON namespace.oid = relation.relnamespace
-              CROSS JOIN LATERAL aclexplode(
-                  COALESCE(relation.relacl, acldefault('r', relation.relowner))
-              ) privilege
-             WHERE namespace.nspname='reporting'
-               AND relation.relname IN ('reports', 'report_items')
-               AND privilege.grantee=0
-               AND privilege.privilege_type IN (
-                   'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'
-               )
-        )
-        """
-    )
+    actual_report_acl = {
+        grant
+        for grant in reporting_runtime_acl
+        if grant[0] in ("reports", "report_items")
+    }
     if (
         not split_report_shape_valid
         or not report_select_policies_valid
-        or browser_report_writes
-        or direct_report_grants != required_direct_report_grants
-        or public_report_privileges
+        or not _acl_matches_allowlist(actual_report_acl, allowed_report_acl)
     ):
         raise RuntimeError("split pre-market report boundary is missing or unsafe")
 
@@ -1314,63 +1367,41 @@ async def _readback(conn: asyncpg.Connection) -> None:
     shared_pre_market_trigger = await conn.fetchrow(
         """
         SELECT trigger.tgenabled,
-               pg_get_triggerdef(trigger.oid) AS trigger_definition,
-               pg_get_functiondef(trigger.tgfoid) AS function_definition
+               trigger.tgtype,
+               pg_get_expr(trigger.tgqual, trigger.tgrelid) AS tgqual,
+               function_namespace.nspname AS function_schema,
+               proc.proname AS function_name,
+               format_type(proc.prorettype, NULL) AS return_type,
+               language.lanname AS language_name,
+               proc.provolatile,
+               proc.prosecdef,
+               proc.pronargs,
+               proc.proconfig,
+               proc.prosrc
           FROM pg_trigger trigger
+          JOIN pg_proc proc ON proc.oid=trigger.tgfoid
+          JOIN pg_namespace function_namespace
+            ON function_namespace.oid=proc.pronamespace
+          JOIN pg_language language ON language.oid=proc.prolang
          WHERE trigger.tgrelid=
                to_regclass('reporting.shared_pre_market_briefs')
            AND trigger.tgname='protect_shared_pre_market_briefs_trigger'
            AND NOT trigger.tgisinternal
         """
     )
-    shared_pre_market_privileges = {
-        (role, privilege): bool(
-            await conn.fetchval(
-                """
-                SELECT CASE
-                    WHEN to_regclass($2) IS NULL THEN FALSE
-                    ELSE has_table_privilege($1, to_regclass($2), $3)
-                END
-                """,
-                role,
-                "reporting.shared_pre_market_briefs",
-                privilege,
-            )
-        )
-        for role in (
-            "wealthsail_api",
-            "wealthsail_worker",
-            "authenticated",
-        )
-        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    allowed_shared_pre_market_acl = {
+        ("shared_pre_market_briefs", role, privilege, False)
+        for role in ("wealthsail_api", "wealthsail_worker")
+        for privilege in ("SELECT", "INSERT")
     }
-    public_shared_pre_market_privileges = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1
-              FROM pg_class relation
-              JOIN pg_namespace namespace
-                ON namespace.oid = relation.relnamespace
-              CROSS JOIN LATERAL aclexplode(
-                  COALESCE(relation.relacl, acldefault('r', relation.relowner))
-              ) privilege
-             WHERE namespace.nspname='reporting'
-               AND relation.relname='shared_pre_market_briefs'
-               AND privilege.grantee=0
-               AND privilege.privilege_type IN (
-                   'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'
-               )
-        )
-        """
+    actual_shared_pre_market_acl = {
+        grant
+        for grant in reporting_runtime_acl
+        if grant[0] == "shared_pre_market_briefs"
+    }
+    shared_pre_market_privileges_valid = _acl_matches_allowlist(
+        actual_shared_pre_market_acl, allowed_shared_pre_market_acl
     )
-    shared_pre_market_privileges_valid = all(
-        allowed
-        == (
-            role in ("wealthsail_api", "wealthsail_worker")
-            and privilege in ("SELECT", "INSERT")
-        )
-        for (role, privilege), allowed in shared_pre_market_privileges.items()
-    ) and not public_shared_pre_market_privileges
     expected_shared_pre_market_columns = {
         "id",
         "trade_date",
@@ -1386,6 +1417,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         set(shared_pre_market_columns) == expected_shared_pre_market_columns
         and shared_pre_market_columns["draft"][0:2] == ("jsonb", "NO")
         and shared_pre_market_columns["source_context"][0:2] == ("jsonb", "NO")
+        and _shared_pre_market_json_constraints_are_canonical(
+            shared_pre_market_constraints
+        )
         and shared_pre_market_columns["context_hash"]
         == ("character", "NO", 64)
         and shared_pre_market_columns["quality_status"][0:2] == ("text", "NO")
@@ -1401,15 +1435,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
             for token in ("fresh", "estimated", "stale", "unavailable")
         )
     )
-    shared_pre_market_trigger_valid = (
-        shared_pre_market_trigger is not None
-        and shared_pre_market_trigger["tgenabled"] in ("O", "A")
-        and "BEFORE UPDATE OR DELETE"
-        in str(shared_pre_market_trigger["trigger_definition"] or "").upper()
-        and "RAISE EXCEPTION"
-        in str(shared_pre_market_trigger["function_definition"] or "").upper()
-        and "APPEND-ONLY"
-        in str(shared_pre_market_trigger["function_definition"] or "").upper()
+    shared_pre_market_trigger_valid = _shared_pre_market_trigger_is_canonical(
+        shared_pre_market_trigger
     )
     if (
         not shared_pre_market_shape_valid

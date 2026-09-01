@@ -71,7 +71,15 @@ CREATE POLICY reports_audience_select ON reporting.reports
 CREATE POLICY reports_audience_api_select ON reporting.reports
     FOR SELECT TO wealthsail_api
     USING (
-        identity.is_tenant_member(tenant_id)
+        EXISTS (
+            SELECT 1
+              FROM identity.tenant_members audience_member
+             WHERE audience_member.tenant_id = reports.tenant_id
+               AND audience_member.user_id = NULLIF(
+                   current_setting('app.user_id', true), ''
+               )::uuid
+               AND audience_member.status = 'ACTIVE'
+        )
         AND (
             audience_user_id IS NULL
             OR audience_user_id = NULLIF(
@@ -104,7 +112,15 @@ CREATE POLICY report_items_audience_select ON reporting.report_items
 CREATE POLICY report_items_audience_api_select ON reporting.report_items
     FOR SELECT TO wealthsail_api
     USING (
-        identity.is_tenant_member(tenant_id)
+        EXISTS (
+            SELECT 1
+              FROM identity.tenant_members audience_member
+             WHERE audience_member.tenant_id = report_items.tenant_id
+               AND audience_member.user_id = NULLIF(
+                   current_setting('app.user_id', true), ''
+               )::uuid
+               AND audience_member.status = 'ACTIVE'
+        )
         AND EXISTS (
             SELECT 1
               FROM reporting.reports parent_report
@@ -123,8 +139,12 @@ CREATE POLICY report_items_audience_api_select ON reporting.report_items
 CREATE TABLE reporting.shared_pre_market_briefs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     trade_date DATE NOT NULL UNIQUE,
-    draft JSONB NOT NULL CHECK (jsonb_typeof(draft) = 'object'),
-    source_context JSONB NOT NULL CHECK (jsonb_typeof(source_context) = 'object'),
+    draft JSONB NOT NULL
+        CONSTRAINT shared_pre_market_briefs_draft_check
+        CHECK (jsonb_typeof(draft) = 'object'),
+    source_context JSONB NOT NULL
+        CONSTRAINT shared_pre_market_briefs_source_context_check
+        CHECK (jsonb_typeof(source_context) = 'object'),
     context_hash CHAR(64) NOT NULL CHECK (context_hash ~ '^[0-9a-f]{64}$'),
     quality_status TEXT NOT NULL CHECK (
         quality_status IN ('FRESH', 'ESTIMATED', 'STALE', 'UNAVAILABLE')

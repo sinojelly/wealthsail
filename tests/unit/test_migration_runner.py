@@ -92,9 +92,10 @@ def test_readback_requires_split_pre_market_boundary() -> None:
         "fk_reports_tenant_audience",
         "uq_reports_variant_audience_version",
         "protect_shared_pre_market_briefs_trigger",
-        "browser_report_writes",
-        "required_direct_report_grants",
-        "public_report_privileges",
+        "reporting_runtime_acl",
+        "_acl_matches_allowlist",
+        "_shared_pre_market_trigger_is_canonical",
+        "_shared_pre_market_json_constraints_are_canonical",
         "_report_policy_has_required_audience",
     ):
         assert contract in source
