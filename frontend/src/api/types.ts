@@ -6,6 +6,8 @@ export type QualityCode = "FRESH" | "ESTIMATED" | "STALE" | "MISSING";
 export type ValuationStatus = "READY" | "SYNCING" | "PARTIAL" | "UNAVAILABLE";
 export type ReportSession =
   "PRE_MARKET" | "INTRADAY" | "FUND_1430" | "POST_MARKET";
+export type ReportSubscriptions = Record<ReportSession, boolean>;
+export type ReportSubscriptionUpdate = Partial<ReportSubscriptions>;
 export type TenantRole = "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
 export type InvitableTenantRole = Exclude<TenantRole, "OWNER">;
 export type PlatformRole = "PLATFORM_ADMIN" | "SUPPORT";
@@ -615,6 +617,7 @@ export interface MeResponse {
   defaultTenantId: string | null;
   defaultAssetScope: "MINE" | "TENANT";
   platformRoles: PlatformRole[];
+  reportSubscriptions: ReportSubscriptions;
   tenants: MeTenant[];
   members: MeMember[];
   bindings: MeBinding[];

@@ -7,6 +7,8 @@ import type {
   MeProfile,
   MeResponse,
   PersonalTenantInvitationCredential,
+  ReportSubscriptions,
+  ReportSubscriptionUpdate,
   TenantUpdateResult,
 } from "./types";
 
@@ -113,6 +115,20 @@ export async function switchTenant(tenantId: string): Promise<LoginResponse> {
 
 export async function getMe(): Promise<MeResponse> {
   const envelope = await request<MeResponse>("/v1/auth/me");
+  return envelope.data;
+}
+
+/** Update only the report delivery switches supplied by the current user. */
+export async function updateReportSubscriptions(
+  input: ReportSubscriptionUpdate,
+): Promise<ReportSubscriptions> {
+  const envelope = await request<ReportSubscriptions>(
+    "/v1/auth/report-subscriptions",
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
   return envelope.data;
 }
 

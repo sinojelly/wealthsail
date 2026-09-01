@@ -33,6 +33,7 @@ import type {
   PositionDto,
   PositionMutationPayload,
   ReportDetail,
+  ReportSubscriptionUpdate,
   ReportSession,
   ReportSummary,
   RulesResponse,
@@ -510,6 +511,22 @@ export function useMe(): UseQueryResult<MeResponse> {
   return useQuery({
     queryKey: privateQueryKey(session, "identity", "me"),
     queryFn: identityApi.getMe,
+  });
+}
+
+export function useUpdateReportSubscriptions() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  const meKey = privateQueryKey(session, "identity", "me");
+  return useMutation({
+    mutationFn: (input: ReportSubscriptionUpdate) =>
+      identityApi.updateReportSubscriptions(input),
+    onSuccess: (reportSubscriptions) => {
+      queryClient.setQueryData<MeResponse>(meKey, (current) =>
+        current ? { ...current, reportSubscriptions } : current,
+      );
+    },
+    onError: onAuthFailure,
   });
 }
 

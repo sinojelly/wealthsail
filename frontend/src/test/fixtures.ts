@@ -354,6 +354,12 @@ export const meFixture: MeResponse = {
   defaultTenantId: "tenant-demo-001",
   defaultAssetScope: "MINE",
   platformRoles: [],
+  reportSubscriptions: {
+    PRE_MARKET: true,
+    INTRADAY: true,
+    FUND_1430: true,
+    POST_MARKET: true,
+  },
   tenants: [
     {
       tenantId: "tenant-demo-001",

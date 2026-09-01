@@ -11,6 +11,7 @@ const {
   revokeBinding,
   updateTenantName,
   revisePerformanceBaseline,
+  updateReportSubscriptions,
 } = vi.hoisted(() => ({
   createInvitation: vi.fn().mockResolvedValue({
     invitationId: "invite-001",
@@ -44,6 +45,12 @@ const {
     source: "USER",
     version: 2,
     createdAt: "2026-08-30T20:00:00+08:00",
+  }),
+  updateReportSubscriptions: vi.fn().mockResolvedValue({
+    PRE_MARKET: true,
+    INTRADAY: false,
+    FUND_1430: true,
+    POST_MARKET: true,
   }),
 }));
 
@@ -109,12 +116,63 @@ vi.mock("../../api/hooks", () => ({
     isPending: false,
     error: null,
   }),
+  useUpdateReportSubscriptions: () => ({
+    mutateAsync: updateReportSubscriptions,
+    isPending: false,
+    error: null,
+  }),
 }));
 
 afterEach(() => {
   meFixture.activeRole = "OWNER";
   meFixture.platformRoles = [];
+  meFixture.reportSubscriptions = {
+    PRE_MARKET: true,
+    INTRADAY: true,
+    FUND_1430: true,
+    POST_MARKET: true,
+  };
   vi.clearAllMocks();
+});
+
+it.each(["OWNER", "VIEWER"] as const)(
+  "shows all report subscriptions to a %s",
+  (role) => {
+    meFixture.activeRole = role;
+    renderWithSession(<SettingsPage />);
+
+    expect(screen.getByRole("switch", { name: "盘前简报" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "盘中跟踪" })).toBeChecked();
+    expect(
+      screen.getByRole("switch", { name: "基金 2:30 报告" }),
+    ).toBeChecked();
+    expect(screen.getByRole("switch", { name: "盘后复盘" })).toBeChecked();
+    expect(
+      screen.queryByRole("heading", { name: "调试触发" }),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it("updates only the changed report subscription", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<SettingsPage />);
+
+  await user.click(screen.getByRole("switch", { name: "盘中跟踪" }));
+
+  expect(updateReportSubscriptions).toHaveBeenCalledWith({ INTRADAY: false });
+  expect(screen.getByRole("switch", { name: "盘中跟踪" })).not.toBeChecked();
+});
+
+it("rolls a report subscription back when the server rejects it", async () => {
+  updateReportSubscriptions.mockRejectedValueOnce(new Error("订阅保存失败"));
+  const user = userEvent.setup();
+  renderWithSession(<SettingsPage />);
+
+  const toggle = screen.getByRole("switch", { name: "盘中跟踪" });
+  await user.click(toggle);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("订阅保存失败");
+  expect(toggle).toBeChecked();
 });
 
 it("lets an owner create a one-time administrator invitation", async () => {

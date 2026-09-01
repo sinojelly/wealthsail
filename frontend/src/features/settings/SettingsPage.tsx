@@ -15,6 +15,7 @@ import PersonalTenantInvitationCard from "./components/PersonalTenantInvitationC
 import TenantRoleCard from "./components/TenantRoleCard";
 import WeComBindingCard from "./components/WeComBindingCard";
 import PerformanceBaselineCard from "./components/PerformanceBaselineCard";
+import ReportSubscriptionCard from "./components/ReportSubscriptionCard";
 
 export default function SettingsPage() {
   const me = useMe();
@@ -47,6 +48,12 @@ export default function SettingsPage() {
             bindings={data?.bindings ?? []}
             onBound={() => me.refetch()}
           />
+          {data ? (
+            <ReportSubscriptionCard
+              key={`${data.activeTenantId}:${Object.values(data.reportSubscriptions).join(":")}`}
+              subscriptions={data.reportSubscriptions}
+            />
+          ) : null}
           <TenantRoleCard
             key={data?.activeTenantId ?? "tenant-role-loading"}
             tenants={data?.tenants ?? []}

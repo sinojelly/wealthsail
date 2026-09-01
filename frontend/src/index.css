@@ -2698,6 +2698,83 @@ button:disabled {
   display: grid;
   gap: 16px;
 }
+.report-subscription-card .panel-header > svg {
+  color: var(--teal);
+}
+.report-subscription-list {
+  display: grid;
+}
+.report-subscription-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--slate-100);
+  cursor: pointer;
+}
+.report-subscription-row:last-child {
+  border-bottom: 0;
+}
+.report-subscription-row > span {
+  display: grid;
+  gap: 4px;
+}
+.report-subscription-row strong {
+  color: var(--navy);
+  font-size: 11px;
+}
+.report-subscription-row small {
+  color: var(--slate-500);
+  font-size: 8px;
+  line-height: 1.45;
+}
+.report-subscription-row input[role="switch"] {
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--slate-300);
+  border-radius: 999px;
+  background: var(--slate-200);
+  appearance: none;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.report-subscription-row input[role="switch"]::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 25%);
+  transition: transform 150ms ease;
+}
+.report-subscription-row input[role="switch"]:checked {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+.report-subscription-row input[role="switch"]:checked::before {
+  transform: translateX(16px);
+}
+.report-subscription-row input[role="switch"]:focus-visible {
+  outline: 2px solid #5eead4;
+  outline-offset: 2px;
+}
+.report-subscription-row input[role="switch"]:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.report-subscription-error {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid #fecaca;
+  color: #b91c1c;
+  background: #fef2f2;
+  font-size: 9px;
+}
 .performance-baseline-card .panel-header > svg {
   color: var(--teal);
 }
