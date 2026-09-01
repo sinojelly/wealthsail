@@ -11,6 +11,63 @@ import asyncpg
 REPORT_SESSIONS = ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET")
 
 
+async def get_user_watchlist_context(
+    conn: asyncpg.Connection, user_id: str
+) -> list[dict]:
+    """Read one user's watchlist with its latest persisted quote, if present."""
+    rows = await conn.fetch(
+        """
+        SELECT watchlist.symbol, watchlist.asset_name AS name,
+               watchlist.asset_type AS type, watchlist.added_at,
+               alias.instrument_id, quote.value AS price,
+               quote.metadata ->> 'changePct' AS change_pct,
+               quote.quality_status AS quality, quote.as_of
+          FROM identity.watchlist watchlist
+          LEFT JOIN LATERAL (
+              SELECT instrument_aliases.instrument_id
+                FROM reference.instrument_aliases instrument_aliases
+               WHERE instrument_aliases.alias_type = 'TICKER'
+                 AND upper(instrument_aliases.alias_value) = watchlist.symbol
+                 AND instrument_aliases.effective_from <= CURRENT_DATE
+                 AND (
+                     instrument_aliases.effective_to IS NULL
+                     OR instrument_aliases.effective_to >= CURRENT_DATE
+                 )
+               ORDER BY instrument_aliases.effective_from DESC
+               LIMIT 1
+          ) alias ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT observations.value, observations.metadata,
+                     observations.quality_status, observations.as_of
+                FROM market.market_observations observations
+               WHERE observations.subject_id = alias.instrument_id
+                 AND observations.field_code IN ('CLOSE', 'NAV', 'ESTIMATED_NAV')
+               ORDER BY observations.as_of DESC, observations.observed_at DESC
+               LIMIT 1
+          ) quote ON TRUE
+         WHERE watchlist.user_id = $1
+         ORDER BY watchlist.added_at DESC, watchlist.symbol
+        """,
+        user_id,
+    )
+    return [
+        {
+            "symbol": row["symbol"],
+            "name": row["name"],
+            "type": row["type"],
+            "addedAt": row["added_at"],
+            "instrumentId": str(row["instrument_id"])
+            if row["instrument_id"] is not None
+            else None,
+            "price": row["price"],
+            "changePct": row["change_pct"],
+            "quality": row["quality"],
+            "asOf": row["as_of"],
+        }
+        for row in rows
+    ]
+
+
 async def get_pre_market_corporate_actions(
     conn: asyncpg.Connection,
     instrument_ids: list[str],

@@ -319,7 +319,11 @@ async def generate_report(
 
 
 async def _build_context(
-    conn: asyncpg.Connection, tenant_id: str, session: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    session: str,
+    *,
+    audience_user_id: str | None = None,
 ) -> dict:
     summary = await get_summary(conn, tenant_id, now_shanghai())
     # Historical zero-quantity snapshots are not active holdings. Filtering
@@ -433,9 +437,14 @@ async def _build_context(
         "positions": positions,
         "policy": dict(policy) if policy else None,
         "fundEstimates": fund_estimates,
+        "watchlist": [],
         # Read-only persisted snapshot; this never performs provider I/O.
         "marketSentiment": await market_service.get_market_sentiment(conn),
     }
+    if audience_user_id is not None:
+        result["watchlist"] = await repository.get_user_watchlist_context(
+            conn, audience_user_id
+        )
     if session == "PRE_MARKET":
         result["preMarket"] = pre_market_context
     if session == "FUND_1430":
