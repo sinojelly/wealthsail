@@ -59,6 +59,12 @@ logger = logging.getLogger("wealthsail.identity.domain")
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _BINDING_CHANNEL = "wecom"
+REPORT_SUBSCRIPTION_COLUMNS = {
+    "PRE_MARKET": "pre_market_report_enabled",
+    "INTRADAY": "intraday_report_enabled",
+    "FUND_1430": "fund_1430_report_enabled",
+    "POST_MARKET": "post_market_report_enabled",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +920,10 @@ class IdentityService:
             """
             SELECT p.id, p.email, p.nickname, p.avatar_url, p.created_at,
                    up.default_tenant_id, up.default_asset_scope,
+                   up.pre_market_report_enabled,
+                   up.intraday_report_enabled,
+                   up.fund_1430_report_enabled,
+                   up.post_market_report_enabled,
                    ARRAY(
                        SELECT pr.role
                          FROM identity.platform_roles pr
@@ -980,6 +990,10 @@ class IdentityService:
             ),
             "defaultAssetScope": profile.get("default_asset_scope") or "MINE",
             "platformRoles": list(profile.get("platform_roles") or []),
+            "reportSubscriptions": {
+                session: profile.get(column) is not False
+                for session, column in REPORT_SUBSCRIPTION_COLUMNS.items()
+            },
             "tenants": [
                 {
                     "tenantId": str(t["tenant_id"]),
@@ -1011,6 +1025,60 @@ class IdentityService:
                 for b in bindings
             ],
         }
+
+    async def update_report_subscriptions(
+        self,
+        conn: AsyncConnection,
+        actor: TenantContext,
+        changes: dict[str, bool],
+    ) -> dict[str, bool]:
+        """Update the current user's delivery preferences only.
+
+        Report generation and audit persistence are deliberately unaffected;
+        these booleans are consumed only when a report expands into Outbox rows.
+        """
+        if not changes:
+            raise ValidationError("至少提交一个研报订阅开关")
+        unknown = set(changes) - set(REPORT_SUBSCRIPTION_COLUMNS)
+        if unknown:
+            raise ValidationError("研报订阅类型无效")
+
+        columns = [REPORT_SUBSCRIPTION_COLUMNS[session] for session in changes]
+        insert_columns = ", ".join(("user_id", *columns))
+        placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 2))
+        updates = ", ".join(
+            f"{column} = EXCLUDED.{column}" for column in columns
+        )
+        returning = ", ".join(REPORT_SUBSCRIPTION_COLUMNS.values())
+        values: list[object] = [actor.user_id, *changes.values()]
+        row = await conn.fetchrow(
+            f"""
+            INSERT INTO identity.user_preferences({insert_columns})
+            VALUES ({placeholders})
+            ON CONFLICT (user_id) DO UPDATE
+               SET {updates}, updated_at = now()
+            RETURNING {returning}
+            """,
+            *values,
+        )
+        if row is None:
+            raise NotFoundError("用户偏好不存在")
+
+        result = {
+            session: row.get(column) is not False
+            for session, column in REPORT_SUBSCRIPTION_COLUMNS.items()
+        }
+        await self._write_audit(
+            conn,
+            tenant_id=actor.tenant_id,
+            actor_type="USER",
+            actor_id=actor.user_id,
+            action="REPORT_SUBSCRIPTIONS_UPDATED",
+            resource_type="identity.user_preferences",
+            resource_id=actor.user_id,
+            details=result,
+        )
+        return result
 
     async def update_profile(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
@@ -82,6 +82,25 @@ class ProfileUpdateRequest(BaseModel):
 
 class TenantUpdateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=64, description="当前活动租户的新名称")
+
+
+class ReportSubscriptionsUpdateRequest(BaseModel):
+    """Strict partial update for the current user's report push preferences."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    PRE_MARKET: bool | None = None
+    INTRADAY: bool | None = None
+    FUND_1430: bool | None = None
+    POST_MARKET: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ReportSubscriptionsUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError("至少提交一个研报订阅开关")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("研报订阅开关必须是布尔值")
+        return self
 
 
 @router.post("/register")
@@ -326,6 +345,25 @@ async def update_profile(
             domain_tenant(ctx),
             nickname=body.nickname,
             avatar_url=body.avatar_url,
+        )
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.patch("/report-subscriptions")
+async def update_report_subscriptions(
+    body: ReportSubscriptionsUpdateRequest,
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Update the signed-in user's report delivery switches."""
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await identity_service(pool, settings).update_report_subscriptions(
+            conn,
+            domain_tenant(ctx),
+            body.model_dump(exclude_unset=True),
         )
     return ok(data, request_id=request_id, as_of=as_of)
 
