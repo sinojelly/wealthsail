@@ -99,6 +99,23 @@ async def _ensure_ledger(conn: asyncpg.Connection) -> None:
     )
 
 
+def _watchlist_policy_has_required_ownership(
+    expression: str | None, roles: tuple[str, ...]
+) -> bool:
+    """Accept only the normalized ownership equality for a watchlist policy."""
+
+    normalized = re.sub(r"\s+", "", (expression or "").lower())
+    normalized = normalized.replace("::text", "").replace("(", "").replace(")", "")
+    if roles == ("authenticated",):
+        return normalized == "user_id=auth.uid"
+    if roles == ("wealthsail_api",):
+        return (
+            normalized
+            == "user_id=nullifcurrent_setting'app.user_id',true,''::uuid"
+        )
+    return False
+
+
 async def _readback(conn: asyncpg.Connection) -> None:
     roles = await conn.fetch(
         """
@@ -902,13 +919,12 @@ async def _readback(conn: asyncpg.Connection) -> None:
             continue
         actual_command, actual_roles, qual, with_check = policy
         expression = qual if expression_field == "qual" else with_check
-        required_token = (
-            "auth.uid" if roles == ("authenticated",) else "app.user_id"
-        )
         watchlist_policies_valid = watchlist_policies_valid and (
             actual_command == command
             and actual_roles == roles
-            and required_token in str(expression or "")
+            and _watchlist_policy_has_required_ownership(
+                str(expression or ""), actual_roles
+            )
         )
     watchlist_privileges = {
         (role, privilege): bool(

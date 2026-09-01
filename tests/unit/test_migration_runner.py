@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts.migrate import (
     _readback,
+    _watchlist_policy_has_required_ownership,
     discover_migrations,
     is_loopback_database,
     load_migrations,
@@ -58,6 +59,23 @@ def test_readback_checks_watchlist_shape_rls_and_privileges() -> None:
     assert "watchlist ownership boundary is missing or unsafe" in source
     assert "identity.watchlist" in source
     assert '("SELECT", "INSERT", "DELETE", "UPDATE")' in source
+
+
+def test_watchlist_policy_readback_rejects_non_ownership_predicates() -> None:
+    assert _watchlist_policy_has_required_ownership(
+        "(user_id = auth.uid())", ("authenticated",)
+    )
+    assert _watchlist_policy_has_required_ownership(
+        "(user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)",
+        ("wealthsail_api",),
+    )
+    assert not _watchlist_policy_has_required_ownership(
+        "(auth.uid() IS NOT NULL)", ("authenticated",)
+    )
+    assert not _watchlist_policy_has_required_ownership(
+        "(current_setting('app.user_id'::text, true) IS NOT NULL)",
+        ("wealthsail_api",),
+    )
 
 
 def test_042_grants_only_runtime_read_access_for_pre_market_reference_data() -> None:
