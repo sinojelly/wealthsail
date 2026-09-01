@@ -278,6 +278,40 @@ def _shared_pre_market_json_constraints_are_canonical(
     return actual == expected
 
 
+def _reporting_relation_owners_are_safe(
+    schema_owner: str | None,
+    relation_owners: Mapping[str, str],
+) -> bool:
+    """Require every protected relation to share a non-runtime schema owner."""
+
+    forbidden_owners = {
+        "public",
+        "anon",
+        "authenticated",
+        "authenticator",
+        "service_role",
+        "wealthsail_api",
+        "wealthsail_worker",
+        "wealthsail_api_login",
+        "wealthsail_worker_login",
+        "supabase_auth_admin",
+        "supabase_storage_admin",
+        "supabase_functions_admin",
+        "dashboard_user",
+    }
+    required_relations = {
+        "reports",
+        "report_items",
+        "shared_pre_market_briefs",
+    }
+    if schema_owner is None or schema_owner.lower() in forbidden_owners:
+        return False
+    return set(relation_owners) == required_relations and all(
+        owner == schema_owner and owner.lower() not in forbidden_owners
+        for owner in relation_owners.values()
+    )
+
+
 async def _readback(conn: asyncpg.Connection) -> None:
     roles = await conn.fetch(
         """
@@ -1284,6 +1318,35 @@ async def _readback(conn: asyncpg.Connection) -> None:
                 key[0], str(expression or ""), actual_roles
             )
         )
+
+    reporting_schema_owner = await conn.fetchval(
+        """
+        SELECT pg_get_userbyid(namespace.nspowner)
+          FROM pg_namespace namespace
+         WHERE namespace.nspname='reporting'
+        """
+    )
+    reporting_relation_owners = {
+        row["relation_name"]: row["relation_owner"]
+        for row in await conn.fetch(
+            """
+            SELECT relation.relname AS relation_name,
+                   pg_get_userbyid(relation.relowner) AS relation_owner
+              FROM pg_class relation
+              JOIN pg_namespace namespace
+                ON namespace.oid=relation.relnamespace
+             WHERE namespace.nspname='reporting'
+               AND relation.relname IN (
+                   'reports', 'report_items', 'shared_pre_market_briefs'
+               )
+            """
+        )
+    }
+    if not _reporting_relation_owners_are_safe(
+        str(reporting_schema_owner) if reporting_schema_owner is not None else None,
+        reporting_relation_owners,
+    ):
+        raise RuntimeError("reporting relation owner boundary is missing or unsafe")
 
     reporting_runtime_acl = {
         (

@@ -44,6 +44,9 @@ def test_045_adds_report_variants_audiences_and_append_only_shared_cache() -> No
     )
     assert sql.count("audience_member.user_id =") == 2
     assert sql.count("audience_member.status = 'ACTIVE'") == 2
+    assert "ALTER TABLE reporting.%I OWNER TO %I" in sql
+    for relation_name in ("reports", "report_items", "shared_pre_market_briefs"):
+        assert f"'{relation_name}'" in sql
     assert not re.search(
         r"GRANT\s+(?:[^;]*\b)?(?:UPDATE|DELETE|TRUNCATE)\b[^;]*"
         r"reporting\.shared_pre_market_briefs",
@@ -228,6 +231,34 @@ def test_acl_readback_rejects_any_grantee_or_privilege_outside_allowlist() -> No
             | {("reports", "wealthsail_api", "SELECT", True)}
         ),
         allowed,
+    )
+
+
+def test_reporting_owner_readback_rejects_runtime_or_mismatched_owners() -> None:
+    canonical = {
+        "reports": "wealthsail_schema_owner",
+        "report_items": "wealthsail_schema_owner",
+        "shared_pre_market_briefs": "wealthsail_schema_owner",
+    }
+
+    assert migration_runner._reporting_relation_owners_are_safe(
+        "wealthsail_schema_owner", canonical
+    )
+    assert not migration_runner._reporting_relation_owners_are_safe(
+        "wealthsail_schema_owner",
+        {**canonical, "reports": "wealthsail_api"},
+    )
+    assert not migration_runner._reporting_relation_owners_are_safe(
+        "wealthsail_schema_owner",
+        {**canonical, "report_items": "different_deploy_owner"},
+    )
+    assert not migration_runner._reporting_relation_owners_are_safe(
+        "authenticated",
+        {name: "authenticated" for name in canonical},
+    )
+    assert not migration_runner._reporting_relation_owners_are_safe(
+        "wealthsail_schema_owner",
+        {name: owner for name, owner in canonical.items() if name != "reports"},
     )
 
 

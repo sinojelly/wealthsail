@@ -94,6 +94,8 @@ def test_readback_requires_split_pre_market_boundary() -> None:
         "protect_shared_pre_market_briefs_trigger",
         "reporting_runtime_acl",
         "_acl_matches_allowlist",
+        "reporting_relation_owners",
+        "_reporting_relation_owners_are_safe",
         "_shared_pre_market_trigger_is_canonical",
         "_shared_pre_market_json_constraints_are_canonical",
         "_report_policy_has_required_audience",

@@ -173,4 +173,28 @@ GRANT SELECT, INSERT ON reporting.shared_pre_market_briefs TO wealthsail_api, we
 COMMENT ON TABLE reporting.shared_pre_market_briefs IS
     'One tenant-neutral append-only macro pre-market brief per trade date.';
 
+-- ACL readback excludes owner-inherent rights, so all protected relations must
+-- share the reporting schema's non-runtime owner.
+DO $$
+DECLARE
+    schema_owner NAME;
+    relation_name TEXT;
+BEGIN
+    SELECT pg_get_userbyid(namespace.nspowner)
+      INTO schema_owner
+      FROM pg_namespace namespace
+     WHERE namespace.nspname='reporting';
+
+    FOREACH relation_name IN ARRAY ARRAY[
+        'reports', 'report_items', 'shared_pre_market_briefs'
+    ] LOOP
+        EXECUTE format(
+            'ALTER TABLE reporting.%I OWNER TO %I',
+            relation_name,
+            schema_owner
+        );
+    END LOOP;
+END;
+$$;
+
 COMMIT;
