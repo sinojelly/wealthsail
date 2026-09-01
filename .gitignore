@@ -30,6 +30,7 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+.worktrees/
 
 temp/
 figma/v2-ui-images/
