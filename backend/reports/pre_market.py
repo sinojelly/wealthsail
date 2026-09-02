@@ -5,12 +5,16 @@ from __future__ import annotations
 from decimal import Decimal
 
 _MISSING = "暂无"
-# 有持仓但当日无可匹配的公司行动时的确定性结论（区别于"无数据"的「暂无」）。
-_NO_MAJOR_IMPACT = "无重大事件影响"
+# 无持仓时的占位（区别于"有持仓但无事件"）。
+_NO_HOLDINGS = "暂无持仓"
+# 有持仓、当日无公司行动且估值与集中度均健康时的确定性结论。
+_HEALTHY_HOLDINGS = "今日无重大事件，持仓估值整体新鲜"
 # 数据库仅有截止时间，没有渠道实际开放状态，任何"可申赎"表述都必须带此限定。
 _CHANNEL_CAVEAT = "（以渠道状态为准）"
 # 除权类行动（现金分红/送股/拆股）必然使除权参考价下调，可确定性提示低开。
 _EX_RIGHTS_TYPES = frozenset({"CASH_DIVIDEND", "STOCK_DIVIDEND", "SPLIT"})
+# 持仓估值质量中视为"过期/缺失"的状态（FRESH/ESTIMATED 视为可用）。
+_STALE_QUALITIES = frozenset({"STALE", "MISSING", "UNAVAILABLE"})
 ACTION_LABELS = {
     "CASH_DIVIDEND": "现金分红除权",
     "STOCK_DIVIDEND": "送股除权",
@@ -157,34 +161,107 @@ def _action_impact_phrase(action: dict, *, concise: bool) -> str:
     )
 
 
-def holding_impact_text(context: dict) -> str:
-    """持仓今日影响（报告正文版）：持仓 ∩ 今日公司行动。
+def _position_label(position: dict) -> str:
+    return str(position.get("name") or position.get("symbol") or "持仓")
 
-    - 没有持仓 → 「暂无」（无数据可归因）
-    - 有持仓且无匹配行动 → 「无重大事件影响」（确定性结论，非缺失）
+
+def _sorted_by_weight(positions: list[dict]) -> list[dict]:
+    return sorted(
+        positions,
+        key=lambda p: safe_decimal(p.get("weight")) or Decimal("-1"),
+        reverse=True,
+    )
+
+
+def _position_health_risks(context: dict, *, concise: bool) -> list[str]:
+    """持仓健康度风险项，按优先级返回短语列表（无风险则空）。
+
+    优先级：估值过期/缺失（STALE/MISSING）> 单一持仓超限（超过政策上限）。
+    全部基于已持久化的持仓数据（quality/weight）与投资政策（policy），
+    不做任何外网或模型调用。
+    """
+    positions = [
+        p
+        for p in (context.get("positions") or [])
+        if isinstance(p, dict)
+        and safe_decimal(p.get("quantity")) is not None
+        and safe_decimal(p.get("quantity")) > 0
+    ]
+    if not positions:
+        return []
+    policy = context.get("policy") or {}
+    limit = safe_decimal(policy.get("single_position_limit"))
+    risks: list[str] = []
+
+    # 1. 估值过期/缺失（按权重降序，仅取有风险的）。
+    stale = [
+        p
+        for p in _sorted_by_weight(positions)
+        if str(p.get("quality") or "").upper() in _STALE_QUALITIES
+    ]
+    for position in stale:
+        name = _position_label(position)
+        quality = str(position.get("quality") or "").upper()
+        is_stale = quality == "STALE"
+        if concise:
+            risks.append(f"{name}估值{'过期' if is_stale else '缺失'}")
+        else:
+            risks.append(
+                f"{name}估值{'过期' if is_stale else '缺失'}，"
+                "持仓数据非最新，请核对后再决策"
+            )
+
+    # 2. 单一持仓超限（占比 > 政策上限）。
+    if limit is not None:
+        for position in _sorted_by_weight(positions):
+            weight = safe_decimal(position.get("weight"))
+            if weight is None or weight <= limit:
+                continue
+            name = _position_label(position)
+            if concise:
+                risks.append(f"{name}占比{weight}%超上限{limit}%")
+            else:
+                risks.append(
+                    f"{name}占比{weight}%，超过政策上限{limit}%，建议关注集中度风险"
+                )
+    return risks
+
+
+def holding_impact_text(context: dict) -> str:
+    """持仓今日影响（报告正文版）。
+
+    组成 = 今日公司行动（持仓 ∩ 当日行动）+ 持仓健康度风险（估值/集中度）。
+
+    - 没有持仓 → 「暂无持仓」（无数据可归因）
+    - 有持仓、无行动、无风险 → 「今日无重大事件，持仓估值整体新鲜」
+    - 否则列出具体行动与风险项
     """
     if not _held_instrument_ids(context):
-        return _MISSING
+        return _NO_HOLDINGS
     actions = matched_actions(context)
-    if not actions:
-        return _NO_MAJOR_IMPACT
-    return (
-        "；".join(_action_impact_phrase(action, concise=False) for action in actions)
-        + "。"
-    )
+    action_phrases = [
+        _action_impact_phrase(action, concise=False) for action in actions
+    ]
+    risk_phrases = _position_health_risks(context, concise=False)
+    parts = action_phrases + risk_phrases
+    if parts:
+        return "；".join(parts) + "。"
+    return _HEALTHY_HOLDINGS
 
 
 def impact_push_text(context: dict, *, limit: int = 2) -> str:
     """持仓影响（推送短句版），超项折叠为「等N项」。"""
     if not _held_instrument_ids(context):
-        return _MISSING
+        return _NO_HOLDINGS
     actions = matched_actions(context)
-    if not actions:
-        return _NO_MAJOR_IMPACT
-    parts = [_action_impact_phrase(action, concise=True) for action in actions[:limit]]
-    text = "；".join(parts)
-    if len(actions) > limit:
-        text += f"等{len(actions)}项"
+    action_phrases = [_action_impact_phrase(action, concise=True) for action in actions]
+    risk_phrases = _position_health_risks(context, concise=True)
+    parts = action_phrases + risk_phrases
+    if not parts:
+        return _HEALTHY_HOLDINGS
+    text = "；".join(parts[:limit])
+    if len(parts) > limit:
+        text += f"等{len(parts)}项"
     return text
 
 
@@ -264,8 +341,13 @@ def _impact_clause(context: dict) -> str | None:
     if not _held_instrument_ids(context):
         return None
     actions = matched_actions(context)
+    risks = _position_health_risks(context, concise=True)
+    if actions and risks:
+        return f"{len(actions)}项行动、{len(risks)}项风险"
+    if risks:
+        return f"{len(risks)}项持仓风险"
     if not actions:
-        return "持仓无重大事件"
+        return "持仓估值整体新鲜"
     if len(actions) == 1:
         return f"{instrument_label(actions[0], include_symbol=False)}除权"
     return f"{len(actions)}只持仓除权"

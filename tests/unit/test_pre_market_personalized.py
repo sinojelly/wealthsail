@@ -78,8 +78,8 @@ def test_personalized_report_marks_missing_facts_as_missing() -> None:
     )
 
     bodies = {item["title"]: item["body"] for item in draft["items"]}
-    # 有持仓、当日无匹配公司行动 → 确定性结论（区别于"无数据"的「暂无」）。
-    assert bodies["持仓今日影响"] == "无重大事件影响"
+    # 有持仓、当日无匹配公司行动且估值健康 → 确定性结论（区别于"无数据"的「暂无」）。
+    assert bodies["持仓今日影响"] == "今日无重大事件，持仓估值整体新鲜"
     assert "贵州茅台" in bodies["关注标的动态"]
     assert bodies["今日操作提醒"] == "暂无"
     assert draft["quality"] == "FRESH"

@@ -109,7 +109,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
     assert push.splitlines() == [
         "🌏 隔夜市场：美股暂无；A50期货暂无",
         "📌 今日关注：经济数据暂无；公司行动暂无；申赎状态暂无",
-        "📊 持仓影响：暂无",
+        "📊 持仓影响：暂无持仓",
         "⏰ 今日提醒：暂无",
         "💡 一句话总结：暂无",
     ]
@@ -126,22 +126,22 @@ def test_push_states_cutoff_window_with_channel_caveat() -> None:
     assert len(push) <= 200
 
 
-def test_holding_impact_declares_no_major_event_when_positions_untouched() -> None:
-    """有持仓但今日无公司行动 → 确定性结论「无重大事件影响」，而非「暂无」。"""
+def test_holding_impact_healthy_when_positions_untouched() -> None:
+    """有持仓、当日无公司行动且估值/集中度健康 → 确定性结论，而非「暂无」。"""
     context = _context()
     context["preMarket"]["corporateActions"] = []
 
-    assert pre_market.holding_impact_text(context) == "无重大事件影响"
-    assert pre_market.impact_push_text(context) == "无重大事件影响"
+    assert pre_market.holding_impact_text(context) == "今日无重大事件，持仓估值整体新鲜"
+    assert pre_market.impact_push_text(context) == "今日无重大事件，持仓估值整体新鲜"
 
 
 def test_holding_impact_is_missing_without_positions() -> None:
-    """没有持仓时无法归因，必须降级为「暂无」，不得臆断影响。"""
+    """没有持仓时无法归因，必须降级为「暂无持仓」，不得臆断影响。"""
     context = _context()
     context["positions"] = []
 
-    assert pre_market.holding_impact_text(context) == "暂无"
-    assert pre_market.impact_push_text(context) == "暂无"
+    assert pre_market.holding_impact_text(context) == "暂无持仓"
+    assert pre_market.impact_push_text(context) == "暂无持仓"
 
 
 def test_holding_impact_ignores_actions_on_unheld_instruments() -> None:
@@ -158,9 +158,79 @@ def test_holding_impact_ignores_actions_on_unheld_instruments() -> None:
         }
     ]
 
-    assert pre_market.holding_impact_text(context) == "无重大事件影响"
+    assert pre_market.holding_impact_text(context) == "今日无重大事件，持仓估值整体新鲜"
     push = pre_market.format_push_content(context)
     assert "中国平安今日除权" not in push
+
+
+def test_holding_impact_flags_stale_valuation() -> None:
+    """持仓估值过期（quality=STALE）必须作为风险项优先展示。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["positions"][0]["quality"] = "STALE"
+    context["positions"][0]["weight"] = "12.50"
+
+    assert (
+        pre_market.holding_impact_text(context)
+        == "招商银行估值过期，持仓数据非最新，请核对后再决策。"
+    )
+    assert pre_market.impact_push_text(context) == "招商银行估值过期"
+
+
+def test_holding_impact_flags_missing_valuation() -> None:
+    """估值缺失（quality=MISSING）同样作为风险，措辞区别于「过期」。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["positions"][0]["quality"] = "MISSING"
+    context["positions"][0]["weight"] = "12.50"
+
+    assert "招商银行估值缺失" in pre_market.holding_impact_text(context)
+    assert pre_market.impact_push_text(context) == "招商银行估值缺失"
+
+
+def test_holding_impact_flags_concentration_breach() -> None:
+    """单一持仓占比超过政策上限必须作为集中度风险展示。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["policy"] = {"single_position_limit": "30.00"}
+    context["positions"][0]["quality"] = "FRESH"
+    context["positions"][0]["weight"] = "35.00"
+
+    assert (
+        "招商银行占比35.00%，超过政策上限30.00%，建议关注集中度风险"
+        in pre_market.holding_impact_text(context)
+    )
+    assert pre_market.impact_push_text(context) == "招商银行占比35.00%超上限30.00%"
+
+
+def test_holding_impact_combines_action_and_risk() -> None:
+    """既有公司行动又有估值过期时，行动在前、风险在后并列展示。"""
+    context = _context()
+    context["positions"][0]["quality"] = "STALE"
+    context["positions"][0]["weight"] = "12.50"
+
+    # 报告正文：行动短语 + 风险短语
+    detailed = pre_market.holding_impact_text(context)
+    assert "招商银行(600036)现金分红除权" in detailed
+    assert "招商银行估值过期" in detailed
+
+    # 推送短句：两项折叠到上限后用「等N项」
+    push_impact = pre_market.impact_push_text(context)
+    assert "招商银行今日除权，预计低开" in push_impact
+    assert "招商银行估值过期" in push_impact
+
+
+def test_holding_impact_valuation_takes_priority_over_concentration() -> None:
+    """估值过期优先于集中度超限展示（风险项排序）。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["policy"] = {"single_position_limit": "10.00"}
+    context["positions"][0]["quality"] = "STALE"
+    context["positions"][0]["weight"] = "35.00"
+
+    risks = pre_market._position_health_risks(context, concise=True)
+    assert risks[0] == "招商银行估值过期"
+    assert risks[1] == "招商银行占比35.00%超上限10.00%"
 
 
 def test_summary_combines_sentiment_holdings_and_events() -> None:
