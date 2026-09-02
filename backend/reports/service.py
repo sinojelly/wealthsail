@@ -53,6 +53,14 @@ SESSION_META: dict[str, dict[str, str]] = {
     },
 }
 
+REPORT_VARIANT_META: dict[str, tuple[str, str]] = {
+    "PRE_MARKET_MACRO": ("盘前简报·宏观", "隔夜市场与今日全球重点"),
+    "PRE_MARKET_PERSONALIZED": (
+        "盘前简报·个性化",
+        "持仓、关注标的与今日操作提醒",
+    ),
+}
+
 _ALLOWED_ITEM_TYPES = {"FACT", "RISK", "ACTION_PLAN", "TODO", "FUND_ESTIMATE", "ALERT"}
 _ALLOWED_SEVERITIES = {"INFO", "WARNING", "CRITICAL"}
 
@@ -85,18 +93,33 @@ async def list_reports(
     tenant_id: str,
     trade_date: date | None,
     session: str | None,
+    actor_user_id: str | None = None,
 ) -> list[dict]:
-    rows = await repository.list_reports(conn, tenant_id, trade_date, session)
+    rows = await repository.list_reports(
+        conn,
+        tenant_id,
+        trade_date,
+        session,
+        actor_user_id=actor_user_id,
+    )
     return [_report_summary(r) for r in rows]
 
 
 def _report_summary(row: asyncpg.Record) -> dict:
+    variant = row["report_variant"]
+    variant_meta = REPORT_VARIANT_META.get(variant)
     meta = SESSION_META.get(row["report_session"], {})
     return {
         "id": str(row["id"]),
         "session": row["report_session"],
-        "title": meta.get("title", row["report_session"]),
-        "subtitle": meta.get("subtitle", ""),
+        "title": variant_meta[0]
+        if variant_meta
+        else meta.get("title", row["report_session"]),
+        "subtitle": variant_meta[1] if variant_meta else meta.get("subtitle", ""),
+        "variant": variant,
+        "audienceUserId": (
+            str(row["audience_user_id"]) if row["audience_user_id"] else None
+        ),
         "tradeDate": row["trade_date"].isoformat(),
         "version": row["version"],
         "generatedAt": row["as_of"],
@@ -106,15 +129,31 @@ def _report_summary(row: asyncpg.Record) -> dict:
 
 
 async def get_report_detail(
-    conn: asyncpg.Connection, tenant_id: str, report_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    report_id: str,
+    actor_user_id: str | None = None,
 ) -> dict:
-    row = await repository.get_report(conn, tenant_id, report_id)
+    row = await repository.get_report(
+        conn, tenant_id, report_id, actor_user_id=actor_user_id
+    )
     if row is None:
         raise NotFoundError("报告不存在或已被删除")
-    items = await repository.get_report_items(conn, tenant_id, report_id)
-    history = await repository.version_history(
-        conn, tenant_id, row["trade_date"], row["report_session"], report_id
+    items = await repository.get_report_items(
+        conn, tenant_id, report_id, actor_user_id=actor_user_id
     )
+    history = await repository.version_history(
+        conn,
+        tenant_id,
+        row["trade_date"],
+        row["report_session"],
+        report_id,
+        actor_user_id=actor_user_id,
+        report_variant=row["report_variant"],
+        audience_user_id=row["audience_user_id"],
+    )
+    variant = row["report_variant"]
+    variant_meta = REPORT_VARIANT_META.get(variant)
     meta = SESSION_META.get(row["report_session"], {})
 
     model_run = None
@@ -133,8 +172,14 @@ async def get_report_detail(
     return {
         "id": str(row["id"]),
         "session": row["report_session"],
-        "title": meta.get("title", row["report_session"]),
-        "subtitle": meta.get("subtitle", ""),
+        "title": variant_meta[0]
+        if variant_meta
+        else meta.get("title", row["report_session"]),
+        "subtitle": variant_meta[1] if variant_meta else meta.get("subtitle", ""),
+        "variant": variant,
+        "audienceUserId": (
+            str(row["audience_user_id"]) if row["audience_user_id"] else None
+        ),
         "tradeDate": row["trade_date"].isoformat(),
         "version": row["version"],
         "status": row["status"],
@@ -202,6 +247,8 @@ async def generate_report(
     job_run_id: str | None = None,
     actor_type: str = "USER",
     force: bool = False,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
     delivery_user_id: str | None = None,
     trigger_audit_action: str | None = None,
     trigger_audit_details: dict | None = None,
@@ -218,9 +265,20 @@ async def generate_report(
 
     # Phase 1: read context (RLS transaction).
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        context = await _build_context(conn, ctx.tenant_id, session)
+        context = await _build_context(
+            conn,
+            ctx.tenant_id,
+            session,
+            audience_user_id=audience_user_id,
+        )
         latest = await repository.latest_report(
-            conn, ctx.tenant_id, trade_date, session
+            conn,
+            ctx.tenant_id,
+            trade_date,
+            session,
+            actor_user_id=ctx.user_id,
+            report_variant=report_variant,
+            audience_user_id=audience_user_id,
         )
 
     # Idempotent replay: same (session, trade_date) generated moments ago.
@@ -228,7 +286,12 @@ async def generate_report(
         age = (started_at - latest["created_at"]).total_seconds()
         if age < IDEMPOTENT_WINDOW_SECONDS:
             async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-                return await get_report_detail(conn, ctx.tenant_id, str(latest["id"]))
+                return await get_report_detail(
+                    conn,
+                    ctx.tenant_id,
+                    str(latest["id"]),
+                    actor_user_id=ctx.user_id,
+                )
 
     # Phase 2: PRE_MARKET and FUND_1430 are deterministic. The other sessions
     # keep personalized generation for holdings and a shared brief otherwise.
@@ -292,6 +355,8 @@ async def generate_report(
                     conn,
                     ctx=ctx,
                     session=session,
+                    report_variant=report_variant,
+                    audience_user_id=audience_user_id,
                     trade_date=trade_date,
                     started_at=started_at,
                     context=context,
@@ -873,6 +938,8 @@ def _delivery_audit_details(
     *,
     session: str,
     version: int,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
     degraded: bool,
     delivery_count: int,
     generation_mode: str | None = None,
@@ -882,6 +949,8 @@ def _delivery_audit_details(
     """Describe report delivery fan-out, including the zero-recipient case."""
     details = {
         "session": session,
+        "variant": report_variant,
+        "audienceUserId": audience_user_id,
         "version": version,
         "degraded": degraded,
         "deliveryCount": delivery_count,
@@ -904,6 +973,8 @@ async def _persist_generation(
     *,
     ctx: TenantContext,
     session: str,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
     trade_date: date,
     started_at: datetime,
     context: dict,
@@ -921,7 +992,15 @@ async def _persist_generation(
     trigger_audit_action: str | None = None,
     trigger_audit_details: dict | None = None,
 ) -> dict:
-    latest = await repository.latest_report(conn, ctx.tenant_id, trade_date, session)
+    latest = await repository.latest_report(
+        conn,
+        ctx.tenant_id,
+        trade_date,
+        session,
+        actor_user_id=ctx.user_id,
+        report_variant=report_variant,
+        audience_user_id=audience_user_id,
+    )
     version = (latest["version"] + 1) if latest else 1
     supersedes = str(latest["id"]) if latest else None
 
@@ -1012,6 +1091,8 @@ async def _persist_generation(
         policy_check_status=draft.get("policy_check_status", "WARNING"),
         valid_until=valid_until,
         supersedes_report_id=supersedes,
+        report_variant=report_variant,
+        audience_user_id=audience_user_id,
     )
     await repository.insert_report_items(
         conn,
@@ -1030,7 +1111,9 @@ async def _persist_generation(
         target_user_id=delivery_user_id,
     )
     delivery_outbox_id = None
-    if delivery_user_id is not None:
+    if delivery_user_id is not None and trigger_audit_action is not None:
+        # The per-recipient outbox id is only surfaced through the controlled
+        # debug trigger receipt; scheduled generation settles for the count.
         delivery_outbox_id = await repository.get_report_outbox_id(
             conn, ctx.tenant_id, report_id, delivery_user_id
         )
@@ -1046,6 +1129,8 @@ async def _persist_generation(
         details=_delivery_audit_details(
             session=session,
             version=version,
+            report_variant=report_variant,
+            audience_user_id=audience_user_id,
             degraded=error_class is not None,
             delivery_count=delivery_count,
             generation_mode=generation_mode,
@@ -1066,10 +1151,17 @@ async def _persist_generation(
             details={
                 **(trigger_audit_details or {}),
                 "session": session,
+                "variant": report_variant,
+                "audienceUserId": audience_user_id,
                 "outboxId": delivery_outbox_id,
             },
         )
-    report = await get_report_detail(conn, ctx.tenant_id, report_id)
+    report = await get_report_detail(
+        conn,
+        ctx.tenant_id,
+        report_id,
+        actor_user_id=ctx.user_id,
+    )
     if trigger_audit_action is not None:
         report["_deliveryOutboxId"] = delivery_outbox_id
     return report

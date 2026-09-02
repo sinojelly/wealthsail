@@ -54,7 +54,13 @@ async def reports_list(
                 ctx.tenant_id,
             )
             trade_date = latest_date
-        data = await service.list_reports(conn, ctx.tenant_id, trade_date, session)
+        data = await service.list_reports(
+            conn,
+            ctx.tenant_id,
+            trade_date,
+            session,
+            actor_user_id=ctx.user_id,
+        )
     return ok(data, request_id=request_id, as_of=as_of)
 
 
@@ -68,7 +74,12 @@ async def report_detail(
     """报告详情：摘要、条目、模型运行与版本审计链。"""
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.get_report_detail(conn, ctx.tenant_id, report_id)
+        data = await service.get_report_detail(
+            conn,
+            ctx.tenant_id,
+            report_id,
+            actor_user_id=ctx.user_id,
+        )
     return ok(data, request_id=request_id, as_of=as_of)
 
 

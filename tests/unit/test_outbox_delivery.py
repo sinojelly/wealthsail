@@ -582,6 +582,8 @@ def test_zero_delivery_is_explicit_in_report_audit_details() -> None:
         session="FUND_1430", version=2, degraded=False, delivery_count=0
     ) == {
         "session": "FUND_1430",
+        "variant": "STANDARD",
+        "audienceUserId": None,
         "version": 2,
         "degraded": False,
         "deliveryCount": 0,

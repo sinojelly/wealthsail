@@ -549,6 +549,8 @@ async def test_debug_delivery_receipt_and_audit_share_report_transaction(
     assert audit.await_args_list[1].kwargs["details"] == {
         "targetUserId": "user-2",
         "session": "PRE_MARKET",
+        "variant": "STANDARD",
+        "audienceUserId": None,
         "outboxId": "outbox-1",
     }
 

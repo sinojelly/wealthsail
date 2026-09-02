@@ -400,9 +400,17 @@ export interface NavTrend {
 // ---------------------------------------------------------------------------
 // reports
 // ---------------------------------------------------------------------------
+export type ReportVariant =
+  | "STANDARD"
+  | "PRE_MARKET_MACRO"
+  | "PRE_MARKET_PERSONALIZED"
+  | (string & {});
+
 export interface ReportSummary {
   id: string;
   session: ReportSession;
+  variant?: ReportVariant;
+  audienceUserId?: string | null;
   title: string;
   subtitle: string;
   tradeDate: string;
@@ -458,6 +466,8 @@ export interface ModelRunInfo {
 export interface ReportDetail {
   id: string;
   session: ReportSession;
+  variant?: ReportVariant;
+  audienceUserId?: string | null;
   title: string;
   subtitle: string;
   tradeDate: string;

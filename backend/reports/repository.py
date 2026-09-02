@@ -245,8 +245,9 @@ async def list_reports(
     tenant_id: str,
     trade_date: date | None = None,
     session: str | None = None,
+    actor_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
-    """One row per session — the latest version — for the report timeline."""
+    """Latest visible version of every session/variant/audience identity."""
     clauses = ["tenant_id = $1"]
     params: list[object] = [tenant_id]
     if trade_date is not None:
@@ -255,42 +256,75 @@ async def list_reports(
     if session is not None:
         clauses.append(f"report_session = ${len(params) + 1}")
         params.append(session)
+    if actor_user_id is not None:
+        clauses.append(
+            f"(audience_user_id IS NULL OR audience_user_id = ${len(params) + 1})"
+        )
+        params.append(actor_user_id)
     where = " AND ".join(clauses)
     return await conn.fetch(
         f"""
-        SELECT DISTINCT ON (report_session)
+        SELECT DISTINCT ON (report_session, report_variant, audience_user_id)
             id, report_session, trade_date, version, status, as_of,
             quality_status, summary, model_run_id, job_run_id,
-            policy_check_status, valid_until, supersedes_report_id, created_at
+            policy_check_status, valid_until, supersedes_report_id, created_at,
+            report_variant, audience_user_id
         FROM reporting.reports
         WHERE {where}
-        ORDER BY report_session, version DESC
+        ORDER BY report_session, report_variant, audience_user_id, version DESC
         """,
         *params,
     )
 
 
 async def get_report(
-    conn: asyncpg.Connection, tenant_id: str, report_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    report_id: str,
+    actor_user_id: str | None = None,
 ) -> asyncpg.Record | None:
+    visibility = ""
+    params: list[object] = [tenant_id, report_id]
+    if actor_user_id is not None:
+        visibility = " AND (audience_user_id IS NULL OR audience_user_id = $3)"
+        params.append(actor_user_id)
     return await conn.fetchrow(
-        """
+        f"""
         SELECT id, report_session, trade_date, version, status, as_of,
                quality_status, summary, model_run_id, job_run_id,
-               policy_check_status, valid_until, supersedes_report_id, created_at
+               policy_check_status, valid_until, supersedes_report_id, created_at,
+               report_variant, audience_user_id
         FROM reporting.reports
-        WHERE tenant_id = $1 AND id = $2
+        WHERE tenant_id = $1 AND id = $2{visibility}
         """,
-        tenant_id,
-        report_id,
+        *params,
     )
 
 
 async def get_report_items(
-    conn: asyncpg.Connection, tenant_id: str, report_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    report_id: str,
+    actor_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
-    return await conn.fetch(
+    visibility = ""
+    params: list[object] = [tenant_id, report_id]
+    if actor_user_id is not None:
+        visibility = """
+          AND EXISTS (
+              SELECT 1
+                FROM reporting.reports parent_report
+               WHERE parent_report.tenant_id = ri.tenant_id
+                 AND parent_report.id = ri.report_id
+                 AND (
+                     parent_report.audience_user_id IS NULL
+                     OR parent_report.audience_user_id = $3
+                 )
+          )
         """
+        params.append(actor_user_id)
+    return await conn.fetch(
+        f"""
         SELECT ri.id, ri.item_type, ri.subject_id, ri.severity, ri.title,
                ri.body, ri.action_plan, ri.data_quality_status, ri.sort_order,
                COALESCE(
@@ -316,12 +350,11 @@ async def get_report_items(
           ON er.tenant_id=rie.tenant_id AND er.id=rie.evidence_ref_id
         LEFT JOIN market.source_snapshots ss ON ss.id=er.source_snapshot_id
         LEFT JOIN reference.data_sources ds ON ds.id=ss.source_id
-        WHERE ri.tenant_id = $1 AND ri.report_id = $2
+        WHERE ri.tenant_id = $1 AND ri.report_id = $2{visibility}
         GROUP BY ri.id
         ORDER BY ri.sort_order ASC, ri.created_at ASC
         """,
-        tenant_id,
-        report_id,
+        *params,
     )
 
 
@@ -331,20 +364,36 @@ async def version_history(
     trade_date: date,
     session: str,
     exclude_report_id: str,
+    *,
+    actor_user_id: str | None = None,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
 ) -> list[asyncpg.Record]:
-    """All versions of the same (trade_date, session) — the version-audit chain."""
-    return await conn.fetch(
-        """
-        SELECT id, version, status, as_of, created_at, supersedes_report_id
-        FROM reporting.reports
-        WHERE tenant_id = $1 AND trade_date = $2 AND report_session = $3
-          AND id <> $4
-        ORDER BY version ASC
-        """,
+    """Other visible versions of one exact report identity."""
+    visibility = ""
+    params: list[object] = [
         tenant_id,
         trade_date,
         session,
         exclude_report_id,
+        report_variant,
+        audience_user_id,
+    ]
+    if actor_user_id is not None:
+        visibility = " AND (audience_user_id IS NULL OR audience_user_id = $7)"
+        params.append(actor_user_id)
+    return await conn.fetch(
+        f"""
+        SELECT id, version, status, as_of, created_at, supersedes_report_id
+        FROM reporting.reports
+        WHERE tenant_id = $1 AND trade_date = $2 AND report_session = $3
+          AND id <> $4
+          AND report_variant = $5
+          AND audience_user_id IS NOT DISTINCT FROM $6
+          {visibility}
+        ORDER BY version ASC
+        """,
+        *params,
     )
 
 
@@ -353,18 +402,34 @@ async def latest_report(
     tenant_id: str,
     trade_date: date,
     session: str,
+    *,
+    actor_user_id: str | None = None,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
 ) -> asyncpg.Record | None:
-    return await conn.fetchrow(
-        """
-        SELECT id, version, status, created_at
-        FROM reporting.reports
-        WHERE tenant_id = $1 AND trade_date = $2 AND report_session = $3
-        ORDER BY version DESC
-        LIMIT 1
-        """,
+    visibility = ""
+    params: list[object] = [
         tenant_id,
         trade_date,
         session,
+        report_variant,
+        audience_user_id,
+    ]
+    if actor_user_id is not None:
+        visibility = " AND (audience_user_id IS NULL OR audience_user_id = $6)"
+        params.append(actor_user_id)
+    return await conn.fetchrow(
+        f"""
+        SELECT id, version, status, created_at, report_variant, audience_user_id
+        FROM reporting.reports
+        WHERE tenant_id = $1 AND trade_date = $2 AND report_session = $3
+          AND report_variant = $4
+          AND audience_user_id IS NOT DISTINCT FROM $5
+          {visibility}
+        ORDER BY version DESC
+        LIMIT 1
+        """,
+        *params,
     )
 
 
@@ -426,6 +491,8 @@ async def insert_report(
     policy_check_status: str,
     valid_until: object,
     supersedes_report_id: str | None,
+    report_variant: str = "STANDARD",
+    audience_user_id: str | None = None,
 ) -> str:
     return str(
         await conn.fetchval(
@@ -433,8 +500,10 @@ async def insert_report(
             INSERT INTO reporting.reports
                 (tenant_id, report_session, trade_date, version, status, as_of,
                  quality_status, summary, model_run_id, job_run_id,
-                 policy_check_status, valid_until, supersedes_report_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 policy_check_status, valid_until, supersedes_report_id,
+                 report_variant, audience_user_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15)
             RETURNING id
             """,
             tenant_id,
@@ -450,6 +519,8 @@ async def insert_report(
             policy_check_status,
             valid_until,
             supersedes_report_id,
+            report_variant,
+            audience_user_id,
         )
     )
 

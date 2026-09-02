@@ -116,6 +116,34 @@ it("renders report audit timestamps in Asia/Shanghai", () => {
   expect(screen.getByText(/v1 · PUBLISHED · 15:00/)).toBeInTheDocument();
 });
 
+it("renders macro and personalized pre-market reports as separate audit rows", () => {
+  reportState.reports = [
+    {
+      ...reportsFixture[0],
+      id: "R-PRE-MACRO-20260902",
+      variant: "PRE_MARKET_MACRO",
+      audienceUserId: null,
+      title: "盘前简报",
+      generatedAt: "2026-09-02T00:30:00Z",
+    },
+    {
+      ...reportsFixture[0],
+      id: "R-PRE-PERSONALIZED-20260902",
+      variant: "PRE_MARKET_PERSONALIZED",
+      audienceUserId: "usr-owner-001",
+      title: "盘前简报",
+      generatedAt: "2026-09-02T00:35:00Z",
+    },
+  ];
+
+  renderWithSession(<ReportsPage />);
+
+  expect(screen.getByText("盘前简报·宏观")).toBeInTheDocument();
+  expect(screen.getByText("盘前简报·个性化")).toBeInTheDocument();
+  expect(screen.getByText("08:30")).toBeInTheDocument();
+  expect(screen.getByText("08:35")).toBeInTheDocument();
+});
+
 it("renders a safe placeholder for an invalid report timestamp", () => {
   reportState.reports = [
     {

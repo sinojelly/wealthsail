@@ -10,7 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import QualityBadge from "../../../components/data-state/QualityBadge";
-import type { EvidenceRecord } from "../report-data";
+import { reportDisplayMeta, type EvidenceRecord } from "../report-data";
 import type { ReportDetail, ReportEvidence, ReportItem } from "../../../api/types";
 import {
   formatShanghaiDateTime,
@@ -53,6 +53,7 @@ export default function ReportViewer({
   onEvidence: (evidence: EvidenceRecord) => void;
 }) {
   const asOfLabel = formatShanghaiDateTime(report.asOf);
+  const display = reportDisplayMeta(report);
   return (
     <article className="report-viewer">
       <header className="report-viewer-header">
@@ -60,8 +61,8 @@ export default function ReportViewer({
           <span className="report-kicker">
             {report.tradeDate} · {asOfLabel} 生成
           </span>
-          <h1>{report.title}</h1>
-          <p>{report.subtitle}</p>
+          <h1>{display.title}</h1>
+          <p>{display.subtitle}</p>
         </div>
         <div className="report-version">
           <span className="status-pill published">

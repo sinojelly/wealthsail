@@ -246,7 +246,7 @@ def test_wecom_route_is_searchable_by_hmac_but_recoverable_only_by_worker_key() 
 
 
 @pytest.mark.asyncio
-async def test_tenant_transaction_switches_to_dedicated_api_role() -> None:
+async def test_tenant_transaction_sets_transaction_local_rls_context() -> None:
     class Transaction:
         async def __aenter__(self):
             return self
@@ -294,6 +294,7 @@ async def test_tenant_transaction_switches_to_dedicated_api_role() -> None:
                 '"tenant_id":"tenant-1"}',
             ),
         ),
+        ("SELECT set_config('app.user_id', $1, true);", ("user-1",)),
     ]
 
 

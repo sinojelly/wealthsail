@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import type { ReportSummary } from "../../../api/types";
 import EmptyState from "../../../components/data-state/EmptyState";
 import { formatShanghaiTime } from "../../../lib/shanghai-time";
+import { reportDisplayMeta } from "../report-data";
 
 export default function ReportTimeline({
   reports,
@@ -16,9 +17,10 @@ export default function ReportTimeline({
   const [query, setQuery] = useState("");
   const filtered = useMemo(
     () =>
-      reports.filter((report) =>
-        `${report.title}${report.subtitle}`.includes(query),
-      ),
+      reports.filter((report) => {
+        const display = reportDisplayMeta(report);
+        return `${display.title}${display.subtitle}`.includes(query);
+      }),
     [query, reports],
   );
   const tradeDate = reports[0]?.tradeDate;
@@ -46,17 +48,18 @@ export default function ReportTimeline({
       <div className={`report-list ${filtered.length === 0 ? "is-empty" : ""}`}>
         {filtered.map((report) => {
           const generatedTime = formatShanghaiTime(report.generatedAt);
+          const display = reportDisplayMeta(report);
           return (
             <button
               key={report.id}
-              aria-label={`${report.title} ${generatedTime}`}
+              aria-label={`${display.title} ${generatedTime}`}
               className={`report-item ${report.id === selectedId ? "selected" : ""}`}
               onClick={() => onSelect(report)}
             >
               <div className="report-time mono">{generatedTime}</div>
               <div className="report-item-copy">
-                <strong>{report.title}</strong>
-                <span>{report.subtitle}</span>
+                <strong>{display.title}</strong>
+                <span>{display.subtitle}</span>
                 <small>
                   <CheckCircle2 size={10} />
                   {report.status} · v{report.version}

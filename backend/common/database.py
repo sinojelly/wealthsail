@@ -3,7 +3,8 @@
 Every business transaction that touches tenant-scoped data MUST run through
 ``tenant_transaction``: it acquires a pooled connection, opens a transaction,
 switches to the restricted ``wealthsail_api`` role and injects the JWT claims
-via ``set_config('request.jwt.claims', ..., is_local=true)``. PostgreSQL then
+via ``set_config('request.jwt.claims', ..., is_local=true)`` plus the explicit
+``app.user_id`` used by audience-scoped policies. PostgreSQL then
 enforces row isolation through the ``identity.is_tenant_member()`` policies —
 even if application code mis-scopes a query, RLS is the final boundary.
 
@@ -85,9 +86,7 @@ async def create_pool(
         statement_cache_size = dsn_options.get("statement_cache_size")
     if statement_cache_size is None and _uses_supabase_transaction_pooler(dsn):
         statement_cache_size = 0
-        logger.info(
-            "disabled asyncpg statement cache for Supabase transaction pooler"
-        )
+        logger.info("disabled asyncpg statement cache for Supabase transaction pooler")
     pool_args: dict[str, Any] = {
         "dsn": dsn,
         "min_size": min_size,
@@ -136,7 +135,8 @@ async def verify_runtime_login_boundary(
     if skip:
         logger.warning(
             "runtime role boundary check skipped for process=%s "
-            "(non-production startup)", process,
+            "(non-production startup)",
+            process,
         )
         return
     async with pool.acquire() as conn:
@@ -219,6 +219,10 @@ async def apply_tenant_context(
     await conn.execute(
         "SELECT set_config('request.jwt.claims', $1, true);",
         _claims_json(user_id, tenant_id, role),
+    )
+    await conn.execute(
+        "SELECT set_config('app.user_id', $1, true);",
+        str(user_id),
     )
 
 
