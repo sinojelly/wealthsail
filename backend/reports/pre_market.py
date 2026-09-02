@@ -501,6 +501,131 @@ def focus_event_text(context: dict) -> str:
     return "；".join(phrases) if phrases else _FOCUS_NONE
 
 
+# 操作参考：无持仓（数据不足）与有持仓但无触发规则时的确定性占位。
+_ADVICE_NO_DATA = "今日无明确操作参考"
+_ADVICE_WATCH = "今日无明确操作参考，可保持观望"
+
+
+def _announcement_advice_phrase(announcement: dict) -> str:
+    """公告 → 操作建议：按标题类型给参考关注点，不引用具体业绩数字。"""
+    name = str(announcement.get("name") or announcement.get("symbol") or "公司")
+    title = str(announcement.get("title") or "")
+    rest = title
+    for token in (name, str(announcement.get("symbol") or "")):
+        if token and rest.startswith(token):
+            rest = rest[len(token) :].lstrip("：:，, ")
+            break
+    detail = rest or "公告"
+    if any(kw in title for kw in ("报告", "业绩")):
+        focus = "关注业绩预期"
+    elif "分红" in title:
+        focus = "关注分红到账安排"
+    elif any(kw in title for kw in ("回购", "增持", "减持")):
+        focus = "关注后续进展"
+    else:
+        focus = "关注公告后续进展"
+    return f"{name}发布{detail}，{focus}"
+
+
+def _operation_advice_candidates(context: dict) -> list[tuple[int, str, str]]:
+    """规则引擎：逐标的取优先级最高的一条，返回 (priority, instrumentId, phrase)。
+
+    优先级：1 除权 > 2 公告 > 3 估值过期 > 4 基金申赎状态。同一标的多事件
+    只保留优先级最高者；全部短语 ≤ 30 字、不调用 AI。
+    """
+    pre = context.get("preMarket") or {}
+    report_date = str(pre.get("reportDate") or "")
+    best: dict[str, tuple[int, str]] = {}
+
+    def add(instrument_id: str, priority: int, phrase: str) -> None:
+        current = best.get(instrument_id)
+        if current is None or priority < current[0]:
+            best[instrument_id] = (priority, _clip_focus_phrase(phrase))
+
+    # P1 今日除权（仅持仓、仅今日）。
+    for action in matched_actions(context):
+        if report_date and str(action.get("exDate") or "") != report_date:
+            continue
+        action_type = str(action.get("actionType") or "")
+        if action_type not in _EX_RIGHTS_TYPES:
+            continue
+        name = instrument_label(action, include_symbol=False)
+        add(
+            str(action.get("instrumentId") or ""),
+            1,
+            f"{name}今日除权，若除权后价格偏低，可关注填权行情",
+        )
+
+    # P2 公司公告（service 已按持仓 A 股抓取并过滤今日/关键词）。
+    announcements = pre.get("announcements")
+    if isinstance(announcements, list):
+        for announcement in announcements:
+            if not isinstance(announcement, dict):
+                continue
+            instrument_id = str(announcement.get("instrumentId") or "")
+            # 公告抓取结果以 symbol 归属；无 instrumentId 时退化为公告代码去重。
+            add(
+                instrument_id or f"@ann:{announcement.get('symbol') or ''}",
+                2,
+                _announcement_advice_phrase(announcement),
+            )
+
+    # P3 持仓估值过期/缺失（STALE/MISSING）。
+    stale_qualities = _STALE_QUALITIES
+    for position in context.get("positions") or []:
+        if not isinstance(position, dict):
+            continue
+        quality = str(position.get("quality") or "").upper()
+        if quality not in stale_qualities:
+            continue
+        name = str(position.get("name") or position.get("symbol") or "持仓")
+        add(
+            str(position.get("instrumentId") or ""),
+            3,
+            f"{name}估值已过期，建议先更新净值再操作",
+        )
+
+    # P4 持仓基金申赎状态（暂停/正常+截止）。
+    for subject in _reminder_subjects(context):
+        suspended = _suspended_statuses(subject["profile"] or {})
+        label = instrument_label(subject, include_symbol=False)
+        if suspended:
+            add(
+                subject["instrumentId"],
+                4,
+                f"{label}今日暂停{'/'.join(suspended)}，建议暂勿操作",
+            )
+        else:
+            cutoff = _earliest_cutoff(subject)
+            if cutoff:
+                add(
+                    subject["instrumentId"],
+                    4,
+                    f"{label}今日{cutoff}前可申赎，请留意截止时间",
+                )
+    return sorted(
+        (
+            (priority, instrument_id, phrase)
+            for instrument_id, (priority, phrase) in best.items()
+        ),
+        key=lambda entry: (entry[0],),
+    )
+
+
+def operation_advice_text(context: dict, *, limit: int = 2) -> str:
+    """操作参考正文：优先展示风险相关建议（1-2 条，以「；」分隔）。
+
+    - 无持仓（数据不足）→ 「今日无明确操作参考」
+    - 有持仓但无任何触发 → 「今日无明确操作参考，可保持观望」
+    """
+    if not _held_instrument_ids(context):
+        return _ADVICE_NO_DATA
+    candidates = _operation_advice_candidates(context)
+    if not candidates:
+        return _ADVICE_WATCH
+    return "；".join(candidate[2] for candidate in candidates[:limit])
+
+
 def _mood_phrase(context: dict) -> str | None:
     """市场情绪短语。无涨跌家数时返回 ``None``（不编造情绪判断）。"""
     sentiment = context.get("marketSentiment") or {}
@@ -611,6 +736,9 @@ def build_report(context: dict) -> dict:
     focus = focus_event_text(context)
     if not focus.endswith("。"):
         focus += "。"
+    advice = operation_advice_text(context)
+    if not advice.endswith("。"):
+        advice += "。"
     conclusion = summary_text(context)
     quality = _quality(context)
     sentiment_quality = str(
@@ -651,6 +779,12 @@ def build_report(context: dict) -> dict:
             impact,
             "RISK",
             quality if pre.get("corporateActions") else "UNAVAILABLE",
+        ),
+        (
+            "操作参考",
+            advice,
+            "ACTION_PLAN",
+            quality if _held_instrument_ids(context) else "UNAVAILABLE",
         ),
         (
             "今日操作提醒",
@@ -729,6 +863,8 @@ def format_push_content(context: dict) -> str:
     reminder = cutoff_push_text(context)
     # 今日焦点事件：公告 > 除权 > 宏观（最多 3 条）。
     focus = focus_event_text(context)
+    # 操作参考：规则引擎输出 1-2 条可执行建议。
+    advice = operation_advice_text(context)
     # 一句话总结：市场情绪 + 持仓影响 + 今日事件，缺项省略。
     summary = "；".join(summary_clauses(context)) or _MISSING
 
@@ -738,10 +874,11 @@ def format_push_content(context: dict) -> str:
         f"📊 持仓影响：{impact}",
         f"⏰ 今日提醒：{reminder}",
         f"🎯 今日焦点：{focus}",
+        f"🧭 操作参考：{advice}",
         f"💡 一句话总结：{summary}",
     ]
-    # 预算：6 行 + 5 个换行 ≤ 200 字符（企微推送上限）。
-    limits = (40, 34, 36, 40, 25, 20)
+    # 预算：7 行 + 6 个换行 ≤ 200 字符（企微推送上限）。
+    limits = (30, 27, 22, 40, 26, 27, 22)
     return "\n".join(
         _clip(line, limit) for line, limit in zip(lines, limits, strict=True)
     )

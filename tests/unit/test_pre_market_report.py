@@ -64,7 +64,7 @@ def _context() -> dict:
     }
 
 
-def test_full_report_has_six_grounded_sections_and_explicit_missing_data() -> None:
+def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> None:
     draft = pre_market.build_report(_context())
 
     expected_titles = [
@@ -72,6 +72,7 @@ def test_full_report_has_six_grounded_sections_and_explicit_missing_data() -> No
         "今日焦点事件",
         "今日重点关注",
         "持仓今日影响",
+        "操作参考",
         "今日操作提醒",
         "一句话总结",
     ]
@@ -81,13 +82,15 @@ def test_full_report_has_six_grounded_sections_and_explicit_missing_data() -> No
         "2. 今日焦点事件：招商银行今日除权，预计低开。",
         "3. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
         "4. 持仓今日影响：招商银行(600036)现金分红除权，价格可能出现技术性调整；现金到账日为2026-09-04，实际收益以到账和税费为准。",
-        "5. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
-        "6. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
+        "5. 操作参考：招商银行今日除权，若除权后价格偏低，可关注填权行情；易方达消费行业今日15:00前可申赎，请留意截止时间。",
+        "6. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
+        "7. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
     ]
     assert draft["status"] == "PARTIAL"
     assert draft["quality"] == "FRESH"
     assert [item["quality"] for item in draft["items"]] == [
         "UNAVAILABLE",
+        "FRESH",
         "FRESH",
         "FRESH",
         "FRESH",
@@ -117,6 +120,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
         "📊 持仓影响：暂无持仓",
         "⏰ 今日提醒：今日无申赎截止提醒",
         "🎯 今日焦点：今日暂无重大事件关注",
+        "🧭 操作参考：今日无明确操作参考",
         "💡 一句话总结：暂无",
     ]
     assert len(push) <= 200
@@ -303,7 +307,8 @@ def test_push_renders_real_overnight_data_with_natural_prefix() -> None:
     assert lines[2].startswith("📊 持仓影响：")
     assert lines[3].startswith("⏰ 今日提醒：")
     assert lines[4].startswith("🎯 今日焦点：")
-    assert lines[5].startswith("💡 一句话总结：")
+    assert lines[5].startswith("🧭 操作参考：")
+    assert lines[6].startswith("💡 一句话总结：")
     assert len(pre_market.format_push_content(context)) <= 200
 
 
@@ -687,3 +692,199 @@ def test_focus_announcement_title_keeps_company_short_form() -> None:
         ],
     )
     assert pre_market.focus_event_text(context) == "贵州茅台发布2026年半年度报告"
+
+
+# --------------------------------------------------------------------------- #
+# 操作参考：规则引擎（除权 > 公告 > 估值过期 > 基金申赎），同标取最高
+# --------------------------------------------------------------------------- #
+
+
+def _advice_context(
+    *,
+    positions=None,
+    actions=(),
+    announcements=(),
+    profiles=(),
+    rules=(),
+    report_date="",
+) -> dict:
+    return {
+        "positions": positions
+        if positions is not None
+        else [
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "100",
+                "quality": "FRESH",
+                "weight": "30.00",
+            },
+            {
+                "instrumentId": "b",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "type": "场外基金",
+                "quantity": "1000",
+                "quality": "FRESH",
+                "weight": "8.00",
+            },
+        ],
+        "marketSentiment": {"qualityStatus": "FRESH"},
+        "preMarket": {
+            "reportDate": report_date,
+            "corporateActions": list(actions),
+            "announcements": list(announcements),
+            "fundProfiles": list(profiles),
+            "fundCutoffRules": list(rules),
+            "usIndices": [],
+            "a50Future": None,
+            "economicEvents": [],
+            "subscriptionRedemptionChanges": [],
+        },
+    }
+
+
+def test_advice_keeps_only_highest_priority_event_per_instrument() -> None:
+    """同一标的（除权+公告+估值过期）只保留优先级最高的除权。"""
+    context = _advice_context(
+        report_date="2026-09-02",
+        actions=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "actionType": "CASH_DIVIDEND",
+                "exDate": "2026-09-02",
+            }
+        ],
+        announcements=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "title": "招商银行2026年半年度报告",
+                "date": "2026-09-02",
+            }
+        ],
+    )
+    context["positions"][0]["quality"] = "STALE"
+    assert pre_market.operation_advice_text(context) == (
+        "招商银行今日除权，若除权后价格偏低，可关注填权行情"
+    )
+
+
+def test_advice_fund_suspension_and_deadline() -> None:
+    """基金暂停申购 → 建议勿操作；正常+截止 → 留意截止时间。"""
+    suspended = _advice_context(
+        positions=[
+            {
+                "instrumentId": "f",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "type": "场外基金",
+                "quantity": "1",
+            }
+        ],
+        profiles=[
+            {
+                "instrumentId": "f",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "purchaseStatus": "SUSPENDED",
+                "redemptionStatus": "OPEN",
+            }
+        ],
+    )
+    assert (
+        "易方达消费行业今日暂停申购，建议暂勿操作"
+        in pre_market.operation_advice_text(suspended)
+    )
+
+    normal = _advice_context(
+        positions=[
+            {
+                "instrumentId": "f",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "type": "场外基金",
+                "quantity": "1",
+            }
+        ],
+        rules=[
+            {
+                "instrumentId": "f",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "salesChannel": "DEFAULT",
+                "cutoffTime": "15:00:00",
+                "timezone": "Asia/Shanghai",
+            }
+        ],
+    )
+    assert (
+        "易方达消费行业今日15:00前可申赎，请留意截止时间"
+        in pre_market.operation_advice_text(normal)
+    )
+
+
+def test_advice_fallback_watch_and_no_data() -> None:
+    """有持仓无触发 → 保持观望；无持仓（数据不足）→ 今日无明确操作参考。"""
+    with_positions = _advice_context(
+        positions=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "1",
+            }
+        ]
+    )
+    assert (
+        pre_market.operation_advice_text(with_positions)
+        == "今日无明确操作参考，可保持观望"
+    )
+    assert (
+        pre_market.operation_advice_text(_advice_context(positions=[]))
+        == "今日无明确操作参考"
+    )
+
+
+def test_advice_limits_to_two_and_caps_phrase_length() -> None:
+    """最多输出 2 条、每条 ≤ 30 字。"""
+    context = _advice_context(
+        report_date="2026-09-02",
+        actions=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "actionType": "CASH_DIVIDEND",
+                "exDate": "2026-09-02",
+            }
+        ],
+        announcements=[
+            {
+                "instrumentId": "b",
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "title": "贵州茅台关于回购股份的进展公告",
+                "date": "2026-09-02",
+            }
+        ],
+        rules=[
+            {
+                "instrumentId": "110022-fund",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "salesChannel": "DEFAULT",
+                "cutoffTime": "15:00:00",
+                "timezone": "Asia/Shanghai",
+            }
+        ],
+    )
+    text = pre_market.operation_advice_text(context, limit=2)
+    assert text.count("；") <= 1
+    assert all(len(part) <= 30 for part in text.split("；"))

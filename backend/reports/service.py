@@ -607,6 +607,13 @@ async def build_report_context(
         announcements = await market_data.fetch_today_company_announcements(
             stock_symbols, report_date
         )
+        # 回填 instrumentId（复用上方 symbol→id 映射），供按持仓去重/排序/建议。
+        for announcement in announcements:
+            instrument_id = symbol_to_instrument.get(
+                str(announcement.get("symbol") or "").zfill(6)
+            )
+            if instrument_id:
+                announcement["instrumentId"] = instrument_id
 
         pre_market_context = {
             "usIndices": global_snapshot.get("usIndices", []),
