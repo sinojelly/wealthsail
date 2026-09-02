@@ -74,6 +74,37 @@ def test_post_accepts_only_symbol_and_rejects_extra_fields(transaction) -> None:
     added.assert_not_awaited()
 
 
+def test_post_auto_registration_fields_are_forwarded_to_service(transaction) -> None:
+    added = AsyncMock(
+        return_value={
+            "symbol": "110022",
+            "assetName": "易方达消费行业",
+            "assetType": "FUND",
+            "addedAt": "2026-09-01T00:00:00+00:00",
+        }
+    )
+    with patch("backend.watchlist.api.service.add_watchlist_item", new=added):
+        response = _client().post(
+            "/api/v1/watchlist",
+            json={
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "assetType": "FUND",
+                "market": "FUND_CN",
+                "currency": "CNY",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["assetType"] == "FUND"
+    added.assert_awaited_once()
+    kwargs = added.await_args.kwargs
+    assert kwargs["name"] == "易方达消费行业"
+    assert kwargs["asset_type"] == "FUND"
+    assert kwargs["market"] == "FUND_CN"
+    assert kwargs["currency"] == "CNY"
+
+
 def test_delete_decodes_symbol_path_and_uses_context_owned_user(transaction) -> None:
     removed = AsyncMock(
         return_value={

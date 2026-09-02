@@ -28,6 +28,34 @@ async def find_active_instrument(conn: Connection, symbol: str):
     )
 
 
+async def ensure_follow_instrument(
+    conn: Connection,
+    *,
+    symbol: str,
+    name: str,
+    asset_type: str,
+    market: str,
+    currency: str = "CNY",
+):
+    """Register a missing fund/ETF in the reference master (SECURITY DEFINER).
+
+    ``asset_type`` must be the internal enum value (``OFF_EXCHANGE_FUND`` /
+    ``EXCHANGE_FUND``) and ``market`` one accepted by the instruments CHECK
+    constraint (e.g. ``FUND_CN`` for OTC funds).  Returns the canonical
+    master row or ``None``.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM reference.ensure_watchlist_instrument($1, $2, $3, $4, $5)
+        """,
+        symbol.strip().upper(),
+        name,
+        asset_type,
+        market,
+        currency,
+    )
+
+
 async def list_watchlist(conn: Connection, user_id: str):
     return await conn.fetch(
         """

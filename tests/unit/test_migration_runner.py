@@ -32,8 +32,11 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 47
-    assert migrations[-1].path.name == "047_reference_fund_profiles.sql"
+    assert versions[-1] == 48
+    assert (
+        migrations[-1].path.name
+        == "048_reference_watchlist_instrument_registration.sql"
+    )
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -175,6 +178,30 @@ def test_047_adds_reference_fund_profiles_with_least_privilege() -> None:
     assert "GRANT INSERT" not in migration
     assert "GRANT UPDATE" not in migration
     assert "GRANT DELETE" not in migration
+
+
+def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "048_reference_watchlist_instrument_registration.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE OR REPLACE FUNCTION reference.ensure_watchlist_instrument",
+        "SECURITY DEFINER",
+        "SET search_path = reference, pg_catalog",
+        "INSERT INTO reference.instruments",
+        "INSERT INTO reference.instrument_aliases",
+        "ON CONFLICT DO NOTHING",
+        "GRANT EXECUTE ON FUNCTION reference.ensure_watchlist_instrument",
+    ):
+        assert contract in migration
+    assert "GRANT EXECUTE ON FUNCTION reference.ensure_watchlist_instrument" in (
+        migration
+    )
+    assert "GRANT INSERT ON reference.instruments" not in migration
+    assert "GRANT INSERT ON reference.instrument_aliases" not in migration
+    assert "GRANT EXECUTE" in migration and "TO wealthsail_api" in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
