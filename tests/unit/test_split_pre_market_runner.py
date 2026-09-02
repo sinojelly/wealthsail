@@ -54,9 +54,7 @@ class _Pool:
 
 
 def test_parse_business_job_key_reconstructs_phase_and_audience() -> None:
-    phase, user = parse_business_job_key(
-        "job:job-1:2026-09-02:PRE_MARKET_MACRO"
-    )
+    phase, user = parse_business_job_key("job:job-1:2026-09-02:PRE_MARKET_MACRO")
     assert phase == "PRE_MARKET_MACRO" and user is None
 
     phase, user = parse_business_job_key(
@@ -123,7 +121,9 @@ async def test_macro_phase_runs_once_per_tenant_via_public_session(
     pool = _Pool(jobs)
     now = datetime(2026, 9, 2, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-    outcomes = await run_session(pool, Settings(_env_file=None), "PRE_MARKET_MACRO", now)
+    outcomes = await run_session(
+        pool, Settings(_env_file=None), "PRE_MARKET_MACRO", now
+    )
 
     assert outcomes == {"tenant-1": "COMPLETED:report=report-1"}
     captured["generate"].assert_awaited_once()
@@ -190,7 +190,9 @@ async def test_personalized_phase_skips_members_without_personal_context(
     jobs = [{"id": "job-1", "tenant_id": "tenant-1", "job_name": "pre-market"}]
     pool = _Pool(jobs)
     # Only one active member here: it has no personal context to report.
-    monkeypatch.setattr(runner, "_active_tenant_members", AsyncMock(return_value=["user-1"]))
+    monkeypatch.setattr(
+        runner, "_active_tenant_members", AsyncMock(return_value=["user-1"])
+    )
     now = datetime(2026, 9, 2, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     outcomes = await run_session(
@@ -209,7 +211,9 @@ async def test_already_terminal_key_returns_skip_without_generating(
 ) -> None:
     captured, install = harness()
     install(monkeypatch)
-    monkeypatch.setattr(runner, "_active_tenant_members", AsyncMock(return_value=["user-1"]))
+    monkeypatch.setattr(
+        runner, "_active_tenant_members", AsyncMock(return_value=["user-1"])
+    )
 
     async def claim_none(*_a, **_k):
         return None

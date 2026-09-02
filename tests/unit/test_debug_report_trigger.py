@@ -1,6 +1,7 @@
 """Controlled one-shot report trigger contracts."""
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.debug import api as debug_api
 from backend.debug import service as debug_service
+from backend.reports import service as reports_service
 from backend.dependencies import (
     get_pool,
     get_request_id,
@@ -213,6 +215,61 @@ async def test_debug_personalized_phase_returns_null_for_empty_context(
 
     assert result == {"reportId": None, "outboxId": None}
     personalized.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> None:
+    """Regression: the personalized debug path must reach the real generator
+    without an unsupported ``actor_type`` kwarg.  The generator only accepts
+    ``job_run_id`` and derives ``actor_type`` internally, so the previous call
+    raised ``TypeError`` in production while the mocked tests stayed green.
+    """
+
+    @asynccontextmanager
+    async def debug_txn(*_a, **_k):
+        yield MembershipConnection(active=True)
+
+    @asynccontextmanager
+    async def gen_txn(*_a, **_k):
+        yield SimpleNamespace()
+
+    captured: dict[str, object] = {}
+
+    async def fake_context(
+        conn, tenant_id, session, *, audience_user_id=None, asset_scope=None
+    ):
+        captured["audience"] = audience_user_id
+        captured["scope"] = asset_scope
+        return {"positions": [{"instrumentId": "inst-1"}], "watchlist": []}
+
+    async def fake_generate(*_a, **kwargs):
+        captured["generate_kwargs"] = kwargs
+        return {"id": "rep-1", "_deliveryOutboxId": "ob-1"}
+
+    monkeypatch.setattr(debug_service, "tenant_transaction", debug_txn)
+    monkeypatch.setattr(
+        debug_service.pre_market_personalized, "tenant_transaction", gen_txn
+    )
+    monkeypatch.setattr(reports_service, "build_report_context", fake_context)
+    monkeypatch.setattr(reports_service, "generate_report", fake_generate)
+
+    result = await debug_service.trigger_report_once(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "PRE_MARKET",
+        target_user_id=TARGET_ID,
+        phase="PERSONALIZED",
+    )
+
+    assert result == {"reportId": "rep-1", "outboxId": "ob-1"}
+    assert captured["audience"] == TARGET_ID
+    assert captured["generate_kwargs"]["report_variant"] == "PRE_MARKET_PERSONALIZED"
+    assert captured["generate_kwargs"]["audience_user_id"] == TARGET_ID
+    assert captured["generate_kwargs"]["delivery_user_id"] == TARGET_ID
+    # The real generator must own the asset scope, not the caller's role.
+    assert captured["scope"].kind == "MINE"
+    assert str(captured["scope"].owner_user_id) == TARGET_ID
 
 
 @pytest.mark.asyncio

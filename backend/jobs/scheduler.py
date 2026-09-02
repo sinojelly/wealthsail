@@ -52,9 +52,7 @@ class SessionSchedule:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "phase", self.phase or self.session)
-        object.__setattr__(
-            self, "public_session", self.public_session or self.session
-        )
+        object.__setattr__(self, "public_session", self.public_session or self.session)
 
 
 SCHEDULES: tuple[SessionSchedule, ...] = (
@@ -103,8 +101,7 @@ def is_due(schedule: SessionSchedule, now: datetime) -> bool:
         afternoon_start = now.replace(hour=13, minute=0, second=0, microsecond=0)
         afternoon_end = now.replace(hour=15, minute=0, second=0, microsecond=0)
         inside_session = (
-            morning_start <= now < morning_end
-            or afternoon_start <= now < afternoon_end
+            morning_start <= now < morning_end or afternoon_start <= now < afternoon_end
         )
         if not inside_session:
             return False
@@ -170,9 +167,7 @@ class Scheduler:
 
     def start(self) -> None:
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(
-                self._loop(), name="wealthsail-scheduler"
-            )
+            self._task = asyncio.create_task(self._loop(), name="wealthsail-scheduler")
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -183,7 +178,9 @@ class Scheduler:
                 pass
 
     async def _loop(self) -> None:
-        logger.info("scheduler started (tick=%.1fs)", self._settings.scheduler_tick_seconds)
+        logger.info(
+            "scheduler started (tick=%.1fs)", self._settings.scheduler_tick_seconds
+        )
         while True:
             try:
                 await self._tick()
@@ -200,8 +197,12 @@ class Scheduler:
         due = [schedule for schedule in SCHEDULES if is_due(schedule, now)]
         if not due:
             return
-        if self._trading_day_check is not None and not await self._trading_day_check(now):
-            logger.info("calendar marks %s as non-trading; sessions skipped", now.date())
+        if self._trading_day_check is not None and not await self._trading_day_check(
+            now
+        ):
+            logger.info(
+                "calendar marks %s as non-trading; sessions skipped", now.date()
+            )
             return
         dispatches: list[tuple[SessionSchedule, tuple[str, str]]] = []
         for schedule in due:

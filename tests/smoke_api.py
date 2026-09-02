@@ -82,7 +82,16 @@ def main() -> int:
         f"/reports/list?tradeDate={seed_trade_date}&session=PRE_MARKET",
         headers=headers,
     )
-    check("reports/list filter PRE_MARKET", r.status_code == 200 and len(r.json()["data"]) == 1)
+    pre_market = r.json()["data"] if r.status_code == 200 else []
+    check("reports/list filter PRE_MARKET", r.status_code == 200 and len(pre_market) >= 1)
+    # Split PRE_MARKET yields a tenant-wide macro report (audience NULL) plus a
+    # per-user personalized report when the current user has holdings/watchlist;
+    # every returned row must still belong to the PRE_MARKET public session.
+    check(
+        "reports/list PRE_MARKET rows stay on PRE_MARKET session",
+        all(x["session"] == "PRE_MARKET" for x in pre_market),
+        str([x.get("session") for x in pre_market]),
+    )
 
     r = client.get("/reports/72000000-0000-0000-0000-000000000002", headers=headers)
     check("reports/{id} detail 200", r.status_code == 200, r.text[:200])

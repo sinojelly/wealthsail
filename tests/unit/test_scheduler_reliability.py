@@ -44,9 +44,7 @@ def test_intraday_business_key_is_idempotent_per_five_minute_bucket() -> None:
     assert business_job_key("job-7", "INTRADAY", first) != business_job_key(
         "job-7", "INTRADAY", next_bucket
     )
-    assert business_job_key("job-7", "INTRADAY", first).endswith(
-        ":INTRADAY:0930"
-    )
+    assert business_job_key("job-7", "INTRADAY", first).endswith(":INTRADAY:0930")
 
 
 def test_fixed_session_has_bounded_restart_catch_up_window() -> None:
@@ -110,7 +108,9 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_times() -> None:
+async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_times() -> (
+    None
+):
     """Temporary sessions and an 18:00 drift must not enter production scheduling."""
     shanghai = ZoneInfo("Asia/Shanghai")
     dispatched: list[str] = []
@@ -233,9 +233,7 @@ async def test_job_completion_uses_lease_token_compare_and_set() -> None:
             return "UPDATE 1"
 
     conn = Conn()
-    updated = await finish_job_run(
-        _Pool(conn), "run-1", "lease-1", status="COMPLETED"
-    )
+    updated = await finish_job_run(_Pool(conn), "run-1", "lease-1", status="COMPLETED")
 
     assert updated is True
     assert "lease_token = $2" in conn.sql
@@ -330,4 +328,3 @@ async def test_both_pre_market_phases_skip_exchange_holidays() -> None:
     assert due_at("PRE_MARKET_MACRO", now) is True
     await scheduler._tick()
     assert dispatched == []
-

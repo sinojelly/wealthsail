@@ -146,9 +146,7 @@ async def run_recoverable_jobs(
         key = str(job["job_key"])
         session = str(job["report_session"])
         try:
-            outcomes[key] = await _execute_with_lease(
-                pool, settings, job, key, session
-            )
+            outcomes[key] = await _execute_with_lease(pool, settings, job, key, session)
         except Exception as exc:  # noqa: BLE001 -- isolate recoverable runs
             logger.exception("recovery failed for %s", key)
             outcomes[key] = f"FAILED:{exc.__class__.__name__}"
@@ -253,9 +251,7 @@ async def finish_job_run(
     return result.endswith("1")
 
 
-async def _heartbeat_loop(
-    pool: Pool, lease: JobLease, lease_seconds: int
-) -> None:
+async def _heartbeat_loop(pool: Pool, lease: JobLease, lease_seconds: int) -> None:
     interval = max(1.0, lease_seconds / 3)
     while True:
         await asyncio.sleep(interval)
@@ -295,17 +291,13 @@ async def run_session(
             members = await _active_tenant_members(pool, tenant_id)
             for user_id in members:
                 label = f"{tenant_id}:{user_id}"
-                key = business_job_key(
-                    str(job["id"]), phase, now, user_id=user_id
-                )
+                key = business_job_key(str(job["id"]), phase, now, user_id=user_id)
                 try:
                     outcomes[label] = await _execute_with_lease(
                         pool, settings, job, key, public_session
                     )
                 except Exception as exc:  # noqa: BLE001 -- isolate members
-                    logger.exception(
-                        "personalized job failed for %s: %s", label, phase
-                    )
+                    logger.exception("personalized job failed for %s: %s", label, phase)
                     outcomes[label] = f"FAILED:{exc.__class__.__name__}"
             continue
         key = business_job_key(str(job["id"]), phase, now)

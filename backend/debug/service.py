@@ -126,7 +126,7 @@ async def _trigger_personalized(
         user_id=target, tenant_id=ctx.tenant_id, tenant_role="OWNER"
     )
     report = await pre_market_personalized.generate_pre_market_personalized(
-        pool, member_ctx, settings, actor_type="USER"
+        pool, member_ctx, settings
     )
     if report is None:
         return {"reportId": None, "outboxId": None}
