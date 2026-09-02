@@ -44,6 +44,7 @@ _QUALITY_PRIORITY = {
     md.Q_UNAVAILABLE: 3,
 }
 
+
 def _source_name(observation: md.Observation) -> str:
     if observation.field_code == md.F_ESTIMATED_NAV:
         return md.ESTIMATOR_SOURCE_NAME
@@ -82,15 +83,17 @@ async def refresh_market(
     # instrument_id → ticker, asset_type
     by_id = {str(i["instrument_id"]): i for i in instruments}
     ticker_to_id = {
-        i["ticker"]: str(i["instrument_id"])
-        for i in instruments
-        if i["ticker"]
+        i["ticker"]: str(i["instrument_id"]) for i in instruments if i["ticker"]
     }
 
     # Scope: INTRADAY → holdings only; FUND_1430 → funds only; others → all.
     stock_symbols = {i["ticker"] for i in instruments if i["asset_type"] == "CN_STOCK"}
-    etf_symbols = {i["ticker"] for i in instruments if i["asset_type"] == "EXCHANGE_FUND"}
-    fund_symbols = {i["ticker"] for i in instruments if i["asset_type"] == "OFF_EXCHANGE_FUND"}
+    etf_symbols = {
+        i["ticker"] for i in instruments if i["asset_type"] == "EXCHANGE_FUND"
+    }
+    fund_symbols = {
+        i["ticker"] for i in instruments if i["asset_type"] == "OFF_EXCHANGE_FUND"
+    }
 
     if session == "INTRADAY":
         held = {str(h["instrument_id"]) for h in holdings}
@@ -136,15 +139,18 @@ async def refresh_market(
         # master.  Unsupported/HK components remain in disclosure metadata and
         # reduce coverage instead of silently disappearing.
         component_codes = {
-            row["component_code"] for row in fund_disclosures
+            row["component_code"]
+            for row in fund_disclosures
             if row["component_code"] in ticker_to_id
         }
         stock_symbols = {
-            code for code in component_codes
+            code
+            for code in component_codes
             if by_id[ticker_to_id[code]]["asset_type"] == "CN_STOCK"
         }
         etf_symbols = {
-            code for code in component_codes
+            code
+            for code in component_codes
             if by_id[ticker_to_id[code]]["asset_type"] == "EXCHANGE_FUND"
         }
 
@@ -171,8 +177,14 @@ async def refresh_market(
 
     # ---- persist: source snapshot + observations ---------------------------
     async with system_connection(pool) as conn:
-        quality = md.Q_FRESH if any(o.quality_status == md.Q_FRESH for o in observations) else (
-            md.Q_STALE if any(o.quality_status == md.Q_STALE for o in observations) else md.Q_UNAVAILABLE
+        quality = (
+            md.Q_FRESH
+            if any(o.quality_status == md.Q_FRESH for o in observations)
+            else (
+                md.Q_STALE
+                if any(o.quality_status == md.Q_STALE for o in observations)
+                else md.Q_UNAVAILABLE
+            )
         )
         retrieval_key = f"{session}:{started.strftime('%Y%m%d%H%M%S')}"
         for source_name in md.source_names():
@@ -219,11 +231,18 @@ async def refresh_market(
         if not instrument_id:
             continue
         current = quotes_by_instrument.get(instrument_id)
-        if current is None or (
-            _FIELD_PRIORITY.get(obs.field_code, 9) < _FIELD_PRIORITY.get(current["field"], 9)
-        ) or (
-            _FIELD_PRIORITY.get(obs.field_code, 9) == _FIELD_PRIORITY.get(current["field"], 9)
-            and _QUALITY_PRIORITY.get(obs.quality_status, 9) < _QUALITY_PRIORITY.get(current["quality"], 9)
+        if (
+            current is None
+            or (
+                _FIELD_PRIORITY.get(obs.field_code, 9)
+                < _FIELD_PRIORITY.get(current["field"], 9)
+            )
+            or (
+                _FIELD_PRIORITY.get(obs.field_code, 9)
+                == _FIELD_PRIORITY.get(current["field"], 9)
+                and _QUALITY_PRIORITY.get(obs.quality_status, 9)
+                < _QUALITY_PRIORITY.get(current["quality"], 9)
+            )
         ):
             quotes_by_instrument[instrument_id] = {
                 "field": obs.field_code,
@@ -257,7 +276,10 @@ async def refresh_market(
     result["tenantsUpdated"] = tenants_updated
     logger.info(
         "行情刷新 %s: 抓取 %d / 有效 %d, 更新租户 %d",
-        session, len(observations), len(usable), tenants_updated,
+        session,
+        len(observations),
+        len(usable),
+        tenants_updated,
     )
     return result
 
@@ -337,6 +359,18 @@ def _build_fund_estimates(
             residual_benchmark_return=Decimal("0"),
             as_of=as_of,
         )
+        # 持仓披露超过 90 天（约一个完整披露季）时，即使计算成功也标记 STALE：
+        # 中心值与区间仍展示，但说明参考价值有限，绝不把旧披露当作新鲜数据。
+        quality_status = estimate.quality_status
+        explanation = estimate.explanation
+        if estimate.value is not None and disclosure_date is not None:
+            disclosure_age_days = (as_of.date() - disclosure_date).days
+            if disclosure_age_days > 90:
+                quality_status = md.Q_STALE
+                explanation = (
+                    f"持仓披露日为 {disclosure_date}（距今 {disclosure_age_days} 天，"
+                    "超过 90 天），估值参考价值有限。"
+                ) + explanation
         estimates.append(
             md.Observation(
                 symbol=fund_symbol,
@@ -346,7 +380,7 @@ def _build_fund_estimates(
                 lower_value=estimate.lower_value,
                 upper_value=estimate.upper_value,
                 as_of=as_of,
-                quality_status=estimate.quality_status,
+                quality_status=quality_status,
                 unit="元/份",
                 method_version=estimate.method_version,
                 origin_uri="internal:fund-estimator",
@@ -357,7 +391,7 @@ def _build_fund_estimates(
                     "confirmedNav": str(nav.value),
                     "confirmedNavAsOf": nav.as_of.isoformat(),
                     "residualBenchmarkReturn": "0",
-                    "explanation": estimate.explanation,
+                    "explanation": explanation,
                 },
             )
         )
@@ -366,7 +400,11 @@ def _build_fund_estimates(
 
 def _quality_to_snapshot(quality: str) -> str:
     """Observation quality → position_snapshot data_quality_status."""
-    return quality if quality in ("FRESH", "ESTIMATED", "STALE", "UNAVAILABLE") else "UNAVAILABLE"
+    return (
+        quality
+        if quality in ("FRESH", "ESTIMATED", "STALE", "UNAVAILABLE")
+        else "UNAVAILABLE"
+    )
 
 
 async def _tenant_owner_user(pool: Pool, tenant_id: str) -> str | None:
@@ -389,7 +427,6 @@ async def fill_trading_calendar(pool: Pool) -> int:
     fallback true, to be corrected on the next run after publication.
     """
     import asyncio
-
 
     def _fetch_dates() -> set[str]:
         import akshare
@@ -508,10 +545,10 @@ async def get_market_hot(conn) -> dict:
         }
     quality = str(row["quality_status"])
     retrieved_at = row["retrieved_at"]
-    if (
-        quality in {md.Q_FRESH, md.Q_ESTIMATED}
-        and retrieved_at < now_shanghai() - timedelta(minutes=10)
-    ):
+    if quality in {
+        md.Q_FRESH,
+        md.Q_ESTIMATED,
+    } and retrieved_at < now_shanghai() - timedelta(minutes=10):
         quality = md.Q_STALE
     return {
         "items": row["items"],
@@ -532,8 +569,7 @@ async def get_market_sentiment(conn) -> dict:
         persisted_quality = str(r["quality_status"])
         quality = (
             "STALE"
-            if persisted_quality == "FRESH"
-            and r["trade_date"] != now_shanghai().date()
+            if persisted_quality == "FRESH" and r["trade_date"] != now_shanghai().date()
             else persisted_quality
         )
         return {

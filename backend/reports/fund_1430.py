@@ -102,6 +102,17 @@ def _overview(metrics: list[dict]) -> str:
     return f"{'；'.join(values)}。{_ESTIMATION_SOURCE}"
 
 
+def _coverage_label(coverage: Decimal | None) -> str:
+    """按持仓覆盖率给出参考价值标签（不臆造，仅对真实覆盖率分级）。"""
+    if coverage is None:
+        return _MISSING
+    if coverage >= Decimal("85"):
+        return "较高"
+    if coverage >= Decimal("60"):
+        return "中等"
+    return "有限"
+
+
 def _confidence(context: dict) -> str:
     estimates = [
         item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
@@ -113,10 +124,13 @@ def _confidence(context: dict) -> str:
         metadata = estimate.get("metadata") or {}
         coverage = _safe_decimal(metadata.get("coveragePct"))
         coverage_text = f"{coverage:.2f}%" if coverage is not None else _MISSING
+        coverage_label = _coverage_label(coverage)
+        disclosed_on = str(metadata.get("disclosedOn") or _MISSING)
         confirmed_as_of = str(metadata.get("confirmedNavAsOf") or _MISSING)
         quality = str(estimate.get("quality") or _MISSING)
         values.append(
             f"{_label(estimate)}覆盖率{coverage_text}，"
+            f"基于{disclosed_on}披露持仓，参考价值{coverage_label}，"
             f"估值截至{_display_time(estimate.get('asOf'))}，"
             f"最近正式净值截至{confirmed_as_of}，质量{quality}"
         )

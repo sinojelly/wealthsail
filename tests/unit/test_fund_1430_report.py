@@ -147,6 +147,17 @@ def test_exact_three_percent_does_not_trigger_action_threshold() -> None:
     assert "仅因估值下跌加仓" not in action["body"]
 
 
+def test_confidence_renders_disclosure_date_and_coverage_value_label() -> None:
+    """估值可信度须展示持仓披露日期与参考价值分级（覆盖率 60%~85% → 中等）。"""
+    draft = _generator().build_report(_context())
+    confidence = next(item for item in draft["items"] if item["title"] == "估值可信度")
+
+    assert "覆盖率72.50%" in confidence["body"]
+    assert "基于2026-06-30披露持仓" in confidence["body"]
+    assert "参考价值中等" in confidence["body"]
+    assert "最近正式净值截至2026-08-31" in confidence["body"]
+
+
 def test_full_report_limits_details_but_discloses_additional_funds() -> None:
     context = _context()
     third_estimate = {
