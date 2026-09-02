@@ -240,6 +240,55 @@ async def insert_shared_market_brief(
     return existing
 
 
+async def get_shared_pre_market_brief(
+    conn: asyncpg.Connection, trade_date: date
+) -> asyncpg.Record | None:
+    return await conn.fetchrow(
+        """
+        SELECT id, trade_date, draft, source_context, context_hash,
+               quality_status, generated_at
+          FROM reporting.shared_pre_market_briefs
+         WHERE trade_date = $1
+        """,
+        trade_date,
+    )
+
+
+async def insert_shared_pre_market_brief(
+    conn: asyncpg.Connection,
+    *,
+    trade_date: date,
+    draft: dict,
+    source_context: dict,
+    context_hash: str,
+    quality_status: str,
+    generated_at: object,
+) -> asyncpg.Record:
+    row = await conn.fetchrow(
+        """
+        INSERT INTO reporting.shared_pre_market_briefs
+            (trade_date, draft, source_context, context_hash, quality_status,
+             generated_at)
+        VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6)
+        ON CONFLICT (trade_date) DO NOTHING
+        RETURNING id, trade_date, draft, source_context, context_hash,
+                  quality_status, generated_at
+        """,
+        trade_date,
+        json.dumps(draft, ensure_ascii=False, default=str),
+        json.dumps(source_context, ensure_ascii=False, default=str),
+        context_hash,
+        quality_status,
+        generated_at,
+    )
+    if row is not None:
+        return row
+    existing = await get_shared_pre_market_brief(conn, trade_date)
+    if existing is None:
+        raise RuntimeError("shared pre-market brief insert lost without a winner")
+    return existing
+
+
 async def list_reports(
     conn: asyncpg.Connection,
     tenant_id: str,

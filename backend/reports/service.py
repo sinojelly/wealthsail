@@ -36,7 +36,13 @@ from backend.integrations.model_gateway import (
 )
 from backend.market import service as market_service
 from backend.portfolio.service import get_positions, get_summary
-from backend.reports import fund_1430, pre_market, repository, shared_market_brief
+from backend.reports import (
+    fund_1430,
+    pre_market,
+    pre_market_macro,
+    repository,
+    shared_market_brief,
+)
 
 logger = logging.getLogger("wealthsail.reports")
 
@@ -293,9 +299,13 @@ async def generate_report(
                     actor_user_id=ctx.user_id,
                 )
 
-    # Phase 2: PRE_MARKET and FUND_1430 are deterministic. The other sessions
-    # keep personalized generation for holdings and a shared brief otherwise.
-    if session == "PRE_MARKET":
+    # Phase 2: the split pre-market macro half is one cached tenant-neutral
+    # brief per trade date. PRE_MARKET and FUND_1430 remain deterministic and
+    # the other sessions keep personalized generation for holdings and a
+    # shared brief otherwise.
+    if report_variant == "PRE_MARKET_MACRO":
+        generation_mode = "PRE_MARKET_MACRO_SHARED"
+    elif session == "PRE_MARKET":
         generation_mode = "PRE_MARKET_DETERMINISTIC"
     elif session == "FUND_1430":
         generation_mode = "FUND_1430_DETERMINISTIC"
@@ -307,7 +317,16 @@ async def generate_report(
     shared_cache_hit = False
     shared_context_hash: str | None = None
     push_content: str | None = None
-    if generation_mode == "PRE_MARKET_DETERMINISTIC":
+    if generation_mode == "PRE_MARKET_MACRO_SHARED":
+        macro_result = await pre_market_macro.get_or_generate(pool, trade_date)
+        draft = macro_result.draft
+        model_result = macro_result.model_result
+        error_class = macro_result.error_class
+        shared_brief_id = macro_result.id
+        shared_context_hash = macro_result.context_hash
+        shared_cache_hit = macro_result.cache_hit
+        push_content = pre_market_macro.format_push_content(draft)
+    elif generation_mode == "PRE_MARKET_DETERMINISTIC":
         draft = pre_market.build_report(context)
         push_content = pre_market.format_push_content(context)
         model_result = None
@@ -962,6 +981,9 @@ def _delivery_audit_details(
         details["generatorVersion"] = "pre-market-deterministic-v1"
     elif generation_mode == "FUND_1430_DETERMINISTIC":
         details["generatorVersion"] = "fund-1430-deterministic-v1"
+    elif generation_mode == "PRE_MARKET_MACRO_SHARED":
+        details["generatorProvider"] = pre_market_macro.PROVIDER
+        details["generatorVersion"] = pre_market_macro.MODEL
     if shared_brief_id is not None:
         details["sharedBriefId"] = shared_brief_id
         details["sharedCacheHit"] = bool(shared_cache_hit)
@@ -1010,6 +1032,7 @@ async def _persist_generation(
     if generation_mode in {
         "PRE_MARKET_DETERMINISTIC",
         "FUND_1430_DETERMINISTIC",
+        "PRE_MARKET_MACRO_SHARED",
     }:
         # Deterministic structured-data generation is not a model execution.
         # Keep model_run_id nullable and record the generator version in the

@@ -204,6 +204,40 @@ async def get_sector_focus_snapshot() -> dict:
     }
 
 
+PRE_MARKET_GLOBAL_METHOD_VERSION = "pre-market-global/v1"
+PRE_MARKET_GLOBAL_SOURCE_NAME = "unavailable"
+
+
+def _unavailable_pre_market_global(retrieved_at: datetime) -> dict:
+    """The only honest answer while no governed overnight provider exists."""
+    return {
+        "usIndices": [],
+        "a50Future": None,
+        "economicEvents": [],
+        "globalEvents": [],
+        "qualityStatus": Q_UNAVAILABLE,
+        "sourceName": PRE_MARKET_GLOBAL_SOURCE_NAME,
+        "sourceAsOf": None,
+        "retrievedAt": retrieved_at.isoformat(),
+        "methodVersion": PRE_MARKET_GLOBAL_METHOD_VERSION,
+    }
+
+
+async def get_pre_market_global_snapshot() -> dict:
+    """Return the governed overnight global snapshot for the 08:30 brief.
+
+    Overnight coverage (US indices, A50 futures, economic calendars and global
+    events) has no governed provider configured yet. Guessing secids or
+    inferring moves from unrelated feeds would put unverifiable numbers in a
+    published report, so the adapter fails closed: every field is empty or
+    null and ``qualityStatus`` is ``UNAVAILABLE``, which downstream renderers
+    display as 暂无. When a provider is onboarded it must populate the same
+    keys and keep this fallback for timeout, parse failure and unsupported
+    payloads.
+    """
+    return _unavailable_pre_market_global(datetime.now(timezone.utc))
+
+
 @dataclass(frozen=True)
 class Observation:
     """Normalized market observation from an external source."""
