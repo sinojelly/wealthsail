@@ -233,58 +233,79 @@ _US_INDEX_ALIASES = {
     "标准普尔500指数": "sp500",
 }
 
+# 美股三大指数在 AkShare 新浪源（index_us_stock_sina）下的 symbol 与中文名。
+# 道琼斯 .DJI / 纳斯达克 .IXIC / 标普500 .INX。
+_US_SINA_SYMBOLS = (
+    (".DJI", "道琼斯", "dow"),
+    (".IXIC", "纳斯达克", "nasdaq"),
+    (".INX", "标普500", "sp500"),
+)
+
 
 async def fetch_us_overnight_indices() -> list[dict]:
-    """美股主要指数隔夜涨跌幅（AkShare ``index_us_spot`` 优先，失败降级为空）。
+    """美股三大指数最新涨跌幅（AkShare ``index_us_stock_sina`` 新浪源）。
 
-    返回 ``[{name, changePct(float %), price}]``。任何异常均降级为空列表——
-    不抛出、不伪造数据，下游渲染为「暂无」。
+    逐标的调用 ``ak.index_us_stock_sina``，取历史序列最新一条，用最新收盘与前一
+    收盘计算涨跌幅 ``(close[-1]-close[-2])/close[-2]*100``。任一标的超时或解析
+    失败仅跳过该标的；全部失败返回空列表（下游渲染「暂无」），不抛出、不伪造数据。
     """
     try:
-        df = await asyncio.to_thread(_ak_import().index_us_spot)
+        ak = _ak_import()
     except Exception as exc:  # noqa: BLE001 — vendor outage degrades
-        logger.warning("akshare 美股指数抓取失败: %s", exc)
+        logger.warning("akshare 不可用，美股指数降级: %s", exc)
         return []
-    if df is None or getattr(df, "empty", True):
-        return []
-    if "名称" not in df.columns:
-        logger.warning("akshare 美股指数列结构变化: %s", list(df.columns))
-        return []
-    change_col = (
-        "涨跌幅"
-        if "涨跌幅" in df.columns
-        else ("涨跌率" if "涨跌率" in df.columns else None)
-    )
-    if change_col is None:
-        logger.warning("akshare 美股指数缺少涨跌幅列: %s", list(df.columns))
-        return []
-    items: list[dict] = []
-    for _, row in df.iterrows():
-        name = str(row.get("名称") or "")
-        if name not in _US_INDEX_ALIASES:
-            continue
-        change = _num(row, change_col)
-        if change is None:
-            continue
-        items.append(
-            {
-                "name": name,
-                "changePct": change,
-                "price": _num(row, "最新价"),
-            }
-        )
-    return items
+    results: list[dict] = []
+    for symbol, name, _key in _US_SINA_SYMBOLS:
+        item = await _fetch_single_us_index(ak, symbol, name)
+        if item is not None:
+            results.append(item)
+    return results
+
+
+async def _fetch_single_us_index(ak, symbol: str, name: str) -> dict | None:
+    """单次抓取单个美股指数，失败降级 None。"""
+    try:
+        df = await asyncio.to_thread(ak.index_us_stock_sina, symbol)
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.warning("akshare 美股指数 %s 抓取失败: %s", symbol, exc)
+        return None
+    if df is None or getattr(df, "empty", True) or "close" not in df.columns:
+        return None
+    try:
+        closes = df["close"].dropna().astype(float)
+        if len(closes) < 2:
+            return None
+        latest, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
+        if not prev or not latest:
+            return None
+        return {
+            "name": name,
+            "changePct": (latest - prev) / prev * 100,
+            "price": latest,
+        }
+    except (ValueError, TypeError, AttributeError) as exc:
+        logger.warning("akshare 美股指数 %s 解析失败: %s", symbol, exc)
+        return None
+
+
+# 东财国际期货中「A50期指当月连续」的品种代码（futures_global_spot_em）。
+_EM_A50_SYMBOL = "CN00Y"
 
 
 async def fetch_a50_future() -> dict | None:
-    """富时中国 A50 期货（新加坡）最新涨跌幅。
+    """富时中国 A50 期货（新加坡交易所）最新涨跌幅。
 
-    优先 AkShare 海外期货接口，失败降级新浪实时；任何异常或不完整数据均降级为
-    ``None``（渲染为「暂无」）。标的代码/接口形态以后端实际可用为准。
+    抓取链（任一环节失败即降级，全部失败返回 ``None`` → 渲染为「暂无」）::
+
+        1. 新浪 hq.sinajs.cn hf_CHA50CFD   — 单请求、实时，按昨结算计算涨跌幅
+        2. 东财 futures_global_spot_em CN00Y — 官方涨跌幅（分页抓取，较重）
+
+    说明：AkShare ``futures_foreign_hist`` 的外盘代码表中**不含 A50**（仅有
+    FEF/FCPO 等 30 个品种），新浪 ``nfSA0`` 现已返回空串，故均不可用。
     """
-    a50 = await _fetch_a50_via_akshare()
+    a50 = await _fetch_sina_a50()
     if a50 is None:
-        a50 = await _fetch_sina_a50()
+        a50 = await _fetch_a50_via_em()
     return a50
 
 
@@ -299,9 +320,9 @@ _US_MARKET_KEYS = (
 async def fetch_pre_market_global_snapshot() -> dict:
     """盘前美股 + A50 真实涨跌幅快照（flat 格式，供盘前简报直接使用）。
 
-    美股：AkShare ``index_us_spot`` 过滤道琼斯 / 纳斯达克 / 标普500；
-    A50：AkShare ``futures_foreign_hist(symbol="新加坡富时A50")`` 优先，失败降级
-    新浪 ``hq.sinajs.cn/list=nfSA0``。任一数据源不可用对应字段降级
+    美股：AkShare ``index_us_stock_sina`` 取 .DJI/.IXIC/.INX 最新一条换算涨跌幅；
+    A50：新浪 ``hq.sinajs.cn/list=hf_CHA50CFD`` 优先，失败降级东财
+    ``futures_global_spot_em(CN00Y)``。任一数据源不可用对应字段降级
     （``us_markets`` 缺项 / ``a50=None``），绝不编造数字。
 
     返回::
@@ -342,37 +363,17 @@ async def fetch_pre_market_global_snapshot() -> dict:
     }
 
 
-async def _fetch_a50_via_akshare() -> dict | None:
-    try:
-        df = await asyncio.to_thread(
-            _ak_import().futures_foreign_hist, symbol="新加坡富时A50"
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.info("akshare A50 接口不可用，降级新浪: %s", exc.__class__.__name__)
-        return None
-    if df is None or getattr(df, "empty", True) or "收盘" not in df.columns:
-        return None
-    try:
-        closes = df["收盘"].dropna().astype(float)
-        if len(closes) < 2:
-            return None
-        latest, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
-        if not prev or not latest:
-            return None
-        return {
-            "name": "富时中国A50期货",
-            "changePct": (latest - prev) / prev * 100,
-            "price": latest,
-            "source": "akshare/a50",
-        }
-    except (ValueError, TypeError, AttributeError) as exc:
-        logger.warning("akshare A50 解析失败: %s", exc)
-        return None
-
-
 async def _fetch_sina_a50() -> dict | None:
-    """新浪实时 SGX A50（hq.sinajs.cn，GBK）。字段布局不符时降级 None。"""
-    url = "https://hq.sinajs.cn/list=nfSA0"
+    """新浪实时 SGX A50（``hq.sinajs.cn/list=hf_CHA50CFD``，GBK 编码）。
+
+    字段布局（已与东财 CN00Y 交叉验证：昨结算/今开/最高/最低/持仓量均一致）::
+
+        0 当前价, 1 买价, 2 卖价, 3 均价, 4 最高, 5 最低, 6 时间, 7 昨结算,
+        8 今开,  9 持仓量, 10 买量, 11 卖量, 12 日期, 13 名称, 14 成交量
+
+    涨跌幅按期货惯例以**昨结算价**为基准。字段不足或数值缺失时降级 ``None``。
+    """
+    url = "https://hq.sinajs.cn/list=hf_CHA50CFD"
     try:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
@@ -390,89 +391,118 @@ async def _fetch_sina_a50() -> dict | None:
     if '="' not in text:
         return None
     try:
-        fields = text.split('="', 1)[1].rstrip('";').split(",")
+        fields = text.split('="', 1)[1].rstrip('";\n').split(",")
     except Exception:  # noqa: BLE001
         return None
-    if len(fields) < 6:
+    if len(fields) < 14:
+        logger.warning("新浪 A50 字段数不足(%d): %s", len(fields), fields[:15])
         return None
-    name = fields[0]
-    # 新浪期货字段：0名称 1开盘 2昨收 3买价 4卖价 5最新价（与个股类似，容错取 5/2）
-    pre_close = _safe_float(fields[2])
-    price = _safe_float(fields[5]) or _safe_float(fields[3])
-    if price is None or price <= 0 or pre_close in (None, 0):
+    price = _safe_float(fields[0])
+    prev_settle = _safe_float(fields[7])
+    name = fields[13].strip()
+    if price is None or price <= 0 or prev_settle in (None, 0):
         return None
     return {
         "name": name or "富时中国A50期货",
-        "changePct": (price - pre_close) / pre_close * 100,
+        "changePct": (price - prev_settle) / prev_settle * 100,
         "price": price,
         "source": "sina/a50",
     }
 
 
-CHINA_DATA_BASE = "https://chinadata.live/api/v2/data"
+async def _fetch_a50_via_em() -> dict | None:
+    """东财国际期货实时行情中的 A50 当月连续（代码 ``CN00Y``）。
 
-# 盘前"经济数据"展示的宏观指标（China Data Portal 免费接口，无需鉴权，NBS 官方
-# 口径）。任一指标超时/缺失都跳过该指标；全部失败则返回空列表（渲染为「暂无」）。
-_ECONOMIC_INDICATORS = (
-    ("china-cpi", "中国CPI同比"),
-    ("china-pmi", "中国制造业PMI"),
+    ``futures_global_spot_em`` 单次返回全部国际期货（约 640 行、分页抓取），
+    故仅在新浪降级失败时使用；直接取用官方 ``涨跌幅``，无需自行换算。
+    """
+    try:
+        df = await asyncio.to_thread(_ak_import().futures_global_spot_em)
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.info("东财国际期货接口不可用: %s", exc.__class__.__name__)
+        return None
+    if df is None or getattr(df, "empty", True):
+        return None
+    if "代码" not in df.columns:
+        logger.warning("东财国际期货列结构变化: %s", list(df.columns))
+        return None
+    try:
+        rows = df[df["代码"].astype(str).str.strip() == _EM_A50_SYMBOL]
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("东财 A50 过滤失败: %s", exc)
+        return None
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    change = _num(row, "涨跌幅")
+    price = _num(row, "最新价")
+    if change is None:
+        return None
+    return {
+        "name": str(row.get("名称") or "富时中国A50期货"),
+        "changePct": change,
+        "price": price,
+        "source": "akshare/a50-em",
+    }
+
+
+# 盘前"经济数据"展示的宏观指标（AkShare 宏观接口，官方口径）。
+# 任一指标超时/缺失都跳过该指标；全部失败则返回空列表（渲染为「暂无」）。
+_ECONOMIC_AKSHARE_SPECS = (
+    # (akshare 函数名, 取值列, 展示名, 单位/后缀)
+    ("macro_china_cpi", "全国-同比增长", "中国CPI同比", "%"),
+    ("macro_china_pmi", "制造业-指数", "中国制造业PMI", ""),
 )
 
 
 async def fetch_economic_calendar() -> list[dict]:
-    """盘前经济数据：取 China Data Portal 最新一期宏观指标。
+    """盘前经济数据：取 AkShare 宏观接口最新一期 CPI / PMI。
 
-    来源为 NBS 官方口径（CPI 同比、制造业 PMI），免费、无需鉴权。返回
-    ``[{summary, title, name, date, value, unit, source}]``。任一指标超时或解析
-    失败都跳过；全部失败则返回空列表（下游渲染为「暂无」），绝不编造数字。
+    - CPI：``ak.macro_china_cpi`` 的「全国-同比增长」（CPI 同比）
+    - PMI：``ak.macro_china_pmi`` 的「制造业-指数」（制造业 PMI）
+
+    返回 ``[{summary, title, name, date, value, unit, source}]``。任一指标超时或
+    解析失败都跳过该指标；全部失败则返回空列表（下游渲染为「暂无」），绝不编造数字。
     """
     items: list[dict] = []
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-        for slug, label in _ECONOMIC_INDICATORS:
-            try:
-                resp = await client.get(f"{CHINA_DATA_BASE}/{slug}")
-                resp.raise_for_status()
-                payload = resp.json()
-            except (httpx.HTTPError, ValueError, TypeError) as exc:
-                logger.warning("经济数据抓取失败(%s): %s", slug, exc)
-                continue
-            item = _parse_economic_item(payload, label)
-            if item is not None:
-                items.append(item)
+    ak = _ak_import()
+    for func_name, col, label, suffix in _ECONOMIC_AKSHARE_SPECS:
+        try:
+            func = getattr(ak, func_name)
+            df = await asyncio.to_thread(func)
+        except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+            logger.warning("akshare 经济数据 %s 抓取失败: %s", func_name, exc)
+            continue
+        if df is None or getattr(df, "empty", True) or col not in df.columns:
+            logger.warning(
+                "akshare 经济数据 %s 列结构变化: %s",
+                func_name,
+                list(getattr(df, "columns", [])),
+            )
+            continue
+        try:
+            row = df.iloc[0]
+            value = _num(row, col)
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            logger.warning("akshare 经济数据 %s 解析失败: %s", func_name, exc)
+            continue
+        if value is None:
+            continue
+        date_str = str(row.get("月份") or "")
+        unit = suffix or ""
+        value_text = f"{value}{unit}" if unit else str(value)
+        items.append(
+            {
+                "summary": f"{label}（{date_str}）：{value_text}",
+                "title": label,
+                "name": label,
+                "date": date_str,
+                "value": value,
+                "unit": unit,
+                "source": "AkShare/macro",
+            }
+        )
     return items
-
-
-def _parse_economic_item(payload: object, label: str) -> dict | None:
-    """从 China Data Portal 数据集响应中解析最新一期指标。"""
-    if not isinstance(payload, dict) or not payload.get("success"):
-        return None
-    ds = payload.get("data")
-    if not isinstance(ds, dict):
-        return None
-    points = ds.get("data")
-    if not isinstance(points, list) or not points:
-        return None
-    dated = [p for p in points if isinstance(p, dict) and p.get("date") is not None]
-    if not dated:
-        return None
-    latest = max(dated, key=lambda p: str(p.get("date")))
-    value = latest.get("value")
-    if value is None:
-        return None
-    date_str = str(latest.get("date"))
-    unit = str(ds.get("unit") or "").strip()
-    # CPI/PMI 等以百分比呈现时单位常为 "%" 或空，统一补 "%"。
-    value_text = f"{value}%" if (not unit or unit == "%") else f"{value}{unit}"
-    source = str(ds.get("source") or "China Data Portal")
-    return {
-        "summary": f"{label}（{date_str}）：{value_text}（来源：{source}）",
-        "title": ds.get("title") or label,
-        "name": label,
-        "date": date_str,
-        "value": value,
-        "unit": unit,
-        "source": source,
-    }
 
 
 # 公司行动（分红/送转）来自 AkShare stock_dividend，按持仓代码过滤。该接口返回全
@@ -580,11 +610,11 @@ def _unavailable_pre_market_global(retrieved_at: datetime) -> dict:
 async def get_pre_market_global_snapshot() -> dict:
     """Return the governed overnight global snapshot for the 08:30 brief.
 
-    数据源：美股主要指数（AkShare 东财指数）、富时中国 A50 期货（AkShare/新浪）。
+    数据源：美股三大指数（AkShare 新浪源 index_us_stock_sina）、富时中国 A50
+    期货（AkShare 海外期货/新浪）、经济数据（AkShare 宏观接口 CPI/PMI）。
     进程内 30 分钟缓存避免重复外网抓取；部分抓取失败时仍返回已成功的那部分
     （``qualityStatus`` 视数据完整性为 ``FRESH``）。完全失败且无可缓存时
-    fail-closed 返回空快照（下游渲染为「暂无」），绝不编造数字。经济日历
-    （``economicEvents``）在接入前保持空列表。
+    fail-closed 返回空快照（下游渲染为「暂无」），绝不编造数字。
     """
     now = datetime.now(timezone.utc)
     cached = _pre_market_global_cache["snapshot"]
@@ -621,7 +651,7 @@ async def get_pre_market_global_snapshot() -> dict:
     if a50 is not None:
         providers.append(str(a50.get("source") or "sina/a50"))
     if economic_events:
-        providers.append("ChinaDataPortal")
+        providers.append("AkShare-Macro")
     snapshot = {
         "usIndices": us_indices,
         "a50Future": a50,
