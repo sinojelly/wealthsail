@@ -105,7 +105,8 @@ def _watchlist_quality(context: dict) -> str:
 def build_report(context: dict) -> dict:
     """Build the three-section personalized brief without any model I/O."""
     pre = context.get("preMarket") or {}
-    impact = holding_impact_text(pre)
+    # 持仓影响需要 positions 做归因，因此传整个 context 而非仅 preMarket。
+    impact = holding_impact_text(context)
     watchlist = _watchlist_text(context)
     reminder = cutoff_text(pre)
     sections = (

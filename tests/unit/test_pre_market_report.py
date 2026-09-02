@@ -79,8 +79,8 @@ def test_full_report_has_five_grounded_sections_and_explicit_missing_data() -> N
         "1. 隔夜市场速览：美股主要指数：暂无；A50期货：暂无。",
         "2. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
         "3. 持仓今日影响：招商银行(600036)现金分红除权，价格可能出现技术性调整；现金到账日为2026-09-04，实际收益以到账和税费为准。",
-        "4. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai）；仅作截止时间参考，能否申赎以销售渠道实际状态为准。",
-        "5. 一句话总结：当前市场情绪偏强；今日重点关注持仓公司行动和基金交易截止时间。",
+        "4. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
+        "5. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
     ]
     assert draft["status"] == "PARTIAL"
     assert draft["quality"] == "FRESH"
@@ -116,17 +116,79 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
     assert len(push) <= 200
 
 
-def test_push_keeps_available_actions_and_cutoff_without_claiming_trade_availability() -> (
-    None
-):
+def test_push_states_cutoff_window_with_channel_caveat() -> None:
+    """今日提醒给出 15:00 前的操作窗口，但不断言渠道一定开放。"""
     push = pre_market.format_push_content(_context())
 
-    assert "招商银行现金分红除权" in push
-    assert "易方达消费行业15:00截止参考" in push
-    assert "渠道状态为准" in push
-    assert "可申购" not in push
-    assert "可赎回" not in push
+    assert "招商银行今日除权，预计低开" in push
+    assert "易方达消费行业今日15:00前可提交申购/赎回" in push
+    assert "（以渠道状态为准）" in push
     assert len(push) <= 200
+
+
+def test_holding_impact_declares_no_major_event_when_positions_untouched() -> None:
+    """有持仓但今日无公司行动 → 确定性结论「无重大事件影响」，而非「暂无」。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+
+    assert pre_market.holding_impact_text(context) == "无重大事件影响"
+    assert pre_market.impact_push_text(context) == "无重大事件影响"
+
+
+def test_holding_impact_is_missing_without_positions() -> None:
+    """没有持仓时无法归因，必须降级为「暂无」，不得臆断影响。"""
+    context = _context()
+    context["positions"] = []
+
+    assert pre_market.holding_impact_text(context) == "暂无"
+    assert pre_market.impact_push_text(context) == "暂无"
+
+
+def test_holding_impact_ignores_actions_on_unheld_instruments() -> None:
+    """公司行动必须落在持仓上才计入影响（今日关注仍可展示非持仓标的）。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = [
+        {
+            "instrumentId": "99999999-9999-9999-9999-999999999999",
+            "symbol": "601318",
+            "name": "中国平安",
+            "actionType": "CASH_DIVIDEND",
+            "exDate": "2026-08-31",
+            "payDate": "2026-09-10",
+        }
+    ]
+
+    assert pre_market.holding_impact_text(context) == "无重大事件影响"
+    push = pre_market.format_push_content(context)
+    assert "中国平安今日除权" not in push
+
+
+def test_summary_combines_sentiment_holdings_and_events() -> None:
+    """一句话总结 = 市场情绪 + 持仓影响 + 今日事件，缺项省略不编造。"""
+    # 三项齐全
+    assert pre_market.summary_clauses(_context()) == [
+        "情绪偏强",
+        "招商银行除权",
+        "1只基金15:00前可提交",
+    ]
+
+    # 只有情绪：其余片段直接省略
+    lean = _context()
+    lean["positions"] = []
+    lean["preMarket"]["fundCutoffRules"] = []
+    assert pre_market.summary_clauses(lean) == ["情绪偏强"]
+
+    # 全部缺失 → 暂无
+    empty = {"positions": [], "marketSentiment": {}, "preMarket": {}}
+    assert pre_market.summary_text(empty) == "暂无"
+
+
+def test_summary_falls_back_to_mood_only_when_sentiment_missing() -> None:
+    """情绪数据缺失时，仍应输出持仓影响与今日事件，而不是整句「暂无」。"""
+    context = _context()
+    context["marketSentiment"] = {}
+
+    assert pre_market.summary_text(context) == "招商银行除权；1只基金15:00前可提交。"
 
 
 def test_stale_sentiment_is_dated_instead_of_presented_as_current() -> None:
@@ -138,7 +200,7 @@ def test_stale_sentiment_is_dated_instead_of_presented_as_current() -> None:
     draft = pre_market.build_report(context)
     push = pre_market.format_push_content(context)
 
-    assert "截至2026-08-28（非实时），市场情绪偏强" in draft["summary"]
+    assert "一句话总结：截至08-28情绪偏强" in draft["summary"]
     assert "截至08-28情绪偏强" in push
     assert "当前市场情绪偏强" not in draft["summary"]
 

@@ -5,6 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 _MISSING = "暂无"
+# 有持仓但当日无可匹配的公司行动时的确定性结论（区别于"无数据"的「暂无」）。
+_NO_MAJOR_IMPACT = "无重大事件影响"
+# 数据库仅有截止时间，没有渠道实际开放状态，任何"可申赎"表述都必须带此限定。
+_CHANNEL_CAVEAT = "（以渠道状态为准）"
+# 除权类行动（现金分红/送股/拆股）必然使除权参考价下调，可确定性提示低开。
+_EX_RIGHTS_TYPES = frozenset({"CASH_DIVIDEND", "STOCK_DIVIDEND", "SPLIT"})
 ACTION_LABELS = {
     "CASH_DIVIDEND": "现金分红除权",
     "STOCK_DIVIDEND": "送股除权",
@@ -94,39 +100,98 @@ def _attention(pre: dict) -> str:
     )
 
 
-def holding_impact_text(pre: dict) -> str:
-    actions = pre.get("corporateActions")
-    if not isinstance(actions, list) or not actions:
+def _held_instrument_ids(context: dict) -> set[str]:
+    """用户持仓的 instrumentId 集合（空集合表示没有持仓，无法归因）。"""
+    positions = context.get("positions")
+    if not isinstance(positions, list):
+        return set()
+    return {
+        str(position.get("instrumentId"))
+        for position in positions
+        if isinstance(position, dict) and position.get("instrumentId")
+    }
+
+
+def matched_actions(context: dict) -> list[dict]:
+    """今日公司行动 ∩ 用户持仓。没有持仓时返回空列表（不做无源归因）。"""
+    held_ids = _held_instrument_ids(context)
+    if not held_ids:
+        return []
+    actions = (context.get("preMarket") or {}).get("corporateActions")
+    if not isinstance(actions, list):
+        return []
+    return [
+        action
+        for action in actions
+        if isinstance(action, dict)
+        and str(action.get("instrumentId") or "") in held_ids
+    ]
+
+
+def _action_impact_phrase(action: dict, *, concise: bool) -> str:
+    """单条公司行动 → 持仓影响短语。
+
+    ``concise=True`` 用于推送短句（如「招商银行今日除权，预计低开」），
+    ``False`` 用于报告正文（保留到账日、税费等限定语）。
+    """
+    action_type = str(action.get("actionType") or "")
+    name = instrument_label(action, include_symbol=not concise)
+    if concise:
+        if action_type in _EX_RIGHTS_TYPES:
+            return f"{name}今日除权，预计低开"
+        return f"{name}今日{ACTION_LABELS.get(action_type, '发生公司行动')}，关注公告"
+    if action_type == "CASH_DIVIDEND":
+        pay_date = str(action.get("payDate") or _MISSING)
+        return (
+            f"{name}现金分红除权，价格可能出现技术性调整；"
+            f"现金到账日为{pay_date}，实际收益以到账和税费为准"
+        )
+    if action_type in {"STOCK_DIVIDEND", "SPLIT"}:
+        return (
+            f"{name}{ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
+            "组合价值以正式结算结果为准"
+        )
+    return (
+        f"{name}{ACTION_LABELS.get(action_type, '发生公司行动')}，"
+        "请关注交易规则和账户正式通知"
+    )
+
+
+def holding_impact_text(context: dict) -> str:
+    """持仓今日影响（报告正文版）：持仓 ∩ 今日公司行动。
+
+    - 没有持仓 → 「暂无」（无数据可归因）
+    - 有持仓且无匹配行动 → 「无重大事件影响」（确定性结论，非缺失）
+    """
+    if not _held_instrument_ids(context):
         return _MISSING
-    impacts: list[str] = []
-    for action in actions:
-        if not isinstance(action, dict):
-            continue
-        label = instrument_label(action)
-        action_type = str(action.get("actionType") or "")
-        if action_type == "CASH_DIVIDEND":
-            pay_date = str(action.get("payDate") or _MISSING)
-            impacts.append(
-                f"{label}现金分红除权，价格可能出现技术性调整；"
-                f"现金到账日为{pay_date}，实际收益以到账和税费为准"
-            )
-        elif action_type in {"STOCK_DIVIDEND", "SPLIT"}:
-            impacts.append(
-                f"{label}{ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
-                "组合价值以正式结算结果为准"
-            )
-        else:
-            impacts.append(
-                f"{label}{ACTION_LABELS.get(action_type, '发生公司行动')}，"
-                "请关注交易规则和账户正式通知"
-            )
-    return "；".join(impacts) + "。" if impacts else _MISSING
+    actions = matched_actions(context)
+    if not actions:
+        return _NO_MAJOR_IMPACT
+    return (
+        "；".join(_action_impact_phrase(action, concise=False) for action in actions)
+        + "。"
+    )
 
 
-def cutoff_text(pre: dict) -> str:
+def impact_push_text(context: dict, *, limit: int = 2) -> str:
+    """持仓影响（推送短句版），超项折叠为「等N项」。"""
+    if not _held_instrument_ids(context):
+        return _MISSING
+    actions = matched_actions(context)
+    if not actions:
+        return _NO_MAJOR_IMPACT
+    parts = [_action_impact_phrase(action, concise=True) for action in actions[:limit]]
+    text = "；".join(parts)
+    if len(actions) > limit:
+        text += f"等{len(actions)}项"
+    return text
+
+
+def _cutoff_reminders(pre: dict, *, limit: int | None, concise: bool) -> list[str]:
     rules = pre.get("fundCutoffRules")
     if not isinstance(rules, list) or not rules:
-        return _MISSING
+        return []
     reminders: list[str] = []
     for rule in rules:
         if not isinstance(rule, dict):
@@ -134,44 +199,123 @@ def cutoff_text(pre: dict) -> str:
         cutoff = str(rule.get("cutoffTime") or "")[:5]
         if not cutoff:
             continue
-        channel = str(rule.get("salesChannel") or "DEFAULT")
-        channel_text = "默认渠道" if channel == "DEFAULT" else channel
-        timezone = str(rule.get("timezone") or "Asia/Shanghai")
-        reminders.append(
-            f"{instrument_label(rule)}{channel_text}截止时间{cutoff}（{timezone}）"
-        )
+        label = instrument_label(rule, include_symbol=not concise)
+        if concise:
+            reminders.append(f"{label}今日{cutoff}前可提交申购/赎回")
+        else:
+            channel = str(rule.get("salesChannel") or "DEFAULT")
+            channel_text = "默认渠道" if channel == "DEFAULT" else channel
+            timezone = str(rule.get("timezone") or "Asia/Shanghai")
+            reminders.append(
+                f"{label}{channel_text}截止时间{cutoff}（{timezone}），"
+                f"今日{cutoff}前可提交申购/赎回"
+            )
+        if limit is not None and len(reminders) >= limit:
+            break
+    return reminders
+
+
+def cutoff_text(pre: dict) -> str:
+    """今日操作提醒（报告正文版）：当日 15:00 前截止的基金申赎窗口。
+
+    规则查询已按 ``cutoff_time <= 15:00`` 过滤（见 repository），此处只做渲染。
+    数据库没有渠道实际开放状态，因此每条提醒都带「以渠道状态为准」限定。
+    """
+    reminders = _cutoff_reminders(pre, limit=None, concise=False)
     if not reminders:
         return _MISSING
-    return "；".join(reminders) + "；仅作截止时间参考，能否申赎以销售渠道实际状态为准。"
+    return "；".join(reminders) + _CHANNEL_CAVEAT + "。"
 
 
-def _mood(context: dict) -> tuple[str, str]:
+def cutoff_push_text(pre: dict, *, limit: int = 2) -> str:
+    """今日提醒（推送短句版），超项折叠为「等N只」。"""
+    reminders = _cutoff_reminders(pre, limit=limit, concise=True)
+    if not reminders:
+        return _MISSING
+    total = pre.get("fundCutoffRules")
+    text = "；".join(reminders)
+    if isinstance(total, list) and len(total) > limit:
+        text += f"等{len(total)}只"
+    return text + _CHANNEL_CAVEAT
+
+
+def _mood_phrase(context: dict) -> str | None:
+    """市场情绪短语。无涨跌家数时返回 ``None``（不编造情绪判断）。"""
     sentiment = context.get("marketSentiment") or {}
     up = safe_decimal(sentiment.get("totalUp"))
     down = safe_decimal(sentiment.get("totalDown"))
     if up is None or down is None:
-        return _MISSING, _MISSING
+        return None
     if up > down * Decimal("1.2"):
         mood = "偏强"
     elif down > up * Decimal("1.2"):
         mood = "偏弱"
     else:
         mood = "均衡"
-    pre = context.get("preMarket") or {}
-    focus: list[str] = []
-    if pre.get("corporateActions"):
-        focus.append("持仓公司行动")
-    if pre.get("fundCutoffRules"):
-        focus.append("基金交易截止时间")
-    direction = "和".join(focus) if focus else "市场广度变化"
     if str(sentiment.get("qualityStatus") or "") == "FRESH":
-        return f"当前市场情绪{mood}；今日重点关注{direction}。", f"情绪{mood}"
+        return f"情绪{mood}"
     trade_date = str(sentiment.get("tradeDate") or "未知日期")
     compact_date = trade_date[-5:] if len(trade_date) >= 5 else trade_date
-    return (
-        f"截至{trade_date}（非实时），市场情绪{mood}；今日重点关注{direction}。",
-        f"截至{compact_date}情绪{mood}",
-    )
+    return f"截至{compact_date}情绪{mood}"
+
+
+def _impact_clause(context: dict) -> str | None:
+    """一句话总结中的「持仓影响」片段；无持仓时返回 ``None``。"""
+    if not _held_instrument_ids(context):
+        return None
+    actions = matched_actions(context)
+    if not actions:
+        return "持仓无重大事件"
+    if len(actions) == 1:
+        return f"{instrument_label(actions[0], include_symbol=False)}除权"
+    return f"{len(actions)}只持仓除权"
+
+
+def _event_clause(context: dict) -> str | None:
+    """一句话总结中的「今日事件」片段（基金申赎截止时间）。"""
+    rules = (context.get("preMarket") or {}).get("fundCutoffRules")
+    if not isinstance(rules, list) or not rules:
+        return None
+    cutoffs = {
+        str(rule.get("cutoffTime") or "")[:5]
+        for rule in rules
+        if isinstance(rule, dict) and str(rule.get("cutoffTime") or "")[:5]
+    }
+    if not cutoffs:
+        return None
+    earliest = min(cutoffs)
+    return f"{len(rules)}只基金{earliest}前可提交"
+
+
+def summary_clauses(context: dict) -> list[str]:
+    """一句话总结的组成片段：市场情绪 + 持仓影响 + 今日事件。
+
+    三项各自独立取用，缺失的片段直接省略（绝不编造）；全部缺失时返回空列表，
+    由调用方渲染为「暂无」。
+    """
+    clauses: list[str] = []
+    for clause in (
+        _mood_phrase(context),
+        _impact_clause(context),
+        _event_clause(context),
+    ):
+        if clause:
+            clauses.append(clause)
+    return clauses
+
+
+def summary_text(context: dict) -> str:
+    """一句话总结：市场情绪 + 持仓影响 + 今日事件的综合判断。"""
+    clauses = summary_clauses(context)
+    return "；".join(clauses) + "。" if clauses else _MISSING
+
+
+def _mood(context: dict) -> tuple[str, str]:
+    """兼容旧调用：返回 (完整结论句, 情绪短语)。"""
+    phrase = _mood_phrase(context)
+    if phrase is None:
+        return _MISSING, _MISSING
+    return f"当前市场{phrase}。", phrase
 
 
 def _quality(context: dict) -> str:
@@ -191,9 +335,9 @@ def build_report(context: dict) -> dict:
     pre = context.get("preMarket") or {}
     overnight = _overnight(pre)
     attention = _attention(pre)
-    impact = holding_impact_text(pre)
+    impact = holding_impact_text(context)
     reminder = cutoff_text(pre)
-    conclusion, _ = _mood(context)
+    conclusion = summary_text(context)
     quality = _quality(context)
     sentiment_quality = str(
         (context.get("marketSentiment") or {}).get("qualityStatus") or "UNAVAILABLE"
@@ -299,32 +443,12 @@ def format_push_content(context: dict) -> str:
         value_keys=("summary", "title", "name"),
     )
 
-    impact = _MISSING
-    if actions:
-        first = actions[0]
-        name = instrument_label(first, include_symbol=False)
-        if first.get("actionType") == "CASH_DIVIDEND":
-            impact = f"{name}除息价或技术调整，到账和税费为准"
-        else:
-            impact = f"{name}公司行动，关注交易规则和正式通知"
-
-    rules = pre.get("fundCutoffRules") or []
-    reminder = _MISSING
-    if rules:
-        first_rule = rules[0]
-        cutoff = str(first_rule.get("cutoffTime") or "")[:5]
-        if cutoff:
-            reminder = (
-                f"{instrument_label(first_rule, include_symbol=False)}{cutoff}截止参考，"
-                "以渠道状态为准"
-            )
-
-    conclusion, mood = _mood(context)
-    if conclusion == _MISSING:
-        summary = _MISSING
-    else:
-        focus = "公司行动与基金截止" if actions or rules else "市场广度"
-        summary = f"{mood}，关注{focus}"
+    # 持仓影响：持仓 ∩ 今日公司行动；无持仓→暂无，无匹配→「无重大事件影响」。
+    impact = impact_push_text(context)
+    # 今日提醒：当日 15:00 前截止的基金申赎窗口（规则查询已按 <= 15:00 过滤）。
+    reminder = cutoff_push_text(pre)
+    # 一句话总结：市场情绪 + 持仓影响 + 今日事件，缺项省略。
+    summary = "；".join(summary_clauses(context)) or _MISSING
 
     lines = [
         f"🌏 隔夜市场：美股{us}；A50期货{a50}",
@@ -333,7 +457,8 @@ def format_push_content(context: dict) -> str:
         f"⏰ 今日提醒：{reminder}",
         f"💡 一句话总结：{summary}",
     ]
-    limits = (38, 55, 42, 36, 25)
+    # 预算：5 行 + 4 个换行 ≤ 200 字符（企微推送上限）。
+    limits = (38, 42, 40, 42, 34)
     return "\n".join(
         _clip(line, limit) for line, limit in zip(lines, limits, strict=True)
     )
