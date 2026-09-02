@@ -221,29 +221,49 @@ def _reset_pre_market_global_cache() -> None:
     _pre_market_global_cache["snapshot"] = None
 
 
+# 美股三大指数在 AkShare 不同接口下的中文别名，统一映射到 dow/nasdaq/sp500。
+_US_INDEX_ALIASES = {
+    "道琼斯": "dow",
+    "道琼斯工业指数": "dow",
+    "道琼斯工业平均指数": "dow",
+    "纳斯达克": "nasdaq",
+    "纳斯达克综合指数": "nasdaq",
+    "标普500": "sp500",
+    "标普500指数": "sp500",
+    "标准普尔500指数": "sp500",
+}
+
+
 async def fetch_us_overnight_indices() -> list[dict]:
-    """美股主要指数隔夜涨跌幅（AkShare 东财指数优先，失败降级为空）。
+    """美股主要指数隔夜涨跌幅（AkShare ``index_us_spot`` 优先，失败降级为空）。
 
     返回 ``[{name, changePct(float %), price}]``。任何异常均降级为空列表——
     不抛出、不伪造数据，下游渲染为「暂无」。
     """
-    wanted = {"道琼斯", "纳斯达克", "标普500", "标普500指数", "道琼斯工业指数"}
     try:
-        df = await asyncio.to_thread(_ak_import().index_us_spot_em)
+        df = await asyncio.to_thread(_ak_import().index_us_spot)
     except Exception as exc:  # noqa: BLE001 — vendor outage degrades
         logger.warning("akshare 美股指数抓取失败: %s", exc)
         return []
     if df is None or getattr(df, "empty", True):
         return []
-    if "名称" not in df.columns or "涨跌幅" not in df.columns:
+    if "名称" not in df.columns:
         logger.warning("akshare 美股指数列结构变化: %s", list(df.columns))
+        return []
+    change_col = (
+        "涨跌幅"
+        if "涨跌幅" in df.columns
+        else ("涨跌率" if "涨跌率" in df.columns else None)
+    )
+    if change_col is None:
+        logger.warning("akshare 美股指数缺少涨跌幅列: %s", list(df.columns))
         return []
     items: list[dict] = []
     for _, row in df.iterrows():
         name = str(row.get("名称") or "")
-        if name not in wanted:
+        if name not in _US_INDEX_ALIASES:
             continue
-        change = _num(row, "涨跌幅")
+        change = _num(row, change_col)
         if change is None:
             continue
         items.append(
@@ -266,6 +286,60 @@ async def fetch_a50_future() -> dict | None:
     if a50 is None:
         a50 = await _fetch_sina_a50()
     return a50
+
+
+# 返回字典键 → 美股指数中文名（与盘前简报展示顺序一致）。
+_US_MARKET_KEYS = (
+    ("dow", "道琼斯"),
+    ("nasdaq", "纳斯达克"),
+    ("sp500", "标普500"),
+)
+
+
+async def fetch_pre_market_global_snapshot() -> dict:
+    """盘前美股 + A50 真实涨跌幅快照（flat 格式，供盘前简报直接使用）。
+
+    美股：AkShare ``index_us_spot`` 过滤道琼斯 / 纳斯达克 / 标普500；
+    A50：AkShare ``futures_foreign_hist(symbol="新加坡富时A50")`` 优先，失败降级
+    新浪 ``hq.sinajs.cn/list=nfSA0``。任一数据源不可用对应字段降级
+    （``us_markets`` 缺项 / ``a50=None``），绝不编造数字。
+
+    返回::
+
+        {
+            "us_markets": {"dow": 0.42, "nasdaq": 0.61, "sp500": 0.15},
+            "a50": 0.28,
+            "source": "akshare",  # 或 "sina" / "akshare+sina" / "unavailable"
+            "as_of": "2026-09-02 08:30:00",
+        }
+    """
+    us_items, a50 = await asyncio.gather(
+        fetch_us_overnight_indices(), fetch_a50_future()
+    )
+    us_markets: dict[str, float] = {}
+    for item in us_items:
+        key = _US_INDEX_ALIASES.get(str(item.get("name") or ""))
+        if key and key not in us_markets:
+            us_markets[key] = round(float(item["changePct"]), 2)
+    a50_pct: float | None = None
+    if isinstance(a50, dict) and a50.get("changePct") is not None:
+        a50_pct = round(float(a50["changePct"]), 2)
+    # 顶层 source：仅标注数据实际来源（akshare / sina），混合时并列。
+    sources: list[str] = []
+    if us_items:
+        sources.append("akshare")
+    if a50 is not None:
+        a50_src = "akshare" if "akshare" in str(a50.get("source") or "") else "sina"
+        if a50_src not in sources:
+            sources.append(a50_src)
+    source = "+".join(sources) if sources else "unavailable"
+    as_of = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "us_markets": us_markets,
+        "a50": a50_pct,
+        "source": source,
+        "as_of": as_of,
+    }
 
 
 async def _fetch_a50_via_akshare() -> dict | None:

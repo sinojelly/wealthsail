@@ -7,6 +7,7 @@ degrade to empty data (rendered as 暂无), never to fabricated numbers.
 
 from __future__ import annotations
 
+import re
 import types
 import unittest.mock as mock
 
@@ -48,7 +49,7 @@ def _clear_cache():
 
 @pytest.mark.asyncio
 async def test_fetch_us_indices_filters_to_major_indices() -> None:
-    fake_ak = types.SimpleNamespace(index_us_spot_em=lambda: _fake_us_df())
+    fake_ak = types.SimpleNamespace(index_us_spot=lambda: _fake_us_df())
     with mock.patch.object(market_data, "_ak_import", return_value=fake_ak):
         items = await market_data.fetch_us_overnight_indices()
     names = {item["name"] for item in items}
@@ -69,7 +70,7 @@ async def test_fetch_us_indices_degrades_on_akshare_error() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_us_indices_degrades_on_unexpected_columns() -> None:
-    fake_ak = types.SimpleNamespace(index_us_spot_em=lambda: _FakeDF([{"foo": 1}]))
+    fake_ak = types.SimpleNamespace(index_us_spot=lambda: _FakeDF([{"foo": 1}]))
     with mock.patch.object(market_data, "_ak_import", return_value=fake_ak):
         items = await market_data.fetch_us_overnight_indices()
     assert items == []
@@ -367,3 +368,95 @@ async def test_fetch_economic_calendar_degrades_to_empty_on_all_fail() -> None:
     ):
         items = await market_data.fetch_economic_calendar()
     assert items == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_pre_market_global_snapshot_maps_all_three() -> None:
+    us = [
+        {"name": "道琼斯", "changePct": 1.234, "price": 35000.0},
+        {"name": "纳斯达克", "changePct": -0.5, "price": 14000.0},
+        {"name": "标普500", "changePct": 2.0, "price": 4500.0},
+    ]
+    a50 = {
+        "name": "富时中国A50期货",
+        "changePct": 0.28,
+        "price": 13000.0,
+        "source": "akshare/a50",
+    }
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=us),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=a50)
+        ),
+    ):
+        snap = await market_data.fetch_pre_market_global_snapshot()
+    assert snap["us_markets"] == {"dow": 1.23, "nasdaq": -0.5, "sp500": 2.0}
+    assert snap["a50"] == 0.28
+    assert snap["source"] == "akshare"
+    assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", snap["as_of"])
+
+
+@pytest.mark.asyncio
+async def test_fetch_pre_market_global_snapshot_partial_and_a50_none() -> None:
+    us = [{"name": "道琼斯", "changePct": 0.4, "price": 1.0}]
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=us),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=None)
+        ),
+    ):
+        snap = await market_data.fetch_pre_market_global_snapshot()
+    assert snap["us_markets"] == {"dow": 0.4}  # 仅道琼斯有数据
+    assert snap["a50"] is None
+    assert snap["source"] == "akshare"
+
+
+@pytest.mark.asyncio
+async def test_fetch_pre_market_global_snapshot_a50_sina_fallback() -> None:
+    # 美股抓取失败（空），A50 降级新浪。
+    a50 = {
+        "name": "富时中国A50",
+        "changePct": 0.15,
+        "price": 13000.0,
+        "source": "sina/a50",
+    }
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=[]),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=a50)
+        ),
+    ):
+        snap = await market_data.fetch_pre_market_global_snapshot()
+    assert snap["us_markets"] == {}
+    assert snap["a50"] == 0.15
+    assert snap["source"] == "sina"
+
+
+@pytest.mark.asyncio
+async def test_fetch_pre_market_global_snapshot_all_unavailable() -> None:
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=[]),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=None)
+        ),
+    ):
+        snap = await market_data.fetch_pre_market_global_snapshot()
+    assert snap["us_markets"] == {}
+    assert snap["a50"] is None
+    assert snap["source"] == "unavailable"
