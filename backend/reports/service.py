@@ -35,11 +35,13 @@ from backend.integrations.model_gateway import (
     chat_completion,
 )
 from backend.market import service as market_service
+from backend.portfolio.scope import AssetScope
 from backend.portfolio.service import get_positions, get_summary
 from backend.reports import (
     fund_1430,
     pre_market,
     pre_market_macro,
+    pre_market_personalized,
     repository,
     shared_market_brief,
 )
@@ -258,6 +260,8 @@ async def generate_report(
     delivery_user_id: str | None = None,
     trigger_audit_action: str | None = None,
     trigger_audit_details: dict | None = None,
+    context: dict | None = None,
+    asset_scope: AssetScope | None = None,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -268,15 +272,22 @@ async def generate_report(
 
     trade_date = now_shanghai().date()
     started_at = now_shanghai()
+    if asset_scope is None and report_variant == "PRE_MARKET_PERSONALIZED":
+        # A personalized report may only describe the audience's own assets.
+        asset_scope = AssetScope(kind="MINE", owner_user_id=audience_user_id)
 
-    # Phase 1: read context (RLS transaction).
+    # Phase 1: read context (RLS transaction). Callers that already resolved
+    # the context (the split pre-market phases) pass it in to avoid a second
+    # round of RLS-scoped reads per user.
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        context = await _build_context(
-            conn,
-            ctx.tenant_id,
-            session,
-            audience_user_id=audience_user_id,
-        )
+        if context is None:
+            context = await build_report_context(
+                conn,
+                ctx.tenant_id,
+                session,
+                audience_user_id=audience_user_id,
+                asset_scope=asset_scope,
+            )
         latest = await repository.latest_report(
             conn,
             ctx.tenant_id,
@@ -305,6 +316,8 @@ async def generate_report(
     # shared brief otherwise.
     if report_variant == "PRE_MARKET_MACRO":
         generation_mode = "PRE_MARKET_MACRO_SHARED"
+    elif report_variant == "PRE_MARKET_PERSONALIZED":
+        generation_mode = "PRE_MARKET_PERSONALIZED_DETERMINISTIC"
     elif session == "PRE_MARKET":
         generation_mode = "PRE_MARKET_DETERMINISTIC"
     elif session == "FUND_1430":
@@ -326,6 +339,11 @@ async def generate_report(
         shared_context_hash = macro_result.context_hash
         shared_cache_hit = macro_result.cache_hit
         push_content = pre_market_macro.format_push_content(draft)
+    elif generation_mode == "PRE_MARKET_PERSONALIZED_DETERMINISTIC":
+        draft = pre_market_personalized.build_report(context)
+        push_content = pre_market_personalized.format_push_content(context)
+        model_result = None
+        error_class = None
     elif generation_mode == "PRE_MARKET_DETERMINISTIC":
         draft = pre_market.build_report(context)
         push_content = pre_market.format_push_content(context)
@@ -402,17 +420,20 @@ async def generate_report(
     ) from last_error
 
 
-async def _build_context(
+async def build_report_context(
     conn: asyncpg.Connection,
     tenant_id: str,
     session: str,
     *,
     audience_user_id: str | None = None,
+    asset_scope: AssetScope | None = None,
 ) -> dict:
-    summary = await get_summary(conn, tenant_id, now_shanghai())
+    summary = await get_summary(conn, tenant_id, now_shanghai(), scope=asset_scope)
     # Historical zero-quantity snapshots are not active holdings. Filtering
     # here keeps fully closed portfolios in the no-holdings report mode.
-    positions = _active_positions(await get_positions(conn, tenant_id))
+    positions = _active_positions(
+        await get_positions(conn, tenant_id, scope=asset_scope)
+    )
     policy = await conn.fetchrow(
         """
         SELECT max_drawdown_limit, single_position_limit, equity_target_pct,
@@ -480,6 +501,9 @@ async def _build_context(
             }
             for row in rows
         ]
+    watchlist: list[dict] = []
+    if audience_user_id is not None:
+        watchlist = await repository.get_user_watchlist_context(conn, audience_user_id)
     pre_market_context: dict = {}
     fund_1430_context: dict = {}
     if session == "PRE_MARKET":
@@ -488,6 +512,12 @@ async def _build_context(
             for position in positions
             if position.get("instrumentId")
         ]
+        # The personalized phase also reports on watched instruments, so its
+        # action and cutoff lookups cover the union of held and watched ids.
+        for item in watchlist:
+            watched_id = item.get("instrumentId")
+            if watched_id and str(watched_id) not in instrument_ids:
+                instrument_ids.append(str(watched_id))
         report_date = now_shanghai().date()
         corporate_actions = await repository.get_pre_market_corporate_actions(
             conn, instrument_ids, report_date
@@ -521,14 +551,10 @@ async def _build_context(
         "positions": positions,
         "policy": dict(policy) if policy else None,
         "fundEstimates": fund_estimates,
-        "watchlist": [],
+        "watchlist": watchlist,
         # Read-only persisted snapshot; this never performs provider I/O.
         "marketSentiment": await market_service.get_market_sentiment(conn),
     }
-    if audience_user_id is not None:
-        result["watchlist"] = await repository.get_user_watchlist_context(
-            conn, audience_user_id
-        )
     if session == "PRE_MARKET":
         result["preMarket"] = pre_market_context
     if session == "FUND_1430":
@@ -979,6 +1005,8 @@ def _delivery_audit_details(
         details["generationMode"] = generation_mode
     if generation_mode == "PRE_MARKET_DETERMINISTIC":
         details["generatorVersion"] = "pre-market-deterministic-v1"
+    elif generation_mode == "PRE_MARKET_PERSONALIZED_DETERMINISTIC":
+        details["generatorVersion"] = "pre-market-personalized-v1"
     elif generation_mode == "FUND_1430_DETERMINISTIC":
         details["generatorVersion"] = "fund-1430-deterministic-v1"
     elif generation_mode == "PRE_MARKET_MACRO_SHARED":
@@ -1031,6 +1059,7 @@ async def _persist_generation(
 
     if generation_mode in {
         "PRE_MARKET_DETERMINISTIC",
+        "PRE_MARKET_PERSONALIZED_DETERMINISTIC",
         "FUND_1430_DETERMINISTIC",
         "PRE_MARKET_MACRO_SHARED",
     }:

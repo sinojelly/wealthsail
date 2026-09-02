@@ -207,7 +207,7 @@ async def test_holdings_generation_uses_one_report_model_call_and_deterministic_
     )
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
     monkeypatch.setattr(
-        report_service, "_build_context", AsyncMock(return_value=context)
+        report_service, "build_report_context", AsyncMock(return_value=context)
     )
     monkeypatch.setattr(
         report_service.repository, "latest_report", AsyncMock(return_value=None)
@@ -251,7 +251,7 @@ async def test_forced_generation_bypasses_recent_replay_and_targets_delivery_use
     }
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
     monkeypatch.setattr(
-        report_service, "_build_context", AsyncMock(return_value=context)
+        report_service, "build_report_context", AsyncMock(return_value=context)
     )
     monkeypatch.setattr(
         report_service.repository, "latest_report", AsyncMock(return_value=recent)
@@ -315,7 +315,7 @@ async def test_pre_market_generation_is_deterministic_for_every_holdings_mode(
     shared_generate = AsyncMock()
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
     monkeypatch.setattr(
-        report_service, "_build_context", AsyncMock(return_value=context)
+        report_service, "build_report_context", AsyncMock(return_value=context)
     )
     monkeypatch.setattr(
         report_service.repository, "latest_report", AsyncMock(return_value=None)
@@ -368,7 +368,7 @@ async def test_fund_1430_generation_is_deterministic_for_every_holdings_mode(
     shared_generate = AsyncMock()
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
     monkeypatch.setattr(
-        report_service, "_build_context", AsyncMock(return_value=context)
+        report_service, "build_report_context", AsyncMock(return_value=context)
     )
     monkeypatch.setattr(
         report_service.repository, "latest_report", AsyncMock(return_value=None)
@@ -591,7 +591,7 @@ async def test_no_holdings_generation_keeps_shared_brief_path(monkeypatch) -> No
     shared_generate = AsyncMock(return_value=shared_result)
     monkeypatch.setattr(report_service, "tenant_transaction", transaction)
     monkeypatch.setattr(
-        report_service, "_build_context", AsyncMock(return_value=context)
+        report_service, "build_report_context", AsyncMock(return_value=context)
     )
     monkeypatch.setattr(
         report_service.repository, "latest_report", AsyncMock(return_value=None)
@@ -662,7 +662,7 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
         cutoff_rules,
     )
 
-    context = await report_service._build_context(
+    context = await report_service.build_report_context(
         _ContextConnection(),
         "tenant-1",
         "PRE_MARKET",
@@ -713,7 +713,7 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
         cutoff_rules,
     )
 
-    context = await report_service._build_context(
+    context = await report_service.build_report_context(
         _ContextConnection(),
         "tenant-1",
         "FUND_1430",

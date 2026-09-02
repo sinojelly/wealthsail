@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 _MISSING = "暂无"
-_ACTION_LABELS = {
+ACTION_LABELS = {
     "CASH_DIVIDEND": "现金分红除权",
     "STOCK_DIVIDEND": "送股除权",
     "SPLIT": "拆股除权",
@@ -15,7 +15,7 @@ _ACTION_LABELS = {
 }
 
 
-def _safe_decimal(value: object) -> Decimal | None:
+def safe_decimal(value: object) -> Decimal | None:
     try:
         parsed = Decimal(str(value))
     except (ArithmeticError, TypeError, ValueError):
@@ -23,13 +23,13 @@ def _safe_decimal(value: object) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
-def _label(item: dict, *, include_symbol: bool = True) -> str:
+def instrument_label(item: dict, *, include_symbol: bool = True) -> str:
     name = str(item.get("name") or item.get("symbol") or "未命名标的")
     symbol = str(item.get("symbol") or "")
     return f"{name}({symbol})" if include_symbol and symbol else name
 
 
-def _list_text(items: object, *, value_keys: tuple[str, ...]) -> str:
+def list_text(items: object, *, value_keys: tuple[str, ...]) -> str:
     if not isinstance(items, list) or not items:
         return _MISSING
     values: list[str] = []
@@ -55,25 +55,25 @@ def _overnight(pre: dict) -> str:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
-            change = _safe_decimal(item.get("changePct"))
+            change = safe_decimal(item.get("changePct"))
             if name and change is not None:
                 index_parts.append(f"{name}{change:+.2f}%")
     us_text = "、".join(index_parts) if index_parts else _MISSING
 
     a50 = pre.get("a50Future")
-    a50_change = _safe_decimal(a50.get("changePct")) if isinstance(a50, dict) else None
+    a50_change = safe_decimal(a50.get("changePct")) if isinstance(a50, dict) else None
     a50_text = f"{a50_change:+.2f}%" if a50_change is not None else _MISSING
     return f"美股主要指数：{us_text}；A50期货：{a50_text}。"
 
 
 def _action_text(action: dict, *, today: bool) -> str:
-    action_label = _ACTION_LABELS.get(str(action.get("actionType") or ""), "公司行动")
-    prefix = _label(action)
+    action_label = ACTION_LABELS.get(str(action.get("actionType") or ""), "公司行动")
+    prefix = instrument_label(action)
     return f"{prefix}{'今日' if today else ''}{action_label}"
 
 
 def _attention(pre: dict) -> str:
-    economic = _list_text(
+    economic = list_text(
         pre.get("economicEvents"), value_keys=("summary", "title", "name")
     )
     actions = pre.get("corporateActions")
@@ -84,7 +84,7 @@ def _attention(pre: dict) -> str:
         if isinstance(actions, list) and actions
         else _MISSING
     )
-    subscription = _list_text(
+    subscription = list_text(
         pre.get("subscriptionRedemptionChanges"),
         value_keys=("summary", "title", "name"),
     )
@@ -94,7 +94,7 @@ def _attention(pre: dict) -> str:
     )
 
 
-def _holding_impact(pre: dict) -> str:
+def holding_impact_text(pre: dict) -> str:
     actions = pre.get("corporateActions")
     if not isinstance(actions, list) or not actions:
         return _MISSING
@@ -102,7 +102,7 @@ def _holding_impact(pre: dict) -> str:
     for action in actions:
         if not isinstance(action, dict):
             continue
-        label = _label(action)
+        label = instrument_label(action)
         action_type = str(action.get("actionType") or "")
         if action_type == "CASH_DIVIDEND":
             pay_date = str(action.get("payDate") or _MISSING)
@@ -112,18 +112,18 @@ def _holding_impact(pre: dict) -> str:
             )
         elif action_type in {"STOCK_DIVIDEND", "SPLIT"}:
             impacts.append(
-                f"{label}{_ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
+                f"{label}{ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
                 "组合价值以正式结算结果为准"
             )
         else:
             impacts.append(
-                f"{label}{_ACTION_LABELS.get(action_type, '发生公司行动')}，"
+                f"{label}{ACTION_LABELS.get(action_type, '发生公司行动')}，"
                 "请关注交易规则和账户正式通知"
             )
     return "；".join(impacts) + "。" if impacts else _MISSING
 
 
-def _cutoff_text(pre: dict) -> str:
+def cutoff_text(pre: dict) -> str:
     rules = pre.get("fundCutoffRules")
     if not isinstance(rules, list) or not rules:
         return _MISSING
@@ -137,7 +137,9 @@ def _cutoff_text(pre: dict) -> str:
         channel = str(rule.get("salesChannel") or "DEFAULT")
         channel_text = "默认渠道" if channel == "DEFAULT" else channel
         timezone = str(rule.get("timezone") or "Asia/Shanghai")
-        reminders.append(f"{_label(rule)}{channel_text}截止时间{cutoff}（{timezone}）")
+        reminders.append(
+            f"{instrument_label(rule)}{channel_text}截止时间{cutoff}（{timezone}）"
+        )
     if not reminders:
         return _MISSING
     return "；".join(reminders) + "；仅作截止时间参考，能否申赎以销售渠道实际状态为准。"
@@ -145,8 +147,8 @@ def _cutoff_text(pre: dict) -> str:
 
 def _mood(context: dict) -> tuple[str, str]:
     sentiment = context.get("marketSentiment") or {}
-    up = _safe_decimal(sentiment.get("totalUp"))
-    down = _safe_decimal(sentiment.get("totalDown"))
+    up = safe_decimal(sentiment.get("totalUp"))
+    down = safe_decimal(sentiment.get("totalDown"))
     if up is None or down is None:
         return _MISSING, _MISSING
     if up > down * Decimal("1.2"):
@@ -189,8 +191,8 @@ def build_report(context: dict) -> dict:
     pre = context.get("preMarket") or {}
     overnight = _overnight(pre)
     attention = _attention(pre)
-    impact = _holding_impact(pre)
-    reminder = _cutoff_text(pre)
+    impact = holding_impact_text(pre)
+    reminder = cutoff_text(pre)
     conclusion, _ = _mood(context)
     quality = _quality(context)
     sentiment_quality = str(
@@ -283,16 +285,16 @@ def format_push_content(context: dict) -> str:
     actions = pre.get("corporateActions") or []
     action_text = (
         "、".join(
-            f"{_label(item, include_symbol=False)}{_ACTION_LABELS.get(str(item.get('actionType') or ''), '公司行动')}"
+            f"{instrument_label(item, include_symbol=False)}{ACTION_LABELS.get(str(item.get('actionType') or ''), '公司行动')}"
             for item in actions[:2]
             if isinstance(item, dict)
         )
         or _MISSING
     )
-    economic = _list_text(
+    economic = list_text(
         pre.get("economicEvents"), value_keys=("summary", "title", "name")
     )
-    subscription = _list_text(
+    subscription = list_text(
         pre.get("subscriptionRedemptionChanges"),
         value_keys=("summary", "title", "name"),
     )
@@ -300,7 +302,7 @@ def format_push_content(context: dict) -> str:
     impact = _MISSING
     if actions:
         first = actions[0]
-        name = _label(first, include_symbol=False)
+        name = instrument_label(first, include_symbol=False)
         if first.get("actionType") == "CASH_DIVIDEND":
             impact = f"{name}除息价或技术调整，到账和税费为准"
         else:
@@ -313,7 +315,7 @@ def format_push_content(context: dict) -> str:
         cutoff = str(first_rule.get("cutoffTime") or "")[:5]
         if cutoff:
             reminder = (
-                f"{_label(first_rule, include_symbol=False)}{cutoff}截止参考，"
+                f"{instrument_label(first_rule, include_symbol=False)}{cutoff}截止参考，"
                 "以渠道状态为准"
             )
 

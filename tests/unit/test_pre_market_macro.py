@@ -271,7 +271,7 @@ async def test_generate_macro_report_persists_null_audience_without_model(
     monkeypatch.setattr(service, "tenant_transaction", transaction)
     monkeypatch.setattr(service.pre_market_macro, "get_or_generate", get_or_generate)
     monkeypatch.setattr(service, "chat_completion", fail_if_called)
-    monkeypatch.setattr(service, "_build_context", AsyncMock(return_value={}))
+    monkeypatch.setattr(service, "build_report_context", AsyncMock(return_value={}))
     monkeypatch.setattr(
         service.repository, "latest_report", AsyncMock(return_value=None)
     )
