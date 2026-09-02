@@ -826,7 +826,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 def format_push_content(context: dict) -> str:
-    """Build a five-line WeCom PRE_MARKET summary capped at 200 characters."""
+    """Build the seven-line WeCom PRE_MARKET summary capped at 700 characters."""
     pre = context.get("preMarket") or {}
     overnight = _overnight(pre)
     us = (
@@ -877,8 +877,8 @@ def format_push_content(context: dict) -> str:
         f"🧭 操作参考：{advice}",
         f"💡 一句话总结：{summary}",
     ]
-    # 预算：7 行 + 6 个换行 ≤ 200 字符（企微推送上限）。
-    limits = (30, 27, 22, 40, 26, 27, 22)
+    # 预算：单行上限 + 6 个换行 ≤ 700 字符（企微文本消息上限内）。
+    limits = (90, 150, 80, 90, 100, 80, 60)
     return "\n".join(
         _clip(line, limit) for line, limit in zip(lines, limits, strict=True)
     )

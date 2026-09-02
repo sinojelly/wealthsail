@@ -99,7 +99,7 @@ def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> 
     ]
 
 
-def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> None:
+def test_missing_fields_are_never_invented_and_push_stays_within_700_chars() -> None:
     context = {
         "positions": [],
         "marketSentiment": {"qualityStatus": "UNAVAILABLE"},
@@ -123,7 +123,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
         "🧭 操作参考：今日无明确操作参考",
         "💡 一句话总结：暂无",
     ]
-    assert len(push) <= 200
+    assert len(push) <= 700
 
 
 def test_push_states_cutoff_window_with_channel_caveat() -> None:
@@ -133,7 +133,7 @@ def test_push_states_cutoff_window_with_channel_caveat() -> None:
     assert "招商银行今日除权，预计低开" in push
     assert "易方达消费行业今日15:00前可提交申购/赎回" in push
     assert "（以渠道状态为准）" in push
-    assert len(push) <= 200
+    assert len(push) <= 700
 
 
 def test_holding_impact_healthy_when_positions_untouched() -> None:
@@ -309,7 +309,7 @@ def test_push_renders_real_overnight_data_with_natural_prefix() -> None:
     assert lines[4].startswith("🎯 今日焦点：")
     assert lines[5].startswith("🧭 操作参考：")
     assert lines[6].startswith("💡 一句话总结：")
-    assert len(pre_market.format_push_content(context)) <= 200
+    assert len(pre_market.format_push_content(context)) <= 700
 
 
 class _QueryRecorder:
