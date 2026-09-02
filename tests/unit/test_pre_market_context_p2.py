@@ -197,6 +197,11 @@ def _stub_context_deps(monkeypatch, *, ak_items, db_actions, cutoff_rules):
         "_get_all_corporate_actions",
         mock.AsyncMock(return_value=ak_items),
     )
+    monkeypatch.setattr(
+        service.market_data,
+        "fetch_today_company_announcements",
+        mock.AsyncMock(return_value=[]),
+    )
     return conn
 
 

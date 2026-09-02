@@ -403,6 +403,104 @@ def cutoff_push_text(context: dict, *, limit: int = 2) -> str:
     return text
 
 
+# 今日焦点事件的空态文案（区别于「暂无」数据缺失的措辞）。
+_FOCUS_NONE = "今日暂无重大事件关注"
+# 每条焦点事件的最大展示长度。
+_FOCUS_PHRASE_LIMIT = 30
+
+
+def _clip_focus_phrase(text: str) -> str:
+    if len(text) <= _FOCUS_PHRASE_LIMIT:
+        return text
+    return text[: _FOCUS_PHRASE_LIMIT - 1].rstrip("；，。") + "…"
+
+
+def _announcement_phrase(item: dict) -> str:
+    """公司公告 → 焦点短语：只直述标题，不加工增长数字（不调用 AI）。"""
+    name = str(item.get("name") or item.get("symbol") or "公司").strip()
+    title = str(item.get("title") or "").strip()
+    rest = title
+    for token in (name, str(item.get("symbol") or "")):
+        if token and rest.startswith(token):
+            rest = rest[len(token) :].lstrip("：:，, ")
+            break
+    detail = rest or title or "发布公告"
+    return f"{name}发布{detail}"
+
+
+def _economic_phrase(item: dict) -> str:
+    """宏观最新一期 → 焦点短语（最近一期直述，不做"今日待发布"推断）。"""
+    name = str(item.get("name") or item.get("title") or "宏观数据").strip()
+    value = str(item.get("value") or "").strip()
+    unit = str(item.get("unit") or "").strip()
+    if value and (not unit or unit == "%"):
+        value_text = f"{value}%"
+    elif value:
+        value_text = f"{value}{unit}"
+    else:
+        value_text = ""
+    period = str(item.get("date") or "").strip().replace("月份", "月")
+    period_text = f"（{period}）" if period else ""
+    return f"{name}{period_text}{value_text}（已发布）"
+
+
+def _focus_event_phrases(context: dict, *, limit: int = 3) -> list[str]:
+    """今日焦点事件，按优先级 公告 > 除权 > 宏观，最多 ``limit`` 条。
+
+    公告按持仓权重降序取，权重缺失时保持原始顺序；全部来自已持久化/已抓取
+    的真实数据，绝不编造。每条短语 ≤ 30 字。
+    """
+    pre = context.get("preMarket") or {}
+    report_date = str(pre.get("reportDate") or "")
+    phrases: list[str] = []
+    weight_by_instrument: dict[str, Decimal] = {}
+    for position in context.get("positions") or []:
+        if isinstance(position, dict) and position.get("instrumentId"):
+            weight = safe_decimal(position.get("weight"))
+            if weight is not None:
+                weight_by_instrument[position["instrumentId"]] = weight
+
+    def sort_key(item: dict) -> tuple[Decimal, str]:
+        weight = weight_by_instrument.get(str(item.get("instrumentId") or ""))
+        return (
+            weight if weight is not None else Decimal("-1"),
+            str(item.get("title") or item.get("name") or ""),
+        )
+
+    announcements = pre.get("announcements")
+    if isinstance(announcements, list):
+        for announcement in sorted(announcements, key=sort_key, reverse=True):
+            if not isinstance(announcement, dict):
+                continue
+            phrases.append(_clip_focus_phrase(_announcement_phrase(announcement)))
+            if len(phrases) >= limit:
+                return phrases
+
+    for action in matched_actions(context):
+        # 焦点事件只展示"今天"：上下文带 reportDate 时严格按 exDate 过滤。
+        if report_date and str(action.get("exDate") or "") != report_date:
+            continue
+        phrases.append(_clip_focus_phrase(_action_impact_phrase(action, concise=True)))
+        if len(phrases) >= limit:
+            return phrases
+
+    economic_events = pre.get("economicEvents")
+    if isinstance(economic_events, list):
+        for event in economic_events:
+            if not isinstance(event, dict):
+                continue
+            phrases.append(_clip_focus_phrase(_economic_phrase(event)))
+            if len(phrases) >= limit:
+                return phrases
+    return phrases
+
+
+def focus_event_text(context: dict) -> str:
+    """今日焦点事件正文（报告/推送通用）：1-3 条以「；」分隔。"""
+    phrases = _focus_event_phrases(context)
+    return "；".join(phrases) if phrases else _FOCUS_NONE
+
+
 def _mood_phrase(context: dict) -> str | None:
     """市场情绪短语。无涨跌家数时返回 ``None``（不编造情绪判断）。"""
     sentiment = context.get("marketSentiment") or {}
@@ -504,12 +602,15 @@ def _quality(context: dict) -> str:
 
 
 def build_report(context: dict) -> dict:
-    """Build the complete five-section PRE_MARKET report without model I/O."""
+    """Build the complete PRE_MARKET report without model I/O."""
     pre = context.get("preMarket") or {}
     overnight = _overnight(pre)
     attention = _attention(pre)
     impact = holding_impact_text(context)
     reminder = cutoff_text(context)
+    focus = focus_event_text(context)
+    if not focus.endswith("。"):
+        focus += "。"
     conclusion = summary_text(context)
     quality = _quality(context)
     sentiment_quality = str(
@@ -523,6 +624,12 @@ def build_report(context: dict) -> dict:
             overnight,
             "FACT",
             quality if pre.get("usIndices") or pre.get("a50Future") else "UNAVAILABLE",
+        ),
+        (
+            "今日焦点事件",
+            focus,
+            "FACT",
+            quality if _focus_event_phrases(context) else "UNAVAILABLE",
         ),
         (
             "今日重点关注",
@@ -620,6 +727,8 @@ def format_push_content(context: dict) -> str:
     impact = impact_push_text(context)
     # 今日提醒：持仓基金申赎状态（暂停/可正常）+ 15:00 前截止窗口。
     reminder = cutoff_push_text(context)
+    # 今日焦点事件：公告 > 除权 > 宏观（最多 3 条）。
+    focus = focus_event_text(context)
     # 一句话总结：市场情绪 + 持仓影响 + 今日事件，缺项省略。
     summary = "；".join(summary_clauses(context)) or _MISSING
 
@@ -628,10 +737,11 @@ def format_push_content(context: dict) -> str:
         f"📌 今日关注：经济数据{economic}；公司行动{action_text}；申赎状态{subscription}",
         f"📊 持仓影响：{impact}",
         f"⏰ 今日提醒：{reminder}",
+        f"🎯 今日焦点：{focus}",
         f"💡 一句话总结：{summary}",
     ]
-    # 预算：5 行 + 4 个换行 ≤ 200 字符（企微推送上限）。
-    limits = (38, 42, 40, 42, 34)
+    # 预算：6 行 + 5 个换行 ≤ 200 字符（企微推送上限）。
+    limits = (40, 34, 36, 40, 25, 20)
     return "\n".join(
         _clip(line, limit) for line, limit in zip(lines, limits, strict=True)
     )

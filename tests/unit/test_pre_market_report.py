@@ -64,11 +64,12 @@ def _context() -> dict:
     }
 
 
-def test_full_report_has_five_grounded_sections_and_explicit_missing_data() -> None:
+def test_full_report_has_six_grounded_sections_and_explicit_missing_data() -> None:
     draft = pre_market.build_report(_context())
 
     expected_titles = [
         "隔夜市场速览",
+        "今日焦点事件",
         "今日重点关注",
         "持仓今日影响",
         "今日操作提醒",
@@ -77,15 +78,17 @@ def test_full_report_has_five_grounded_sections_and_explicit_missing_data() -> N
     assert [item["title"] for item in draft["items"]] == expected_titles
     assert draft["summary"].splitlines() == [
         "1. 隔夜市场速览：美股主要指数：暂无；A50期货：暂无。",
-        "2. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
-        "3. 持仓今日影响：招商银行(600036)现金分红除权，价格可能出现技术性调整；现金到账日为2026-09-04，实际收益以到账和税费为准。",
-        "4. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
-        "5. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
+        "2. 今日焦点事件：招商银行今日除权，预计低开。",
+        "3. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
+        "4. 持仓今日影响：招商银行(600036)现金分红除权，价格可能出现技术性调整；现金到账日为2026-09-04，实际收益以到账和税费为准。",
+        "5. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
+        "6. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
     ]
     assert draft["status"] == "PARTIAL"
     assert draft["quality"] == "FRESH"
     assert [item["quality"] for item in draft["items"]] == [
         "UNAVAILABLE",
+        "FRESH",
         "FRESH",
         "FRESH",
         "FRESH",
@@ -113,6 +116,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
         "📌 今日关注：经济数据暂无；公司行动暂无；申赎状态暂无",
         "📊 持仓影响：暂无持仓",
         "⏰ 今日提醒：今日无申赎截止提醒",
+        "🎯 今日焦点：今日暂无重大事件关注",
         "💡 一句话总结：暂无",
     ]
     assert len(push) <= 200
@@ -298,7 +302,8 @@ def test_push_renders_real_overnight_data_with_natural_prefix() -> None:
     assert lines[1].startswith("📌 今日关注：")
     assert lines[2].startswith("📊 持仓影响：")
     assert lines[3].startswith("⏰ 今日提醒：")
-    assert lines[4].startswith("💡 一句话总结：")
+    assert lines[4].startswith("🎯 今日焦点：")
+    assert lines[5].startswith("💡 一句话总结：")
     assert len(pre_market.format_push_content(context)) <= 200
 
 
@@ -544,3 +549,141 @@ async def test_fund_profiles_query_is_effective_window_scoped() -> None:
     assert "reference.fund_profiles" in query
     assert "profile.effective_from <= $2" in query
     assert "DISTINCT ON (profile.instrument_id)" in query
+
+
+# --------------------------------------------------------------------------- #
+# 今日焦点事件：公告 > 除权 > 宏观，只展示今天，每条 ≤ 30 字
+# --------------------------------------------------------------------------- #
+
+
+def _focus_context(
+    *, announcements=(), actions=(), economics=(), report_date=""
+) -> dict:
+    return {
+        "positions": [
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "100",
+                "weight": "30.00",
+            },
+            {
+                "instrumentId": "b",
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "type": "A股",
+                "quantity": "10",
+                "weight": "60.00",
+            },
+        ],
+        "marketSentiment": {"qualityStatus": "FRESH", "totalUp": 100, "totalDown": 100},
+        "preMarket": {
+            "reportDate": report_date,
+            "announcements": list(announcements),
+            "corporateActions": list(actions),
+            "economicEvents": list(economics),
+            "usIndices": [],
+            "a50Future": None,
+            "subscriptionRedemptionChanges": [],
+            "fundCutoffRules": [],
+            "fundProfiles": [],
+        },
+    }
+
+
+def test_focus_prioritises_announcement_over_dividend_over_macro() -> None:
+    """优先级：公告 > 除权 > 宏观；公告内按持仓权重降序。"""
+    context = _focus_context(
+        report_date="2026-09-02",
+        announcements=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "title": "招商银行2026年半年度报告",
+                "date": "2026-09-02",
+            },
+            {
+                "instrumentId": "b",
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "title": "贵州茅台关于分红方案的公告",
+                "date": "2026-09-02",
+            },
+        ],
+        actions=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "actionType": "CASH_DIVIDEND",
+                "exDate": "2026-09-02",
+            }
+        ],
+        economics=[
+            {
+                "name": "中国制造业PMI",
+                "title": "中国制造业PMI",
+                "value": "49.5",
+                "unit": "%",
+                "date": "2026年8月",
+            }
+        ],
+    )
+    phrases = pre_market._focus_event_phrases(context, limit=3)
+    assert phrases == [
+        "贵州茅台发布关于分红方案的公告",  # 权重更高 → 排最前
+        "招商银行发布2026年半年度报告",
+        "招商银行今日除权，预计低开",
+    ]
+
+
+def test_focus_drops_non_today_actions_and_limits_phrases() -> None:
+    """非今日除权不计入焦点；每条焦点 ≤ 30 字。"""
+    context = _focus_context(
+        report_date="2026-09-02",
+        actions=[
+            {
+                "instrumentId": "a",
+                "symbol": "600036",
+                "name": "招商银行",
+                "actionType": "CASH_DIVIDEND",
+                "exDate": "2026-06-18",  # 非今日 → 排除
+            }
+        ],
+        economics=[
+            {
+                "name": "中国CPI同比",
+                "title": "中国CPI同比",
+                "value": "0.5",
+                "unit": "%",
+                "date": "2026年07月",
+            }
+        ],
+    )
+    phrases = pre_market._focus_event_phrases(context, limit=3)
+    assert phrases == ["中国CPI同比（2026年07月）0.5%（已发布）"]
+    assert all(len(phrase) <= 30 for phrase in phrases)
+
+
+def test_focus_none_message_when_no_events() -> None:
+    assert pre_market.focus_event_text(_focus_context()) == "今日暂无重大事件关注"
+
+
+def test_focus_announcement_title_keeps_company_short_form() -> None:
+    """标题去掉公司名前缀后直述，不加工任何数字。"""
+    context = _focus_context(
+        report_date="2026-09-02",
+        announcements=[
+            {
+                "instrumentId": "b",
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "title": "贵州茅台2026年半年度报告",
+                "date": "2026-09-02",
+            }
+        ],
+    )
+    assert pre_market.focus_event_text(context) == "贵州茅台发布2026年半年度报告"

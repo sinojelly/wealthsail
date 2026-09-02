@@ -593,6 +593,20 @@ async def build_report_context(
         fund_profiles = await repository.get_pre_market_fund_profiles(
             conn, instrument_ids, report_date
         )
+        # 今日公司公告（巨潮 cninfo，按持仓 A 股代码抓取）——焦点事件来源之一。
+        # 单标的约 1.5s，market_data 内并行抓取 + 15 分钟缓存；失败降级为空。
+        stock_symbols = sorted(
+            {
+                six
+                for position in positions
+                if isinstance(position, dict)
+                and position.get("type") == "A股"
+                and (six := _to_six_digit(str(position.get("symbol") or "")))
+            }
+        )
+        announcements = await market_data.fetch_today_company_announcements(
+            stock_symbols, report_date
+        )
 
         pre_market_context = {
             "usIndices": global_snapshot.get("usIndices", []),
@@ -602,6 +616,8 @@ async def build_report_context(
             "corporateActions": corporate_actions,
             "fundCutoffRules": cutoff_rules,
             "fundProfiles": fund_profiles,
+            "announcements": announcements,
+            "reportDate": str(report_date),
         }
     if session == "FUND_1430":
         fund_ids = [

@@ -546,3 +546,75 @@ async def test_fetch_pre_market_global_snapshot_all_unavailable() -> None:
     assert snap["us_markets"] == {}
     assert snap["a50"] is None
     assert snap["source"] == "unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# 今日公司公告（巨潮 cninfo 披露）
+# --------------------------------------------------------------------------- #
+
+
+def _fake_disclosure_df(rows: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(
+        rows,
+        columns=["代码", "简称", "公告标题", "公告时间", "公告链接"],
+    )
+
+
+def _fake_disclosure_rows() -> list[dict]:
+    return [
+        {
+            "代码": "600519",
+            "简称": "贵州茅台",
+            "公告标题": "贵州茅台2026年半年度报告",
+            "公告时间": "2026-09-02",
+        },
+        {
+            "代码": "600519",
+            "简称": "贵州茅台",
+            "公告标题": "贵州茅台关于日常关联交易的公告",
+            "公告时间": "2026-09-02",  # 无关注关键词 → 排除
+        },
+        {
+            "代码": "600036",
+            "简称": "招商银行",
+            "公告标题": "招商银行关于回购股份的进展公告",
+            "公告时间": "2026-09-01",  # 非今日 → 排除
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_today_announcements_filters_date_and_keywords() -> None:
+    fake_ak = types.SimpleNamespace(
+        stock_zh_a_disclosure_report_cninfo=lambda symbol,
+        market,
+        start_date,
+        end_date: (
+            _fake_disclosure_df(
+                [row for row in _fake_disclosure_rows() if row["代码"] == symbol]
+            )
+        )
+    )
+    market_data._reset_company_announcements_cache()
+    with mock.patch.object(market_data, "_ak_import", return_value=fake_ak):
+        items = await market_data.fetch_today_company_announcements(
+            ["600519", "600036"], "2026-09-02"
+        )
+
+    assert [item["symbol"] for item in items] == ["600519"]
+    assert items[0]["title"] == "贵州茅台2026年半年度报告"
+
+
+@pytest.mark.asyncio
+async def test_fetch_today_announcements_degrades_on_error_and_empty_input() -> None:
+    market_data._reset_company_announcements_cache()
+    with mock.patch.object(
+        market_data,
+        "_ak_import",
+        side_effect=RuntimeError("cninfo down"),
+    ):
+        items = await market_data.fetch_today_company_announcements(
+            ["600519"], "2026-09-02"
+        )
+    assert items == []
+    assert await market_data.fetch_today_company_announcements([], "2026-09-02") == []

@@ -517,6 +517,115 @@ def _reset_corporate_actions_cache() -> None:
     _corporate_actions_cache["items"] = None
 
 
+# 今日公司公告（巨潮 cninfo 披露）只取持仓相关、标题含关注关键词的事件。
+# 单标的约 1.5s，进程内缓存 15 分钟避免每份报告重复抓取；全部失败降级为空。
+_ANNOUNCEMENTS_TTL_SECONDS = 15 * 60
+_company_announcements_cache: dict = {"ts": 0.0, "key": ("", ""), "items": []}
+_TITLE_FOCUS_KEYWORDS = (
+    "报告",  # 定期报告/业绩快报等
+    "业绩",  # 业绩预告/业绩说明
+    "分红",  # 权益分派/分红
+    "回购",  # 回购/增持
+    "重组",  # 重组/收购/重大资产
+    "停牌",  # 停牌/复牌
+    "减持",  # 减持/限售
+    "中标",  # 重大合同/中标
+    "违规",  # 立案/处罚/违规
+)
+
+
+def _reset_company_announcements_cache() -> None:
+    """清空今日公告缓存（测试用）。"""
+    _company_announcements_cache["ts"] = 0.0
+    _company_announcements_cache["key"] = ("", "")
+    _company_announcements_cache["items"] = []
+
+
+async def fetch_today_company_announcements(
+    symbols: list[str], trade_date: object
+) -> list[dict]:
+    """持仓标今日公司公告（AkShare 巨潮 cninfo 披露，逐标的并行抓取）。
+
+    返回 ``[{symbol, name, title, date}]``，只保留公告日期 == ``trade_date``
+    且标题命中关注关键词的条目。任一标的失败仅跳过该标的；全部失败返回空列表
+    （渲染「今日暂无重大事件关注」），绝不编造。
+    """
+    if not symbols:
+        return []
+    wanted = sorted(
+        {str(symbol).zfill(6) for symbol in symbols if str(symbol).zfill(6).isdigit()}
+    )
+    if not wanted:
+        return []
+    date_text = str(trade_date)
+    now = datetime.now(timezone.utc).timestamp()
+    cached_key = _company_announcements_cache["key"]
+    cached = _company_announcements_cache["items"]
+    if (
+        cached is not None
+        and cached_key == (tuple(wanted), date_text)
+        and (now - _company_announcements_cache["ts"]) < _ANNOUNCEMENTS_TTL_SECONDS
+    ):
+        return cached
+    per_symbol = await asyncio.gather(
+        *(_fetch_announcements_for_symbol(code, date_text) for code in wanted),
+        return_exceptions=True,
+    )
+    items: list[dict] = []
+    for outcome in per_symbol:
+        if isinstance(outcome, list):
+            items.extend(outcome)
+    items.sort(key=lambda item: (item["symbol"], item["title"]))
+    _company_announcements_cache.update(
+        ts=now, key=(tuple(wanted), date_text), items=items
+    )
+    return items
+
+
+async def _fetch_announcements_for_symbol(symbol: str, date_text: str) -> list[dict]:
+    """抓取单标的某日公告并按关注关键词过滤（网络异常降级为空）。"""
+    compact = date_text.replace("-", "")
+    try:
+        df = await asyncio.to_thread(
+            _ak_import().stock_zh_a_disclosure_report_cninfo,
+            symbol=symbol,
+            market="沪深京",
+            start_date=compact,
+            end_date=compact,
+        )
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.info("akshare 公告抓取失败(%s): %s", symbol, exc.__class__.__name__)
+        return []
+    if df is None or getattr(df, "empty", True):
+        return []
+    title_col = next(
+        (column for column in ("公告标题", "标题") if column in df.columns), None
+    )
+    date_col = next(
+        (column for column in ("公告时间", "日期") if column in df.columns), None
+    )
+    if title_col is None:
+        logger.warning("akshare 公告列结构变化: %s", list(df.columns))
+        return []
+    items: list[dict] = []
+    for _, row in df.iterrows():
+        title = str(row[title_col] or "").strip()
+        if not title or not any(kw in title for kw in _TITLE_FOCUS_KEYWORDS):
+            continue
+        announced = str(row[date_col] or "")
+        if date_col is not None and date_text not in announced:
+            continue
+        items.append(
+            {
+                "symbol": symbol,
+                "name": str(row.get("简称") or symbol).strip(),
+                "title": title,
+                "date": date_text,
+            }
+        )
+    return items
+
+
 async def fetch_corporate_actions(symbols: list[str]) -> list[dict]:
     """持仓标的最新公司行动（AkShare stock_dividend），按 6 位代码过滤。
 
