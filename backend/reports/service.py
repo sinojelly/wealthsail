@@ -28,6 +28,7 @@ from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.dependencies import now_shanghai, write_audit
 from backend.errors import NotFoundError, ValidationError_
+from backend.integrations import market_data
 from backend.integrations.model_gateway import (
     ModelCallError,
     ModelNotConfiguredError,
@@ -531,13 +532,68 @@ async def build_report_context(
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, instrument_ids, report_date
         )
+        # 隔夜美股 + A50 + 经济日历来自受治理的全局快照（进程内缓存、超时降级）。
+        # 抓取失败时为 []/None，下游渲染为「暂无」，绝不编造数字。
+        global_snapshot = await market_data.get_pre_market_global_snapshot()
+
+        # 持仓标的代码 → instrumentId（6 位代码映射，兼容 .SH/.SZ 后缀）。
+        symbol_to_instrument: dict[str, str] = {}
+        for pos in positions:
+            sym = pos.get("symbol")
+            iid = pos.get("instrumentId")
+            if not sym or not iid:
+                continue
+            six = _to_six_digit(str(sym))
+            if six:
+                symbol_to_instrument[six] = str(iid)
+
+        # AkShare 补充公司行动（分红/送转），与 DB 记录按 (instrumentId,
+        # actionType, exDate) 去重合并，失败降级为空（下游「暂无」）。
+        held_symbols = list(symbol_to_instrument)
+        ak_actions = await market_data.fetch_corporate_actions(held_symbols)
+        seen_keys = {
+            (c.get("instrumentId"), c.get("actionType"), c.get("exDate"))
+            for c in corporate_actions
+        }
+        for ak in ak_actions:
+            iid = symbol_to_instrument.get(ak.get("symbol"))
+            if not iid:
+                continue
+            ex_iso = _to_iso_date(ak.get("exDate"))
+            if not ex_iso:
+                continue
+            key = (iid, ak.get("actionType"), ex_iso)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            corporate_actions.append(
+                {
+                    "instrumentId": iid,
+                    "symbol": ak.get("symbol"),
+                    "name": ak.get("name"),
+                    "actionType": ak.get("actionType"),
+                    "exDate": ex_iso,
+                    "recordDate": None,
+                    "payDate": _to_iso_date(ak.get("payDate")) or None,
+                    "params": {},
+                    "revision": 0,
+                    "source": ak.get("source", "akshare/stock_dividend"),
+                }
+            )
+
+        # 申赎状态：从 reference.instrument_cutoff_rules 派生（有截止时间即视为
+        # 当日可申赎，需在前置提醒中关注）。任何缺失均降级为空，绝不编造。
+        subscription_changes = [
+            _derive_subscription_change(rule)
+            for rule in cutoff_rules
+            if rule.get("cutoffTime")
+        ]
+
         pre_market_context = {
-            # No governed providers exist for these fields yet. Their explicit
-            # empty values are rendered as "暂无" instead of inferred facts.
-            "usIndices": [],
-            "a50Future": None,
-            "economicEvents": [],
-            "subscriptionRedemptionChanges": [],
+            "usIndices": global_snapshot.get("usIndices", []),
+            "a50Future": global_snapshot.get("a50Future"),
+            "economicEvents": global_snapshot.get("economicEvents", []),
+            "subscriptionRedemptionChanges": subscription_changes,
             "corporateActions": corporate_actions,
             "fundCutoffRules": cutoff_rules,
         }
@@ -583,6 +639,43 @@ def _safe_decimal(value: object) -> Decimal | None:
     except (ArithmeticError, ValueError, TypeError):
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _to_six_digit(code: str) -> str:
+    """持仓代码归一化为 6 位 A 股代码（兼容 600519 / 600519.SH）。"""
+    digits = "".join(ch for ch in str(code or "") if ch.isdigit())
+    return digits[-6:].zfill(6) if len(digits) >= 6 else ""
+
+
+def _to_iso_date(value: object) -> str:
+    """AkShare 日期归一化为 YYYY-MM-DD；无法解析返回空串。"""
+    if not value:
+        return ""
+    raw = str(value).strip().replace("/", "-")[:10]
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return ""
+
+
+def _derive_subscription_change(rule: dict) -> dict:
+    """从 cutoff_rules 单行派生申赎状态变化（供「今日关注」渲染）。"""
+    cutoff = str(rule.get("cutoffTime") or "")
+    cutoff_short = cutoff[:5] if len(cutoff) >= 5 else cutoff
+    tz = str(rule.get("timezone") or "Asia/Shanghai")
+    channel = str(rule.get("salesChannel") or "DEFAULT")
+    channel_text = "默认渠道" if channel == "DEFAULT" else channel
+    name = str(rule.get("name") or rule.get("symbol") or "标的")
+    return {
+        "instrumentId": rule.get("instrumentId"),
+        "symbol": rule.get("symbol"),
+        "name": name,
+        "title": f"{name} 申赎截止{cutoff_short}",
+        "summary": f"{channel_text}截止{cutoff_short}（{tz}）",
+        "cutoffTime": rule.get("cutoffTime"),
+        "timezone": tz,
+        "salesChannel": channel,
+    }
 
 
 def _position_label(position: dict) -> str:

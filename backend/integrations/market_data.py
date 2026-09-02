@@ -100,7 +100,9 @@ def _major_indices_source_as_of(payload: dict) -> datetime | None:
             timestamps.append(timestamp)
     # The oldest adopted component controls whole-snapshot freshness; one
     # current row must never mask another stale index row.
-    return datetime.fromtimestamp(min(timestamps), tz=timezone.utc) if timestamps else None
+    return (
+        datetime.fromtimestamp(min(timestamps), tz=timezone.utc) if timestamps else None
+    )
 
 
 def _major_indices_quality(source_as_of: datetime | None, now: datetime) -> str:
@@ -204,8 +206,286 @@ async def get_sector_focus_snapshot() -> dict:
     }
 
 
-PRE_MARKET_GLOBAL_METHOD_VERSION = "pre-market-global/v1"
+PRE_MARKET_GLOBAL_METHOD_VERSION = "pre-market-global/v2"
 PRE_MARKET_GLOBAL_SOURCE_NAME = "unavailable"
+
+# 进程内缓存：盘前快照 30 分钟内复用，避免每次报告生成都重复外网抓取；
+# 抓取超时时降级到上次成功缓存（标注 STALE）或 unavailable（fail-closed）。
+_PRE_MARKET_GLOBAL_TTL_SECONDS = 30 * 60
+_pre_market_global_cache: dict = {"ts": 0.0, "snapshot": None}
+
+
+def _reset_pre_market_global_cache() -> None:
+    """清空进程内缓存（测试用，避免用例间串扰）。"""
+    _pre_market_global_cache["ts"] = 0.0
+    _pre_market_global_cache["snapshot"] = None
+
+
+async def fetch_us_overnight_indices() -> list[dict]:
+    """美股主要指数隔夜涨跌幅（AkShare 东财指数优先，失败降级为空）。
+
+    返回 ``[{name, changePct(float %), price}]``。任何异常均降级为空列表——
+    不抛出、不伪造数据，下游渲染为「暂无」。
+    """
+    wanted = {"道琼斯", "纳斯达克", "标普500", "标普500指数", "道琼斯工业指数"}
+    try:
+        df = await asyncio.to_thread(_ak_import().index_us_spot_em)
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.warning("akshare 美股指数抓取失败: %s", exc)
+        return []
+    if df is None or getattr(df, "empty", True):
+        return []
+    if "名称" not in df.columns or "涨跌幅" not in df.columns:
+        logger.warning("akshare 美股指数列结构变化: %s", list(df.columns))
+        return []
+    items: list[dict] = []
+    for _, row in df.iterrows():
+        name = str(row.get("名称") or "")
+        if name not in wanted:
+            continue
+        change = _num(row, "涨跌幅")
+        if change is None:
+            continue
+        items.append(
+            {
+                "name": name,
+                "changePct": change,
+                "price": _num(row, "最新价"),
+            }
+        )
+    return items
+
+
+async def fetch_a50_future() -> dict | None:
+    """富时中国 A50 期货（新加坡）最新涨跌幅。
+
+    优先 AkShare 海外期货接口，失败降级新浪实时；任何异常或不完整数据均降级为
+    ``None``（渲染为「暂无」）。标的代码/接口形态以后端实际可用为准。
+    """
+    a50 = await _fetch_a50_via_akshare()
+    if a50 is None:
+        a50 = await _fetch_sina_a50()
+    return a50
+
+
+async def _fetch_a50_via_akshare() -> dict | None:
+    try:
+        df = await asyncio.to_thread(
+            _ak_import().futures_foreign_hist, symbol="新加坡富时A50"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("akshare A50 接口不可用，降级新浪: %s", exc.__class__.__name__)
+        return None
+    if df is None or getattr(df, "empty", True) or "收盘" not in df.columns:
+        return None
+    try:
+        closes = df["收盘"].dropna().astype(float)
+        if len(closes) < 2:
+            return None
+        latest, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
+        if not prev or not latest:
+            return None
+        return {
+            "name": "富时中国A50期货",
+            "changePct": (latest - prev) / prev * 100,
+            "price": latest,
+            "source": "akshare/a50",
+        }
+    except (ValueError, TypeError, AttributeError) as exc:
+        logger.warning("akshare A50 解析失败: %s", exc)
+        return None
+
+
+async def _fetch_sina_a50() -> dict | None:
+    """新浪实时 SGX A50（hq.sinajs.cn，GBK）。字段布局不符时降级 None。"""
+    url = "https://hq.sinajs.cn/list=nfSA0"
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
+            )
+            response.raise_for_status()
+            text = response.content.decode("gbk", errors="replace")
+    except httpx.HTTPError as exc:
+        logger.warning("新浪 A50 抓取失败: %s", exc)
+        return None
+    if '="' not in text:
+        return None
+    try:
+        fields = text.split('="', 1)[1].rstrip('";').split(",")
+    except Exception:  # noqa: BLE001
+        return None
+    if len(fields) < 6:
+        return None
+    name = fields[0]
+    # 新浪期货字段：0名称 1开盘 2昨收 3买价 4卖价 5最新价（与个股类似，容错取 5/2）
+    pre_close = _safe_float(fields[2])
+    price = _safe_float(fields[5]) or _safe_float(fields[3])
+    if price is None or price <= 0 or pre_close in (None, 0):
+        return None
+    return {
+        "name": name or "富时中国A50期货",
+        "changePct": (price - pre_close) / pre_close * 100,
+        "price": price,
+        "source": "sina/a50",
+    }
+
+
+CHINA_DATA_BASE = "https://chinadata.live/api/v2/data"
+
+# 盘前"经济数据"展示的宏观指标（China Data Portal 免费接口，无需鉴权，NBS 官方
+# 口径）。任一指标超时/缺失都跳过该指标；全部失败则返回空列表（渲染为「暂无」）。
+_ECONOMIC_INDICATORS = (
+    ("china-cpi", "中国CPI同比"),
+    ("china-pmi", "中国制造业PMI"),
+)
+
+
+async def fetch_economic_calendar() -> list[dict]:
+    """盘前经济数据：取 China Data Portal 最新一期宏观指标。
+
+    来源为 NBS 官方口径（CPI 同比、制造业 PMI），免费、无需鉴权。返回
+    ``[{summary, title, name, date, value, unit, source}]``。任一指标超时或解析
+    失败都跳过；全部失败则返回空列表（下游渲染为「暂无」），绝不编造数字。
+    """
+    items: list[dict] = []
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        for slug, label in _ECONOMIC_INDICATORS:
+            try:
+                resp = await client.get(f"{CHINA_DATA_BASE}/{slug}")
+                resp.raise_for_status()
+                payload = resp.json()
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                logger.warning("经济数据抓取失败(%s): %s", slug, exc)
+                continue
+            item = _parse_economic_item(payload, label)
+            if item is not None:
+                items.append(item)
+    return items
+
+
+def _parse_economic_item(payload: object, label: str) -> dict | None:
+    """从 China Data Portal 数据集响应中解析最新一期指标。"""
+    if not isinstance(payload, dict) or not payload.get("success"):
+        return None
+    ds = payload.get("data")
+    if not isinstance(ds, dict):
+        return None
+    points = ds.get("data")
+    if not isinstance(points, list) or not points:
+        return None
+    dated = [p for p in points if isinstance(p, dict) and p.get("date") is not None]
+    if not dated:
+        return None
+    latest = max(dated, key=lambda p: str(p.get("date")))
+    value = latest.get("value")
+    if value is None:
+        return None
+    date_str = str(latest.get("date"))
+    unit = str(ds.get("unit") or "").strip()
+    # CPI/PMI 等以百分比呈现时单位常为 "%" 或空，统一补 "%"。
+    value_text = f"{value}%" if (not unit or unit == "%") else f"{value}{unit}"
+    source = str(ds.get("source") or "China Data Portal")
+    return {
+        "summary": f"{label}（{date_str}）：{value_text}（来源：{source}）",
+        "title": ds.get("title") or label,
+        "name": label,
+        "date": date_str,
+        "value": value,
+        "unit": unit,
+        "source": source,
+    }
+
+
+# 公司行动（分红/送转）来自 AkShare stock_dividend，按持仓代码过滤。该接口返回全
+# 市场分红，体积较大，故进程内缓存 6 小时，避免每次报告生成都重复抓取。
+_CORPORATE_ACTIONS_TTL_SECONDS = 6 * 60 * 60
+_corporate_actions_cache: dict = {"ts": 0.0, "items": None}
+
+
+def _reset_corporate_actions_cache() -> None:
+    """清空公司行动缓存（测试用）。"""
+    _corporate_actions_cache["ts"] = 0.0
+    _corporate_actions_cache["items"] = None
+
+
+async def fetch_corporate_actions(symbols: list[str]) -> list[dict]:
+    """持仓标的最新公司行动（AkShare stock_dividend），按 6 位代码过滤。
+
+    返回 ``[{symbol, name, actionType, exDate, payDate, instrumentId?}]``。
+    任何异常、接口不可用或列结构变化都降级为空列表（渲染为「暂无」），绝不编造。
+    """
+    if not symbols:
+        return []
+    wanted = {str(s).zfill(6) for s in symbols}
+    all_items = await _get_all_corporate_actions()
+    return [item for item in all_items if item["symbol"] in wanted]
+
+
+async def _get_all_corporate_actions() -> list[dict]:
+    """抓取并归一化全市场公司行动，进程内缓存 6 小时。"""
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _corporate_actions_cache["items"]
+    if cached is not None and (now - _corporate_actions_cache["ts"]) < (
+        _CORPORATE_ACTIONS_TTL_SECONDS
+    ):
+        return cached
+    items = _normalize_corporate_actions()
+    _corporate_actions_cache.update(ts=now, items=items)
+    return items
+
+
+def _normalize_corporate_actions() -> list[dict]:
+    try:
+        ak = _ak_import()
+        df = None
+        for name in ("stock_dividend", "stock_dividend_cninfo"):
+            fn = getattr(ak, name, None)
+            if fn is not None:
+                df = fn()
+                break
+    except Exception as exc:  # noqa: BLE001 — vendor outage degrades
+        logger.warning("akshare 公司行动抓取失败: %s", exc)
+        return []
+    if df is None or getattr(df, "empty", True):
+        return []
+    cols = set(df.columns)
+    code_col = next((c for c in ("股票代码", "代码") if c in cols), None)
+    name_col = next((c for c in ("股票简称", "名称", "股票名称") if c in cols), None)
+    ex_col = next((c for c in ("除权除息日", "除息日", "除权日") if c in cols), None)
+    pay_col = next(
+        (c for c in ("派息日", "红利发放日", "股息发放日") if c in cols), None
+    )
+    if code_col is None or ex_col is None:
+        logger.warning("akshare 公司行动列结构变化: %s", list(df.columns))
+        return []
+    items: list[dict] = []
+    for _, row in df.iterrows():
+        code = str(row[code_col] or "").zfill(6)
+        if not code:
+            continue
+        ex_date = str(row[ex_col] or "")
+        if not ex_date:
+            continue
+        items.append(
+            {
+                "symbol": code,
+                "name": str(row[name_col]) if name_col else "",
+                "actionType": "CASH_DIVIDEND",
+                "exDate": ex_date,
+                "payDate": (
+                    str(row[pay_col])
+                    if pay_col is not None and row[pay_col] is not None
+                    else None
+                ),
+                "source": "akshare/stock_dividend",
+            }
+        )
+    return items
 
 
 def _unavailable_pre_market_global(retrieved_at: datetime) -> dict:
@@ -226,16 +506,63 @@ def _unavailable_pre_market_global(retrieved_at: datetime) -> dict:
 async def get_pre_market_global_snapshot() -> dict:
     """Return the governed overnight global snapshot for the 08:30 brief.
 
-    Overnight coverage (US indices, A50 futures, economic calendars and global
-    events) has no governed provider configured yet. Guessing secids or
-    inferring moves from unrelated feeds would put unverifiable numbers in a
-    published report, so the adapter fails closed: every field is empty or
-    null and ``qualityStatus`` is ``UNAVAILABLE``, which downstream renderers
-    display as 暂无. When a provider is onboarded it must populate the same
-    keys and keep this fallback for timeout, parse failure and unsupported
-    payloads.
+    数据源：美股主要指数（AkShare 东财指数）、富时中国 A50 期货（AkShare/新浪）。
+    进程内 30 分钟缓存避免重复外网抓取；部分抓取失败时仍返回已成功的那部分
+    （``qualityStatus`` 视数据完整性为 ``FRESH``）。完全失败且无可缓存时
+    fail-closed 返回空快照（下游渲染为「暂无」），绝不编造数字。经济日历
+    （``economicEvents``）在接入前保持空列表。
     """
-    return _unavailable_pre_market_global(datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    cached = _pre_market_global_cache["snapshot"]
+    if cached is not None and (now.timestamp() - _pre_market_global_cache["ts"]) < (
+        _PRE_MARKET_GLOBAL_TTL_SECONDS
+    ):
+        return cached
+
+    retrieved_at = now
+    try:
+        us_indices, a50, economic_events = await asyncio.gather(
+            fetch_us_overnight_indices(),
+            fetch_a50_future(),
+            fetch_economic_calendar(),
+        )
+    except Exception as exc:  # noqa: BLE001 — 极端异常也走降级
+        logger.warning("盘前全球快照抓取异常，降级: %s", exc)
+        us_indices, a50, economic_events = [], None, []
+
+    has_data = bool(us_indices) or a50 is not None or bool(economic_events)
+    if not has_data:
+        if cached is not None:
+            degraded = dict(cached)
+            degraded["qualityStatus"] = Q_STALE
+            degraded["sourceName"] = (
+                degraded.get("sourceName") or PRE_MARKET_GLOBAL_SOURCE_NAME
+            ) + "(cached)"
+            return degraded
+        return _unavailable_pre_market_global(retrieved_at)
+
+    providers: list[str] = []
+    if us_indices:
+        providers.append(AKSOURCE_NAME)
+    if a50 is not None:
+        providers.append(str(a50.get("source") or "sina/a50"))
+    if economic_events:
+        providers.append("ChinaDataPortal")
+    snapshot = {
+        "usIndices": us_indices,
+        "a50Future": a50,
+        "economicEvents": economic_events,
+        "globalEvents": [],
+        "qualityStatus": Q_FRESH,
+        "sourceName": "+".join(providers)
+        if providers
+        else PRE_MARKET_GLOBAL_SOURCE_NAME,
+        "sourceAsOf": None,
+        "retrievedAt": retrieved_at.isoformat(),
+        "methodVersion": PRE_MARKET_GLOBAL_METHOD_VERSION,
+    }
+    _pre_market_global_cache.update(ts=now.timestamp(), snapshot=snapshot)
+    return snapshot
 
 
 @dataclass(frozen=True)
@@ -262,8 +589,12 @@ class Observation:
             "symbol": self.symbol,
             "field_code": self.field_code,
             "value": str(self.value),
-            "lower_value": str(self.lower_value) if self.lower_value is not None else None,
-            "upper_value": str(self.upper_value) if self.upper_value is not None else None,
+            "lower_value": str(self.lower_value)
+            if self.lower_value is not None
+            else None,
+            "upper_value": str(self.upper_value)
+            if self.upper_value is not None
+            else None,
             "quality_status": self.quality_status,
             "as_of": self.as_of.isoformat(),
             "method_version": self.method_version,
@@ -338,8 +669,12 @@ def _parse_ak_spot(df, symbols: list[str], label: str) -> list[Observation]:
                 value=_decimal(price),
                 return_rate=(
                     _decimal(row["涨跌幅"]) / Decimal("100")
-                    if "涨跌幅" in columns and row["涨跌幅"] is not None
-                    and not (isinstance(row["涨跌幅"], float) and row["涨跌幅"] != row["涨跌幅"])
+                    if "涨跌幅" in columns
+                    and row["涨跌幅"] is not None
+                    and not (
+                        isinstance(row["涨跌幅"], float)
+                        and row["涨跌幅"] != row["涨跌幅"]
+                    )
                     else None
                 ),
                 as_of=now,
@@ -363,7 +698,10 @@ async def _fetch_sina_quotes(
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": _SINA_UA, "Referer": "https://finance.sina.com.cn/"},
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
             )
             response.raise_for_status()
             text = response.content.decode("gbk", errors="replace")
@@ -379,7 +717,9 @@ async def _fetch_sina_quotes(
         symbol = code[2:]
         fields = line.split('="', 1)[1].rstrip('";').split(",")
         if len(fields) < 4 or not fields[0]:
-            observations.append(_unavailable(symbol, subject_type, field_code, "sina/hq"))
+            observations.append(
+                _unavailable(symbol, subject_type, field_code, "sina/hq")
+            )
             continue
         current = fields[3]
         if not current or Decimal(current) == 0:
@@ -400,7 +740,9 @@ async def _fetch_sina_quotes(
                     )
                 )
             else:
-                observations.append(_unavailable(symbol, subject_type, field_code, "sina/hq"))
+                observations.append(
+                    _unavailable(symbol, subject_type, field_code, "sina/hq")
+                )
             continue
         observations.append(
             Observation(
@@ -503,9 +845,7 @@ async def get_sina_quote(symbol: str) -> dict:
     return await _fetch_sina_quote(code, suffix)
 
 
-async def get_sina_instrument_identity(
-    symbol: str, expected_type: str
-) -> dict | None:
+async def get_sina_instrument_identity(symbol: str, expected_type: str) -> dict | None:
     """Resolve an exact listed-security identity with Sina's typed catalog.
 
     The quote endpoint proves that a code is tradable but does not distinguish
@@ -599,7 +939,9 @@ def _match_ak_quote(df, *, code: str | None, name: str | None) -> dict | None:
     prev_close = _num(row, "昨收")
     if price is None or price <= 0:
         if prev_close is None or prev_close <= 0:
-            return _quote_unavailable(str(row["代码"]).zfill(6), "akshare/spot-no-price")
+            return _quote_unavailable(
+                str(row["代码"]).zfill(6), "akshare/spot-no-price"
+            )
         quality, price_out = Q_STALE, prev_close
     else:
         quality, price_out = Q_FRESH, price
@@ -631,7 +973,10 @@ async def _fetch_sina_quote(code: str, suffix: str | None) -> dict:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": _SINA_UA, "Referer": "https://finance.sina.com.cn/"},
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
             )
             response.raise_for_status()
             text = response.content.decode("gbk", errors="replace")
@@ -640,7 +985,7 @@ async def _fetch_sina_quote(code: str, suffix: str | None) -> dict:
         return _quote_unavailable(code, "sina/hq-error")
     if '="' not in text:
         return _quote_unavailable(code, "sina/hq-empty")
-    fields = text.split('="', 1)[1].rstrip('\";').split(",")
+    fields = text.split('="', 1)[1].rstrip('";').split(",")
     if len(fields) < 32 or not fields[0]:
         return _quote_unavailable(code, "sina/hq-empty")
 
@@ -702,7 +1047,10 @@ async def _sina_search_code(name: str) -> str | None:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": _SINA_UA, "Referer": "https://finance.sina.com.cn/"},
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
             )
             response.raise_for_status()
             text = response.content.decode("gbk", errors="replace")
@@ -742,11 +1090,35 @@ def _quote_unavailable(symbol: str, source: str) -> dict:
 # ---------------------------------------------------------------------------
 # 新浪降级候选池：主流活跃 A 股 + 宽基/行业 ETF（仅 AkShare/东财均失败时兜底）
 _SINA_HOT_POOL = [
-    "600519", "300308", "300750", "000858", "601318", "600036",
-    "000001", "002594", "600900", "601899", "600030", "601988",
-    "601398", "000725", "002475", "300059", "600887", "601012",
-    "603259", "688981", "600276", "601166", "600585", "000333",
-    "510300", "588000", "159915", "512100", "516160",
+    "600519",
+    "300308",
+    "300750",
+    "000858",
+    "601318",
+    "600036",
+    "000001",
+    "002594",
+    "600900",
+    "601899",
+    "600030",
+    "601988",
+    "601398",
+    "000725",
+    "002475",
+    "300059",
+    "600887",
+    "601012",
+    "603259",
+    "688981",
+    "600276",
+    "601166",
+    "600585",
+    "000333",
+    "510300",
+    "588000",
+    "159915",
+    "512100",
+    "516160",
 ]
 
 # 东财 push2 clist：全市场按涨跌幅降序取前 N（AkShare 底层同源，轻量直连）
@@ -858,7 +1230,10 @@ async def _fetch_em_clist(limit: int) -> list[dict]:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": _SINA_UA, "Referer": "https://quote.eastmoney.com/"},
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://quote.eastmoney.com/",
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -894,7 +1269,10 @@ async def _fetch_sina_pool_hot(limit: int) -> list[dict]:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": _SINA_UA, "Referer": "https://finance.sina.com.cn/"},
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
             )
             response.raise_for_status()
             text = response.content.decode("gbk", errors="replace")
@@ -905,7 +1283,7 @@ async def _fetch_sina_pool_hot(limit: int) -> list[dict]:
     for line in text.splitlines():
         if '="' not in line:
             continue
-        fields = line.split('="', 1)[1].rstrip('\";').split(",")
+        fields = line.split('="', 1)[1].rstrip('";').split(",")
         if len(fields) < 32 or not fields[0]:
             continue
         name = fields[0]
@@ -1049,7 +1427,9 @@ async def fetch_fund_nav_history(
 
         if total_count == 0:
             if rows:
-                raise RuntimeError("fund NAV provider returned invalid pagination metadata")
+                raise RuntimeError(
+                    "fund NAV provider returned invalid pagination metadata"
+                )
             completed = True
             break
         if not rows:
@@ -1064,7 +1444,12 @@ async def fetch_fund_nav_history(
                 nav = _decimal(raw.get("DWJZ"))
             except (ValueError, TypeError, ArithmeticError):
                 continue
-            if observed_on < start or observed_on > end or not nav.is_finite() or nav <= 0:
+            if (
+                observed_on < start
+                or observed_on > end
+                or not nav.is_finite()
+                or nav <= 0
+            ):
                 continue
             by_day.setdefault(
                 observed_on,
@@ -1227,7 +1612,9 @@ def _decimal(value: object) -> Decimal:
     raise TypeError(f"unexpected numeric type: {type(value).__name__}")
 
 
-def _unavailable(symbol: str, subject_type: str, field_code: str, method: str) -> Observation:
+def _unavailable(
+    symbol: str, subject_type: str, field_code: str, method: str
+) -> Observation:
     return Observation(
         symbol=symbol,
         subject_type=subject_type,
@@ -1242,7 +1629,9 @@ def _unavailable(symbol: str, subject_type: str, field_code: str, method: str) -
 def _unavailable_observations(
     symbols: list[str], subject_type: str, field_code: str, method: str
 ) -> list[Observation]:
-    return [_unavailable(symbol, subject_type, field_code, method) for symbol in symbols]
+    return [
+        _unavailable(symbol, subject_type, field_code, method) for symbol in symbols
+    ]
 
 
 async def fetch_all(
@@ -1343,8 +1732,14 @@ def _sentiment_from_ak(df) -> dict:
         return {}
     turnover_yi = turnover_yuan / Decimal("100000000")
     # 综合情绪评分 0-100：涨跌家数比为基础，涨停加分、跌停减分（封顶 ±20）
-    base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
-    score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    base = (
+        Decimal(str(up)) / Decimal(str(up + down)) * 100
+        if (up + down)
+        else Decimal("50")
+    )
+    score = (
+        base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    )
     score = max(Decimal("0"), min(Decimal("100"), score))
     now = datetime.now(_SHANGHAI_TZ)
     return {
@@ -1400,7 +1795,9 @@ _SINA_MC_URL = (
 )
 
 
-def _count_from_sina_items(items: list[dict]) -> tuple[int, int, int, int, int, Decimal]:
+def _count_from_sina_items(
+    items: list[dict],
+) -> tuple[int, int, int, int, int, Decimal]:
     """新浪市场中心行统计 → (up, down, flat, limit_up, limit_down, turnover_元)。"""
     up = down = flat = limit_up = limit_down = 0
     turnover = Decimal("0")
@@ -1484,8 +1881,14 @@ async def _fetch_sina_market_sentiment() -> dict:
     if total == 0 or incomplete:
         return {}
     turnover_yi = turnover / Decimal("100000000")
-    base = Decimal(str(up)) / Decimal(str(up + down)) * 100 if (up + down) else Decimal("50")
-    score = base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    base = (
+        Decimal(str(up)) / Decimal(str(up + down)) * 100
+        if (up + down)
+        else Decimal("50")
+    )
+    score = (
+        base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
+    )
     score = max(Decimal("0"), min(Decimal("100"), score))
     now = datetime.now(_SHANGHAI_TZ)
     return {
@@ -1528,8 +1931,12 @@ async def fetch_market_sentiment() -> dict:
         stats["north_flow"] = north
         logger.info(
             "市场情绪: 涨 %d 跌 %d 平 %d 涨停 %d 跌停 %d 成交 %.0f 亿",
-            stats["total_up"], stats["total_down"], stats["total_flat"],
-            stats["limit_up"], stats["limit_down"], stats["turnover"] or 0,
+            stats["total_up"],
+            stats["total_down"],
+            stats["total_flat"],
+            stats["limit_up"],
+            stats["limit_down"],
+            stats["turnover"] or 0,
         )
         return stats
     return {}

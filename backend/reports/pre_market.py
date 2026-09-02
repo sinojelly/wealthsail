@@ -327,11 +327,11 @@ def format_push_content(context: dict) -> str:
         summary = f"{mood}，关注{focus}"
 
     lines = [
-        f"隔夜：美股{us}；A50{a50}",
-        f"关注：经济数据{economic}；公司行动{action_text}；申赎变化{subscription}",
-        f"影响：{impact}",
-        f"提醒：{reminder}",
-        f"总结：{summary}",
+        f"🌏 隔夜市场：美股{us}；A50期货{a50}",
+        f"📌 今日关注：经济数据{economic}；公司行动{action_text}；申赎状态{subscription}",
+        f"📊 持仓影响：{impact}",
+        f"⏰ 今日提醒：{reminder}",
+        f"💡 一句话总结：{summary}",
     ]
     limits = (38, 55, 42, 36, 25)
     return "\n".join(

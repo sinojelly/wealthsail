@@ -107,11 +107,11 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
     assert "None" not in draft["summary"]
     assert "null" not in draft["summary"]
     assert push.splitlines() == [
-        "隔夜：美股暂无；A50暂无",
-        "关注：经济数据暂无；公司行动暂无；申赎变化暂无",
-        "影响：暂无",
-        "提醒：暂无",
-        "总结：暂无",
+        "🌏 隔夜市场：美股暂无；A50期货暂无",
+        "📌 今日关注：经济数据暂无；公司行动暂无；申赎状态暂无",
+        "📊 持仓影响：暂无",
+        "⏰ 今日提醒：暂无",
+        "💡 一句话总结：暂无",
     ]
     assert len(push) <= 200
 
@@ -143,6 +143,31 @@ def test_stale_sentiment_is_dated_instead_of_presented_as_current() -> None:
     assert "当前市场情绪偏强" not in draft["summary"]
 
 
+def test_push_renders_real_overnight_data_with_natural_prefix() -> None:
+    """P0 wiring: real US/A50 figures flow into the natural-language push."""
+    context = {
+        "positions": [],
+        "marketSentiment": {"qualityStatus": "UNAVAILABLE"},
+        "preMarket": {
+            "usIndices": [{"name": "道琼斯", "changePct": "1.23"}],
+            "a50Future": {"name": "富时中国A50期货", "changePct": "0.50"},
+            "economicEvents": [],
+            "subscriptionRedemptionChanges": [],
+            "corporateActions": [],
+            "fundCutoffRules": [],
+        },
+    }
+    lines = pre_market.format_push_content(context).splitlines()
+    assert lines[0].startswith("🌏 隔夜市场：美股")
+    assert "道琼斯+1.23%" in lines[0]
+    assert "A50期货+0.50%" in lines[0]
+    assert lines[1].startswith("📌 今日关注：")
+    assert lines[2].startswith("📊 持仓影响：")
+    assert lines[3].startswith("⏰ 今日提醒：")
+    assert lines[4].startswith("💡 一句话总结：")
+    assert len(pre_market.format_push_content(context)) <= 200
+
+
 class _QueryRecorder:
     def __init__(self) -> None:
         self.queries: list[str] = []
@@ -153,14 +178,14 @@ class _QueryRecorder:
 
 
 @pytest.mark.asyncio
-async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutoffs() -> None:
+async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutoffs() -> (
+    None
+):
     conn = _QueryRecorder()
     instrument_ids = ["11111111-1111-1111-1111-111111111111"]
     trade_date = date(2026, 8, 31)
 
-    await repository.get_pre_market_corporate_actions(
-        conn, instrument_ids, trade_date
-    )
+    await repository.get_pre_market_corporate_actions(conn, instrument_ids, trade_date)
     await repository.get_pre_market_cutoff_rules(conn, instrument_ids, trade_date)
 
     assert len(conn.queries) == 2
