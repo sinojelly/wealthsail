@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 46
-    assert migrations[-1].path.name == "046_intraday_alert_throttle.sql"
+    assert versions[-1] == 47
+    assert migrations[-1].path.name == "047_reference_fund_profiles.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -145,8 +145,36 @@ def test_readback_requires_pre_market_reference_read_boundary() -> None:
     assert "pre-market reference read boundary is missing or unsafe" in source
     assert "market.corporate_actions" in source
     assert "reference.instrument_cutoff_rules" in source
+    assert "reference.fund_profiles" in source
     assert "aclexplode" in source
     assert "has_table_privilege($1, $2, $3)" in source
+
+
+def test_047_adds_reference_fund_profiles_with_least_privilege() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "migrations" / "047_reference_fund_profiles.sql").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "CREATE TABLE IF NOT EXISTS reference.fund_profiles",
+        "purchase_status TEXT NOT NULL DEFAULT 'OPEN'",
+        "CHECK (purchase_status IN ('OPEN', 'SUSPENDED'))",
+        "redemption_status TEXT NOT NULL DEFAULT 'OPEN'",
+        "effective_from DATE NOT NULL",
+        "UNIQUE (instrument_id, effective_from)",
+        "GRANT SELECT ON reference.fund_profiles TO wealthsail_api",
+    ):
+        assert contract in migration
+    assert (
+        "GRANT SELECT ON reference.fund_profiles TO wealthsail_worker" not in migration
+    )
+    assert (
+        "REVOKE ALL ON reference.fund_profiles FROM PUBLIC, authenticated" in migration
+    )
+    assert "GRANT INSERT" not in migration
+    assert "GRANT UPDATE" not in migration
+    assert "GRANT DELETE" not in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:

@@ -103,14 +103,16 @@ def test_missing_fields_are_never_invented_and_push_stays_within_200_chars() -> 
     draft = pre_market.build_report(context)
     push = pre_market.format_push_content(context)
 
-    assert draft["summary"].count("暂无") >= 8
+    assert "暂无持仓" in draft["summary"]
+    assert "今日无申赎截止提醒" in draft["summary"]
+    assert draft["summary"].count("暂无") >= 6
     assert "None" not in draft["summary"]
     assert "null" not in draft["summary"]
     assert push.splitlines() == [
         "🌏 隔夜市场：美股暂无；A50期货暂无",
         "📌 今日关注：经济数据暂无；公司行动暂无；申赎状态暂无",
         "📊 持仓影响：暂无持仓",
-        "⏰ 今日提醒：暂无",
+        "⏰ 今日提醒：今日无申赎截止提醒",
         "💡 一句话总结：暂无",
     ]
     assert len(push) <= 200
@@ -323,3 +325,222 @@ async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutof
     assert len(conn.queries) == 2
     assert all("ia.effective_from <= $2" in query for query in conn.queries)
     assert "rule.cutoff_time <= TIME '15:00'" in conn.queries[1]
+
+
+# --------------------------------------------------------------------------- #
+# 今日提醒：基金申赎状态（可正常/暂停）语义
+# --------------------------------------------------------------------------- #
+
+_FUND_ID = "fund-110022"
+
+
+def _fund_position() -> dict:
+    return {
+        "instrumentId": _FUND_ID,
+        "symbol": "110022",
+        "name": "易方达消费行业",
+        "type": "场外基金",
+        "quantity": "1000",
+        "quality": "FRESH",
+        "weight": "8.00",
+    }
+
+
+def _profile(
+    *,
+    purchase: str = "OPEN",
+    redemption: str = "OPEN",
+    instrument_id: str = _FUND_ID,
+    name: str = "易方达消费行业",
+    symbol: str = "110022",
+) -> dict:
+    return {
+        "instrumentId": instrument_id,
+        "symbol": symbol,
+        "name": name,
+        "purchaseStatus": purchase,
+        "redemptionStatus": redemption,
+    }
+
+
+def _rule(
+    *,
+    cutoff: str = "15:00:00",
+    instrument_id: str = _FUND_ID,
+    name: str = "易方达消费行业",
+    symbol: str = "110022",
+) -> dict:
+    return {
+        "instrumentId": instrument_id,
+        "symbol": symbol,
+        "name": name,
+        "salesChannel": "DEFAULT",
+        "cutoffTime": cutoff,
+        "timezone": "Asia/Shanghai",
+    }
+
+
+def _reminder_context(*, positions: list[dict], profiles=(), rules=()) -> dict:
+    return {
+        "positions": positions,
+        "policy": {"single_position_limit": "30.00"},
+        "marketSentiment": {
+            "tradeDate": "2026-09-01",
+            "totalUp": 3200,
+            "totalDown": 1800,
+            "qualityStatus": "FRESH",
+        },
+        "preMarket": {
+            "usIndices": [],
+            "a50Future": None,
+            "economicEvents": [],
+            "subscriptionRedemptionChanges": [],
+            "corporateActions": [],
+            "fundCutoffRules": list(rules),
+            "fundProfiles": list(profiles),
+        },
+    }
+
+
+def test_reminder_no_fund_holdings() -> None:
+    """无持仓基金 → 「今日无申赎截止提醒」；非持仓基金的截止规则也不展示。"""
+    stock = {
+        "instrumentId": "s1",
+        "symbol": "600036",
+        "name": "招商银行",
+        "type": "A股",
+        "quantity": "100",
+    }
+    context = _reminder_context(
+        positions=[stock],
+        rules=[_rule(instrument_id="other-fund")],
+    )
+    assert pre_market.cutoff_text(context) == "今日无申赎截止提醒"
+    assert pre_market.cutoff_push_text(context) == "今日无申赎截止提醒"
+    assert pre_market.reminder_has_data(context) is False
+
+
+def test_reminder_held_fund_without_status_data() -> None:
+    """有持仓基金但无（截止规则/申赎档案）状态数据 → 「今日无申赎截止提醒」。"""
+    context = _reminder_context(positions=[_fund_position()])
+    assert pre_market.cutoff_text(context) == "今日无申赎截止提醒"
+    assert pre_market.cutoff_push_text(context) == "今日无申赎截止提醒"
+
+
+def test_reminder_open_fund_with_cutoff_shows_window() -> None:
+    """档案 OPEN + 有截止规则 → 展示今日截止窗口（带渠道限定）。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile()],
+        rules=[_rule()],
+    )
+    detailed = pre_market.cutoff_text(context)
+    assert "易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai）" in detailed
+    assert "今日15:00前可提交申购/赎回" in detailed
+    assert "（以渠道状态为准）" in detailed
+    push = pre_market.cutoff_push_text(context)
+    assert "易方达消费行业今日15:00前可提交申购/赎回" in push
+    assert "（以渠道状态为准）" in push
+
+
+def test_reminder_suspended_purchase() -> None:
+    """档案申购=SUSPENDED → 「今日暂停申购」，优先于截止规则。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile(purchase="SUSPENDED")],
+        rules=[_rule()],
+    )
+    detailed = pre_market.cutoff_text(context)
+    assert "易方达消费行业(110022)今日暂停申购" in detailed
+    assert "（以基金公告为准）" in detailed
+    assert pre_market.cutoff_push_text(context).startswith("易方达消费行业今日暂停申购")
+
+
+def test_reminder_suspended_purchase_and_redemption() -> None:
+    """申购、赎回均 SUSPENDED → 「今日暂停申购/赎回」。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile(purchase="SUSPENDED", redemption="SUSPENDED")],
+    )
+    assert "易方达消费行业(110022)今日暂停申购/赎回" in pre_market.cutoff_text(context)
+    assert pre_market.cutoff_push_text(context).startswith(
+        "易方达消费行业今日暂停申购/赎回"
+    )
+
+
+def test_reminder_open_fund_without_cutoff_says_normal() -> None:
+    """档案 OPEN 但无 15:00 前截止 → 「今日可正常申购/赎回」，不编造截止。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile()],
+    )
+    detailed = pre_market.cutoff_text(context)
+    assert "易方达消费行业(110022)今日可正常申购/赎回" in detailed
+    assert "暂无15:00前截止" in detailed
+    assert pre_market.cutoff_push_text(context).startswith(
+        "易方达消费行业今日可正常申购/赎回"
+    )
+
+
+def test_reminder_suspended_ranked_before_cutoff() -> None:
+    """暂停基金排在截止窗口基金之前。"""
+    suspended_fund = {
+        "instrumentId": "fund-a",
+        "symbol": "000001",
+        "name": "华夏成长",
+        "type": "场外基金",
+        "quantity": "100",
+        "quality": "FRESH",
+        "weight": "5.00",
+    }
+    normal_fund = {
+        "instrumentId": "fund-b",
+        "symbol": "000002",
+        "name": "嘉实增长",
+        "type": "场外基金",
+        "quantity": "100",
+        "quality": "FRESH",
+        "weight": "5.00",
+    }
+    context = _reminder_context(
+        positions=[suspended_fund, normal_fund],
+        profiles=[
+            _profile(purchase="SUSPENDED", instrument_id="fund-a", name="华夏成长")
+        ],
+        rules=[
+            _rule(
+                instrument_id="fund-b",
+                name="嘉实增长",
+                symbol="000002",
+            )
+        ],
+    )
+    text = pre_market.cutoff_push_text(context)
+    assert text.index("华夏成长今日暂停申购") < text.index(
+        "嘉实增长今日15:00前可提交申购/赎回"
+    )
+
+
+def test_reminder_event_clause_flags_suspension() -> None:
+    """一句话总结：有暂停 → 「N只基金暂停申赎」，不输出截止口径。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile(purchase="SUSPENDED")],
+        rules=[_rule()],
+    )
+    assert "1只基金暂停申赎" in pre_market.summary_clauses(context)
+
+
+@pytest.mark.asyncio
+async def test_fund_profiles_query_is_effective_window_scoped() -> None:
+    conn = _QueryRecorder()
+    instrument_ids = ["11111111-1111-1111-1111-111111111111"]
+    trade_date = date(2026, 8, 31)
+
+    await repository.get_pre_market_fund_profiles(conn, instrument_ids, trade_date)
+
+    assert len(conn.queries) == 1
+    query = conn.queries[0]
+    assert "reference.fund_profiles" in query
+    assert "profile.effective_from <= $2" in query
+    assert "DISTINCT ON (profile.instrument_id)" in query

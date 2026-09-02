@@ -265,55 +265,142 @@ def impact_push_text(context: dict, *, limit: int = 2) -> str:
     return text
 
 
-def _cutoff_reminders(pre: dict, *, limit: int | None, concise: bool) -> list[str]:
-    rules = pre.get("fundCutoffRules")
-    if not isinstance(rules, list) or not rules:
-        return []
-    reminders: list[str] = []
-    for rule in rules:
-        if not isinstance(rule, dict):
-            continue
-        cutoff = str(rule.get("cutoffTime") or "")[:5]
-        if not cutoff:
-            continue
-        label = instrument_label(rule, include_symbol=not concise)
-        if concise:
-            reminders.append(f"{label}今日{cutoff}前可提交申购/赎回")
-        else:
-            channel = str(rule.get("salesChannel") or "DEFAULT")
-            channel_text = "默认渠道" if channel == "DEFAULT" else channel
-            timezone = str(rule.get("timezone") or "Asia/Shanghai")
-            reminders.append(
-                f"{label}{channel_text}截止时间{cutoff}（{timezone}），"
-                f"今日{cutoff}前可提交申购/赎回"
-            )
-        if limit is not None and len(reminders) >= limit:
-            break
-    return reminders
+# 今日提醒的空态消息：有持仓基金但无（截止规则/申赎状态）数据、或无持仓基金。
+_NO_CUTOFF_REMINDER = "今日无申赎截止提醒"
+# 基金申赎开放状态（fund_profiles 由公告回填），展示时带来源限定。
+_FUND_STATUS_CAVEAT = "（以基金公告为准）"
 
 
-def cutoff_text(pre: dict) -> str:
-    """今日操作提醒（报告正文版）：当日 15:00 前截止的基金申赎窗口。
+def _reminder_subjects(context: dict) -> list[dict]:
+    """今日提醒的标的集合 = 持仓 ∩ (截止规则 ∪ 申赎状态档案)。
 
-    规则查询已按 ``cutoff_time <= 15:00`` 过滤（见 repository），此处只做渲染。
-    数据库没有渠道实际开放状态，因此每条提醒都带「以渠道状态为准」限定。
+    每条为 ``{instrumentId, symbol, name, rules: [...], profile: dict|None}``。
+    只看持仓（无持仓基金的截止规则不在此列），档案缺行视为无状态数据。
     """
-    reminders = _cutoff_reminders(pre, limit=None, concise=False)
-    if not reminders:
-        return _MISSING
-    return "；".join(reminders) + _CHANNEL_CAVEAT + "。"
+    pre = context.get("preMarket") or {}
+    held_ids = _held_instrument_ids(context)
+    subjects: dict[str, dict] = {}
+    for source, key in (
+        (pre.get("fundCutoffRules"), "rules"),
+        (pre.get("fundProfiles"), "profile"),
+    ):
+        if not isinstance(source, list):
+            continue
+        for row in source:
+            if not isinstance(row, dict):
+                continue
+            instrument_id = str(row.get("instrumentId") or "")
+            if not instrument_id or instrument_id not in held_ids:
+                continue
+            subject = subjects.setdefault(
+                instrument_id,
+                {"instrumentId": instrument_id, "rules": [], "profile": None},
+            )
+            # 名称/代码来自截止规则或申赎档案行（同一标的各来源一致）。
+            if not subject.get("name"):
+                subject["name"] = str(row.get("name") or "")
+                subject["symbol"] = str(row.get("symbol") or "")
+            if key == "profile":
+                subject["profile"] = row
+            elif subject["profile"] is None and row.get("cutoffTime"):
+                subject["rules"].append(row)
+    return list(subjects.values())
 
 
-def cutoff_push_text(pre: dict, *, limit: int = 2) -> str:
+def _suspended_statuses(profile: dict) -> list[str]:
+    """档案中处于 SUSPENDED 的申赎方向（空 = 无暂停）。"""
+    statuses: list[str] = []
+    if str(profile.get("purchaseStatus") or "") == "SUSPENDED":
+        statuses.append("申购")
+    if str(profile.get("redemptionStatus") or "") == "SUSPENDED":
+        statuses.append("赎回")
+    return statuses
+
+
+def _earliest_cutoff(subject: dict) -> str:
+    cutoffs = [str(rule.get("cutoffTime") or "")[:5] for rule in subject["rules"]]
+    return min(cutoffs) if cutoffs else ""
+
+
+def _reminder_phrases(context: dict, *, concise: bool) -> list[str]:
+    """每只持仓基金的今日提醒短语，排序：暂停 > 有截止窗口 > 可正常无截止。"""
+    subjects = _reminder_subjects(context)
+    if not subjects:
+        return []
+
+    def sort_key(subject: dict) -> tuple[int, str]:
+        if _suspended_statuses(subject["profile"] or {}):
+            group = 0
+        elif subject["rules"]:
+            group = 1
+        else:
+            group = 2
+        label = str(subject.get("name") or subject.get("instrumentId"))
+        return group, label
+
+    phrases: list[str] = []
+    for subject in sorted(subjects, key=sort_key):
+        profile = subject["profile"]
+        suspended = _suspended_statuses(profile) if profile else []
+        label = instrument_label(subject, include_symbol=not concise)
+        if suspended:
+            phrases.append(f"{label}今日暂停{'/'.join(suspended)}")
+            continue
+        if subject["rules"]:
+            cutoff = _earliest_cutoff(subject)
+            if concise:
+                phrases.append(f"{label}今日{cutoff}前可提交申购/赎回")
+            else:
+                channel = str(subject["rules"][0].get("salesChannel") or "DEFAULT")
+                channel_text = "默认渠道" if channel == "DEFAULT" else channel
+                timezone = str(subject["rules"][0].get("timezone") or "Asia/Shanghai")
+                phrases.append(
+                    f"{label}{channel_text}截止时间{cutoff}（{timezone}），"
+                    f"今日{cutoff}前可提交申购/赎回"
+                )
+            continue
+        if concise:
+            phrases.append(f"{label}今日可正常申购/赎回")
+        else:
+            phrases.append(f"{label}今日可正常申购/赎回（暂无15:00前截止）")
+    return phrases
+
+
+def reminder_has_data(context: dict) -> bool:
+    """今日提醒是否具备事实输入（持仓 ∩ (截止规则 ∪ 申赎档案) 非空）。"""
+    return bool(_reminder_subjects(context))
+
+
+def cutoff_text(context: dict) -> str:
+    """今日操作提醒（报告正文版）。
+
+    - 无持仓基金、或持仓基金无（截止规则/申赎状态）数据 → 「今日无申赎截止提醒」
+    - 暂停 → 「X今日暂停申购/赎回（以基金公告为准）」
+    - 可正常 + 有截止 → 「X默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可
+      提交申购/赎回（以渠道状态为准）」
+    - 可正常 + 无截止 → 「X今日可正常申购/赎回（暂无15:00前截止）」
+    """
+    phrases = _reminder_phrases(context, concise=False)
+    if not phrases:
+        return _NO_CUTOFF_REMINDER
+    suspended_any = any("暂停" in phrase for phrase in phrases)
+    caveat = _FUND_STATUS_CAVEAT if suspended_any else _CHANNEL_CAVEAT
+    return "；".join(phrases) + caveat + "。"
+
+
+def cutoff_push_text(context: dict, *, limit: int = 2) -> str:
     """今日提醒（推送短句版），超项折叠为「等N只」。"""
-    reminders = _cutoff_reminders(pre, limit=limit, concise=True)
-    if not reminders:
-        return _MISSING
-    total = pre.get("fundCutoffRules")
-    text = "；".join(reminders)
-    if isinstance(total, list) and len(total) > limit:
-        text += f"等{len(total)}只"
-    return text + _CHANNEL_CAVEAT
+    phrases = _reminder_phrases(context, concise=True)
+    if not phrases:
+        return _NO_CUTOFF_REMINDER
+    text = "；".join(phrases[:limit])
+    if len(phrases) > limit:
+        text += f"等{len(phrases)}只"
+    if "暂停" in "；".join(phrases[:limit]):
+        text += _FUND_STATUS_CAVEAT
+    else:
+        text += _CHANNEL_CAVEAT
+    return text
 
 
 def _mood_phrase(context: dict) -> str | None:
@@ -354,19 +441,23 @@ def _impact_clause(context: dict) -> str | None:
 
 
 def _event_clause(context: dict) -> str | None:
-    """一句话总结中的「今日事件」片段（基金申赎截止时间）。"""
-    rules = (context.get("preMarket") or {}).get("fundCutoffRules")
-    if not isinstance(rules, list) or not rules:
+    """一句话总结中的「今日事件」片段（持仓基金申赎状态/截止）。
+
+    暂停优先（风险 > 常态截止）；无暂停时按最早截止口径；均无 → ``None``。
+    """
+    subjects = _reminder_subjects(context)
+    if not subjects:
         return None
-    cutoffs = {
-        str(rule.get("cutoffTime") or "")[:5]
-        for rule in rules
-        if isinstance(rule, dict) and str(rule.get("cutoffTime") or "")[:5]
-    }
-    if not cutoffs:
-        return None
-    earliest = min(cutoffs)
-    return f"{len(rules)}只基金{earliest}前可提交"
+    suspended = [
+        subject for subject in subjects if _suspended_statuses(subject["profile"] or {})
+    ]
+    if suspended:
+        return f"{len(suspended)}只基金暂停申赎"
+    cutoffs = [_earliest_cutoff(subject) for subject in subjects if subject["rules"]]
+    cutoffs = [cutoff for cutoff in cutoffs if cutoff]
+    if cutoffs:
+        return f"{len(subjects)}只基金{min(cutoffs)}前可提交"
+    return None
 
 
 def summary_clauses(context: dict) -> list[str]:
@@ -407,7 +498,7 @@ def _quality(context: dict) -> str:
     if sentiment_quality in {"FRESH", "ESTIMATED", "STALE"}:
         return sentiment_quality
     pre = context.get("preMarket") or {}
-    if pre.get("corporateActions") or pre.get("fundCutoffRules"):
+    if pre.get("corporateActions") or reminder_has_data(context):
         return "FRESH"
     return "UNAVAILABLE"
 
@@ -418,7 +509,7 @@ def build_report(context: dict) -> dict:
     overnight = _overnight(pre)
     attention = _attention(pre)
     impact = holding_impact_text(context)
-    reminder = cutoff_text(pre)
+    reminder = cutoff_text(context)
     conclusion = summary_text(context)
     quality = _quality(context)
     sentiment_quality = str(
@@ -458,7 +549,7 @@ def build_report(context: dict) -> dict:
             "今日操作提醒",
             reminder,
             "ACTION_PLAN",
-            quality if pre.get("fundCutoffRules") else "UNAVAILABLE",
+            quality if reminder_has_data(context) else "UNAVAILABLE",
         ),
         ("一句话总结", conclusion, "FACT", sentiment_quality),
     )
@@ -525,10 +616,10 @@ def format_push_content(context: dict) -> str:
         value_keys=("summary", "title", "name"),
     )
 
-    # 持仓影响：持仓 ∩ 今日公司行动；无持仓→暂无，无匹配→「无重大事件影响」。
+    # 持仓影响：持仓 ∩ 今日公司行动 + 持仓健康度风险。
     impact = impact_push_text(context)
-    # 今日提醒：当日 15:00 前截止的基金申赎窗口（规则查询已按 <= 15:00 过滤）。
-    reminder = cutoff_push_text(pre)
+    # 今日提醒：持仓基金申赎状态（暂停/可正常）+ 15:00 前截止窗口。
+    reminder = cutoff_push_text(context)
     # 一句话总结：市场情绪 + 持仓影响 + 今日事件，缺项省略。
     summary = "；".join(summary_clauses(context)) or _MISSING
 

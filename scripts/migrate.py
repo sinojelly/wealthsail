@@ -110,10 +110,7 @@ def _watchlist_policy_has_required_ownership(
     if roles == ("authenticated",):
         return normalized == "user_id=auth.uid"
     if roles == ("wealthsail_api",):
-        return (
-            normalized
-            == "user_id=nullifcurrent_setting'app.user_id',true,''::uuid"
-        )
+        return normalized == "user_id=nullifcurrent_setting'app.user_id',true,''::uuid"
     return False
 
 
@@ -146,10 +143,7 @@ def _report_policy_has_required_audience(
         return False
 
     if table_name == "reports":
-        expected = (
-            f"{membership}audience_user_idisnullor"
-            f"audience_user_id={actor_id}"
-        )
+        expected = f"{membership}audience_user_idisnulloraudience_user_id={actor_id}"
     elif table_name == "report_items":
         expected = (
             f"{membership}existsselect1fromreporting.reportsparent_reportwhere"
@@ -159,9 +153,10 @@ def _report_policy_has_required_audience(
             f"parent_report.audience_user_id={actor_id}"
         )
     required_or_depth = 1 if table_name == "reports" else 2
-    return normalized == expected and _boolean_operator_depth(
-        policy_expression, "or"
-    ) >= required_or_depth
+    return (
+        normalized == expected
+        and _boolean_operator_depth(policy_expression, "or") >= required_or_depth
+    )
 
 
 def _boolean_operator_depth(expression: str, operator: str) -> int:
@@ -263,9 +258,7 @@ def _shared_pre_market_json_constraints_are_canonical(
     """Require both named JSON fields to accept objects only."""
 
     expected = {
-        "shared_pre_market_briefs_draft_check": (
-            "checkjsonb_typeofdraft='object'"
-        ),
+        "shared_pre_market_briefs_draft_check": ("checkjsonb_typeofdraft='object'"),
         "shared_pre_market_briefs_source_context_check": (
             "checkjsonb_typeofsource_context='object'"
         ),
@@ -338,6 +331,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     pre_market_tables = (
         "market.corporate_actions",
         "reference.instrument_cutoff_rules",
+        "reference.fund_profiles",
     )
     pre_market_reference_boundary: dict[str, bool] = {}
     for table in pre_market_tables:
@@ -375,7 +369,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
                   ) privilege
                  WHERE (namespace.nspname, relation.relname) IN (
                            ('market', 'corporate_actions'),
-                           ('reference', 'instrument_cutoff_rules')
+                           ('reference', 'instrument_cutoff_rules'),
+                           ('reference', 'fund_profiles')
                        )
                    AND privilege.grantee = 0
                    AND privilege.privilege_type = 'SELECT'
@@ -1088,7 +1083,12 @@ async def _readback(conn: asyncpg.Connection) -> None:
         """
     )
     watchlist_policies = {
-        row["policyname"]: (row["cmd"], tuple(row["roles"]), row["qual"], row["with_check"])
+        row["policyname"]: (
+            row["cmd"],
+            tuple(row["roles"]),
+            row["qual"],
+            row["with_check"],
+        )
         for row in await conn.fetch(
             """
             SELECT policyname, cmd, roles, qual, with_check
@@ -1193,18 +1193,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
             """
         )
     }
-    variant_constraint = split_report_constraints.get(
-        "reports_report_variant_check"
-    )
+    variant_constraint = split_report_constraints.get("reports_report_variant_check")
     variant_audience_constraint = split_report_constraints.get(
         "reports_variant_audience_check"
     )
     audience_profile_constraint = split_report_constraints.get(
         "fk_reports_audience_profile"
     )
-    audience_constraint = split_report_constraints.get(
-        "fk_reports_tenant_audience"
-    )
+    audience_constraint = split_report_constraints.get("fk_reports_tenant_audience")
 
     def compact_contract(value: object) -> str:
         compact = str(value or "").lower().replace('"', "")
@@ -1220,8 +1216,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "identity.tenant_memberstenant_id,user_idondeleterestrict"
     )
     expected_audience_profile_fk = (
-        "foreignkeyaudience_user_idreferences"
-        "identity.profilesidondeleterestrict"
+        "foreignkeyaudience_user_idreferencesidentity.profilesidondeleterestrict"
     )
     expected_variant_audience_check = (
         "checkreport_variant='standard'andaudience_user_idisnullor"
@@ -1260,8 +1255,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     split_report_shape_valid = (
         set(split_report_columns) == {"report_variant", "audience_user_id"}
         and split_report_columns["report_variant"][0:2] == ("text", "NO")
-        and "standard"
-        in str(split_report_columns["report_variant"][2] or "").lower()
+        and "standard" in str(split_report_columns["report_variant"][2] or "").lower()
         and split_report_columns["audience_user_id"][0:2] == ("uuid", "YES")
         and variant_constraint is not None
         and variant_constraint[0:2] == ("c", True)
@@ -1300,9 +1294,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         ("reports", "reports_audience_select"): ("authenticated",),
         ("reports", "reports_audience_api_select"): ("wealthsail_api",),
         ("report_items", "report_items_audience_select"): ("authenticated",),
-        ("report_items", "report_items_audience_api_select"): (
-            "wealthsail_api",
-        ),
+        ("report_items", "report_items_audience_api_select"): ("wealthsail_api",),
     }
     report_select_policies_valid = set(report_select_policies) == set(
         required_report_select_policies
@@ -1483,14 +1475,11 @@ async def _readback(conn: asyncpg.Connection) -> None:
         and _shared_pre_market_json_constraints_are_canonical(
             shared_pre_market_constraints
         )
-        and shared_pre_market_columns["context_hash"]
-        == ("character", "NO", 64)
+        and shared_pre_market_columns["context_hash"] == ("character", "NO", 64)
         and shared_pre_market_columns["quality_status"][0:2] == ("text", "NO")
         and shared_pre_market_columns["generated_at"][0:2]
         == ("timestamp with time zone", "NO")
-        and shared_pre_market_constraints.get(
-            "shared_pre_market_briefs_trade_date_key"
-        )
+        and shared_pre_market_constraints.get("shared_pre_market_briefs_trade_date_key")
         == "UNIQUE (trade_date)"
         and "^[0-9a-f]{64}$" in cache_contract
         and all(

@@ -81,7 +81,8 @@ def test_personalized_report_marks_missing_facts_as_missing() -> None:
     # 有持仓、当日无匹配公司行动且估值健康 → 确定性结论（区别于"无数据"的「暂无」）。
     assert bodies["持仓今日影响"] == "今日无重大事件，持仓估值整体新鲜"
     assert "贵州茅台" in bodies["关注标的动态"]
-    assert bodies["今日操作提醒"] == "暂无"
+    # 有持仓基金但无申赎截止/状态数据 → 无提醒的确定性空态。
+    assert bodies["今日操作提醒"] == "今日无申赎截止提醒"
     assert draft["quality"] == "FRESH"
 
 

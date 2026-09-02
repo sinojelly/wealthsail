@@ -14,9 +14,11 @@ from backend.common.tenancy import TenantContext
 from backend.portfolio.scope import AssetScope
 from backend.reports.pre_market import (
     ACTION_LABELS,
+    cutoff_push_text,
     cutoff_text,
     holding_impact_text,
     instrument_label,
+    reminder_has_data,
     safe_decimal,
 )
 
@@ -108,7 +110,7 @@ def build_report(context: dict) -> dict:
     # 持仓影响需要 positions 做归因，因此传整个 context 而非仅 preMarket。
     impact = holding_impact_text(context)
     watchlist = _watchlist_text(context)
-    reminder = cutoff_text(pre)
+    reminder = cutoff_text(context)
     sections = (
         (_SECTION_TITLES[0], impact, "RISK", _impact_quality(pre)),
         (_SECTION_TITLES[1], watchlist, "FACT", _watchlist_quality(context)),
@@ -116,7 +118,7 @@ def build_report(context: dict) -> dict:
             _SECTION_TITLES[2],
             reminder,
             "ACTION_PLAN",
-            "FRESH" if pre.get("fundCutoffRules") else "UNAVAILABLE",
+            "FRESH" if reminder_has_data(context) else "UNAVAILABLE",
         ),
     )
     qualities = [item_quality for *__, item_quality in sections]
@@ -158,18 +160,8 @@ def _clip(text: str, limit: int) -> str:
 
 def format_push_content(context: dict) -> str:
     """Build a three-line WeCom summary capped at 200 characters."""
-    pre = context.get("preMarket") or {}
     draft = build_report(context)
-    rules = pre.get("fundCutoffRules") or []
-    reminder_text = _MISSING
-    if rules:
-        first_rule = rules[0]
-        cutoff = str(first_rule.get("cutoffTime") or "")[:5]
-        if cutoff:
-            reminder_text = (
-                f"{instrument_label(first_rule, include_symbol=False)}"
-                f"{cutoff}截止参考，以渠道状态为准"
-            )
+    reminder_text = cutoff_push_text(context)
     return "\n".join(
         (
             f"持仓：{_clip(str(draft['items'][0]['body']), 70)}",

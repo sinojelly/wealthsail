@@ -330,3 +330,28 @@ def test_derive_subscription_change_labels_channel() -> None:
     )
     assert change["summary"] == "TIANTIAN截止15:00（Asia/Shanghai）"
     assert change["title"] == "基金A 申赎截止15:00"
+
+
+@pytest.mark.asyncio
+async def test_fund_profiles_flow_into_pre_market_context(monkeypatch) -> None:
+    """reference.fund_profiles 的读取结果必须进入 preMarket.fundProfiles。"""
+    conn = _stub_context_deps(monkeypatch, ak_items=[], db_actions=[], cutoff_rules=[])
+    profiles = [
+        {
+            "instrumentId": "inst-fund",
+            "symbol": "FUND001",
+            "name": "某场外基金",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "SUSPENDED",
+        }
+    ]
+    monkeypatch.setattr(
+        service.repository,
+        "get_pre_market_fund_profiles",
+        mock.AsyncMock(return_value=profiles),
+    )
+
+    ctx = await service.build_report_context(conn, "tenant-1", "PRE_MARKET")
+
+    assert ctx["preMarket"]["fundProfiles"] == profiles
+    assert ctx["preMarket"]["fundProfiles"][0]["redemptionStatus"] == "SUSPENDED"

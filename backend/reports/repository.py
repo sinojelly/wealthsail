@@ -178,6 +178,59 @@ async def get_pre_market_cutoff_rules(
     ]
 
 
+async def get_pre_market_fund_profiles(
+    conn: asyncpg.Connection,
+    instrument_ids: list[str],
+    trade_date: date,
+) -> list[dict]:
+    """Read effective OTC-fund subscription/redemption openness.
+
+    Returns the latest effective ``reference.fund_profiles`` row per instrument
+    (``purchase_status`` / ``redemption_status`` in ``OPEN``/``SUSPENDED``).
+    An absent row means "no verified status" — the caller must render that as
+    "no cutoff reminder" and never guess openness.
+    """
+    if not instrument_ids:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (profile.instrument_id)
+               profile.instrument_id, COALESCE(alias.ticker, '') AS symbol,
+               instrument.canonical_name AS name,
+               profile.purchase_status, profile.redemption_status,
+               profile.effective_from, profile.effective_to
+          FROM reference.fund_profiles profile
+          JOIN reference.instruments instrument ON instrument.id = profile.instrument_id
+          LEFT JOIN LATERAL (
+              SELECT ia.alias_value AS ticker
+                FROM reference.instrument_aliases ia
+               WHERE ia.instrument_id = profile.instrument_id
+                 AND ia.alias_type = 'TICKER'
+                 AND ia.effective_from <= $2
+                 AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
+               ORDER BY ia.effective_from DESC
+               LIMIT 1
+          ) alias ON TRUE
+         WHERE profile.instrument_id = ANY($1::uuid[])
+           AND profile.effective_from <= $2
+           AND (profile.effective_to IS NULL OR profile.effective_to >= $2)
+         ORDER BY profile.instrument_id, profile.effective_from DESC
+        """,
+        instrument_ids,
+        trade_date,
+    )
+    return [
+        {
+            "instrumentId": str(row["instrument_id"]),
+            "symbol": str(row["symbol"] or ""),
+            "name": str(row["name"]),
+            "purchaseStatus": str(row["purchase_status"]),
+            "redemptionStatus": str(row["redemption_status"]),
+        }
+        for row in rows
+    ]
+
+
 async def get_shared_market_brief(
     conn: asyncpg.Connection, trade_date: date
 ) -> asyncpg.Record | None:

@@ -588,6 +588,11 @@ async def build_report_context(
             for rule in cutoff_rules
             if rule.get("cutoffTime")
         ]
+        # 基金申赎开放状态（可正常/暂停）：reference.fund_profiles 最新生效行。
+        # 表缺行/查询失败均降级为空列表——下游据此渲染「今日无申赎截止提醒」。
+        fund_profiles = await repository.get_pre_market_fund_profiles(
+            conn, instrument_ids, report_date
+        )
 
         pre_market_context = {
             "usIndices": global_snapshot.get("usIndices", []),
@@ -596,6 +601,7 @@ async def build_report_context(
             "subscriptionRedemptionChanges": subscription_changes,
             "corporateActions": corporate_actions,
             "fundCutoffRules": cutoff_rules,
+            "fundProfiles": fund_profiles,
         }
     if session == "FUND_1430":
         fund_ids = [
