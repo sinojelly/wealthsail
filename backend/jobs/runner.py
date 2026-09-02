@@ -20,9 +20,20 @@ import asyncpg
 from backend.common.database import Pool, system_connection
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
+from backend.reports import pre_market_personalized
 from backend.reports.service import generate_report
 
 logger = logging.getLogger("wealthsail.runner")
+
+# Internal dispatch phases for the split 08:30 / 08:35 pre-market report.
+PRE_MARKET_PHASES = ("PRE_MARKET_MACRO", "PRE_MARKET_PERSONALIZED")
+
+# Map an internal dispatch phase back to the public session stored on the
+# workflow.jobs row, so recovery and runner lookups stay migration-free.
+PUBLIC_SESSION_BY_PHASE = {
+    "PRE_MARKET_MACRO": "PRE_MARKET",
+    "PRE_MARKET_PERSONALIZED": "PRE_MARKET",
+}
 
 
 @dataclass(frozen=True)
@@ -31,18 +42,38 @@ class JobLease:
     lease_token: str
 
 
-def business_job_key(job_id: str, session: str, now: datetime) -> str:
+def business_job_key(
+    job_id: str, phase: str, now: datetime, *, user_id: str | None = None
+) -> str:
     """Stable idempotency key for one logical report occurrence.
 
     Fixed sessions run once per trade date.  INTRADAY is intentionally a
     sequence of five-minute reports, so its key includes the logical bucket;
-    repeated scheduler ticks inside the same bucket remain idempotent.
+    repeated scheduler ticks inside the same bucket remain idempotent.  The
+    split personalized pre-market phase appends the audience UUID so each
+    member gets an independent terminal key.
     """
-    key = f"job:{job_id}:{now.date().isoformat()}:{session}"
-    if session == "INTRADAY":
+    key = f"job:{job_id}:{now.date().isoformat()}:{phase}"
+    if phase == "INTRADAY":
         bucket_minute = now.minute - (now.minute % 5)
         key = f"{key}:{now.hour:02d}{bucket_minute:02d}"
+    if user_id is not None:
+        key = f"{key}:{user_id}"
     return key
+
+
+def parse_business_job_key(key: str) -> tuple[str, str | None]:
+    """Reverse ``business_job_key``: phase plus optional audience UUID.
+
+    Recovery reads the persisted key and must never fall back to the legacy
+    tenant-wide ``PRE_MARKET`` path, so an unknown shape fails closed.
+    """
+    parts = key.split(":")
+    if len(parts) < 4 or parts[0] != "job":
+        raise ValueError(f"invalid business job key: {key}")
+    phase = parts[3]
+    audience_user_id = parts[4] if len(parts) >= 5 else None
+    return phase, audience_user_id
 
 
 def worker_owner() -> str:
@@ -237,10 +268,16 @@ async def _heartbeat_loop(
 async def run_session(
     pool: Pool,
     settings: Settings,
-    session: str,
+    phase: str,
     now: datetime,
 ) -> dict:
-    """Execute a due session for every enabled tenant job."""
+    """Execute one internal dispatch phase for every enabled tenant job.
+
+    The split personalized pre-market phase fans out once per active tenant
+    member; each member's failure is isolated so one empty/blocked member does
+    not abort the rest.
+    """
+    public_session = PUBLIC_SESSION_BY_PHASE.get(phase, phase)
     async with system_connection(pool) as conn:
         jobs = await conn.fetch(
             """
@@ -248,19 +285,36 @@ async def run_session(
             FROM workflow.jobs j
             WHERE j.report_session = $1 AND j.is_enabled = TRUE
             """,
-            session,
+            public_session,
         )
 
     outcomes: dict[str, str] = {}
     for job in jobs:
         tenant_id = str(job["tenant_id"])
-        key = business_job_key(str(job["id"]), session, now)
+        if phase == "PRE_MARKET_PERSONALIZED":
+            members = await _active_tenant_members(pool, tenant_id)
+            for user_id in members:
+                label = f"{tenant_id}:{user_id}"
+                key = business_job_key(
+                    str(job["id"]), phase, now, user_id=user_id
+                )
+                try:
+                    outcomes[label] = await _execute_with_lease(
+                        pool, settings, job, key, public_session
+                    )
+                except Exception as exc:  # noqa: BLE001 -- isolate members
+                    logger.exception(
+                        "personalized job failed for %s: %s", label, phase
+                    )
+                    outcomes[label] = f"FAILED:{exc.__class__.__name__}"
+            continue
+        key = business_job_key(str(job["id"]), phase, now)
         try:
             outcomes[tenant_id] = await _execute_with_lease(
-                pool, settings, job, key, session
+                pool, settings, job, key, public_session
             )
         except Exception as exc:  # noqa: BLE001 -- isolate tenants
-            logger.exception("job failed for tenant %s: %s", tenant_id, session)
+            logger.exception("job failed for tenant %s: %s", tenant_id, phase)
             outcomes[tenant_id] = f"FAILED:{exc.__class__.__name__}"
     return outcomes
 
@@ -270,7 +324,7 @@ async def _execute_with_lease(
     settings: Settings,
     job: asyncpg.Record,
     key: str,
-    session: str,
+    public_session: str,
 ) -> str:
     lease = await claim_job_run(
         pool,
@@ -287,20 +341,47 @@ async def _execute_with_lease(
         name=f"job-heartbeat:{lease.run_id}",
     )
     try:
-        acting_user = await _tenant_owner_user(pool, str(job["tenant_id"]))
-        ctx = TenantContext(
-            user_id=acting_user,
-            tenant_id=str(job["tenant_id"]),
-            tenant_role="OWNER",
-        )
-        report = await generate_report(
-            pool,
-            ctx,
-            settings,
-            session,
-            job_run_id=lease.run_id,
-            actor_type="SYSTEM_WORKER",
-        )
+        phase, audience_user_id = parse_business_job_key(key)
+        tenant_id = str(job["tenant_id"])
+        if phase == "PRE_MARKET_PERSONALIZED":
+            # Members with neither active positions nor a watchlist have no
+            # personal facts to report; they keep only the shared macro brief.
+            member_ctx = TenantContext(
+                user_id=audience_user_id,
+                tenant_id=tenant_id,
+                tenant_role="OWNER",
+            )
+            report = await pre_market_personalized.generate_pre_market_personalized(
+                pool, member_ctx, settings, job_run_id=lease.run_id
+            )
+            if report is None:
+                if not await finish_job_run(
+                    pool,
+                    lease.run_id,
+                    lease.lease_token,
+                    status="SKIPPED",
+                    error_class="NO_PERSONAL_CONTEXT",
+                ):
+                    raise RuntimeError("job lease lost before completion")
+                return "SKIPPED:NO_PERSONAL_CONTEXT"
+        else:
+            acting_user = await _tenant_owner_user(pool, tenant_id)
+            ctx = TenantContext(
+                user_id=acting_user,
+                tenant_id=tenant_id,
+                tenant_role="OWNER",
+            )
+            report = await generate_report(
+                pool,
+                ctx,
+                settings,
+                public_session,
+                report_variant=phase if phase in PRE_MARKET_PHASES else "STANDARD",
+                audience_user_id=None,
+                delivery_user_id=None,
+                job_run_id=lease.run_id,
+                actor_type="SYSTEM_WORKER",
+            )
         if not await finish_job_run(
             pool, lease.run_id, lease.lease_token, status="COMPLETED"
         ):
@@ -338,3 +419,18 @@ async def _tenant_owner_user(pool: Pool, tenant_id: str) -> str:
     if user_id is None:
         raise RuntimeError(f"tenant {tenant_id} has no active OWNER member")
     return str(user_id)
+
+
+async def _active_tenant_members(pool: Pool, tenant_id: str) -> list[str]:
+    """ACTIVE tenant members who each receive their own 08:35 report."""
+    async with system_connection(pool) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_id
+            FROM identity.tenant_members
+            WHERE tenant_id = $1 AND status = 'ACTIVE'
+            ORDER BY created_at ASC
+            """,
+            tenant_id,
+        )
+    return [str(row["user_id"]) for row in rows]

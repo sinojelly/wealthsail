@@ -42,14 +42,54 @@ class SessionSchedule:
     # Fixed sessions can be caught up after a short Worker restart.  The
     # persistent job key keeps repeated ticks idempotent across processes.
     catch_up_minutes: int = 15
+    # Internal dispatch value (what the runner executes).  For split pre-market
+    # the public session ``PRE_MARKET`` expands into two phases five minutes
+    # apart; legacy sessions dispatch under their own name.
+    phase: str = ""
+    # Database job lookup key (workflow.jobs.report_session).  Both split
+    # pre-market phases keep the legacy public value so no migration is needed.
+    public_session: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "phase", self.phase or self.session)
+        object.__setattr__(
+            self, "public_session", self.public_session or self.session
+        )
 
 
 SCHEDULES: tuple[SessionSchedule, ...] = (
-    SessionSchedule("PRE_MARKET", "盘前简报", minute=30, hour=8),
+    SessionSchedule(
+        "PRE_MARKET",
+        "盘前简报·宏观",
+        minute=30,
+        hour=8,
+        phase="PRE_MARKET_MACRO",
+        public_session="PRE_MARKET",
+    ),
+    SessionSchedule(
+        "PRE_MARKET",
+        "盘前简报·个性化",
+        minute=35,
+        hour=8,
+        phase="PRE_MARKET_PERSONALIZED",
+        public_session="PRE_MARKET",
+    ),
     SessionSchedule("INTRADAY", "盘中跟踪", minute=0, hour=9, every_minutes=5),
     SessionSchedule("FUND_1430", "基金 2:30 报告", minute=30, hour=14),
     SessionSchedule("POST_MARKET", "盘后复盘", minute=30, hour=15),
 )
+
+
+# Internal dispatch phases for the split 08:30 / 08:35 pre-market report.
+PRE_MARKET_PHASES = ("PRE_MARKET_MACRO", "PRE_MARKET_PERSONALIZED")
+
+
+def due_at(phase: str, now: datetime) -> bool:
+    """True when the given internal dispatch phase is due at ``now``."""
+    schedule = next((s for s in SCHEDULES if s.phase == phase), None)
+    if schedule is None:
+        return False
+    return is_due(schedule, now)
 
 
 def is_due(schedule: SessionSchedule, now: datetime) -> bool:
@@ -91,7 +131,7 @@ def _fire_key(schedule: SessionSchedule, now: datetime) -> tuple[str, str]:
             second=0,
             microsecond=0,
         )
-    return schedule.session, slot.strftime("%Y%m%d%H%M")
+    return schedule.phase, slot.strftime("%Y%m%d%H%M")
 
 
 async def is_trading_day(conn, day: datetime) -> bool:
@@ -183,9 +223,9 @@ class Scheduler:
         )
 
     async def _dispatch(self, schedule: SessionSchedule, now: datetime) -> None:
-        """Execute one due session while isolating it from sibling failures."""
-        logger.info("dispatching %s at %s", schedule.session, now.isoformat())
+        """Execute one due phase while isolating it from sibling failures."""
+        logger.info("dispatching %s at %s", schedule.phase, now.isoformat())
         try:
-            await self._execute(schedule.session, now)
+            await self._execute(schedule.phase, now)
         except Exception:  # noqa: BLE001
-            logger.exception("scheduler execution failed for %s", schedule.session)
+            logger.exception("scheduler execution failed for %s", schedule.phase)

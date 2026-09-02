@@ -11,7 +11,12 @@ import pytest
 from backend.config import Settings
 from backend.jobs import runner
 from backend.jobs.runner import business_job_key, claim_job_run, finish_job_run
-from backend.jobs.scheduler import SCHEDULES, Scheduler
+from backend.jobs.scheduler import (
+    SCHEDULES,
+    Scheduler,
+    SESSION_LABELS,
+    due_at,
+)
 
 
 def test_business_job_key_ignores_tick_seconds_and_worker_restart() -> None:
@@ -277,3 +282,52 @@ async def test_recovery_scan_executes_due_report_run_with_original_key(
     assert "make_interval(mins =>" in conn.sql
     assert executed == [("job:job-1:2026-08-26:PRE_MARKET", "PRE_MARKET")]
     assert outcomes == {"job:job-1:2026-08-26:PRE_MARKET": "COMPLETED:report=report-1"}
+
+
+def test_pre_market_phases_fire_at_exact_shanghai_slots() -> None:
+    shanghai = ZoneInfo("Asia/Shanghai")
+    assert due_at("PRE_MARKET_MACRO", datetime(2026, 9, 2, 8, 30, 5, tzinfo=shanghai))
+    assert due_at(
+        "PRE_MARKET_PERSONALIZED", datetime(2026, 9, 2, 8, 35, 5, tzinfo=shanghai)
+    )
+    assert not due_at(
+        "PRE_MARKET_PERSONALIZED", datetime(2026, 9, 2, 8, 34, 59, tzinfo=shanghai)
+    )
+    # Macro keeps its legacy bounded catch-up window (…08:45).
+    assert due_at("PRE_MARKET_MACRO", datetime(2026, 9, 2, 8, 40, tzinfo=shanghai))
+
+
+def test_four_public_session_labels_remain_unchanged() -> None:
+    assert dict(SESSION_LABELS) == {
+        "PRE_MARKET": "盘前简报",
+        "INTRADAY": "盘中跟踪",
+        "FUND_1430": "基金 2:30 报告",
+        "POST_MARKET": "盘后交互复盘",
+    }
+
+
+@pytest.mark.asyncio
+async def test_both_pre_market_phases_skip_exchange_holidays() -> None:
+    shanghai = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 10, 1, 8, 30, tzinfo=shanghai)
+
+    dispatched: list[str] = []
+
+    async def execute(phase: str, _at: datetime) -> None:
+        dispatched.append(phase)
+
+    async def trading_day(_now: datetime) -> bool:
+        return False
+
+    scheduler = Scheduler(
+        Settings(_env_file=None),
+        execute,
+        trading_day_check=trading_day,
+        now_provider=lambda: now,
+    )
+    # 08:30 macro is due by the clock, but the holiday gate must still block
+    # every phase before any dispatch.
+    assert due_at("PRE_MARKET_MACRO", now) is True
+    await scheduler._tick()
+    assert dispatched == []
+

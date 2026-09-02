@@ -152,3 +152,98 @@ async def test_debug_service_hides_inactive_or_cross_tenant_target(monkeypatch) 
         )
 
     generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_debug_personalized_phase_requires_active_member(monkeypatch) -> None:
+    conn = MembershipConnection(active=False)
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    personalized = AsyncMock()
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        debug_service.pre_market_personalized,
+        "generate_pre_market_personalized",
+        personalized,
+    )
+
+    with pytest.raises(NotFoundError, match="活动成员"):
+        await debug_service.trigger_report_once(
+            object(),
+            TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+            Settings(_env_file=None, app_env="test"),
+            "PRE_MARKET",
+            target_user_id=TARGET_ID,
+            phase="PERSONALIZED",
+        )
+
+    personalized.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_debug_personalized_phase_returns_null_for_empty_context(
+    monkeypatch,
+) -> None:
+    conn = MembershipConnection(active=True)
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    # Empty/empty member: no personal facts to report.
+    personalized = AsyncMock(return_value=None)
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        debug_service.pre_market_personalized,
+        "generate_pre_market_personalized",
+        personalized,
+    )
+
+    result = await debug_service.trigger_report_once(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "PRE_MARKET",
+        target_user_id=TARGET_ID,
+        phase="PERSONALIZED",
+    )
+
+    assert result == {"reportId": None, "outboxId": None}
+    personalized.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_debug_macro_phase_is_the_default_for_pre_market(monkeypatch) -> None:
+    conn = MembershipConnection(active=True)
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    generate = AsyncMock(return_value={"id": "macro-1"})
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(debug_service.report_service, "generate_report", generate)
+    pool = object()
+
+    result = await debug_service.trigger_report_once(
+        pool,
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "PRE_MARKET",
+    )
+
+    assert result == {"reportId": "macro-1", "outboxId": None}
+    generate.assert_awaited_once_with(
+        pool,
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "PRE_MARKET",
+        actor_type="USER",
+        force=True,
+        report_variant="PRE_MARKET_MACRO",
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": USER_ID},
+    )
