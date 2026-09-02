@@ -6,6 +6,7 @@ from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.errors import NotFoundError, ValidationError_
+from backend.reports import intraday
 from backend.reports import pre_market_personalized
 from backend.reports import repository
 from backend.reports import service as report_service
@@ -60,6 +61,9 @@ async def trigger_report_once(
         report_id = str(report["id"])
         outbox_id = report.pop("_deliveryOutboxId", None)
         return {"reportId": report_id, "outboxId": outbox_id}
+
+    if session == "INTRADAY" and phase == "ALERT":
+        return await _trigger_intraday_alert(pool, ctx, settings, target_user_id)
 
     target = target_user_id or ctx.user_id
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
@@ -128,6 +132,42 @@ async def _trigger_personalized(
     report = await pre_market_personalized.generate_pre_market_personalized(
         pool, member_ctx, settings
     )
+    if report is None:
+        return {"reportId": None, "outboxId": None}
+    report_id = str(report["id"])
+    outbox_id = report.pop("_deliveryOutboxId", None)
+    return {"reportId": report_id, "outboxId": outbox_id}
+
+
+async def _trigger_intraday_alert(
+    pool: Pool,
+    ctx: TenantContext,
+    settings: Settings,
+    target_user_id: str | None,
+) -> dict[str, str | None]:
+    """Force one member's condition-triggered INTRADAY alert via debug trigger."""
+    target = target_user_id or ctx.user_id
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        active_member = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM identity.tenant_members
+                 WHERE tenant_id = $1
+                   AND user_id = $2
+                   AND status = 'ACTIVE'
+            )
+            """,
+            ctx.tenant_id,
+            target,
+        )
+    if not active_member:
+        raise NotFoundError("目标用户不是当前租户的活动成员")
+
+    member_ctx = TenantContext(
+        user_id=target, tenant_id=ctx.tenant_id, tenant_role="OWNER"
+    )
+    report = await intraday.maybe_generate_intraday_alert(pool, member_ctx, settings)
     if report is None:
         return {"reportId": None, "outboxId": None}
     report_id = str(report["id"])

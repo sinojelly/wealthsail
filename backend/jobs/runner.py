@@ -20,6 +20,7 @@ import asyncpg
 from backend.common.database import Pool, system_connection
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
+from backend.reports import intraday
 from backend.reports import pre_market_personalized
 from backend.reports.service import generate_report
 
@@ -287,7 +288,10 @@ async def run_session(
     outcomes: dict[str, str] = {}
     for job in jobs:
         tenant_id = str(job["tenant_id"])
-        if phase == "PRE_MARKET_PERSONALIZED":
+        # Both the split personalized pre-market report and the condition-
+        # triggered INTRADAY alert are evaluated per active tenant member, so
+        # each member's own holdings and 30-minute cooldown stay isolated.
+        if phase in ("PRE_MARKET_PERSONALIZED", "INTRADAY"):
             members = await _active_tenant_members(pool, tenant_id)
             for user_id in members:
                 label = f"{tenant_id}:{user_id}"
@@ -356,6 +360,28 @@ async def _execute_with_lease(
                 ):
                     raise RuntimeError("job lease lost before completion")
                 return "SKIPPED:NO_PERSONAL_CONTEXT"
+        elif phase == "INTRADAY":
+            # Condition-triggered: only generates/delivers when a threshold is
+            # breached and the 30-minute per-user cooldown has elapsed.
+            member_user = audience_user_id or await _tenant_owner_user(pool, tenant_id)
+            member_ctx = TenantContext(
+                user_id=member_user,
+                tenant_id=tenant_id,
+                tenant_role="OWNER",
+            )
+            report = await intraday.maybe_generate_intraday_alert(
+                pool, member_ctx, settings, job_run_id=lease.run_id
+            )
+            if report is None:
+                if not await finish_job_run(
+                    pool,
+                    lease.run_id,
+                    lease.lease_token,
+                    status="SKIPPED",
+                    error_class="INTRADAY_NO_ALERT",
+                ):
+                    raise RuntimeError("job lease lost before completion")
+                return "SKIPPED:INTRADAY_NO_ALERT"
         else:
             acting_user = await _tenant_owner_user(pool, tenant_id)
             ctx = TenantContext(

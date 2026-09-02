@@ -1,6 +1,7 @@
 """Controlled one-shot report trigger contracts."""
 
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -304,3 +305,69 @@ async def test_debug_macro_phase_is_the_default_for_pre_market(monkeypatch) -> N
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
         trigger_audit_details={"targetUserId": USER_ID},
     )
+
+
+@pytest.mark.asyncio
+async def test_debug_intraday_alert_phase_routes_to_real_generator(monkeypatch) -> None:
+    """?session=INTRADAY&phase=ALERT must reach the real condition-triggered
+    generator and return its report id (here a single holding breaches +3%)."""
+
+    @asynccontextmanager
+    async def debug_txn(*_a, **_k):
+        yield MembershipConnection(active=True)
+
+    @asynccontextmanager
+    async def gen_txn(*_a, **_k):
+        yield SimpleNamespace()
+
+    captured: dict[str, object] = {}
+
+    async def fake_context(
+        conn, tenant_id, session, *, audience_user_id=None, asset_scope=None
+    ):
+        captured["audience"] = audience_user_id
+        captured["scope"] = asset_scope
+        return {
+            "positions": [{"instrumentId": "inst-1", "changePct": "3.5"}],
+            "summary": {"dailyPnl": "0", "totalAsset": "100"},
+        }
+
+    async def fake_generate(*_a, **kwargs):
+        captured["generate_kwargs"] = kwargs
+        return {"id": "rep-intraday", "_deliveryOutboxId": None}
+
+    async def fake_day_change(*_a, **_k):
+        return {"inst-1": Decimal("3.5")}
+
+    async def fake_claim(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(debug_service, "tenant_transaction", debug_txn)
+    monkeypatch.setattr(debug_service.intraday, "tenant_transaction", gen_txn)
+    monkeypatch.setattr(debug_service.intraday, "build_report_context", fake_context)
+    monkeypatch.setattr(debug_service.intraday, "generate_report", fake_generate)
+    monkeypatch.setattr(
+        debug_service.intraday.repository, "latest_day_change_pct", fake_day_change
+    )
+    monkeypatch.setattr(
+        debug_service.intraday.repository, "claim_intraday_alert", fake_claim
+    )
+
+    result = await debug_service.trigger_report_once(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "INTRADAY",
+        target_user_id=TARGET_ID,
+        phase="ALERT",
+    )
+
+    assert result == {"reportId": "rep-intraday", "outboxId": None}
+    assert captured["generate_kwargs"]["report_variant"] == "INTRADAY_ALERT"
+    assert captured["generate_kwargs"]["force"] is True
+    assert captured["generate_kwargs"]["audience_user_id"] == TARGET_ID
+    assert captured["generate_kwargs"]["delivery_user_id"] == TARGET_ID
+    assert captured["generate_kwargs"]["push_content_override"] is not None
+    # The alert generator must own the asset scope, not the caller's role.
+    assert captured["scope"].kind == "MINE"
+    assert str(captured["scope"].owner_user_id) == TARGET_ID

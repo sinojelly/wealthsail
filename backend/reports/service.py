@@ -262,6 +262,7 @@ async def generate_report(
     trigger_audit_details: dict | None = None,
     context: dict | None = None,
     asset_scope: AssetScope | None = None,
+    push_content_override: str | None = None,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -382,6 +383,11 @@ async def generate_report(
             error_class = exc.__class__.__name__
             draft = _fallback_draft(session, context)
         draft = _attach_deterministic_fund_items(session, draft, context)
+
+    # Callers such as the condition-triggered INTRADAY alert supply a tailored
+    # push body (trigger condition + live data) instead of the generic preview.
+    if push_content_override is not None:
+        push_content = push_content_override
 
     # Phase 3: write with version-conflict retry.
     last_error: Exception | None = None

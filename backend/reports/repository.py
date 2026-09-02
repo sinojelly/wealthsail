@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from urllib.parse import quote
-from datetime import date
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 import asyncpg
 
@@ -774,3 +775,83 @@ async def get_report_outbox_id(
         user_id,
     )
     return str(value) if value is not None else None
+
+
+async def latest_day_change_pct(
+    conn: asyncpg.Connection, tenant_id: str, instrument_ids: list[str]
+) -> dict[str, Decimal]:
+    """Latest persisted day-change % (今日涨跌幅) per held instrument.
+
+    The Worker refreshes equities quotes into ``market.market_observations``;
+    the intraday alert evaluation reads that already-persisted value instead
+    of calling an external quote provider on every 5-minute tick.
+    """
+    if not instrument_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (o.subject_id)
+               o.subject_id,
+               o.metadata ->> 'changePct' AS change_pct
+          FROM market.market_observations o
+         WHERE o.subject_id = ANY($1::uuid[])
+           AND o.metadata ? 'changePct'
+         ORDER BY o.subject_id, o.as_of DESC, o.observed_at DESC
+        """,
+        instrument_ids,
+    )
+    result: dict[str, Decimal] = {}
+    for row in rows:
+        raw = row["change_pct"]
+        if raw is None:
+            continue
+        try:
+            result[str(row["subject_id"])] = Decimal(str(raw))
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
+async def claim_intraday_alert(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    user_id: str,
+    alert_key: str,
+    now: datetime,
+    window: timedelta,
+) -> bool:
+    """Record (and gate) a single intraday alert for one user.
+
+    Returns ``True`` when the alert may be delivered now (it was never sent, or
+    was sent longer than ``window`` ago); ``False`` when the same alert fired
+    within the cooldown window and must be suppressed. The check-then-upsert
+    runs inside the tenant transaction, which the runner's per-member lease
+    serializes, so concurrent ticks for the same user cannot double-send.
+    """
+    since = now - window
+    last = await conn.fetchval(
+        """
+        SELECT last_sent_at
+          FROM workflow.intraday_alert_throttle
+         WHERE tenant_id = $1 AND user_id = $2 AND alert_key = $3
+        """,
+        tenant_id,
+        user_id,
+        alert_key,
+    )
+    if last is not None and last >= since:
+        return False
+    await conn.execute(
+        """
+        INSERT INTO workflow.intraday_alert_throttle
+            (tenant_id, user_id, alert_key, last_sent_at)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, user_id, alert_key)
+        DO UPDATE SET last_sent_at = EXCLUDED.last_sent_at
+        """,
+        tenant_id,
+        user_id,
+        alert_key,
+        now,
+    )
+    return True

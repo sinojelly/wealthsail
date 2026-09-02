@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 45
-    assert migrations[-1].path.name == "045_split_pre_market_reports.sql"
+    assert versions[-1] == 46
+    assert migrations[-1].path.name == "046_intraday_alert_throttle.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:

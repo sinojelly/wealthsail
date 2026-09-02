@@ -23,7 +23,7 @@ from backend.debug.service import trigger_report_once
 
 ReportSession = Literal["PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET"]
 # Split pre-market debug phase selector (?phase=...).
-DebugPhase = Literal["MACRO", "PERSONALIZED"]
+DebugPhase = Literal["MACRO", "PERSONALIZED", "ALERT"]
 
 router = APIRouter(prefix="/debug/reports", tags=["debug"])
 
@@ -41,7 +41,9 @@ async def trigger_report(
     """Force one report version without creating a scheduler job.
 
     ``PRE_MARKET`` runs the shared 08:30 macro brief by default; ``?phase=PERSONALIZED&user_id=<uuid>``
-    runs one member's 08:35 report instead.
+    runs one member's 08:35 report instead. ``?session=INTRADAY&phase=ALERT&user_id=<uuid>``
+    runs one member's condition-triggered intraday alert (no-op when no threshold
+    is breached or the 30-minute cooldown is active).
     """
     ctx.require_roles("OWNER", "ADMIN")
     data = await trigger_report_once(
