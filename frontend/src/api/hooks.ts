@@ -526,10 +526,11 @@ export function useGenerateReport() {
   const queryClient = useQueryClient();
   const auth = usePrivateSession();
   return useMutation({
-    mutationFn: (session: ReportSession) => reportsApi.generateReport(session),
-    onSuccess: (report) => {
+    mutationFn: (session: ReportSession) => reportsApi.triggerReport(session),
+    onSuccess: () => {
+      // 触发端点只回执 {reportId, outboxId}（报告已生成并写入 outbox，由 Worker
+      // 推送企微），没有完整报告对象，因此只刷新列表让新版本出现在时间线里。
       queryClient.invalidateQueries({ queryKey: reportQueryKeys.all(auth) });
-      queryClient.setQueryData(reportQueryKeys.detail(auth, report.id), report);
     },
   });
 }

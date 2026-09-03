@@ -28,12 +28,23 @@ export async function getReport(id: string): Promise<ReportDetail> {
   return envelope.data;
 }
 
-export async function generateReport(
+export interface TriggerReportResult {
+  reportId: string | null;
+  outboxId: string | null;
+}
+
+/**
+ * 触发一次报告生成（服务端 force 生成新版本），写入 outbox 后由 Worker 推送企微。
+ *
+ * 走 debug 触发端点而非 /v1/reports/generate：后者 force=false，当天已有报告时
+ * 直接返回旧版本，既不生成新版本也不写 outbox（不会推送）。
+ */
+export async function triggerReport(
   session: ReportSession,
-): Promise<ReportDetail> {
-  const envelope = await request<ReportDetail>("/v1/reports/generate", {
-    method: "POST",
-    body: JSON.stringify({ session }),
-  });
+): Promise<TriggerReportResult> {
+  const envelope = await request<TriggerReportResult>(
+    `/v1/debug/reports/trigger/${encodeURIComponent(session)}`,
+    { method: "POST" },
+  );
   return envelope.data;
 }
