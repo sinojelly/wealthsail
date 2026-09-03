@@ -55,6 +55,12 @@ export default function ReportsPage() {
     });
   }
 
+  // 无任何历史报告时的时段占位入口：直接按 session 触发（后端 tenant 级
+  // 生成 + outbox 投递），让 14:30/盘后等时段也能一键推送而不依赖手工命令。
+  function handleGenerateSession(session: ReportSession) {
+    generate.mutate({ session });
+  }
+
   return (
     <>
       <PageHeader
@@ -89,6 +95,7 @@ export default function ReportsPage() {
             next.set("reportId", report.id);
             setSearchParams(next);
           }}
+          onGenerate={handleGenerateSession}
         />
         {detailQuery.isLoading ? (
           <div className="report-viewer report-loading">正在加载报告…</div>

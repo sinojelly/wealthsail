@@ -186,16 +186,29 @@ it("presents an empty report workspace with structured guidance", () => {
 
   renderWithSession(<ReportsPage />);
 
-  const emptyTimeline = screen.getByRole("status", {
-    name: "暂无报告记录",
-  });
-  expect(emptyTimeline).toHaveTextContent(
-    "报告生成后会按交易日和版本显示在这里",
-  );
-  expect(emptyTimeline.closest(".report-list")).toHaveClass("is-empty");
+  // 无任何报告时，时间线仍常驻四时段占位入口，可一键生成。
+  for (const session of ["盘前简报", "盘中跟踪", "基金 2:30 报告", "盘后交互复盘"]) {
+    expect(screen.getByRole("button", { name: `生成 ${session}` })).toBeInTheDocument();
+  }
   expect(screen.getByRole("status", { name: "暂无研报" })).toHaveTextContent(
     "盘前、盘中、基金 2:30 和盘后报告生成后",
   );
+});
+
+it("generates a missing FUND_1430 report from the timeline placeholder", async () => {
+  // reportsFixture 仅含 PRE_MARKET 与 POST_MARKET → FUND_1430 显示占位入口。
+  reportState.reports = reportsFixture.filter((report) => report.session !== "POST_MARKET");
+  reportState.detail = null;
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />);
+  await user.click(screen.getByRole("button", { name: "生成 基金 2:30 报告" }));
+
+  expect(reportState.regenerate).toHaveBeenCalledWith({
+    session: "FUND_1430",
+    phase: undefined,
+    userId: undefined,
+  });
 });
 
 

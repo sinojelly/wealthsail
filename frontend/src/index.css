@@ -1663,6 +1663,19 @@ button:disabled {
   color: #059669;
   font-size: 8px;
 }
+.report-item-placeholder {
+  border-style: dashed;
+  border-color: #cbd5e1;
+  background: transparent;
+  opacity: 0.92;
+}
+.report-item-placeholder:hover {
+  border-color: #99f6e4;
+  background: white;
+}
+.report-item-placeholder .report-item-copy small {
+  color: #0f766e;
+}
 .report-list-empty {
   grid-column: 1 / -1;
   min-height: 150px;
