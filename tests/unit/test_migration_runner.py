@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 52
-    assert migrations[-1].path.name == "052_register_otc_fund_instruments.sql"
+    assert versions[-1] == 53
+    assert migrations[-1].path.name == "053_index_funds_initial_holdings.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -304,6 +304,26 @@ def test_052_registers_otc_funds_idempotently_with_ticker_alias() -> None:
     assert "'FUND'" not in migration.replace("OFF_EXCHANGE_FUND", "").replace(
         "'FUND_CN'", ""
     )
+
+
+def test_053_seeds_index_funds_holdings_with_approximated_weights() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "053_index_funds_initial_holdings.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "INSERT INTO market.fund_lookthrough",
+        "ON CONFLICT (fund_instrument_id, holding_instrument_id, report_period)",
+        "DO UPDATE SET",
+        "warning",
+        "基于公开指数机制的估值近似",
+        "date '2026-06-30'",
+    ):
+        assert contract in migration
+    # 五只指数 / ETF 联接基金均需覆盖
+    for fund in ("161725", "161726", "001632", "011103", "012733"):
+        assert fund in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
