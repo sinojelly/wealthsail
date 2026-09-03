@@ -39,7 +39,13 @@ export default function WatchlistPanel() {
   async function add(item: InstrumentSearchResult) {
     setMutationError(null);
     try {
-      await addWatchlist.mutateAsync({ symbol: item.symbol });
+      await addWatchlist.mutateAsync({
+        symbol: item.symbol,
+        // 把搜索结果元数据一起提交：基金等不在主数据时后端据此自动登记。
+        name: item.name,
+        assetType: item.type,
+        market: item.market,
+      });
       setQuery("");
       setDebouncedQuery("");
     } catch (error) {

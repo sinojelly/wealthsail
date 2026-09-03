@@ -230,8 +230,7 @@ def _aggregate_holding_pnl(
     )
     total_cost = sum(
         (
-            _d(_row_value(row, "quantity"))
-            * _d(_row_value(row, "avg_cost"))
+            _d(_row_value(row, "quantity")) * _d(_row_value(row, "avg_cost"))
             for row in positions
         ),
         ZERO,
@@ -259,10 +258,7 @@ def _aggregate_cumulative_pnl(
         "performance_baseline_total_asset",
         "initial_cumulative_pnl",
     )
-    if any(
-        any(_row_value(row, field) is None for field in required)
-        for row in navs
-    ):
+    if any(any(_row_value(row, field) is None for field in required) for row in navs):
         return None, None, False
 
     result = sum(
@@ -275,9 +271,7 @@ def _aggregate_cumulative_pnl(
         ),
         ZERO,
     )
-    baseline_dates = {
-        _row_value(row, "performance_baseline_as_of") for row in navs
-    }
+    baseline_dates = {_row_value(row, "performance_baseline_as_of") for row in navs}
     earliest = min(baseline_dates)
     return result, _date_text(earliest), len(baseline_dates) > 1
 
@@ -343,15 +337,12 @@ def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict 
     holding_started_on = _row_value(row, "holding_started_on")
     confirmed_started_on = _row_value(row, "confirmed_holding_started_on")
     confirmation_matches_metric = (
-        confirmed_started_on is not None
-        and confirmed_started_on == holding_started_on
+        confirmed_started_on is not None and confirmed_started_on == holding_started_on
     )
     quality_reasons = list(_row_value(row, "quality_reasons", []) or [])
     if confirmation_matches_metric:
         quality_reasons = [
-            reason
-            for reason in quality_reasons
-            if reason != "PARTIAL_HOLDING_HISTORY"
+            reason for reason in quality_reasons if reason != "PARTIAL_HOLDING_HISTORY"
         ]
     effective_status = str(calculation_status)
     if (
@@ -462,9 +453,7 @@ async def get_summary(
     unpriced_count = sum(int(r.get("unpriced_position_count", 0) or 0) for r in navs)
 
     positions = (
-        await repository.latest_positions(
-            conn, tenant_id, owner_user_id=owner_user_id
-        )
+        await repository.latest_positions(conn, tenant_id, owner_user_id=owner_user_id)
         if owner_user_id is not None
         else await repository.latest_positions(conn, tenant_id)
     )
@@ -762,9 +751,7 @@ async def get_positions(
                 "account": {
                     "id": str(row["account_id"]),
                     "name": _row_value(row, "account_name"),
-                    "ownershipScope": _row_value(
-                        row, "ownership_scope", "UNASSIGNED"
-                    ),
+                    "ownershipScope": _row_value(row, "ownership_scope", "UNASSIGNED"),
                     "owners": [
                         {
                             "userId": str(owner_id),
@@ -884,9 +871,7 @@ async def _load_search_dataset(
         cached = _SEARCH_DATASET_CACHE.get(cache_key)
         if cached is not None and cached[0] > loop.time():
             return cached[1]
-        df = await asyncio.wait_for(
-            asyncio.to_thread(fetcher), timeout=timeout_seconds
-        )
+        df = await asyncio.wait_for(asyncio.to_thread(fetcher), timeout=timeout_seconds)
         if (
             df is None
             or df.empty
@@ -986,6 +971,94 @@ async def _ak_search(
     return list(results.values())
 
 
+async def instrument_live_candidates(
+    symbol: str,
+    *,
+    timeout_seconds: float = _DEFAULT_MARKET_MASTER_TIMEOUT_SECONDS,
+) -> list[dict]:
+    """Live canonical candidates for one exact code (fund/ETF/stock datasets).
+
+    Returns ``[{symbol, name, market, type}]`` (type ∈ STOCK/ETF/FUND). Used by
+    the watchlist add path to auto-register a symbol missing from the local
+    master when the client did not carry an asset type; vendor failures degrade
+    per dataset and never raise.  An ambiguous code (e.g. 000001 is both a stock
+    and an OTC fund) yields more than one candidate for the caller to disambiguate.
+    """
+    target = str(symbol).strip().upper().zfill(6)
+    out: dict[str, dict] = {}
+    try:
+        import akshare as ak  # noqa: PLC0415
+    except ImportError:
+        return []
+
+    async def _collect(
+        cache_key: str,
+        fetcher,
+        *,
+        code_column: str,
+        name_column: str,
+        asset_type: str,
+        market_fn,
+    ) -> None:
+        try:
+            rows = await _load_search_dataset(
+                cache_key,
+                fetcher,
+                code_column=code_column,
+                name_column=name_column,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 — 数据集缺失仅降级该类型
+            logger.warning(
+                "watchlist live candidate unavailable source=%s error=%s",
+                cache_key,
+                exc,
+            )
+            return
+        for row in rows:
+            if row["symbol"] != target:
+                continue
+            market = market_fn(row["symbol"])
+            out.setdefault(
+                f"{market}:{row['symbol']}:{asset_type}",
+                {
+                    "symbol": row["symbol"],
+                    "name": row["name"],
+                    "market": market,
+                    "type": asset_type,
+                    "source": "live",
+                },
+            )
+
+    await asyncio.gather(
+        _collect(
+            "fund_name_em",
+            lambda: ak.fund_name_em(),
+            code_column="基金代码",
+            name_column="基金简称",
+            asset_type="FUND",
+            market_fn=lambda _code: "FUND_CN",
+        ),
+        _collect(
+            "fund_etf_spot_em",
+            lambda: ak.fund_etf_spot_em(),
+            code_column="代码",
+            name_column="名称",
+            asset_type="ETF",
+            market_fn=lambda code: _primary_market("CN_STOCK", code),
+        ),
+        _collect(
+            "stock_zh_a_spot_em",
+            lambda: ak.stock_zh_a_spot_em(),
+            code_column="代码",
+            name_column="名称",
+            asset_type="STOCK",
+            market_fn=lambda code: _primary_market("CN_STOCK", code),
+        ),
+    )
+    return sorted(out.values(), key=lambda item: (item["type"], item["symbol"]))
+
+
 def _listed_symbol_matches_asset_type(symbol: str, asset_type: str) -> bool:
     """Reject obvious stock/ETF type mismatches before quote-only lookup."""
     if asset_type == "EXCHANGE_FUND":
@@ -1025,15 +1098,11 @@ async def _verify_authoritative_instrument(
 
     if asset_type in {"CN_STOCK", "EXCHANGE_FUND"}:
         # The Sina quote route used here has no reliable BSE addressing mode.
-        if market == "BSE" or not _listed_symbol_matches_asset_type(
-            symbol, asset_type
-        ):
+        if market == "BSE" or not _listed_symbol_matches_asset_type(symbol, asset_type):
             return None
         try:
             identity = await asyncio.wait_for(
-                market_data_adapter.get_sina_instrument_identity(
-                    symbol, public_type
-                ),
+                market_data_adapter.get_sina_instrument_identity(symbol, public_type),
                 timeout=timeout_seconds,
             )
         except Exception as exc:  # noqa: BLE001 — broad master may still work
@@ -1229,9 +1298,7 @@ async def _resolve_verified_instrument(
         timeout_seconds=provider_timeout_seconds,
     )
     if exact is None:
-        candidates = await _ak_search(
-            symbol, timeout_seconds=provider_timeout_seconds
-        )
+        candidates = await _ak_search(symbol, timeout_seconds=provider_timeout_seconds)
         exact = next(
             (
                 candidate
@@ -1611,9 +1678,7 @@ async def create_position_import(
             if current is not None and current["asset_type"] != internal_type:
                 raise ValidationError_(
                     f"标的 {symbol} 的资产类型与主数据不一致",
-                    field_errors=[
-                        {"field": "assetType", "message": "与主数据不一致"}
-                    ],
+                    field_errors=[{"field": "assetType", "message": "与主数据不一致"}],
                 )
             instrument_id = (
                 str(current["id"])

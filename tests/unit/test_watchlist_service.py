@@ -96,11 +96,87 @@ async def test_add_resolves_server_canonical_metadata_and_is_idempotent() -> Non
 
 
 @pytest.mark.asyncio
-async def test_add_rejects_symbol_missing_from_authoritative_master() -> None:
+async def test_add_rejects_symbol_missing_from_authoritative_master(
+    monkeypatch,
+) -> None:
+    async def no_candidates(_symbol: str):
+        return []
+
+    monkeypatch.setattr(service, "_fetch_live_candidates", no_candidates)
     with pytest.raises(ValidationError_, match="未通过主数据验证"):
         await service.add_watchlist_item(
             WatchlistConn(instrument=None), viewer_context(), "UNKNOWN"
         )
+
+
+@pytest.mark.asyncio
+async def test_add_auto_registers_fund_from_live_candidate_without_metadata(
+    monkeypatch,
+) -> None:
+    """旧客户端只传 symbol 时，唯一实时候选（基金）可兜底自动登记。"""
+
+    async def candidates(_symbol: str):
+        return [
+            {
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "market": "FUND_CN",
+                "type": "FUND",
+                "source": "live",
+            }
+        ]
+
+    monkeypatch.setattr(service, "_fetch_live_candidates", candidates)
+    conn = WatchlistConn(
+        instrument=None,
+        created={
+            "symbol": "110022",
+            "asset_name": "易方达消费行业",
+            "asset_type": "OFF_EXCHANGE_FUND",
+            "primary_market": "FUND_CN",
+            "instrument_id": "00000000-0000-0000-0000-0000000000aa",
+        },
+    )
+
+    result = await service.add_watchlist_item(conn, viewer_context(), "110022")
+
+    assert conn.register_args == (
+        "110022",
+        "易方达消费行业",
+        "OFF_EXCHANGE_FUND",
+        "FUND_CN",
+        "CNY",
+    )
+    assert result["assetType"] == "FUND"
+
+
+@pytest.mark.asyncio
+async def test_add_reports_ambiguous_code_without_guessing(monkeypatch) -> None:
+    """000001 同时匹配股票与基金时，不猜，给明确歧义错误。"""
+
+    async def candidates(_symbol: str):
+        return [
+            {
+                "symbol": "000001",
+                "name": "平安银行",
+                "market": "SZSE",
+                "type": "STOCK",
+                "source": "live",
+            },
+            {
+                "symbol": "000001",
+                "name": "华夏成长",
+                "market": "FUND_CN",
+                "type": "FUND",
+                "source": "live",
+            },
+        ]
+
+    monkeypatch.setattr(service, "_fetch_live_candidates", candidates)
+    conn = WatchlistConn(instrument=None)
+    with pytest.raises(ValidationError_, match="同时匹配多种类型"):
+        await service.add_watchlist_item(conn, viewer_context(), "000001")
+    assert conn.register_args is None
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,13 @@ async def list_watchlist(conn: Connection, user_id: str) -> list[dict]:
     return [_item_dto(row) for row in rows]
 
 
+async def _fetch_live_candidates(symbol: str) -> list[dict]:
+    """实时权威候选（基金/ETF/股票数据集），仅用于主数据缺失时的兜底登记。"""
+    from backend.portfolio import service as portfolio_service
+
+    return await portfolio_service.instrument_live_candidates(symbol)
+
+
 async def add_watchlist_item(
     conn: Connection,
     ctx: TenantContext,
@@ -79,20 +86,48 @@ async def add_watchlist_item(
     market: str | None = None,
     currency: str = "CNY",
 ) -> dict:
-    """Add a watch item; funds/ETFs missing from the master are auto-registered.
+    """Add a watch item; symbols missing from the master are auto-registered.
 
-    仅当客户端（搜索结果）携带 ``name``/``asset_type``/``market`` 时才允许
-    自动登记主数据（SECURITY DEFINER 函数写入 reference.instruments）。缺
-    少元数据或登记失败时抛出明确的验证错误，绝不静默失败。
+    优先采用客户端（搜索结果）携带的 ``name``/``asset_type``/``market``；
+    未携带时用实时数据集兜底：唯一候选直接登记，多类型歧义（如 000001
+    既是股票又是基金）则给出明确错误，绝不猜。登记失败抛明确业务错误。
     """
     normalized = _normalize_symbol(symbol)
     instrument = await repository.find_active_instrument(conn, normalized)
     if instrument is None or instrument["asset_type"] is None:
         public_type = (asset_type or "").upper()
         db_type = _PUBLIC_TO_DB.get(public_type)
-        if not name or db_type not in {"EXCHANGE_FUND", "OFF_EXCHANGE_FUND"}:
+        resolved_name = name
+        # 客户端未提供类型/名称时，尝试按实时数据集精确解析唯一候选。
+        if db_type is None or not resolved_name:
+            candidates = await _fetch_live_candidates(normalized)
+            candidates = [
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and candidate.get("type") in _PUBLIC_TO_DB
+            ]
+            if not candidates:
+                raise ValidationError_(
+                    "标的未通过主数据验证；如需关注基金，请从搜索结果携带名称与类型后重试"
+                )
+            distinct = sorted(
+                {(candidate["type"], candidate["market"]) for candidate in candidates}
+            )
+            if len(distinct) > 1:
+                kinds = "、".join(f"{kind}({market})" for kind, market in distinct)
+                raise ValidationError_(
+                    f"标的代码 {normalized} 同时匹配多种类型（{kinds}），"
+                    "无法自动登记，请从搜索结果选择具体标的后再关注"
+                )
+            chosen = candidates[0]
+            public_type = chosen["type"]
+            db_type = _PUBLIC_TO_DB[public_type]
+            resolved_name = str(chosen.get("name") or "")
+            market = str(chosen.get("market") or market or "")
+        if db_type is None or not (resolved_name or "").strip():
             raise ValidationError_(
-                "标的未通过主数据验证；如需关注基金，请从搜索结果携带名称与类型后重试"
+                "标的未通过主数据验证；缺少可用于自动登记的名称与类型"
             )
         primary_market = _resolve_primary_market(public_type, market, normalized)
         if primary_market is None:
@@ -104,7 +139,7 @@ async def add_watchlist_item(
             created = await repository.ensure_follow_instrument(
                 conn,
                 symbol=normalized,
-                name=name.strip(),
+                name=resolved_name.strip(),
                 asset_type=db_type,
                 market=primary_market,
                 currency=currency,
