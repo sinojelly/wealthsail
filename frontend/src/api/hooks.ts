@@ -526,7 +526,15 @@ export function useGenerateReport() {
   const queryClient = useQueryClient();
   const auth = usePrivateSession();
   return useMutation({
-    mutationFn: (session: ReportSession) => reportsApi.triggerReport(session),
+    mutationFn: (input: {
+      session: ReportSession;
+      phase?: "MACRO" | "PERSONALIZED" | "ALERT";
+      userId?: string;
+    }) =>
+      reportsApi.triggerReport(input.session, {
+        phase: input.phase,
+        userId: input.userId,
+      }),
     onSuccess: () => {
       // 触发端点只回执 {reportId, outboxId}（报告已生成并写入 outbox，由 Worker
       // 推送企微），没有完整报告对象，因此只刷新列表让新版本出现在时间线里。

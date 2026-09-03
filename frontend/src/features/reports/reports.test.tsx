@@ -8,6 +8,7 @@ import { reportDetailFixture, reportsFixture } from "../../test/fixtures";
 const reportState = vi.hoisted(() => ({
   reports: [] as ReportSummary[],
   detail: null as ReportDetail | null,
+  regenerate: vi.fn<(input: unknown) => void>(),
 }));
 
 vi.mock("../../api/hooks", () => ({
@@ -24,7 +25,7 @@ vi.mock("../../api/hooks", () => ({
     error: null,
   }),
   useGenerateReport: () => ({
-    mutate: vi.fn(),
+    mutate: reportState.regenerate,
     isPending: false,
     isError: false,
     error: null,
@@ -34,6 +35,7 @@ vi.mock("../../api/hooks", () => ({
 beforeEach(() => {
   reportState.reports = reportsFixture;
   reportState.detail = reportDetailFixture;
+  reportState.regenerate.mockClear();
 });
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
@@ -194,4 +196,62 @@ it("presents an empty report workspace with structured guidance", () => {
   expect(screen.getByRole("status", { name: "暂无研报" })).toHaveTextContent(
     "盘前、盘中、基金 2:30 和盘后报告生成后",
   );
+});
+
+
+it("regenerate button forwards the selected report's MACRO variant as phase", async () => {
+  reportState.reports = [
+    {
+      id: "R-PRE-MACRO",
+      session: "PRE_MARKET",
+      variant: "PRE_MARKET_MACRO",
+      title: "盘前简报·宏观",
+      subtitle: "隔夜市场与今日全球重点",
+      tradeDate: "2026-09-03",
+      version: 1,
+      generatedAt: "2026-09-03T08:30:00+08:00",
+      status: "已发布",
+      qualityStatus: "FRESH",
+    },
+  ];
+  reportState.detail = null;
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-PRE-MACRO");
+  await user.click(screen.getByRole("button", { name: /重新生成/ }));
+
+  expect(reportState.regenerate).toHaveBeenCalledWith({
+    session: "PRE_MARKET",
+    phase: "MACRO",
+    userId: undefined,
+  });
+});
+
+it("regenerate button forwards PERSONALIZED phase + audience user_id", async () => {
+  reportState.reports = [
+    {
+      id: "R-PRE-PERSONALIZED",
+      session: "PRE_MARKET",
+      variant: "PRE_MARKET_PERSONALIZED",
+      audienceUserId: "00000000-0000-0000-0000-000000000099",
+      title: "盘前简报·个性化",
+      subtitle: "持仓、关注标的与今日操作提醒",
+      tradeDate: "2026-09-03",
+      version: 1,
+      generatedAt: "2026-09-03T08:35:00+08:00",
+      status: "已发布",
+      qualityStatus: "FRESH",
+    },
+  ];
+  reportState.detail = null;
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-PRE-PERSONALIZED");
+  await user.click(screen.getByRole("button", { name: /重新生成/ }));
+
+  expect(reportState.regenerate).toHaveBeenCalledWith({
+    session: "PRE_MARKET",
+    phase: "PERSONALIZED",
+    userId: "00000000-0000-0000-0000-000000000099",
+  });
 });

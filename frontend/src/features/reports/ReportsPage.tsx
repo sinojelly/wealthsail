@@ -6,13 +6,34 @@ import {
   useReportDetail,
   useReportsList,
 } from "../../api/hooks";
-import type { ReportSession } from "../../api/types";
+import type { ReportSession, ReportSummary } from "../../api/types";
 import PageHeader from "../../components/layout/PageHeader";
 import EmptyState from "../../components/data-state/EmptyState";
 import EvidenceDrawer from "./components/EvidenceDrawer";
 import ReportTimeline from "./components/ReportTimeline";
 import ReportViewer from "./components/ReportViewer";
 import type { EvidenceRecord } from "./report-data";
+
+type TriggerVariant = {
+  phase?: "MACRO" | "PERSONALIZED";
+  userId?: string;
+};
+
+// 根据选中的报告行推断应该触发的变体与目标用户：选中 MACRO 行 → 重建
+// 宏观；选中 PERSONALIZED 行 → 重建该用户的个性化简报（投到该用户企微）。
+// 不识别 STANDARD（33c6c7b 已下线旧生成入口），保留默认空对象以触发 MACRO
+// 默认路径，避免按钮完全失灵。
+function pickTriggerVariant(
+  report: ReportSummary,
+): TriggerVariant {
+  if (report.variant === "PRE_MARKET_MACRO") {
+    return { phase: "MACRO" };
+  }
+  if (report.variant === "PRE_MARKET_PERSONALIZED" && report.audienceUserId) {
+    return { phase: "PERSONALIZED", userId: report.audienceUserId };
+  }
+  return {};
+}
 
 export default function ReportsPage() {
   const reportsQuery = useReportsList();
@@ -24,9 +45,14 @@ export default function ReportsPage() {
   const generate = useGenerateReport();
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
 
-  function handleGenerate(session: ReportSession) {
+  function handleGenerate() {
     if (!selected) return;
-    generate.mutate(session);
+    const variant = pickTriggerVariant(selected);
+    generate.mutate({
+      session: selected.session,
+      phase: variant.phase,
+      userId: variant.userId,
+    });
   }
 
   return (
@@ -38,7 +64,7 @@ export default function ReportsPage() {
           <button
             className="btn-secondary"
             disabled={!selected || generate.isPending}
-            onClick={() => selected && handleGenerate(selected.session)}
+            onClick={() => selected && handleGenerate()}
           >
             <RefreshCw size={14} className={generate.isPending ? "spin" : ""} />
             重新生成 {selected ? `v${selected.version + 1}` : ""}
