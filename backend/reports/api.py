@@ -92,6 +92,16 @@ async def generate(
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """生成指定时段研报（LLM 网关可用时调用 DeepSeek，否则确定性降级）。"""
+    if body.session == "PRE_MARKET":
+        # 045 拆分后 PRE_MARKET 只有 MACRO / PERSONALIZED 两个变体；此端点
+        # 以 STANDARD 变体生成，会产出既不被订阅链投递又误导审计的旧 7 行
+        # 全量报告（用户报告「重新生成后内容没变」的来源）。下线该入口，
+        # 统一走 debug 触发端点并显式选择变体。
+        raise ValidationError_(
+            "PRE_MARKET 已拆分为宏观与个性化简报，旧生成入口已下线；"
+            "请改用 POST /api/v1/debug/reports/trigger/PRE_MARKET，"
+            "并按需携带 ?phase=PRE_MARKET_MACRO 或 ?phase=PRE_MARKET_PERSONALIZED"
+        )
     as_of = now_shanghai()
     data = await service.generate_report(pool, ctx, settings, body.session)
     return ok(data, request_id=request_id, as_of=as_of)
