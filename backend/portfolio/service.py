@@ -746,6 +746,7 @@ async def get_positions(
                 "pnl": fmt_money(_d(pnl)) if pnl is not None else None,
                 "pnlRate": fmt_money(pnl_rate) if pnl_rate is not None else None,
                 "quality": merge_quality([_position_display_quality(row)]),
+                "valuationDate": _date_text(_row_value(row, "current_nav_date")),
                 "valuationStatus": valuation_status,
                 "accountId": str(row["account_id"]),
                 "account": {

@@ -307,3 +307,109 @@ async def test_generate_macro_report_persists_null_audience_without_model(
     assert details["generatorVersion"] == "shared-pre-market-v1"
     assert details["sharedBriefId"] == "macro-brief-1"
     assert details["sharedCacheHit"] is False
+
+
+def _with_us_indices(indices: list[dict]) -> dict:
+    ctx = _source_context()
+    ctx["usIndices"] = indices
+    ctx["qualityStatus"] = "FRESH"
+    return ctx
+
+
+def _overnight_body(ctx: dict) -> str:
+    return pre_market_macro.build_report(ctx)["items"][0]["body"]
+
+
+def test_overnight_most_up_adds_optimistic_insight() -> None:
+    ctx = _with_us_indices(
+        [
+            {"name": "道琼斯", "changePct": "1.23"},
+            {"name": "纳斯达克", "changePct": "0.90"},
+            {"name": "标普500", "changePct": "-0.10"},
+        ]
+    )
+    body = _overnight_body(ctx)
+    assert "道琼斯+1.23%" in body
+    assert "（美股普涨，市场情绪偏乐观）" in body
+
+
+def test_overnight_most_down_adds_cautious_insight() -> None:
+    ctx = _with_us_indices(
+        [
+            {"name": "道琼斯", "changePct": "-1.20"},
+            {"name": "纳斯达克", "changePct": "-0.85"},
+            {"name": "标普500", "changePct": "0.20"},
+        ]
+    )
+    assert "（美股回调，市场情绪偏谨慎）" in _overnight_body(ctx)
+
+
+def test_overnight_split_marks_disagreement() -> None:
+    ctx = _with_us_indices(
+        [
+            {"name": "道琼斯", "changePct": "0.30"},
+            {"name": "纳斯达克", "changePct": "-0.25"},
+        ]
+    )
+    assert "（美股涨跌互现，市场存在分歧）" in _overnight_body(ctx)
+
+
+def test_overnight_skips_insight_when_below_two_indices() -> None:
+    ctx = _with_us_indices([{"name": "道琼斯", "changePct": "0.55"}])
+    body = _overnight_body(ctx)
+    assert "道琼斯+0.55%" in body
+    assert "美股普涨" not in body
+    assert "美股回调" not in body
+    assert "涨跌互现" not in body
+
+
+def test_economic_pmi_below_50_explains_contraction() -> None:
+    ctx = _source_context()
+    ctx["economicEvents"] = [
+        {
+            "title": "中国制造业PMI",
+            "name": "中国制造业PMI",
+            "date": "2026年08月",
+            "value": "49.8",
+            "unit": "",
+        }
+    ]
+    body = pre_market_macro.build_report(ctx)["items"][1]["body"]
+    assert (
+        "中国制造业PMI（2026年08月）49.8——低于荣枯线，制造业处收缩区间，关注政策对冲"
+        in body
+    )
+
+
+def test_economic_pmi_above_50_explains_expansion() -> None:
+    ctx = _source_context()
+    ctx["economicEvents"] = [
+        {"title": "中国制造业PMI", "date": "2026年08月", "value": "50.6", "unit": ""}
+    ]
+    body = pre_market_macro.build_report(ctx)["items"][1]["body"]
+    assert "——高于荣枯线，制造业处扩张区间" in body
+
+
+def test_economic_cpi_band_insight_is_honest_about_single_period() -> None:
+    ctx = _source_context()
+    ctx["economicEvents"] = [
+        {
+            "title": "中国CPI同比",
+            "name": "中国CPI同比",
+            "date": "2026年07月",
+            "value": "0.5",
+            "unit": "%",
+        }
+    ]
+    body = pre_market_macro.build_report(ctx)["items"][1]["body"]
+    assert "中国CPI同比（2026年07月）0.5%——同比低位，通胀温和偏弱" in body
+
+
+def test_economic_missing_value_lists_name_without_interpretation() -> None:
+    ctx = _source_context()
+    ctx["economicEvents"] = [
+        {"title": "中国制造业PMI", "date": "2026年08月", "value": None, "unit": ""}
+    ]
+    body = pre_market_macro.build_report(ctx)["items"][1]["body"]
+    assert "中国制造业PMI（2026年08月）" in body
+    assert "荣枯线" not in body

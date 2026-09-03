@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -271,3 +273,99 @@ async def test_personalized_phase_skips_members_without_positions_or_watchlist(
     assert result is None
     assert "insert" not in captured
     captured["outbox"].assert_not_awaited()
+
+
+def _quote_watch(
+    *,
+    symbol: str,
+    name: str,
+    asset_type: str,
+    price: str | None = None,
+    change: str | None = None,
+    quality: str = "FRESH",
+    as_of=None,
+) -> dict:
+    return {
+        "symbol": symbol,
+        "name": name,
+        "type": asset_type,
+        "instrumentId": _WATCHED_ID,
+        "price": price,
+        "changePct": change,
+        "quality": quality,
+        "asOf": as_of,
+    }
+
+
+def _watch_body(watch: dict, now: datetime | None = None) -> str:
+    ctx = _context(watchlist=[watch])
+    return pre_market_personalized.build_report(ctx, now=now)["items"][1]["body"]
+
+
+def test_watchlist_fund_without_quote_calls_out_stale_source() -> None:
+    """场外基金无净值 → 说明数据源未更新，而非笼统「暂无行情」。"""
+    body = _watch_body(
+        _quote_watch(symbol="000001", name="华夏成长", asset_type="FUND"),
+        now=datetime(2026, 9, 3, 10, 0),
+    )
+    assert "华夏成长(000001)暂无行情（数据源未更新" in body
+
+
+def test_watchlist_stock_without_quote_in_session_hints_suspension() -> None:
+    """交易时段内无行情 → 提示可能停牌或数据延迟（不直接断言停牌）。"""
+    body = _watch_body(
+        _quote_watch(symbol="600519", name="贵州茅台", asset_type="STOCK"),
+        now=datetime(2026, 8, 31, 10, 30),
+    )
+    assert "盘中暂无最新行情，标的可能停牌或数据源延迟" in body
+
+
+def test_watchlist_stock_without_quote_off_hours_explains_window() -> None:
+    body = _watch_body(
+        _quote_watch(symbol="600519", name="贵州茅台", asset_type="STOCK"),
+        now=datetime(2026, 8, 31, 16, 0),
+    )
+    assert "非交易时段：交易日 09:30-15:00 为连续竞价" in body
+
+
+def test_watchlist_weekend_without_quote_is_not_trading() -> None:
+    body = _watch_body(
+        _quote_watch(symbol="600519", name="贵州茅台", asset_type="STOCK"),
+        now=datetime(2026, 9, 6, 10, 30),
+    )
+    assert "非交易时段" in body
+
+
+def test_watchlist_stale_quote_shows_data_cutoff_time() -> None:
+    """有价格但数据过期 → 标注数据截至时间，便于判断时效。"""
+    body = _watch_body(
+        _quote_watch(
+            symbol="600519",
+            name="贵州茅台",
+            asset_type="STOCK",
+            price="1680.00",
+            change="1.20",
+            quality="STALE",
+            as_of=datetime(2026, 8, 28, 4, 0, tzinfo=ZoneInfo("UTC")),
+        ),
+        now=datetime(2026, 9, 3, 9, 0),
+    )
+    assert "最新价1680.0000、涨跌+1.20%" in body
+    assert "数据质量：STALE" in body
+    assert "数据截至08-28 12:00" in body
+
+
+def test_watchlist_fresh_quote_has_no_asof_noise() -> None:
+    body = _watch_body(
+        _quote_watch(
+            symbol="600519",
+            name="贵州茅台",
+            asset_type="STOCK",
+            price="1680.00",
+            change="1.20",
+            quality="FRESH",
+            as_of=datetime(2026, 9, 3, 9, 0, tzinfo=ZoneInfo("UTC")),
+        )
+    )
+    assert "（数据质量：FRESH）" in body
+    assert "数据截至" not in body

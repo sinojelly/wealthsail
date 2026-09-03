@@ -9,8 +9,12 @@ not repeated here. There is no model call in this phase.
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from backend.common.database import tenant_transaction
 from backend.common.tenancy import TenantContext
+from backend.dependencies import now_shanghai
 from backend.portfolio.scope import AssetScope
 from backend.reports.pre_market import (
     ACTION_LABELS,
@@ -25,10 +29,43 @@ from backend.reports.pre_market import (
 _MISSING = "暂无"
 _DISCLAIMER = "以上仅为市场信息与投资思考，不构成投资建议。"
 _SECTION_TITLES = ("持仓今日影响", "关注标的动态", "今日操作提醒")
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
-def _watchlist_text(context: dict) -> str:
-    """Summarize watched instruments from their latest persisted quote."""
+def _trading_session_active(now: datetime) -> bool:
+    """是否处于 A 股连续竞价时段（工作日 09:30–15:00）。"""
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 9 * 60 + 30 <= minutes <= 15 * 60
+
+
+def _asof_label(value: object) -> str:
+    """行情时间戳转本地「MM-DD HH:MM」展示；无法解析返回空串。"""
+    if isinstance(value, datetime):
+        aware = value if value.tzinfo is not None else value.replace(tzinfo=_SHANGHAI)
+        return aware.astimezone(_SHANGHAI).strftime("%m-%d %H:%M")
+    text = str(value or "").strip()
+    return text[:16] if text else ""
+
+
+def _missing_quote_reason(item: dict, now: datetime) -> str:
+    """无行情时的状态分型（基于资产类型与交易时段，不臆造停牌结论）。
+
+    - 场外基金：净值披露滞后 → 数据源未更新
+    - 交易时段内 A 股/ETF 无行情 → 可能停牌或数据延迟（明确限定词）
+    - 非交易时段 → 时段说明
+    """
+    if str(item.get("type") or "").upper() == "FUND":
+        return "数据源未更新：场外基金净值通常在交易日 20:00 后公布"
+    if _trading_session_active(now):
+        return "盘中暂无最新行情，标的可能停牌或数据源延迟"
+    return "非交易时段：交易日 09:30-15:00 为连续竞价"
+
+
+def _watchlist_text(context: dict, *, now: datetime | None = None) -> str:
+    """关注标的最新行情与数据时效；无行情时按类型/时段分型说明原因。"""
+    now = now or now_shanghai()
     watched = context.get("watchlist") or []
     if not watched:
         return _MISSING
@@ -39,14 +76,25 @@ def _watchlist_text(context: dict) -> str:
         label = instrument_label(item)
         change = safe_decimal(item.get("changePct"))
         price = safe_decimal(item.get("price"))
+        quality = str(item.get("quality") or "")
+        quality_upper = quality.upper()
         if change is None and price is None:
-            parts.append(f"{label}暂无行情")
+            reason = _missing_quote_reason(item, now)
+            parts.append(
+                f"{label}暂无行情（{reason}）" if reason else f"{label}暂无行情"
+            )
             continue
         move_text = f"{change:+.2f}%" if change is not None else _MISSING
         price_text = f"{price:.4f}" if price is not None else _MISSING
-        quality = str(item.get("quality") or _MISSING)
+        freshness = ""
+        if quality_upper not in ("", "FRESH") and item.get("asOf") is not None:
+            as_of = _asof_label(item.get("asOf"))
+            if as_of:
+                freshness = f"，数据截至{as_of}"
+        quality_text = quality if quality else _MISSING
         parts.append(
-            f"{label}最新价{price_text}、涨跌{move_text}（数据质量：{quality}）"
+            f"{label}最新价{price_text}、涨跌{move_text}"
+            f"（数据质量：{quality_text}{freshness}）"
         )
     if not parts:
         return _MISSING
@@ -104,12 +152,12 @@ def _watchlist_quality(context: dict) -> str:
     return "FRESH" if has_quote else "UNAVAILABLE"
 
 
-def build_report(context: dict) -> dict:
+def build_report(context: dict, *, now: datetime | None = None) -> dict:
     """Build the three-section personalized brief without any model I/O."""
     pre = context.get("preMarket") or {}
     # 持仓影响需要 positions 做归因，因此传整个 context 而非仅 preMarket。
     impact = holding_impact_text(context)
-    watchlist = _watchlist_text(context)
+    watchlist = _watchlist_text(context, now=now)
     reminder = cutoff_text(context)
     sections = (
         (_SECTION_TITLES[0], impact, "RISK", _impact_quality(pre)),

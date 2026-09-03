@@ -180,11 +180,25 @@ def test_holding_impact_flags_stale_valuation() -> None:
     context["positions"][0]["quality"] = "STALE"
     context["positions"][0]["weight"] = "12.50"
 
+    # 无具体估值日期时给出「过期 + 影响」而非笼统的非最新提示。
     assert (
         pre_market.holding_impact_text(context)
-        == "招商银行估值过期，持仓数据非最新，请核对后再决策。"
+        == "招商银行估值已过期，将影响估值与盈亏归因，请核对后再决策。"
     )
     assert pre_market.impact_push_text(context) == "招商银行估值过期"
+
+
+def test_holding_impact_stale_valuation_shows_date_when_available() -> None:
+    """估值过期且知道最近估值日期时，文案显示具体日期增强可执行性。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["positions"][0]["quality"] = "STALE"
+    context["positions"][0]["weight"] = "12.50"
+    context["positions"][0]["valuationDate"] = "2026-08-28"
+
+    text = pre_market.holding_impact_text(context)
+    assert "招商银行估值已过期（2026-08-28 以来未更新）" in text
+    assert "将影响估值与盈亏归因，请核对后再决策" in text
 
 
 def test_holding_impact_flags_missing_valuation() -> None:
@@ -222,7 +236,7 @@ def test_holding_impact_combines_action_and_risk() -> None:
     # 报告正文：行动短语 + 风险短语
     detailed = pre_market.holding_impact_text(context)
     assert "招商银行(600036)现金分红除权" in detailed
-    assert "招商银行估值过期" in detailed
+    assert "招商银行估值已过期" in detailed
 
     # 推送短句：两项折叠到上限后用「等N项」
     push_impact = pre_market.impact_push_text(context)
@@ -431,10 +445,13 @@ def test_reminder_no_fund_holdings() -> None:
 
 
 def test_reminder_held_fund_without_status_data() -> None:
-    """有持仓基金但无（截止规则/申赎档案）状态数据 → 「今日无申赎截止提醒」。"""
+    """有持仓基金但无（截止规则/申赎档案）状态数据 → 空态附默认 15:00 提示。"""
     context = _reminder_context(positions=[_fund_position()])
-    assert pre_market.cutoff_text(context) == "今日无申赎截止提醒"
-    assert pre_market.cutoff_push_text(context) == "今日无申赎截止提醒"
+    expected = (
+        "今日无申赎截止提醒；持有场外基金默认 15:00 前可提交申购/赎回（以渠道状态为准）"
+    )
+    assert pre_market.cutoff_text(context) == expected
+    assert pre_market.cutoff_push_text(context) == expected
 
 
 def test_reminder_open_fund_with_cutoff_shows_window() -> None:

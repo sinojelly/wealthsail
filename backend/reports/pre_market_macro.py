@@ -90,6 +90,30 @@ def _list_text(items: object) -> str:
     return "；".join(values) if values else _MISSING
 
 
+def _overnight_sentiment(indices: object) -> str | None:
+    """美股主要指数情绪方向（基于可解析的涨跌幅多数）。
+
+    - 多数上涨 → 乐观；多数下跌 → 谨慎；涨跌互现 → 分歧
+    - 可判读指数不足 2 个时不输出情绪句（数据不足不解释）。
+    只对真实涨跌符号做多数判断，不引用任何板块/资金等未采集维度。
+    """
+    changes = [
+        change
+        for item in (indices if isinstance(indices, list) else [])
+        if isinstance(item, dict)
+        and (change := _safe_decimal(item.get("changePct"))) is not None
+    ]
+    if len(changes) < 2:
+        return None
+    ups = sum(1 for change in changes if change > 0)
+    downs = sum(1 for change in changes if change < 0)
+    if ups > downs:
+        return "美股普涨，市场情绪偏乐观"
+    if downs > ups:
+        return "美股回调，市场情绪偏谨慎"
+    return "美股涨跌互现，市场存在分歧"
+
+
 def _overnight_text(source_context: dict) -> str:
     indices = source_context.get("usIndices")
     parts: list[str] = []
@@ -102,6 +126,9 @@ def _overnight_text(source_context: dict) -> str:
             if name and change is not None:
                 parts.append(f"{name}{change:+.2f}%")
     us_text = "、".join(parts) if parts else _MISSING
+    sentiment = _overnight_sentiment(indices)
+    if parts and sentiment:
+        us_text = f"{us_text}（{sentiment}）"
 
     a50 = source_context.get("a50Future")
     a50_change = _safe_decimal(a50.get("changePct")) if isinstance(a50, dict) else None
@@ -114,8 +141,56 @@ def _overnight_text(source_context: dict) -> str:
     return f"美股主要指数：{us_text}；A50期货：{a50_text}。"
 
 
+def _economic_insight(title: str, value: Decimal) -> str | None:
+    """单个经济指标基于数值口径的解读（不比较历史、不臆造趋势）。
+
+    - PMI：>50 扩张、<50 收缩、贴近荣枯线则平稳（官方口径）
+    - CPI 同比：按绝对值区间给出温和/高位描述；单期数据不做「抬头/回落」断言
+    """
+    upper = (title or "").upper()
+    if "PMI" in upper:
+        if value > Decimal("50"):
+            return "高于荣枯线，制造业处扩张区间"
+        if value < Decimal("50"):
+            return "低于荣枯线，制造业处收缩区间，关注政策对冲"
+        return "贴近荣枯线，制造业景气度平稳"
+    if "CPI" in upper:
+        if value >= Decimal("3"):
+            return "同比高位，通胀压力需关注"
+        if value >= Decimal("1"):
+            return "同比温和，物价总体平稳"
+        return "同比低位，通胀温和偏弱"
+    return None
+
+
+def _economic_text(economic: object) -> str:
+    """经济数据节：名称（期数）+ 数值 + 解读句；数值缺失则只列名称。"""
+    if not isinstance(economic, list) or not economic:
+        return _MISSING
+    parts: list[str] = []
+    for item in economic:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or "").strip()
+        if not title:
+            continue
+        value = _safe_decimal(item.get("value"))
+        unit = str(item.get("unit") or "").strip()
+        date_text = str(item.get("date") or "").strip()
+        label = f"{title}（{date_text}）" if date_text else title
+        if value is None:
+            parts.append(label)
+            continue
+        value_text = f"{value:.1f}{unit}" if unit else str(value)
+        insight = _economic_insight(title, value)
+        parts.append(
+            f"{label}{value_text}——{insight}" if insight else f"{label}{value_text}"
+        )
+    return "；".join(parts) if parts else _MISSING
+
+
 def _attention_text(source_context: dict) -> str:
-    economic = _list_text(source_context.get("economicEvents"))
+    economic = _economic_text(source_context.get("economicEvents"))
     global_events = _list_text(source_context.get("globalEvents"))
     return f"经济数据：{economic}；全球事件：{global_events}。"
 

@@ -203,13 +203,18 @@ def _position_health_risks(context: dict, *, concise: bool) -> list[str]:
         name = _position_label(position)
         quality = str(position.get("quality") or "").upper()
         is_stale = quality == "STALE"
+        valuation_date = str(position.get("valuationDate") or "").strip()
         if concise:
             risks.append(f"{name}估值{'过期' if is_stale else '缺失'}")
-        else:
+        elif is_stale and valuation_date:
             risks.append(
-                f"{name}估值{'过期' if is_stale else '缺失'}，"
-                "持仓数据非最新，请核对后再决策"
+                f"{name}估值已过期（{valuation_date} 以来未更新），"
+                "将影响估值与盈亏归因，请核对后再决策"
             )
+        elif is_stale:
+            risks.append(f"{name}估值已过期，将影响估值与盈亏归因，请核对后再决策")
+        else:
+            risks.append(f"{name}估值缺失（暂无最新净值），请先更新估值后再决策")
 
     # 2. 单一持仓超限（占比 > 政策上限）。
     if limit is not None:
@@ -267,8 +272,29 @@ def impact_push_text(context: dict, *, limit: int = 2) -> str:
 
 # 今日提醒的空态消息：有持仓基金但无（截止规则/申赎状态）数据、或无持仓基金。
 _NO_CUTOFF_REMINDER = "今日无申赎截止提醒"
+# 有场外基金持仓但暂无任何截止/申赎档案时的规则性提示（渠道状态以实际为准）。
+_DEFAULT_CUTOFF_HINT = "；持有场外基金默认 15:00 前可提交申购/赎回（以渠道状态为准）"
 # 基金申赎开放状态（fund_profiles 由公告回填），展示时带来源限定。
 _FUND_STATUS_CAVEAT = "（以基金公告为准）"
+
+
+def _no_cutoff_reminder_text(context: dict) -> str:
+    """今日提醒空态文本。
+
+    - 没有任何场外基金持仓 → 「今日无申赎截止提醒」（无从提示 15:00 默认值）
+    - 有场外基金持仓但数据不足 → 追加规则性 15:00 默认截止提示（以渠道状态为准）
+    """
+    held_funds = [
+        position
+        for position in (context.get("positions") or [])
+        if isinstance(position, dict)
+        and str(position.get("type") or "").strip() == "场外基金"
+        and safe_decimal(position.get("quantity")) is not None
+        and safe_decimal(position.get("quantity")) > 0
+    ]
+    if not held_funds:
+        return _NO_CUTOFF_REMINDER
+    return _NO_CUTOFF_REMINDER + _DEFAULT_CUTOFF_HINT
 
 
 def _reminder_subjects(context: dict) -> list[dict]:
@@ -382,7 +408,7 @@ def cutoff_text(context: dict) -> str:
     """
     phrases = _reminder_phrases(context, concise=False)
     if not phrases:
-        return _NO_CUTOFF_REMINDER
+        return _no_cutoff_reminder_text(context)
     suspended_any = any("暂停" in phrase for phrase in phrases)
     caveat = _FUND_STATUS_CAVEAT if suspended_any else _CHANNEL_CAVEAT
     return "；".join(phrases) + caveat + "。"
@@ -392,7 +418,7 @@ def cutoff_push_text(context: dict, *, limit: int = 2) -> str:
     """今日提醒（推送短句版），超项折叠为「等N只」。"""
     phrases = _reminder_phrases(context, concise=True)
     if not phrases:
-        return _NO_CUTOFF_REMINDER
+        return _no_cutoff_reminder_text(context)
     text = "；".join(phrases[:limit])
     if len(phrases) > limit:
         text += f"等{len(phrases)}只"
