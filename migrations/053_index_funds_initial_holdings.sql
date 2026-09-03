@@ -1,5 +1,10 @@
 BEGIN;
 
+-- 051 建表时未包含 metadata 列，053 需要它来记录「近似」警告，先补齐
+-- （幂等；已应用 051 的环境用 IF NOT EXISTS 安全）。
+ALTER TABLE market.fund_lookthrough
+    ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 -- 近似回填 5 只指数 / ETF 联接基金到 market.fund_lookthrough。
 --
 -- 这 5 只是「指数 / ETF 联接」类基金，其持仓等于对应指数的成分与权重

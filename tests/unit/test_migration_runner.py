@@ -325,6 +325,8 @@ def test_053_seeds_index_funds_holdings_with_approximated_weights() -> None:
         "date '2026-06-30'",
     ):
         assert contract in migration
+    # 051 建表缺 metadata 列，053 必须先 ALTER 补齐（否则 INSERT 报列不存在）。
+    assert "ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb" in migration
     # 五只指数 / ETF 联接基金均需覆盖
     for fund in ("161725", "161726", "001632", "011103", "012733"):
         assert fund in migration
