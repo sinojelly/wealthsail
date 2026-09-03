@@ -32,11 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 49
-    assert (
-        migrations[-1].path.name
-        == "049_watchlist_instrument_registration_disambiguation.sql"
-    )
+    assert versions[-1] == 50
+    assert migrations[-1].path.name == "050_enable_fund_1430_delivery.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -219,6 +216,28 @@ def test_049_scopes_registration_reuse_by_market() -> None:
         assert contract in migration
     assert "GRANT INSERT ON reference.instruments" not in migration
     assert "TO wealthsail_api" in migration
+
+
+def test_050_enables_fund_1430_job_and_preference_idempotently() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "migrations" / "050_enable_fund_1430_delivery.sql").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "INSERT INTO workflow.jobs",
+        "'FUND_1430'",
+        "NOT EXISTS",
+        "UPDATE identity.user_preferences",
+        "fund_1430_report_enabled = TRUE",
+        "COALESCE(preferences.pre_market_report_enabled, FALSE)",
+        "channel_type = 'wecom'",
+        "binding.status = 'ACTIVE'",
+    ):
+        assert contract in migration
+    # 迁移不得粗暴打开所有用户偏好：必须保留「至少开启一种报告 + 有企微绑定」前提。
+    assert "WHERE" in migration
+    assert "membership.status = 'ACTIVE'" in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
