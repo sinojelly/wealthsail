@@ -88,15 +88,14 @@ def _context() -> dict:
     }
 
 
-def test_full_report_has_five_sections_sources_and_estimate_evidence() -> None:
+def test_full_report_has_four_sections_sources_and_estimate_evidence() -> None:
     draft = _generator().build_report(_context())
 
-    assert [item["title"] for item in draft["items"][:5]] == [
+    assert [item["title"] for item in draft["items"][:4]] == [
         "今日估值概览",
         "估值可信度",
         "申赎提醒",
-        "操作建议",
-        "一句话总结",
+        "总结",
     ]
     assert (
         draft["summary"]
@@ -140,11 +139,13 @@ def test_exact_three_percent_does_not_trigger_action_threshold() -> None:
     ]
 
     draft = _generator().build_report(context)
-    action = next(item for item in draft["items"] if item["title"] == "操作建议")
+    action = next(item for item in draft["items"] if item["title"] == "总结")
 
-    assert "未触发超过±3%的操作阈值" in action["body"]
+    # 未触发 ±3% 阈值时，总结节应描述整体温和并给出按原计划操作的建议。
+    assert "未触发±3%阈值" in action["body"]
+    assert "可正常申赎" in action["body"]
+    assert "按原计划操作" in action["body"]
     assert "避免追涨" not in action["body"]
-    assert "仅因估值下跌加仓" not in action["body"]
 
 
 def test_confidence_renders_disclosure_date_and_coverage_value_label() -> None:
@@ -180,11 +181,12 @@ def test_full_report_limits_details_but_discloses_additional_funds() -> None:
 
     draft = _generator().build_report(context)
     reminder = next(item for item in draft["items"] if item["title"] == "申赎提醒")
-    action = next(item for item in draft["items"] if item["title"] == "操作建议")
+    summary = next(item for item in draft["items"] if item["title"] == "总结")
 
     assert "另有1只基金的截止规则，请在报告明细中核对" in reminder["body"]
     assert "另有2只基金" not in reminder["body"]
-    assert "另有1只基金触发阈值，请在报告明细中核对" in action["body"]
+    # 总结节中触发基金数量应被整体反映（2 只触发 + 1 只未触发 = 触发 2 只）。
+    assert "2只基金预估涨幅超过+3%" in summary["body"]
     cutoff_details = [
         item for item in draft["items"] if item["title"].endswith("申赎截止明细")
     ]
@@ -211,18 +213,51 @@ def test_missing_data_is_explicit_and_never_fabricated() -> None:
     assert len(push) <= 200
 
 
-def test_push_has_five_compact_sourced_lines_under_200_characters() -> None:
+def test_push_has_four_compact_sourced_lines_under_200_characters() -> None:
     push = _generator().format_push_content(_context())
 
     lines = push.splitlines()
-    assert len(lines) == 5
+    assert len(lines) == 4
     assert lines[0].startswith("估值：") and lines[0].endswith("【基于估值系统】")
     assert lines[1].startswith("可信：") and lines[1].endswith("【基于估值系统】")
     assert lines[2].startswith("申赎：") and lines[2].endswith("【基于规则引擎】")
-    assert lines[3].startswith("建议：") and lines[3].endswith("【基于规则引擎】")
-    assert lines[4].startswith("总结：") and lines[4].endswith("【基于规则引擎】")
+    assert lines[3].startswith("总结：") and lines[3].endswith("【基于规则引擎】")
     assert "+4.10%" in push
     assert "72.50%" in push
     assert "15:00" in push
     assert "能否申赎以渠道为准" in push
     assert len(push) <= 200
+
+
+def test_summary_reports_split_count_when_mixed_thresholds_triggered() -> None:
+    """估值方向同时出现正/负触发时，总结节应给出正/负各几只的具体计数。"""
+    context = _context()
+    # 第二个 fund 保持 -4% 触发负阈值，添加第三只 +5% 触发正阈值 → 分化。
+    context["fundEstimates"].append(
+        {
+            **context["fundEstimates"][0],
+            "instrumentId": "33333333-3333-3333-3333-333333333333",
+            "symbol": "003095",
+            "name": "中欧医疗健康",
+            "value": "1.0500",
+            "lowerValue": "1.0300",
+            "upperValue": "1.0700",
+            "snapshotId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        }
+    )
+    draft = _generator().build_report(context)
+    summary = next(item for item in draft["items"] if item["title"] == "总结")
+
+    assert "估值分化" in summary["body"]
+    # 110011 +4.10%、003095 +5.00% 触发 +3%；161725 -4.00% 触发 -3%。
+    assert "2只基金预估涨幅超过+3%" in summary["body"]
+    assert "1只基金预估跌幅低于-3%" in summary["body"]
+    assert "按阈值控制" in summary["body"]
+
+
+def test_summary_reports_no_fabrication_when_metrics_and_rules_empty() -> None:
+    context = {"positions": [], "fundEstimates": [], "fund1430": {}}
+    draft = _generator().build_report(context)
+    summary = next(item for item in draft["items"] if item["title"] == "总结")
+    assert "估值与申赎均暂无数据" in summary["body"]
+    assert "不臆造" not in summary["body"]  # sanity: 避免错把"不臆造"写成内容

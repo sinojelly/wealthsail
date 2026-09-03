@@ -194,48 +194,51 @@ def _triggered_metrics(metrics: list[dict]) -> list[dict]:
     )
 
 
-def _actions(metrics: list[dict]) -> str:
-    all_triggered = _triggered_metrics(metrics)
-    triggered = all_triggered[:2]
-    if not metrics:
-        return f"{_MISSING}（估值数据不足）。{_RULE_SOURCE}"
-    if not triggered:
-        return f"今日未触发超过±3%的操作阈值，按原计划执行。{_RULE_SOURCE}"
-    actions: list[str] = []
-    for metric in triggered:
-        label = _label(metric["estimate"])
-        change = metric["changePct"]
-        if change > _ACTION_THRESHOLD:
-            actions.append(
-                f"{label}预估{change:+.2f}%，超过+3%，避免追涨；"
-                "如已有减仓计划，请在15:00前复核"
-            )
-        else:
-            actions.append(
-                f"{label}预估{change:+.2f}%，低于-3%，"
-                "避免仅因估值下跌加仓，先复核风险预算"
-            )
-    remaining = len(all_triggered) - len(actions)
-    if remaining:
-        actions.append(f"另有{remaining}只基金触发阈值，请在报告明细中核对")
-    return f"{'；'.join(actions)}。{_RULE_SOURCE}"
+def _summary(metrics: list[dict], context: dict) -> str:
+    """综合判断：估值方向 + ±3% 阈值触发 + 申赎截止状态 → 单条结论。
 
-
-def _conclusion(metrics: list[dict]) -> str:
+    数据全空时输出兜底；只要有估算或截止任一输入即给具体判断，不臆造。
+    """
     triggered = _triggered_metrics(metrics)
-    if not metrics:
-        return f"今日整体判断和操作方向：{_MISSING}。{_RULE_SOURCE}"
+    has_metrics = bool(metrics)
+    cutoff_rules = _cutoff_rules(context)
+    if not has_metrics and not cutoff_rules:
+        return f"今日估值与申赎均暂无数据，请以基金公告与渠道状态为准。{_ESTIMATION_SOURCE}"
     positive = any(metric["changePct"] > _ACTION_THRESHOLD for metric in triggered)
     negative = any(metric["changePct"] < -_ACTION_THRESHOLD for metric in triggered)
-    if positive and negative:
-        conclusion = "基金估值分化，按阈值控制操作并优先复核风险预算"
-    elif positive:
-        conclusion = "基金估值偏强，避免追涨并按既定减仓计划复核"
-    elif negative:
-        conclusion = "基金估值偏弱，先核对风险预算，避免仅凭估值加仓"
+    triggered_n = len(triggered)
+    if positive and not negative:
+        valuation_view = (
+            f"今日估值偏强（{triggered_n}只基金预估涨幅超过+3%）"
+            if triggered_n
+            else "今日估值偏强"
+        )
+        advice = "持仓基金可正常申赎，已有减仓计划请在15:00前复核"
+    elif negative and not positive:
+        valuation_view = (
+            f"今日估值偏弱（{triggered_n}只基金预估跌幅低于-3%）"
+            if triggered_n
+            else "今日估值偏弱"
+        )
+        advice = "持仓基金可正常申赎，建议先核对风险预算"
+    elif positive and negative:
+        positive_n = sum(
+            1 for metric in triggered if metric["changePct"] > _ACTION_THRESHOLD
+        )
+        negative_n = sum(
+            1 for metric in triggered if metric["changePct"] < -_ACTION_THRESHOLD
+        )
+        valuation_view = (
+            f"今日估值分化（{positive_n}只基金预估涨幅超过+3%、"
+            f"{negative_n}只基金预估跌幅低于-3%）"
+        )
+        advice = "持仓基金可正常申赎，按阈值控制并优先复核风险预算"
     else:
-        conclusion = "基金估值未触发±3%阈值，维持原计划并等待正式净值"
-    return f"{conclusion}。{_RULE_SOURCE}"
+        valuation_view = "今日估值整体温和（未触发±3%阈值）"
+        advice = "持仓基金可正常申赎，建议按原计划操作"
+    if not cutoff_rules:
+        advice = advice.replace("可正常申赎", "暂无申赎截止数据，能否申赎")
+    return f"{valuation_view}，{advice}。{_RULE_SOURCE}"
 
 
 def _quality(value: object) -> str:
@@ -305,13 +308,12 @@ def _cutoff_detail_items(context: dict) -> list[dict]:
 
 
 def build_report(context: dict) -> dict:
-    """Build the complete five-section FUND_1430 report without model I/O."""
+    """Build the complete four-section FUND_1430 report without model I/O."""
     metrics = _metrics(context)
     overview = _overview(metrics)
     confidence = _confidence(context)
     reminder = _reminder(context)
-    actions = _actions(metrics)
-    conclusion = _conclusion(metrics)
+    summary = _summary(metrics, context)
     estimates = context.get("fundEstimates") or []
     cutoff_rules = (context.get("fund1430") or {}).get("fundCutoffRules") or []
     sections = (
@@ -325,8 +327,12 @@ def build_report(context: dict) -> dict:
             else "UNAVAILABLE",
         ),
         ("申赎提醒", reminder, "TODO", "FRESH" if cutoff_rules else "UNAVAILABLE"),
-        ("操作建议", actions, "ACTION_PLAN", "ESTIMATED" if metrics else "UNAVAILABLE"),
-        ("一句话总结", conclusion, "FACT", "ESTIMATED" if metrics else "UNAVAILABLE"),
+        (
+            "总结",
+            summary,
+            "ACTION_PLAN",
+            "ESTIMATED" if (metrics or cutoff_rules) else "UNAVAILABLE",
+        ),
     )
     section_items = [
         {
@@ -408,40 +414,30 @@ def format_push_content(context: dict) -> str:
     else:
         reminder = _MISSING
 
-    triggered = _triggered_metrics(metrics)[:2]
-    if triggered:
-        compact_actions: list[str] = []
-        for metric in triggered:
-            symbol = _compact_symbol(metric["estimate"].get("symbol"))
-            if metric["changePct"] > _ACTION_THRESHOLD:
-                compact_actions.append(f"{symbol}>+3%勿追涨")
-            else:
-                compact_actions.append(f"{symbol}<-3%勿盲目加仓")
-        advice = "；".join(compact_actions)
-    elif metrics:
-        advice = "未触发±3%阈值，按原计划"
-    else:
-        advice = _MISSING
-
     if not metrics:
         summary = _MISSING
     else:
-        positive = any(metric["changePct"] > _ACTION_THRESHOLD for metric in triggered)
-        negative = any(metric["changePct"] < -_ACTION_THRESHOLD for metric in triggered)
+        # 推送总长 ≤200 字符，"建议"已合并到"总结"里只占一行。
+        triggered_all = _triggered_metrics(metrics)
+        positive = any(
+            metric["changePct"] > _ACTION_THRESHOLD for metric in triggered_all
+        )
+        negative = any(
+            metric["changePct"] < -_ACTION_THRESHOLD for metric in triggered_all
+        )
         if positive and negative:
-            summary = "估值分化，按阈值控制操作"
+            summary = "估值分化，按阈值控制"
         elif positive:
             summary = "估值偏强，避免追涨"
         elif negative:
-            summary = "估值偏弱，先核对风险预算"
+            summary = "估值偏弱，先核风险"
         else:
-            summary = "估值未越阈值，维持原计划"
+            summary = "估值未越阈值，原计划"
 
     lines = (
         _sourced_line("估值", overview, _ESTIMATION_SOURCE, 40),
         _sourced_line("可信", confidence, _ESTIMATION_SOURCE, 38),
         _sourced_line("申赎", reminder, _RULE_SOURCE, 48),
-        _sourced_line("建议", advice, _RULE_SOURCE, 40),
-        _sourced_line("总结", summary, _RULE_SOURCE, 30),
+        _sourced_line("总结", summary, _RULE_SOURCE, 50),
     )
     return "\n".join(lines)
