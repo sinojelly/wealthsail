@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 51
-    assert migrations[-1].path.name == "051_fund_lookthrough.sql"
+    assert versions[-1] == 52
+    assert migrations[-1].path.name == "052_register_otc_fund_instruments.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -242,9 +242,9 @@ def test_050_enables_fund_1430_job_and_preference_idempotently() -> None:
 
 def test_051_creates_fund_lookthrough_with_lookup_and_privilege_guard() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations" / "051_fund_lookthrough.sql"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations" / "051_fund_lookthrough.sql").read_text(
+        encoding="utf-8"
+    )
 
     for contract in (
         "CREATE TABLE IF NOT EXISTS market.fund_lookthrough",
@@ -263,6 +263,47 @@ def test_051_creates_fund_lookthrough_with_lookup_and_privilege_guard() -> None:
     assert "wealthsail_worker" in migration
     # schema 放在 market（与其他市场快照同处，便于 RLS 与备份策略一致）。
     assert "market.fund_lookthrough" in migration
+
+
+def test_052_registers_otc_funds_idempotently_with_ticker_alias() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "052_register_otc_fund_instruments.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "INSERT INTO reference.instruments",
+        "'OFF_EXCHANGE_FUND'",
+        "'FUND_CN'",
+        "001632 天弘中证食品饮料ETF联接C",
+        "005275 中欧创新成长灵活配置混合A",
+        "NOT EXISTS",
+        "INSERT INTO reference.instrument_aliases",
+        "alias_type = 'TICKER'",
+        "ON CONFLICT DO NOTHING",
+    ):
+        assert contract in migration
+    # 迁移必须完整包含用户要求的 12 只基金代码。
+    for code in (
+        "001632",
+        "012733",
+        "011103",
+        "000689",
+        "008552",
+        "161726",
+        "070019",
+        "002593",
+        "008295",
+        "004476",
+        "001705",
+        "005275",
+    ):
+        assert code in migration
+    # 场外基金必须用 OFF_EXCHANGE_FUND + FUND_CN（约束内合法值），
+    # 而非用户建议的不存在枚举 'FUND'。
+    assert "'FUND'" not in migration.replace("OFF_EXCHANGE_FUND", "").replace(
+        "'FUND_CN'", ""
+    )
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
