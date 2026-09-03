@@ -331,3 +331,96 @@ async def test_remove_missing_symbol_is_not_found_and_does_not_audit() -> None:
         await service.remove_watchlist_item(conn, viewer_context(), "MISSING")
 
     assert conn.audit_rows == []
+
+
+_FUND_ROW = {
+    "symbol": "000001",
+    "asset_name": "华夏成长",
+    "asset_type": "OFF_EXCHANGE_FUND",
+    "primary_market": "FUND_CN",
+    "instrument_id": "00000000-0000-0000-0000-0000000000cc",
+}
+
+
+@pytest.mark.asyncio
+async def test_add_fund_follow_does_not_reuse_same_code_stock() -> None:
+    """000001 已有股票别名时，携带类型的基金关注必须登记基金而非关注股票。"""
+    conn = WatchlistConn(
+        instrument={
+            "symbol": "000001",
+            "asset_name": "平安银行",
+            "asset_type": "STOCK",
+        },
+        created=_FUND_ROW,
+    )
+
+    result = await service.add_watchlist_item(
+        conn,
+        viewer_context(),
+        "000001",
+        name="华夏成长",
+        asset_type="FUND",
+        market="FUND_CN",
+    )
+
+    assert conn.register_args == (
+        "000001",
+        "华夏成长",
+        "OFF_EXCHANGE_FUND",
+        "FUND_CN",
+        "CNY",
+    )
+    assert result["symbol"] == "000001"
+    assert result["assetName"] == "华夏成长"
+    assert result["assetType"] == "FUND"
+
+
+@pytest.mark.asyncio
+async def test_add_scopes_master_lookup_by_requested_market_when_type_given() -> None:
+    """携带类型时，主数据查询必须限定在对应市场，避免命中同码异类。"""
+    conn = WatchlistConn(
+        instrument={
+            "symbol": "000001",
+            "asset_name": "平安银行",
+            "asset_type": "STOCK",
+        },
+        created=_FUND_ROW,
+    )
+    await service.add_watchlist_item(
+        conn,
+        viewer_context(),
+        "000001",
+        name="华夏成长",
+        asset_type="FUND",
+        market="FUND_CN",
+    )
+
+    lookup = next(
+        call for call in conn.calls if "FROM reference.instrument_aliases" in call[0]
+    )
+    lookup_sql, lookup_args = lookup
+    assert "alias.market = $2" in lookup_sql
+    assert lookup_args == ("000001", "FUND_CN")
+
+
+@pytest.mark.asyncio
+async def test_add_same_code_different_kind_conflict_is_explicit() -> None:
+    """同码已关注股票时再关注基金，不静默返回旧行，给出明确指引。"""
+    conn = WatchlistConn(instrument=None, created=_FUND_ROW)
+    conn.items[(USER_ID, "000001")] = {
+        "symbol": "000001",
+        "asset_name": "平安银行",
+        "asset_type": "STOCK",
+        "added_at": datetime(2026, 8, 30, tzinfo=timezone.utc),
+    }
+
+    with pytest.raises(ValidationError_, match="已在关注中.*请先取消原关注后再添加"):
+        await service.add_watchlist_item(
+            conn,
+            viewer_context(),
+            "000001",
+            name="华夏成长",
+            asset_type="FUND",
+            market="FUND_CN",
+        )
+    assert conn.audit_rows == []

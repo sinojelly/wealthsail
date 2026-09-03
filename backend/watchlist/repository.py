@@ -5,8 +5,37 @@ from __future__ import annotations
 from asyncpg import Connection
 
 
-async def find_active_instrument(conn: Connection, symbol: str):
-    """Resolve a ticker to the authoritative active instrument metadata."""
+async def find_active_instrument(
+    conn: Connection, symbol: str, *, market: str | None = None
+):
+    """Resolve a ticker to the authoritative active instrument metadata.
+
+    ``market`` narrows the alias lookup to one market so a code shared by two
+    instruments (e.g. 000001 is 平安银行 on SZSE and a FUND_CN fund) resolves
+    to the requested kind instead of an arbitrary row.
+    """
+    if market:
+        return await conn.fetchrow(
+            """
+            SELECT alias.alias_value AS symbol, instrument.canonical_name AS asset_name,
+                   CASE instrument.asset_type
+                     WHEN 'CN_STOCK' THEN 'STOCK'
+                     WHEN 'EXCHANGE_FUND' THEN 'ETF'
+                     WHEN 'OFF_EXCHANGE_FUND' THEN 'FUND'
+                   END AS asset_type
+            FROM reference.instrument_aliases alias
+            JOIN reference.instruments instrument ON instrument.id = alias.instrument_id
+            WHERE alias.alias_type='TICKER'
+              AND upper(alias.alias_value)=upper($1)
+              AND alias.market = $2
+              AND instrument.lifecycle_status='ACTIVE'
+              AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+            ORDER BY alias.effective_from DESC
+            LIMIT 1
+            """,
+            symbol,
+            market,
+        )
     return await conn.fetchrow(
         """
         SELECT alias.alias_value AS symbol, instrument.canonical_name AS asset_name,

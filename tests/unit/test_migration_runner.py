@@ -32,10 +32,10 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 48
+    assert versions[-1] == 49
     assert (
         migrations[-1].path.name
-        == "048_reference_watchlist_instrument_registration.sql"
+        == "049_watchlist_instrument_registration_disambiguation.sql"
     )
 
 
@@ -202,6 +202,23 @@ def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -
     assert "GRANT INSERT ON reference.instruments" not in migration
     assert "GRANT INSERT ON reference.instrument_aliases" not in migration
     assert "GRANT EXECUTE" in migration and "TO wealthsail_api" in migration
+
+
+def test_049_scopes_registration_reuse_by_market() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "049_watchlist_instrument_registration_disambiguation.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE OR REPLACE FUNCTION reference.ensure_watchlist_instrument",
+        "AND alias.market = p_market",
+        "SECURITY DEFINER",
+        "GRANT EXECUTE ON FUNCTION reference.ensure_watchlist_instrument",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON reference.instruments" not in migration
+    assert "TO wealthsail_api" in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:

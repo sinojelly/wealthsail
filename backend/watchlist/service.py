@@ -22,6 +22,7 @@ _DB_TO_PUBLIC = {
     "EXCHANGE_FUND": "ETF",
     "OFF_EXCHANGE_FUND": "FUND",
 }
+_TYPE_LABEL = {"STOCK": "股票", "ETF": "场内ETF", "FUND": "基金"}
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -93,9 +94,27 @@ async def add_watchlist_item(
     既是股票又是基金）则给出明确错误，绝不猜。登记失败抛明确业务错误。
     """
     normalized = _normalize_symbol(symbol)
-    instrument = await repository.find_active_instrument(conn, normalized)
+    public_type = (asset_type or "").upper()
+    expects_kind = public_type in _PUBLIC_TO_DB
+    # 客户端明确类型时按市场精确解析主数据：000001 在 SZSE 是平安银行、
+    # 在 FUND_CN 是场外基金，同码不同市场互不干扰。
+    scoped_market: str | None = None
+    if expects_kind:
+        scoped_market = _resolve_primary_market(public_type, market, normalized)
+
+    instrument = await repository.find_active_instrument(
+        conn, normalized, market=scoped_market
+    )
+    if (
+        instrument is not None
+        and expects_kind
+        and str(instrument["asset_type"]) != public_type
+    ):
+        # 命中异类标的（如请求基金但代码已被股票占用）→ 视为未命中本类型，
+        # 走自动登记创建对应资产，绝不把基金关注到同名股票上。
+        instrument = None
+
     if instrument is None or instrument["asset_type"] is None:
-        public_type = (asset_type or "").upper()
         db_type = _PUBLIC_TO_DB.get(public_type)
         resolved_name = name
         # 客户端未提供类型/名称时，尝试按实时数据集精确解析唯一候选。
@@ -168,6 +187,17 @@ async def add_watchlist_item(
         row = await repository.get_watchlist_item(conn, ctx.user_id, canonical_symbol)
         if row is None:
             raise RuntimeError("watchlist conflict row disappeared")
+        # 同代码但类型不同（如已关注 000001 平安银行股票、现关注同名基金）：
+        # identity.watchlist 以 (user_id, symbol) 为主键无法并存，绝不静默
+        # 返回旧行冒充新关注，给出明确指引。
+        existing_type = str(row["asset_type"])
+        expected_type = str(instrument["asset_type"])
+        if existing_type != expected_type:
+            raise ValidationError_(
+                f"代码 {canonical_symbol} 已在关注中（{_TYPE_LABEL.get(existing_type, existing_type)}"
+                f" {row['asset_name']}）；如需关注{_TYPE_LABEL.get(expected_type, expected_type)}"
+                f"（{instrument['asset_name']}），请先取消原关注后再添加"
+            )
     else:
         await write_audit(
             conn,
