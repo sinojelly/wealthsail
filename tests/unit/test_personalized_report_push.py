@@ -707,10 +707,35 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
         AsyncMock(return_value={"qualityStatus": "UNAVAILABLE"}),
     )
     cutoff_rules = AsyncMock(return_value=[{"symbol": "110011"}])
+    fund_profiles = AsyncMock(
+        return_value=[
+            {
+                "instrumentId": "11111111-1111-1111-1111-111111111111",
+                "purchaseStatus": "OPEN",
+                "redemptionStatus": "OPEN",
+            }
+        ]
+    )
+    fund_lookthrough = AsyncMock(return_value=[])
     monkeypatch.setattr(
         report_service.repository,
         "get_pre_market_cutoff_rules",
         cutoff_rules,
+    )
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_fund_profiles",
+        fund_profiles,
+    )
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_fund_lookthrough",
+        fund_lookthrough,
+    )
+    monkeypatch.setattr(
+        report_service.market_data,
+        "fetch_equity_quotes",
+        AsyncMock(return_value=[]),
     )
 
     context = await report_service.build_report_context(
@@ -721,3 +746,12 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
 
     assert context["fund1430"]["fundCutoffRules"] == [{"symbol": "110011"}]
     assert cutoff_rules.await_args.args[1] == ["11111111-1111-1111-1111-111111111111"]
+    assert context["fund1430"]["fundProfiles"] == [
+        {
+            "instrumentId": "11111111-1111-1111-1111-111111111111",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "OPEN",
+        }
+    ]
+    assert context["fund1430"]["fundLookthrough"] == []
+    assert context["fund1430"]["holdingQuoteBySymbol"] == {}

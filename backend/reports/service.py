@@ -635,7 +635,37 @@ async def build_report_context(
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, fund_ids, now_shanghai().date()
         )
-        fund_1430_context = {"fundCutoffRules": cutoff_rules}
+        # Fund subscription/redemption openness drives the reminder body so
+        # the 14:30 brief can surface paused/limited funds explicitly.
+        fund_profiles = await repository.get_pre_market_fund_profiles(
+            conn, fund_ids, now_shanghai().date()
+        )
+        # Per-fund holdings snapshot: latest report_period rows per fund
+        # become the basis for weighted live-return estimates and
+        # coverage/staleness labels.
+        fund_lookthrough = await repository.get_fund_lookthrough(
+            conn, fund_ids, now_shanghai().date()
+        )
+        # Pull live return rates for every distinct holding symbol the
+        # snapshot references so the estimate is weighted against real ticks,
+        # not stale persisted change_pct.
+        holding_symbols = sorted(
+            {
+                str(row.get("holdingSymbol") or "")
+                for row in fund_lookthrough
+                if row.get("holdingSymbol")
+            }
+        )
+        holding_observations = await market_data.fetch_equity_quotes(holding_symbols)
+        holding_quote_by_symbol: dict[str, market_data.Observation] = {
+            obs.symbol: obs for obs in holding_observations if obs.symbol
+        }
+        fund_1430_context = {
+            "fundCutoffRules": cutoff_rules,
+            "fundProfiles": fund_profiles,
+            "fundLookthrough": fund_lookthrough,
+            "holdingQuoteBySymbol": holding_quote_by_symbol,
+        }
     result = {
         "session": session,
         "summary": summary,

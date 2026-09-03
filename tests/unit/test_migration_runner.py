@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 50
-    assert migrations[-1].path.name == "050_enable_fund_1430_delivery.sql"
+    assert versions[-1] == 51
+    assert migrations[-1].path.name == "051_fund_lookthrough.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -238,6 +238,31 @@ def test_050_enables_fund_1430_job_and_preference_idempotently() -> None:
     # 迁移不得粗暴打开所有用户偏好：必须保留「至少开启一种报告 + 有企微绑定」前提。
     assert "WHERE" in migration
     assert "membership.status = 'ACTIVE'" in migration
+
+
+def test_051_creates_fund_lookthrough_with_lookup_and_privilege_guard() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "051_fund_lookthrough.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "CREATE TABLE IF NOT EXISTS market.fund_lookthrough",
+        "fund_instrument_id UUID NOT NULL REFERENCES reference.instruments",
+        "holding_instrument_id UUID NOT NULL REFERENCES reference.instruments",
+        "weight_pct NUMERIC(5, 2) NOT NULL CHECK",
+        "report_period DATE NOT NULL",
+        "as_of TIMESTAMPTZ",
+        "UNIQUE (fund_instrument_id, holding_instrument_id, report_period)",
+        "idx_fund_lookthrough_fund_asof",
+        "REVOKE ALL ON market.fund_lookthrough",
+        "GRANT SELECT ON market.fund_lookthrough",
+    ):
+        assert contract in migration
+    # worker 不写表（与 fund_profiles / cutoff_rules 边界一致）。
+    assert "wealthsail_worker" in migration
+    # schema 放在 market（与其他市场快照同处，便于 RLS 与备份策略一致）。
+    assert "market.fund_lookthrough" in migration
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:

@@ -231,6 +231,86 @@ async def get_pre_market_fund_profiles(
     ]
 
 
+async def get_fund_lookthrough(
+    conn: asyncpg.Connection,
+    fund_instrument_ids: list[str],
+    trade_date: date,
+) -> list[dict]:
+    """Read each held OTC fund's latest holdings snapshot for the briefing.
+
+    Picks the most recent ``report_period`` per fund (regardless of whether
+    it predates ``trade_date`` so we never fall back to empty), and joins
+    each holding's TICKER alias so the report can match it against live
+    return-rate observations.  An empty ``fund_instrument_ids`` yields [].
+    """
+    if not fund_instrument_ids:
+        return []
+    rows = await conn.fetch(
+        """
+        WITH latest_period AS (
+            SELECT DISTINCT ON (look.fund_instrument_id)
+                   look.fund_instrument_id, look.report_period
+              FROM market.fund_lookthrough look
+             WHERE look.fund_instrument_id = ANY($1::uuid[])
+             ORDER BY look.fund_instrument_id, look.report_period DESC
+        )
+        SELECT look.fund_instrument_id,
+               COALESCE(fund_alias.alias_value, '') AS fund_symbol,
+               instrument.canonical_name AS fund_name,
+               look.holding_instrument_id,
+               COALESCE(holding_alias.alias_value, '') AS holding_symbol,
+               look.weight_pct,
+               look.report_period,
+               look.as_of,
+               holding.canonical_name AS holding_name
+          FROM latest_period period
+          JOIN market.fund_lookthrough look
+            ON look.fund_instrument_id = period.fund_instrument_id
+           AND look.report_period = period.report_period
+          JOIN reference.instruments instrument
+            ON instrument.id = look.fund_instrument_id
+          JOIN reference.instruments holding
+            ON holding.id = look.holding_instrument_id
+          LEFT JOIN LATERAL (
+              SELECT ia.alias_value
+                FROM reference.instrument_aliases ia
+               WHERE ia.instrument_id = look.fund_instrument_id
+                 AND ia.alias_type = 'TICKER'
+                 AND ia.effective_from <= $2
+                 AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
+               ORDER BY ia.effective_from DESC
+               LIMIT 1
+          ) fund_alias ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT ia.alias_value
+                FROM reference.instrument_aliases ia
+               WHERE ia.instrument_id = look.holding_instrument_id
+                 AND ia.alias_type = 'TICKER'
+                 AND ia.effective_from <= $2
+                 AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
+               ORDER BY ia.effective_from DESC
+               LIMIT 1
+          ) holding_alias ON TRUE
+        """,
+        fund_instrument_ids,
+        trade_date,
+    )
+    return [
+        {
+            "fundInstrumentId": str(row["fund_instrument_id"]),
+            "fundSymbol": str(row["fund_symbol"] or ""),
+            "fundName": str(row["fund_name"]),
+            "holdingInstrumentId": str(row["holding_instrument_id"]),
+            "holdingSymbol": str(row["holding_symbol"] or ""),
+            "holdingName": str(row["holding_name"] or ""),
+            "weightPct": row["weight_pct"],
+            "reportPeriod": row["report_period"].isoformat(),
+            "asOf": row["as_of"],
+        }
+        for row in rows
+    ]
+
+
 async def get_shared_market_brief(
     conn: asyncpg.Connection, trade_date: date
 ) -> asyncpg.Record | None:
