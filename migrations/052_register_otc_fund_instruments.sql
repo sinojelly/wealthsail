@@ -57,21 +57,22 @@ inserted AS (
                'source', 'manual-import-2026-09-03'
            )
       FROM missing
-    RETURNING canonical_name
-)
--- report how many were actually inserted
-SELECT count(*) AS inserted_count
-  FROM inserted;
-
+    RETURNING 1
+),
 -- Always (re)ensure the TICKER alias for every requested code so lookups by
 -- the 6-digit code keep working even when the instrument pre-existed.
-INSERT INTO reference.instrument_aliases (
-    instrument_id, alias_type, alias_value, market, effective_from
+aliased AS (
+    INSERT INTO reference.instrument_aliases (
+        instrument_id, alias_type, alias_value, market, effective_from
+    )
+    SELECT instrument.id, 'TICKER', requested.code, 'FUND_CN', CURRENT_DATE
+      FROM requested
+      JOIN reference.instruments instrument
+        ON instrument.canonical_name = requested.canonical_name
+    ON CONFLICT DO NOTHING
+    RETURNING 1
 )
-SELECT instrument.id, 'TICKER', requested.code, 'FUND_CN', CURRENT_DATE
-  FROM requested
-  JOIN reference.instruments instrument
-    ON instrument.canonical_name = requested.canonical_name
-ON CONFLICT DO NOTHING;
+SELECT (SELECT count(*) FROM inserted) AS inserted_count,
+       (SELECT count(*) FROM aliased) AS alias_count;
 
 COMMIT;

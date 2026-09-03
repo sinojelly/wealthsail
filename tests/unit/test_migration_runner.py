@@ -283,6 +283,10 @@ def test_052_registers_otc_funds_idempotently_with_ticker_alias() -> None:
         "ON CONFLICT DO NOTHING",
     ):
         assert contract in migration
+    # 关键：`requested` CTE 只作用于单条语句。两条 INSERT 必须放在同一个
+    # WITH 链里（否则第二条 FROM requested 会报 relation does not exist）。
+    assert "(SELECT count(*) FROM inserted) AS inserted_count" in migration
+    assert "(SELECT count(*) FROM aliased) AS alias_count" in migration
     # 迁移必须完整包含用户要求的 12 只基金代码。
     for code in (
         "001632",
