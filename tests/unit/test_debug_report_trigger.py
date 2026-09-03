@@ -125,7 +125,9 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
         "POST_MARKET",
         actor_type="USER",
         force=True,
-        delivery_user_id=TARGET_ID,
+        # debug trigger never pins per-recipient delivery on STANDARD sessions;
+        # outbox iterates all eligible bindings + preferences instead.
+        delivery_user_id=None,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
         trigger_audit_details={"targetUserId": TARGET_ID},
     )

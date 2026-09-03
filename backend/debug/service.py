@@ -92,7 +92,12 @@ async def trigger_report_once(
         # DEBUG_REPORT_TRIGGERED below distinguishes this controlled action.
         actor_type="USER",
         force=True,
-        delivery_user_id=target,
+        # Non-premarket sessions stay STANDARD at the tenant level: the
+        # 045 reports_variant_audience_check constraint requires STANDARD to
+        # carry an empty audience_user_id, and per-recipient delivery here is
+        # handled by insert_report_outbox_deliveries over active bindings +
+        # user_preferences rather than the report row itself.
+        delivery_user_id=None,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
         trigger_audit_details={"targetUserId": target},
     )
