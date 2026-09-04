@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Activity,
+  Calculator,
   CheckCircle2,
   Clock3,
   DatabaseZap,
@@ -8,9 +9,17 @@ import {
   FileClock,
   ListChecks,
   RadioTower,
+  RefreshCw,
   ShieldAlert,
 } from "lucide-react";
-import { useOpsAudit, useOpsFreshness, useOpsJobs, useOpsOutbox } from "../../api/hooks";
+import {
+  useOpsAudit,
+  useOpsFreshness,
+  useOpsFundEstimate,
+  useOpsJobs,
+  useOpsOutbox,
+  useRunFundEstimate,
+} from "../../api/hooks";
 import PageHeader from "../../components/layout/PageHeader";
 import AuditLogTable from "./components/AuditLogTable";
 import JobRunsTable from "./components/JobRunsTable";
@@ -23,6 +32,8 @@ export default function OperationsPage() {
   const freshness = useOpsFreshness();
   const outbox = useOpsOutbox();
   const audit = useOpsAudit(50);
+  const fundEstimate = useOpsFundEstimate();
+  const runFundEstimate = useRunFundEstimate();
 
   const runs = jobs.data?.runs ?? [];
   const completed = runs.filter((run) => run.status === "COMPLETED").length;
@@ -35,9 +46,28 @@ export default function OperationsPage() {
   const cancelledMessages = outbox.data?.counts.cancelled ?? 0;
   const deliveryNeedsAttention = pendingMessages + unknownMessages + deadMessages;
   const navFresh = freshness.data?.nav?.latestAsOf;
-  const errors = [jobs.error, freshness.error, outbox.error, audit.error]
+  const errors = [
+    jobs.error,
+    freshness.error,
+    outbox.error,
+    audit.error,
+    fundEstimate.error,
+    runFundEstimate.error,
+  ]
     .filter((error): error is Error => error instanceof Error)
     .map((error) => error.message);
+  const estimateStatus = fundEstimate.data;
+  const estimateRunBusy = ["PENDING", "RUNNING"].includes(
+    estimateStatus?.run?.status ?? "",
+  );
+
+  async function requestFundEstimate() {
+    try {
+      await runFundEstimate.mutateAsync();
+    } catch {
+      // Mutation error is rendered through the unified alert above.
+    }
+  }
 
   return (
     <>
@@ -60,6 +90,86 @@ export default function OperationsPage() {
           </div>
         </div>
       ) : null}
+      <section className="panel fund-estimate-ops-card">
+        <div className="fund-estimate-ops-heading">
+          <span className="ops-icon good">
+            <Calculator size={17} />
+          </span>
+          <div>
+            <h2>场外基金盘中估值</h2>
+            <p>
+              Worker 使用最近官方净值和基金披露成分计算；API 不直接访问行情供应商。
+            </p>
+          </div>
+          <button
+            className="btn-primary"
+            type="button"
+            disabled={
+              !estimateStatus?.canRun ||
+              estimateRunBusy ||
+              runFundEstimate.isPending
+            }
+            onClick={() => void requestFundEstimate()}
+          >
+            <RefreshCw
+              size={14}
+              className={estimateRunBusy ? "spin" : undefined}
+            />
+            {runFundEstimate.isPending || estimateRunBusy
+              ? "基金估值处理中"
+              : "立即计算基金估值"}
+          </button>
+        </div>
+        <div className="fund-estimate-ops-summary">
+          <div>
+            <span>估值覆盖</span>
+            <strong>
+              {estimateStatus
+                ? `${estimateStatus.coverage.estimatedCount} / ${estimateStatus.coverage.heldFundCount} 只已生成`
+                : "—"}
+            </strong>
+            <small>
+              {estimateStatus
+                ? `${estimateStatus.coverage.unavailableCount} 只因覆盖不足而弃权`
+                : "正在读取状态"}
+            </small>
+          </div>
+          <div>
+            <span>最近手动任务</span>
+            <strong>{estimateStatus?.run?.status ?? "尚未运行"}</strong>
+            <small>
+              {estimateStatus?.run?.errorClass
+                ? `错误：${estimateStatus.run.errorClass}`
+                : estimateStatus?.coverage.latestAsOf
+                  ? `最近估值 ${new Date(estimateStatus.coverage.latestAsOf).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}`
+                  : "暂无盘中估值快照"}
+            </small>
+          </div>
+          <div>
+            <span>交易日状态</span>
+            <strong>
+              {estimateStatus?.calendar.isTradingDay ? "交易日" : "非交易日"}
+            </strong>
+            <small>
+              最近交易日 {estimateStatus?.calendar.latestTradingDate ?? "待确认"}
+            </small>
+          </div>
+        </div>
+        {estimateStatus?.calendar.status !== "READY" ? (
+          <div className="fund-estimate-calendar-warning" role="status">
+            <ShieldAlert size={14} />
+            <span>
+              交易日历尚未补齐；当前已按已落库的最新官方净值日安全兜底，Worker
+              会在启动时自动重试补齐。
+            </span>
+          </div>
+        ) : null}
+        {estimateStatus && !estimateStatus.canRun ? (
+          <p className="fund-estimate-nontrading-note">
+            今天不是交易日，无需生成盘中估值；持仓继续使用最近官方净值。
+          </p>
+        ) : null}
+      </section>
       <section className="ops-metrics">
         <div className="panel">
           <span className="ops-icon good">

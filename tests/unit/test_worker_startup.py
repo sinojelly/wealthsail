@@ -78,6 +78,12 @@ async def test_worker_bootstraps_market_hot_before_background_loops(
         "ensure_market_hot_snapshot",
         AsyncMock(side_effect=bootstrap),
     )
+    monkeypatch.setattr(
+        worker.market_service,
+        "ensure_trading_calendar",
+        AsyncMock(side_effect=lambda received_pool: events.append("calendar-bootstrap")),
+        raising=False,
+    )
     monkeypatch.setattr(worker, "Scheduler", lambda *_args, **_kwargs: Component("scheduler"))
     monkeypatch.setattr(worker, "OutboxConsumer", lambda *_args: Component("outbox"))
     monkeypatch.setattr(worker, "DataTaskConsumer", lambda *_args: Component("data-task"))
@@ -87,8 +93,9 @@ async def test_worker_bootstraps_market_hot_before_background_loops(
 
     await worker.main()
 
-    assert events[:5] == [
+    assert events[:6] == [
         "stale-run-recovery",
+        "calendar-bootstrap",
         "market-hot-bootstrap",
         "scheduler-start",
         "outbox-start",

@@ -7,7 +7,10 @@ import pytest
 
 from backend.market.fund_estimator import FundComponentReturn, estimate_fund_nav
 from backend.integrations import market_data as md
-from backend.market.service import _build_fund_estimates
+from backend.market.service import (
+    _build_fund_estimates,
+    _normalized_a_share_component_symbols,
+)
 
 
 def test_estimate_fund_nav_exposes_coverage_interval_and_method() -> None:
@@ -105,7 +108,7 @@ def test_pipeline_uses_only_fresh_component_returns_and_keeps_disclosure_date() 
         disclosures=[
             {
                 "fund_instrument_id": "fund-id",
-                "component_code": "600519",
+                "component_code": "600519.SH",
                 "weight": Decimal("0.65"),
                 "disclosed_on": datetime(2026, 6, 30).date(),
                 "disclosure_label": "2026年2季度股票投资明细",
@@ -221,3 +224,20 @@ def test_pipeline_keeps_estimated_within_90_days() -> None:
     estimate = estimates[0]
     assert estimate.quality_status == md.Q_ESTIMATED
     assert "超过 90 天" not in estimate.metadata["explanation"]
+
+
+def test_disclosed_a_share_components_do_not_require_instrument_master_rows() -> None:
+    disclosures = [
+        {"component_code": "600519"},
+        {"component_code": "000858.SZ"},
+        {"component_code": "430047"},
+        {"component_code": "00700"},  # 港股，不交给 A 股报价 Provider
+        {"component_code": "not-a-code"},
+        {"component_code": None},
+    ]
+
+    assert _normalized_a_share_component_symbols(disclosures) == {
+        "600519",
+        "000858",
+        "430047",
+    }

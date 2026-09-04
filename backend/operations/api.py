@@ -10,8 +10,14 @@ from fastapi import APIRouter, Depends, Query
 
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
-from backend.dependencies import get_pool, get_request_id, get_tenant_context, now_shanghai
-from backend.errors import ok
+from backend.dependencies import (
+    get_pool,
+    get_request_id,
+    get_tenant_context,
+    now_shanghai,
+    write_audit,
+)
+from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.operations import repository
 
 router = APIRouter(prefix="/operations", tags=["operations"])
@@ -77,6 +83,51 @@ async def operations_freshness(
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         data = await repository.freshness(conn, ctx.tenant_id)
     return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.get("/fund-estimate")
+async def operations_fund_estimate(
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """基金 14:30 估值运行条件、最近任务与覆盖状态。"""
+    _require_owner_admin(ctx)
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await repository.fund_estimate_status(conn, ctx.tenant_id)
+    return ok(data, request_id=request_id, as_of=as_of)
+
+
+@router.post("/fund-estimate/run")
+async def operations_run_fund_estimate(
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """提交持久化 FUND_1430 请求；Provider I/O 只由 Worker 执行。"""
+    _require_owner_admin(ctx)
+    as_of = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        status = await repository.fund_estimate_status(conn, ctx.tenant_id)
+        if not status["canRun"]:
+            raise ValidationError_("今天不是交易日，无需生成盘中估值；当前使用最近官方净值")
+        result = await repository.enqueue_manual_fund_estimate(conn, ctx.tenant_id)
+        if result["reason"] == "JOB_NOT_CONFIGURED":
+            raise DataUnavailableError("当前租户尚未启用基金 14:30 标准任务")
+        if result["created"]:
+            await write_audit(
+                conn,
+                tenant_id=ctx.tenant_id,
+                actor_type="USER",
+                actor_id=ctx.user_id,
+                action="FUND_ESTIMATE_RUN_REQUESTED",
+                resource_type="workflow.job_runs",
+                resource_id=result["run"]["id"],
+                correlation_id=request_id,
+                details={"session": "FUND_1430"},
+            )
+    return ok(result, request_id=request_id, as_of=as_of)
 
 
 @router.get("/outbox")

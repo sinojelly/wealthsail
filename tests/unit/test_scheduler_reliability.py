@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -328,3 +329,50 @@ async def test_both_pre_market_phases_skip_exchange_holidays() -> None:
     assert due_at("PRE_MARKET_MACRO", now) is True
     await scheduler._tick()
     assert dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_manual_fund_estimate_refreshes_market_after_claim_before_report(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    async def refresh(*_args):
+        events.append("refresh")
+        return {"observations": 1}
+
+    async def report(*_args, **_kwargs):
+        events.append("report")
+        return {"id": "report-1"}
+
+    async def heartbeat(*_args):
+        await asyncio.Future()
+
+    monkeypatch.setattr(
+        runner,
+        "claim_job_run",
+        AsyncMock(return_value=runner.JobLease("run-1", "lease-1")),
+    )
+    monkeypatch.setattr(runner, "_heartbeat_loop", heartbeat)
+    monkeypatch.setattr(
+        runner, "_tenant_owner_user", AsyncMock(return_value="owner-1")
+    )
+    monkeypatch.setattr(
+        runner,
+        "market_service",
+        type("MarketService", (), {"refresh_market": staticmethod(refresh)}),
+        raising=False,
+    )
+    monkeypatch.setattr(runner, "generate_report", report)
+    monkeypatch.setattr(runner, "finish_job_run", AsyncMock(return_value=True))
+
+    outcome = await runner._execute_with_lease(
+        object(),
+        Settings(_env_file=None),
+        {"id": "job-1", "tenant_id": "tenant-1"},
+        "manual:FUND_1430:request-1",
+        "FUND_1430",
+    )
+
+    assert outcome == "COMPLETED:report=report-1"
+    assert events == ["refresh", "report"]

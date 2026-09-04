@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -32,6 +32,9 @@ async def test_latest_position_identity_includes_account_and_instrument() -> Non
 
     assert "DISTINCT ON (ps.account_id, ps.instrument_id)" in conn.sql
     assert "ORDER BY ps.account_id, ps.instrument_id, ps.as_of DESC" in conn.sql
+    assert "ESTIMATED_NAV" in conn.sql
+    assert "estimate.metadata" in conn.sql
+    assert "AT TIME ZONE 'Asia/Shanghai'" in conn.sql
 
 
 @pytest.mark.asyncio
@@ -146,6 +149,62 @@ async def test_persisted_current_nav_marks_projection_gap_as_automatic_sync(
 
     assert result[0]["price"] is None
     assert result[0]["valuationStatus"] == "SYNCING"
+
+
+@pytest.mark.asyncio
+async def test_fund_position_exposes_auditable_intraday_estimate(monkeypatch) -> None:
+    rows = [
+        {
+            "instrument_id": "fund-1",
+            "account_id": "account-1",
+            "ticker": "012733",
+            "canonical_name": "测试基金",
+            "asset_type": "OFF_EXCHANGE_FUND",
+            "quantity": Decimal("100"),
+            "avg_cost": Decimal("1"),
+            "market_price": Decimal("1.00"),
+            "market_value": Decimal("100"),
+            "unrealized_pnl": Decimal("0"),
+            "data_quality_status": "FRESH",
+            "estimated_nav": Decimal("1.05"),
+            "estimated_nav_lower": Decimal("1.03"),
+            "estimated_nav_upper": Decimal("1.07"),
+            "estimated_nav_as_of": datetime(2026, 8, 31, 6, 30, tzinfo=timezone.utc),
+            "estimated_nav_quality": "ESTIMATED",
+            "estimated_nav_method": "weighted-disclosed-holdings/v1",
+            "estimated_nav_metadata": (
+                '{"coveragePct":"68.50","disclosedOn":"2026-06-30",'
+                '"confirmedNav":"1.00","confirmedNavAsOf":"2026-08-28T00:00:00+00:00",'
+                '"explanation":"按已披露成分估算"}'
+            ),
+        }
+    ]
+
+    async def latest_positions(_conn, _tenant):
+        return rows
+
+    async def latest_nav(_conn, _tenant):
+        return [{"total_nav": Decimal("100"), "as_of": date(2026, 8, 31)}]
+
+    monkeypatch.setattr(repository, "latest_positions", latest_positions)
+    monkeypatch.setattr(repository, "latest_nav_per_account", latest_nav)
+
+    position = (await service.get_positions(object(), "tenant-1"))[0]
+
+    assert position["intradayEstimate"] == {
+        "value": "1.05",
+        "changePct": "5.00",
+        "lower": "1.03",
+        "upper": "1.07",
+        "coveragePct": "68.50",
+        "disclosedOn": "2026-06-30",
+        "confirmedNav": "1.00",
+        "confirmedNavAsOf": "2026-08-28T00:00:00+00:00",
+        "asOf": "2026-08-31T06:30:00+00:00",
+        "quality": "ESTIMATED",
+        "methodVersion": "weighted-disclosed-holdings/v1",
+        "explanation": "按已披露成分估算",
+    }
 
 
 @pytest.mark.asyncio

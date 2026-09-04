@@ -14,8 +14,10 @@ quality beyond what the source reported.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -51,6 +53,30 @@ def _source_name(observation: md.Observation) -> str:
     if observation.subject_type == "FUND":
         return md.FUNDSOURCE_NAME
     return md.AKSOURCE_NAME
+
+
+def _normalized_a_share_component_symbol(value: object) -> str | None:
+    """Normalize one disclosed Shanghai, Shenzhen or Beijing stock code."""
+    raw = str(value or "").strip().upper()
+    suffix_match = re.fullmatch(r"(\d{6})\.(?:SH|SZ|BJ)", raw)
+    code = suffix_match.group(1) if suffix_match else raw
+    return code if re.fullmatch(r"[034689]\d{5}", code) else None
+
+
+def _normalized_a_share_component_symbols(disclosures: list[dict]) -> set[str]:
+    """Return Provider-ready A-share codes from dated fund disclosures.
+
+    Disclosure components are estimation inputs, not WealthSail holdings. They
+    therefore do not need to be inserted into the canonical instrument master.
+    Unsupported markets remain in the disclosure rows and naturally reduce
+    estimator coverage instead of being silently treated as zero-return assets.
+    """
+    symbols: set[str] = set()
+    for row in disclosures:
+        code = _normalized_a_share_component_symbol(row.get("component_code"))
+        if code is not None:
+            symbols.add(code)
+    return symbols
 
 
 async def refresh_market(
@@ -135,24 +161,13 @@ async def refresh_market(
             )
         fund_disclosures = [dict(row) for row in stored]
 
-        # Price only the disclosed components understood by the instrument
-        # master.  Unsupported/HK components remain in disclosure metadata and
-        # reduce coverage instead of silently disappearing.
-        component_codes = {
-            row["component_code"]
-            for row in fund_disclosures
-            if row["component_code"] in ticker_to_id
-        }
-        stock_symbols = {
-            code
-            for code in component_codes
-            if by_id[ticker_to_id[code]]["asset_type"] == "CN_STOCK"
-        }
-        etf_symbols = {
-            code
-            for code in component_codes
-            if by_id[ticker_to_id[code]]["asset_type"] == "EXCHANGE_FUND"
-        }
+        # Dated disclosure components are transient estimator inputs.  Fetch
+        # recognized A-share codes even when a user has never held them and no
+        # canonical instrument-master row exists. Raw component observations
+        # remain auditable in the source snapshot; only the derived fund
+        # estimate is normalized into market_observations.
+        stock_symbols = _normalized_a_share_component_symbols(fund_disclosures)
+        etf_symbols = set()
 
     observations = await md.fetch_all(
         list(stock_symbols), list(etf_symbols), list(fund_symbols)
@@ -343,19 +358,24 @@ def _build_fund_estimates(
                 )
             )
             continue
-        components = tuple(
-            FundComponentReturn(
-                instrument_code=row["component_code"],
-                weight=Decimal(str(row["weight"])),
-                return_rate=returns_by_symbol[row["component_code"]],
+        covered_components: list[FundComponentReturn] = []
+        for row in rows:
+            normalized_component = _normalized_a_share_component_symbol(
+                row["component_code"]
             )
-            for row in rows
-            if row["component_code"] in returns_by_symbol
-        )
+            if normalized_component not in returns_by_symbol:
+                continue
+            covered_components.append(
+                FundComponentReturn(
+                    instrument_code=normalized_component,
+                    weight=Decimal(str(row["weight"])),
+                    return_rate=returns_by_symbol[normalized_component],
+                )
+            )
         estimate = estimate_fund_nav(
             fund_code=fund_symbol,
             confirmed_nav=nav.value,
-            components=components,
+            components=tuple(covered_components),
             residual_benchmark_return=Decimal("0"),
             as_of=as_of,
         )
@@ -426,8 +446,6 @@ async def fill_trading_calendar(pool: Pool) -> int:
     holidays (false). Future dates (official calendar not yet published): workday
     fallback true, to be corrected on the next run after publication.
     """
-    import asyncio
-
     def _fetch_dates() -> set[str]:
         import akshare
 
@@ -440,7 +458,7 @@ async def fill_trading_calendar(pool: Pool) -> int:
         logger.error("交易日历拉取失败: %s", exc)
         return 0
 
-    today = date.today()
+    today = now_shanghai().date()
     rows: list[tuple] = []
     cursor = date(2024, 1, 1)
     end = date(2026, 12, 31)
@@ -458,6 +476,32 @@ async def fill_trading_calendar(pool: Pool) -> int:
         inserted = await repository.upsert_trading_calendar_rows(conn, rows)
     logger.info("交易日历填充完成: %d 天 (2024-2026, SSE)", inserted)
     return inserted
+
+
+async def ensure_trading_calendar(pool: Pool) -> dict:
+    """Populate the governed SSE calendar when a deployment has no rows.
+
+    The read path can safely fall back to persisted official NAV dates, but
+    the scheduler still benefits from a complete holiday calendar.  Upsert is
+    idempotent, so concurrent cold starts may both fetch without corrupting
+    state; subsequent starts are database-only.
+    """
+    async with system_connection(pool) as conn:
+        existing = await conn.fetchval(
+            """
+            SELECT count(*)
+              FROM reference.trading_calendars
+             WHERE market = 'SSE'
+            """
+        )
+    if int(existing or 0) > 0:
+        return {"status": "SKIPPED", "reason": "CALENDAR_EXISTS", "rows": int(existing)}
+    inserted = await fill_trading_calendar(pool)
+    return {
+        "status": "COMPLETED" if inserted > 0 else "ABSTAINED",
+        "reason": None if inserted > 0 else "PROVIDER_UNAVAILABLE",
+        "rows": inserted,
+    }
 
 
 async def refresh_market_sentiment(pool: Pool) -> dict:

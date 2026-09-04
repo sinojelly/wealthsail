@@ -681,6 +681,40 @@ export function useOpsAudit(limit = 50): UseQueryResult<AuditRow[]> {
   });
 }
 
+export function useOpsFundEstimate() {
+  const session = usePrivateSession();
+  return useQuery({
+    queryKey: privateQueryKey(session, "operations", "fund-estimate"),
+    queryFn: operationsApi.getFundEstimateStatus,
+    refetchInterval: (query) =>
+      ["PENDING", "RUNNING"].includes(query.state.data?.run?.status ?? "")
+        ? 5_000
+        : 30_000,
+  });
+}
+
+export function useRunFundEstimate() {
+  const queryClient = useQueryClient();
+  const session = usePrivateSession();
+  return useMutation({
+    mutationFn: operationsApi.runFundEstimate,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: privateQueryKey(session, "operations", "fund-estimate"),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: privateQueryKey(session, "operations", "jobs"),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: privateQueryKey(session, "portfolio"),
+        }),
+      ]);
+    },
+    onError: onAuthFailure,
+  });
+}
+
 export function useMarketSentiment() {
   const session = usePrivateSession();
   return useQuery({

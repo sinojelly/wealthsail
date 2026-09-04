@@ -12,6 +12,7 @@ import type {
 } from "../../../api/types";
 import PositionDialog from "./PositionDialog";
 import FundRangeMetrics from "./FundRangeMetrics";
+import FundIntradayEstimate from "./FundIntradayEstimate";
 
 function holdingPnlTone(value: string | null): string {
   if (value === null) {
@@ -277,6 +278,7 @@ export default function HoldingsTable({
                   {row.type === "场外基金" ? (
                     <tr className="fund-range-row">
                       <td colSpan={10}>
+                        <FundIntradayEstimate estimate={row.intradayEstimate} />
                         <FundRangeMetrics
                           holdingPeriod={row.holdingPeriod}
                           metrics={row.rangeMetrics}

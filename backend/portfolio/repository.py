@@ -65,7 +65,30 @@ _SELECT_NAV_PERFORMANCE_JOINS = """
     ) external_flow ON performance.baseline_as_of IS NOT NULL
 """
 
-_SELECT_POSITION_COLUMNS = """
+_LATEST_FUND_MARKET_DATE_SQL = """
+    COALESCE(
+        (
+            SELECT max(calendar.calendar_date)
+              FROM reference.trading_calendars calendar
+             WHERE calendar.market = 'SSE'
+               AND calendar.is_trading_day = TRUE
+               AND calendar.calendar_date <=
+                   (now() AT TIME ZONE 'Asia/Shanghai')::date
+        ),
+        (
+            SELECT max(
+                       (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date
+                   )
+              FROM market.market_observations observation
+             WHERE observation.field_code = 'NAV'
+               AND observation.value IS NOT NULL
+               AND observation.as_of <= now()
+        )
+    )
+"""
+
+
+_SELECT_POSITION_COLUMNS = f"""
     ps.instrument_id, ps.account_id, ps.as_of, ps.quantity, ps.avg_cost,
     ps.market_price, ps.market_value, ps.unrealized_pnl, ps.data_quality_status,
     i.canonical_name, i.asset_type,
@@ -81,14 +104,14 @@ _SELECT_POSITION_COLUMNS = """
     metric.from_high_pct, metric.from_low_pct, metric.range_position_pct,
     metric.calculation_status, metric.quality_reasons,
     metric.calculation_version,
-    (
-        SELECT max(calendar.calendar_date)
-          FROM reference.trading_calendars calendar
-         WHERE calendar.market = 'SSE'
-           AND calendar.is_trading_day = TRUE
-           AND calendar.calendar_date <=
-               (now() AT TIME ZONE 'Asia/Shanghai')::date
-    ) AS latest_trading_date,
+    estimate.value AS estimated_nav,
+    estimate.lower_value AS estimated_nav_lower,
+    estimate.upper_value AS estimated_nav_upper,
+    estimate.as_of AS estimated_nav_as_of,
+    estimate.quality_status AS estimated_nav_quality,
+    estimate.method_version AS estimated_nav_method,
+    estimate.metadata AS estimated_nav_metadata,
+    ({_LATEST_FUND_MARKET_DATE_SQL}) AS latest_trading_date,
     account.name AS account_name,
     account.ownership_scope,
     COALESCE(owners.owner_user_ids, ARRAY[]::uuid[]) AS owner_user_ids,
@@ -424,6 +447,21 @@ async def latest_positions(
              ORDER BY metric.as_of DESC
              LIMIT 1
         ) metric ON i.asset_type = 'OFF_EXCHANGE_FUND'
+        LEFT JOIN LATERAL (
+            SELECT observation.value, observation.lower_value,
+                   observation.upper_value, observation.as_of,
+                   observation.quality_status, observation.method_version,
+                   observation.metadata
+             FROM market.market_observations observation
+             WHERE observation.subject_id = ps.instrument_id
+               AND observation.field_code = 'ESTIMATED_NAV'
+               AND (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date =
+                   (now() AT TIME ZONE 'Asia/Shanghai')::date
+             ORDER BY observation.as_of DESC,
+                      observation.observed_at DESC,
+                      observation.revision DESC
+             LIMIT 1
+        ) estimate ON i.asset_type = 'OFF_EXCHANGE_FUND'
         LEFT JOIN LATERAL (
             SELECT decision.started_on
               FROM ledger.position_holding_start_decisions decision
@@ -1093,14 +1131,7 @@ async def latest_observation_quotes(
         # immutable historical fact marked STALE; only the current-position
         # projection upgrades it when its date is the latest SSE trading day.
         latest_trading_day = await conn.fetchval(
-            """
-            SELECT max(calendar_date)
-              FROM reference.trading_calendars
-             WHERE market = 'SSE'
-               AND is_trading_day = TRUE
-               AND calendar_date <=
-                   (now() AT TIME ZONE 'Asia/Shanghai')::date
-            """
+            f"SELECT ({_LATEST_FUND_MARKET_DATE_SQL})"
         )
     best: dict[str, dict] = {}
     for row in rows:

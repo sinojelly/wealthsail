@@ -2,6 +2,7 @@
 import type {
   AuditRow,
   FreshnessResponse,
+  FundEstimateOperationsStatus,
   MeResponse,
   NavTrend,
   OpsJobsResponse,
@@ -58,6 +59,7 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.56",
     quality: "FRESH",
     valuationStatus: "READY",
+    intradayEstimate: null,
     accountId: "acc-1",
     account: {
       id: "acc-1",
@@ -82,6 +84,7 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.28",
     quality: "FRESH",
     valuationStatus: "READY",
+    intradayEstimate: null,
     accountId: "acc-1",
     account: {
       id: "acc-1",
@@ -106,6 +109,7 @@ export const positionsFixture: PositionDto[] = [
     pnlRate: "9.92",
     quality: "FRESH",
     valuationStatus: "READY",
+    intradayEstimate: null,
     accountId: "acc-fund-1",
     account: {
       id: "acc-fund-1",
@@ -410,6 +414,31 @@ export const opsFreshnessFixture: FreshnessResponse = {
     latestAsOf: "2026-08-23T16:00:08+08:00",
     freshCount: 6,
     total: 6,
+  },
+};
+
+export const opsFundEstimateFixture: FundEstimateOperationsStatus = {
+  session: "FUND_1430",
+  canRun: true,
+  unavailableReason: null,
+  calendar: {
+    status: "MISSING",
+    today: "2026-08-31",
+    isTradingDay: true,
+    latestTradingDate: "2026-08-28",
+  },
+  run: {
+    id: "fund-run-001",
+    status: "COMPLETED",
+    startedAt: "2026-08-31T14:30:00+08:00",
+    finishedAt: "2026-08-31T14:31:00+08:00",
+    errorClass: null,
+  },
+  coverage: {
+    heldFundCount: 12,
+    estimatedCount: 8,
+    unavailableCount: 4,
+    latestAsOf: "2026-08-31T14:30:30+08:00",
   },
 };
 

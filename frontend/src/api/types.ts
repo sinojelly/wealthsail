@@ -139,6 +139,22 @@ export interface PositionDto {
   };
   holdingPeriod: HoldingPeriodDto | null;
   rangeMetrics: FundRangeMetricsDto | null;
+  intradayEstimate: FundIntradayEstimateDto | null;
+}
+
+export interface FundIntradayEstimateDto {
+  value: DecimalString | null;
+  changePct: DecimalString | null;
+  lower: DecimalString | null;
+  upper: DecimalString | null;
+  coveragePct: DecimalString | null;
+  disclosedOn: string | null;
+  confirmedNav: DecimalString | null;
+  confirmedNavAsOf: string | null;
+  asOf: string;
+  quality: QualityCode;
+  methodVersion: string | null;
+  explanation: string | null;
 }
 
 export interface HoldingPeriodDto {
@@ -676,6 +692,37 @@ export interface FreshnessInfo {
 export interface FreshnessResponse {
   nav: FreshnessInfo;
   positions: FreshnessInfo;
+}
+
+export interface FundEstimateOperationsStatus {
+  session: "FUND_1430";
+  canRun: boolean;
+  unavailableReason: "NON_TRADING_DAY" | null;
+  calendar: {
+    status: "READY" | "DEGRADED" | "MISSING";
+    today: string;
+    isTradingDay: boolean;
+    latestTradingDate: string | null;
+  };
+  run: {
+    id: string;
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "ABSTAINED";
+    startedAt: string;
+    finishedAt: string | null;
+    errorClass: string | null;
+  } | null;
+  coverage: {
+    heldFundCount: number;
+    estimatedCount: number;
+    unavailableCount: number;
+    latestAsOf: string | null;
+  };
+}
+
+export interface FundEstimateRunRequest {
+  created: boolean;
+  reason: null;
+  run: NonNullable<FundEstimateOperationsStatus["run"]>;
 }
 
 export type OutboxStatus =

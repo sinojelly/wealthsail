@@ -92,6 +92,21 @@ async def main() -> None:
     except Exception:  # noqa: BLE001
         logger.exception("stale-run recovery failed (continuing)")
 
+    # The scheduler falls back to weekdays when the exchange calendar is
+    # empty, but portfolio freshness also needs holiday-aware trading dates.
+    # Bootstrap once on a cold deployment; the portfolio read path retains a
+    # persisted-official-NAV fallback if the provider is temporarily down.
+    try:
+        calendar = await market_service.ensure_trading_calendar(pool)
+        logger.info(
+            "trading calendar bootstrap status=%s rows=%s reason=%s",
+            calendar["status"],
+            calendar.get("rows", 0),
+            calendar.get("reason", "-"),
+        )
+    except Exception:  # noqa: BLE001 -- independent loops must still start
+        logger.exception("trading calendar bootstrap failed (continuing)")
+
     # A fresh market-hot migration can be deployed outside trading hours.
     # Seed only an empty read model here; normal refreshes remain tied to the
     # four governed trading sessions and API requests never call Providers.

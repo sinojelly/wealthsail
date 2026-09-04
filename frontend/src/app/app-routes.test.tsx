@@ -161,6 +161,18 @@ vi.mock("../api/hooks", () => ({
     isError: false,
     error: null,
   }),
+  useOpsFundEstimate: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useRunFundEstimate: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
   useInstrumentSearch: () => ({
     data: [],
     isLoading: false,

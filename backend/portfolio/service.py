@@ -307,6 +307,64 @@ def _decimal_text(value) -> str | None:
     return format(value if isinstance(value, Decimal) else Decimal(str(value)), "f")
 
 
+def _json_object(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _intraday_estimate_dto(row: asyncpg.Record | dict) -> dict | None:
+    """Map the latest persisted FUND_1430 observation without relabeling NAV."""
+    if _row_value(row, "asset_type") != "OFF_EXCHANGE_FUND":
+        return None
+    as_of = _row_value(row, "estimated_nav_as_of")
+    if as_of is None:
+        return None
+    metadata = _json_object(_row_value(row, "estimated_nav_metadata"))
+    value = _row_value(row, "estimated_nav")
+    confirmed_nav_raw = metadata.get("confirmedNav")
+    confirmed_nav = None
+    try:
+        if confirmed_nav_raw is not None:
+            confirmed_nav = Decimal(str(confirmed_nav_raw))
+    except (ArithmeticError, ValueError):
+        confirmed_nav = None
+    change = None
+    if value is not None and confirmed_nav is not None and confirmed_nav > 0:
+        change = pct(_d(value) - confirmed_nav, confirmed_nav)
+    disclosed_on = metadata.get("disclosedOn")
+    return {
+        "value": _decimal_text(value),
+        "changePct": _decimal_text(change),
+        "lower": _decimal_text(_row_value(row, "estimated_nav_lower")),
+        "upper": _decimal_text(_row_value(row, "estimated_nav_upper")),
+        "coveragePct": (
+            str(metadata["coveragePct"])
+            if metadata.get("coveragePct") is not None
+            else None
+        ),
+        "disclosedOn": (
+            None
+            if disclosed_on is None or str(disclosed_on) == "None"
+            else str(disclosed_on)
+        ),
+        "confirmedNav": _decimal_text(confirmed_nav),
+        "confirmedNavAsOf": metadata.get("confirmedNavAsOf"),
+        "asOf": _date_text(as_of),
+        "quality": merge_quality(
+            [str(_row_value(row, "estimated_nav_quality", "UNAVAILABLE"))]
+        ),
+        "methodVersion": _row_value(row, "estimated_nav_method"),
+        "explanation": metadata.get("explanation"),
+    }
+
+
 def _position_period_dto(row: asyncpg.Record | dict) -> tuple[dict | None, dict | None]:
     """Map persisted metric facts without recalculating financial percentages."""
     if row["asset_type"] != "OFF_EXCHANGE_FUND":
@@ -765,6 +823,7 @@ async def get_positions(
                 },
                 "holdingPeriod": holding_period,
                 "rangeMetrics": range_metrics,
+                "intradayEstimate": _intraday_estimate_dto(row),
             }
         )
     return result

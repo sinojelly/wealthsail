@@ -20,6 +20,7 @@ import asyncpg
 from backend.common.database import Pool, system_connection
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
+from backend.market import service as market_service
 from backend.reports import intraday
 from backend.reports import pre_market_personalized
 from backend.reports.service import generate_report
@@ -337,7 +338,16 @@ async def _execute_with_lease(
         name=f"job-heartbeat:{lease.run_id}",
     )
     try:
-        phase, audience_user_id = parse_business_job_key(key)
+        manual_fund_estimate = public_session == "FUND_1430" and key.startswith(
+            "manual:FUND_1430:"
+        )
+        if manual_fund_estimate:
+            phase, audience_user_id = "FUND_1430", None
+            logger.info("manual FUND_1430 refresh started run_id=%s", lease.run_id)
+            await market_service.refresh_market(pool, settings, "FUND_1430")
+            logger.info("manual FUND_1430 refresh completed run_id=%s", lease.run_id)
+        else:
+            phase, audience_user_id = parse_business_job_key(key)
         tenant_id = str(job["tenant_id"])
         if phase == "PRE_MARKET_PERSONALIZED":
             # Members with neither active positions nor a watchlist have no

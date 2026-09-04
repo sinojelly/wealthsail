@@ -107,3 +107,33 @@ it("uses China-market gain and loss colors and emphasizes the return rate", () =
   expect(screen.getByText("-6.25%")).toHaveClass("holding-pnl-rate");
   expect(screen.getByText("0.00%")).toHaveClass("holding-pnl-rate");
 });
+
+it("shows an auditable intraday fund estimate without replacing official NAV", () => {
+  const fund = {
+    ...positionsFixture.at(-1)!,
+    price: "1.00",
+    intradayEstimate: {
+      value: "1.05",
+      changePct: "5.00",
+      lower: "1.03",
+      upper: "1.07",
+      coveragePct: "68.50",
+      disclosedOn: "2026-06-30",
+      confirmedNav: "1.00",
+      confirmedNavAsOf: "2026-08-28T00:00:00+00:00",
+      asOf: "2026-08-31T06:30:00+00:00",
+      quality: "ESTIMATED" as const,
+      methodVersion: "weighted-disclosed-holdings/v1",
+      explanation: "按已披露成分估算",
+    },
+  };
+
+  renderWithSession(<HoldingsTable rows={[fund]} />);
+
+  expect(screen.getByText("盘中估值 1.05")).toBeInTheDocument();
+  expect(screen.getByText("估算涨跌 +5.00%")).toBeInTheDocument();
+  expect(screen.getByText("区间 1.03–1.07")).toBeInTheDocument();
+  expect(screen.getByText("成分覆盖 68.50%")).toBeInTheDocument();
+  expect(screen.getByText("披露 2026-06-30")).toBeInTheDocument();
+  expect(screen.getByText(/仅供盘中跟踪，不是官方净值/)).toBeInTheDocument();
+});
