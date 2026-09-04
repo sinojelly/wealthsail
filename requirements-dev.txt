@@ -5,3 +5,6 @@ pytest==8.3.4
 pytest-asyncio==0.24.0
 requests==2.32.3
 ruff==0.9.10
+# Migration SQL syntax parsing (Postgres dialect) for tests/unit/
+# test_migration_sql_syntax.py; missing install degrades that suite to skip.
+sqlglot==30.18.0

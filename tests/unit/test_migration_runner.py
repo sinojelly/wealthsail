@@ -336,37 +336,71 @@ def test_053_seeds_index_funds_holdings_with_approximated_weights() -> None:
 
 
 def test_054_registers_missing_holdings_before_seeding_lookthrough() -> None:
-    """054 必须先自动注册缺失持仓股票再插 lookthrough（修复 053 静默失配）。"""
+    """054 必须先注册缺失持仓股票/基金，再回填 lookthrough（修复 053 静默失配）。
+
+    且「注册」与「回填」必须是**多条顺序语句**：同一条语句内的多个
+    data-modifying CTE 并发执行、互相看不到写入，写在一条语句里会再次
+    插 0 行却显示 applied。
+    """
     root = Path(__file__).resolve().parents[2]
     migration = (
         root / "migrations" / "054_backfill_index_fund_holdings.sql"
     ).read_text(encoding="utf-8")
 
     for contract in (
-        # 缺失持仓股票自动注册（CN_STOCK + TICKER alias）
-        "missing_holdings AS (",
-        "INSERT INTO reference.instruments",
+        # 持仓股票注册 + alias 补全
         "'CN_STOCK'",
-        "inserted_holding_aliases AS (",
+        "INSERT INTO reference.instrument_aliases",
         "ON CONFLICT DO NOTHING",
-        # 缺失基金兜底注册
-        "missing_funds AS (",
+        # 基金注册 + alias 兜底（052 漏建的补回来）
         "'OFF_EXCHANGE_FUND'",
-        # lookthrough 重插（与 053 幂等兼容）
+        "'FUND_CN'",
+        # lookthrough 回填（与 053 幂等兼容）
         "INSERT INTO market.fund_lookthrough",
         "ON CONFLICT (fund_instrument_id, holding_instrument_id, report_period)",
         "DO NOTHING",
         # 警告标记保留
         "基于公开指数机制的估值近似",
+        # 约束说明留档
+        "同一条语句内",
     ):
         assert contract in migration
     # 五只指数 / ETF 联接基金均需覆盖
     for fund in ("161725", "161726", "001632", "011103", "012733"):
         assert fund in migration
-    # market 按代码前缀推断（60/688 沪市，其余深市）
-    assert (
-        "CASE WHEN r.holding_symbol LIKE '6%' THEN 'SSE' ELSE 'SZSE' END" in migration
-    )
+    # 22 只持仓股票均需覆盖
+    for holding in (
+        "600519",
+        "000858",
+        "000568",
+        "600809",
+        "000596",
+        "300760",
+        "603259",
+        "600276",
+        "300015",
+        "300122",
+        "603288",
+        "600887",
+        "601012",
+        "600438",
+        "002129",
+        "300274",
+        "002459",
+        "002230",
+        "002415",
+        "603019",
+        "688111",
+        "000938",
+    ):
+        assert holding in migration
+    # 顺序约束：注册（instruments）必须出现在回填（fund_lookthrough）之前，
+    # 且两者分属不同语句（用分号分隔），否则回填读不到新注册的行。
+    register_at = migration.index("INSERT INTO reference.instruments")
+    seed_at = migration.index("INSERT INTO market.fund_lookthrough")
+    assert register_at < seed_at
+    assert migration.count("INSERT INTO market.fund_lookthrough") == 1
+    assert migration[register_at:seed_at].count(";") >= 1
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:

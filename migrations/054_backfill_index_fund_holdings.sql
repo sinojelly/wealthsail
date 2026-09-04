@@ -1,140 +1,224 @@
 BEGIN;
 
--- 053 的 INSERT 通过 alias JOIN 解析持仓股票；未注册过的股票 JOIN 不到
--- 就被静默跳过，导致 053 applied 但 fund_lookthrough 仍为 0 行。
--- 本迁移补齐链路：
---   1) 自动注册缺失的持仓股票（CN_STOCK + TICKER alias，market 按代码前缀）
---   2) 基金若因任何原因缺 alias 也补注册（OFF_EXCHANGE_FUND/FUND_CN）
---   3) 重新 INSERT lookthrough（ON CONFLICT DO NOTHING，与 053 幂等兼容）
--- 权重仍是基于公开指数机制的估算近似，metadata.warning 保留该标记。
+-- 053 的 INSERT 通过 alias JOIN 解析持仓股票；未注册的股票 JOIN 不到就
+-- 被静默跳过，导致 053 显示 applied 但 fund_lookthrough 仍 0 行。
+--
+-- 关键约束（PostgreSQL）：**同一条语句内**的多个 data-modifying CTE 并发
+-- 执行，彼此看不到对方的写入。因此「先注册股票 / 基金，再读 alias 表回
+-- 填 lookthrough」必须拆成**多条顺序语句**——后一条语句在同一事务内可以
+-- 看到前一条的写入。同一个 bug 也存在于 052（新注册基金拿不到 alias），
+-- 本迁移一并兜底补 alias。
+--
+-- 步骤：
+--   1) 注册缺失的持仓股票（22 只，CN_STOCK，canonical_name 用中文名）
+--   2) 为这些股票补 TICKER alias（读表，可见步骤 1 的写入）
+--   3) 注册缺失的指数基金（5 只，OFF_EXCHANGE_FUND/FUND_CN）
+--   4) 为这些基金补 TICKER alias（读表，可见步骤 3 的写入）
+--   5) 回填 lookthrough（读 alias 表，可见步骤 1-4 的全部写入）
+-- 权重仍为基于公开指数机制的估算近似，metadata.warning 保留该标记。
 
-WITH requested (
-    fund_symbol, fund_name, holding_symbol, holding_name, weight_pct
-) AS (
+-- 1) 注册缺失的持仓股票
+WITH requested (holding_symbol, holding_name, market) AS (
     VALUES
-        ('161725', '招商国证生物医药指数(LOF)A', '600519', '贵州茅台', '55.00'),
-        ('161725', '招商国证生物医药指数(LOF)A', '000858', '五粮液', '28.00'),
-        ('161725', '招商国证生物医药指数(LOF)A', '000568', '泸州老窖', '12.00'),
-        ('161725', '招商国证生物医药指数(LOF)A', '600809', '山西汾酒', '3.00'),
-        ('161725', '招商国证生物医药指数(LOF)A', '000596', '古井贡酒', '2.00'),
-        ('161726', '招商国证生物医药指数(LOF)A', '300760', '迈瑞医疗', '12.00'),
-        ('161726', '招商国证生物医药指数(LOF)A', '603259', '药明康德', '11.00'),
-        ('161726', '招商国证生物医药指数(LOF)A', '600276', '恒瑞医药', '10.00'),
-        ('161726', '招商国证生物医药指数(LOF)A', '300015', '爱尔眼科', '7.00'),
-        ('161726', '招商国证生物医药指数(LOF)A', '300122', '智飞生物', '6.00'),
-        ('001632', '天弘中证食品饮料ETF联接C', '600519', '贵州茅台', '25.00'),
-        ('001632', '天弘中证食品饮料ETF联接C', '000858', '五粮液', '14.00'),
-        ('001632', '天弘中证食品饮料ETF联接C', '603288', '海天味业', '8.00'),
-        ('001632', '天弘中证食品饮料ETF联接C', '600887', '伊利股份', '8.00'),
-        ('001632', '天弘中证食品饮料ETF联接C', '000568', '泸州老窖', '7.00'),
-        ('011103', '天弘中证光伏产业指数C', '601012', '隆基绿能', '14.00'),
-        ('011103', '天弘中证光伏产业指数C', '600438', '通威股份', '11.00'),
-        ('011103', '天弘中证光伏产业指数C', '002129', 'TCL中环', '9.00'),
-        ('011103', '天弘中证光伏产业指数C', '300274', '阳光电源', '9.00'),
-        ('011103', '天弘中证光伏产业指数C', '002459', '晶澳科技', '7.00'),
-        ('012733', '易方达中证人工智能主题ETF联接A', '002230', '科大讯飞', '11.00'),
-        ('012733', '易方达中证人工智能主题ETF联接A', '002415', '海康威视', '10.00'),
-        ('012733', '易方达中证人工智能主题ETF联接A', '603019', '中科曙光', '7.00'),
-        ('012733', '易方达中证人工智能主题ETF联接A', '688111', '金山办公', '5.00'),
-        ('012733', '易方达中证人工智能主题ETF联接A', '000938', '紫光股份', '4.00')
+        ('600519', '贵州茅台', 'SSE'),
+        ('000858', '五粮液', 'SZSE'),
+        ('000568', '泸州老窖', 'SZSE'),
+        ('600809', '山西汾酒', 'SSE'),
+        ('000596', '古井贡酒', 'SZSE'),
+        ('300760', '迈瑞医疗', 'SZSE'),
+        ('603259', '药明康德', 'SSE'),
+        ('600276', '恒瑞医药', 'SSE'),
+        ('300015', '爱尔眼科', 'SZSE'),
+        ('300122', '智飞生物', 'SZSE'),
+        ('603288', '海天味业', 'SSE'),
+        ('600887', '伊利股份', 'SSE'),
+        ('601012', '隆基绿能', 'SSE'),
+        ('600438', '通威股份', 'SSE'),
+        ('002129', 'TCL中环', 'SZSE'),
+        ('300274', '阳光电源', 'SZSE'),
+        ('002459', '晶澳科技', 'SZSE'),
+        ('002230', '科大讯飞', 'SZSE'),
+        ('002415', '海康威视', 'SZSE'),
+        ('603019', '中科曙光', 'SSE'),
+        ('688111', '金山办公', 'SSE'),
+        ('000938', '紫光股份', 'SZSE')
 ),
--- 按代码前缀推断上市交易所（60/688 → SSE，其余深市 → SZSE）
-typed_holdings AS (
-    SELECT DISTINCT r.holding_symbol, r.holding_name,
-           CASE WHEN r.holding_symbol LIKE '6%' THEN 'SSE' ELSE 'SZSE' END AS market
-      FROM requested r
-),
--- 注册缺失的持仓股票（幂等：已有 TICKER alias 的跳过）
-missing_holdings AS (
-    SELECT th.holding_symbol, th.holding_name, th.market
-      FROM typed_holdings th
-     WHERE NOT EXISTS (
-               SELECT 1
-                 FROM reference.instrument_aliases ha
-                WHERE ha.alias_type = 'TICKER'
-                  AND ha.alias_value = th.holding_symbol
-                  AND ha.effective_from <= CURRENT_DATE
-                  AND (ha.effective_to IS NULL OR ha.effective_to >= CURRENT_DATE)
-           )
-),
-inserted_holdings AS (
-    INSERT INTO reference.instruments (
-        asset_type, primary_market, trading_currency, canonical_name,
-        lifecycle_status, metadata
-    )
-    SELECT 'CN_STOCK', mh.market, 'CNY', mh.holding_name, 'ACTIVE',
-           jsonb_build_object(
-               'registeredBy', 'fund-holdings-seed',
-               'source', 'index-fund-holdings'
-           )
-      FROM missing_holdings mh
-    RETURNING id, canonical_name
-),
-inserted_holding_aliases AS (
-    INSERT INTO reference.instrument_aliases (
-        instrument_id, alias_type, alias_value, market, effective_from
-    )
-    SELECT ih.id, 'TICKER', mh.holding_symbol, mh.market, CURRENT_DATE
-      FROM inserted_holdings ih
-      JOIN missing_holdings mh ON mh.holding_name = ih.canonical_name
-    ON CONFLICT DO NOTHING
-    RETURNING 1
-),
--- 注册缺失的基金（正常情况下 052 已建，这里兜底）
-missing_funds AS (
-    SELECT DISTINCT r.fund_symbol, r.fund_name
+missing AS (
+    SELECT r.holding_symbol, r.holding_name, r.market
       FROM requested r
      WHERE NOT EXISTS (
-               SELECT 1
-                 FROM reference.instrument_aliases fa
-                WHERE fa.alias_type = 'TICKER'
-                  AND fa.alias_value = r.fund_symbol
-                  AND fa.effective_from <= CURRENT_DATE
-                  AND (fa.effective_to IS NULL OR fa.effective_to >= CURRENT_DATE)
+               SELECT 1 FROM reference.instrument_aliases alias
+                WHERE alias.alias_type = 'TICKER'
+                  AND alias.alias_value = r.holding_symbol
+                  AND alias.effective_from <= CURRENT_DATE
+                  AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
            )
-),
-inserted_funds AS (
-    INSERT INTO reference.instruments (
-        asset_type, primary_market, trading_currency, canonical_name,
-        lifecycle_status, metadata
-    )
-    SELECT 'OFF_EXCHANGE_FUND', 'FUND_CN', 'CNY',
-           mf.fund_symbol || ' ' || mf.fund_name, 'ACTIVE',
-           jsonb_build_object(
-               'registeredBy', 'fund-holdings-seed',
-               'source', 'index-fund-holdings'
+       AND NOT EXISTS (
+               SELECT 1 FROM reference.instruments instrument
+                WHERE instrument.canonical_name = r.holding_name
            )
-      FROM missing_funds mf
-    RETURNING id, canonical_name
+)
+INSERT INTO reference.instruments (
+    asset_type, primary_market, trading_currency, canonical_name,
+    lifecycle_status, metadata
+)
+SELECT 'CN_STOCK', m.market, 'CNY', m.holding_name, 'ACTIVE',
+       jsonb_build_object(
+           'registeredBy', 'fund-holdings-seed',
+           'source', 'index-fund-holdings'
+       )
+  FROM missing m;
+
+-- 2) 为这些股票补 TICKER alias（读表，可见步骤 1）
+WITH requested (holding_symbol, holding_name, market) AS (
+    VALUES
+        ('600519', '贵州茅台', 'SSE'),
+        ('000858', '五粮液', 'SZSE'),
+        ('000568', '泸州老窖', 'SZSE'),
+        ('600809', '山西汾酒', 'SSE'),
+        ('000596', '古井贡酒', 'SZSE'),
+        ('300760', '迈瑞医疗', 'SZSE'),
+        ('603259', '药明康德', 'SSE'),
+        ('600276', '恒瑞医药', 'SSE'),
+        ('300015', '爱尔眼科', 'SZSE'),
+        ('300122', '智飞生物', 'SZSE'),
+        ('603288', '海天味业', 'SSE'),
+        ('600887', '伊利股份', 'SSE'),
+        ('601012', '隆基绿能', 'SSE'),
+        ('600438', '通威股份', 'SSE'),
+        ('002129', 'TCL中环', 'SZSE'),
+        ('300274', '阳光电源', 'SZSE'),
+        ('002459', '晶澳科技', 'SZSE'),
+        ('002230', '科大讯飞', 'SZSE'),
+        ('002415', '海康威视', 'SZSE'),
+        ('603019', '中科曙光', 'SSE'),
+        ('688111', '金山办公', 'SSE'),
+        ('000938', '紫光股份', 'SZSE')
+)
+INSERT INTO reference.instrument_aliases (
+    instrument_id, alias_type, alias_value, market, effective_from
+)
+SELECT instrument.id, 'TICKER', r.holding_symbol, r.market, CURRENT_DATE
+  FROM requested r
+  JOIN reference.instruments instrument
+    ON instrument.canonical_name = r.holding_name
+   AND instrument.asset_type = 'CN_STOCK'
+ WHERE NOT EXISTS (
+           SELECT 1 FROM reference.instrument_aliases alias
+            WHERE alias.alias_type = 'TICKER'
+              AND alias.alias_value = r.holding_symbol
+              AND alias.effective_from <= CURRENT_DATE
+              AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+       )
+ON CONFLICT DO NOTHING;
+
+-- 3) 注册缺失的指数基金（052 已建的行靠 canonical_name 去重，不重复建行）
+WITH requested (fund_symbol, fund_name) AS (
+    VALUES
+        ('161725', '招商中证白酒指数(LOF)A'),
+        ('161726', '招商国证生物医药指数(LOF)A'),
+        ('001632', '天弘中证食品饮料ETF联接C'),
+        ('011103', '天弘中证光伏产业指数C'),
+        ('012733', '易方达中证人工智能主题ETF联接A')
 ),
-inserted_fund_aliases AS (
-    INSERT INTO reference.instrument_aliases (
-        instrument_id, alias_type, alias_value, market, effective_from
-    )
-    SELECT ifn.id, 'TICKER', mf.fund_symbol, 'FUND_CN', CURRENT_DATE
-      FROM inserted_funds ifn
-      JOIN missing_funds mf
-        ON ifn.canonical_name = mf.fund_symbol || ' ' || mf.fund_name
-    ON CONFLICT DO NOTHING
-    RETURNING 1
+missing AS (
+    SELECT r.fund_symbol, r.fund_name
+      FROM requested r
+     WHERE NOT EXISTS (
+               SELECT 1 FROM reference.instrument_aliases alias
+                WHERE alias.alias_type = 'TICKER'
+                  AND alias.alias_value = r.fund_symbol
+                  AND alias.effective_from <= CURRENT_DATE
+                  AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+           )
+       AND NOT EXISTS (
+               SELECT 1 FROM reference.instruments instrument
+                WHERE instrument.canonical_name = r.fund_symbol || ' ' || r.fund_name
+           )
+)
+INSERT INTO reference.instruments (
+    asset_type, primary_market, trading_currency, canonical_name,
+    lifecycle_status, metadata
+)
+SELECT 'OFF_EXCHANGE_FUND', 'FUND_CN', 'CNY',
+       m.fund_symbol || ' ' || m.fund_name, 'ACTIVE',
+       jsonb_build_object(
+           'registeredBy', 'fund-holdings-seed',
+           'source', 'index-fund-holdings'
+       )
+  FROM missing m;
+
+-- 4) 为这些基金补 TICKER alias（读表，可见步骤 3；同时兜底 052 漏建的情况）
+WITH requested (fund_symbol, fund_name) AS (
+    VALUES
+        ('161725', '招商中证白酒指数(LOF)A'),
+        ('161726', '招商国证生物医药指数(LOF)A'),
+        ('001632', '天弘中证食品饮料ETF联接C'),
+        ('011103', '天弘中证光伏产业指数C'),
+        ('012733', '易方达中证人工智能主题ETF联接A')
+)
+INSERT INTO reference.instrument_aliases (
+    instrument_id, alias_type, alias_value, market, effective_from
+)
+SELECT instrument.id, 'TICKER', r.fund_symbol, 'FUND_CN', CURRENT_DATE
+  FROM requested r
+  JOIN reference.instruments instrument
+    ON instrument.canonical_name = r.fund_symbol || ' ' || r.fund_name
+ WHERE NOT EXISTS (
+           SELECT 1 FROM reference.instrument_aliases alias
+            WHERE alias.alias_type = 'TICKER'
+              AND alias.alias_value = r.fund_symbol
+              AND alias.effective_from <= CURRENT_DATE
+              AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+       )
+ON CONFLICT DO NOTHING;
+
+-- 5) 回填 lookthrough（读 alias 表，可见步骤 1-4 的全部写入）
+WITH requested (fund_symbol, holding_symbol, weight_pct) AS (
+    VALUES
+        ('161725', '600519', '55.00'),
+        ('161725', '000858', '28.00'),
+        ('161725', '000568', '12.00'),
+        ('161725', '600809', '3.00'),
+        ('161725', '000596', '2.00'),
+        ('161726', '300760', '12.00'),
+        ('161726', '603259', '11.00'),
+        ('161726', '600276', '10.00'),
+        ('161726', '300015', '7.00'),
+        ('161726', '300122', '6.00'),
+        ('001632', '600519', '25.00'),
+        ('001632', '000858', '14.00'),
+        ('001632', '603288', '8.00'),
+        ('001632', '600887', '8.00'),
+        ('001632', '000568', '7.00'),
+        ('011103', '601012', '14.00'),
+        ('011103', '600438', '11.00'),
+        ('011103', '002129', '9.00'),
+        ('011103', '300274', '9.00'),
+        ('011103', '002459', '7.00'),
+        ('012733', '002230', '11.00'),
+        ('012733', '002415', '10.00'),
+        ('012733', '603019', '7.00'),
+        ('012733', '688111', '5.00'),
+        ('012733', '000938', '4.00')
 ),
 funds AS (
-    SELECT DISTINCT r.fund_symbol, fi.id AS fund_instrument_id
+    SELECT DISTINCT r.fund_symbol, instrument.id AS fund_instrument_id
       FROM requested r
-      JOIN reference.instrument_aliases fa
-        ON fa.alias_type = 'TICKER' AND fa.alias_value = r.fund_symbol
-       AND fa.effective_from <= CURRENT_DATE
-       AND (fa.effective_to IS NULL OR fa.effective_to >= CURRENT_DATE)
-      JOIN reference.instruments fi ON fi.id = fa.instrument_id
+      JOIN reference.instrument_aliases alias
+        ON alias.alias_type = 'TICKER' AND alias.alias_value = r.fund_symbol
+       AND alias.effective_from <= CURRENT_DATE
+       AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+      JOIN reference.instruments instrument ON instrument.id = alias.instrument_id
 ),
 holdings AS (
-    SELECT DISTINCT r.holding_symbol, hi.id AS holding_instrument_id
+    SELECT DISTINCT r.holding_symbol, instrument.id AS holding_instrument_id
       FROM requested r
-      JOIN reference.instrument_aliases ha
-        ON ha.alias_type = 'TICKER' AND ha.alias_value = r.holding_symbol
-       AND ha.effective_from <= CURRENT_DATE
-       AND (ha.effective_to IS NULL OR ha.effective_to >= CURRENT_DATE)
-      JOIN reference.instruments hi ON hi.id = ha.instrument_id
+      JOIN reference.instrument_aliases alias
+        ON alias.alias_type = 'TICKER' AND alias.alias_value = r.holding_symbol
+       AND alias.effective_from <= CURRENT_DATE
+       AND (alias.effective_to IS NULL OR alias.effective_to >= CURRENT_DATE)
+      JOIN reference.instruments instrument ON instrument.id = alias.instrument_id
 ),
 seeded AS (
     INSERT INTO market.fund_lookthrough (
@@ -154,8 +238,6 @@ seeded AS (
     DO NOTHING
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM inserted_holdings) AS holdings_registered,
-       (SELECT count(*) FROM inserted_funds) AS funds_registered,
-       (SELECT count(*) FROM seeded) AS lookthrough_rows;
+SELECT count(*) AS lookthrough_rows FROM seeded;
 
 COMMIT;
