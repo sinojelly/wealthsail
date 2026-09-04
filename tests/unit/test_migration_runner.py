@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 53
-    assert migrations[-1].path.name == "053_index_funds_initial_holdings.sql"
+    assert versions[-1] == 54
+    assert migrations[-1].path.name == "054_backfill_index_fund_holdings.sql"
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
@@ -326,10 +326,47 @@ def test_053_seeds_index_funds_holdings_with_approximated_weights() -> None:
     ):
         assert contract in migration
     # 051 建表缺 metadata 列，053 必须先 ALTER 补齐（否则 INSERT 报列不存在）。
-    assert "ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb" in migration
+    assert (
+        "ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb"
+        in migration
+    )
     # 五只指数 / ETF 联接基金均需覆盖
     for fund in ("161725", "161726", "001632", "011103", "012733"):
         assert fund in migration
+
+
+def test_054_registers_missing_holdings_before_seeding_lookthrough() -> None:
+    """054 必须先自动注册缺失持仓股票再插 lookthrough（修复 053 静默失配）。"""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "054_backfill_index_fund_holdings.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        # 缺失持仓股票自动注册（CN_STOCK + TICKER alias）
+        "missing_holdings AS (",
+        "INSERT INTO reference.instruments",
+        "'CN_STOCK'",
+        "inserted_holding_aliases AS (",
+        "ON CONFLICT DO NOTHING",
+        # 缺失基金兜底注册
+        "missing_funds AS (",
+        "'OFF_EXCHANGE_FUND'",
+        # lookthrough 重插（与 053 幂等兼容）
+        "INSERT INTO market.fund_lookthrough",
+        "ON CONFLICT (fund_instrument_id, holding_instrument_id, report_period)",
+        "DO NOTHING",
+        # 警告标记保留
+        "基于公开指数机制的估值近似",
+    ):
+        assert contract in migration
+    # 五只指数 / ETF 联接基金均需覆盖
+    for fund in ("161725", "161726", "001632", "011103", "012733"):
+        assert fund in migration
+    # market 按代码前缀推断（60/688 沪市，其余深市）
+    assert (
+        "CASE WHEN r.holding_symbol LIKE '6%' THEN 'SSE' ELSE 'SZSE' END" in migration
+    )
 
 
 def test_041_adds_daily_shared_market_brief_cache_with_least_privilege() -> None:
