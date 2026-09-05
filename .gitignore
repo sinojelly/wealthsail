@@ -57,3 +57,6 @@ backend/static/avatars/*
 # 本地金融账户资料与采集结果：包含资产、交易流水、浏览器登录会话，严禁提交
 /reference/天天基金/
 /tools/tiantian-fund-importer/private-data/
+
+# 本地 agent 记忆与项目数据，不进入源码仓库
+.workbuddy/

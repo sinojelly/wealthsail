@@ -632,6 +632,16 @@ async def build_report_context(
             for position in positions
             if position.get("instrumentId") and position.get("type") == "场外基金"
         ]
+        # Also surface funds the user tracks on the watchlist (自选), not just
+        # held ledger positions. The 14:30 brief is the user's "funds I follow"
+        # view, so a watched OTC fund must appear even if it is not currently a
+        # ledger position. Watchlist items without a resolved instrument (or that
+        # are already present) are skipped; non-fund watchlist rows simply yield
+        # no lookthrough/profile rows downstream.
+        for item in watchlist:
+            watched_id = item.get("instrumentId")
+            if watched_id and str(watched_id) not in fund_ids:
+                fund_ids.append(str(watched_id))
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, fund_ids, now_shanghai().date()
         )

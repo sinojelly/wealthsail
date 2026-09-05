@@ -32,8 +32,40 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 54
-    assert migrations[-1].path.name == "054_backfill_index_fund_holdings.sql"
+    assert versions[-1] == 55
+    assert migrations[-1].path.name == "055_user_otc_fund_reference_data.sql"
+
+
+def test_055_seeds_fund_reference_data_with_correct_asset_type() -> None:
+    """055 must register OTC funds as OFF_EXCHANGE_FUND, never the invalid 'FUND' type."""
+    root = Path(__file__).resolve().parents[2]
+    sql = (root / "migrations" / "055_user_otc_fund_reference_data.sql").read_text(
+        encoding="utf-8"
+    )
+
+    # The bug the user hit: inserting asset_type='FUND' violates the CHECK.
+    # The migration must use the valid enum value instead, and never insert the
+    # bare 'FUND' literal as an asset_type value.
+    assert "OFF_EXCHANGE_FUND" in sql
+    assert "CN_STOCK" in sql
+    # No instrument INSERT may use the invalid bare 'FUND' asset_type literal.
+    assert "asset_type, 'FUND'" not in sql
+    assert "'FUND'," not in sql
+    # Each seeded table the 14:30 report reads from must be present.
+    for table in (
+        "reference.instruments",
+        "reference.instrument_aliases",
+        "reference.fund_profiles",
+        "reference.instrument_cutoff_rules",
+        "market.fund_lookthrough",
+    ):
+        assert table in sql
+    # Idempotency guards so the migration is safe to re-run.
+    assert "ON CONFLICT" in sql
+    assert "NOT EXISTS" in sql
+    # All 12 funds are explicitly seeded (count the canonical-name VALUES rows).
+    assert sql.count("前海开源新经济混合A") >= 1
+    assert sql.count("中欧创新成长灵活配置混合A") >= 1
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:
