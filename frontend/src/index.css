@@ -1673,6 +1673,10 @@ button:disabled {
   border-color: #99f6e4;
   background: white;
 }
+.report-item-placeholder.is-static:hover {
+  border-color: #cbd5e1;
+  background: transparent;
+}
 .report-item-placeholder .report-item-copy small {
   color: #0f766e;
 }
@@ -2795,7 +2799,9 @@ button:disabled {
   background: var(--slate-200);
   appearance: none;
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
 }
 .report-subscription-row input[role="switch"]::before {
   content: "";
@@ -3545,7 +3551,9 @@ button:disabled {
   background: var(--slate-50);
 }
 @keyframes ops-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .fund-estimate-ops-heading .spin {
   animation: ops-spin 1s linear infinite;

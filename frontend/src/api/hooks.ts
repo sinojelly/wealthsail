@@ -529,11 +529,9 @@ export function useGenerateReport() {
     mutationFn: (input: {
       session: ReportSession;
       phase?: "MACRO" | "PERSONALIZED" | "ALERT";
-      userId?: string;
     }) =>
       reportsApi.triggerReport(input.session, {
         phase: input.phase,
-        userId: input.userId,
       }),
     onSuccess: () => {
       // 触发端点只回执 {reportId, outboxId}（报告已生成并写入 outbox，由 Worker

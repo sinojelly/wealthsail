@@ -39,22 +39,18 @@ export interface TriggerReportResult {
  * 走 debug 触发端点而非 /v1/reports/generate：后者 force=false，当天已有报告时
  * 直接返回旧版本，既不生成新版本也不写 outbox（不会推送）。
  *
- * ``phase`` 与 ``userId`` 共同决定触发的变体：选中行若是
+ * ``phase`` 决定触发的变体：选中行若是
  * ``PRE_MARKET_MACRO``，传 ``{ phase: "MACRO" }``；若是 ``PRE_MARKET_PERSONALIZED``，
- * 必须传 ``{ phase: "PERSONALIZED", userId: audienceUserId }`` 才能触发某个具体
- * 成员的个性化简报并投递到该用户。不传则后端默认 MACRO（租户级共享，不含个人
- * watchlist，自然不会推到手机）。
+ * 传 ``{ phase: "PERSONALIZED" }``。服务端始终以当前登录用户为报告受众和唯一
+ * 投递目标，前端不能代替其他成员触发通知。
  */
 export async function triggerReport(
   session: ReportSession,
-  options: { phase?: "MACRO" | "PERSONALIZED" | "ALERT"; userId?: string } = {},
+  options: { phase?: "MACRO" | "PERSONALIZED" | "ALERT" } = {},
 ): Promise<TriggerReportResult> {
   const params = new URLSearchParams();
   if (options.phase) {
     params.set("phase", options.phase);
-  }
-  if (options.userId) {
-    params.set("user_id", options.userId);
   }
   const query = params.toString();
   const envelope = await request<TriggerReportResult>(

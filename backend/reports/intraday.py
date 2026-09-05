@@ -163,6 +163,10 @@ async def maybe_generate_intraday_alert(
     settings,
     *,
     job_run_id: str | None = None,
+    ignore_cooldown: bool = False,
+    actor_type: str = "SYSTEM_WORKER",
+    trigger_audit_action: str | None = None,
+    trigger_audit_details: dict | None = None,
 ) -> dict | None:
     """Generate and deliver an INTRADAY alert only when a threshold is breached.
 
@@ -199,17 +203,18 @@ async def maybe_generate_intraday_alert(
             return None
 
         now = now_shanghai()
-        allowed: list[IntradayTrigger] = []
-        for trigger in triggers:
-            if await repository.claim_intraday_alert(
-                conn,
-                ctx.tenant_id,
-                ctx.user_id,
-                trigger.alert_key,
-                now,
-                INTRADAY_ALERT_DEDUP_WINDOW,
-            ):
-                allowed.append(trigger)
+        allowed: list[IntradayTrigger] = list(triggers) if ignore_cooldown else []
+        if not ignore_cooldown:
+            for trigger in triggers:
+                if await repository.claim_intraday_alert(
+                    conn,
+                    ctx.tenant_id,
+                    ctx.user_id,
+                    trigger.alert_key,
+                    now,
+                    INTRADAY_ALERT_DEDUP_WINDOW,
+                ):
+                    allowed.append(trigger)
         if not allowed:
             return None
 
@@ -224,9 +229,11 @@ async def maybe_generate_intraday_alert(
         audience_user_id=ctx.user_id,
         delivery_user_id=ctx.user_id,
         job_run_id=job_run_id,
-        actor_type="SYSTEM_WORKER",
+        actor_type=actor_type,
         force=True,
         push_content_override=content,
         asset_scope=asset_scope,
+        trigger_audit_action=trigger_audit_action,
+        trigger_audit_details=trigger_audit_details,
     )
     return report

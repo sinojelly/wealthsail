@@ -20,7 +20,12 @@ from backend.dependencies import (
     get_settings_dep,
     get_tenant_context,
 )
-from backend.errors import MoneyJSONResponse, NotFoundError, register_exception_handlers
+from backend.errors import (
+    MoneyJSONResponse,
+    NotFoundError,
+    ValidationError_,
+    register_exception_handlers,
+)
 
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -56,7 +61,7 @@ def test_debug_trigger_role_boundary(role: str, status: int) -> None:
     assert response.status_code == status
     if status == 200:
         assert response.json()["data"] == {"reportId": "report-1", "outboxId": None}
-        assert trigger.await_args.kwargs["target_user_id"] == USER_ID
+        assert "target_user_id" not in trigger.await_args.kwargs
     else:
         trigger.assert_not_awaited()
 
@@ -71,7 +76,7 @@ def test_debug_trigger_rejects_unknown_session_before_service_call() -> None:
     trigger.assert_not_awaited()
 
 
-def test_debug_trigger_forwards_explicit_target_user() -> None:
+def test_debug_trigger_ignores_external_target_and_uses_authenticated_user() -> None:
     trigger = AsyncMock(return_value={"reportId": "report-1", "outboxId": "outbox-1"})
     with patch("backend.debug.api.trigger_report_once", new=trigger):
         response = client("ADMIN").post(
@@ -79,7 +84,8 @@ def test_debug_trigger_forwards_explicit_target_user() -> None:
         )
 
     assert response.status_code == 200
-    assert trigger.await_args.kwargs["target_user_id"] == TARGET_ID
+    trigger.assert_awaited_once()
+    assert "target_user_id" not in trigger.await_args.kwargs
 
 
 class MembershipConnection:
@@ -114,7 +120,7 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
     pool = object()
 
     result = await debug_service.trigger_report_once(
-        pool, ctx, settings, "POST_MARKET", target_user_id=TARGET_ID
+        pool, ctx, settings, "POST_MARKET"
     )
 
     assert result == {"reportId": "report-1", "outboxId": "outbox-1"}
@@ -125,18 +131,18 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
         "POST_MARKET",
         actor_type="USER",
         force=True,
-        # debug trigger never pins per-recipient delivery on STANDARD sessions;
-        # outbox iterates all eligible bindings + preferences instead.
-        delivery_user_id=None,
+        # A manual debug run is deliberately unicast to the authenticated
+        # operator, even though the STANDARD report row remains tenant-wide.
+        delivery_user_id=USER_ID,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
-        trigger_audit_details={"targetUserId": TARGET_ID},
+        trigger_audit_details={"targetUserId": USER_ID},
     )
     lookup.assert_not_awaited()
     assert all("workflow.jobs" not in sql for sql, _args in conn.calls)
 
 
 @pytest.mark.asyncio
-async def test_debug_service_hides_inactive_or_cross_tenant_target(monkeypatch) -> None:
+async def test_debug_service_requires_authenticated_user_to_remain_active(monkeypatch) -> None:
     conn = MembershipConnection(active=False)
 
     @asynccontextmanager
@@ -153,7 +159,39 @@ async def test_debug_service_hides_inactive_or_cross_tenant_target(monkeypatch) 
             TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
             Settings(_env_file=None, app_env="test"),
             "POST_MARKET",
-            target_user_id=TARGET_ID,
+        )
+
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session", "phase"),
+    [
+        ("PRE_MARKET", "ALERT"),
+        ("INTRADAY", "PERSONALIZED"),
+        ("FUND_1430", "MACRO"),
+        ("POST_MARKET", "ALERT"),
+    ],
+)
+async def test_debug_service_rejects_incompatible_session_phase(
+    monkeypatch, session: str, phase: str
+) -> None:
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield MembershipConnection(active=True)
+
+    generate = AsyncMock()
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(debug_service.report_service, "generate_report", generate)
+
+    with pytest.raises(ValidationError_, match="不支持"):
+        await debug_service.trigger_report_once(
+            object(),
+            TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+            Settings(_env_file=None, app_env="test"),
+            session,
+            phase=phase,
         )
 
     generate.assert_not_awaited()
@@ -181,7 +219,6 @@ async def test_debug_personalized_phase_requires_active_member(monkeypatch) -> N
             TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
             Settings(_env_file=None, app_env="test"),
             "PRE_MARKET",
-            target_user_id=TARGET_ID,
             phase="PERSONALIZED",
         )
 
@@ -207,26 +244,31 @@ async def test_debug_personalized_phase_returns_null_for_empty_context(
         personalized,
     )
 
+    pool = object()
+    ctx = TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN")
+    settings = Settings(_env_file=None, app_env="test")
     result = await debug_service.trigger_report_once(
-        object(),
-        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
-        Settings(_env_file=None, app_env="test"),
+        pool,
+        ctx,
+        settings,
         "PRE_MARKET",
-        target_user_id=TARGET_ID,
         phase="PERSONALIZED",
     )
 
     assert result == {"reportId": None, "outboxId": None}
-    personalized.assert_awaited_once()
+    personalized.assert_awaited_once_with(
+        pool,
+        ctx,
+        settings,
+        force=True,
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": USER_ID},
+    )
 
 
 @pytest.mark.asyncio
 async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> None:
-    """Regression: the personalized debug path must reach the real generator
-    without an unsupported ``actor_type`` kwarg.  The generator only accepts
-    ``job_run_id`` and derives ``actor_type`` internally, so the previous call
-    raised ``TypeError`` in production while the mocked tests stayed green.
-    """
+    """Personalized debug generation must force a new self-scoped version."""
 
     @asynccontextmanager
     async def debug_txn(*_a, **_k):
@@ -261,18 +303,22 @@ async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> N
         TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
         Settings(_env_file=None, app_env="test"),
         "PRE_MARKET",
-        target_user_id=TARGET_ID,
         phase="PERSONALIZED",
     )
 
     assert result == {"reportId": "rep-1", "outboxId": "ob-1"}
-    assert captured["audience"] == TARGET_ID
+    assert captured["audience"] == USER_ID
     assert captured["generate_kwargs"]["report_variant"] == "PRE_MARKET_PERSONALIZED"
-    assert captured["generate_kwargs"]["audience_user_id"] == TARGET_ID
-    assert captured["generate_kwargs"]["delivery_user_id"] == TARGET_ID
+    assert captured["generate_kwargs"]["audience_user_id"] == USER_ID
+    assert captured["generate_kwargs"]["delivery_user_id"] == USER_ID
+    assert captured["generate_kwargs"]["force"] is True
+    assert (
+        captured["generate_kwargs"]["trigger_audit_action"]
+        == "DEBUG_REPORT_TRIGGERED"
+    )
     # The real generator must own the asset scope, not the caller's role.
     assert captured["scope"].kind == "MINE"
-    assert str(captured["scope"].owner_user_id) == TARGET_ID
+    assert str(captured["scope"].owner_user_id) == USER_ID
 
 
 @pytest.mark.asyncio
@@ -304,8 +350,13 @@ async def test_debug_macro_phase_is_the_default_for_pre_market(monkeypatch) -> N
         actor_type="USER",
         force=True,
         report_variant="PRE_MARKET_MACRO",
+        delivery_user_id=USER_ID,
+        rebuild_shared_draft=True,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
-        trigger_audit_details={"targetUserId": USER_ID},
+        trigger_audit_details={
+            "targetUserId": USER_ID,
+            "sharedDraftRebuilt": True,
+        },
     )
 
 
@@ -342,7 +393,7 @@ async def test_debug_intraday_alert_phase_routes_to_real_generator(monkeypatch) 
         return {"inst-1": Decimal("3.5")}
 
     async def fake_claim(*_a, **_k):
-        return True
+        return False
 
     monkeypatch.setattr(debug_service, "tenant_transaction", debug_txn)
     monkeypatch.setattr(debug_service.intraday, "tenant_transaction", gen_txn)
@@ -360,16 +411,20 @@ async def test_debug_intraday_alert_phase_routes_to_real_generator(monkeypatch) 
         TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
         Settings(_env_file=None, app_env="test"),
         "INTRADAY",
-        target_user_id=TARGET_ID,
         phase="ALERT",
     )
 
     assert result == {"reportId": "rep-intraday", "outboxId": None}
     assert captured["generate_kwargs"]["report_variant"] == "INTRADAY_ALERT"
     assert captured["generate_kwargs"]["force"] is True
-    assert captured["generate_kwargs"]["audience_user_id"] == TARGET_ID
-    assert captured["generate_kwargs"]["delivery_user_id"] == TARGET_ID
+    assert captured["generate_kwargs"]["audience_user_id"] == USER_ID
+    assert captured["generate_kwargs"]["delivery_user_id"] == USER_ID
+    assert captured["generate_kwargs"]["actor_type"] == "USER"
+    assert (
+        captured["generate_kwargs"]["trigger_audit_action"]
+        == "DEBUG_REPORT_TRIGGERED"
+    )
     assert captured["generate_kwargs"]["push_content_override"] is not None
     # The alert generator must own the asset scope, not the caller's role.
     assert captured["scope"].kind == "MINE"
-    assert str(captured["scope"].owner_user_id) == TARGET_ID
+    assert str(captured["scope"].owner_user_id) == USER_ID

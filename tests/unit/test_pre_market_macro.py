@@ -309,6 +309,61 @@ async def test_generate_macro_report_persists_null_audience_without_model(
     assert details["sharedCacheHit"] is False
 
 
+@pytest.mark.asyncio
+async def test_debug_macro_rebuilds_draft_from_cached_source_context(monkeypatch) -> None:
+    """A debug rerun must exercise today's renderer without recollecting data."""
+    source_context = _source_context()
+    brief = pre_market_macro.SharedPreMarketBrief(
+        id="macro-brief-1",
+        draft={
+            "summary": "stale renderer output",
+            "items": [],
+            "quality": "UNAVAILABLE",
+            "status": "PARTIAL",
+        },
+        source_context=source_context,
+        context_hash="a" * 64,
+        model_result=None,
+        error_class=None,
+        cache_hit=True,
+    )
+    captured: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield object()
+
+    async def persist(_conn, **kwargs):
+        captured.update(kwargs)
+        return {"id": "macro-report-2"}
+
+    monkeypatch.setattr(service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        service.repository, "latest_report", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service.pre_market_macro,
+        "get_or_generate",
+        AsyncMock(return_value=brief),
+    )
+    monkeypatch.setattr(service, "_persist_generation", persist)
+
+    result = await service.generate_report(
+        object(),
+        TenantContext("alice", "tenant-1", tenant_role="ADMIN"),
+        Settings(_env_file=None),
+        "PRE_MARKET",
+        report_variant="PRE_MARKET_MACRO",
+        context={},
+        force=True,
+        rebuild_shared_draft=True,
+    )
+
+    assert result == {"id": "macro-report-2"}
+    assert captured["draft"] == pre_market_macro.build_report(source_context)
+    assert captured["draft"] != brief.draft
+
+
 def _with_us_indices(indices: list[dict]) -> dict:
     ctx = _source_context()
     ctx["usIndices"] = indices

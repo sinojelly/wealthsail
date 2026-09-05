@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Literal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
@@ -31,7 +30,6 @@ router = APIRouter(prefix="/debug/reports", tags=["debug"])
 @router.post("/trigger/{session}")
 async def trigger_report(
     session: ReportSession,
-    user_id: UUID | None = Query(default=None),
     phase: DebugPhase | None = Query(default=None),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -40,10 +38,11 @@ async def trigger_report(
 ) -> dict:
     """Force one report version without creating a scheduler job.
 
-    ``PRE_MARKET`` runs the shared 08:30 macro brief by default; ``?phase=PERSONALIZED&user_id=<uuid>``
-    runs one member's 08:35 report instead. ``?session=INTRADAY&phase=ALERT&user_id=<uuid>``
-    runs one member's condition-triggered intraday alert (no-op when no threshold
-    is breached or the 30-minute cooldown is active).
+    ``PRE_MARKET`` runs the shared 08:30 macro brief by default;
+    ``?phase=PERSONALIZED`` runs the authenticated operator's 08:35 report.
+    ``INTRADAY?phase=ALERT`` re-evaluates that same user's current alert facts.
+    Report content may remain tenant-wide, but manual delivery is always
+    restricted to the authenticated operator.
     """
     ctx.require_roles("OWNER", "ADMIN")
     data = await trigger_report_once(
@@ -51,7 +50,6 @@ async def trigger_report(
         ctx,
         settings,
         session,
-        target_user_id=str(user_id) if user_id is not None else ctx.user_id,
         phase=phase,
     )
     return ok(data, request_id=request_id, as_of=now_shanghai())

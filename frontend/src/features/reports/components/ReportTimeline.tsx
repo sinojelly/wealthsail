@@ -14,12 +14,16 @@ export default function ReportTimeline({
   selectedId,
   onSelect,
   onGenerate,
+  canGenerate,
+  isGenerating,
 }: {
   reports: ReportSummary[];
   selectedId: string;
   onSelect: (report: ReportSummary) => void;
   /** 触发尚未生成过任何报告的报告时段（无行可选中时的一键生成入口）。 */
   onGenerate: (session: ReportSession) => void;
+  canGenerate: boolean;
+  isGenerating: boolean;
 }) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(
@@ -60,7 +64,9 @@ export default function ReportTimeline({
       ) : null}
       <div
         className={`report-list ${
-          filtered.length === 0 && missingSessions.length === 0 ? "is-empty" : ""
+          filtered.length === 0 && missingSessions.length === 0
+            ? "is-empty"
+            : ""
         }`}
       >
         {filtered.map((report) => {
@@ -87,11 +93,30 @@ export default function ReportTimeline({
         })}
         {missingSessions.map((session) => {
           const meta = REPORT_SESSION_META[session];
+          if (!canGenerate) {
+            return (
+              <div
+                key={session}
+                className="report-item report-item-placeholder is-static"
+              >
+                <div className="report-time mono" />
+                <div className="report-item-copy">
+                  <strong>{meta.title}</strong>
+                  <span>{meta.subtitle}</span>
+                  <small>
+                    <Sparkles size={10} />
+                    尚未生成
+                  </small>
+                </div>
+              </div>
+            );
+          }
           return (
             <button
               key={session}
-              aria-label={`生成 ${meta.title}`}
+              aria-label={`生成并发给我 ${meta.title}`}
               className="report-item report-item-placeholder"
+              disabled={isGenerating}
               onClick={() => onGenerate(session)}
             >
               <div className="report-time mono" />
@@ -100,7 +125,7 @@ export default function ReportTimeline({
                 <span>{meta.subtitle}</span>
                 <small>
                   <Sparkles size={10} />
-                  尚未生成，点击生成并推送
+                  尚未生成，点击生成并发给我
                 </small>
               </div>
             </button>

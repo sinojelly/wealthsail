@@ -16,6 +16,12 @@ _PRE_MARKET_PHASE_BY_QUERY = {
     "MACRO": "PRE_MARKET_MACRO",
     "PERSONALIZED": "PRE_MARKET_PERSONALIZED",
 }
+_ALLOWED_PHASES_BY_SESSION: dict[str, set[str | None]] = {
+    "PRE_MARKET": {None, "MACRO", "PERSONALIZED"},
+    "INTRADAY": {None, "ALERT"},
+    "FUND_1430": {None},
+    "POST_MARKET": {None},
+}
 
 
 async def trigger_report_once(
@@ -24,10 +30,9 @@ async def trigger_report_once(
     settings: Settings,
     session: str,
     *,
-    target_user_id: str | None = None,
     phase: str | None = None,
 ) -> dict[str, str | None]:
-    """Generate one report version and queue at most one user's delivery.
+    """Generate a new report version and queue only the operator's delivery.
 
     This path deliberately has no dependency on scheduler jobs or job runs.
     The regular Worker still leases and sends an Outbox row when one is created.
@@ -42,11 +47,24 @@ async def trigger_report_once(
             "未知报告时段",
             field_errors=[{"field": "session", "message": session}],
         )
+    if phase not in _ALLOWED_PHASES_BY_SESSION[session]:
+        raise ValidationError_(
+            f"{session} 不支持 phase={phase}",
+            field_errors=[
+                {
+                    "field": "phase",
+                    "message": "报告时段与变体不匹配",
+                }
+            ],
+        )
+
+    await _require_active_operator(pool, ctx)
+    target = ctx.user_id
 
     if session == "PRE_MARKET":
         report_variant = _PRE_MARKET_PHASE_BY_QUERY.get(phase, "PRE_MARKET_MACRO")
         if report_variant == "PRE_MARKET_PERSONALIZED":
-            return await _trigger_personalized(pool, ctx, settings, target_user_id)
+            return await _trigger_personalized(pool, ctx, settings)
         report = await report_service.generate_report(
             pool,
             ctx,
@@ -55,33 +73,22 @@ async def trigger_report_once(
             actor_type="USER",
             force=True,
             report_variant="PRE_MARKET_MACRO",
+            delivery_user_id=target,
+            # Re-run the current deterministic renderer over the governed
+            # source snapshot, without recollecting or overwriting the cache.
+            rebuild_shared_draft=True,
             trigger_audit_action="DEBUG_REPORT_TRIGGERED",
-            trigger_audit_details={"targetUserId": target_user_id or ctx.user_id},
+            trigger_audit_details={
+                "targetUserId": target,
+                "sharedDraftRebuilt": True,
+            },
         )
         report_id = str(report["id"])
         outbox_id = report.pop("_deliveryOutboxId", None)
         return {"reportId": report_id, "outboxId": outbox_id}
 
     if session == "INTRADAY" and phase == "ALERT":
-        return await _trigger_intraday_alert(pool, ctx, settings, target_user_id)
-
-    target = target_user_id or ctx.user_id
-    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        active_member = await conn.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                  FROM identity.tenant_members
-                 WHERE tenant_id = $1
-                   AND user_id = $2
-                   AND status = 'ACTIVE'
-            )
-            """,
-            ctx.tenant_id,
-            target,
-        )
-    if not active_member:
-        raise NotFoundError("目标用户不是当前租户的活动成员")
+        return await _trigger_intraday_alert(pool, ctx, settings)
 
     report = await report_service.generate_report(
         pool,
@@ -92,12 +99,9 @@ async def trigger_report_once(
         # DEBUG_REPORT_TRIGGERED below distinguishes this controlled action.
         actor_type="USER",
         force=True,
-        # Non-premarket sessions stay STANDARD at the tenant level: the
-        # 045 reports_variant_audience_check constraint requires STANDARD to
-        # carry an empty audience_user_id, and per-recipient delivery here is
-        # handled by insert_report_outbox_deliveries over active bindings +
-        # user_preferences rather than the report row itself.
-        delivery_user_id=None,
+        # STANDARD report content stays tenant-wide, while this debug
+        # operation creates an Outbox row only for its authenticated operator.
+        delivery_user_id=target,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
         trigger_audit_details={"targetUserId": target},
     )
@@ -110,32 +114,15 @@ async def _trigger_personalized(
     pool: Pool,
     ctx: TenantContext,
     settings: Settings,
-    target_user_id: str | None,
 ) -> dict[str, str | None]:
-    """Run one member's 08:35 report via the controlled debug trigger."""
-    target = target_user_id or ctx.user_id
-    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        active_member = await conn.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                  FROM identity.tenant_members
-                 WHERE tenant_id = $1
-                   AND user_id = $2
-                   AND status = 'ACTIVE'
-            )
-            """,
-            ctx.tenant_id,
-            target,
-        )
-    if not active_member:
-        raise NotFoundError("目标用户不是当前租户的活动成员")
-
-    member_ctx = TenantContext(
-        user_id=target, tenant_id=ctx.tenant_id, tenant_role="OWNER"
-    )
+    """Run the authenticated operator's 08:35 report as a new version."""
     report = await pre_market_personalized.generate_pre_market_personalized(
-        pool, member_ctx, settings
+        pool,
+        ctx,
+        settings,
+        force=True,
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": ctx.user_id},
     )
     if report is None:
         return {"reportId": None, "outboxId": None}
@@ -148,10 +135,26 @@ async def _trigger_intraday_alert(
     pool: Pool,
     ctx: TenantContext,
     settings: Settings,
-    target_user_id: str | None,
 ) -> dict[str, str | None]:
-    """Force one member's condition-triggered INTRADAY alert via debug trigger."""
-    target = target_user_id or ctx.user_id
+    """Re-evaluate the operator's alert and bypass only its delivery cooldown."""
+    report = await intraday.maybe_generate_intraday_alert(
+        pool,
+        ctx,
+        settings,
+        ignore_cooldown=True,
+        actor_type="USER",
+        trigger_audit_action="DEBUG_REPORT_TRIGGERED",
+        trigger_audit_details={"targetUserId": ctx.user_id},
+    )
+    if report is None:
+        return {"reportId": None, "outboxId": None}
+    report_id = str(report["id"])
+    outbox_id = report.pop("_deliveryOutboxId", None)
+    return {"reportId": report_id, "outboxId": outbox_id}
+
+
+async def _require_active_operator(pool: Pool, ctx: TenantContext) -> None:
+    """Reject a stale tenant token whose membership is no longer active."""
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         active_member = await conn.fetchval(
             """
@@ -164,17 +167,7 @@ async def _trigger_intraday_alert(
             )
             """,
             ctx.tenant_id,
-            target,
+            ctx.user_id,
         )
     if not active_member:
         raise NotFoundError("目标用户不是当前租户的活动成员")
-
-    member_ctx = TenantContext(
-        user_id=target, tenant_id=ctx.tenant_id, tenant_role="OWNER"
-    )
-    report = await intraday.maybe_generate_intraday_alert(pool, member_ctx, settings)
-    if report is None:
-        return {"reportId": None, "outboxId": None}
-    report_id = str(report["id"])
-    outbox_id = report.pop("_deliveryOutboxId", None)
-    return {"reportId": report_id, "outboxId": outbox_id}

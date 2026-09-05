@@ -225,6 +225,9 @@ async def generate_pre_market_personalized(
     settings,
     *,
     job_run_id: str | None = None,
+    force: bool = False,
+    trigger_audit_action: str | None = None,
+    trigger_audit_details: dict | None = None,
 ) -> dict | None:
     """Generate one member's 08:35 report, or None when there is nothing to say.
 
@@ -257,4 +260,7 @@ async def generate_pre_market_personalized(
         audience_user_id=ctx.user_id,
         delivery_user_id=ctx.user_id,
         context=context,
+        force=force,
+        trigger_audit_action=trigger_audit_action,
+        trigger_audit_details=trigger_audit_details,
     )

@@ -8,7 +8,25 @@ import { reportDetailFixture, reportsFixture } from "../../test/fixtures";
 const reportState = vi.hoisted(() => ({
   reports: [] as ReportSummary[],
   detail: null as ReportDetail | null,
-  regenerate: vi.fn<(input: unknown) => void>(),
+  regenerate: vi.fn<
+    (
+      input: unknown,
+      options?: {
+        onSuccess?: (result: {
+          reportId: string | null;
+          outboxId: string | null;
+        }) => void;
+      },
+    ) => void
+  >(),
+  role: "OWNER",
+  isPending: false,
+}));
+
+vi.mock("../../app/auth-session", () => ({
+  useAuthSession: () => ({ role: reportState.role }),
+  canViewOperations: (session: { role?: string } | null) =>
+    session?.role === "OWNER" || session?.role === "ADMIN",
 }));
 
 vi.mock("../../api/hooks", () => ({
@@ -26,7 +44,7 @@ vi.mock("../../api/hooks", () => ({
   }),
   useGenerateReport: () => ({
     mutate: reportState.regenerate,
-    isPending: false,
+    isPending: reportState.isPending,
     isError: false,
     error: null,
   }),
@@ -36,6 +54,8 @@ beforeEach(() => {
   reportState.reports = reportsFixture;
   reportState.detail = reportDetailFixture;
   reportState.regenerate.mockClear();
+  reportState.role = "OWNER";
+  reportState.isPending = false;
 });
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
@@ -187,8 +207,15 @@ it("presents an empty report workspace with structured guidance", () => {
   renderWithSession(<ReportsPage />);
 
   // 无任何报告时，时间线仍常驻四时段占位入口，可一键生成。
-  for (const session of ["盘前简报", "盘中跟踪", "基金 2:30 报告", "盘后交互复盘"]) {
-    expect(screen.getByRole("button", { name: `生成 ${session}` })).toBeInTheDocument();
+  for (const session of [
+    "盘前简报",
+    "盘中跟踪",
+    "基金 2:30 报告",
+    "盘后交互复盘",
+  ]) {
+    expect(
+      screen.getByRole("button", { name: `生成并发给我 ${session}` }),
+    ).toBeInTheDocument();
   }
   expect(screen.getByRole("status", { name: "暂无研报" })).toHaveTextContent(
     "盘前、盘中、基金 2:30 和盘后报告生成后",
@@ -197,20 +224,25 @@ it("presents an empty report workspace with structured guidance", () => {
 
 it("generates a missing FUND_1430 report from the timeline placeholder", async () => {
   // reportsFixture 仅含 PRE_MARKET 与 POST_MARKET → FUND_1430 显示占位入口。
-  reportState.reports = reportsFixture.filter((report) => report.session !== "POST_MARKET");
+  reportState.reports = reportsFixture.filter(
+    (report) => report.session !== "POST_MARKET",
+  );
   reportState.detail = null;
 
   const user = userEvent.setup();
   renderWithSession(<ReportsPage />);
-  await user.click(screen.getByRole("button", { name: "生成 基金 2:30 报告" }));
+  await user.click(
+    screen.getByRole("button", { name: "生成并发给我 基金 2:30 报告" }),
+  );
 
-  expect(reportState.regenerate).toHaveBeenCalledWith({
-    session: "FUND_1430",
-    phase: undefined,
-    userId: undefined,
-  });
+  expect(reportState.regenerate).toHaveBeenCalledWith(
+    {
+      session: "FUND_1430",
+      phase: undefined,
+    },
+    expect.any(Object),
+  );
 });
-
 
 it("regenerate button forwards the selected report's MACRO variant as phase", async () => {
   reportState.reports = [
@@ -233,14 +265,16 @@ it("regenerate button forwards the selected report's MACRO variant as phase", as
   renderWithSession(<ReportsPage />, "/reports?reportId=R-PRE-MACRO");
   await user.click(screen.getByRole("button", { name: /重新生成/ }));
 
-  expect(reportState.regenerate).toHaveBeenCalledWith({
-    session: "PRE_MARKET",
-    phase: "MACRO",
-    userId: undefined,
-  });
+  expect(reportState.regenerate).toHaveBeenCalledWith(
+    {
+      session: "PRE_MARKET",
+      phase: "MACRO",
+    },
+    expect.any(Object),
+  );
 });
 
-it("regenerate button forwards PERSONALIZED phase + audience user_id", async () => {
+it("regenerate button forwards PERSONALIZED phase for the current user", async () => {
   reportState.reports = [
     {
       id: "R-PRE-PERSONALIZED",
@@ -262,9 +296,108 @@ it("regenerate button forwards PERSONALIZED phase + audience user_id", async () 
   renderWithSession(<ReportsPage />, "/reports?reportId=R-PRE-PERSONALIZED");
   await user.click(screen.getByRole("button", { name: /重新生成/ }));
 
-  expect(reportState.regenerate).toHaveBeenCalledWith({
-    session: "PRE_MARKET",
-    phase: "PERSONALIZED",
-    userId: "00000000-0000-0000-0000-000000000099",
+  expect(reportState.regenerate).toHaveBeenCalledWith(
+    {
+      session: "PRE_MARKET",
+      phase: "PERSONALIZED",
+    },
+    expect.any(Object),
+  );
+});
+
+it("hides every manual trigger from EDITOR and VIEWER roles", () => {
+  reportState.role = "VIEWER";
+  reportState.reports = [];
+
+  renderWithSession(<ReportsPage />);
+
+  expect(
+    screen.queryByRole("button", { name: /生成并发给我/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /重新生成/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getAllByText("尚未生成")).toHaveLength(4);
+});
+
+it("keeps every manual trigger disabled while one generation is pending", () => {
+  reportState.isPending = true;
+  reportState.reports = reportsFixture.filter(
+    (report) => report.session !== "POST_MARKET",
+  );
+
+  renderWithSession(
+    <ReportsPage />,
+    `/reports?reportId=${reportState.reports[0].id}`,
+  );
+
+  expect(
+    screen.getByRole("button", { name: /重新生成并发给我/ }),
+  ).toBeDisabled();
+  expect(
+    screen.getByRole("button", { name: /生成并发给我 基金 2:30 报告/ }),
+  ).toBeDisabled();
+});
+
+it("regenerates an INTRADAY_ALERT as the same alert variant", async () => {
+  reportState.reports = [
+    {
+      ...reportsFixture[0],
+      id: "R-INTRADAY-ALERT",
+      session: "INTRADAY",
+      variant: "INTRADAY_ALERT",
+      audienceUserId: "usr-owner-001",
+      title: "盘中异动提醒",
+    },
+  ];
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-INTRADAY-ALERT");
+  await user.click(screen.getByRole("button", { name: /重新生成并发给我/ }));
+
+  expect(reportState.regenerate).toHaveBeenCalledWith(
+    { session: "INTRADAY", phase: "ALERT" },
+    expect.any(Object),
+  );
+});
+
+it("reports queued delivery and selects the newly generated version", async () => {
+  const selected = reportsFixture[0];
+  const nextReport = {
+    ...selected,
+    id: "R-NEW",
+    version: selected.version + 1,
+  };
+  reportState.regenerate.mockImplementation((_input, options) => {
+    reportState.reports = [nextReport];
+    options?.onSuccess?.({ reportId: "R-NEW", outboxId: "OUTBOX-NEW" });
   });
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, `/reports?reportId=${selected.id}`);
+  await user.click(screen.getByRole("button", { name: /重新生成并发给我/ }));
+
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "报告已生成，企业微信通知已排队",
+  );
+  expect(screen.getByRole("button", { name: /盘前简报/ })).toHaveClass(
+    "selected",
+  );
+});
+
+it("does not claim a WeCom delivery when no outbox row was created", async () => {
+  reportState.regenerate.mockImplementation((_input, options) => {
+    options?.onSuccess?.({ reportId: "R-NEW", outboxId: null });
+  });
+
+  const user = userEvent.setup();
+  renderWithSession(
+    <ReportsPage />,
+    `/reports?reportId=${reportsFixture[0].id}`,
+  );
+  await user.click(screen.getByRole("button", { name: /重新生成并发给我/ }));
+
+  expect(
+    screen.getByText("报告已生成；当前没有可用的企业微信投递。"),
+  ).toBeInTheDocument();
 });

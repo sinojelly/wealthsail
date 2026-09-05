@@ -264,6 +264,7 @@ async def generate_report(
     context: dict | None = None,
     asset_scope: AssetScope | None = None,
     push_content_override: str | None = None,
+    rebuild_shared_draft: bool = False,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -334,7 +335,11 @@ async def generate_report(
     push_content: str | None = None
     if generation_mode == "PRE_MARKET_MACRO_SHARED":
         macro_result = await pre_market_macro.get_or_generate(pool, trade_date)
-        draft = macro_result.draft
+        draft = (
+            pre_market_macro.build_report(macro_result.source_context)
+            if rebuild_shared_draft
+            else macro_result.draft
+        )
         model_result = macro_result.model_result
         error_class = macro_result.error_class
         shared_brief_id = macro_result.id
