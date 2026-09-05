@@ -6,6 +6,17 @@ Usage:
 
 Development seeds are intentionally outside ``migrations/`` and can never be
 selected by this command.
+
+Checksum drift reconciliation (rare, deliberate):
+  --reconcile-drift 054
+  MIGRATION_DATABASE_URL=... python scripts/migrate.py \
+      --environment development --confirm-target ... --reconcile-drift 054
+
+Use this only when an already-applied migration file had to be corrected after
+the fact (bug fix) and the corrected file is idempotent, or its data effects
+are covered by a later migration.  Reconciliation only rewrites the recorded
+``checksum_sha256``/``filename`` in the ledger — it never re-executes SQL — so
+the run continues into the not-yet-applied migrations that restore the data.
 """
 
 from __future__ import annotations
@@ -2009,7 +2020,13 @@ async def _readback(conn: asyncpg.Connection) -> None:
         raise RuntimeError("development seed entered the production migration ledger")
 
 
-async def migrate(dsn: str, migrations: list[Migration], *, dry_run: bool) -> None:
+async def migrate(
+    dsn: str,
+    migrations: list[Migration],
+    *,
+    dry_run: bool,
+    reconcile_drift: int | None = None,
+) -> None:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute("SELECT pg_advisory_lock($1)", LOCK_KEY)
@@ -2024,6 +2041,25 @@ async def migrate(dsn: str, migrations: list[Migration], *, dry_run: bool) -> No
             previous = applied.get(migration.version)
             if previous:
                 if previous["checksum_sha256"].strip() != migration.checksum:
+                    if reconcile_drift == migration.version:
+                        print(
+                            f"RECONCILE {migration.path.name}: ledger "
+                            f"sha256={previous['checksum_sha256'][:12]} -> file "
+                            f"sha256={migration.checksum[:12]} (ledger only, SQL not re-executed)"
+                        )
+                        async with conn.transaction():
+                            await conn.execute(
+                                """
+                                UPDATE public.wealthsail_schema_migrations
+                                   SET filename = $2, checksum_sha256 = $3
+                                 WHERE version = $1
+                                """,
+                                migration.version,
+                                migration.path.name,
+                                migration.checksum,
+                            )
+                        print(f"SKIP {migration.path.name} (reconciled)")
+                        continue
                     raise RuntimeError(
                         f"checksum drift at migration {migration.version:03d}: {migration.path.name}"
                     )
@@ -2069,6 +2105,18 @@ def parse_args() -> argparse.Namespace:
         help="Exact host[:port]/database printed by this command",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--reconcile-drift",
+        type=int,
+        metavar="VERSION",
+        help=(
+            "One-time recovery: trust the CURRENT file content for this already-"
+            "applied migration version and rewrite its ledger checksum WITHOUT "
+            "re-executing SQL. Only use when the file was corrected after apply "
+            "and the corrected content is idempotent or covered by a later "
+            "migration. Drift on any other version still fails the run."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -2084,11 +2132,17 @@ def main() -> None:
         )
     if args.environment == "production" and is_loopback_database(dsn):
         raise SystemExit("production environment cannot target a loopback database")
-    print(
-        f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}"
-    )
+    target_line = f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}"
+    if args.reconcile_drift is not None:
+        target_line += f" reconcile_drift={args.reconcile_drift:03d}"
+    print(target_line)
     asyncio.run(
-        migrate(dsn, load_migrations(ROOT / "migrations"), dry_run=args.dry_run)
+        migrate(
+            dsn,
+            load_migrations(ROOT / "migrations"),
+            dry_run=args.dry_run,
+            reconcile_drift=args.reconcile_drift,
+        )
     )
 
 

@@ -94,6 +94,32 @@ def test_readback_checks_watchlist_shape_rls_and_privileges() -> None:
     assert '("SELECT", "INSERT", "DELETE", "UPDATE")' in source
 
 
+def test_checksum_drift_reconciliation_only_rewrites_the_ledger() -> None:
+    """--reconcile-drift must update the recorded checksum without re-running SQL.
+
+    Contract: drift on a version NOT passed to --reconcile-drift still raises;
+    the reconciled version is skipped after the ledger row is updated, so the
+    run continues into later migrations that restore the corrected data.
+    """
+    source = inspect.getsource(migration_runner.migrate)
+
+    assert "checksum drift at migration" in source
+    assert "reconcile_drift == migration.version" in source
+    assert "RECONCILE" in source
+    # Ledger-only update: never re-execute the migration SQL on reconciliation.
+    assert "UPDATE public.wealthsail_schema_migrations" in source
+    assert "SET filename = $2, checksum_sha256 = $3" in source
+    assert "(ledger only, SQL not re-executed)" in source
+
+
+def test_reconcile_drift_flag_is_opt_in_single_version() -> None:
+    source = inspect.getsource(migration_runner.parse_args)
+
+    assert '"--reconcile-drift"' in source
+    assert "type=int" in source
+    assert "WITHOUT " in source  # help text must warn SQL is not re-executed
+
+
 def test_watchlist_policy_readback_rejects_non_ownership_predicates() -> None:
     assert _watchlist_policy_has_required_ownership(
         "(user_id = auth.uid())", ("authenticated",)
