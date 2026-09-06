@@ -46,11 +46,15 @@ AKSOURCE_NAME = "AkShare-OpenSource"
 FUNDSOURCE_NAME = "TiantianFund-EastMoney"
 SINASOURCE_NAME = "Sina-Finance-Quote"
 ESTIMATOR_SOURCE_NAME = "WealthSail-Fund-Estimator"
+SINA_FUND_ESTIMATE_SOURCE_NAME = "Sina-Fund-Estimate"
 EASTMONEY_INDEX_SOURCE_NAME = "EastMoney-Major-Indices"
 EASTMONEY_SECTOR_SOURCE_NAME = "EastMoney-Industry-Boards"
 AKSOURCE_TYPE = "MARKET_DATA"
 FUNDSOURCE_TYPE = "FUND_NAV"
 ESTIMATOR_SOURCE_TYPE = "FUND_NAV"
+SINA_FUND_ESTIMATE_SOURCE_TYPE = "FUND_NAV"
+
+_SINA_FUND_ESTIMATE_METHOD = "sina/fund-estimate/v1"
 
 _SINA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _EASTMONEY_INDEX_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
@@ -1548,6 +1552,150 @@ async def fetch_fund_observations(symbols: list[str]) -> list[Observation]:
     return observations
 
 
+def parse_sina_fund_estimates(
+    payload: str,
+    symbols: list[str],
+    *,
+    retrieved_at: datetime,
+) -> list[Observation]:
+    """Parse Sina's real fund-estimate response into one result per request.
+
+    The public response uses ``fu_<fund code>`` rows encoded as GBK.  Its
+    estimate is a provider reference value, not a fund-company confirmed NAV;
+    callers therefore receive ``ESTIMATED_NAV`` and explicit source metadata.
+    Missing, malformed and non-finite rows fail closed instead of disappearing
+    from the batch, which makes per-fund coverage observable to the Worker.
+    """
+    requested = list(dict.fromkeys(str(symbol).strip() for symbol in symbols))
+    raw_by_symbol = {
+        match.group(1): match.group(2)
+        for match in re.finditer(
+            r'var\s+hq_str_fu_(\d{6})="([^"]*)";?', payload
+        )
+    }
+    retrieved_local = retrieved_at.astimezone(_SHANGHAI_TZ)
+    observations: list[Observation] = []
+    for symbol in requested:
+        fields = raw_by_symbol.get(symbol, "").split(",")
+        if len(fields) < 8 or not fields[0].strip():
+            observations.append(
+                _unavailable(symbol, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD)
+            )
+            continue
+        try:
+            estimate = _decimal(fields[2])
+            confirmed_nav = _decimal(fields[3])
+            estimated_change_pct = _decimal(fields[6])
+            provider_date = date.fromisoformat(fields[7].strip())
+            provider_time = time.fromisoformat(fields[1].strip())
+        except (ArithmeticError, TypeError, ValueError):
+            observations.append(
+                _unavailable(symbol, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD)
+            )
+            continue
+        if (
+            not estimate.is_finite()
+            or not confirmed_nav.is_finite()
+            or not estimated_change_pct.is_finite()
+            or estimate <= 0
+            or confirmed_nav <= 0
+        ):
+            observations.append(
+                _unavailable(symbol, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD)
+            )
+            continue
+        source_as_of = datetime.combine(
+            provider_date, provider_time, tzinfo=_SHANGHAI_TZ
+        )
+        observations.append(
+            Observation(
+                symbol=symbol,
+                subject_type="FUND",
+                field_code=F_ESTIMATED_NAV,
+                value=estimate,
+                as_of=source_as_of,
+                quality_status=(
+                    Q_ESTIMATED
+                    if provider_date == retrieved_local.date()
+                    else Q_STALE
+                ),
+                unit="元/份",
+                method_version=_SINA_FUND_ESTIMATE_METHOD,
+                origin_uri="https://finance.sina.com.cn/fund/",
+                metadata={
+                    "estimateSource": SINA_FUND_ESTIMATE_SOURCE_NAME,
+                    "estimateSourceKind": "EXTERNAL_PROVIDER",
+                    "confirmedNav": str(confirmed_nav),
+                    "providerEstimatedChangePct": str(estimated_change_pct),
+                    "explanation": "新浪基金估值提供的盘中参考值，不是基金公司正式净值。",
+                },
+            )
+        )
+    return observations
+
+
+async def fetch_fund_intraday_estimates(symbols: list[str]) -> list[Observation]:
+    """Batch-fetch real Sina intraday estimates for off-exchange funds."""
+    requested = list(dict.fromkeys(str(symbol).strip() for symbol in symbols))
+    if not requested:
+        return []
+    valid = [symbol for symbol in requested if re.fullmatch(r"\d{6}", symbol)]
+    if not valid:
+        return _unavailable_observations(
+            requested, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD
+        )
+    url = "https://hq.sinajs.cn/list=" + ",".join(
+        f"fu_{symbol}" for symbol in valid
+    )
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": _SINA_UA,
+                    "Referer": "https://finance.sina.com.cn/",
+                },
+            )
+            response.raise_for_status()
+            payload = response.content.decode("gbk", errors="replace")
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "新浪基金估值抓取失败 requested=%d error_class=%s error=%s",
+            len(requested),
+            type(exc).__name__,
+            exc,
+        )
+        return _unavailable_observations(
+            requested, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD
+        )
+
+    observations = parse_sina_fund_estimates(
+        payload,
+        valid,
+        retrieved_at=datetime.now(timezone.utc),
+    )
+    invalid = set(requested) - set(valid)
+    by_symbol = {item.symbol: item for item in observations}
+    for symbol in invalid:
+        by_symbol[symbol] = _unavailable(
+            symbol, "FUND", F_ESTIMATED_NAV, _SINA_FUND_ESTIMATE_METHOD
+        )
+    ordered = [by_symbol[symbol] for symbol in requested]
+    unavailable = [
+        item.symbol for item in ordered if item.quality_status == Q_UNAVAILABLE
+    ]
+    stale = [item.symbol for item in ordered if item.quality_status == Q_STALE]
+    logger.info(
+        "新浪基金估值: 请求 %d 只, 可用 %d 只, 过期 %d 只, 不可用 %d 只%s",
+        len(requested),
+        len(requested) - len(stale) - len(unavailable),
+        len(stale),
+        len(unavailable),
+        f", 不可用代码={','.join(unavailable)}" if unavailable else "",
+    )
+    return ordered
+
+
 async def fetch_fund_nav_history(
     symbol: str,
     start: date,
@@ -1701,10 +1849,29 @@ async def fetch_fund_disclosures(symbols: list[str]) -> list[FundDisclosure]:
 
     async def one(symbol: str) -> list[FundDisclosure]:
         async with semaphore:
-            return await asyncio.to_thread(_fetch_one_fund_disclosure, symbol)
+            try:
+                return await asyncio.to_thread(_fetch_one_fund_disclosure, symbol)
+            except Exception as exc:  # noqa: BLE001 — isolate one provider row/fund
+                logger.warning(
+                    "基金持仓披露解析失败 symbol=%s error_class=%s error=%s",
+                    symbol,
+                    type(exc).__name__,
+                    exc,
+                )
+                return []
 
     batches = await asyncio.gather(*(one(symbol) for symbol in symbols))
-    return [row for batch in batches for row in batch]
+    rows = [row for batch in batches for row in batch]
+    covered = {row.fund_symbol for row in rows}
+    missing = [symbol for symbol in symbols if symbol not in covered]
+    logger.info(
+        "基金持仓披露: 请求 %d 只, 有披露 %d 只, 明细 %d 条%s",
+        len(symbols),
+        len(covered),
+        len(rows),
+        f", 无披露代码={','.join(missing)}" if missing else "",
+    )
+    return rows
 
 
 def _fetch_one_fund_disclosure(symbol: str) -> list[FundDisclosure]:
@@ -1738,7 +1905,7 @@ def _fetch_one_fund_disclosure(symbol: str) -> list[FundDisclosure]:
             weight = _decimal(item["占净值比例"]) / Decimal("100")
         except (TypeError, ValueError, ArithmeticError):
             continue
-        if not code or weight <= 0 or weight > 1:
+        if not code or not weight.is_finite() or weight <= 0 or weight > 1:
             continue
         rows.append(
             FundDisclosure(
@@ -1866,6 +2033,7 @@ def source_definitions() -> tuple[tuple[str, str], ...]:
         (AKSOURCE_NAME, AKSOURCE_TYPE),
         (FUNDSOURCE_NAME, FUNDSOURCE_TYPE),
         (ESTIMATOR_SOURCE_NAME, ESTIMATOR_SOURCE_TYPE),
+        (SINA_FUND_ESTIMATE_SOURCE_NAME, SINA_FUND_ESTIMATE_SOURCE_TYPE),
     )
 
 

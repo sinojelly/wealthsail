@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -49,10 +50,85 @@ _QUALITY_PRIORITY = {
 
 def _source_name(observation: md.Observation) -> str:
     if observation.field_code == md.F_ESTIMATED_NAV:
+        if observation.method_version == "sina/fund-estimate/v1":
+            return md.SINA_FUND_ESTIMATE_SOURCE_NAME
         return md.ESTIMATOR_SOURCE_NAME
     if observation.subject_type == "FUND":
         return md.FUNDSOURCE_NAME
     return md.AKSOURCE_NAME
+
+
+def _source_snapshot_quality(observations: list[md.Observation]) -> str:
+    """Summarize one provider batch without upgrading or losing ESTIMATED."""
+    for quality in (md.Q_FRESH, md.Q_ESTIMATED, md.Q_STALE, md.Q_UNAVAILABLE):
+        if any(item.quality_status == quality for item in observations):
+            return quality
+    return md.Q_UNAVAILABLE
+
+
+def _usable_estimate(observation: md.Observation | None) -> bool:
+    value = observation.value if observation is not None else None
+    return value is not None and value.is_finite() and value > 0
+
+
+def _select_fund_estimates(
+    *,
+    provider_estimates: list[md.Observation],
+    internal_estimates: list[md.Observation],
+    fund_symbols: set[str],
+) -> list[md.Observation]:
+    """Choose one auditable estimate per fund using the documented chain.
+
+    A same-day external estimate covers feeder/index funds that cannot reach a
+    meaningful stock-disclosure coverage ratio.  A real internal estimate is
+    preferred over an old external quote; a stale external value is retained
+    only when no calculable internal value exists, and remains visibly STALE.
+    """
+    provider_by_symbol = {item.symbol: item for item in provider_estimates}
+    internal_by_symbol = {item.symbol: item for item in internal_estimates}
+    selected: list[md.Observation] = []
+    for symbol in sorted(fund_symbols):
+        provider = provider_by_symbol.get(symbol)
+        internal = internal_by_symbol.get(symbol)
+        if (
+            _usable_estimate(provider)
+            and provider is not None
+            and provider.quality_status == md.Q_ESTIMATED
+        ):
+            selected.append(provider)
+        elif internal is not None and _usable_estimate(internal):
+            selected.append(internal)
+        elif provider is not None and _usable_estimate(provider):
+            selected.append(provider)
+        elif internal is not None:
+            selected.append(internal)
+        elif provider is not None:
+            selected.append(provider)
+    return selected
+
+
+def _attach_confirmed_nav_dates(
+    estimates: list[md.Observation], observations: list[md.Observation]
+) -> list[md.Observation]:
+    """Add the audited official-NAV date to external provider metadata."""
+    nav_by_symbol = {
+        item.symbol: item
+        for item in observations
+        if item.field_code == md.F_NAV
+        and item.value is not None
+        and item.quality_status != md.Q_UNAVAILABLE
+    }
+    result: list[md.Observation] = []
+    for estimate in estimates:
+        if estimate.method_version != "sina/fund-estimate/v1":
+            result.append(estimate)
+            continue
+        nav = nav_by_symbol.get(estimate.symbol)
+        metadata = dict(estimate.metadata or {})
+        if nav is not None:
+            metadata["confirmedNavAsOf"] = nav.as_of.isoformat()
+        result.append(replace(estimate, metadata=metadata))
+    return result
 
 
 def _normalized_a_share_component_symbol(value: object) -> str | None:
@@ -169,18 +245,65 @@ async def refresh_market(
         stock_symbols = _normalized_a_share_component_symbols(fund_disclosures)
         etf_symbols = set()
 
-    observations = await md.fetch_all(
-        list(stock_symbols), list(etf_symbols), list(fund_symbols)
-    )
+    provider_estimates: list[md.Observation] = []
     if session == "FUND_1430":
-        observations.extend(
-            _build_fund_estimates(
-                observations=observations,
-                disclosures=fund_disclosures,
-                fund_instrument_ids=set(held_funds),
-                by_id=by_id,
-                as_of=started,
+        observations, provider_estimates = await asyncio.gather(
+            md.fetch_all(
+                list(stock_symbols), list(etf_symbols), list(fund_symbols)
+            ),
+            md.fetch_fund_intraday_estimates(list(fund_symbols)),
+        )
+        internal_estimates = _build_fund_estimates(
+            observations=observations,
+            disclosures=fund_disclosures,
+            fund_instrument_ids=set(held_funds),
+            by_id=by_id,
+            as_of=started,
+        )
+        selected_estimates = _select_fund_estimates(
+            provider_estimates=provider_estimates,
+            internal_estimates=internal_estimates,
+            fund_symbols=fund_symbols,
+        )
+        selected_estimates = _attach_confirmed_nav_dates(
+            selected_estimates, observations
+        )
+        observations.extend(selected_estimates)
+        result["fundEstimateRequested"] = len(fund_symbols)
+        result["fundEstimateUsable"] = sum(
+            1
+            for item in selected_estimates
+            if item.quality_status != md.Q_UNAVAILABLE and item.value is not None
+        )
+        result["fundEstimateMethods"] = dict(
+            sorted(
+                {
+                    method: sum(
+                        1
+                        for item in selected_estimates
+                        if item.method_version == method
+                    )
+                    for method in {
+                        item.method_version for item in selected_estimates
+                    }
+                }.items()
             )
+        )
+        logger.info(
+            "14:30基金估值选择: 请求 %d 只, 可用 %d 只, 方法=%s, 不可用=%s",
+            result["fundEstimateRequested"],
+            result["fundEstimateUsable"],
+            result["fundEstimateMethods"],
+            ",".join(
+                item.symbol
+                for item in selected_estimates
+                if item.quality_status == md.Q_UNAVAILABLE or item.value is None
+            )
+            or "-",
+        )
+    else:
+        observations = await md.fetch_all(
+            list(stock_symbols), list(etf_symbols), list(fund_symbols)
         )
     result["fetched"] = len(observations)
     usable = [o for o in observations if o.quality_status != md.Q_UNAVAILABLE]
@@ -192,15 +315,6 @@ async def refresh_market(
 
     # ---- persist: source snapshot + observations ---------------------------
     async with system_connection(pool) as conn:
-        quality = (
-            md.Q_FRESH
-            if any(o.quality_status == md.Q_FRESH for o in observations)
-            else (
-                md.Q_STALE
-                if any(o.quality_status == md.Q_STALE for o in observations)
-                else md.Q_UNAVAILABLE
-            )
-        )
         retrieval_key = f"{session}:{started.strftime('%Y%m%d%H%M%S')}"
         for source_name in md.source_names():
             batch = [o for o in observations if _source_name(o) == source_name]
@@ -212,7 +326,7 @@ async def refresh_market(
                 source_id=source_id,
                 retrieval_key=f"{retrieval_key}:{source_name}",
                 observations=[o.to_payload() for o in batch],
-                quality_status=quality,
+                quality_status=_source_snapshot_quality(batch),
                 retrieved_at=started,
             )
             rows = [

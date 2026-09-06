@@ -89,6 +89,41 @@ def _context() -> dict:
     }
 
 
+def test_external_provider_estimate_explains_source_without_fake_coverage() -> None:
+    generator = _generator()
+    context = _context()
+    context["fundEstimates"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "symbol": "110011",
+            "name": "易方达消费中",
+            "value": "1.0200",
+            "lowerValue": None,
+            "upperValue": None,
+            "quality": "ESTIMATED",
+            "asOf": "2026-09-07T14:30:00+08:00",
+            "snapshotId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "methodVersion": "sina/fund-estimate/v1",
+            "metadata": {
+                "estimateSourceKind": "EXTERNAL_PROVIDER",
+                "estimateSource": "Sina-Fund-Estimate",
+                "confirmedNav": "1.0000",
+                "confirmedNavAsOf": "2026-09-04T00:00:00+00:00",
+            },
+        }
+    ]
+
+    report = generator.build_report(context)
+
+    confidence = next(
+        item["body"] for item in report["items"] if item["title"] == "估值可信度"
+    )
+    assert "Sina-Fund-Estimate外部盘中估值" in confidence
+    assert "不提供持仓覆盖率" in confidence
+    assert "基于暂无披露持仓" not in confidence
+    assert "今日估值整体温和（未触发±3%阈值）" in report["summary"]
+
+
 def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
     draft = _generator().build_report(_context())
 

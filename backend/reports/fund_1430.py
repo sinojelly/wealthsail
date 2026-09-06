@@ -122,12 +122,22 @@ def _confidence(context: dict) -> str:
     values: list[str] = []
     for estimate in estimates:
         metadata = estimate.get("metadata") or {}
+        quality = str(estimate.get("quality") or _MISSING)
+        if metadata.get("estimateSourceKind") == "EXTERNAL_PROVIDER":
+            source = str(metadata.get("estimateSource") or "外部数据源")
+            confirmed_as_of = _display_time(metadata.get("confirmedNavAsOf"))
+            values.append(
+                f"{_label(estimate)}：{source}外部盘中估值，"
+                f"估值截至{_display_time(estimate.get('asOf'))}，"
+                f"最近正式净值截至{confirmed_as_of}，"
+                f"不提供持仓覆盖率，质量{quality}"
+            )
+            continue
         coverage = _safe_decimal(metadata.get("coveragePct"))
         coverage_text = f"{coverage:.2f}%" if coverage is not None else _MISSING
         coverage_label = _coverage_label(coverage)
         disclosed_on = str(metadata.get("disclosedOn") or _MISSING)
         confirmed_as_of = str(metadata.get("confirmedNavAsOf") or _MISSING)
-        quality = str(estimate.get("quality") or _MISSING)
         values.append(
             f"{_label(estimate)}覆盖率{coverage_text}，"
             f"基于{disclosed_on}披露持仓，参考价值{coverage_label}，"

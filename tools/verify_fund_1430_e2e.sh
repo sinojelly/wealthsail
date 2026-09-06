@@ -85,12 +85,30 @@ from backend.integrations import market_data
 
 async def main() -> None:
     fund_codes = [code.strip() for code in os.environ["FUND_CODES"].split(",") if code.strip()]
-    disclosures = await market_data.fetch_fund_disclosures(fund_codes)
+    estimates, disclosures = await asyncio.gather(
+        market_data.fetch_fund_intraday_estimates(fund_codes),
+        market_data.fetch_fund_disclosures(fund_codes),
+    )
     component_codes = sorted({row.component_symbol for row in disclosures})
     quotes = await market_data.fetch_equity_quotes(component_codes)
     print(
         {
             "fundCodes": fund_codes,
+            "estimateUsable": sum(
+                1
+                for item in estimates
+                if item.value is not None and item.quality_status != "UNAVAILABLE"
+            ),
+            "estimates": [
+                {
+                    "symbol": item.symbol,
+                    "value": str(item.value) if item.value is not None else None,
+                    "asOf": item.as_of.isoformat(),
+                    "quality": item.quality_status,
+                    "method": item.method_version,
+                }
+                for item in estimates
+            ],
             "disclosureRows": len(disclosures),
             "componentCodes": len(component_codes),
             "quoteRows": len(quotes),
@@ -153,7 +171,7 @@ SELECT id, tenant_id, job_key, status, started_at, finished_at, error_class
 
 -- 2. 最新持久化基金估值；报告只读取这里的数据，不再读取人工近似权重。
 SELECT subject_id AS instrument_id, as_of, value, lower_value, upper_value,
-       quality_status, method_version, metadata
+       quality_status, method_version, snapshot_id, metadata
   FROM market.market_observations
  WHERE field_code = 'ESTIMATED_NAV'
  ORDER BY as_of DESC

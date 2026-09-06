@@ -478,7 +478,8 @@ async def build_report_context(
             SELECT DISTINCT ON (o.subject_id)
                 o.subject_id AS instrument_id, COALESCE(a.ticker, '') AS symbol,
                 i.canonical_name AS name, o.value, o.lower_value, o.upper_value,
-                o.quality_status, o.as_of, o.snapshot_id, o.metadata
+                o.quality_status, o.as_of, o.snapshot_id, o.method_version,
+                o.metadata
             FROM market.market_observations o
             JOIN held_funds h ON h.instrument_id = o.subject_id
             JOIN reference.instruments i ON i.id = o.subject_id
@@ -509,6 +510,7 @@ async def build_report_context(
                 "quality": row["quality_status"],
                 "asOf": row["as_of"],
                 "snapshotId": str(row["snapshot_id"]) if row["snapshot_id"] else None,
+                "methodVersion": row["method_version"],
                 "metadata": _parse_jsonb(row["metadata"]),
             }
             for row in rows

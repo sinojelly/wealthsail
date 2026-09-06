@@ -118,6 +118,7 @@ def test_market_source_registry_uses_database_source_type_vocabulary() -> None:
         ("AkShare-OpenSource", "MARKET_DATA"),
         ("TiantianFund-EastMoney", "FUND_NAV"),
         ("WealthSail-Fund-Estimator", "FUND_NAV"),
+        ("Sina-Fund-Estimate", "FUND_NAV"),
     )
 
 
