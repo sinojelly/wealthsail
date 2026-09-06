@@ -1,100 +1,186 @@
 #!/usr/bin/env bash
-# verify_fund_1430_e2e.sh
-# 端到端验证「基金 14:30 报告」是否已接入真实数据（估值/申赎/持仓穿透）。
-# 需要在【具备数据库与运行环境】的机器上执行；本机（无 Postgres）无法运行。
+# 验证基金 14:30 真实数据链路：
+#   基金持仓 -> 官方净值与持仓披露 -> 成分股行情 -> ESTIMATED_NAV -> 报告。
 #
 # 用法：
 #   export MIGRATION_DATABASE_URL="postgresql://user:pass@host:5432/wealthsail"
-#   export WORKER_DATABASE_URL="$MIGRATION_DATABASE_URL"
+#   export API_BASE_URL="http://localhost:8000/api/v1"
+#   export ACCESS_TOKEN="<OWNER 或 ADMIN 的 access token>"
+#   export FUND_CODES="012733,161726"  # 可选：只读验证真实披露与成分股行情
 #   ./tools/verify_fund_1430_e2e.sh
 #
-# 说明：脚本只做「读」与「触发」，不修改业务数据。
-
+# 注意：本脚本会执行数据库迁移检查、提交一次基金估值任务并生成报告，因此会写入
+# schema_migrations、workflow.job_runs、market.market_observations 和 reporting 表。
+# 它不会插入固定基金状态、默认截止时间或人工编造的成分权重。
 set -euo pipefail
 
-PY="${PY:-.venv/Scripts/python.exe}"
+PY="${PY:-.venv/bin/python}"
 PSQL="${PSQL:-psql}"
+API_BASE_URL="${API_BASE_URL:-http://localhost:8000/api/v1}"
 
-echo "====================================================="
-echo "[1/5] 运行迁移（会校验边界，含 watchlist / 拆分盘前 / fund_profiles）"
-echo "====================================================="
-# 先用 dry-run 确认目标；--confirm-target 必须是 host[:port]/database 形式
-# （例如 MIGRATION_DATABASE_URL=postgresql://u:p@db.host:5432/wealthsail
-#  => --confirm-target db.host:5432/wealthsail）
+if [[ -z "${MIGRATION_DATABASE_URL:-}" ]]; then
+  echo "缺少 MIGRATION_DATABASE_URL" >&2
+  exit 2
+fi
+
+if [[ -z "${ACCESS_TOKEN:-}" ]]; then
+  echo "缺少 ACCESS_TOKEN（必须属于当前租户的 OWNER 或 ADMIN）" >&2
+  exit 2
+fi
+
+echo "[1/6] 校验并执行待应用迁移"
 TARGET=$($PY - <<'PY'
 import os
 from scripts.migrate import safe_target_name
+
 print(safe_target_name(os.environ["MIGRATION_DATABASE_URL"]))
 PY
 )
-echo "目标标识将是: $TARGET"
-$PSQL "$MIGRATION_DATABASE_URL" -tAc "SELECT 1" >/dev/null  # 确认可连接
+echo "数据库目标：$TARGET"
+$PSQL "$MIGRATION_DATABASE_URL" -tAc "SELECT 1" >/dev/null
 $PY -m scripts.migrate --environment development --confirm-target "$TARGET"
 
-echo "====================================================="
-echo "[2/5] 数据管线前置检查（SQL 诊断）"
-echo "====================================================="
-# 下面三条查询用于确认 FUND_1430 能拿到真实数据；任一为 0 都说明需要先喂数据。
+echo "[2/6] 检查真实数据链路的已有事实"
 cat <<'SQL' | $PSQL "$MIGRATION_DATABASE_URL" -f -
--- (a) 持仓穿透快照：054 回填 + ingest_fund_holdings 灌入
-SELECT 'fund_lookthrough_rows' AS metric, count(*) AS val
-FROM market.fund_lookthrough;
+WITH latest_positions AS (
+    SELECT DISTINCT ON (p.tenant_id, p.account_id, p.instrument_id)
+           p.tenant_id, p.account_id, p.instrument_id, p.quantity
+      FROM ledger.position_snapshots p
+     ORDER BY p.tenant_id, p.account_id, p.instrument_id,
+              p.as_of DESC, p.created_at DESC
+), held_funds AS (
+    SELECT p.instrument_id
+      FROM latest_positions p
+      JOIN reference.instruments i ON i.id = p.instrument_id
+     WHERE i.asset_type = 'OFF_EXCHANGE_FUND' AND p.quantity > 0
+)
+SELECT 'held_otc_funds' AS metric, count(DISTINCT instrument_id) AS value
+  FROM held_funds
+UNION ALL
+SELECT 'real_disclosure_components', count(*)
+  FROM market.fund_disclosure_components
+UNION ALL
+SELECT 'official_nav_observations', count(*)
+  FROM market.market_observations
+ WHERE field_code = 'NAV' AND quality_status <> 'UNAVAILABLE'
+UNION ALL
+SELECT 'persisted_estimated_nav', count(*)
+  FROM market.market_observations
+ WHERE field_code = 'ESTIMATED_NAV' AND quality_status <> 'UNAVAILABLE';
 
--- (b) 正式净值（天天基金导入）：估值计算的锚
-SELECT 'official_nav_rows' AS metric, count(*) AS val
-FROM market.market_observations
-WHERE field_code='NAV' AND quality_status <> 'UNAVAILABLE';
-
--- (c) 申赎权威状态（迁移 047）：申赎提醒的真实来源
-SELECT 'fund_profiles_rows' AS metric, count(*) AS val
-FROM reference.fund_profiles;
-
--- (d) 已启用 FUND_1430 定时任务与推送偏好（迁移 050 + 043）
-SELECT j.job_key, j.enabled,
-       (SELECT string_agg(pref||'='||val, ', ')
-          FROM jsonb_each_text(j.preferences) AS t(pref,val)) AS prefs
-FROM workflow.jobs j
-WHERE j.session='FUND_1430';
+SELECT id, job_name, cron_expr, report_session, is_enabled
+  FROM workflow.jobs
+ WHERE report_session = 'FUND_1430'
+ ORDER BY tenant_id, job_name;
 SQL
 
-echo "====================================================="
-echo "[3/5] 启动 / 重启 worker（行情刷新 + 估值计算 + 报告生成）"
-echo "====================================================="
-echo "请在新终端执行（或先停止旧 worker）："
-echo "  $PY -m backend.worker"
-echo "（docker-compose 用户：docker compose restart worker）"
+echo "[3/6] 只读调用真实 Provider（可在非交易时段执行）"
+if [[ -n "${FUND_CODES:-}" ]]; then
+  FUND_CODES="$FUND_CODES" $PY - <<'PY'
+import asyncio
+import os
 
-echo "====================================================="
-echo "[4/5] 触发一次 FUND_1430 重新生成（DEBUG 端点，需 OWNER/ADMIN）"
-echo "====================================================="
-echo "curl -X POST \"http://localhost:8000/api/v1/debug/reports/trigger/FUND_1430\" \\"
-echo "     -H 'Authorization: Bearer <admin_token>'"
-echo "（或在前端审计页点击「基金2:30报告」的「生成并推送」按钮）"
+from backend.integrations import market_data
 
-echo "====================================================="
-echo "[5/5] 验证报告内容（SQL 诊断）"
-echo "====================================================="
-cat <<'SQL' | $PSQL "$MIGRATION_DATABASE_URL" -f -
--- 最近一次 FUND_1430 报告的摘要与质量
-SELECT r.id, r.session, r.generated_at, r.quality, r.status,
-       left(r.summary, 120) AS summary_head
-FROM reporting.reports r
-WHERE r.session='FUND_1430'
-ORDER BY r.generated_at DESC
-LIMIT 1;
 
--- 该行报告是否含「估值」明细项（ESTIMATED 说明来自真实估值系统而非暂无）
-SELECT count(*) FILTER (WHERE item_type='FUND_ESTIMATE') AS estimate_items,
-       count(*) FILTER (WHERE quality='ESTIMATED')        AS estimated_quality
-FROM reporting.report_items
-WHERE report_id = (
-   SELECT id FROM reporting.reports WHERE session='FUND_1430'
-   ORDER BY generated_at DESC LIMIT 1
-);
+async def main() -> None:
+    fund_codes = [code.strip() for code in os.environ["FUND_CODES"].split(",") if code.strip()]
+    disclosures = await market_data.fetch_fund_disclosures(fund_codes)
+    component_codes = sorted({row.component_symbol for row in disclosures})
+    quotes = await market_data.fetch_equity_quotes(component_codes)
+    print(
+        {
+            "fundCodes": fund_codes,
+            "disclosureRows": len(disclosures),
+            "componentCodes": len(component_codes),
+            "quoteRows": len(quotes),
+            "quoteSamples": [
+                {
+                    "symbol": quote.symbol,
+                    "value": str(quote.value),
+                    "returnRate": str(quote.return_rate),
+                    "asOf": quote.as_of.isoformat(),
+                    "quality": quote.quality_status,
+                    "method": quote.method_version,
+                }
+                for quote in quotes[:5]
+            ],
+        }
+    )
+
+
+asyncio.run(main())
+PY
+else
+  echo "未设置 FUND_CODES，跳过只读 Provider 检查。"
+fi
+
+echo "[4/6] 确认 Worker 正在运行"
+echo "systemd：sudo systemctl status wealthsail-worker --no-pager"
+echo "前台启动：$PY -m backend.worker"
+
+echo "[5/6] 在交易日提交一次真实基金估值任务"
+STATUS_RESPONSE=$(curl --fail-with-body --silent --show-error \
+  "$API_BASE_URL/operations/fund-estimate" \
+  -H "Authorization: Bearer $ACCESS_TOKEN")
+CAN_RUN=$(STATUS_RESPONSE="$STATUS_RESPONSE" $PY - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["STATUS_RESPONSE"])
+data = payload.get("data", payload)
+print("true" if data.get("canRun") else "false")
+PY
+)
+if [[ "$CAN_RUN" == "true" ]]; then
+  RUN_RESPONSE=$(curl --fail-with-body --silent --show-error \
+    -X POST "$API_BASE_URL/operations/fund-estimate/run" \
+    -H "Authorization: Bearer $ACCESS_TOKEN")
+  echo "$RUN_RESPONSE"
+  echo "任务由 Worker 异步执行；请等待 workflow.job_runs 进入 COMPLETED 后再查看结果。"
+else
+  echo "当前不是可运行交易日，不提交伪盘中任务；上一步仍可用最近可用行情验证 Provider。"
+fi
+
+echo "[6/6] 输出任务、估值和报告回读 SQL"
+cat <<'SQL'
+-- 1. 最近一次基金估值任务；完成状态应为 COMPLETED。
+SELECT id, tenant_id, job_key, status, started_at, finished_at, error_class
+  FROM workflow.job_runs
+ WHERE job_key LIKE 'manual:FUND_1430:%'
+ ORDER BY started_at DESC
+ LIMIT 5;
+
+-- 2. 最新持久化基金估值；报告只读取这里的数据，不再读取人工近似权重。
+SELECT subject_id AS instrument_id, as_of, value, lower_value, upper_value,
+       quality_status, method_version, metadata
+  FROM market.market_observations
+ WHERE field_code = 'ESTIMATED_NAV'
+ ORDER BY as_of DESC
+ LIMIT 30;
+
+-- 3. 最近基金 14:30 报告及证据条目。
+SELECT id, tenant_id, report_session, trade_date, version, status, as_of,
+       quality_status, left(summary, 160) AS summary_head
+  FROM reporting.reports
+ WHERE report_session = 'FUND_1430'
+ ORDER BY created_at DESC
+ LIMIT 5;
+
+SELECT report_id,
+       count(*) FILTER (WHERE item_type = 'FUND_ESTIMATE') AS estimate_items,
+       count(*) FILTER (WHERE data_quality_status = 'ESTIMATED') AS estimated_items,
+       count(*) FILTER (WHERE data_quality_status = 'STALE') AS stale_items
+  FROM reporting.report_items
+ WHERE report_id = (
+     SELECT id
+       FROM reporting.reports
+      WHERE report_session = 'FUND_1430'
+      ORDER BY created_at DESC
+      LIMIT 1
+ )
+ GROUP BY report_id;
 SQL
 
-echo "====================================================="
-echo "判定："
-echo " - 若 (a)(b)(c) 均 > 0 且报告 summary 含具体涨跌幅/申赎状态 => 真实数据已贯通。"
-echo " - 若任一为 0 => 先运行天天基金净值导入 + ingest_fund_holdings 回填持仓，再重跑。"
-echo "====================================================="
+echo "执行上面的回读 SQL：psql \"$MIGRATION_DATABASE_URL\""
+echo "非交易时段不提交盘中任务；页面继续使用最近正式净值。若需联调，可直接验证已持久化的最近收盘/净值事实。"

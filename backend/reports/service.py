@@ -637,49 +637,15 @@ async def build_report_context(
             for position in positions
             if position.get("instrumentId") and position.get("type") == "场外基金"
         ]
-        # Also surface funds the user tracks on the watchlist (自选), not just
-        # held ledger positions. The 14:30 brief is the user's "funds I follow"
-        # view, so a watched OTC fund must appear even if it is not currently a
-        # ledger position. Watchlist items without a resolved instrument (or that
-        # are already present) are skipped; non-fund watchlist rows simply yield
-        # no lookthrough/profile rows downstream.
-        for item in watchlist:
-            watched_id = item.get("instrumentId")
-            if watched_id and str(watched_id) not in fund_ids:
-                fund_ids.append(str(watched_id))
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, fund_ids, now_shanghai().date()
         )
-        # Fund subscription/redemption openness drives the reminder body so
-        # the 14:30 brief can surface paused/limited funds explicitly.
-        fund_profiles = await repository.get_pre_market_fund_profiles(
-            conn, fund_ids, now_shanghai().date()
-        )
-        # Per-fund holdings snapshot: latest report_period rows per fund
-        # become the basis for weighted live-return estimates and
-        # coverage/staleness labels.
-        fund_lookthrough = await repository.get_fund_lookthrough(
-            conn, fund_ids, now_shanghai().date()
-        )
-        # Pull live return rates for every distinct holding symbol the
-        # snapshot references so the estimate is weighted against real ticks,
-        # not stale persisted change_pct.
-        holding_symbols = sorted(
-            {
-                str(row.get("holdingSymbol") or "")
-                for row in fund_lookthrough
-                if row.get("holdingSymbol")
-            }
-        )
-        holding_observations = await market_data.fetch_equity_quotes(holding_symbols)
-        holding_quote_by_symbol: dict[str, market_data.Observation] = {
-            obs.symbol: obs for obs in holding_observations if obs.symbol
-        }
+        # Report generation is read-only: the Worker has already fetched the
+        # latest dated disclosure and component quotes, then persisted one
+        # traceable ESTIMATED_NAV observation per held fund.  Never fall back
+        # to static fund_lookthrough seeds or perform Provider I/O here.
         fund_1430_context = {
             "fundCutoffRules": cutoff_rules,
-            "fundProfiles": fund_profiles,
-            "fundLookthrough": fund_lookthrough,
-            "holdingQuoteBySymbol": holding_quote_by_symbol,
         }
     result = {
         "session": session,
