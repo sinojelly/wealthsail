@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from backend.integrations import market_data as md
+from backend.market import service as market_service
 from backend.market.service import (
     _select_fund_estimates,
     _source_name,
@@ -66,7 +67,34 @@ def test_sina_fund_estimate_parser_marks_previous_trading_day_as_stale() -> None
     assert observations[0].quality_status == md.Q_STALE
 
 
-def test_sina_fund_estimate_parser_fails_closed_for_missing_or_non_finite_rows() -> None:
+def test_latest_trading_day_estimate_is_valid_historical_reference_on_weekend() -> None:
+    estimate = _estimate(
+        "161726",
+        value="0.3980",
+        quality=md.Q_STALE,
+        method="sina/fund-estimate/v1",
+        as_of=datetime(2026, 9, 4, 16, 4, tzinfo=SHANGHAI),
+    )
+
+    normalizer = getattr(
+        market_service, "_normalize_latest_trading_day_estimates", None
+    )
+    assert normalizer is not None, "latest-trading-day normalization is missing"
+    normalized = normalizer(
+        [estimate],
+        latest_trading_date=date(2026, 9, 4),
+        requested_at=datetime(2026, 9, 6, 10, 0, tzinfo=SHANGHAI),
+    )
+
+    assert normalized[0].quality_status == md.Q_ESTIMATED
+    assert normalized[0].metadata["valuationDateKind"] == "LATEST_TRADING_DAY"
+    assert normalized[0].metadata["valuationDate"] == "2026-09-04"
+    assert normalized[0].metadata["nonTradingDayReference"] is True
+
+
+def test_sina_fund_estimate_parser_fails_closed_for_missing_or_non_finite_rows() -> (
+    None
+):
     payload = (
         'var hq_str_fu_005275="中欧创新成长灵活配置混合A,14:30:00,'
         'NaN,1.9289,1.9289,0,NaN,2026-09-07,1.9073,-1.119";'
@@ -144,20 +172,23 @@ def _estimate(
     value: str | None,
     quality: str,
     method: str,
+    as_of: datetime | None = None,
 ) -> md.Observation:
     return md.Observation(
         symbol=symbol,
         subject_type="FUND",
         field_code=md.F_ESTIMATED_NAV,
         value=Decimal(value) if value is not None else None,
-        as_of=datetime(2026, 9, 7, 14, 30, tzinfo=SHANGHAI),
+        as_of=as_of or datetime(2026, 9, 7, 14, 30, tzinfo=SHANGHAI),
         quality_status=quality,
         method_version=method,
         metadata={"confirmedNav": "1.0000"},
     )
 
 
-def test_fund_estimate_selection_prefers_current_real_provider_and_keeps_internal_fallback() -> None:
+def test_fund_estimate_selection_prefers_current_real_provider_and_keeps_internal_fallback() -> (
+    None
+):
     provider = [
         _estimate(
             "012733",

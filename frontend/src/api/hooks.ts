@@ -541,6 +541,23 @@ export function useGenerateReport() {
   });
 }
 
+export function useReportTriggerRun(runId: string | null) {
+  const auth = usePrivateSession();
+  return useQuery({
+    queryKey: reportQueryKeys.triggerRun(auth, runId ?? ""),
+    queryFn: () => reportsApi.getReportTriggerRun(runId as string),
+    enabled: Boolean(runId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "COMPLETED" ||
+        status === "FAILED" ||
+        status === "SKIPPED"
+        ? false
+        : 1_500;
+    },
+  });
+}
+
 export function usePolicies(): UseQueryResult<PoliciesResponse> {
   const session = usePrivateSession();
   return useQuery({

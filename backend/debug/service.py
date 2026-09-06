@@ -5,7 +5,8 @@ from __future__ import annotations
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
-from backend.errors import NotFoundError, ValidationError_
+from backend.errors import DataUnavailableError, NotFoundError, ValidationError_
+from backend.operations import repository as operations_repository
 from backend.reports import intraday
 from backend.reports import pre_market_personalized
 from backend.reports import repository
@@ -34,8 +35,9 @@ async def trigger_report_once(
 ) -> dict[str, str | None]:
     """Generate a new report version and queue only the operator's delivery.
 
-    This path deliberately has no dependency on scheduler jobs or job runs.
-    The regular Worker still leases and sends an Outbox row when one is created.
+    Most report types render synchronously and let the Worker send the Outbox
+    row. ``FUND_1430`` is different: it first enqueues a durable Worker run so
+    real provider data can be refreshed before the report is rendered.
 
     For ``PRE_MARKET`` the optional ``phase`` selects the shared macro brief
     (default) or one member's personalized report.  A member with no personal
@@ -60,6 +62,23 @@ async def trigger_report_once(
 
     await _require_active_operator(pool, ctx)
     target = ctx.user_id
+
+    if session == "FUND_1430":
+        async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+            queued = await operations_repository.enqueue_manual_fund_estimate(
+                conn,
+                ctx.tenant_id,
+                target_user_id=target,
+            )
+        if queued["reason"] == "JOB_NOT_CONFIGURED":
+            raise DataUnavailableError("当前租户尚未启用基金 14:30 标准任务")
+        run = queued["run"]
+        return {
+            "reportId": None,
+            "outboxId": None,
+            "runId": run["id"],
+            "status": run["status"],
+        }
 
     if session == "PRE_MARKET":
         report_variant = _PRE_MARKET_PHASE_BY_QUERY.get(phase, "PRE_MARKET_MACRO")
@@ -108,6 +127,59 @@ async def trigger_report_once(
     report_id = str(report["id"])
     outbox_id = report.pop("_deliveryOutboxId", None)
     return {"reportId": report_id, "outboxId": outbox_id}
+
+
+async def get_report_trigger_run(
+    pool: Pool,
+    ctx: TenantContext,
+    run_id: str,
+) -> dict[str, str | None]:
+    """Return one debug FUND_1430 run owned by the authenticated operator."""
+    ctx.require_roles("OWNER", "ADMIN")
+    await _require_active_operator(pool, ctx)
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT run.id, run.status, run.error_class,
+                   report.id AS report_id
+              FROM workflow.job_runs run
+              LEFT JOIN LATERAL (
+                    SELECT id
+                      FROM reporting.reports
+                     WHERE tenant_id = run.tenant_id
+                       AND job_run_id = run.id
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1
+              ) report ON TRUE
+             WHERE run.tenant_id = $1
+               AND run.id = $2::uuid
+               AND run.job_type IS NULL
+               AND run.payload ->> 'targetUserId' = $3::text
+            """,
+            ctx.tenant_id,
+            run_id,
+            ctx.user_id,
+        )
+        if row is None:
+            raise NotFoundError("报告刷新任务不存在")
+        report_id = str(row["report_id"]) if row["report_id"] is not None else None
+        outbox_id = (
+            await repository.get_report_outbox_id(
+                conn,
+                ctx.tenant_id,
+                report_id,
+                ctx.user_id,
+            )
+            if report_id is not None
+            else None
+        )
+    return {
+        "runId": str(row["id"]),
+        "status": str(row["status"]),
+        "reportId": report_id,
+        "outboxId": outbox_id,
+        "errorClass": row["error_class"],
+    }
 
 
 async def _trigger_personalized(

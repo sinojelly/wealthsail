@@ -354,9 +354,7 @@ async def test_manual_fund_estimate_refreshes_market_after_claim_before_report(
         AsyncMock(return_value=runner.JobLease("run-1", "lease-1")),
     )
     monkeypatch.setattr(runner, "_heartbeat_loop", heartbeat)
-    monkeypatch.setattr(
-        runner, "_tenant_owner_user", AsyncMock(return_value="owner-1")
-    )
+    monkeypatch.setattr(runner, "_tenant_owner_user", AsyncMock(return_value="owner-1"))
     monkeypatch.setattr(
         runner,
         "market_service",
@@ -376,3 +374,64 @@ async def test_manual_fund_estimate_refreshes_market_after_claim_before_report(
 
     assert outcome == "COMPLETED:report=report-1"
     assert events == ["refresh", "report"]
+
+
+@pytest.mark.asyncio
+async def test_debug_fund_estimate_refreshes_then_delivers_only_to_requester(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+    captured: dict[str, object] = {}
+
+    async def refresh(*_args):
+        events.append("refresh")
+        return {"fundEstimateUsable": 12}
+
+    async def report(_pool, ctx, _settings, _session, **kwargs):
+        events.append("report")
+        captured["ctx"] = ctx
+        captured["kwargs"] = kwargs
+        return {"id": "report-debug"}
+
+    async def heartbeat(*_args):
+        await asyncio.Future()
+
+    monkeypatch.setattr(
+        runner,
+        "claim_job_run",
+        AsyncMock(return_value=runner.JobLease("run-debug", "lease-debug")),
+    )
+    monkeypatch.setattr(runner, "_heartbeat_loop", heartbeat)
+    monkeypatch.setattr(
+        runner,
+        "_tenant_owner_user",
+        AsyncMock(side_effect=AssertionError("debug run must use requesting user")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "market_service",
+        type("MarketService", (), {"refresh_market": staticmethod(refresh)}),
+        raising=False,
+    )
+    monkeypatch.setattr(runner, "generate_report", report)
+    monkeypatch.setattr(runner, "finish_job_run", AsyncMock(return_value=True))
+
+    try:
+        outcome = await runner._execute_with_lease(
+            object(),
+            Settings(_env_file=None),
+            {"id": "job-1", "tenant_id": "tenant-1"},
+            "debug:FUND_1430:00000000-0000-0000-0000-000000000099:request-1",
+            "FUND_1430",
+        )
+    except Exception as exc:  # pragma: no cover - expected RED before implementation
+        pytest.fail(f"debug FUND_1430 key was not recognized: {exc}")
+
+    ctx = captured["ctx"]
+    kwargs = captured["kwargs"]
+    assert outcome == "COMPLETED:report=report-debug"
+    assert events == ["refresh", "report"]
+    assert ctx.user_id == "00000000-0000-0000-0000-000000000099"
+    assert kwargs["delivery_user_id"] == ctx.user_id
+    assert kwargs["force"] is True
+    assert kwargs["trigger_audit_action"] == "DEBUG_REPORT_TRIGGERED"

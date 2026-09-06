@@ -7,6 +7,9 @@ audit details never leave the database through this surface.
 
 from __future__ import annotations
 
+import json
+from uuid import uuid4
+
 import asyncpg
 
 
@@ -50,9 +53,7 @@ async def list_job_runs(
     )
 
 
-async def fund_estimate_status(
-    conn: asyncpg.Connection, tenant_id: str
-) -> dict:
+async def fund_estimate_status(conn: asyncpg.Connection, tenant_id: str) -> dict:
     """Sanitized FUND_1430 readiness, last run and estimate coverage."""
     calendar = await conn.fetchrow(
         """
@@ -189,29 +190,58 @@ async def fund_estimate_status(
 
 
 async def enqueue_manual_fund_estimate(
-    conn: asyncpg.Connection, tenant_id: str
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    *,
+    target_user_id: str | None = None,
 ) -> dict:
-    """Create one durable FUND_1430 request, deduplicated transactionally."""
+    """Create one durable FUND_1430 request, deduplicated transactionally.
+
+    Operations requests use a tenant-wide ``manual:`` key.  The controlled
+    report-debug entry point embeds the authenticated requester in a
+    ``debug:`` key so the Worker can unicast the resulting notification.  The
+    key is server-generated; callers cannot nominate another recipient.
+    """
+    run_prefix = (
+        f"debug:FUND_1430:{target_user_id}:"
+        if target_user_id is not None
+        else "manual:FUND_1430:"
+    )
+    job_key = f"{run_prefix}{uuid4()}"
+    key_pattern = f"{run_prefix}%"
+    payload = json.dumps(
+        {"targetUserId": target_user_id} if target_user_id is not None else {},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     await conn.execute(
         """
         SELECT pg_advisory_xact_lock(
             hashtextextended('manual-fund-estimate:' || $1::text, 0)
         )
         """,
-        tenant_id,
+        f"{tenant_id}:{target_user_id or 'tenant'}",
     )
     existing = await conn.fetchrow(
         """
         SELECT id, status, started_at, finished_at, error_class
           FROM workflow.job_runs
          WHERE tenant_id = $1
-           AND job_key LIKE 'manual:FUND_1430:%'
-           AND status IN ('PENDING', 'RUNNING', 'FAILED')
-           AND (status <> 'FAILED' OR started_at >= now() - interval '30 minutes')
+           AND job_key LIKE $2
+           AND (
+                status IN ('PENDING', 'RUNNING')
+                OR (
+                    $3::boolean = FALSE
+                    AND status = 'FAILED'
+                    AND started_at >= now() - interval '30 minutes'
+                )
+           )
          ORDER BY started_at DESC, id DESC
          LIMIT 1
         """,
         tenant_id,
+        key_pattern,
+        target_user_id is not None,
     )
     if existing is not None:
         return {"created": False, "run": _run_dto(existing), "reason": None}
@@ -236,13 +266,17 @@ async def enqueue_manual_fund_estimate(
         INSERT INTO workflow.job_runs
             (tenant_id, job_id, job_key, status, started_at,
              job_type, payload, available_at)
+        -- manual:FUND_1430: and debug:FUND_1430:<user>: keys are generated
+        -- above; both are consumed by the same Worker refresh pipeline.
         VALUES
-            ($1, $2, 'manual:FUND_1430:' || gen_random_uuid()::text,
-             'PENDING', now(), NULL, '{}'::jsonb, now())
+            ($1, $2, $3,
+             'PENDING', now(), NULL, $4::jsonb, now())
         RETURNING id, status, started_at, finished_at, error_class
         """,
         tenant_id,
         job["id"],
+        job_key,
+        payload,
     )
     return {"created": True, "run": _run_dto(created), "reason": None}
 

@@ -62,7 +62,7 @@ async def test_manual_fund_estimate_request_is_deduplicated_while_active() -> No
             return "SELECT 1"
 
         async def fetchrow(self, sql: str, *_args):
-            if "status IN ('PENDING', 'RUNNING', 'FAILED')" in sql:
+            if "status IN ('PENDING', 'RUNNING')" in sql:
                 return {
                     "id": "run-existing",
                     "status": "PENDING",
@@ -90,7 +90,7 @@ async def test_manual_fund_estimate_request_creates_persistent_job_run() -> None
             return "SELECT 1"
 
         async def fetchrow(self, sql: str, *_args):
-            if "status IN ('PENDING', 'RUNNING', 'FAILED')" in sql:
+            if "status IN ('PENDING', 'RUNNING')" in sql:
                 return None
             if "FROM workflow.jobs" in sql:
                 return {"id": "job-fund"}
@@ -110,3 +110,43 @@ async def test_manual_fund_estimate_request_creates_persistent_job_run() -> None
 
     assert result["created"] is True
     assert result["run"]["id"] == "run-new"
+
+
+@pytest.mark.asyncio
+async def test_debug_fund_estimate_request_encodes_authenticated_recipient() -> None:
+    seen: dict[str, object] = {}
+
+    class Connection:
+        async def execute(self, sql: str, *args):
+            assert "pg_advisory_xact_lock" in sql
+            seen["lock_args"] = args
+            return "SELECT 1"
+
+        async def fetchrow(self, sql: str, *args):
+            if "status IN ('PENDING', 'RUNNING')" in sql:
+                seen["dedupe_args"] = args
+                return None
+            if "FROM workflow.jobs" in sql:
+                return {"id": "job-fund"}
+            if "INSERT INTO workflow.job_runs" in sql:
+                seen["insert_sql"] = sql
+                seen["insert_args"] = args
+                return {
+                    "id": "run-debug",
+                    "status": "PENDING",
+                    "started_at": datetime.now(timezone.utc),
+                    "finished_at": None,
+                    "error_class": None,
+                }
+            raise AssertionError(sql)
+
+    target_user_id = "00000000-0000-0000-0000-000000000001"
+    result = await enqueue_manual_fund_estimate(
+        Connection(), "tenant-1", target_user_id=target_user_id
+    )
+
+    assert result["run"]["id"] == "run-debug"
+    assert f"debug:FUND_1430:{target_user_id}:" in str(seen["insert_args"])
+    assert "manual:FUND_1430:" not in str(seen["insert_args"])
+    assert seen["dedupe_args"][-1] is True
+    assert seen["insert_args"][-1] == f'{{"targetUserId":"{target_user_id}"}}'

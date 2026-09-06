@@ -107,6 +107,56 @@ def _select_fund_estimates(
     return selected
 
 
+def _normalize_latest_trading_day_estimates(
+    estimates: list[md.Observation],
+    *,
+    latest_trading_date: date | None,
+    requested_at: datetime,
+) -> list[md.Observation]:
+    """Classify provider estimates against the market calendar, not wall time.
+
+    Sina returns the last trading day's final estimate on weekends and market
+    holidays.  That is a valid *historical reference* for a manually requested
+    report, although it is not a live estimate for the request date.  Metadata
+    keeps this distinction explicit so renderers never call it "today's"
+    estimate.  Older values remain STALE and unusable values remain
+    UNAVAILABLE.
+    """
+    normalized: list[md.Observation] = []
+    for estimate in estimates:
+        valuation_date = estimate.as_of.date()
+        metadata = dict(estimate.metadata or {})
+        is_latest_market_day = (
+            latest_trading_date is not None and valuation_date == latest_trading_date
+        )
+        non_trading_day_reference = (
+            is_latest_market_day and requested_at.date() != latest_trading_date
+        )
+        metadata.update(
+            {
+                "valuationDate": valuation_date.isoformat(),
+                "latestTradingDate": (
+                    latest_trading_date.isoformat()
+                    if latest_trading_date is not None
+                    else None
+                ),
+                "valuationDateKind": (
+                    "LATEST_TRADING_DAY"
+                    if non_trading_day_reference
+                    else "CURRENT_TRADING_DAY"
+                    if is_latest_market_day
+                    else "OUTDATED"
+                ),
+                "nonTradingDayReference": non_trading_day_reference,
+            }
+        )
+        quality = estimate.quality_status
+        if is_latest_market_day and _usable_estimate(estimate):
+            quality = md.Q_ESTIMATED
+        normalized.append(replace(estimate, quality_status=quality, metadata=metadata))
+    return normalized
+
+
 def _attach_confirmed_nav_dates(
     estimates: list[md.Observation], observations: list[md.Observation]
 ) -> list[md.Observation]:
@@ -177,6 +227,30 @@ async def refresh_market(
             name: await repository.get_source_id(conn, name)
             for name in md.source_names()
         }
+        latest_trading_date = await conn.fetchval(
+            """
+            SELECT COALESCE(
+                (
+                    SELECT max(calendar.calendar_date)
+                      FROM reference.trading_calendars calendar
+                     WHERE calendar.market = 'SSE'
+                       AND calendar.is_trading_day = TRUE
+                       AND calendar.calendar_date <= $1
+                ),
+                (
+                    SELECT max(
+                        (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date
+                    )
+                      FROM market.market_observations observation
+                     WHERE observation.field_code = 'NAV'
+                       AND observation.value IS NOT NULL
+                       AND (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date
+                           <= $1
+                )
+            )
+            """,
+            started.date(),
+        )
 
     if not instruments:
         logger.info("无活跃标的，跳过行情刷新")
@@ -248,10 +322,13 @@ async def refresh_market(
     provider_estimates: list[md.Observation] = []
     if session == "FUND_1430":
         observations, provider_estimates = await asyncio.gather(
-            md.fetch_all(
-                list(stock_symbols), list(etf_symbols), list(fund_symbols)
-            ),
+            md.fetch_all(list(stock_symbols), list(etf_symbols), list(fund_symbols)),
             md.fetch_fund_intraday_estimates(list(fund_symbols)),
+        )
+        provider_estimates = _normalize_latest_trading_day_estimates(
+            provider_estimates,
+            latest_trading_date=latest_trading_date,
+            requested_at=started,
         )
         internal_estimates = _build_fund_estimates(
             observations=observations,
@@ -283,9 +360,7 @@ async def refresh_market(
                         for item in selected_estimates
                         if item.method_version == method
                     )
-                    for method in {
-                        item.method_version for item in selected_estimates
-                    }
+                    for method in {item.method_version for item in selected_estimates}
                 }.items()
             )
         )
@@ -560,6 +635,7 @@ async def fill_trading_calendar(pool: Pool) -> int:
     holidays (false). Future dates (official calendar not yet published): workday
     fallback true, to be corrected on the next run after publication.
     """
+
     def _fetch_dates() -> set[str]:
         import akshare
 

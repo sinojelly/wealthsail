@@ -14,6 +14,7 @@ import os
 import socket
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 import asyncpg
 
@@ -76,6 +77,22 @@ def parse_business_job_key(key: str) -> tuple[str, str | None]:
     phase = parts[3]
     audience_user_id = parts[4] if len(parts) >= 5 else None
     return phase, audience_user_id
+
+
+def _debug_fund_delivery_user(key: str) -> str | None:
+    """Extract the server-bound recipient from a debug FUND_1430 key.
+
+    Invalid shapes fail closed by returning ``None``; they will subsequently
+    be rejected by the normal business-key parser instead of becoming a
+    tenant-wide delivery.
+    """
+    parts = key.split(":")
+    if len(parts) != 4 or parts[:2] != ["debug", "FUND_1430"]:
+        return None
+    try:
+        return str(UUID(parts[2]))
+    except (TypeError, ValueError):
+        return None
 
 
 def worker_owner() -> str:
@@ -341,11 +358,22 @@ async def _execute_with_lease(
         manual_fund_estimate = public_session == "FUND_1430" and key.startswith(
             "manual:FUND_1430:"
         )
-        if manual_fund_estimate:
+        debug_delivery_user = (
+            _debug_fund_delivery_user(key) if public_session == "FUND_1430" else None
+        )
+        if manual_fund_estimate or debug_delivery_user is not None:
             phase, audience_user_id = "FUND_1430", None
-            logger.info("manual FUND_1430 refresh started run_id=%s", lease.run_id)
+            logger.info(
+                "%s FUND_1430 refresh started run_id=%s",
+                "debug" if debug_delivery_user else "manual",
+                lease.run_id,
+            )
             await market_service.refresh_market(pool, settings, "FUND_1430")
-            logger.info("manual FUND_1430 refresh completed run_id=%s", lease.run_id)
+            logger.info(
+                "%s FUND_1430 refresh completed run_id=%s",
+                "debug" if debug_delivery_user else "manual",
+                lease.run_id,
+            )
         else:
             phase, audience_user_id = parse_business_job_key(key)
         tenant_id = str(job["tenant_id"])
@@ -393,7 +421,9 @@ async def _execute_with_lease(
                     raise RuntimeError("job lease lost before completion")
                 return "SKIPPED:INTRADAY_NO_ALERT"
         else:
-            acting_user = await _tenant_owner_user(pool, tenant_id)
+            acting_user = debug_delivery_user or await _tenant_owner_user(
+                pool, tenant_id
+            )
             ctx = TenantContext(
                 user_id=acting_user,
                 tenant_id=tenant_id,
@@ -406,9 +436,18 @@ async def _execute_with_lease(
                 public_session,
                 report_variant=phase if phase in PRE_MARKET_PHASES else "STANDARD",
                 audience_user_id=None,
-                delivery_user_id=None,
+                delivery_user_id=debug_delivery_user,
                 job_run_id=lease.run_id,
                 actor_type="SYSTEM_WORKER",
+                force=debug_delivery_user is not None,
+                trigger_audit_action=(
+                    "DEBUG_REPORT_TRIGGERED" if debug_delivery_user else None
+                ),
+                trigger_audit_details=(
+                    {"targetUserId": debug_delivery_user}
+                    if debug_delivery_user
+                    else None
+                ),
             )
         if not await finish_job_run(
             pool, lease.run_id, lease.lease_token, status="COMPLETED"

@@ -93,6 +93,8 @@ export default function ReportTimeline({
         })}
         {missingSessions.map((session) => {
           const meta = REPORT_SESSION_META[session];
+          const actionLabel =
+            session === "FUND_1430" ? "更新估值并发给我" : "生成并发给我";
           if (!canGenerate) {
             return (
               <div
@@ -114,7 +116,7 @@ export default function ReportTimeline({
           return (
             <button
               key={session}
-              aria-label={`生成并发给我 ${meta.title}`}
+              aria-label={`${actionLabel} ${meta.title}`}
               className="report-item report-item-placeholder"
               disabled={isGenerating}
               onClick={() => onGenerate(session)}
@@ -125,7 +127,7 @@ export default function ReportTimeline({
                 <span>{meta.subtitle}</span>
                 <small>
                   <Sparkles size={10} />
-                  尚未生成，点击生成并发给我
+                  尚未生成，点击{actionLabel}
                 </small>
               </div>
             </button>

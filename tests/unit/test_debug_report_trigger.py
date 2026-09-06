@@ -88,6 +88,27 @@ def test_debug_trigger_ignores_external_target_and_uses_authenticated_user() -> 
     assert "target_user_id" not in trigger.await_args.kwargs
 
 
+def test_debug_trigger_run_status_is_scoped_to_authenticated_operator() -> None:
+    lookup = AsyncMock(
+        return_value={
+            "runId": "00000000-0000-0000-0000-000000000010",
+            "status": "COMPLETED",
+            "reportId": "report-1",
+            "outboxId": "outbox-1",
+            "errorClass": None,
+        }
+    )
+    with patch("backend.debug.api.get_report_trigger_run", new=lookup, create=True):
+        response = client("OWNER").get(
+            "/api/v1/debug/reports/runs/00000000-0000-0000-0000-000000000010"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reportId"] == "report-1"
+    lookup.assert_awaited_once()
+    assert lookup.await_args.args[1].user_id == USER_ID
+
+
 class MembershipConnection:
     def __init__(self, active: bool) -> None:
         self.active = active
@@ -96,6 +117,58 @@ class MembershipConnection:
     async def fetchval(self, sql: str, *args):
         self.calls.append((sql, args))
         return self.active
+
+
+@pytest.mark.asyncio
+async def test_debug_run_lookup_returns_only_requesters_report_and_outbox(
+    monkeypatch,
+) -> None:
+    class Connection:
+        async def fetchval(self, sql: str, *args):
+            if "SELECT EXISTS" in sql:
+                return True
+            if "workflow.outbox" in sql:
+                assert args == (TENANT_ID, "report-1", USER_ID)
+                return "outbox-1"
+            raise AssertionError(sql)
+
+        async def fetchrow(self, sql: str, *args):
+            assert "run.payload ->> 'targetUserId'" in sql
+            assert "run.job_key" not in sql
+            assert "run.error_class" in sql
+            assert args == (
+                TENANT_ID,
+                "00000000-0000-0000-0000-000000000010",
+                USER_ID,
+            )
+            return {
+                "id": "00000000-0000-0000-0000-000000000010",
+                "status": "COMPLETED",
+                "error_class": None,
+                "report_id": "report-1",
+            }
+
+    conn = Connection()
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+
+    result = await debug_service.get_report_trigger_run(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="OWNER"),
+        "00000000-0000-0000-0000-000000000010",
+    )
+
+    assert result == {
+        "runId": "00000000-0000-0000-0000-000000000010",
+        "status": "COMPLETED",
+        "reportId": "report-1",
+        "outboxId": "outbox-1",
+        "errorClass": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -119,9 +192,7 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
     settings = Settings(_env_file=None, app_env="test")
     pool = object()
 
-    result = await debug_service.trigger_report_once(
-        pool, ctx, settings, "POST_MARKET"
-    )
+    result = await debug_service.trigger_report_once(pool, ctx, settings, "POST_MARKET")
 
     assert result == {"reportId": "report-1", "outboxId": "outbox-1"}
     generate.assert_awaited_once_with(
@@ -142,7 +213,59 @@ async def test_debug_service_generates_once_without_scheduler_dependency(
 
 
 @pytest.mark.asyncio
-async def test_debug_service_requires_authenticated_user_to_remain_active(monkeypatch) -> None:
+async def test_fund_debug_trigger_queues_worker_refresh_for_authenticated_user(
+    monkeypatch,
+) -> None:
+    conn = MembershipConnection(active=True)
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    enqueue = AsyncMock(
+        return_value={
+            "created": True,
+            "run": {
+                "id": "run-fund",
+                "status": "PENDING",
+                "startedAt": "2026-09-06T17:00:00+08:00",
+                "finishedAt": None,
+                "errorClass": None,
+            },
+            "reason": None,
+        }
+    )
+    generate = AsyncMock()
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        debug_service,
+        "operations_repository",
+        SimpleNamespace(enqueue_manual_fund_estimate=enqueue),
+        raising=False,
+    )
+    monkeypatch.setattr(debug_service.report_service, "generate_report", generate)
+
+    result = await debug_service.trigger_report_once(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="OWNER"),
+        Settings(_env_file=None, app_env="test"),
+        "FUND_1430",
+    )
+
+    assert result == {
+        "reportId": None,
+        "outboxId": None,
+        "runId": "run-fund",
+        "status": "PENDING",
+    }
+    enqueue.assert_awaited_once_with(conn, TENANT_ID, target_user_id=USER_ID)
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_debug_service_requires_authenticated_user_to_remain_active(
+    monkeypatch,
+) -> None:
     conn = MembershipConnection(active=False)
 
     @asynccontextmanager
@@ -313,8 +436,7 @@ async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> N
     assert captured["generate_kwargs"]["delivery_user_id"] == USER_ID
     assert captured["generate_kwargs"]["force"] is True
     assert (
-        captured["generate_kwargs"]["trigger_audit_action"]
-        == "DEBUG_REPORT_TRIGGERED"
+        captured["generate_kwargs"]["trigger_audit_action"] == "DEBUG_REPORT_TRIGGERED"
     )
     # The real generator must own the asset scope, not the caller's role.
     assert captured["scope"].kind == "MINE"
@@ -421,8 +543,7 @@ async def test_debug_intraday_alert_phase_routes_to_real_generator(monkeypatch) 
     assert captured["generate_kwargs"]["delivery_user_id"] == USER_ID
     assert captured["generate_kwargs"]["actor_type"] == "USER"
     assert (
-        captured["generate_kwargs"]["trigger_audit_action"]
-        == "DEBUG_REPORT_TRIGGERED"
+        captured["generate_kwargs"]["trigger_audit_action"] == "DEBUG_REPORT_TRIGGERED"
     )
     assert captured["generate_kwargs"]["push_content_override"] is not None
     # The alert generator must own the asset scope, not the caller's role.

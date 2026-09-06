@@ -122,6 +122,34 @@ def test_external_provider_estimate_explains_source_without_fake_coverage() -> N
     assert "不提供持仓覆盖率" in confidence
     assert "基于暂无披露持仓" not in confidence
     assert "今日估值整体温和（未触发±3%阈值）" in report["summary"]
+    assert "来源不提供区间" in report["summary"]
+    assert "区间：暂无" not in report["summary"]
+
+
+def test_non_trading_day_report_labels_latest_trading_day_as_historical() -> None:
+    generator = _generator()
+    context = _context()
+    estimate = context["fundEstimates"][0]
+    estimate["asOf"] = "2026-09-04T16:04:00+08:00"
+    estimate["quality"] = "ESTIMATED"
+    estimate["metadata"].update(
+        {
+            "valuationDate": "2026-09-04",
+            "latestTradingDate": "2026-09-04",
+            "valuationDateKind": "LATEST_TRADING_DAY",
+            "nonTradingDayReference": True,
+        }
+    )
+    context["fundEstimates"] = [estimate]
+
+    report = generator.build_report(context)
+    push = generator.format_push_content(context)
+
+    assert report["items"][0]["title"] == "最近交易日估值概览"
+    assert "2026-09-04" in report["summary"]
+    assert "非交易日历史参考" in report["summary"]
+    assert "今日预估" not in report["summary"]
+    assert "09-04" in push
 
 
 def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:

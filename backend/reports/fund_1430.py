@@ -83,23 +83,49 @@ def _metrics(context: dict) -> list[dict]:
     return result
 
 
-def _range_text(metric: dict) -> str:
+def _range_phrase(metric: dict) -> str:
     lower = metric.get("lowerPct")
     upper = metric.get("upperPct")
     if lower is None or upper is None:
-        return _MISSING
-    return f"{lower:+.2f}%～{upper:+.2f}%"
+        metadata = metric["estimate"].get("metadata") or {}
+        if metadata.get("estimateSourceKind") == "EXTERNAL_PROVIDER":
+            return "来源不提供区间"
+        return f"区间{_MISSING}"
+    return f"区间{lower:+.2f}%～{upper:+.2f}%"
 
 
-def _overview(metrics: list[dict]) -> str:
+def _historical_reference(context: dict) -> tuple[bool, str | None]:
+    """Return the provider valuation date when this is a holiday/weekend view."""
+    for estimate in context.get("fundEstimates") or []:
+        if not isinstance(estimate, dict):
+            continue
+        metadata = estimate.get("metadata") or {}
+        if not metadata.get("nonTradingDayReference"):
+            continue
+        valuation_date = str(metadata.get("valuationDate") or "").strip()
+        if not valuation_date:
+            displayed = _display_time(estimate.get("asOf"))
+            valuation_date = displayed[:10] if displayed != _MISSING else ""
+        return True, valuation_date or None
+    return False, None
+
+
+def _overview(metrics: list[dict], context: dict) -> str:
+    historical, valuation_date = _historical_reference(context)
+    period = "最近交易日" if historical else "今日"
     if not metrics:
-        return f"今日预估涨跌幅及估值区间：{_MISSING}。{_ESTIMATION_SOURCE}"
+        return f"{period}预估涨跌幅及估值区间：{_MISSING}。{_ESTIMATION_SOURCE}"
     values = [
         f"{_label(metric['estimate'])}预估{metric['changePct']:+.2f}%，"
-        f"区间{_range_text(metric)}"
+        f"{_range_phrase(metric)}"
         for metric in metrics
     ]
-    return f"{'；'.join(values)}。{_ESTIMATION_SOURCE}"
+    reference = (
+        f"估值日期{valuation_date or _MISSING}（非交易日历史参考）；"
+        if historical
+        else ""
+    )
+    return f"{reference}{'；'.join(values)}。{_ESTIMATION_SOURCE}"
 
 
 def _coverage_label(coverage: Decimal | None) -> str:
@@ -222,25 +248,33 @@ def _summary(metrics: list[dict], context: dict) -> str:
     数据全空时输出兜底；只要有估算或截止任一输入即给具体判断，不臆造。
     """
     triggered = _triggered_metrics(metrics)
+    historical, valuation_date = _historical_reference(context)
+    period = "最近交易日" if historical else "今日"
+    historical_note = (
+        f"（{valuation_date or _MISSING}，非交易日历史参考）" if historical else ""
+    )
     has_metrics = bool(metrics)
     cutoff_rules = _cutoff_rules(context)
     if not has_metrics and not cutoff_rules:
-        return f"今日估值与申赎均暂无数据，请以基金公告与渠道状态为准。{_ESTIMATION_SOURCE}"
+        return (
+            f"{period}估值与申赎均暂无数据，请以基金公告与渠道状态为准。"
+            f"{_ESTIMATION_SOURCE}"
+        )
     positive = any(metric["changePct"] > _ACTION_THRESHOLD for metric in triggered)
     negative = any(metric["changePct"] < -_ACTION_THRESHOLD for metric in triggered)
     triggered_n = len(triggered)
     if positive and not negative:
         valuation_view = (
-            f"今日估值偏强（{triggered_n}只基金预估涨幅超过+3%）"
+            f"{period}估值偏强（{triggered_n}只基金预估涨幅超过+3%）"
             if triggered_n
-            else "今日估值偏强"
+            else f"{period}估值偏强"
         )
         advice = "已有减仓计划时先复核阈值与风险预算"
     elif negative and not positive:
         valuation_view = (
-            f"今日估值偏弱（{triggered_n}只基金预估跌幅低于-3%）"
+            f"{period}估值偏弱（{triggered_n}只基金预估跌幅低于-3%）"
             if triggered_n
-            else "今日估值偏弱"
+            else f"{period}估值偏弱"
         )
         advice = "建议先核对风险预算"
     elif positive and negative:
@@ -251,12 +285,12 @@ def _summary(metrics: list[dict], context: dict) -> str:
             1 for metric in triggered if metric["changePct"] < -_ACTION_THRESHOLD
         )
         valuation_view = (
-            f"今日估值分化（{positive_n}只基金预估涨幅超过+3%、"
+            f"{period}估值分化（{positive_n}只基金预估涨幅超过+3%、"
             f"{negative_n}只基金预估跌幅低于-3%）"
         )
         advice = "按阈值控制并优先复核风险预算"
     else:
-        valuation_view = "今日估值整体温和（未触发±3%阈值）"
+        valuation_view = f"{period}估值整体温和（未触发±3%阈值）"
         advice = "建议按原计划操作"
     cutoff = _earliest_cutoff(context)
     channel_note = (
@@ -264,7 +298,9 @@ def _summary(metrics: list[dict], context: dict) -> str:
         if cutoff
         else "暂无申赎截止数据，能否申赎以销售渠道为准"
     )
-    return f"{valuation_view}，{advice}；{channel_note}。{_RULE_SOURCE}"
+    return (
+        f"{valuation_view}{historical_note}，{advice}；{channel_note}。{_RULE_SOURCE}"
+    )
 
 
 def _quality(value: object) -> str:
@@ -298,7 +334,7 @@ def _evidence_items(context: dict) -> list[dict]:
         else:
             body = (
                 f"预估涨跌幅{metric['changePct']:+.2f}%，"
-                f"区间{_range_text(metric)}。{_ESTIMATION_SOURCE}"
+                f"{_range_phrase(metric)}。{_ESTIMATION_SOURCE}"
             )
             severity = "INFO"
         item = {
@@ -347,7 +383,8 @@ def _cutoff_detail_items(context: dict) -> list[dict]:
 def build_report(context: dict) -> dict:
     """Build the complete four-section FUND_1430 report without model I/O."""
     metrics = _metrics(context)
-    overview = _overview(metrics)
+    historical, _valuation_date = _historical_reference(context)
+    overview = _overview(metrics, context)
     confidence = _confidence(context)
     reminder = _reminder(context)
     summary = _summary(metrics, context)
@@ -357,7 +394,12 @@ def build_report(context: dict) -> dict:
     )
     cutoff_rules = (context.get("fund1430") or {}).get("fundCutoffRules") or []
     sections = (
-        ("今日估值概览", overview, "FACT", "ESTIMATED" if metrics else "UNAVAILABLE"),
+        (
+            "最近交易日估值概览" if historical else "今日估值概览",
+            overview,
+            "FACT",
+            "ESTIMATED" if metrics else "UNAVAILABLE",
+        ),
         (
             "估值可信度",
             confidence,
@@ -414,11 +456,13 @@ def format_push_content(context: dict) -> str:
         item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
     ]
     first_metric = metrics[0] if metrics else None
+    historical, valuation_date = _historical_reference(context)
     if first_metric:
         estimate = first_metric["estimate"]
+        date_prefix = f"{(valuation_date or _MISSING)[5:]}参考 " if historical else ""
         overview = (
-            f"{_compact_symbol(estimate.get('symbol'))}{first_metric['changePct']:+.2f}%"
-            f"（{_range_text(first_metric)}）"
+            f"{date_prefix}{_compact_symbol(estimate.get('symbol'))}"
+            f"{first_metric['changePct']:+.2f}%（{_range_phrase(first_metric)}）"
         )
     else:
         overview = _MISSING

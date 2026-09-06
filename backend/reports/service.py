@@ -491,7 +491,8 @@ async def build_report_context(
                 ORDER BY effective_from DESC LIMIT 1
             ) a ON TRUE
             WHERE o.field_code = 'ESTIMATED_NAV'
-            ORDER BY o.subject_id, o.as_of DESC, o.observed_at DESC
+            ORDER BY o.subject_id, o.as_of DESC, o.observed_at DESC,
+                     o.revision DESC
             """,
             tenant_id,
         )

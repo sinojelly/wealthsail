@@ -9,6 +9,8 @@ export const reportQueryKeys = {
     privateQueryKey(auth, "reports", "list", tradeDate ?? "", session ?? ""),
   detail: (auth: AuthSession | null, id: string) =>
     privateQueryKey(auth, "reports", "detail", id),
+  triggerRun: (auth: AuthSession | null, id: string) =>
+    privateQueryKey(auth, "reports", "trigger-run", id),
 };
 
 export async function listReports(params?: {
@@ -31,6 +33,19 @@ export async function getReport(id: string): Promise<ReportDetail> {
 export interface TriggerReportResult {
   reportId: string | null;
   outboxId: string | null;
+  runId?: string | null;
+  status?: ReportTriggerRunStatus;
+}
+
+export type ReportTriggerRunStatus =
+  "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED";
+
+export interface ReportTriggerRunResult {
+  runId: string;
+  status: ReportTriggerRunStatus;
+  reportId: string | null;
+  outboxId: string | null;
+  errorClass: string | null;
 }
 
 /**
@@ -58,6 +73,15 @@ export async function triggerReport(
       query ? `?${query}` : ""
     }`,
     { method: "POST" },
+  );
+  return envelope.data;
+}
+
+export async function getReportTriggerRun(
+  runId: string,
+): Promise<ReportTriggerRunResult> {
+  const envelope = await request<ReportTriggerRunResult>(
+    `/v1/debug/reports/runs/${encodeURIComponent(runId)}`,
   );
   return envelope.data;
 }

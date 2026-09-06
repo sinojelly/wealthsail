@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReportsPage from "./ReportsPage";
 import type { ReportDetail, ReportSummary } from "../../api/types";
@@ -15,12 +15,26 @@ const reportState = vi.hoisted(() => ({
         onSuccess?: (result: {
           reportId: string | null;
           outboxId: string | null;
+          runId?: string | null;
+          status?: "PENDING" | "RUNNING" | "COMPLETED";
         }) => void;
       },
     ) => void
   >(),
   role: "OWNER",
   isPending: false,
+  refetchReports: vi.fn(),
+  triggerRun: {
+    data: null as null | {
+      runId: string;
+      status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+      reportId: string | null;
+      outboxId: string | null;
+      errorClass: string | null;
+    },
+    isError: false,
+    error: null as Error | null,
+  },
 }));
 
 vi.mock("../../app/auth-session", () => ({
@@ -35,6 +49,7 @@ vi.mock("../../api/hooks", () => ({
     isLoading: false,
     isError: false,
     error: null,
+    refetch: reportState.refetchReports,
   }),
   useReportDetail: (reportId: string | null) => ({
     data: reportId ? (reportState.detail ?? undefined) : undefined,
@@ -48,6 +63,7 @@ vi.mock("../../api/hooks", () => ({
     isError: false,
     error: null,
   }),
+  useReportTriggerRun: () => reportState.triggerRun,
 }));
 
 beforeEach(() => {
@@ -56,6 +72,13 @@ beforeEach(() => {
   reportState.regenerate.mockClear();
   reportState.role = "OWNER";
   reportState.isPending = false;
+  reportState.refetchReports.mockReset();
+  reportState.refetchReports.mockImplementation(async () => ({
+    data: reportState.reports,
+  }));
+  reportState.triggerRun.data = null;
+  reportState.triggerRun.isError = false;
+  reportState.triggerRun.error = null;
 });
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
@@ -207,18 +230,50 @@ it("presents an empty report workspace with structured guidance", () => {
   renderWithSession(<ReportsPage />);
 
   // 无任何报告时，时间线仍常驻四时段占位入口，可一键生成。
-  for (const session of [
-    "盘前简报",
-    "盘中跟踪",
-    "基金 2:30 报告",
-    "盘后交互复盘",
-  ]) {
+  for (const session of ["盘前简报", "盘中跟踪", "盘后交互复盘"]) {
     expect(
       screen.getByRole("button", { name: `生成并发给我 ${session}` }),
     ).toBeInTheDocument();
   }
+  expect(
+    screen.getByRole("button", {
+      name: "更新估值并发给我 基金 2:30 报告",
+    }),
+  ).toBeInTheDocument();
   expect(screen.getByRole("status", { name: "暂无研报" })).toHaveTextContent(
     "盘前、盘中、基金 2:30 和盘后报告生成后",
+  );
+});
+
+it("keeps the background refresh acknowledgement visible while FUND_1430 is pending", async () => {
+  const selected = {
+    ...reportsFixture[0],
+    id: "R-FUND-PENDING",
+    session: "FUND_1430" as const,
+  };
+  reportState.reports = [selected];
+  reportState.triggerRun.data = {
+    runId: "RUN-FUND-PENDING",
+    status: "PENDING",
+    reportId: null,
+    outboxId: null,
+    errorClass: null,
+  };
+  reportState.regenerate.mockImplementation((_input, options) => {
+    options?.onSuccess?.({
+      reportId: null,
+      outboxId: null,
+      runId: "RUN-FUND-PENDING",
+      status: "PENDING",
+    });
+  });
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, `/reports?reportId=${selected.id}`);
+  await user.click(screen.getByRole("button", { name: /更新估值并发给我/ }));
+
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "真实估值更新已进入后台",
   );
 });
 
@@ -232,7 +287,7 @@ it("generates a missing FUND_1430 report from the timeline placeholder", async (
   const user = userEvent.setup();
   renderWithSession(<ReportsPage />);
   await user.click(
-    screen.getByRole("button", { name: "生成并发给我 基金 2:30 报告" }),
+    screen.getByRole("button", { name: "更新估值并发给我 基金 2:30 报告" }),
   );
 
   expect(reportState.regenerate).toHaveBeenCalledWith(
@@ -241,6 +296,46 @@ it("generates a missing FUND_1430 report from the timeline placeholder", async (
       phase: undefined,
     },
     expect.any(Object),
+  );
+});
+
+it("queues a FUND_1430 refresh and selects the report after Worker completion", async () => {
+  const selected = reportsFixture.find(
+    (report) => report.session === "FUND_1430",
+  ) ?? {
+    ...reportsFixture[0],
+    id: "R-FUND-OLD",
+    session: "FUND_1430" as const,
+    version: 1,
+  };
+  const nextReport = { ...selected, id: "R-FUND-NEW", version: 2 };
+  reportState.reports = [selected];
+  reportState.regenerate.mockImplementation((_input, options) => {
+    reportState.reports = [nextReport];
+    reportState.triggerRun.data = {
+      runId: "RUN-FUND-1",
+      status: "COMPLETED",
+      reportId: "R-FUND-NEW",
+      outboxId: "OUTBOX-FUND-NEW",
+      errorClass: null,
+    };
+    options?.onSuccess?.({
+      reportId: null,
+      outboxId: null,
+      runId: "RUN-FUND-1",
+      status: "PENDING",
+    });
+  });
+
+  const user = userEvent.setup();
+  renderWithSession(<ReportsPage />, `/reports?reportId=${selected.id}`);
+  await user.click(screen.getByRole("button", { name: /更新估值并发给我/ }));
+
+  await waitFor(() => expect(reportState.refetchReports).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "最近交易日估值报告已生成，企业微信通知已排队",
+    ),
   );
 });
 
@@ -335,7 +430,7 @@ it("keeps every manual trigger disabled while one generation is pending", () => 
     screen.getByRole("button", { name: /重新生成并发给我/ }),
   ).toBeDisabled();
   expect(
-    screen.getByRole("button", { name: /生成并发给我 基金 2:30 报告/ }),
+    screen.getByRole("button", { name: /更新估值并发给我 基金 2:30 报告/ }),
   ).toBeDisabled();
 });
 

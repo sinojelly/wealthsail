@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileSearch, RefreshCw, Sparkles } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { canViewOperations, useAuthSession } from "../../app/auth-session";
 import {
   useGenerateReport,
   useReportDetail,
+  useReportTriggerRun,
   useReportsList,
 } from "../../api/hooks";
 import type { ReportSession, ReportSummary } from "../../api/types";
@@ -45,10 +46,20 @@ export default function ReportsPage() {
   const selected = reports.find((report) => report.id === selectedId) ?? null;
   const detailQuery = useReportDetail(selected?.id ?? null);
   const generate = useGenerateReport();
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
+  const triggerRunQuery = useReportTriggerRun(pendingRunId);
+  const handledRunId = useRef<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
 
   function handleGenerationResult(result: TriggerReportResult) {
+    if (result.runId) {
+      setPendingRunId(result.runId);
+      setGenerationNotice(
+        "真实估值更新已进入后台，预计 1～2 分钟完成，无需停留在本页。",
+      );
+      return;
+    }
     if (!result.reportId) {
       setGenerationNotice("当前没有满足生成条件的内容，未创建新报告。");
       return;
@@ -63,6 +74,40 @@ export default function ReportsPage() {
         : "报告已生成；当前没有可用的企业微信投递。",
     );
   }
+
+  useEffect(() => {
+    const run = triggerRunQuery.data;
+    if (!pendingRunId || !run || run.runId !== pendingRunId) return;
+    if (run.status === "COMPLETED" && handledRunId.current !== run.runId) {
+      handledRunId.current = run.runId;
+      void reportsQuery.refetch().then(() => {
+        if (run.reportId) {
+          setSearchParams((current) => {
+            const next = new URLSearchParams(current);
+            next.set("reportId", run.reportId as string);
+            return next;
+          });
+        }
+      });
+    }
+  }, [pendingRunId, reportsQuery, setSearchParams, triggerRunQuery.data]);
+
+  const triggerRun = triggerRunQuery.data;
+  const triggerRunTerminal =
+    triggerRun?.status === "COMPLETED" ||
+    triggerRun?.status === "FAILED" ||
+    triggerRun?.status === "SKIPPED";
+  const isGenerating =
+    generate.isPending ||
+    (pendingRunId !== null && !triggerRunTerminal && !triggerRunQuery.isError);
+  const visibleGenerationNotice =
+    triggerRun && triggerRun.runId === pendingRunId && triggerRunTerminal
+      ? triggerRun.status === "COMPLETED"
+        ? triggerRun.outboxId
+          ? "最近交易日估值报告已生成，企业微信通知已排队。"
+          : "最近交易日估值报告已生成；当前没有可用的企业微信投递。"
+        : `真实估值更新未完成${triggerRun.errorClass ? `（${triggerRun.errorClass}）` : ""}，请稍后重试。`
+      : generationNotice;
 
   function runGeneration(input: {
     session: ReportSession;
@@ -97,22 +142,22 @@ export default function ReportsPage() {
           canTrigger ? (
             <button
               className="btn-secondary"
-              disabled={!selected || generate.isPending}
+              disabled={!selected || isGenerating}
               onClick={() => selected && handleGenerate()}
             >
-              <RefreshCw
-                size={14}
-                className={generate.isPending ? "spin" : ""}
-              />
-              重新生成并发给我 {selected ? `v${selected.version + 1}` : ""}
+              <RefreshCw size={14} className={isGenerating ? "spin" : ""} />
+              {selected?.session === "FUND_1430"
+                ? "更新估值并发给我"
+                : "重新生成并发给我"}{" "}
+              {selected ? `v${selected.version + 1}` : ""}
             </button>
           ) : null
         }
       />
-      {generationNotice ? (
+      {visibleGenerationNotice ? (
         <div className="alert alert-info" role="status">
           <Sparkles size={15} />
-          {generationNotice}
+          {visibleGenerationNotice}
         </div>
       ) : null}
       {generate.isError ? (
@@ -121,6 +166,15 @@ export default function ReportsPage() {
           生成失败：
           {generate.error instanceof Error
             ? generate.error.message
+            : "未知错误"}
+        </div>
+      ) : null}
+      {triggerRunQuery.isError ? (
+        <div className="alert alert-danger">
+          <Sparkles size={15} />
+          查询估值更新状态失败：
+          {triggerRunQuery.error instanceof Error
+            ? triggerRunQuery.error.message
             : "未知错误"}
         </div>
       ) : null}
@@ -135,7 +189,7 @@ export default function ReportsPage() {
           }}
           onGenerate={handleGenerateSession}
           canGenerate={canTrigger}
-          isGenerating={generate.isPending}
+          isGenerating={isGenerating}
         />
         {detailQuery.isLoading ? (
           <div className="report-viewer report-loading">正在加载报告…</div>

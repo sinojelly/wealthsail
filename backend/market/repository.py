@@ -95,7 +95,8 @@ def rebuild_confirmed_holdings(
             account_id = str(event["account_id"])
             key = (account_id, instrument_id)
             state = holdings.setdefault(
-                key, HoldingProjection(account_id=account_id, instrument_id=instrument_id)
+                key,
+                HoldingProjection(account_id=account_id, instrument_id=instrument_id),
             )
             quantity = Decimal(str(leg.get("quantity") or "0"))
             if quantity > 0:
@@ -110,13 +111,17 @@ def rebuild_confirmed_holdings(
                         ZERO,
                     )
                     if cash_cost == 0:
-                        cash_cost = quantity * Decimal(str(leg.get("unit_price") or "0"))
+                        cash_cost = quantity * Decimal(
+                            str(leg.get("unit_price") or "0")
+                        )
                     state.cost_basis += cash_cost
                 state.quantity += quantity
             elif quantity < 0:
                 sold = abs(quantity)
                 if sold > state.quantity:
-                    raise ValueError("confirmed ledger would create a negative position")
+                    raise ValueError(
+                        "confirmed ledger would create a negative position"
+                    )
                 remaining = state.quantity - sold
                 state.cost_basis = (
                     state.cost_basis * remaining / state.quantity
@@ -200,7 +205,9 @@ async def insert_source_snapshot(
     quality_status: str,
     retrieved_at: datetime,
 ) -> str:
-    canonical = json.dumps(observations, sort_keys=True, ensure_ascii=False, default=str)
+    canonical = json.dumps(
+        observations, sort_keys=True, ensure_ascii=False, default=str
+    )
     content_hash = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return str(
         await conn.fetchval(
@@ -230,13 +237,38 @@ async def insert_observations(
         return
     await conn.executemany(
         """
+        WITH latest AS MATERIALIZED (
+            SELECT value, lower_value, upper_value, unit, currency,
+                   quality_status, method_version, metadata, revision
+              FROM market.market_observations
+             WHERE subject_type = $1::text
+               AND subject_id = $2::uuid
+               AND field_code = $3::text
+               AND as_of = $9::timestamptz
+               AND source_id = $12::uuid
+             ORDER BY revision DESC
+             LIMIT 1
+        )
         INSERT INTO market.market_observations
             (subject_type, subject_id, field_code, value, lower_value, upper_value,
              unit, currency,
              as_of, observed_at, snapshot_id, source_id, quality_status,
              method_version, metadata, revision)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15::jsonb, 1)
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               $13, $14, $15::jsonb, COALESCE(latest.revision + 1, 1)
+          FROM (SELECT 1) seed
+          LEFT JOIN latest ON TRUE
+         WHERE latest.revision IS NULL
+            OR NOT (
+                latest.value IS NOT DISTINCT FROM $4::numeric
+                AND latest.lower_value IS NOT DISTINCT FROM $5::numeric
+                AND latest.upper_value IS NOT DISTINCT FROM $6::numeric
+                AND latest.unit IS NOT DISTINCT FROM $7::text
+                AND latest.currency IS NOT DISTINCT FROM $8::char(3)
+                AND latest.quality_status IS NOT DISTINCT FROM $13::text
+                AND latest.method_version IS NOT DISTINCT FROM $14::text
+                AND latest.metadata IS NOT DISTINCT FROM $15::jsonb
+            )
         ON CONFLICT (subject_type, subject_id, field_code, as_of, source_id, revision)
         DO NOTHING
         """,
@@ -613,9 +645,7 @@ async def get_latest_market_sentiment(
     return [dict(r) for r in rows]
 
 
-async def insert_market_hot_snapshot(
-    conn: asyncpg.Connection, *, data: dict
-) -> str:
+async def insert_market_hot_snapshot(conn: asyncpg.Connection, *, data: dict) -> str:
     """Persist one immutable Worker-produced market-hot snapshot."""
     row = await conn.fetchrow(
         """
