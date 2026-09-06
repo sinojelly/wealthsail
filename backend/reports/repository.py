@@ -783,7 +783,12 @@ async def insert_report_outbox_deliveries(
             "REPORT_PUBLISHED",
             "reporting.reports",
             json.dumps(payload, ensure_ascii=False),
-            f"{session}:{trade_date}:{version}:binding:{binding['id']}",
+            # The report id MUST be part of the key: the split pre-market phases
+            # (08:30 macro / 08:35 personalized) persist two report rows with
+            # the same (session, trade_date) and each starts its version at 1,
+            # so a session-level key collides and ON CONFLICT DO NOTHING
+            # silently drops the second push.
+            f"{session}:{trade_date}:{version}:{report_id}:binding:{binding['id']}",
         )
         for binding in bindings
     ]

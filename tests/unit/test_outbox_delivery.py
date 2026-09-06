@@ -492,6 +492,42 @@ async def test_report_publication_without_active_binding_queues_nothing() -> Non
 
 
 @pytest.mark.asyncio
+async def test_split_pre_market_phases_get_distinct_outbox_idempotency_keys() -> None:
+    """The 08:30 macro and 08:35 personalized reports must both deliver.
+
+    Both phases persist report rows with the same (session, trade_date) and
+    each starts its own version at 1, so the outbox idempotency key must
+    include the report id — a session-level key collides and the
+    ON CONFLICT DO NOTHING upsert silently drops the second push.
+    """
+    conn = _DeliveryConnection(bindings=[{"id": "binding-1", "user_id": "user-1"}])
+
+    await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        report_id="report-macro",
+        session="PRE_MARKET",
+        version=1,
+        trade_date="2026-09-04",
+    )
+    await insert_report_outbox_deliveries(
+        conn,
+        tenant_id="tenant-a",
+        report_id="report-personalized",
+        session="PRE_MARKET",
+        version=1,
+        trade_date="2026-09-04",
+    )
+
+    assert len(conn.inserted) == 2
+    macro_key = conn.inserted[0][-1]
+    personalized_key = conn.inserted[1][-1]
+    assert macro_key != personalized_key
+    assert "report-macro" in macro_key
+    assert "report-personalized" in personalized_key
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("session", "disabled_column"),
     [
