@@ -32,8 +32,33 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 54
-    assert migrations[-1].path.name == "054_backfill_index_fund_holdings.sql"
+    assert versions[-1] == 56
+    assert migrations[-1].path.name == "056_api_outbox_read_grants.sql"
+
+
+def test_056_grants_api_read_access_to_outbox_delivery_receipts() -> None:
+    """Manual regenerate reads back the operator's outbox id (f9dbf82 path).
+
+    wealthsail_api must get column-level SELECT on workflow.outbox — without it
+    POST /v1/debug/reports/trigger/{session} fails with permission denied. The
+    grant must stay column-level and must NOT expose the payload content column.
+    """
+    root = Path(__file__).resolve().parents[2]
+    sql = (root / "migrations" / "056_api_outbox_read_grants.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GRANT SELECT (" in sql
+    assert ") ON workflow.outbox TO wealthsail_api;" in sql
+    assert "channel_binding_id" in sql  # JOIN column for the receipt lookup
+    assert "payload" not in sql.split("GRANT SELECT")[1]  # content stays hidden
+
+    # The deploy runner must verify this boundary at migration time.
+    readback = inspect.getsource(_readback)
+    assert '"api_outbox_select"' in readback
+    # Source stores the check as two adjacent string literals across lines.
+    assert "has_any_column_privilege('wealthsail_api'," in readback
+    assert "'workflow.outbox','SELECT')" in readback
 
 
 def test_readback_requires_secure_report_subscription_preferences() -> None:

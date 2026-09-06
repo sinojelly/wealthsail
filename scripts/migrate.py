@@ -2004,6 +2004,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "SELECT has_table_privilege('wealthsail_worker',"
             "'market.market_hot_snapshots','INSERT')"
         ),
+        "api_outbox_select": await conn.fetchval(
+            "SELECT has_any_column_privilege('wealthsail_api',"
+            "'workflow.outbox','SELECT')"
+        ),
         "browser_market_hot_select": not await conn.fetchval(
             "SELECT has_table_privilege('authenticated',"
             "'market.market_hot_snapshots','SELECT')"
