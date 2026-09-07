@@ -869,10 +869,35 @@ async def get_pre_market_global_snapshot() -> dict:
     if not has_data:
         if cached is not None:
             degraded = dict(cached)
+            # Quality stored in the process cache describes the moment of the
+            # successful fetch. Recompute every adopted quote against this
+            # failed refresh attempt so a multi-day-old item cannot retain its
+            # historical FRESH label indefinitely.
+            degraded_us = [
+                _classify_market_item(item, retrieved_at)
+                for item in degraded.get("usIndices", [])
+                if isinstance(item, dict)
+            ]
+            degraded_a50 = degraded.get("a50Future")
+            degraded_a50 = (
+                _classify_market_item(degraded_a50, retrieved_at)
+                if isinstance(degraded_a50, dict)
+                else None
+            )
+            degraded_market_items = [
+                *degraded_us,
+                *([degraded_a50] if degraded_a50 is not None else []),
+            ]
+            degraded["usIndices"] = degraded_us
+            degraded["a50Future"] = degraded_a50
+            degraded["sourceAsOf"] = _oldest_market_source_as_of(
+                degraded_market_items
+            )
             degraded["qualityStatus"] = Q_STALE
             degraded["sourceName"] = (
                 degraded.get("sourceName") or PRE_MARKET_GLOBAL_SOURCE_NAME
             ) + "(cached)"
+            degraded["fallbackAt"] = retrieved_at.isoformat()
             return degraded
         return _unavailable_pre_market_global(retrieved_at)
 

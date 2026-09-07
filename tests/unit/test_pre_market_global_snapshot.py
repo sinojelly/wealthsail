@@ -467,6 +467,62 @@ async def test_snapshot_falls_back_to_stale_cache_when_expired() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expired_cache_reclassifies_quotes_older_than_one_trading_day(
+    monkeypatch,
+) -> None:
+    """Fallback must not retain an item's historical FRESH classification."""
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 9, 8, 0, 30, tzinfo=ZoneInfo("UTC"))
+            return current.astimezone(tz) if tz is not None else current
+
+    market_data._pre_market_global_cache.update(
+        ts=0.0,
+        snapshot={
+            "usIndices": [
+                {
+                    "name": "道琼斯",
+                    "changePct": 0.5,
+                    "price": 100,
+                    "sourceAsOf": "2026-09-04",
+                    "qualityStatus": "FRESH",
+                }
+            ],
+            "a50Future": None,
+            "economicEvents": [],
+            "globalEvents": [],
+            "qualityStatus": "FRESH",
+            "sourceName": "AkShare-OpenSource",
+            "sourceAsOf": "2026-09-04",
+            "retrievedAt": "2026-09-04T00:30:00+00:00",
+            "methodVersion": market_data.PRE_MARKET_GLOBAL_METHOD_VERSION,
+        },
+    )
+    monkeypatch.setattr(market_data, "datetime", FixedDatetime)
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=[]),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=None)
+        ),
+        mock.patch.object(
+            market_data, "fetch_economic_calendar", new=mock.AsyncMock(return_value=[])
+        ),
+    ):
+        degraded = await market_data.get_pre_market_global_snapshot()
+
+    assert degraded["usIndices"][0]["qualityStatus"] == "STALE"
+    assert degraded["qualityStatus"] == "STALE"
+    assert degraded["sourceAsOf"] == "2026-09-04"
+    assert degraded["fallbackAt"] == "2026-09-08T00:30:00+00:00"
+
+
+@pytest.mark.asyncio
 async def test_fetch_economic_calendar_parses_latest_point() -> None:
     # AkShare 宏观接口返回 DataFrame，最新一期在首行（月份降序）。
     cpi_df = pd.DataFrame(
