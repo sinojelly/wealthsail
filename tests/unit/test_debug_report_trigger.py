@@ -110,13 +110,20 @@ def test_debug_trigger_run_status_is_scoped_to_authenticated_operator() -> None:
 
 
 class MembershipConnection:
-    def __init__(self, active: bool) -> None:
+    def __init__(self, active: bool, *, trading_day: bool = True) -> None:
         self.active = active
+        self.trading_day = trading_day
         self.calls: list[tuple[str, tuple]] = []
 
     async def fetchval(self, sql: str, *args):
         self.calls.append((sql, args))
         return self.active
+
+    async def fetchrow(self, sql: str, *args):
+        self.calls.append((sql, args))
+        if "reference.trading_calendars" in sql:
+            return {"is_trading_day": self.trading_day}
+        raise AssertionError(sql)
 
 
 @pytest.mark.asyncio
@@ -474,12 +481,38 @@ async def test_debug_macro_phase_is_the_default_for_pre_market(monkeypatch) -> N
         report_variant="PRE_MARKET_MACRO",
         delivery_user_id=USER_ID,
         rebuild_shared_draft=True,
+        pre_market_non_trading_debug=False,
         trigger_audit_action="DEBUG_REPORT_TRIGGERED",
         trigger_audit_details={
             "targetUserId": USER_ID,
             "sharedDraftRebuilt": True,
+            "nonTradingDayCarryForward": False,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_debug_macro_marks_non_trading_day_as_carry_forward(monkeypatch) -> None:
+    conn = MembershipConnection(active=True, trading_day=False)
+
+    @asynccontextmanager
+    async def transaction(*_args, **_kwargs):
+        yield conn
+
+    generate = AsyncMock(return_value={"id": "macro-weekend"})
+    monkeypatch.setattr(debug_service, "tenant_transaction", transaction)
+    monkeypatch.setattr(debug_service.report_service, "generate_report", generate)
+
+    await debug_service.trigger_report_once(
+        object(),
+        TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
+        Settings(_env_file=None, app_env="test"),
+        "PRE_MARKET",
+    )
+
+    kwargs = generate.await_args.kwargs
+    assert kwargs["pre_market_non_trading_debug"] is True
+    assert kwargs["trigger_audit_details"]["nonTradingDayCarryForward"] is True
 
 
 @pytest.mark.asyncio

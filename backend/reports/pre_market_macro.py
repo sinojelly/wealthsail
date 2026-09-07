@@ -195,9 +195,19 @@ def _attention_text(source_context: dict) -> str:
     return f"经济数据：{economic}；全球事件：{global_events}。"
 
 
-def build_report(source_context: dict) -> dict:
-    """Build the two-section macro brief without any model I/O."""
+def build_report(source_context: dict, *, non_trading_debug: bool = False) -> dict:
+    """Build the two-section macro brief without any model I/O.
+
+    ``non_trading_debug`` is presentation metadata for a controlled manual run;
+    it never changes or overwrites the shared source snapshot.
+    """
     overnight = _overnight_text(source_context)
+    if non_trading_debug:
+        source_as_of = str(source_context.get("sourceAsOf") or "").strip()
+        as_of_note = f"（数据截至{source_as_of[:10]}）" if source_as_of else ""
+        overnight = (
+            f"非交易日手动调试：沿用上一交易日行情{as_of_note}；{overnight}"
+        )
     attention = _attention_text(source_context)
     snapshot_quality = _quality(source_context)
     has_overnight = bool(source_context.get("usIndices")) or bool(

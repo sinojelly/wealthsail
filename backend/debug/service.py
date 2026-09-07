@@ -5,7 +5,9 @@ from __future__ import annotations
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
+from backend.dependencies import now_shanghai
 from backend.errors import DataUnavailableError, NotFoundError, ValidationError_
+from backend.jobs import scheduler as job_scheduler
 from backend.operations import repository as operations_repository
 from backend.reports import intraday
 from backend.reports import pre_market_personalized
@@ -84,6 +86,13 @@ async def trigger_report_once(
         report_variant = _PRE_MARKET_PHASE_BY_QUERY.get(phase, "PRE_MARKET_MACRO")
         if report_variant == "PRE_MARKET_PERSONALIZED":
             return await _trigger_personalized(pool, ctx, settings)
+        # The automatic scheduler already skips weekends and exchange holidays.
+        # Manual debug intentionally remains available on those days, but its
+        # report must disclose that the market facts are carried forward.
+        async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+            non_trading_debug = not await job_scheduler.is_trading_day(
+                conn, now_shanghai()
+            )
         report = await report_service.generate_report(
             pool,
             ctx,
@@ -96,10 +105,12 @@ async def trigger_report_once(
             # Re-run the current deterministic renderer over the governed
             # source snapshot, without recollecting or overwriting the cache.
             rebuild_shared_draft=True,
+            pre_market_non_trading_debug=non_trading_debug,
             trigger_audit_action="DEBUG_REPORT_TRIGGERED",
             trigger_audit_details={
                 "targetUserId": target,
                 "sharedDraftRebuilt": True,
+                "nonTradingDayCarryForward": non_trading_debug,
             },
         )
         report_id = str(report["id"])

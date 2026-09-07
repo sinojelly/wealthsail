@@ -74,6 +74,17 @@ def test_macro_report_renders_governed_overnight_facts() -> None:
     assert draft["items"][1]["body"] == "经济数据：暂无；全球事件：暂无。"
 
 
+def test_non_trading_debug_report_labels_carried_market_data() -> None:
+    context = {**_source_context(), "sourceAsOf": "2026-09-04"}
+
+    draft = pre_market_macro.build_report(context, non_trading_debug=True)
+    push = pre_market_macro.format_push_content(draft)
+
+    notice = "非交易日手动调试：沿用上一交易日行情（数据截至2026-09-04）"
+    assert notice in draft["summary"]
+    assert notice in push
+
+
 def test_macro_report_never_marks_empty_sections_fresh() -> None:
     draft = pre_market_macro.build_report(
         {"usIndices": [], "a50Future": None, "qualityStatus": "FRESH"}

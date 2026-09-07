@@ -266,6 +266,7 @@ async def generate_report(
     asset_scope: AssetScope | None = None,
     push_content_override: str | None = None,
     rebuild_shared_draft: bool = False,
+    pre_market_non_trading_debug: bool = False,
 ) -> dict:
     ctx.require_roles("OWNER", "ADMIN", "EDITOR")
     if session not in SESSION_META:
@@ -338,9 +339,15 @@ async def generate_report(
     push_content: str | None = None
     if generation_mode == "PRE_MARKET_MACRO_SHARED":
         macro_result = await pre_market_macro.get_or_generate(pool, trade_date)
+        # A non-trading debug run adds an explicit carry-forward notice to this
+        # report version only. The append-only shared daily draft remains the
+        # canonical source for normal 08:30 scheduling and other tenants.
         draft = (
-            pre_market_macro.build_report(macro_result.source_context)
-            if rebuild_shared_draft
+            pre_market_macro.build_report(
+                macro_result.source_context,
+                non_trading_debug=pre_market_non_trading_debug,
+            )
+            if rebuild_shared_draft or pre_market_non_trading_debug
             else macro_result.draft
         )
         model_result = macro_result.model_result
