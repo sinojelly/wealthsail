@@ -7,9 +7,11 @@ degrade to empty data (rendered as 暂无), never to fabricated numbers.
 
 from __future__ import annotations
 
+from datetime import datetime
 import re
 import types
 import unittest.mock as mock
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -69,6 +71,7 @@ async def test_fetch_us_indices_returns_latest_change_pct() -> None:
     for item in items:
         assert item["changePct"] == pytest.approx(1.23)
         assert item["price"] == pytest.approx(101.23)
+        assert item["sourceAsOf"] == "2026-09-01"
 
 
 @pytest.mark.asyncio
@@ -154,6 +157,7 @@ async def test_fetch_sina_a50_parses_change_pct() -> None:
     )
     assert result["price"] == pytest.approx(14534.910)
     assert result["source"] == "sina/a50"
+    assert result["sourceAsOf"] == "2026-09-02T18:09:19+08:00"
 
 
 @pytest.mark.asyncio
@@ -280,12 +284,21 @@ async def test_fetch_a50_future_falls_back_to_em_when_sina_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_populates_us_and_a50() -> None:
-    us = [{"name": "道琼斯", "changePct": 1.0, "price": 35000.0}]
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    us = [
+        {
+            "name": "道琼斯",
+            "changePct": 1.0,
+            "price": 35000.0,
+            "sourceAsOf": today,
+        }
+    ]
     a50 = {
         "name": "富时中国A50期货",
         "changePct": 0.5,
         "price": 13000.0,
         "source": "sina/a50",
+        "sourceAsOf": f"{today}T08:30:00+08:00",
     }
     with (
         mock.patch.object(
@@ -301,11 +314,50 @@ async def test_snapshot_populates_us_and_a50() -> None:
         ),
     ):
         snap = await market_data.get_pre_market_global_snapshot()
-    assert snap["usIndices"] == us
-    assert snap["a50Future"] == a50
+    assert snap["usIndices"] == [{**us[0], "qualityStatus": "FRESH"}]
+    assert snap["a50Future"] == {**a50, "qualityStatus": "FRESH"}
     assert snap["qualityStatus"] == "FRESH"
     assert "AkShare-OpenSource" in snap["sourceName"]
     assert snap["economicEvents"] == []  # P1 not yet wired in this test
+
+
+@pytest.mark.asyncio
+async def test_snapshot_quality_uses_actual_market_source_date(monkeypatch) -> None:
+    """A quote older than the prior trading day must not be labelled fresh."""
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 9, 8, 0, 30, tzinfo=ZoneInfo("UTC"))
+            return current.astimezone(tz) if tz is not None else current
+
+    us = [
+        {
+            "name": "道琼斯",
+            "changePct": 1.0,
+            "price": 35000.0,
+            "sourceAsOf": "2026-09-04",
+        }
+    ]
+    monkeypatch.setattr(market_data, "datetime", FixedDatetime)
+    with (
+        mock.patch.object(
+            market_data,
+            "fetch_us_overnight_indices",
+            new=mock.AsyncMock(return_value=us),
+        ),
+        mock.patch.object(
+            market_data, "fetch_a50_future", new=mock.AsyncMock(return_value=None)
+        ),
+        mock.patch.object(
+            market_data, "fetch_economic_calendar", new=mock.AsyncMock(return_value=[])
+        ),
+    ):
+        snap = await market_data.get_pre_market_global_snapshot()
+
+    assert snap["usIndices"][0]["qualityStatus"] == "STALE"
+    assert snap["qualityStatus"] == "STALE"
+    assert snap["sourceAsOf"] == "2026-09-04"
 
 
 @pytest.mark.asyncio
@@ -369,7 +421,15 @@ async def test_snapshot_degrades_to_unavailable_on_fetch_exception() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_falls_back_to_stale_cache_when_expired() -> None:
-    good_us = [{"name": "道琼斯", "changePct": 1.0, "price": 1.0}]
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    good_us = [
+        {
+            "name": "道琼斯",
+            "changePct": 1.0,
+            "price": 1.0,
+            "sourceAsOf": today,
+        }
+    ]
     with (
         mock.patch.object(
             market_data,
@@ -402,7 +462,7 @@ async def test_snapshot_falls_back_to_stale_cache_when_expired() -> None:
         ),
     ):
         degraded = await market_data.get_pre_market_global_snapshot()
-    assert degraded["usIndices"] == good_us
+    assert degraded["usIndices"] == [{**good_us[0], "qualityStatus": "FRESH"}]
     assert degraded["qualityStatus"] == "STALE"
 
 

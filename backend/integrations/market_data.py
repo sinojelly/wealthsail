@@ -20,7 +20,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -217,12 +217,101 @@ PRE_MARKET_GLOBAL_SOURCE_NAME = "unavailable"
 # 抓取超时时降级到上次成功缓存（标注 STALE）或 unavailable（fail-closed）。
 _PRE_MARKET_GLOBAL_TTL_SECONDS = 30 * 60
 _pre_market_global_cache: dict = {"ts": 0.0, "snapshot": None}
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+_MAX_FRESH_TRADING_DAYS = 1
 
 
 def _reset_pre_market_global_cache() -> None:
     """清空进程内缓存（测试用，避免用例间串扰）。"""
     _pre_market_global_cache["ts"] = 0.0
     _pre_market_global_cache["snapshot"] = None
+
+
+def _normalize_source_as_of(value: object) -> str | None:
+    """Return a provider timestamp/date in an auditable ISO representation."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none"}:
+        return None
+    # AkShare's US-index adapter currently returns ISO dates. Preserve date-only
+    # values because inventing a close time would make the source timestamp less
+    # truthful, not more precise.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat()
+
+
+def _source_date(value: object) -> date | None:
+    normalized = _normalize_source_as_of(value)
+    if normalized is None:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        return date.fromisoformat(normalized)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(_SHANGHAI_TZ)
+    return parsed.date()
+
+
+def _elapsed_trading_days(source_day: date, reference_day: date) -> int:
+    """Count conservative Mon-Fri sessions after ``source_day``.
+
+    The project has no governed US holiday calendar yet. Treating an exchange
+    holiday as elapsed is intentionally conservative: it can mark data stale,
+    but can never present an old quote as fresh.
+    """
+    if source_day > reference_day:
+        return _MAX_FRESH_TRADING_DAYS + 1
+    elapsed = 0
+    cursor = source_day + timedelta(days=1)
+    while cursor <= reference_day:
+        if cursor.weekday() < 5:
+            elapsed += 1
+        cursor += timedelta(days=1)
+    return elapsed
+
+
+def _market_source_quality(source_as_of: object, retrieved_at: datetime) -> str:
+    source_day = _source_date(source_as_of)
+    if source_day is None:
+        return Q_STALE
+    reference_day = retrieved_at.astimezone(_SHANGHAI_TZ).date()
+    return (
+        Q_FRESH
+        if _elapsed_trading_days(source_day, reference_day)
+        <= _MAX_FRESH_TRADING_DAYS
+        else Q_STALE
+    )
+
+
+def _classify_market_item(item: dict, retrieved_at: datetime) -> dict:
+    classified = dict(item)
+    classified["qualityStatus"] = _market_source_quality(
+        classified.get("sourceAsOf"), retrieved_at
+    )
+    return classified
+
+
+def _oldest_market_source_as_of(items: list[dict]) -> str | None:
+    dated = [
+        (source_day, normalized)
+        for item in items
+        if (normalized := _normalize_source_as_of(item.get("sourceAsOf"))) is not None
+        if (source_day := _source_date(normalized)) is not None
+    ]
+    return min(dated, key=lambda value: value[0])[1] if dated else None
 
 
 # 美股三大指数在 AkShare 不同接口下的中文别名，统一映射到 dow/nasdaq/sp500。
@@ -276,7 +365,8 @@ async def _fetch_single_us_index(ak, symbol: str, name: str) -> dict | None:
     if df is None or getattr(df, "empty", True) or "close" not in df.columns:
         return None
     try:
-        closes = df["close"].dropna().astype(float)
+        valid_rows = df.loc[df["close"].notna()]
+        closes = valid_rows["close"].astype(float)
         if len(closes) < 2:
             return None
         latest, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
@@ -286,6 +376,9 @@ async def _fetch_single_us_index(ak, symbol: str, name: str) -> dict | None:
             "name": name,
             "changePct": (latest - prev) / prev * 100,
             "price": latest,
+            "sourceAsOf": _normalize_source_as_of(
+                valid_rows.iloc[-1].get("date")
+            ),
         }
     except (ValueError, TypeError, AttributeError) as exc:
         logger.warning("akshare 美股指数 %s 解析失败: %s", symbol, exc)
@@ -411,7 +504,19 @@ async def _fetch_sina_a50() -> dict | None:
         "changePct": (price - prev_settle) / prev_settle * 100,
         "price": price,
         "source": "sina/a50",
+        "sourceAsOf": _sina_a50_source_as_of(fields[12], fields[6]),
     }
+
+
+def _sina_a50_source_as_of(date_text: str, time_text: str) -> str | None:
+    """Combine the provider's quote date/time without substituting fetch time."""
+    try:
+        parsed = datetime.fromisoformat(
+            f"{str(date_text).strip()}T{str(time_text).strip()}"
+        )
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=_SHANGHAI_TZ).isoformat()
 
 
 async def _fetch_a50_via_em() -> dict | None:
@@ -447,6 +552,10 @@ async def _fetch_a50_via_em() -> dict | None:
         "changePct": change,
         "price": price,
         "source": "akshare/a50-em",
+        # This fallback response exposes no quote timestamp. Keep it unknown so
+        # the aggregate quality is STALE instead of fabricating source time from
+        # the HTTP retrieval time.
+        "sourceAsOf": None,
     }
 
 
@@ -738,14 +847,23 @@ async def get_pre_market_global_snapshot() -> dict:
 
     retrieved_at = now
     try:
-        us_indices, a50, economic_events = await asyncio.gather(
+        raw_us_indices, raw_a50, economic_events = await asyncio.gather(
             fetch_us_overnight_indices(),
             fetch_a50_future(),
             fetch_economic_calendar(),
         )
     except Exception as exc:  # noqa: BLE001 — 极端异常也走降级
         logger.warning("盘前全球快照抓取异常，降级: %s", exc)
-        us_indices, a50, economic_events = [], None, []
+        raw_us_indices, raw_a50, economic_events = [], None, []
+
+    us_indices = [
+        _classify_market_item(item, retrieved_at) for item in raw_us_indices
+    ]
+    a50 = (
+        _classify_market_item(raw_a50, retrieved_at)
+        if isinstance(raw_a50, dict)
+        else None
+    )
 
     has_data = bool(us_indices) or a50 is not None or bool(economic_events)
     if not has_data:
@@ -765,16 +883,24 @@ async def get_pre_market_global_snapshot() -> dict:
         providers.append(str(a50.get("source") or "sina/a50"))
     if economic_events:
         providers.append("AkShare-Macro")
+    market_items = [*us_indices, *([a50] if a50 is not None else [])]
+    market_quality = (
+        Q_STALE
+        if any(item["qualityStatus"] == Q_STALE for item in market_items)
+        else Q_FRESH
+    )
     snapshot = {
         "usIndices": us_indices,
         "a50Future": a50,
         "economicEvents": economic_events,
         "globalEvents": [],
-        "qualityStatus": Q_FRESH,
+        "qualityStatus": market_quality if market_items else Q_FRESH,
         "sourceName": "+".join(providers)
         if providers
         else PRE_MARKET_GLOBAL_SOURCE_NAME,
-        "sourceAsOf": None,
+        # The oldest adopted quote controls aggregate freshness; item-level
+        # sourceAsOf values remain available when US and A50 timestamps differ.
+        "sourceAsOf": _oldest_market_source_as_of(market_items),
         "retrievedAt": retrieved_at.isoformat(),
         "methodVersion": PRE_MARKET_GLOBAL_METHOD_VERSION,
     }
