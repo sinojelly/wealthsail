@@ -374,7 +374,8 @@ async def test_snapshot_caches_within_ttl() -> None:
     ):
         first = await market_data.get_pre_market_global_snapshot()
         second = await market_data.get_pre_market_global_snapshot()
-    assert first is second  # same cached object
+    assert first == second
+    assert first is not second  # callers cannot mutate the cache's baseline object
     assert fetch_us.await_count == 1  # fetched only once
 
 
@@ -520,6 +521,61 @@ async def test_expired_cache_reclassifies_quotes_older_than_one_trading_day(
     assert degraded["qualityStatus"] == "STALE"
     assert degraded["sourceAsOf"] == "2026-09-04"
     assert degraded["fallbackAt"] == "2026-09-08T00:30:00+00:00"
+
+
+def test_market_source_quality_handles_weekend_boundary() -> None:
+    monday = datetime(2026, 9, 7, 0, 30, tzinfo=ZoneInfo("UTC"))
+    tuesday = datetime(2026, 9, 8, 0, 30, tzinfo=ZoneInfo("UTC"))
+
+    assert market_data._market_source_quality("2026-09-04", monday) == "FRESH"
+    assert market_data._market_source_quality("2026-09-04", tuesday) == "STALE"
+
+
+@pytest.mark.asyncio
+async def test_ttl_cache_reclassifies_quality_when_it_crosses_trading_day_boundary(
+    monkeypatch,
+) -> None:
+    """A TTL hit returns a classified copy, never yesterday's mutable object."""
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 9, 8, 0, 10, tzinfo=ZoneInfo("UTC"))
+            return current.astimezone(tz) if tz is not None else current
+
+    original = {
+        "usIndices": [
+            {
+                "name": "道琼斯",
+                "changePct": 0.5,
+                "price": 100,
+                "sourceAsOf": "2026-09-04",
+                "qualityStatus": "FRESH",
+            }
+        ],
+        "a50Future": None,
+        "economicEvents": [],
+        "globalEvents": [],
+        "qualityStatus": "FRESH",
+        "sourceName": "AkShare-OpenSource",
+        "sourceAsOf": "2026-09-04",
+        "retrievedAt": "2026-09-07T15:50:00+00:00",
+        "methodVersion": market_data.PRE_MARKET_GLOBAL_METHOD_VERSION,
+    }
+    now = FixedDatetime.now(ZoneInfo("UTC"))
+    market_data._pre_market_global_cache.update(
+        ts=now.timestamp() - 20 * 60,
+        snapshot=original,
+    )
+    monkeypatch.setattr(market_data, "datetime", FixedDatetime)
+
+    cached = await market_data.get_pre_market_global_snapshot()
+
+    assert cached is not original
+    assert cached["usIndices"][0]["qualityStatus"] == "STALE"
+    assert cached["qualityStatus"] == "STALE"
+    assert original["usIndices"][0]["qualityStatus"] == "FRESH"
+    assert original["qualityStatus"] == "FRESH"
 
 
 @pytest.mark.asyncio

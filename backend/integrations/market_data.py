@@ -314,6 +314,43 @@ def _oldest_market_source_as_of(items: list[dict]) -> str | None:
     return min(dated, key=lambda value: value[0])[1] if dated else None
 
 
+def _reclassify_cached_snapshot(
+    cached: dict, retrieved_at: datetime, *, refresh_failed: bool = False
+) -> dict:
+    """Return a copy whose market qualities are valid at ``retrieved_at``.
+
+    Cache entries retain the successful collection's original facts and
+    timestamps. Only derived quality labels are recalculated, preventing a TTL
+    hit or failed refresh from mutating the baseline used by later attempts.
+    """
+    classified = dict(cached)
+    us_indices = [
+        _classify_market_item(item, retrieved_at)
+        for item in cached.get("usIndices", [])
+        if isinstance(item, dict)
+    ]
+    raw_a50 = cached.get("a50Future")
+    a50 = (
+        _classify_market_item(raw_a50, retrieved_at)
+        if isinstance(raw_a50, dict)
+        else None
+    )
+    market_items = [*us_indices, *([a50] if a50 is not None else [])]
+    classified["usIndices"] = us_indices
+    classified["a50Future"] = a50
+    if market_items:
+        classified["sourceAsOf"] = _oldest_market_source_as_of(market_items)
+        classified["qualityStatus"] = (
+            Q_STALE
+            if refresh_failed
+            or any(item["qualityStatus"] == Q_STALE for item in market_items)
+            else Q_FRESH
+        )
+    elif refresh_failed:
+        classified["qualityStatus"] = Q_STALE
+    return classified
+
+
 # 美股三大指数在 AkShare 不同接口下的中文别名，统一映射到 dow/nasdaq/sp500。
 _US_INDEX_ALIASES = {
     "道琼斯": "dow",
@@ -843,7 +880,7 @@ async def get_pre_market_global_snapshot() -> dict:
     if cached is not None and (now.timestamp() - _pre_market_global_cache["ts"]) < (
         _PRE_MARKET_GLOBAL_TTL_SECONDS
     ):
-        return cached
+        return _reclassify_cached_snapshot(cached, now)
 
     retrieved_at = now
     try:
@@ -868,32 +905,13 @@ async def get_pre_market_global_snapshot() -> dict:
     has_data = bool(us_indices) or a50 is not None or bool(economic_events)
     if not has_data:
         if cached is not None:
-            degraded = dict(cached)
             # Quality stored in the process cache describes the moment of the
             # successful fetch. Recompute every adopted quote against this
             # failed refresh attempt so a multi-day-old item cannot retain its
             # historical FRESH label indefinitely.
-            degraded_us = [
-                _classify_market_item(item, retrieved_at)
-                for item in degraded.get("usIndices", [])
-                if isinstance(item, dict)
-            ]
-            degraded_a50 = degraded.get("a50Future")
-            degraded_a50 = (
-                _classify_market_item(degraded_a50, retrieved_at)
-                if isinstance(degraded_a50, dict)
-                else None
+            degraded = _reclassify_cached_snapshot(
+                cached, retrieved_at, refresh_failed=True
             )
-            degraded_market_items = [
-                *degraded_us,
-                *([degraded_a50] if degraded_a50 is not None else []),
-            ]
-            degraded["usIndices"] = degraded_us
-            degraded["a50Future"] = degraded_a50
-            degraded["sourceAsOf"] = _oldest_market_source_as_of(
-                degraded_market_items
-            )
-            degraded["qualityStatus"] = Q_STALE
             degraded["sourceName"] = (
                 degraded.get("sourceName") or PRE_MARKET_GLOBAL_SOURCE_NAME
             ) + "(cached)"
@@ -2199,7 +2217,6 @@ _ak_module = None
 # ---------------------------------------------------------------------------
 # 市场情绪指数（涨跌家数 / 涨停跌停 / 成交额 / 北向资金）
 # ---------------------------------------------------------------------------
-_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def price_limit_pct(symbol: str, name: str = "") -> Decimal:
