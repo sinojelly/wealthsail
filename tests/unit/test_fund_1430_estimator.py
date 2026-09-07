@@ -129,6 +129,7 @@ def test_pipeline_uses_only_fresh_component_returns_and_keeps_disclosure_date() 
     assert len(estimates) == 1
     estimate = estimates[0]
     assert estimate.quality_status == md.Q_ESTIMATED
+    assert estimate.return_rate == Decimal("0.013")
     assert estimate.metadata["coveragePct"] == "65.00"
     assert estimate.metadata["disclosedOn"] == "2026-06-30"
 

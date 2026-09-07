@@ -104,6 +104,7 @@ async def test_refresh_keeps_unpriced_holding_as_unavailable_row() -> None:
     assert "ev.status = 'CONFIRMED'" in conn.fetch_sql
     assert "ev.event_type <> 'REVERSAL'" in conn.fetch_sql
     assert "reversal.reverses_event_id = ev.id" in conn.fetch_sql
+    assert "reversal.trade_date <= $2" in conn.fetch_sql
     by_instrument = {str(args[2]): args for args in conn.writes}
     assert by_instrument["priced"][6:10] == (
         Decimal("3"),
@@ -167,10 +168,36 @@ def test_cash_only_account_has_complete_fresh_nav() -> None:
     assert nav.quality == "FRESH"
 
 
+def test_account_nav_preserves_the_worst_position_valuation_quality() -> None:
+    nav = derive_account_nav(
+        cash_balance=Decimal("100"),
+        principal=Decimal("100"),
+        priced_positions_value=Decimal("50"),
+        total_position_count=2,
+        priced_position_count=2,
+        position_quality_statuses=("FRESH", "ESTIMATED"),
+    )
+
+    assert nav.total_nav == Decimal("150.00")
+    assert nav.quality == "ESTIMATED"
+
+
 class _NavConnection:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        cash_balance: Decimal = Decimal("100"),
+        positions_value: Decimal = Decimal("0"),
+        previous_total: Decimal | None = None,
+        daily_external_flow: Decimal = Decimal("0"),
+    ) -> None:
         self.cash_sql = ""
+        self.previous_nav_sql = ""
         self.nav_write_args: tuple[object, ...] | None = None
+        self.cash_balance = cash_balance
+        self.positions_value = positions_value
+        self.previous_total = previous_total
+        self.daily_external_flow = daily_external_flow
 
     async def fetch(self, _sql: str, *_args):
         return [{"account_id": "account-a"}]
@@ -179,9 +206,22 @@ class _NavConnection:
         normalized = " ".join(sql.split())
         if "ledger.ledger_legs" in normalized:
             self.cash_sql = normalized
-            return {"cash_balance": Decimal("100"), "principal": Decimal("100")}
+            return {
+                "cash_balance": self.cash_balance,
+                "principal": Decimal("100"),
+                "daily_external_flow": self.daily_external_flow,
+            }
         if "ledger.position_snapshots" in normalized:
-            return {"positions_value": 0, "total": 0, "priced_count": 0}
+            return {
+                "positions_value": self.positions_value,
+                "total": 0,
+                "priced_count": 0,
+            }
+        if "SELECT total_nav" in normalized and self.previous_total is not None:
+            self.previous_nav_sql = normalized
+            return {"total_nav": self.previous_total}
+        if "SELECT total_nav" in normalized:
+            self.previous_nav_sql = normalized
         return None
 
     async def execute(self, sql: str, *args):
@@ -201,6 +241,8 @@ async def test_account_nav_excludes_reversal_legs_from_cash() -> None:
     ) == 1
     assert "ev.event_type <> 'REVERSAL'" in conn.cash_sql
     assert "reversal.reverses_event_id = ev.id" in conn.cash_sql
+    assert "reversal.trade_date <= $3" in conn.cash_sql
+    assert "ev.trade_date <= $3" in conn.cash_sql
 
 
 @pytest.mark.asyncio
@@ -218,3 +260,41 @@ async def test_account_nav_does_not_fabricate_cumulative_pnl_from_opening_import
     # INSERT argument $8 is cumulative_pnl. It must remain unknown until a
     # cash-flow-aware performance ledger is available.
     assert conn.nav_write_args[7] is None
+
+
+@pytest.mark.asyncio
+async def test_first_account_nav_snapshot_abstains_from_daily_pnl() -> None:
+    """Without a previous close, a zero daily return would be fabricated."""
+    conn = _NavConnection()
+
+    await refresh_account_nav(
+        conn,
+        tenant_id="tenant-a",
+        as_of_date=date(2026, 8, 28),
+    )
+
+    assert conn.nav_write_args is not None
+    assert conn.nav_write_args[6] is None
+
+
+@pytest.mark.asyncio
+async def test_account_nav_daily_pnl_excludes_same_day_external_cash_flow() -> None:
+    """Deposits and withdrawals are not investment performance."""
+    conn = _NavConnection(
+        cash_balance=Decimal("200"),
+        positions_value=Decimal("950"),
+        previous_total=Decimal("1000"),
+        daily_external_flow=Decimal("100"),
+    )
+
+    await refresh_account_nav(
+        conn,
+        tenant_id="tenant-a",
+        as_of_date=date(2026, 8, 28),
+    )
+
+    assert conn.nav_write_args is not None
+    assert conn.nav_write_args[6] == Decimal("50.00")
+    assert "ev.trade_date = $3" in conn.cash_sql
+    assert "reference.trading_calendars" in conn.previous_nav_sql
+    assert "calendar.calendar_date < $3" in conn.previous_nav_sql

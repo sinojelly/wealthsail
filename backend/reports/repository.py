@@ -835,6 +835,343 @@ async def get_report_outbox_id(
     return str(value) if value is not None else None
 
 
+async def get_post_market_performance(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    trade_date: date,
+    *,
+    owner_user_id: str | None = None,
+) -> dict:
+    """Return complete, cash-flow-aware daily performance or abstain.
+
+    Every active account in the requested asset scope must have both today's
+    computed PnL and a previous close.  A same-day external cash flow keeps the
+    amount valid (it was removed by the projection) but makes the simple daily
+    rate unavailable because the intraday timing of that flow is unknown.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT
+            CASE WHEN COUNT(*) > 0
+                       AND COUNT(current_nav.id) = COUNT(*)
+                       AND COUNT(current_nav.daily_pnl) = COUNT(*)
+                 THEN SUM(current_nav.daily_pnl)
+            END AS daily_pnl,
+            CASE WHEN COUNT(*) > 0
+                       AND COUNT(current_nav.id) = COUNT(*)
+                       AND COUNT(current_nav.daily_pnl) = COUNT(*)
+                       AND COUNT(previous_nav.total_nav) = COUNT(*)
+                       AND BOOL_AND(COALESCE(daily_flow.daily_external_flow, 0) = 0)
+                       AND SUM(previous_nav.total_nav) <> 0
+                 THEN SUM(current_nav.daily_pnl)
+                      / SUM(previous_nav.total_nav) * 100
+            END AS daily_pnl_rate,
+            CASE WHEN COUNT(*) > 0
+                       AND COUNT(current_nav.id) = COUNT(*)
+                       AND COUNT(current_nav.daily_pnl) = COUNT(*)
+                       AND COUNT(previous_nav.total_nav) = COUNT(*)
+                 THEN CASE
+                     WHEN BOOL_OR(current_nav.data_quality_status = 'UNAVAILABLE')
+                              OR BOOL_OR(previous_nav.data_quality_status = 'UNAVAILABLE')
+                         THEN 'UNAVAILABLE'
+                     WHEN BOOL_OR(current_nav.data_quality_status = 'STALE')
+                              OR BOOL_OR(previous_nav.data_quality_status = 'STALE')
+                         THEN 'STALE'
+                     WHEN BOOL_OR(current_nav.data_quality_status = 'ESTIMATED')
+                              OR BOOL_OR(previous_nav.data_quality_status = 'ESTIMATED')
+                         THEN 'ESTIMATED'
+                     ELSE 'FRESH'
+                 END
+                 ELSE 'UNAVAILABLE'
+            END AS quality,
+            COUNT(*) AS account_count
+          FROM identity.accounts account
+          LEFT JOIN ledger.account_nav_snapshots current_nav
+            ON current_nav.tenant_id = account.tenant_id
+           AND current_nav.account_id = account.id
+           AND current_nav.as_of = $3
+          LEFT JOIN LATERAL (
+              SELECT prior.total_nav, prior.data_quality_status
+                FROM ledger.account_nav_snapshots prior
+               WHERE prior.tenant_id = account.tenant_id
+                 AND prior.account_id = account.id
+                 AND prior.as_of = (
+                     SELECT max(calendar.calendar_date)
+                       FROM reference.trading_calendars calendar
+                      WHERE calendar.market = 'SSE'
+                        AND calendar.is_trading_day = TRUE
+                        AND calendar.calendar_date < $3
+                 )
+          ) previous_nav ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT COALESCE(SUM(leg.amount), 0) AS daily_external_flow
+                FROM ledger.ledger_events event
+                JOIN ledger.ledger_legs leg
+                  ON leg.tenant_id = event.tenant_id
+                 AND leg.event_id = event.id
+               WHERE event.tenant_id = account.tenant_id
+                 AND event.account_id = account.id
+                 AND event.trade_date = $3
+                 AND event.event_type IN ('CASH_IN', 'CASH_OUT')
+                 AND event.status = 'CONFIRMED'
+                 AND leg.amount IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1
+                       FROM ledger.ledger_events reversal
+                      WHERE reversal.tenant_id = event.tenant_id
+                        AND reversal.event_type = 'REVERSAL'
+                        AND reversal.status = 'CONFIRMED'
+                        AND reversal.reverses_event_id = event.id
+                 )
+          ) daily_flow ON TRUE
+         WHERE account.tenant_id = $1
+           AND account.status = 'ACTIVE'
+           AND (
+               $2::uuid IS NULL OR EXISTS (
+                   SELECT 1
+                     FROM identity.account_members owner
+                    WHERE owner.tenant_id = account.tenant_id
+                      AND owner.account_id = account.id
+                      AND owner.user_id = $2
+                      AND owner.effective_from <= $3
+                      AND (owner.effective_to IS NULL OR owner.effective_to >= $3)
+                      AND owner.relationship IN ('BENEFICIAL_OWNER', 'JOINT_OWNER')
+               )
+           )
+        """,
+        tenant_id,
+        owner_user_id,
+        trade_date,
+    )
+    row = row or {}
+    daily_pnl = row.get("daily_pnl")
+    daily_rate = row.get("daily_pnl_rate")
+    return {
+        "dailyPnl": str(daily_pnl) if daily_pnl is not None else None,
+        "dailyPnlRate": str(daily_rate) if daily_rate is not None else None,
+        "quality": str(row.get("quality") or "UNAVAILABLE"),
+        "asOf": trade_date.isoformat(),
+    }
+
+
+async def get_post_market_contributions(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    trade_date: date,
+    *,
+    owner_user_id: str | None = None,
+) -> dict:
+    """Estimate same-day holding contributions from fresh persisted quotes.
+
+    Positions changed during the day are excluded because a closing quantity
+    cannot reveal the intraday exposure.  This deliberate abstention prevents
+    buys, sells and transfers from being presented as exact attribution.
+    """
+    rows = await conn.fetch(
+        """
+        WITH positions AS (
+            SELECT snapshot.instrument_id,
+                   CASE WHEN COUNT(snapshot.market_value) = COUNT(*)
+                        THEN SUM(snapshot.market_value)
+                   END AS market_value,
+                   CASE WHEN COUNT(snapshot.market_price) = COUNT(*)
+                             AND MIN(snapshot.market_price) = MAX(snapshot.market_price)
+                        THEN MIN(snapshot.market_price)
+                   END AS market_price
+              FROM ledger.position_snapshots snapshot
+              JOIN identity.accounts account
+                ON account.tenant_id = snapshot.tenant_id
+               AND account.id = snapshot.account_id
+             WHERE snapshot.tenant_id = $1
+               AND snapshot.as_of = $3
+               AND snapshot.quantity > 0
+               AND account.status = 'ACTIVE'
+               AND (
+                   $2::uuid IS NULL OR EXISTS (
+                       SELECT 1
+                         FROM identity.account_members owner
+                        WHERE owner.tenant_id = account.tenant_id
+                          AND owner.account_id = account.id
+                          AND owner.user_id = $2
+                          AND owner.effective_from <= $3
+                          AND (owner.effective_to IS NULL OR owner.effective_to >= $3)
+                          AND owner.relationship IN (
+                              'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                          )
+                   )
+               )
+             GROUP BY snapshot.instrument_id
+        ), scoped_quantity_events AS (
+            SELECT event.id, event.account_id
+              FROM ledger.ledger_events event
+              JOIN identity.accounts changed_account
+                ON changed_account.tenant_id = event.tenant_id
+               AND changed_account.id = event.account_id
+             WHERE event.tenant_id = $1
+               AND changed_account.status = 'ACTIVE'
+               AND event.trade_date = $3
+               AND event.status = 'CONFIRMED'
+               AND event.event_type IN (
+                   'BUY', 'SELL', 'DIVIDEND_REINVEST', 'SPLIT', 'MERGER',
+                   'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT'
+               )
+               AND (
+                   $2::uuid IS NULL OR EXISTS (
+                       SELECT 1
+                         FROM identity.account_members changed_owner
+                        WHERE changed_owner.tenant_id = changed_account.tenant_id
+                          AND changed_owner.account_id = changed_account.id
+                          AND changed_owner.user_id = $2
+                          AND changed_owner.effective_from <= $3
+                          AND (
+                              changed_owner.effective_to IS NULL
+                              OR changed_owner.effective_to >= $3
+                          )
+                          AND changed_owner.relationship IN (
+                              'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                          )
+                   )
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM ledger.ledger_events reversal
+                    WHERE reversal.tenant_id = event.tenant_id
+                      AND reversal.event_type = 'REVERSAL'
+                      AND reversal.status = 'CONFIRMED'
+                      AND reversal.reverses_event_id = event.id
+               )
+            UNION
+            SELECT original.id, original.account_id
+              FROM ledger.ledger_events reversal
+              JOIN ledger.ledger_events original
+                ON original.tenant_id = reversal.tenant_id
+               AND reversal.reverses_event_id = original.id
+              JOIN identity.accounts changed_account
+                ON changed_account.tenant_id = original.tenant_id
+               AND changed_account.id = original.account_id
+             WHERE reversal.tenant_id = $1
+               AND reversal.trade_date = $3
+               AND reversal.status = 'CONFIRMED'
+               AND reversal.event_type = 'REVERSAL'
+               AND original.event_type IN (
+                   'BUY', 'SELL', 'DIVIDEND_REINVEST', 'SPLIT', 'MERGER',
+                   'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT'
+               )
+               AND changed_account.status = 'ACTIVE'
+               AND (
+                   $2::uuid IS NULL OR EXISTS (
+                       SELECT 1
+                         FROM identity.account_members changed_owner
+                        WHERE changed_owner.tenant_id = changed_account.tenant_id
+                          AND changed_owner.account_id = changed_account.id
+                          AND changed_owner.user_id = $2
+                          AND changed_owner.effective_from <= $3
+                          AND (
+                              changed_owner.effective_to IS NULL
+                              OR changed_owner.effective_to >= $3
+                          )
+                          AND changed_owner.relationship IN (
+                              'BENEFICIAL_OWNER', 'JOINT_OWNER'
+                          )
+                   )
+               )
+        ), changed_today AS (
+            SELECT DISTINCT leg.instrument_id
+              FROM scoped_quantity_events changed_event
+              JOIN ledger.ledger_legs leg
+                ON leg.tenant_id = $1
+               AND leg.event_id = changed_event.id
+             WHERE leg.instrument_id IS NOT NULL
+        ), quotes AS (
+            SELECT DISTINCT ON (o.subject_id)
+                   o.subject_id,
+                   o.value,
+                   (o.metadata ->> 'changePct')::numeric AS change_pct,
+                   o.quality_status AS quality
+              FROM market.market_observations o
+             WHERE (o.as_of AT TIME ZONE 'Asia/Shanghai')::date = $3
+               AND o.quality_status IN ('FRESH', 'ESTIMATED')
+               AND o.metadata ->> 'changePct'
+                   ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+             ORDER BY o.subject_id, o.as_of DESC, o.observed_at DESC,
+                      o.revision DESC
+        )
+        SELECT positions.instrument_id,
+               COALESCE(alias.ticker, '') AS symbol,
+               instrument.canonical_name AS name,
+               positions.market_value,
+               quotes.change_pct,
+               quotes.quality,
+               changed_today.instrument_id IS NOT NULL AS changed_today
+          FROM positions
+          LEFT JOIN quotes ON quotes.subject_id = positions.instrument_id
+                          AND quotes.value = positions.market_price
+          JOIN reference.instruments instrument
+            ON instrument.id = positions.instrument_id
+          LEFT JOIN changed_today
+            ON changed_today.instrument_id = positions.instrument_id
+          LEFT JOIN LATERAL (
+              SELECT instrument_alias.alias_value AS ticker
+                FROM reference.instrument_aliases instrument_alias
+               WHERE instrument_alias.instrument_id = positions.instrument_id
+                 AND instrument_alias.alias_type = 'TICKER'
+                 AND instrument_alias.effective_from <= $3
+                 AND (
+                     instrument_alias.effective_to IS NULL
+                     OR instrument_alias.effective_to >= $3
+                 )
+               ORDER BY instrument_alias.effective_from DESC
+               LIMIT 1
+          ) alias ON TRUE
+        """,
+        tenant_id,
+        owner_user_id,
+        trade_date,
+    )
+    result: list[dict] = []
+    position_count = len(rows)
+    hundred = Decimal("100")
+    for row in rows:
+        if bool(row["changed_today"]):
+            continue
+        try:
+            market_value = Decimal(str(row["market_value"]))
+            change_pct = Decimal(str(row["change_pct"]))
+            denominator = hundred + change_pct
+        except (ArithmeticError, TypeError, ValueError):
+            continue
+        if (
+            not market_value.is_finite()
+            or not change_pct.is_finite()
+            or denominator == 0
+        ):
+            continue
+        contribution = (market_value * change_pct / denominator).quantize(
+            Decimal("0.01")
+        )
+        result.append(
+            {
+                "instrumentId": str(row["instrument_id"]),
+                "symbol": str(row["symbol"] or ""),
+                "name": str(row["name"] or row["symbol"] or "标的"),
+                "changePct": str(change_pct),
+                "contributionAmount": str(contribution),
+                "quality": str(row["quality"]),
+            }
+        )
+    items = sorted(
+        result,
+        key=lambda item: abs(Decimal(item["contributionAmount"])),
+        reverse=True,
+    )
+    return {
+        "items": items,
+        "complete": position_count > 0 and len(items) == position_count,
+        "positionCount": position_count,
+        "attributedCount": len(items),
+    }
+
+
 async def latest_day_change_pct(
     conn: asyncpg.Connection, tenant_id: str, instrument_ids: list[str]
 ) -> dict[str, Decimal]:

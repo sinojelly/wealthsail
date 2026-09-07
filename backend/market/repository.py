@@ -49,6 +49,7 @@ def derive_account_nav(
     priced_positions_value: Decimal,
     total_position_count: int,
     priced_position_count: int,
+    position_quality_statuses: tuple[str, ...] = (),
 ) -> AccountNavValuation:
     """Fail closed when a confirmed open position has no valuation."""
     known_value = (cash_balance + priced_positions_value).quantize(Decimal("0.01"))
@@ -62,12 +63,21 @@ def derive_account_nav(
             * Decimal("100")
         ).quantize(Decimal("0.01"))
     )
+    normalized_qualities = {quality.upper() for quality in position_quality_statuses}
+    if unpriced or "UNAVAILABLE" in normalized_qualities:
+        quality = "UNAVAILABLE"
+    elif "STALE" in normalized_qualities:
+        quality = "STALE"
+    elif "ESTIMATED" in normalized_qualities:
+        quality = "ESTIMATED"
+    else:
+        quality = "FRESH"
     return AccountNavValuation(
         total_nav=known_value if unpriced == 0 else None,
         known_value=known_value,
         coverage_pct=coverage,
         unpriced_position_count=unpriced,
-        quality="FRESH" if unpriced == 0 else "UNAVAILABLE",
+        quality=quality,
     )
 
 
@@ -359,6 +369,7 @@ async def refresh_positions(
               WHERE reversal.tenant_id = ev.tenant_id
                 AND reversal.status = 'CONFIRMED'
                 AND reversal.event_type = 'REVERSAL'
+                AND reversal.trade_date <= $2
                 AND reversal.reverses_event_id = ev.id
           )
         GROUP BY ev.id, ev.account_id, ev.event_type, ev.occurred_at
@@ -428,7 +439,8 @@ async def refresh_account_nav(
 
     cash_balance: net cash from confirmed CASH legs (ledger is the source of
     truth, not the previous projection);
-    daily_pnl     = total_nav − previous trading day total_nav.
+    daily_pnl     = total_nav − previous trading day total_nav
+                    − same-day external cash flow.
 
     ``cumulative_pnl`` deliberately remains NULL. An opening-balance import
     supplies the remaining position cost, but not a complete lifetime external
@@ -453,11 +465,16 @@ async def refresh_account_nav(
                    -- （CASH_OUT 的 amount 为负，直接求和即净额）
                    COALESCE(SUM(leg.amount)
                             FILTER (WHERE ev.event_type IN ('CASH_IN', 'CASH_OUT')), 0)
-                   AS principal
+                   AS principal,
+                   COALESCE(SUM(leg.amount)
+                            FILTER (WHERE ev.event_type IN ('CASH_IN', 'CASH_OUT')
+                                      AND ev.trade_date = $3), 0)
+                   AS daily_external_flow
             FROM ledger.ledger_legs leg
             JOIN ledger.ledger_events ev
               ON ev.tenant_id = leg.tenant_id AND ev.id = leg.event_id
             WHERE leg.tenant_id = $1 AND ev.account_id = $2
+              AND ev.trade_date <= $3
               -- Fees and taxes are separate legs but still reduce cash.
               AND leg.amount IS NOT NULL
               AND ev.status = 'CONFIRMED'
@@ -469,21 +486,27 @@ async def refresh_account_nav(
                   WHERE reversal.tenant_id = ev.tenant_id
                     AND reversal.status = 'CONFIRMED'
                     AND reversal.event_type = 'REVERSAL'
+                    AND reversal.trade_date <= $3
                     AND reversal.reverses_event_id = ev.id
               )
             """,
             tenant_id,
             account_id,
+            as_of_date,
         )
         cash_balance = Decimal((cash_row or {}).get("cash_balance") or 0)
         principal = Decimal((cash_row or {}).get("principal") or 0)
+        daily_external_flow = Decimal(
+            (cash_row or {}).get("daily_external_flow") or 0
+        )
 
         positions_row = await conn.fetchrow(
             """
             SELECT COALESCE(SUM(market_value) FILTER (WHERE market_value IS NOT NULL), 0)
                    AS positions_value,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE market_value IS NOT NULL) AS priced_count
+                   COUNT(*) FILTER (WHERE market_value IS NOT NULL) AS priced_count,
+                   ARRAY_AGG(data_quality_status) AS quality_statuses
             FROM ledger.position_snapshots
             WHERE tenant_id = $1 AND account_id = $2 AND as_of = $3
             """,
@@ -499,6 +522,10 @@ async def refresh_account_nav(
             priced_positions_value=positions_value,
             total_position_count=int(positions_row.get("total") or 0),
             priced_position_count=int(positions_row.get("priced_count") or 0),
+            position_quality_statuses=tuple(
+                str(value)
+                for value in (positions_row.get("quality_statuses") or [])
+            ),
         )
         total_nav = valuation.total_nav
 
@@ -507,8 +534,13 @@ async def refresh_account_nav(
             SELECT total_nav
             FROM ledger.account_nav_snapshots
             WHERE tenant_id = $1 AND account_id = $2 AND as_of < $3
-            ORDER BY as_of DESC
-            LIMIT 1
+              AND as_of = (
+                  SELECT max(calendar.calendar_date)
+                    FROM reference.trading_calendars calendar
+                   WHERE calendar.market = 'SSE'
+                     AND calendar.is_trading_day = TRUE
+                     AND calendar.calendar_date < $3
+              )
             """,
             tenant_id,
             account_id,
@@ -517,10 +549,10 @@ async def refresh_account_nav(
         prev_total = (
             Decimal(prev_row["total_nav"])
             if prev_row and prev_row["total_nav"] is not None
-            else total_nav
+            else None
         )
         daily_pnl = (
-            (total_nav - prev_total).quantize(Decimal("0.01"))
+            (total_nav - prev_total - daily_external_flow).quantize(Decimal("0.01"))
             if total_nav is not None and prev_total is not None
             else None
         )

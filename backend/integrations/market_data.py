@@ -1619,6 +1619,7 @@ def parse_sina_fund_estimates(
                     if provider_date == retrieved_local.date()
                     else Q_STALE
                 ),
+                return_rate=estimated_change_pct / Decimal("100"),
                 unit="元/份",
                 method_version=_SINA_FUND_ESTIMATE_METHOD,
                 origin_uri="https://finance.sina.com.cn/fund/",

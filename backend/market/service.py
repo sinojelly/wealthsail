@@ -58,6 +58,43 @@ def _source_name(observation: md.Observation) -> str:
     return md.AKSOURCE_NAME
 
 
+def _observation_row(
+    observation: md.Observation,
+    *,
+    instrument_id: str,
+    observed_at: datetime,
+    snapshot_id: str,
+    source_id: str,
+) -> tuple:
+    """Build the persistence row without dropping the provider day return.
+
+    ``Observation.return_rate`` is a decimal fraction (``0.0125`` means
+    ``1.25%``), while report queries consume ``metadata.changePct`` as a
+    percentage.  Normalize that contract at the single database boundary so
+    every equity, ETF and fund provider is persisted consistently.
+    """
+    metadata = dict(observation.metadata or {})
+    if observation.return_rate is not None and observation.return_rate.is_finite():
+        metadata["changePct"] = str(observation.return_rate * Decimal("100"))
+    return (
+        observation.subject_type,
+        instrument_id,
+        observation.field_code,
+        observation.value,
+        observation.lower_value,
+        observation.upper_value,
+        observation.unit,
+        observation.currency,
+        observation.as_of,
+        observed_at,
+        snapshot_id,
+        source_id,
+        observation.quality_status,
+        observation.method_version,
+        json.dumps(metadata, ensure_ascii=False, default=str),
+    )
+
+
 def _source_snapshot_quality(observations: list[md.Observation]) -> str:
     """Summarize one provider batch without upgrading or losing ESTIMATED."""
     for quality in (md.Q_FRESH, md.Q_ESTIMATED, md.Q_STALE, md.Q_UNAVAILABLE):
@@ -405,22 +442,12 @@ async def refresh_market(
                 retrieved_at=started,
             )
             rows = [
-                (
-                    o.subject_type,
-                    ticker_to_id.get(o.symbol),  # subject_id (instrument uuid)
-                    o.field_code,
-                    o.value,
-                    o.lower_value,
-                    o.upper_value,
-                    o.unit,
-                    o.currency,
-                    o.as_of,
-                    started,
-                    snapshot_id,
-                    source_id,
-                    o.quality_status,
-                    o.method_version,
-                    json.dumps(o.metadata or {}, ensure_ascii=False, default=str),
+                _observation_row(
+                    o,
+                    instrument_id=ticker_to_id[o.symbol],
+                    observed_at=started,
+                    snapshot_id=snapshot_id,
+                    source_id=source_id,
                 )
                 for o in batch
                 if o.symbol in ticker_to_id
@@ -588,6 +615,9 @@ def _build_fund_estimates(
                 value=estimate.value,
                 lower_value=estimate.lower_value,
                 upper_value=estimate.upper_value,
+                return_rate=(estimate.value / nav.value - Decimal("1"))
+                if estimate.value is not None and nav.value is not None
+                else None,
                 as_of=as_of,
                 quality_status=quality_status,
                 unit="元/份",

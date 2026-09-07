@@ -58,7 +58,7 @@ def test_personalized_push_has_four_grounded_sections_and_stays_under_300_chars(
     formatter = getattr(report_service, "_format_personalized_push_content", None)
     assert formatter is not None, "personalized push formatter is not implemented"
 
-    content = formatter(_context(), session="POST_MARKET")
+    content = formatter(_context(), session="INTRADAY")
 
     assert content.count("一句话总结：") == 1
     assert content.count("持仓健康度：") == 1
@@ -108,7 +108,7 @@ def test_personalized_push_ignores_closed_positions_in_health_and_actions() -> N
         }
     )
 
-    content = formatter(context, session="POST_MARKET")
+    content = formatter(context, session="INTRADAY")
 
     assert "000001" not in content
     assert "已清仓旧标的" not in content
@@ -170,7 +170,7 @@ def test_personalized_push_compacts_long_symbols_without_hiding_actions_or_limit
         },
     ]
 
-    content = formatter(context, session="POST_MARKET")
+    content = formatter(context, session="INTRADAY")
     health_line, action_line = content.splitlines()[1:3]
 
     assert "35.00%" in health_line and "30.00%" in health_line
@@ -180,7 +180,7 @@ def test_personalized_push_compacts_long_symbols_without_hiding_actions_or_limit
 
 
 @pytest.mark.asyncio
-async def test_holdings_generation_uses_one_report_model_call_and_deterministic_push(
+async def test_post_market_holdings_generation_is_fully_deterministic(
     monkeypatch,
 ) -> None:
     context = _context()
@@ -223,9 +223,9 @@ async def test_holdings_generation_uses_one_report_model_call_and_deterministic_
     )
 
     assert result == {"id": "report-1"}
-    assert model.await_count == 1
-    assert captured["generation_mode"] == "PERSONALIZED"
-    assert captured["push_content"].startswith("1. 一句话总结：")
+    assert model.await_count == 0
+    assert captured["generation_mode"] == "POST_MARKET_DETERMINISTIC"
+    assert captured["push_content"].startswith("1. 今日结果：")
     assert len(captured["push_content"]) <= 300
 
 
@@ -429,6 +429,7 @@ def test_fund_1430_audit_names_deterministic_generator_without_model_run() -> No
     [
         ("PRE_MARKET", "PRE_MARKET_DETERMINISTIC"),
         ("FUND_1430", "FUND_1430_DETERMINISTIC"),
+        ("POST_MARKET", "POST_MARKET_DETERMINISTIC"),
     ],
 )
 async def test_deterministic_report_persistence_does_not_create_a_model_run(

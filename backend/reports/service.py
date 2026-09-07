@@ -40,6 +40,7 @@ from backend.portfolio.scope import AssetScope
 from backend.portfolio.service import get_positions, get_summary
 from backend.reports import (
     fund_1430,
+    post_market,
     pre_market,
     pre_market_macro,
     pre_market_personalized,
@@ -325,6 +326,8 @@ async def generate_report(
         generation_mode = "PRE_MARKET_DETERMINISTIC"
     elif session == "FUND_1430":
         generation_mode = "FUND_1430_DETERMINISTIC"
+    elif session == "POST_MARKET" and context["positions"]:
+        generation_mode = "POST_MARKET_DETERMINISTIC"
     else:
         generation_mode = (
             "NO_HOLDINGS_SHARED" if not context["positions"] else "PERSONALIZED"
@@ -359,6 +362,11 @@ async def generate_report(
     elif generation_mode == "FUND_1430_DETERMINISTIC":
         draft = fund_1430.build_report(context)
         push_content = fund_1430.format_push_content(context)
+        model_result = None
+        error_class = None
+    elif generation_mode == "POST_MARKET_DETERMINISTIC":
+        draft = post_market.build_report(context)
+        push_content = post_market.format_push_content(context)
         model_result = None
         error_class = None
     elif generation_mode == "NO_HOLDINGS_SHARED":
@@ -521,6 +529,7 @@ async def build_report_context(
         watchlist = await repository.get_user_watchlist_context(conn, audience_user_id)
     pre_market_context: dict = {}
     fund_1430_context: dict = {}
+    post_market_context: dict = {}
     if session == "PRE_MARKET":
         instrument_ids = [
             str(position["instrumentId"])
@@ -650,6 +659,23 @@ async def build_report_context(
         fund_1430_context = {
             "fundCutoffRules": cutoff_rules,
         }
+    if session == "POST_MARKET":
+        report_date = now_shanghai().date()
+        owner_user_id = asset_scope.owner_user_id if asset_scope is not None else None
+        post_market_context = {
+            "performance": await repository.get_post_market_performance(
+                conn,
+                tenant_id,
+                report_date,
+                owner_user_id=owner_user_id,
+            ),
+            "contributions": await repository.get_post_market_contributions(
+                conn,
+                tenant_id,
+                report_date,
+                owner_user_id=owner_user_id,
+            ),
+        }
     result = {
         "session": session,
         "summary": summary,
@@ -664,6 +690,8 @@ async def build_report_context(
         result["preMarket"] = pre_market_context
     if session == "FUND_1430":
         result["fund1430"] = fund_1430_context
+    if session == "POST_MARKET":
+        result["postMarket"] = post_market_context
     return result
 
 
@@ -1151,6 +1179,8 @@ def _delivery_audit_details(
         details["generatorVersion"] = "pre-market-personalized-v1"
     elif generation_mode == "FUND_1430_DETERMINISTIC":
         details["generatorVersion"] = "fund-1430-deterministic-v1"
+    elif generation_mode == "POST_MARKET_DETERMINISTIC":
+        details["generatorVersion"] = "post-market-deterministic-v1"
     elif generation_mode == "PRE_MARKET_MACRO_SHARED":
         details["generatorProvider"] = pre_market_macro.PROVIDER
         details["generatorVersion"] = pre_market_macro.MODEL
@@ -1203,6 +1233,7 @@ async def _persist_generation(
         "PRE_MARKET_DETERMINISTIC",
         "PRE_MARKET_PERSONALIZED_DETERMINISTIC",
         "FUND_1430_DETERMINISTIC",
+        "POST_MARKET_DETERMINISTIC",
         "PRE_MARKET_MACRO_SHARED",
     }:
         # Deterministic structured-data generation is not a model execution.

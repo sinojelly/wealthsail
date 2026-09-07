@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -159,6 +160,33 @@ def test_quality_to_snapshot_mapping() -> None:
     assert service._quality_to_snapshot("STALE") == "STALE"
     assert service._quality_to_snapshot("UNAVAILABLE") == "UNAVAILABLE"
     assert service._quality_to_snapshot("WEIRD") == "UNAVAILABLE"  # fail closed
+
+
+def test_observation_row_persists_provider_day_change_percentage() -> None:
+    """Dropping ``return_rate`` at the DB boundary would break day attribution."""
+    observed_at = datetime(2026, 9, 7, 7, 30, tzinfo=timezone.utc)
+    observation = md.Observation(
+        symbol="600036",
+        subject_type="INSTRUMENT",
+        field_code=md.F_CLOSE,
+        value=Decimal("42.50"),
+        return_rate=Decimal("0.0125"),
+        as_of=observed_at,
+        quality_status=md.Q_FRESH,
+        method_version="test/quote-v1",
+        metadata={"provider": "test"},
+    )
+
+    row = service._observation_row(
+        observation,
+        instrument_id="00000000-0000-0000-0000-000000000001",
+        observed_at=observed_at,
+        snapshot_id="00000000-0000-0000-0000-000000000002",
+        source_id="00000000-0000-0000-0000-000000000003",
+    )
+
+    metadata = json.loads(row[14])
+    assert metadata == {"provider": "test", "changePct": "1.2500"}
 
 
 # ---------------------------------------------------------------------------
