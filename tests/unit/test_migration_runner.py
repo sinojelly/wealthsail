@@ -32,8 +32,49 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 56
-    assert migrations[-1].path.name == "056_api_outbox_read_grants.sql"
+    assert versions[-1] == 57
+    assert migrations[-1].path.name == "057_corporate_actions_ingestion.sql"
+
+
+def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
+    """Manual ingestion needs dated, revisioned facts without runtime writes."""
+    root = Path(__file__).resolve().parents[2]
+    path = root / "migrations" / "057_corporate_actions_ingestion.sql"
+
+    assert path.exists()
+    migration = path.read_text(encoding="utf-8")
+    for contract in (
+        "ADD COLUMN IF NOT EXISTS action_date DATE",
+        "ADD COLUMN IF NOT EXISTS summary TEXT",
+        "ADD COLUMN IF NOT EXISTS source_event_id TEXT",
+        "ADD COLUMN IF NOT EXISTS source_ref TEXT",
+        "EX_RIGHTS",
+        "RIGHTS_ISSUE",
+        "OTHER",
+        "UNIQUE (source_event_id, revision)",
+        "idx_corporate_actions_date_instrument",
+        "MANUAL_CORPORATE_ACTIONS",
+        "GRANT SELECT ON market.corporate_actions TO wealthsail_api",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON market.corporate_actions" not in migration
+    assert "GRANT UPDATE ON market.corporate_actions" not in migration
+    assert "GRANT DELETE ON market.corporate_actions" not in migration
+
+
+def test_readback_requires_corporate_action_ingestion_contract() -> None:
+    source = inspect.getsource(_readback)
+
+    for contract in (
+        "corporate action ingestion contract is missing or unsafe",
+        "action_date",
+        "summary",
+        "source_event_id",
+        "source_ref",
+        "corporate_actions_source_event_id_revision_key",
+        "MANUAL_CORPORATE_ACTIONS",
+    ):
+        assert contract in source
 
 
 def test_056_grants_api_read_access_to_outbox_delivery_receipts() -> None:

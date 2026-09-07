@@ -1,0 +1,5 @@
+symbol,market,asset_name,action_type,action_date,summary,ex_date,record_date,pay_date,source_event_id,revision,source_ref
+600036,SSE,招商银行,除权除息,2026-09-08,今日除权除息,2026-09-08,,,,1,
+600519,SSE,贵州茅台,分红派息,2026-09-09,现金红利到账,,,2026-09-09,,1,
+000001,SZSE,平安银行,配股,2026-09-10,配股缴款开始,,,,,1,
+300750,SZSE,宁德时代,其他重大公司行动,2026-09-11,重大资产事项,,,,,1,

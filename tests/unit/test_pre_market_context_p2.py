@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import types
 import unittest.mock as mock
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -135,7 +137,9 @@ class _FakeConn:
         self.fetch = mock.AsyncMock(return_value=[])
 
 
-def _stub_context_deps(monkeypatch, *, ak_items, db_actions, cutoff_rules):
+def _stub_context_deps(
+    monkeypatch, *, ak_items, db_actions, cutoff_rules, watchlist=None
+):
     """Wire build_report_context's I/O to deterministic fakes."""
     conn = _FakeConn()
     monkeypatch.setattr(
@@ -177,6 +181,11 @@ def _stub_context_deps(monkeypatch, *, ak_items, db_actions, cutoff_rules):
     )
     monkeypatch.setattr(
         service.repository,
+        "get_user_watchlist_context",
+        mock.AsyncMock(return_value=watchlist or []),
+    )
+    monkeypatch.setattr(
+        service.repository,
         "get_pre_market_cutoff_rules",
         mock.AsyncMock(return_value=cutoff_rules),
     )
@@ -206,67 +215,62 @@ def _stub_context_deps(monkeypatch, *, ak_items, db_actions, cutoff_rules):
 
 
 @pytest.mark.asyncio
-async def test_akshare_actions_merged_with_instrument_id(monkeypatch) -> None:
-    ak_items = [
-        {
-            "symbol": "600519",
-            "name": "贵州茅台",
-            "actionType": "CASH_DIVIDEND",
-            "exDate": "2026-06-18",
-            "payDate": "2026-06-24",
-            "source": "akshare/stock_dividend",
-        },
-    ]
-    conn = _stub_context_deps(
-        monkeypatch, ak_items=ak_items, db_actions=[], cutoff_rules=[]
-    )
-
-    ctx = await service.build_report_context(conn, "tenant-1", "PRE_MARKET")
-    actions = ctx["preMarket"]["corporateActions"]
-
-    assert len(actions) == 1
-    merged = actions[0]
-    assert merged["instrumentId"] == "inst-kweichow"  # mapped from 600519.SH
-    assert merged["symbol"] == "600519"
-    assert merged["exDate"] == "2026-06-18"
-    assert merged["payDate"] == "2026-06-24"
-    assert merged["source"] == "akshare/stock_dividend"
-
-
-@pytest.mark.asyncio
-async def test_akshare_dedup_against_db_corporate_actions(monkeypatch) -> None:
-    ak_items = [
-        {
-            "symbol": "600519",
-            "name": "贵州茅台",
-            "actionType": "CASH_DIVIDEND",
-            "exDate": "2026-06-18",
-            "payDate": "2026-06-24",
-            "source": "akshare/stock_dividend",
-        },
-    ]
+async def test_context_reads_persisted_actions_for_holdings_and_watchlist_window(
+    monkeypatch,
+) -> None:
     db_actions = [
         {
             "instrumentId": "inst-kweichow",
             "symbol": "600519",
             "name": "贵州茅台",
-            "actionType": "CASH_DIVIDEND",
-            "exDate": "2026-06-18",
-            "recordDate": None,
-            "payDate": "2026-06-24",
-            "params": {},
+            "actionType": "EX_RIGHTS",
+            "actionDate": "2026-09-08",
+            "exDate": "2026-09-08",
+            "summary": "除权除息",
+            "sourceEventId": "manual-csv:event-1",
             "revision": 1,
-        },
+        }
     ]
     conn = _stub_context_deps(
-        monkeypatch, ak_items=ak_items, db_actions=db_actions, cutoff_rules=[]
+        monkeypatch,
+        ak_items=[],
+        db_actions=db_actions,
+        cutoff_rules=[],
+        watchlist=[
+            {
+                "instrumentId": "inst-watch",
+                "symbol": "300750",
+                "name": "宁德时代",
+                "type": "STOCK",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "now_shanghai",
+        lambda: datetime(2026, 9, 7, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
-    ctx = await service.build_report_context(conn, "tenant-1", "PRE_MARKET")
+    async def provider_must_not_run(*_args, **_kwargs):
+        raise AssertionError("production reports must only use persisted actions")
+
+    monkeypatch.setattr(service.market_data, "fetch_corporate_actions", provider_must_not_run)
+
+    ctx = await service.build_report_context(
+        conn, "tenant-1", "PRE_MARKET", audience_user_id="user-1"
+    )
     actions = ctx["preMarket"]["corporateActions"]
-    # DB record already covers this (instrumentId, actionType, exDate): no dup.
-    assert len(actions) == 1
-    assert actions[0]["revision"] == 1
+
+    assert actions == db_actions
+    call = service.repository.get_pre_market_corporate_actions.await_args
+    assert set(call.args[1]) == {
+        "inst-kweichow",
+        "inst-pingan",
+        "inst-fund",
+        "inst-watch",
+    }
+    assert call.args[2].isoformat() == "2026-09-07"
+    assert call.args[3].isoformat() == "2026-09-10"
 
 
 @pytest.mark.asyncio

@@ -17,9 +17,11 @@ from backend.common.tenancy import TenantContext
 from backend.dependencies import now_shanghai
 from backend.portfolio.scope import AssetScope
 from backend.reports.pre_market import (
-    ACTION_LABELS,
+    action_list_text,
     cutoff_push_text,
     cutoff_text,
+    format_action_entry,
+    holding_health_push_text,
     holding_impact_text,
     instrument_label,
     reminder_has_data,
@@ -63,7 +65,9 @@ def _missing_quote_reason(item: dict, now: datetime) -> str:
     return "非交易时段：交易日 09:30-15:00 为连续竞价"
 
 
-def _watchlist_text(context: dict, *, now: datetime | None = None) -> str:
+def _watchlist_text(
+    context: dict, *, now: datetime | None = None, include_actions: bool = True
+) -> str:
     """关注标的最新行情与数据时效；无行情时按类型/时段分型说明原因。"""
     now = now or now_shanghai()
     watched = context.get("watchlist") or []
@@ -98,9 +102,12 @@ def _watchlist_text(context: dict, *, now: datetime | None = None) -> str:
         )
     if not parts:
         return _MISSING
+    quote_text = "；".join(parts)
+    if not include_actions:
+        return quote_text
     actions = _watched_actions(context)
     action_text = "；".join(actions) if actions else _MISSING
-    return f"{'；'.join(parts)}。今日公司行动：{action_text}。"
+    return f"{quote_text}。今日公司行动：{action_text}。"
 
 
 def _watched_actions(context: dict) -> list[str]:
@@ -124,10 +131,13 @@ def _watched_actions(context: dict) -> list[str]:
         if instrument_id not in watched_ids or instrument_id in held_ids:
             # Holdings already carry their action in the impact section.
             continue
-        action_label = ACTION_LABELS.get(
-            str(action.get("actionType") or ""), "公司行动"
+        actions.append(
+            format_action_entry(
+                action,
+                str((context.get("preMarket") or {}).get("reportDate") or ""),
+                include_summary=True,
+            )
         )
-        actions.append(f"{instrument_label(action)}今日{action_label}")
     return actions
 
 
@@ -207,14 +217,15 @@ def _clip(text: str, limit: int) -> str:
 
 
 def format_push_content(context: dict) -> str:
-    """Build a three-line WeCom summary capped at 200 characters."""
-    draft = build_report(context)
+    """Build a four-line WeCom summary capped at 200 characters."""
     reminder_text = cutoff_push_text(context)
+    watchlist_text = _watchlist_text(context, include_actions=False)
     return "\n".join(
         (
-            f"持仓：{_clip(str(draft['items'][0]['body']), 70)}",
-            f"关注：{_clip(str(draft['items'][1]['body']), 70)}",
-            f"提醒：{_clip(reminder_text, 40)}",
+            _clip(f"持仓：{holding_health_push_text(context)}", 45),
+            _clip(f"关注：{watchlist_text}", 35),
+            _clip(f"行动：{action_list_text(context, limit=3)}", 75),
+            _clip(f"提醒：{reminder_text}", 35),
         )
     )
 

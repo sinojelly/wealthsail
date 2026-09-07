@@ -22,7 +22,11 @@ ACTION_LABELS = {
     "MERGER": "合并事项",
     "CODE_CHANGE": "代码变更",
     "DELISTING": "退市事项",
+    "EX_RIGHTS": "除权除息",
+    "RIGHTS_ISSUE": "配股",
+    "OTHER": "其他重大公司行动",
 }
+_NO_RECORDED_ACTIONS = "今日及未来3天暂无已录入公司行动"
 
 
 def safe_decimal(value: object) -> Decimal | None:
@@ -76,10 +80,81 @@ def _overnight(pre: dict) -> str:
     return f"美股主要指数：{us_text}；A50期货：{a50_text}。"
 
 
-def _action_text(action: dict, *, today: bool) -> str:
-    action_label = ACTION_LABELS.get(str(action.get("actionType") or ""), "公司行动")
-    prefix = instrument_label(action)
-    return f"{prefix}{'今日' if today else ''}{action_label}"
+def _action_event_date(action: dict) -> str:
+    return str(
+        action.get("actionDate")
+        or action.get("exDate")
+        or action.get("payDate")
+        or ""
+    )[:10]
+
+
+def _report_date(context: dict) -> str:
+    return str((context.get("preMarket") or {}).get("reportDate") or "")[:10]
+
+
+def _action_label(action: dict) -> str:
+    action_type = str(action.get("actionType") or "")
+    if action_type == "CASH_DIVIDEND":
+        event_date = _action_event_date(action)
+        pay_date = str(action.get("payDate") or "")[:10]
+        ex_date = str(action.get("exDate") or "")[:10]
+        if event_date and pay_date and event_date == pay_date and event_date != ex_date:
+            return "分红派息"
+    return ACTION_LABELS.get(action_type, "公司行动")
+
+
+def _action_when(action: dict, report_date: str) -> str:
+    event_date = _action_event_date(action)
+    if not event_date or not report_date or event_date == report_date:
+        return "今日"
+    return event_date[5:10]
+
+
+def format_action_entry(
+    action: dict, report_date: str, *, include_summary: bool = False
+) -> str:
+    """Format one persisted event without turning a future fact into today's event."""
+    text = f"{instrument_label(action)}{_action_when(action, report_date)}{_action_label(action)}"
+    summary = str(action.get("summary") or "").strip()
+    if include_summary and summary and summary not in text:
+        text += f"：{summary}"
+    return text
+
+
+def relevant_actions(context: dict) -> list[dict]:
+    """Return actions scoped to this report's held or watched instruments."""
+    relevant_ids = _held_instrument_ids(context)
+    relevant_ids.update(
+        str(item.get("instrumentId"))
+        for item in (context.get("watchlist") or [])
+        if isinstance(item, dict) and item.get("instrumentId")
+    )
+    actions = (context.get("preMarket") or {}).get("corporateActions") or []
+    return [
+        action
+        for action in actions
+        if isinstance(action, dict)
+        and str(action.get("instrumentId") or "") in relevant_ids
+    ]
+
+
+def action_list_text(
+    context: dict, *, limit: int | None = None, entry_limit: int = 20
+) -> str:
+    """Summarize ordered user-scoped actions, preserving the total when folded."""
+    actions = relevant_actions(context)
+    if not actions:
+        return _NO_RECORDED_ACTIONS
+    selected = actions if limit is None else actions[:limit]
+    entries = [
+        _clip(format_action_entry(action, _report_date(context)), entry_limit)
+        for action in selected
+    ]
+    text = "；".join(entries)
+    if limit is not None and len(actions) > limit:
+        text += f"等共{len(actions)}条"
+    return text
 
 
 def _attention(pre: dict) -> str:
@@ -89,7 +164,9 @@ def _attention(pre: dict) -> str:
     actions = pre.get("corporateActions")
     action_text = (
         "；".join(
-            _action_text(item, today=True) for item in actions if isinstance(item, dict)
+            format_action_entry(item, str(pre.get("reportDate") or ""))
+            for item in actions
+            if isinstance(item, dict)
         )
         if isinstance(actions, list) and actions
         else _MISSING
@@ -132,7 +209,20 @@ def matched_actions(context: dict) -> list[dict]:
     ]
 
 
-def _action_impact_phrase(action: dict, *, concise: bool) -> str:
+def _is_ex_rights_action(action: dict) -> bool:
+    action_type = str(action.get("actionType") or "")
+    if action_type in {"EX_RIGHTS", "STOCK_DIVIDEND", "SPLIT"}:
+        return True
+    if action_type != "CASH_DIVIDEND":
+        return False
+    event_date = _action_event_date(action)
+    ex_date = str(action.get("exDate") or "")[:10]
+    return bool(ex_date and event_date == ex_date)
+
+
+def _action_impact_phrase(
+    action: dict, *, concise: bool, report_date: str = ""
+) -> str:
     """单条公司行动 → 持仓影响短语。
 
     ``concise=True`` 用于推送短句（如「招商银行今日除权，预计低开」），
@@ -140,23 +230,35 @@ def _action_impact_phrase(action: dict, *, concise: bool) -> str:
     """
     action_type = str(action.get("actionType") or "")
     name = instrument_label(action, include_symbol=not concise)
+    when = _action_when(action, report_date)
+    is_today = when == "今日"
+    action_label = _action_label(action)
+    summary = str(action.get("summary") or "").strip()
+    if not is_today:
+        detail = f"：{summary}" if summary and summary != action_label else ""
+        return f"{name}{when}{action_label}{detail}"
     if concise:
-        if action_type in _EX_RIGHTS_TYPES:
+        if _is_ex_rights_action(action):
             return f"{name}今日除权，预计低开"
-        return f"{name}今日{ACTION_LABELS.get(action_type, '发生公司行动')}，关注公告"
-    if action_type == "CASH_DIVIDEND":
+        return f"{name}今日{action_label}，关注公告"
+    dated_prefix = "今日" if action.get("actionDate") else ""
+    if action_type == "CASH_DIVIDEND" and _is_ex_rights_action(action):
         pay_date = str(action.get("payDate") or _MISSING)
         return (
-            f"{name}现金分红除权，价格可能出现技术性调整；"
+            f"{name}{dated_prefix}现金分红除权，价格可能出现技术性调整；"
             f"现金到账日为{pay_date}，实际收益以到账和税费为准"
         )
+    if action_type == "EX_RIGHTS":
+        return f"{name}今日除权除息，价格可能出现技术性调整；以正式公告为准"
+    if action_type == "CASH_DIVIDEND":
+        return f"{name}今日分红派息，请关注实际到账和税费"
     if action_type in {"STOCK_DIVIDEND", "SPLIT"}:
         return (
-            f"{name}{ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
+            f"{name}{dated_prefix}{ACTION_LABELS[action_type]}，持仓数量与价格口径可能调整，"
             "组合价值以正式结算结果为准"
         )
     return (
-        f"{name}{ACTION_LABELS.get(action_type, '发生公司行动')}，"
+        f"{name}{dated_prefix}{action_label}，"
         "请关注交易规则和账户正式通知"
     )
 
@@ -245,7 +347,8 @@ def holding_impact_text(context: dict) -> str:
         return _NO_HOLDINGS
     actions = matched_actions(context)
     action_phrases = [
-        _action_impact_phrase(action, concise=False) for action in actions
+        _action_impact_phrase(action, concise=False, report_date=_report_date(context))
+        for action in actions
     ]
     risk_phrases = _position_health_risks(context, concise=False)
     parts = action_phrases + risk_phrases
@@ -259,7 +362,10 @@ def impact_push_text(context: dict, *, limit: int = 2) -> str:
     if not _held_instrument_ids(context):
         return _NO_HOLDINGS
     actions = matched_actions(context)
-    action_phrases = [_action_impact_phrase(action, concise=True) for action in actions]
+    action_phrases = [
+        _action_impact_phrase(action, concise=True, report_date=_report_date(context))
+        for action in actions
+    ]
     risk_phrases = _position_health_risks(context, concise=True)
     parts = action_phrases + risk_phrases
     if not parts:
@@ -267,6 +373,19 @@ def impact_push_text(context: dict, *, limit: int = 2) -> str:
     text = "；".join(parts[:limit])
     if len(parts) > limit:
         text += f"等{len(parts)}项"
+    return text
+
+
+def holding_health_push_text(context: dict, *, limit: int = 2) -> str:
+    """Push-only holding health text; company actions have their own line."""
+    if not _held_instrument_ids(context):
+        return _NO_HOLDINGS
+    risks = _position_health_risks(context, concise=True)
+    if not risks:
+        return _HEALTHY_HOLDINGS
+    text = "；".join(risks[:limit])
+    if len(risks) > limit:
+        text += f"等{len(risks)}项"
     return text
 
 
@@ -504,9 +623,13 @@ def _focus_event_phrases(context: dict, *, limit: int = 3) -> list[str]:
 
     for action in matched_actions(context):
         # 焦点事件只展示"今天"：上下文带 reportDate 时严格按 exDate 过滤。
-        if report_date and str(action.get("exDate") or "") != report_date:
+        if report_date and _action_event_date(action) != report_date:
             continue
-        phrases.append(_clip_focus_phrase(_action_impact_phrase(action, concise=True)))
+        phrases.append(
+            _clip_focus_phrase(
+                _action_impact_phrase(action, concise=True, report_date=report_date)
+            )
+        )
         if len(phrases) >= limit:
             return phrases
 
@@ -570,10 +693,9 @@ def _operation_advice_candidates(context: dict) -> list[tuple[int, str, str]]:
 
     # P1 今日除权（仅持仓、仅今日）。
     for action in matched_actions(context):
-        if report_date and str(action.get("exDate") or "") != report_date:
+        if report_date and _action_event_date(action) != report_date:
             continue
-        action_type = str(action.get("actionType") or "")
-        if action_type not in _EX_RIGHTS_TYPES:
+        if not _is_ex_rights_action(action):
             continue
         name = instrument_label(action, include_symbol=False)
         add(
@@ -866,15 +988,7 @@ def format_push_content(context: dict) -> str:
         else overnight.split("A50期货：", 1)[1].rstrip("。")
     )
 
-    actions = pre.get("corporateActions") or []
-    action_text = (
-        "、".join(
-            f"{instrument_label(item, include_symbol=False)}{ACTION_LABELS.get(str(item.get('actionType') or ''), '公司行动')}"
-            for item in actions[:2]
-            if isinstance(item, dict)
-        )
-        or _MISSING
-    )
+    action_text = action_list_text(context, limit=3, entry_limit=30)
     economic = list_text(
         pre.get("economicEvents"), value_keys=("summary", "title", "name")
     )

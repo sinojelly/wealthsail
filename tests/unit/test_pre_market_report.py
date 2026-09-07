@@ -116,7 +116,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_700_chars() -> 
     assert "null" not in draft["summary"]
     assert push.splitlines() == [
         "🌏 隔夜市场：美股暂无；A50期货暂无",
-        "📌 今日关注：经济数据暂无；公司行动暂无；申赎状态暂无",
+        "📌 今日关注：经济数据暂无；公司行动今日及未来3天暂无已录入公司行动；申赎状态暂无",
         "📊 持仓影响：暂无持仓",
         "⏰ 今日提醒：今日无申赎截止提醒",
         "🎯 今日焦点：今日暂无重大事件关注",
@@ -124,6 +124,30 @@ def test_missing_fields_are_never_invented_and_push_stays_within_700_chars() -> 
         "💡 一句话总结：暂无",
     ]
     assert len(push) <= 700
+
+
+def test_standard_push_dates_future_actions_and_folds_after_three() -> None:
+    context = _context()
+    context["preMarket"]["reportDate"] = "2026-09-07"
+    context["preMarket"]["corporateActions"] = [
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": f"60003{index}",
+            "name": f"标的{index}",
+            "actionType": "OTHER",
+            "actionDate": f"2026-09-{7 + index:02d}",
+            "summary": f"事件{index}",
+        }
+        for index in range(4)
+    ]
+
+    attention = pre_market.format_push_content(context).splitlines()[1]
+
+    assert "标的0(600030)今日其他重大公司行动" in attention
+    assert "标的1(600031)09-08其他重大公司行动" in attention
+    assert "标的2(600032)09-09其他重大公司行动" in attention
+    assert "标的3" not in attention
+    assert "等共4条" in attention
 
 
 def test_push_states_cutoff_window_with_channel_caveat() -> None:
@@ -329,9 +353,11 @@ def test_push_renders_real_overnight_data_with_natural_prefix() -> None:
 class _QueryRecorder:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.args: list[tuple[object, ...]] = []
 
-    async def fetch(self, query: str, *_args):
+    async def fetch(self, query: str, *args):
         self.queries.append(query)
+        self.args.append(args)
         return []
 
 
@@ -343,11 +369,16 @@ async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutof
     instrument_ids = ["11111111-1111-1111-1111-111111111111"]
     trade_date = date(2026, 8, 31)
 
-    await repository.get_pre_market_corporate_actions(conn, instrument_ids, trade_date)
+    await repository.get_pre_market_corporate_actions(
+        conn, instrument_ids, trade_date, date(2026, 9, 3)
+    )
     await repository.get_pre_market_cutoff_rules(conn, instrument_ids, trade_date)
 
     assert len(conn.queries) == 2
     assert all("ia.effective_from <= $2" in query for query in conn.queries)
+    assert "WITH latest_revision AS" in conn.queries[0]
+    assert "action_date BETWEEN $2 AND $3" in conn.queries[0]
+    assert conn.args[0][1:] == (trade_date, date(2026, 9, 3))
     assert "rule.cutoff_time <= TIME '15:00'" in conn.queries[1]
 
 

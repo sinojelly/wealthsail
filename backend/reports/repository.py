@@ -72,19 +72,31 @@ async def get_user_watchlist_context(
 async def get_pre_market_corporate_actions(
     conn: asyncpg.Connection,
     instrument_ids: list[str],
-    trade_date: date,
+    start_date: date,
+    end_date: date,
 ) -> list[dict]:
-    """Read the latest revision of today's held-instrument corporate actions."""
+    """Read latest revisions for held/watched instruments in an inclusive window."""
     if not instrument_ids:
         return []
     rows = await conn.fetch(
         """
-        SELECT DISTINCT ON (ca.instrument_id, ca.action_type, ca.ex_date)
+        WITH latest_revision AS (
+            SELECT DISTINCT ON (source_event_id)
+                   instrument_id, action_type, action_date, ex_date,
+                   record_date, pay_date, params, source_id, summary,
+                   source_event_id, revision, source_ref, created_at
+              FROM market.corporate_actions
+             ORDER BY source_event_id, revision DESC, created_at DESC
+        )
+        SELECT
                ca.instrument_id, COALESCE(alias.ticker, '') AS symbol,
-               instrument.canonical_name AS name, ca.action_type, ca.ex_date,
-               ca.record_date, ca.pay_date, ca.params, ca.revision
-          FROM market.corporate_actions ca
+               instrument.canonical_name AS name, ca.action_type,
+               ca.action_date, ca.ex_date, ca.record_date, ca.pay_date,
+               ca.params, ca.summary, ca.source_event_id, ca.revision,
+               ca.source_ref, source.name AS source_name
+          FROM latest_revision ca
           JOIN reference.instruments instrument ON instrument.id = ca.instrument_id
+          LEFT JOIN reference.data_sources source ON source.id = ca.source_id
           LEFT JOIN LATERAL (
               SELECT ia.alias_value AS ticker
                 FROM reference.instrument_aliases ia
@@ -94,13 +106,14 @@ async def get_pre_market_corporate_actions(
                  AND (ia.effective_to IS NULL OR ia.effective_to >= $2)
                ORDER BY ia.effective_from DESC
                LIMIT 1
-          ) alias ON TRUE
+         ) alias ON TRUE
          WHERE ca.instrument_id = ANY($1::uuid[])
-           AND ca.ex_date = $2
-         ORDER BY ca.instrument_id, ca.action_type, ca.ex_date, ca.revision DESC
+           AND ca.action_date BETWEEN $2 AND $3
+         ORDER BY ca.action_date, symbol, ca.action_type, ca.source_event_id
         """,
         instrument_ids,
-        trade_date,
+        start_date,
+        end_date,
     )
     result: list[dict] = []
     for row in rows:
@@ -116,12 +129,17 @@ async def get_pre_market_corporate_actions(
                 "symbol": str(row["symbol"] or ""),
                 "name": str(row["name"]),
                 "actionType": str(row["action_type"]),
-                "exDate": row["ex_date"].isoformat(),
+                "actionDate": row["action_date"].isoformat(),
+                "exDate": row["ex_date"].isoformat() if row["ex_date"] else None,
                 "recordDate": row["record_date"].isoformat()
                 if row["record_date"]
                 else None,
                 "payDate": row["pay_date"].isoformat() if row["pay_date"] else None,
                 "params": params if isinstance(params, dict) else {},
+                "summary": str(row["summary"]),
+                "sourceEventId": str(row["source_event_id"]),
+                "sourceName": str(row["source_name"] or "UNATTRIBUTED"),
+                "sourceRef": str(row["source_ref"]) if row["source_ref"] else None,
                 "revision": int(row["revision"]),
             }
         )

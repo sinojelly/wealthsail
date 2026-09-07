@@ -401,6 +401,63 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if not api_reads or public_pre_market_read or forbidden_effective_privileges:
         raise RuntimeError("pre-market reference read boundary is missing or unsafe")
 
+    corporate_action_columns = {
+        row["column_name"]: row
+        for row in await conn.fetch(
+            """
+            SELECT column_name, is_nullable
+              FROM information_schema.columns
+             WHERE table_schema = 'market'
+               AND table_name = 'corporate_actions'
+               AND column_name IN (
+                   'action_date', 'summary', 'source_event_id', 'source_ref'
+               )
+            """
+        )
+    }
+    corporate_action_unique = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(constraint.oid)
+          FROM pg_constraint constraint
+          JOIN pg_class relation ON relation.oid = constraint.conrelid
+          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'market'
+           AND relation.relname = 'corporate_actions'
+           AND constraint.conname =
+               'corporate_actions_source_event_id_revision_key'
+        """
+    )
+    corporate_action_source = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM reference.data_sources
+             WHERE name = 'MANUAL_CORPORATE_ACTIONS'
+               AND source_type = 'MARKET_DATA'
+               AND status = 'ACTIVE'
+        )
+        """
+    )
+    required_corporate_action_columns = {
+        "action_date",
+        "summary",
+        "source_event_id",
+        "source_ref",
+    }
+    required_not_null_columns = {"action_date", "summary", "source_event_id"}
+    if (
+        set(corporate_action_columns) != required_corporate_action_columns
+        or any(
+            corporate_action_columns[name]["is_nullable"] != "NO"
+            for name in required_not_null_columns
+        )
+        or corporate_action_unique != "UNIQUE (source_event_id, revision)"
+        or not corporate_action_source
+    ):
+        raise RuntimeError(
+            "corporate action ingestion contract is missing or unsafe"
+        )
+
     exposed_writes = await conn.fetchval(
         """
         SELECT COUNT(*)

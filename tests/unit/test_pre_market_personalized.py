@@ -99,7 +99,10 @@ def test_personalized_report_reports_held_corporate_action_impact() -> None:
                         "symbol": "600036",
                         "name": "招商银行",
                         "actionType": "CASH_DIVIDEND",
+                        "actionDate": "2026-09-07",
+                        "exDate": "2026-09-07",
                         "payDate": "2026-09-10",
+                        "summary": "现金分红除息",
                     }
                 ]
             },
@@ -107,7 +110,7 @@ def test_personalized_report_reports_held_corporate_action_impact() -> None:
     )
 
     impact = draft["items"][0]["body"]
-    assert "招商银行(600036)现金分红除权" in impact
+    assert "招商银行(600036)今日现金分红除权" in impact
     assert "2026-09-10" in impact
     assert draft["items"][0]["quality"] == "FRESH"
 
@@ -132,6 +135,95 @@ def test_personalized_report_reports_watched_corporate_action() -> None:
     body = draft["items"][1]["body"]
     assert "贵州茅台(600519)今日拆股除权" in body
     assert draft["items"][1]["quality"] == "FRESH"
+
+
+def test_personalized_report_renders_all_four_days_and_action_categories() -> None:
+    draft = pre_market_personalized.build_report(
+        _context(
+            positions=_positions(),
+            watchlist=_watchlist(),
+            pre_market={
+                "reportDate": "2026-09-07",
+                "corporateActions": [
+                    {
+                        "instrumentId": _HELD_ID,
+                        "symbol": "600036",
+                        "name": "招商银行",
+                        "actionType": "EX_RIGHTS",
+                        "actionDate": "2026-09-07",
+                        "exDate": "2026-09-07",
+                        "summary": "除权除息",
+                    },
+                    {
+                        "instrumentId": _HELD_ID,
+                        "symbol": "600036",
+                        "name": "招商银行",
+                        "actionType": "CASH_DIVIDEND",
+                        "actionDate": "2026-09-08",
+                        "payDate": "2026-09-08",
+                        "summary": "现金红利到账",
+                    },
+                    {
+                        "instrumentId": _WATCHED_ID,
+                        "symbol": "600519",
+                        "name": "贵州茅台",
+                        "actionType": "RIGHTS_ISSUE",
+                        "actionDate": "2026-09-09",
+                        "summary": "配股缴款开始",
+                    },
+                    {
+                        "instrumentId": _WATCHED_ID,
+                        "symbol": "600519",
+                        "name": "贵州茅台",
+                        "actionType": "OTHER",
+                        "actionDate": "2026-09-10",
+                        "summary": "重大资产事项",
+                    },
+                ],
+            },
+        )
+    )
+
+    bodies = {item["title"]: item["body"] for item in draft["items"]}
+    assert "招商银行(600036)今日除权除息" in bodies["持仓今日影响"]
+    assert "招商银行(600036)09-08分红派息" in bodies["持仓今日影响"]
+    assert "贵州茅台(600519)09-09配股" in bodies["关注标的动态"]
+    assert "贵州茅台(600519)09-10其他重大公司行动" in bodies["关注标的动态"]
+
+
+def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
+    actions = [
+        {
+            "instrumentId": _HELD_ID,
+            "symbol": f"60003{index}",
+            "name": f"标的{index}",
+            "actionType": "EX_RIGHTS" if index == 0 else "OTHER",
+            "actionDate": f"2026-09-{7 + index:02d}",
+            "summary": f"事件{index}",
+        }
+        for index in range(4)
+    ]
+    content = pre_market_personalized.format_push_content(
+        _context(
+            positions=_positions(),
+            pre_market={"reportDate": "2026-09-07", "corporateActions": actions},
+        )
+    )
+
+    assert "行动：" in content
+    assert "标的0" in content and "标的1" in content and "标的2" in content
+    assert "标的3" not in content
+    assert content.count("标的0") == 1
+    assert "等共4条" in content
+    assert len(content) <= 200
+
+
+def test_personalized_push_uses_honest_empty_action_copy() -> None:
+    content = pre_market_personalized.format_push_content(
+        _context(positions=_positions(), pre_market={"reportDate": "2026-09-07"})
+    )
+
+    assert "行动：今日及未来3天暂无已录入公司行动" in content
 
 
 def test_personalized_report_renders_cutoff_reminder() -> None:
@@ -178,8 +270,8 @@ def test_personalized_push_stays_under_200_characters() -> None:
     )
 
     assert len(content) <= 200
-    assert content.count("\n") == 2
-    assert "持仓：" in content and "关注：" in content and "提醒：" in content
+    assert content.count("\n") == 3
+    assert all(label in content for label in ("持仓：", "关注：", "行动：", "提醒："))
 
 
 def _install(monkeypatch, *, positions: list[dict], watchlist: list[dict]) -> dict:

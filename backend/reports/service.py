@@ -551,7 +551,7 @@ async def build_report_context(
                 instrument_ids.append(str(watched_id))
         report_date = now_shanghai().date()
         corporate_actions = await repository.get_pre_market_corporate_actions(
-            conn, instrument_ids, report_date
+            conn, instrument_ids, report_date, report_date + timedelta(days=3)
         )
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, instrument_ids, report_date
@@ -571,39 +571,10 @@ async def build_report_context(
             if six:
                 symbol_to_instrument[six] = str(iid)
 
-        # AkShare 补充公司行动（分红/送转），与 DB 记录按 (instrumentId,
-        # actionType, exDate) 去重合并，失败降级为空（下游「暂无」）。
-        held_symbols = list(symbol_to_instrument)
-        ak_actions = await market_data.fetch_corporate_actions(held_symbols)
-        seen_keys = {
-            (c.get("instrumentId"), c.get("actionType"), c.get("exDate"))
-            for c in corporate_actions
-        }
-        for ak in ak_actions:
-            iid = symbol_to_instrument.get(ak.get("symbol"))
-            if not iid:
-                continue
-            ex_iso = _to_iso_date(ak.get("exDate"))
-            if not ex_iso:
-                continue
-            key = (iid, ak.get("actionType"), ex_iso)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            corporate_actions.append(
-                {
-                    "instrumentId": iid,
-                    "symbol": ak.get("symbol"),
-                    "name": ak.get("name"),
-                    "actionType": ak.get("actionType"),
-                    "exDate": ex_iso,
-                    "recordDate": None,
-                    "payDate": _to_iso_date(ak.get("payDate")) or None,
-                    "params": {},
-                    "revision": 0,
-                    "source": ak.get("source", "akshare/stock_dividend"),
-                }
-            )
+        # Corporate actions are governed facts: report generation only reads
+        # persisted, revisioned rows.  The legacy AkShare adapter remains
+        # available to ingestion tooling but cannot inject transient facts into
+        # an auditable production report.
 
         # 申赎状态：从 reference.instrument_cutoff_rules 派生（有截止时间即视为
         # 当日可申赎，需在前置提醒中关注）。任何缺失均降级为空，绝不编造。
