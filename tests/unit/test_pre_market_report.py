@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -90,6 +91,8 @@ def test_holdings_markdown_sorts_formats_marks_and_escapes() -> None:
                 "quantity": "8500",
                 "avgCost": "38.82",
                 "price": "39.15",
+                "marketValue": "332775.00",
+                "pnlRate": "0.85",
                 "changePct": "0.84",
                 "weight": "34.85",
                 "quality": "FRESH",
@@ -103,6 +106,8 @@ def test_holdings_markdown_sorts_formats_marks_and_escapes() -> None:
                 "quantity": "62000",
                 "avgCost": "4.14",
                 "price": "4.12",
+                "marketValue": "255440.00",
+                "pnlRate": "-0.48",
                 "changePct": "-0.31",
                 "weight": "29.68",
                 "quality": "FRESH",
@@ -113,13 +118,45 @@ def test_holdings_markdown_sorts_formats_marks_and_escapes() -> None:
 
     lines = pre_market.holdings_markdown(context).splitlines()
 
-    assert lines[0] == "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+    assert lines[0] == "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 仓位 |"
     assert lines[2].startswith("| 600036 | 招商银行⚠️ | 8,500股 |")
     assert lines[3].startswith("| 510300 | 沪深300ETF | 62,000份 |")
     assert lines[4].startswith(r"| 110022 | 基金\|成长 A⚠️ | 118,420.52份 |")
-    assert "| +0.84% | 34.85% |" in lines[2]
-    assert "| -0.31% | 29.68% |" in lines[3]
-    assert "| -- | -- | -- |" in lines[4]
+    assert "| 39.15（持仓 +0.85%） | 332,775 | +0.84% | 34.85% |" in lines[2]
+    assert "| 4.12（持仓 -0.48%） | 255,440 | -0.31% | 29.68% |" in lines[3]
+    assert "| --（持仓 --） | -- | -- | -- |" in lines[4]
+
+
+def test_holdings_table_derives_complete_fund_values_from_summary() -> None:
+    """Fund rows must not lose market value, return, or weight when derivable."""
+    context = {
+        "summary": {"totalAsset": "1000.00"},
+        "positions": [
+            {
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "type": "场外基金",
+                "quantity": "100",
+                "avgCost": "1.50",
+                "price": "2.00",
+                "marketValue": None,
+                "pnlRate": None,
+                "changePct": "1.20",
+                "weight": None,
+                "quality": "STALE",
+                "changeQuality": "FRESH",
+            }
+        ],
+    }
+
+    row = pre_market.position_table_rows(context)[0]
+    markdown = pre_market.holdings_markdown(context)
+
+    assert row["marketValue"] == 200
+    assert row["pnlRate"].quantize(Decimal("0.01")) == Decimal("33.33")
+    assert row["weight"] == 20
+    assert "| 110022 | 易方达消费行业⚠️ | 100份 | 1.5 |" in markdown
+    assert "| 2（持仓 +33.33%） | 200 | +1.20% | 20.00% |" in markdown
 
 
 def test_position_table_rows_use_symbol_as_stable_tie_break() -> None:
@@ -165,7 +202,7 @@ def test_holdings_markdown_renders_non_finite_values_as_missing() -> None:
     }
 
     row = pre_market.holdings_markdown(context).splitlines()[2]
-    assert row == "| 600036 | 招商银行⚠️ | -- | -- | -- | -- | -- |"
+    assert row == "| 600036 | 招商银行⚠️ | -- | -- | --（持仓 --） | -- | -- | -- |"
 
 
 def test_holdings_markdown_neutralizes_inline_markdown_in_asset_names() -> None:
@@ -208,7 +245,7 @@ def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> 
     ]
     assert [item["title"] for item in draft["items"]] == expected_titles
     assert draft["summary"].startswith(
-        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 仓位 |"
     )
     assert draft["summary"].splitlines()[-7:] == [
         "1. 隔夜市场速览：美股主要指数：暂无；A50期货：暂无。",

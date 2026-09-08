@@ -63,24 +63,54 @@ def _position_quality(position: dict) -> str:
 def position_table_rows(context: dict) -> list[dict]:
     """Normalize and deterministically order holdings for report rendering."""
     rows: list[dict] = []
+    summary = context.get("summary")
+    total_asset = (
+        safe_decimal(summary.get("totalAsset"))
+        if isinstance(summary, dict)
+        else None
+    )
     for position in context.get("positions") or []:
         if not isinstance(position, dict):
             continue
         asset_type = str(position.get("type") or "").upper()
+        quantity = safe_decimal(position.get("quantity"))
+        avg_cost = safe_decimal(position.get("avgCost"))
+        price = safe_decimal(position.get("price"))
+        market_value = safe_decimal(position.get("marketValue"))
+        if market_value is None and quantity is not None and price is not None:
+            market_value = quantity * price
+        pnl_rate = safe_decimal(position.get("pnlRate"))
+        if (
+            pnl_rate is None
+            and price is not None
+            and avg_cost is not None
+            and avg_cost != 0
+        ):
+            pnl_rate = (price / avg_cost - Decimal("1")) * Decimal("100")
+        weight = safe_decimal(position.get("weight"))
+        if (
+            weight is None
+            and market_value is not None
+            and total_asset is not None
+            and total_asset > 0
+        ):
+            weight = market_value / total_asset * Decimal("100")
         rows.append(
             {
                 "symbol": str(position.get("symbol") or "--"),
                 "name": str(position.get("name") or "未命名标的"),
-                "quantity": safe_decimal(position.get("quantity")),
+                "quantity": quantity,
                 "unit": (
                     "股"
                     if asset_type in {"A股", "股票", "STOCK", "CN_STOCK"}
                     else "份"
                 ),
-                "avgCost": safe_decimal(position.get("avgCost")),
-                "price": safe_decimal(position.get("price")),
+                "avgCost": avg_cost,
+                "price": price,
+                "marketValue": market_value,
+                "pnlRate": pnl_rate,
                 "changePct": safe_decimal(position.get("changePct")),
-                "weight": safe_decimal(position.get("weight")),
+                "weight": weight,
                 "quality": _position_quality(position),
             }
         )
@@ -122,23 +152,28 @@ def _format_table_number(
 
 
 def holdings_markdown(context: dict) -> str:
-    """Render the seven-column GFM holdings table or an explicit empty state."""
+    """Render the eight-column GFM holdings table or an explicit empty state."""
     rows = position_table_rows(context)
     if not rows:
         return "暂无持仓，今日市场概况"
     lines = [
-        "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 仓位 |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         warning = "⚠️" if row["quality"] in {"STALE", "UNAVAILABLE"} else ""
         quantity = _format_table_number(row["quantity"], grouped=True)
+        price = _format_table_number(row["price"], grouped=True)
+        pnl_rate = _format_table_number(
+            row["pnlRate"], places=2, signed=True, suffix="%"
+        )
         cells = (
             row["symbol"],
             f'{row["name"]}{warning}',
             f'{quantity}{row["unit"]}' if quantity != "--" else "--",
             _format_table_number(row["avgCost"]),
-            _format_table_number(row["price"]),
+            f"{price}（持仓 {pnl_rate}）",
+            _format_table_number(row["marketValue"], grouped=True),
             _format_table_number(
                 row["changePct"], places=2, signed=True, suffix="%"
             ),

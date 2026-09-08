@@ -1813,6 +1813,97 @@ button:disabled {
   color: #059669;
   font-weight: 700;
 }
+.report-holdings-table-card {
+  margin: 12px 0 16px;
+  overflow: hidden;
+  border: 1px solid var(--slate-200);
+  border-radius: 12px;
+  background: white;
+}
+.report-holdings-table-card .report-markdown-table-scroll {
+  margin: 0;
+}
+.report-summary-markdown .report-holdings-table {
+  min-width: 860px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.report-summary-markdown .report-holdings-table th,
+.report-summary-markdown .report-holdings-table td {
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--slate-100);
+  vertical-align: middle;
+}
+.report-summary-markdown .report-holdings-table th {
+  color: var(--slate-500);
+  background: var(--slate-50);
+  font-size: 10px;
+}
+.report-summary-markdown .report-holdings-table th:nth-child(n + 3),
+.report-summary-markdown .report-holdings-table td:nth-child(n + 3) {
+  text-align: right;
+  white-space: nowrap;
+}
+.report-summary-markdown .report-holdings-table th:nth-child(1) { width: 10%; }
+.report-summary-markdown .report-holdings-table th:nth-child(2) { width: 22%; }
+.report-summary-markdown .report-holdings-table th:nth-child(3) { width: 13%; }
+.report-summary-markdown .report-holdings-table th:nth-child(4) { width: 12%; }
+.report-summary-markdown .report-holdings-table th:nth-child(5) { width: 14%; }
+.report-summary-markdown .report-holdings-table th:nth-child(6) { width: 13%; }
+.report-summary-markdown .report-holdings-table th:nth-child(7) { width: 9%; }
+.report-summary-markdown .report-holdings-table th:nth-child(8) { width: 7%; }
+.report-summary-markdown .report-holdings-table td:nth-child(1) {
+  color: var(--slate-500);
+  font-variant-numeric: tabular-nums;
+}
+.report-summary-markdown .report-holdings-table td:nth-child(2) {
+  color: var(--slate-900);
+  font-weight: 700;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.report-summary-markdown .report-holdings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.report-holding-price {
+  font-variant-numeric: tabular-nums;
+}
+.report-holding-price-value,
+.report-holding-return {
+  display: block;
+}
+.report-holding-price-value {
+  color: var(--slate-900);
+  font-size: 12px;
+  font-weight: 750;
+}
+.report-holding-return {
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.2;
+}
+.report-holdings-legend {
+  display: flex;
+  gap: 18px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--slate-100);
+  color: var(--slate-500);
+  font-size: 9px;
+}
+.report-holdings-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.report-holdings-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.report-legend-up { background: #ef626c; }
+.report-legend-down { background: #43b91d; }
 .section-title {
   margin-bottom: 13px;
 }

@@ -4,7 +4,9 @@
 
 **Goal:** Add a grounded holdings table to the 08:35 personalized pre-market audit report, render it as a responsive GFM table on Web, and send a WeCom-compatible compact holdings summary under 200 characters.
 
-**Architecture:** Enrich the report-only PRE_MARKET context with persisted, price-aligned quote metadata without changing the public portfolio API. Pure backend formatters create a deterministic seven-column GFM table for the stored report and complete-line compact rows for WeCom. A focused React Markdown component renders the stored summary safely and applies A-share rise/fall colors.
+**Architecture:** Enrich the report-only PRE_MARKET context with persisted, price-aligned quote metadata without changing the public portfolio API. Pure backend formatters create a deterministic eight-column GFM table for the stored report and complete-line compact rows for WeCom. A focused React Markdown component renders the stored summary safely, uses a fixed aligned holdings layout, shows cumulative return below the latest price, and applies A-share rise/fall colors.
+
+> **2026-09-08 布局修订：** 本计划下方保留的七列代码片段是首次实施时的历史步骤。当前生效契约以设计文档和生产测试为准：新增“市值”列，最新价下方展示 `pnlRate`，并在 `weight` 缺失时使用 `marketValue ÷ summary.totalAsset` 补齐股票及基金仓位。
 
 **Tech Stack:** Python 3.12, FastAPI service layer, asyncpg/PostgreSQL, pytest, React 19, TypeScript, react-markdown 10, remark-gfm 4, Vitest, Testing Library, CSS.
 

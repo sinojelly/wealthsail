@@ -89,7 +89,7 @@ def test_personalized_report_prepends_holdings_table_without_changing_items() ->
     )
 
     assert draft["summary"].startswith(
-        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 仓位 |"
     )
     assert "| 600036 | 招商银行" in draft["summary"]
     assert [item["title"] for item in draft["items"]] == [
