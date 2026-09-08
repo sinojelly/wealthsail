@@ -23,6 +23,8 @@
 
 ## Task 1：扩展数据库契约、权限与迁移校验
 
+**Status:** 已完成（058 契约；059 作为不可变历史后的前向最小读取授权）。
+
 **Files:**
 
 - Create: `migrations/058_corporate_actions_multisource_sync.sql`
@@ -30,17 +32,17 @@
 - Modify: `tests/unit/test_migration_runner.py`
 - Create: `tests/unit/test_corporate_actions_migration_contract.py`
 
-- [ ] **Step 1: 写入失败的迁移契约测试。**
+- [x] **Step 1: 写入失败的迁移契约测试。**
 
   断言最新迁移为 058，SQL 为 `market.corporate_actions` 添加 `quality_status` 与 `verified_by`，注册两个数据源，并创建仅由迁移所有者写表的受控函数。断言 Worker 获得函数 `EXECUTE`，却没有表的 `INSERT`、`UPDATE` 或 `DELETE` 权限。
 
-- [ ] **Step 2: 运行该测试，确认当前失败。**
+- [x] **Step 2: 运行该测试，确认当前失败。**
 
   Run: `pytest tests/unit/test_migration_runner.py tests/unit/test_corporate_actions_migration_contract.py -q`
 
   Expected: 失败原因只涉及缺少 058 迁移或相应 SQL 契约。
 
-- [ ] **Step 3: 新增迁移。**
+- [x] **Step 3: 新增迁移。**
 
   迁移应：
 
@@ -50,17 +52,17 @@
   4. 创建 `market.upsert_corporate_action_sync(...)`，以 `source_event_id + revision` 实现幂等写入，安全合并 `verified_by`，并记录 `source_ref`；
   5. 只向 Worker 角色授予该函数的 `EXECUTE`，保持公司行动表的直接写权限被撤销。
 
-- [ ] **Step 4: 扩展迁移读回校验。**
+- [x] **Step 4: 扩展迁移读回校验。**
 
   在 `scripts/migrate.py` 的读回阶段验证字段、质量约束、两个数据源、函数和运行时授权，失败时给出明确错误。
 
-- [ ] **Step 5: 再次运行测试。**
+- [x] **Step 5: 再次运行测试。**
 
   Run: `pytest tests/unit/test_migration_runner.py tests/unit/test_corporate_actions_migration_contract.py -q`
 
   Expected: 全部通过。
 
-- [ ] **Step 6: 提交迁移契约。**
+- [x] **Step 6: 提交迁移契约。**
 
   ```powershell
   git add migrations/058_corporate_actions_multisource_sync.sql scripts/migrate.py tests/unit/test_migration_runner.py tests/unit/test_corporate_actions_migration_contract.py
@@ -68,6 +70,8 @@
   ```
 
 ## Task 2：封装 baostock 分红查询
+
+**Status:** 已完成。
 
 **Files:**
 
@@ -106,6 +110,8 @@
 
 ## Task 3：实现双源归一化、合并与质量判定
 
+**Status:** 已完成。
+
 **Files:**
 
 - Create: `backend/integrations/corporate_actions.py`
@@ -137,6 +143,8 @@
   ```
 
 ## Task 4：添加全局同步任务与受控写入
+
+**Status:** 已完成。
 
 **Files:**
 
@@ -170,6 +178,8 @@
 
 ## Task 5：注册交易日 06:00 Worker 调度
 
+**Status:** 已完成。
+
 **Files:**
 
 - Modify: `backend/jobs/scheduler.py`
@@ -202,6 +212,8 @@
   ```
 
 ## Task 6：将质量和来源纳入盘前简报
+
+**Status:** 已完成。
 
 **Files:**
 
@@ -237,6 +249,8 @@
 
 ## Task 7：补充部署手册并完成端到端验证
 
+**Status:** 本地文档与全量验证已完成；生产 dry-run、执行迁移及次日 06:00 观察待部署环境执行。
+
 **Files:**
 
 - Modify: `docs/11-运行维护手册.md`（若实际文件名不同，以仓库现有 11 文档为准）
@@ -245,7 +259,7 @@
 
 - [ ] **Step 1: 记录运维验证步骤。**
 
-  写明 058 的 dry-run、执行迁移、确认 Worker 权限、手动运行一次同步、查询质量状态、检查次日 06:00 日志，以及人工 CSV 仍用于场外基金的操作示例。不得将数据库凭据写入文档。
+  写明 058/059 的 dry-run、执行迁移、确认 Worker 权限、手动运行一次同步、查询质量状态、检查次日 06:00 日志，以及人工 CSV 仍用于场外基金的操作示例。不得将数据库凭据写入文档。
 
 - [ ] **Step 2: 执行局部与全量验证。**
 
@@ -261,7 +275,7 @@
 
   `python scripts/migrate.py --environment production --confirm-target <已审计数据库主机:端口/数据库> --dry-run`
 
-  Expected: 仅计划 058，且读回校验描述公司行动多源契约。
+  Expected: 仅计划 058 与 059，且读回校验描述公司行动多源契约。
 
 - [ ] **Step 4: 提交文档和验证入口。**
 
@@ -275,7 +289,7 @@
 - [ ] `git diff --check` 无输出。
 - [ ] 所有新增 Python 文件通过项目格式化与静态检查入口。
 - [ ] 单元测试不访问真实 AkShare 或 baostock 网络。
-- [ ] 058 迁移在空库与已有 057 数据的库上均可安全执行。
+- [ ] 058/059 迁移在空库与已有 057 数据的库上均可安全执行（待部署环境验证）。
 - [ ] Worker 直接写 `market.corporate_actions` 的权限仍为拒绝。
 - [ ] 周末与交易日历休市日不会调度同步任务。
 - [ ] 自动抓取不支持的场外基金不会误报抓取成功。

@@ -22,15 +22,17 @@ sqlglot = pytest.importorskip("sqlglot", reason="sqlglot not installed")
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = ROOT / "migrations"
 
-# Historical files already applied in production that sqlglot's Postgres
-# dialect cannot fully model (PL/pgSQL DO blocks, CREATE EXTENSION, some
-# COMMENT/ALTER forms). They are exempt from parsing, not from review.
+# Migrations containing PostgreSQL forms that sqlglot's dialect cannot fully
+# model (PL/pgSQL DO blocks, CREATE EXTENSION, and array-typed COMMENT ON
+# FUNCTION signatures) are exempt from parsing, not from review. Their
+# migration-specific contract tests plus deployment readback remain mandatory.
 PARSER_BLIND_SPOTS = frozenset(
     {
         "005_rls_security_policies.sql",
         "007_security_and_integrity_hardening.sql",
         "032_tenant_user_account_ownership.sql",
         "040_report_job_session_uniqueness.sql",
+        "058_corporate_actions_multisource_sync.sql",
     }
 )
 
