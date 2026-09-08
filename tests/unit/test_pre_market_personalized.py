@@ -281,13 +281,13 @@ def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
     assert content.splitlines()[:3] == [
         "**盘前持仓概览**",
         "```",
-        "📉 标的0(600000)  仓位30.00% 当日-1.00%",
+        "📉 标的0(600000) 仓位30.00% 当日-1.00%",
     ]
-    assert "📈 标的2(600002)  仓位28.00% 当日+1.00%" in content
-    assert "📈 标的10(600010) 仓位20.00% 当日+9.00% ⚠️" in content
+    assert "📈 标的2(600002) 仓位28.00% 当日+1.00%" in content
+    assert "📈 标的10(600010) 仓位20.00% 当日+9.00%" in content
     assert all(f"6000{index:02d}" in content for index in range(11))
     assert "| 代码 |" not in content
-    assert "⚠️ 表示该标的数据质量不是 FRESH" in content
+    assert "⚠️" not in content
 
 
 def test_personalized_push_keeps_full_name_in_aligned_list() -> None:
