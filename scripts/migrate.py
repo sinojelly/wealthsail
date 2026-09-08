@@ -410,7 +410,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
              WHERE table_schema = 'market'
                AND table_name = 'corporate_actions'
                AND column_name IN (
-                   'action_date', 'summary', 'source_event_id', 'source_ref'
+                   'action_date', 'summary', 'source_event_id', 'source_ref',
+                   'quality_status', 'verified_by'
                )
             """
         )
@@ -427,15 +428,32 @@ async def _readback(conn: asyncpg.Connection) -> None:
                'corporate_actions_source_event_id_revision_key'
         """
     )
-    corporate_action_source = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1
+    corporate_action_sources = {
+        row["name"]
+        for row in await conn.fetch(
+            """
+            SELECT name
               FROM reference.data_sources
-             WHERE name = 'MANUAL_CORPORATE_ACTIONS'
+             WHERE name = ANY($1::TEXT[])
                AND source_type = 'MARKET_DATA'
                AND status = 'ACTIVE'
+            """,
+            [
+                "MANUAL_CORPORATE_ACTIONS",
+                "AKSHARE_CORPORATE_ACTIONS",
+                "BAOSTOCK_CORPORATE_ACTIONS",
+            ],
         )
+    }
+    corporate_action_quality_constraint = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(constraint.oid)
+          FROM pg_constraint constraint
+          JOIN pg_class relation ON relation.oid = constraint.conrelid
+          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'market'
+           AND relation.relname = 'corporate_actions'
+           AND constraint.conname = 'corporate_actions_quality_status_check'
         """
     )
     required_corporate_action_columns = {
@@ -443,8 +461,16 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "summary",
         "source_event_id",
         "source_ref",
+        "quality_status",
+        "verified_by",
     }
-    required_not_null_columns = {"action_date", "summary", "source_event_id"}
+    required_not_null_columns = {
+        "action_date",
+        "summary",
+        "source_event_id",
+        "quality_status",
+        "verified_by",
+    }
     if (
         set(corporate_action_columns) != required_corporate_action_columns
         or any(
@@ -452,11 +478,64 @@ async def _readback(conn: asyncpg.Connection) -> None:
             for name in required_not_null_columns
         )
         or corporate_action_unique != "UNIQUE (source_event_id, revision)"
-        or not corporate_action_source
+        or corporate_action_sources
+        != {
+            "MANUAL_CORPORATE_ACTIONS",
+            "AKSHARE_CORPORATE_ACTIONS",
+            "BAOSTOCK_CORPORATE_ACTIONS",
+        }
+        or not corporate_action_quality_constraint
+        or any(
+            value not in corporate_action_quality_constraint
+            for value in ("FRESH", "STALE", "UNAVAILABLE", "CONFLICT")
+        )
     ):
         raise RuntimeError(
             "corporate action ingestion contract is missing or unsafe"
         )
+
+    corporate_action_sync_function = (
+        "market.upsert_corporate_action_sync("
+        "uuid,text,date,date,date,jsonb,text,text,text,text[])"
+    )
+    corporate_action_sync_security = await conn.fetchrow(
+        """
+        SELECT procedure.prosecdef,
+               COALESCE(procedure.proconfig, ARRAY[]::TEXT[]) AS proconfig
+          FROM pg_proc procedure
+          JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'market'
+           AND procedure.proname = 'upsert_corporate_action_sync'
+           AND pg_get_function_identity_arguments(procedure.oid) =
+               'p_instrument_id uuid, p_action_type text, p_action_date date, '
+               'p_record_date date, p_pay_date date, p_params jsonb, '
+               'p_source_event_id text, p_source_ref text, '
+               'p_quality_status text, p_verified_by text[]'
+        """
+    )
+    worker_can_sync_corporate_actions = bool(
+        await conn.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+            "wealthsail_worker",
+            corporate_action_sync_function,
+        )
+    )
+    api_can_sync_corporate_actions = bool(
+        await conn.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+            "wealthsail_api",
+            corporate_action_sync_function,
+        )
+    )
+    if (
+        corporate_action_sync_security is None
+        or not corporate_action_sync_security["prosecdef"]
+        or "search_path=market, reference, pg_catalog"
+        not in corporate_action_sync_security["proconfig"]
+        or not worker_can_sync_corporate_actions
+        or api_can_sync_corporate_actions
+    ):
+        raise RuntimeError("corporate action multi-source contract is missing or unsafe")
 
     exposed_writes = await conn.fetchval(
         """

@@ -46,7 +46,7 @@
 
   1. 为现有行回填 `quality_status = 'FRESH'`，默认 `verified_by = ARRAY['MANUAL']::text[]`；
   2. 校验质量状态只能为 `FRESH`、`STALE`、`UNAVAILABLE`、`CONFLICT`；
-  3. 为 `market.data_sources` 注册 `AKSHARE_CORPORATE_ACTIONS` 与 `BAOSTOCK_CORPORATE_ACTIONS`；
+  3. 为 `reference.data_sources` 注册 `AKSHARE_CORPORATE_ACTIONS` 与 `BAOSTOCK_CORPORATE_ACTIONS`；
   4. 创建 `market.upsert_corporate_action_sync(...)`，以 `source_event_id + revision` 实现幂等写入，安全合并 `verified_by`，并记录 `source_ref`；
   5. 只向 Worker 角色授予该函数的 `EXECUTE`，保持公司行动表的直接写权限被撤销。
 
