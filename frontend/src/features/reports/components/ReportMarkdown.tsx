@@ -19,8 +19,15 @@ function plainText(node: ReactNode): string {
 
 function movementClass(children: ReactNode): string | undefined {
   const value = plainText(children);
-  if (/^\+[0-9]+(?:\.[0-9]+)?%$/.test(value)) return "report-value-up";
-  if (/^-[0-9]+(?:\.[0-9]+)?%$/.test(value)) return "report-value-down";
+  // 场外基金的涨跌幅会附带最近净值日期，例如“-1.03%（9/7）”。
+  // 日期只是数据口径说明，不应影响涨跌颜色判断。
+  const datedPercentage = "[0-9]+(?:\\.[0-9]+)?%(?:（[0-9]{1,2}/[0-9]{1,2}）)?";
+  if (new RegExp(`^\\+${datedPercentage}$`).test(value)) {
+    return "report-value-up";
+  }
+  if (new RegExp(`^-${datedPercentage}$`).test(value)) {
+    return "report-value-down";
+  }
   return undefined;
 }
 

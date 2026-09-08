@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 _MISSING = "暂无"
 # 无持仓时的占位（区别于"有持仓但无事件"）。
@@ -34,6 +36,7 @@ _POSITION_QUALITY_PRIORITY = {
     "UNAVAILABLE": 3,
     "MISSING": 3,
 }
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def safe_decimal(value: object) -> Decimal | None:
@@ -73,6 +76,7 @@ def position_table_rows(context: dict) -> list[dict]:
         if not isinstance(position, dict):
             continue
         asset_type = str(position.get("type") or "").upper()
+        is_fund = asset_type in {"场外基金", "OFF_EXCHANGE_FUND", "FUND"}
         quantity = safe_decimal(position.get("quantity"))
         avg_cost = safe_decimal(position.get("avgCost"))
         price = safe_decimal(position.get("price"))
@@ -110,8 +114,10 @@ def position_table_rows(context: dict) -> list[dict]:
                 "marketValue": market_value,
                 "pnlRate": pnl_rate,
                 "changePct": safe_decimal(position.get("changePct")),
+                "changeSourceAsOf": position.get("changeSourceAsOf"),
                 "weight": weight,
                 "quality": _position_quality(position),
+                "isFund": is_fund,
             }
         )
     return sorted(
@@ -151,6 +157,45 @@ def _format_table_number(
     return f"{rendered}{suffix}"
 
 
+def _month_day(value: object) -> str | None:
+    parsed: date | None = None
+    if isinstance(value, datetime):
+        parsed = (
+            value.astimezone(_SHANGHAI_TZ).date()
+            if value.tzinfo is not None
+            else value.date()
+        )
+    elif isinstance(value, date):
+        parsed = value
+    elif value:
+        raw = str(value).strip().replace("Z", "+00:00")
+        try:
+            timestamp = datetime.fromisoformat(raw)
+            parsed = (
+                timestamp.astimezone(_SHANGHAI_TZ).date()
+                if timestamp.tzinfo is not None
+                else timestamp.date()
+            )
+        except ValueError:
+            try:
+                parsed = date.fromisoformat(raw[:10])
+            except ValueError:
+                parsed = None
+    return f"{parsed.month}/{parsed.day}" if parsed is not None else None
+
+
+def _day_change_text(row: dict) -> str:
+    if row["changePct"] is None:
+        return "暂不可用"
+    change = _format_table_number(
+        row["changePct"], places=2, signed=True, suffix="%"
+    )
+    if not row["isFund"]:
+        return change
+    source_date = _month_day(row.get("changeSourceAsOf"))
+    return f"{change}（{source_date or '日期暂不可用'}）"
+
+
 def holdings_markdown(context: dict) -> str:
     """Render the eight-column GFM holdings table or an explicit empty state."""
     rows = position_table_rows(context)
@@ -161,7 +206,7 @@ def holdings_markdown(context: dict) -> str:
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
-        warning = "⚠️" if row["quality"] in {"STALE", "UNAVAILABLE"} else ""
+        warning = "⚠️" if row["quality"] != "FRESH" else ""
         quantity = _format_table_number(row["quantity"], grouped=True)
         price = _format_table_number(row["price"], grouped=True)
         pnl_rate = _format_table_number(
@@ -174,12 +219,19 @@ def holdings_markdown(context: dict) -> str:
             _format_table_number(row["avgCost"]),
             f"{price}（持仓 {pnl_rate}）",
             _format_table_number(row["marketValue"], grouped=True),
-            _format_table_number(
-                row["changePct"], places=2, signed=True, suffix="%"
-            ),
+            _day_change_text(row),
             _format_table_number(row["weight"], places=2, suffix="%"),
         )
         lines.append("| " + " | ".join(_markdown_cell(cell) for cell in cells) + " |")
+    notes: list[str] = []
+    if any(row["quality"] != "FRESH" for row in rows):
+        notes.append(
+            "⚠️ 表示价格或涨跌数据质量不是 FRESH（估算、过期或不可用）"
+        )
+    if any(row["isFund"] for row in rows):
+        notes.append("基金“当日”采用最近披露净值涨跌幅，括号内为净值日期")
+    if notes:
+        lines.extend(("", "> " + "；".join(notes) + "。"))
     return "\n".join(lines)
 
 

@@ -124,7 +124,7 @@ def test_holdings_markdown_sorts_formats_marks_and_escapes() -> None:
     assert lines[4].startswith(r"| 110022 | 基金\|成长 A⚠️ | 118,420.52份 |")
     assert "| 39.15（持仓 +0.85%） | 332,775 | +0.84% | 34.85% |" in lines[2]
     assert "| 4.12（持仓 -0.48%） | 255,440 | -0.31% | 29.68% |" in lines[3]
-    assert "| --（持仓 --） | -- | -- | -- |" in lines[4]
+    assert "| --（持仓 --） | -- | 暂不可用 | -- |" in lines[4]
 
 
 def test_holdings_table_derives_complete_fund_values_from_summary() -> None:
@@ -142,6 +142,9 @@ def test_holdings_table_derives_complete_fund_values_from_summary() -> None:
                 "marketValue": None,
                 "pnlRate": None,
                 "changePct": "1.20",
+                "changeSourceAsOf": datetime(
+                    2026, 9, 7, 0, 0, tzinfo=ZoneInfo("UTC")
+                ),
                 "weight": None,
                 "quality": "STALE",
                 "changeQuality": "FRESH",
@@ -156,7 +159,49 @@ def test_holdings_table_derives_complete_fund_values_from_summary() -> None:
     assert row["pnlRate"].quantize(Decimal("0.01")) == Decimal("33.33")
     assert row["weight"] == 20
     assert "| 110022 | 易方达消费行业⚠️ | 100份 | 1.5 |" in markdown
-    assert "| 2（持仓 +33.33%） | 200 | +1.20% | 20.00% |" in markdown
+    assert "| 2（持仓 +33.33%） | 200 | +1.20%（9/7） | 20.00% |" in markdown
+    assert "基金“当日”采用最近披露净值涨跌幅" in markdown
+    assert "⚠️ 表示价格或涨跌数据质量不是 FRESH" in markdown
+
+
+def test_holdings_warning_is_shown_for_every_non_fresh_quality() -> None:
+    """ESTIMATED is not FRESH and therefore needs the same explained marker."""
+    markdown = pre_market.holdings_markdown(
+        {
+            "positions": [
+                {
+                    "symbol": "110022",
+                    "name": "易方达消费行业",
+                    "type": "场外基金",
+                    "quantity": "100",
+                    "quality": "ESTIMATED",
+                    "changeQuality": "FRESH",
+                }
+            ]
+        }
+    )
+
+    assert "易方达消费行业⚠️" in markdown
+    assert "⚠️ 表示价格或涨跌数据质量不是 FRESH" in markdown
+
+
+def test_fund_day_change_without_persisted_nav_is_explicitly_unavailable() -> None:
+    markdown = pre_market.holdings_markdown(
+        {
+            "positions": [
+                {
+                    "symbol": "110022",
+                    "name": "易方达消费行业",
+                    "type": "场外基金",
+                    "quantity": "100",
+                    "quality": "FRESH",
+                    "changeQuality": "UNAVAILABLE",
+                }
+            ]
+        }
+    )
+
+    assert "| 暂不可用 |" in markdown
 
 
 def test_position_table_rows_use_symbol_as_stable_tie_break() -> None:
@@ -202,7 +247,9 @@ def test_holdings_markdown_renders_non_finite_values_as_missing() -> None:
     }
 
     row = pre_market.holdings_markdown(context).splitlines()[2]
-    assert row == "| 600036 | 招商银行⚠️ | -- | -- | --（持仓 --） | -- | -- | -- |"
+    assert row == (
+        "| 600036 | 招商银行⚠️ | -- | -- | --（持仓 --） | -- | 暂不可用 | -- |"
+    )
 
 
 def test_holdings_markdown_neutralizes_inline_markdown_in_asset_names() -> None:
@@ -572,6 +619,36 @@ async def test_pre_market_position_quotes_require_price_alignment_and_report_cut
     assert "o.as_of <= $3" in conn.query
     assert "o.value = target.market_price" in conn.query
     assert "o.field_code IN ('CLOSE', 'NAV', 'ESTIMATED_NAV')" in conn.query
+    assert "previous_nav" in conn.query
+    assert "OFF_EXCHANGE_FUND" in conn.query
+
+
+@pytest.mark.asyncio
+async def test_pre_market_position_quotes_return_latest_official_fund_nav_change():
+    """OTC funds use the latest two persisted official NAV rows, with date."""
+    nav_as_of = datetime(2026, 9, 7, 0, 0, tzinfo=ZoneInfo("UTC"))
+    conn = _CoverageConnection(
+        [
+            {
+                "instrument_id": "22222222-2222-2222-2222-222222222222",
+                "change_pct": "-1.03",
+                "quality_status": "STALE",
+                "source_as_of": nav_as_of,
+            }
+        ]
+    )
+
+    result = await repository.get_pre_market_position_quotes(
+        conn,
+        {"22222222-2222-2222-2222-222222222222": "1.73"},
+        datetime(2026, 9, 8, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert result["22222222-2222-2222-2222-222222222222"] == {
+        "changePct": "-1.03",
+        "quality": "STALE",
+        "sourceAsOf": nav_as_of,
+    }
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ const summary = `## 持仓概览
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 600036 | 招商银行⚠️ | 8,500股 | 38.82 | 39.15（持仓 +0.85%） | 332,775 | +0.84% | 34.85% |
 | 510300 | 沪深300ETF | 62,000份 | 4.14 | 4.12（持仓 -0.48%） | 255,440 | -0.31% | 29.68% |
-| 110022 | 易方达消费行业 | 100份 | 1.50 | --（持仓 --） | 200 | -- | 20.00% |`;
+| 110022 | 易方达消费行业⚠️ | 100份 | 1.50 | --（持仓 --） | 200 | -1.03%（9/7） | 20.00% |`;
 
 it("renders a structured holdings table with complete aligned values", () => {
   render(<ReportMarkdown>{summary}</ReportMarkdown>);
@@ -24,10 +24,13 @@ it("renders a structured holdings table with complete aligned values", () => {
   );
   expect(within(table).getByText("+0.84%")).toHaveClass("report-value-up");
   expect(within(table).getByText("-0.31%")).toHaveClass("report-value-down");
+  expect(within(table).getByText("-1.03%（9/7）")).toHaveClass(
+    "report-value-down",
+  );
   expect(within(table).getByText("34.85%")).not.toHaveClass(
     "report-value-up",
   );
-  expect(within(table).getByText("易方达消费行业")).toBeInTheDocument();
+  expect(within(table).getByText("易方达消费行业⚠️")).toBeInTheDocument();
   expect(screen.getByText("盈利 / 上涨")).toBeInTheDocument();
   expect(screen.getByText("亏损 / 下跌")).toBeInTheDocument();
 });

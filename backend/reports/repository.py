@@ -1195,11 +1195,12 @@ async def get_pre_market_position_quotes(
     position_prices: dict[str, object],
     report_as_of: datetime,
 ) -> dict[str, dict]:
-    """Return persisted day changes aligned with the displayed position price.
+    """Return persisted day changes for the pre-market holdings table.
 
-    The report must never combine a current position price with a percentage
-    from another observation. Invalid or unavailable projection prices remain
-    in the target set but cannot match a quote, so their change stays missing.
+    Exchange-traded instruments require an observation whose value matches the
+    displayed position price. OTC funds have no live pre-market quote, so their
+    change is derived from the latest two persisted official NAV dates and the
+    latest NAV date is returned for an explicit table label.
     """
     if not position_prices:
         return {}
@@ -1226,10 +1227,24 @@ async def get_pre_market_position_quotes(
                    AS input(instrument_id, market_price)
         )
         SELECT target.instrument_id,
-               quote.change_pct,
-               quote.quality_status,
-               quote.source_as_of
+               CASE
+                   WHEN instrument.asset_type = 'OFF_EXCHANGE_FUND'
+                       THEN fund_quote.change_pct::text
+                   ELSE quote.change_pct
+               END AS change_pct,
+               CASE
+                   WHEN instrument.asset_type = 'OFF_EXCHANGE_FUND'
+                       THEN fund_quote.quality_status
+                   ELSE quote.quality_status
+               END AS quality_status,
+               CASE
+                   WHEN instrument.asset_type = 'OFF_EXCHANGE_FUND'
+                       THEN fund_quote.source_as_of
+                   ELSE quote.source_as_of
+               END AS source_as_of
           FROM target
+          JOIN reference.instruments instrument
+            ON instrument.id = target.instrument_id
           LEFT JOIN LATERAL (
               SELECT o.metadata ->> 'changePct' AS change_pct,
                      o.quality_status,
@@ -1244,6 +1259,40 @@ async def get_pre_market_position_quotes(
                ORDER BY o.as_of DESC, o.observed_at DESC, o.revision DESC
                LIMIT 1
           ) quote ON TRUE
+          LEFT JOIN LATERAL (
+              WITH nav_by_date AS (
+                  SELECT DISTINCT ON (
+                             (o.as_of AT TIME ZONE 'Asia/Shanghai')::date
+                         )
+                         o.value,
+                         o.quality_status,
+                         o.as_of
+                    FROM market.market_observations o
+                   WHERE o.subject_id = target.instrument_id
+                     AND o.field_code = 'NAV'
+                     AND o.as_of <= $3
+                     AND o.value IS NOT NULL
+                     AND o.value > 0
+                   ORDER BY
+                         (o.as_of AT TIME ZONE 'Asia/Shanghai')::date,
+                         o.observed_at DESC,
+                         o.revision DESC
+              ), nav_returns AS (
+                  SELECT value,
+                         quality_status,
+                         as_of,
+                         lag(value) OVER (ORDER BY as_of) AS previous_nav
+                    FROM nav_by_date
+              )
+              SELECT (value / previous_nav - 1) * 100 AS change_pct,
+                     quality_status,
+                     as_of AS source_as_of
+                FROM nav_returns
+               WHERE previous_nav IS NOT NULL
+                 AND previous_nav > 0
+               ORDER BY as_of DESC
+               LIMIT 1
+          ) fund_quote ON instrument.asset_type = 'OFF_EXCHANGE_FUND'
         """,
         instrument_ids,
         market_prices,
