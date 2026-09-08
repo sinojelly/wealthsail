@@ -203,7 +203,10 @@ async def test_report_delivery_renders_a_clickable_internal_markdown_link(
             "session": "POST_MARKET",
             "message_type": "markdown",
             "link_path": "/reports?reportId=report-1",
-            "content": "盘后报告 [外部链接](https://attacker.example) 已经生成。",
+            "content": (
+                "盘后报告 <font color=\"warning\">+1.23%</font> "
+                "[外部链接](https://attacker.example) 已经生成。"
+            ),
         },
     }
     command = build_delivery_command(row, binding, routing_key=key)
@@ -232,6 +235,7 @@ async def test_report_delivery_renders_a_clickable_internal_markdown_link(
     assert captured["recipient"] == "wecom-user-7"
     assert captured["msg_type"] == "markdown"
     assert "盘后报告" in captured["content"]
+    assert '<font color="warning">+1.23%</font>' in captured["content"]
     assert "https://attacker.example" not in captured["content"]
     assert (
         "[查看完整报告](https://wealthsail.example.com/reports?reportId=report-1)"

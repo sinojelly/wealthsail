@@ -253,15 +253,14 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert "标的3" not in content
     assert content.count("标的0") == 1
     assert "等共4条" in content
-    assert len(content) <= 200
 
 
-def test_personalized_push_uses_two_compact_holdings_and_overflow_count() -> None:
-    """WeCom receives the two largest holdings and an explicit overflow count."""
+def test_personalized_push_renders_every_holding_as_markdown_table() -> None:
+    """The push keeps every holding, including stale facts, in aligned columns."""
     positions = [
         {
             "instrumentId": str(index),
-            "symbol": f"60003{index}",
+            "symbol": f"6000{index:02d}",
             "name": f"标的{index}",
             "type": "A股",
             "quantity": "100",
@@ -269,10 +268,10 @@ def test_personalized_push_uses_two_compact_holdings_and_overflow_count() -> Non
             "price": "10.00",
             "changePct": str(index - 1),
             "weight": str(30 - index),
-            "quality": "FRESH",
+            "quality": "STALE" if index == 10 else "FRESH",
             "changeQuality": "FRESH",
         }
-        for index in range(3)
+        for index in range(11)
     ]
 
     content = pre_market_personalized.format_push_content(
@@ -281,16 +280,18 @@ def test_personalized_push_uses_two_compact_holdings_and_overflow_count() -> Non
 
     assert content.splitlines()[:3] == [
         "**盘前持仓概览**",
-        "600030 标的0 30.00%｜-1.00%",
-        "600031 标的1 29.00%｜+0.00%",
+        "| 代码 | 名称 | 仓位 | 当日 |",
+        "| --- | --- | ---: | ---: |",
     ]
-    assert "另1项见完整报告" in content
-    assert "600032" not in content
-    assert len(content) <= 200
+    assert "| 600000 | 标的0 | 30.00% | <font color=\"info\">-1.00%</font> |" in content
+    assert "| 600002 | 标的2 | 28.00% | <font color=\"warning\">+1.00%</font> |" in content
+    assert "| 600010 | 标的10⚠️ | 20.00% | <font color=\"warning\">+9.00%</font> |" in content
+    assert all(f"6000{index:02d}" in content for index in range(11))
+    assert "另" not in content
 
 
-def test_personalized_push_clips_only_name_and_keeps_complete_lines() -> None:
-    """Long names cannot cause a partial holding row or broken Markdown."""
+def test_personalized_push_keeps_full_name_in_markdown_table() -> None:
+    """The table preserves a long name instead of silently clipping it."""
     position = {
         "instrumentId": _HELD_ID,
         "symbol": "600036",
@@ -309,9 +310,7 @@ def test_personalized_push_clips_only_name_and_keeps_complete_lines() -> None:
         _context(positions=[position])
     )
 
-    assert "600036 这是一个非常非常长的持仓… 80.00%｜+1.00%" in content
-    assert all(line and not line.endswith("**…") for line in content.splitlines())
-    assert len(content) <= 200
+    assert "| 600036 | 这是一个非常非常长的持仓标的名称 | 80.00% | <font color=\"warning\">+1.00%</font> |" in content
 
 
 def test_personalized_push_watchlist_only_uses_no_holdings_copy() -> None:
@@ -355,7 +354,7 @@ def test_personalized_report_renders_cutoff_reminder() -> None:
     assert draft["items"][2]["quality"] == "FRESH"
 
 
-def test_personalized_push_stays_under_200_characters() -> None:
+def test_personalized_push_retains_reminders_and_actions_after_markdown_table() -> None:
     content = pre_market_personalized.format_push_content(
         _context(
             positions=_positions(),
@@ -375,8 +374,7 @@ def test_personalized_push_stays_under_200_characters() -> None:
         )
     )
 
-    assert len(content) <= 200
-    assert content.startswith("**盘前持仓概览**\n600036 招商银行")
+    assert content.startswith("**盘前持仓概览**\n| 代码 | 名称 | 仓位 | 当日 |")
     assert "提醒：" in content
     assert "行动：" in content
 

@@ -212,23 +212,6 @@ def build_report(context: dict, *, now: datetime | None = None) -> dict:
     }
 
 
-_PUSH_LIMIT = 200
-
-
-def _append_push_line(lines: list[str], candidate: str) -> bool:
-    """Append one complete line only when it fits the WeCom budget."""
-    rendered = "\n".join((*lines, candidate))
-    if len(rendered) > _PUSH_LIMIT:
-        return False
-    lines.append(candidate)
-    return True
-
-
-def _compact_holding_name(value: object, limit: int = 13) -> str:
-    name = str(value or "未命名标的").replace("\r", " ").replace("\n", " ")
-    return name if len(name) <= limit else f"{name[: limit - 1]}…"
-
-
 def _push_percent(value: object, *, signed: bool = False) -> str:
     parsed = safe_decimal(value)
     if parsed is None:
@@ -237,32 +220,54 @@ def _push_percent(value: object, *, signed: bool = False) -> str:
     return f"{sign}{parsed:.2f}%"
 
 
-def _holding_push_line(row: dict) -> str:
-    warning = "⚠️" if row["quality"] in {"STALE", "UNAVAILABLE"} else ""
-    symbol = str(row["symbol"]).replace("\r", " ").replace("\n", " ")
-    return (
-        f"{symbol} {_compact_holding_name(row['name'])}{warning} "
-        f"{_push_percent(row['weight'])}｜"
-        f"{_push_percent(row['changePct'], signed=True)}"
-    )
+def _markdown_table_cell(value: object) -> str:
+    """Escape untrusted persisted text while preserving Markdown table structure."""
+    text = "--" if value is None else str(value)
+    escaped = text.replace("\\", "\\\\")
+    for character in ("|", "`", "*", "_", "[", "]", "(", ")", "<", ">", "!"):
+        escaped = escaped.replace(character, f"\\{character}")
+    return escaped.replace("\r", " ").replace("\n", " ").strip() or "--"
+
+
+def _colored_day_change(value: object) -> str:
+    """Use WeCom's supported Markdown colours: warning for rises, info for falls."""
+    parsed = safe_decimal(value)
+    rendered = _push_percent(parsed, signed=True)
+    if parsed is None or parsed == 0:
+        return rendered
+    colour = "warning" if parsed > 0 else "info"
+    return f'<font color="{colour}">{rendered}</font>'
+
+
+def _holdings_push_table(rows: list[dict]) -> list[str]:
+    """Render every position as the compact four-column WeCom Markdown table."""
+    lines = [
+        "| 代码 | 名称 | 仓位 | 当日 |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    for row in rows:
+        warning = "⚠️" if row["quality"] != "FRESH" else ""
+        cells = (
+            _markdown_table_cell(row["symbol"]),
+            _markdown_table_cell(f'{row["name"]}{warning}'),
+            _markdown_table_cell(_push_percent(row["weight"])),
+            _colored_day_change(row["changePct"]),
+        )
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
 
 
 def format_push_content(context: dict) -> str:
-    """Build a complete-line WeCom holdings summary capped at 200 chars."""
+    """Build the personalized WeCom push with its complete holdings table."""
     rows = position_table_rows(context)
     lines = ["**盘前持仓概览**"]
     if rows:
-        for row in rows[:2]:
-            _append_push_line(lines, _holding_push_line(row))
-        if len(rows) > 2:
-            _append_push_line(lines, f"另{len(rows) - 2}项见完整报告")
+        lines.extend(_holdings_push_table(rows))
     else:
-        _append_push_line(lines, "暂无持仓，今日市场概况")
-    _append_push_line(lines, f"提醒：{cutoff_push_text(context)}")
-    _append_push_line(lines, f"行动：{action_list_text(context, limit=3)}")
-    content = "\n".join(lines)
-    assert len(content) <= _PUSH_LIMIT
-    return content
+        lines.append("暂无持仓，今日市场概况")
+    lines.append(f"提醒：{cutoff_push_text(context)}")
+    lines.append(f"行动：{action_list_text(context, limit=3)}")
+    return "\n".join(lines)
 
 
 async def generate_pre_market_personalized(

@@ -35,6 +35,12 @@ _URL_SCHEME_PATTERN = re.compile(r"\b([a-z][a-z0-9+.-]{1,31}):(?=//)", re.I)
 _MARKDOWN_LINK_CHARS = str.maketrans(
     {"[": "【", "]": "】", "(": "（", ")": "）", "<": "＜", ">": "＞"}
 )
+# The report formatters may use only these native WeCom Markdown colour tags.
+# Everything else remains escaped before delivery, so an outbox payload cannot
+# introduce an arbitrary HTML-like tag or a second link destination.
+_WECOM_FONT_TAG_PATTERN = re.compile(
+    r'(</font>|<font color="(?:info|comment|warning)">)'
+)
 
 
 @dataclass(frozen=True)
@@ -130,9 +136,15 @@ def _truncate_utf8(value: str, byte_limit: int) -> str:
 
 
 def _plain_markdown_body(value: str) -> str:
-    """Keep the report preview readable without allowing payload-defined links."""
-    without_link_syntax = value.translate(_MARKDOWN_LINK_CHARS)
-    return _URL_SCHEME_PATTERN.sub(r"\1：", without_link_syntax)
+    """Keep preview text safe while preserving the fixed WeCom colour tags."""
+    parts = _WECOM_FONT_TAG_PATTERN.split(value)
+    sanitized = "".join(
+        part
+        if _WECOM_FONT_TAG_PATTERN.fullmatch(part)
+        else _URL_SCHEME_PATTERN.sub(r"\1：", part.translate(_MARKDOWN_LINK_CHARS))
+        for part in parts
+    )
+    return sanitized
 
 
 def _render_delivery_content(command: DeliveryCommand, settings: Settings) -> str:
