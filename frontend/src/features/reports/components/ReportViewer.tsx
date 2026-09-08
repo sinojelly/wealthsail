@@ -16,6 +16,7 @@ import {
   formatShanghaiDateTime,
   formatShanghaiTime,
 } from "../../../lib/shanghai-time";
+import ReportMarkdown from "./ReportMarkdown";
 
 const ITEM_TYPE_META: Record<string, { label: string; icon: typeof Info }> = {
   FACT: { label: "事实", icon: BookOpen },
@@ -90,7 +91,7 @@ export default function ReportViewer({
               </span>
             ) : null}
           </div>
-          <p className="report-summary-text">{report.summary}</p>
+          <ReportMarkdown>{report.summary}</ReportMarkdown>
         </section>
 
         <section className="report-section">

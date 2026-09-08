@@ -81,6 +81,22 @@ beforeEach(() => {
   reportState.triggerRun.error = null;
 });
 
+it("renders a holdings Markdown table in the report summary", () => {
+  reportState.detail = {
+    ...reportDetailFixture,
+    summary: `## 持仓概览
+
+| 代码 | 当日 |
+| --- | ---: |
+| 600036 | +0.84% |`,
+  };
+
+  renderWithSession(<ReportsPage />, "/reports?reportId=R-POST-20260823");
+
+  expect(screen.getByRole("table")).toBeInTheDocument();
+  expect(screen.getByText("+0.84%")).toHaveClass("report-value-up");
+});
+
 it("opens a report evidence record with traceable provenance metadata", async () => {
   const user = userEvent.setup();
   renderWithSession(<ReportsPage />);

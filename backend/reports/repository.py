@@ -1190,6 +1190,84 @@ async def get_post_market_contributions(
     }
 
 
+async def get_pre_market_position_quotes(
+    conn: asyncpg.Connection,
+    position_prices: dict[str, object],
+    report_as_of: datetime,
+) -> dict[str, dict]:
+    """Return persisted day changes aligned with the displayed position price.
+
+    The report must never combine a current position price with a percentage
+    from another observation. Invalid or unavailable projection prices remain
+    in the target set but cannot match a quote, so their change stays missing.
+    """
+    if not position_prices:
+        return {}
+
+    instrument_ids = list(position_prices)
+    market_prices: list[Decimal | None] = []
+    for instrument_id in instrument_ids:
+        raw_price = position_prices[instrument_id]
+        try:
+            parsed_price = Decimal(str(raw_price)) if raw_price is not None else None
+        except (ArithmeticError, TypeError, ValueError):
+            parsed_price = None
+        market_prices.append(
+            parsed_price
+            if parsed_price is not None and parsed_price.is_finite()
+            else None
+        )
+
+    rows = await conn.fetch(
+        """
+        WITH target AS (
+            SELECT input.instrument_id, input.market_price
+              FROM unnest($1::uuid[], $2::numeric[])
+                   AS input(instrument_id, market_price)
+        )
+        SELECT target.instrument_id,
+               quote.change_pct,
+               quote.quality_status,
+               quote.source_as_of
+          FROM target
+          LEFT JOIN LATERAL (
+              SELECT o.metadata ->> 'changePct' AS change_pct,
+                     o.quality_status,
+                     o.as_of AS source_as_of
+                FROM market.market_observations o
+               WHERE o.subject_id = target.instrument_id
+                 AND o.as_of <= $3
+                 AND o.value = target.market_price
+                 AND o.field_code IN ('CLOSE', 'NAV', 'ESTIMATED_NAV')
+                 AND o.metadata ->> 'changePct'
+                     ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+               ORDER BY o.as_of DESC, o.observed_at DESC, o.revision DESC
+               LIMIT 1
+          ) quote ON TRUE
+        """,
+        instrument_ids,
+        market_prices,
+        report_as_of,
+    )
+    result: dict[str, dict] = {}
+    for row in rows:
+        raw_change_pct = row["change_pct"]
+        if raw_change_pct is None:
+            continue
+        try:
+            change_pct = Decimal(str(raw_change_pct))
+        except (ArithmeticError, TypeError, ValueError):
+            continue
+        if not change_pct.is_finite():
+            continue
+        result[str(row["instrument_id"])] = {
+            "changePct": str(change_pct),
+            "quality": str(row["quality_status"] or "UNAVAILABLE"),
+            "sourceAsOf": row["source_as_of"],
+        }
+    return result
+
+
 async def latest_day_change_pct(
     conn: asyncpg.Connection, tenant_id: str, instrument_ids: list[str]
 ) -> dict[str, Decimal]:

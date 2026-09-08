@@ -339,7 +339,8 @@ async def test_pre_market_generation_is_deterministic_for_every_holdings_mode(
     assert captured["generation_mode"] == "PRE_MARKET_DETERMINISTIC"
     assert captured["model_result"] is None
     assert len(captured["push_content"]) <= 200
-    assert captured["draft"]["summary"].startswith("1. 隔夜市场速览：")
+    assert captured["draft"]["summary"].startswith("## 持仓概览\n\n")
+    assert "1. 隔夜市场速览：" in captured["draft"]["summary"]
 
 
 @pytest.mark.asyncio
@@ -650,6 +651,13 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
         "get_market_sentiment",
         sentiment,
     )
+    monkeypatch.setattr(
+        report_service.market_data,
+        "get_pre_market_global_snapshot",
+        AsyncMock(
+            return_value={"usIndices": [], "a50Future": None, "economicEvents": []}
+        ),
+    )
     corporate_actions = AsyncMock(return_value=[])
     cutoff_rules = AsyncMock(return_value=[])
     monkeypatch.setattr(
@@ -669,7 +677,15 @@ async def test_holdings_context_reads_persisted_market_signal_without_provider_c
         "PRE_MARKET",
     )
 
-    assert context["positions"] == [{"symbol": "600036", "quantity": "1"}]
+    assert context["positions"] == [
+        {
+            "symbol": "600036",
+            "quantity": "1",
+            "changePct": None,
+            "changeQuality": "UNAVAILABLE",
+            "changeSourceAsOf": None,
+        }
+    ]
     assert context["marketSentiment"]["totalDown"] == 3000
     assert context["preMarket"]["corporateActions"] == []
     assert context["preMarket"]["fundCutoffRules"] == []

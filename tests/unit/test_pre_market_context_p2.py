@@ -156,6 +156,7 @@ def _stub_context_deps(
                     "name": "贵州茅台",
                     "type": "A股",
                     "quantity": "100",
+                    "price": "1680.00",
                 },
                 {
                     "instrumentId": "inst-pingan",
@@ -163,6 +164,7 @@ def _stub_context_deps(
                     "name": "平安银行",
                     "type": "A股",
                     "quantity": "200",
+                    "price": "12.50",
                 },
                 {
                     "instrumentId": "inst-fund",
@@ -170,6 +172,7 @@ def _stub_context_deps(
                     "name": "某场外基金",
                     "type": "场外基金",
                     "quantity": "300",
+                    "price": "1.40",
                 },
             ]
         ),
@@ -188,6 +191,11 @@ def _stub_context_deps(
         service.repository,
         "get_pre_market_cutoff_rules",
         mock.AsyncMock(return_value=cutoff_rules),
+    )
+    monkeypatch.setattr(
+        service.repository,
+        "get_pre_market_position_quotes",
+        mock.AsyncMock(return_value={}),
     )
     monkeypatch.setattr(
         service.market_data,
@@ -212,6 +220,41 @@ def _stub_context_deps(
         mock.AsyncMock(return_value=[]),
     )
     return conn
+
+
+@pytest.mark.asyncio
+async def test_pre_market_context_enriches_positions_with_aligned_quote(
+    monkeypatch,
+) -> None:
+    """The personalized report receives only price-aligned persisted changes."""
+    conn = _stub_context_deps(
+        monkeypatch, ak_items=[], db_actions=[], cutoff_rules=[]
+    )
+    quote_as_of = datetime(
+        2026, 9, 5, 15, 0, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
+    service.repository.get_pre_market_position_quotes.return_value = {
+        "inst-kweichow": {
+            "changePct": "0.84",
+            "quality": "STALE",
+            "sourceAsOf": quote_as_of,
+        }
+    }
+
+    context = await service.build_report_context(
+        conn, "tenant-1", "PRE_MARKET", audience_user_id="user-1"
+    )
+
+    position = context["positions"][0]
+    assert position["changePct"] == "0.84"
+    assert position["changeQuality"] == "STALE"
+    assert position["changeSourceAsOf"] == quote_as_of
+    called_prices = service.repository.get_pre_market_position_quotes.await_args.args[1]
+    assert called_prices == {
+        "inst-kweichow": "1680.00",
+        "inst-pingan": "12.50",
+        "inst-fund": "1.40",
+    }
 
 
 @pytest.mark.asyncio

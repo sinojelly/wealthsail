@@ -21,11 +21,12 @@ from backend.reports.pre_market import (
     cutoff_push_text,
     cutoff_text,
     format_action_entry,
-    holding_health_push_text,
     holding_impact_text,
     instrument_label,
+    position_table_rows,
     reminder_has_data,
     safe_decimal,
+    summary_with_holdings,
 )
 
 _MISSING = "暂无"
@@ -185,13 +186,14 @@ def build_report(context: dict, *, now: datetime | None = None) -> dict:
         if candidate in qualities:
             overall = candidate
             break
+    section_summary = "\n".join(
+        f"{index}. {title}：{body}"
+        for index, (title, body, _item_type, _item_quality) in enumerate(
+            sections, start=1
+        )
+    )
     return {
-        "summary": "\n".join(
-            f"{index}. {title}：{body}"
-            for index, (title, body, _item_type, _item_quality) in enumerate(
-                sections, start=1
-            )
-        ),
+        "summary": summary_with_holdings(context, section_summary),
         "items": [
             {
                 "item_type": item_type,
@@ -210,24 +212,57 @@ def build_report(context: dict, *, now: datetime | None = None) -> dict:
     }
 
 
-def _clip(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip("；，。") + "…"
+_PUSH_LIMIT = 200
+
+
+def _append_push_line(lines: list[str], candidate: str) -> bool:
+    """Append one complete line only when it fits the WeCom budget."""
+    rendered = "\n".join((*lines, candidate))
+    if len(rendered) > _PUSH_LIMIT:
+        return False
+    lines.append(candidate)
+    return True
+
+
+def _compact_holding_name(value: object, limit: int = 13) -> str:
+    name = str(value or "未命名标的").replace("\r", " ").replace("\n", " ")
+    return name if len(name) <= limit else f"{name[: limit - 1]}…"
+
+
+def _push_percent(value: object, *, signed: bool = False) -> str:
+    parsed = safe_decimal(value)
+    if parsed is None:
+        return "--"
+    sign = "+" if signed and parsed >= 0 else ""
+    return f"{sign}{parsed:.2f}%"
+
+
+def _holding_push_line(row: dict) -> str:
+    warning = "⚠️" if row["quality"] in {"STALE", "UNAVAILABLE"} else ""
+    symbol = str(row["symbol"]).replace("\r", " ").replace("\n", " ")
+    return (
+        f"{symbol} {_compact_holding_name(row['name'])}{warning} "
+        f"{_push_percent(row['weight'])}｜"
+        f"{_push_percent(row['changePct'], signed=True)}"
+    )
 
 
 def format_push_content(context: dict) -> str:
-    """Build a four-line WeCom summary capped at 200 characters."""
-    reminder_text = cutoff_push_text(context)
-    watchlist_text = _watchlist_text(context, include_actions=False)
-    return "\n".join(
-        (
-            _clip(f"持仓：{holding_health_push_text(context)}", 45),
-            _clip(f"关注：{watchlist_text}", 35),
-            _clip(f"行动：{action_list_text(context, limit=3)}", 75),
-            _clip(f"提醒：{reminder_text}", 35),
-        )
-    )
+    """Build a complete-line WeCom holdings summary capped at 200 chars."""
+    rows = position_table_rows(context)
+    lines = ["**盘前持仓概览**"]
+    if rows:
+        for row in rows[:2]:
+            _append_push_line(lines, _holding_push_line(row))
+        if len(rows) > 2:
+            _append_push_line(lines, f"另{len(rows) - 2}项见完整报告")
+    else:
+        _append_push_line(lines, "暂无持仓，今日市场概况")
+    _append_push_line(lines, f"提醒：{cutoff_push_text(context)}")
+    _append_push_line(lines, f"行动：{action_list_text(context, limit=3)}")
+    content = "\n".join(lines)
+    assert len(content) <= _PUSH_LIMIT
+    return content
 
 
 async def generate_pre_market_personalized(

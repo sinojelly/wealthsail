@@ -27,6 +27,13 @@ ACTION_LABELS = {
     "OTHER": "其他重大公司行动",
 }
 _NO_RECORDED_ACTIONS = "今日及未来3天暂无已录入公司行动"
+_POSITION_QUALITY_PRIORITY = {
+    "FRESH": 0,
+    "ESTIMATED": 1,
+    "STALE": 2,
+    "UNAVAILABLE": 3,
+    "MISSING": 3,
+}
 
 
 def safe_decimal(value: object) -> Decimal | None:
@@ -35,6 +42,115 @@ def safe_decimal(value: object) -> Decimal | None:
     except (ArithmeticError, TypeError, ValueError):
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _position_quality(position: dict) -> str:
+    qualities: list[str] = []
+    for key in ("quality", "changeQuality"):
+        candidate = str(position.get(key) or "UNAVAILABLE").upper()
+        qualities.append(
+            candidate
+            if candidate in _POSITION_QUALITY_PRIORITY
+            else "UNAVAILABLE"
+        )
+    worst = max(
+        qualities,
+        key=lambda value: _POSITION_QUALITY_PRIORITY[value],
+    )
+    return "UNAVAILABLE" if worst == "MISSING" else worst
+
+
+def position_table_rows(context: dict) -> list[dict]:
+    """Normalize and deterministically order holdings for report rendering."""
+    rows: list[dict] = []
+    for position in context.get("positions") or []:
+        if not isinstance(position, dict):
+            continue
+        asset_type = str(position.get("type") or "").upper()
+        rows.append(
+            {
+                "symbol": str(position.get("symbol") or "--"),
+                "name": str(position.get("name") or "未命名标的"),
+                "quantity": safe_decimal(position.get("quantity")),
+                "unit": (
+                    "股"
+                    if asset_type in {"A股", "股票", "STOCK", "CN_STOCK"}
+                    else "份"
+                ),
+                "avgCost": safe_decimal(position.get("avgCost")),
+                "price": safe_decimal(position.get("price")),
+                "changePct": safe_decimal(position.get("changePct")),
+                "weight": safe_decimal(position.get("weight")),
+                "quality": _position_quality(position),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["weight"] is None,
+            -(row["weight"] or Decimal("0")),
+            row["symbol"],
+        ),
+    )
+
+
+def _markdown_cell(value: object) -> str:
+    text = "--" if value is None else str(value)
+    escaped = text.replace("\\", "\\\\")
+    for character in ("|", "`", "*", "_", "[", "]", "(", ")", "<", ">", "!"):
+        escaped = escaped.replace(character, f"\\{character}")
+    return escaped.replace("\r", " ").replace("\n", " ").strip() or "--"
+
+
+def _format_table_number(
+    value: Decimal | None,
+    *,
+    places: int | None = None,
+    signed: bool = False,
+    grouped: bool = False,
+    suffix: str = "",
+) -> str:
+    if value is None or not value.is_finite():
+        return "--"
+    if places is not None:
+        sign = "+" if signed and value >= 0 else ""
+        return f"{sign}{value:,.{places}f}{suffix}"
+    rendered = format(value, ",f" if grouped else "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return f"{rendered}{suffix}"
+
+
+def holdings_markdown(context: dict) -> str:
+    """Render the seven-column GFM holdings table or an explicit empty state."""
+    rows = position_table_rows(context)
+    if not rows:
+        return "暂无持仓，今日市场概况"
+    lines = [
+        "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        warning = "⚠️" if row["quality"] in {"STALE", "UNAVAILABLE"} else ""
+        quantity = _format_table_number(row["quantity"], grouped=True)
+        cells = (
+            row["symbol"],
+            f'{row["name"]}{warning}',
+            f'{quantity}{row["unit"]}' if quantity != "--" else "--",
+            _format_table_number(row["avgCost"]),
+            _format_table_number(row["price"]),
+            _format_table_number(
+                row["changePct"], places=2, signed=True, suffix="%"
+            ),
+            _format_table_number(row["weight"], places=2, suffix="%"),
+        )
+        lines.append("| " + " | ".join(_markdown_cell(cell) for cell in cells) + " |")
+    return "\n".join(lines)
+
+
+def summary_with_holdings(context: dict, section_summary: str) -> str:
+    """Prepend the shared holdings contract to a user-scoped PRE_MARKET body."""
+    return f"## 持仓概览\n\n{holdings_markdown(context)}\n\n{section_summary}"
 
 
 def instrument_label(item: dict, *, include_symbol: bool = True) -> str:
@@ -942,13 +1058,14 @@ def build_report(context: dict) -> dict:
         ),
         ("一句话总结", conclusion, "FACT", sentiment_quality),
     )
+    section_summary = "\n".join(
+        f"{index}. {title}：{body}"
+        for index, (title, body, _item_type, _item_quality) in enumerate(
+            sections, start=1
+        )
+    )
     return {
-        "summary": "\n".join(
-            f"{index}. {title}：{body}"
-            for index, (title, body, _item_type, _item_quality) in enumerate(
-                sections, start=1
-            )
-        ),
+        "summary": summary_with_holdings(context, section_summary),
         "items": [
             {
                 "item_type": item_type,

@@ -25,6 +25,12 @@ def _positions() -> list[dict]:
             "name": "招商银行",
             "quantity": "100",
             "type": "股票",
+            "avgCost": "38.82",
+            "price": "39.15",
+            "changePct": "0.84",
+            "weight": "34.85",
+            "quality": "FRESH",
+            "changeQuality": "FRESH",
         }
     ]
 
@@ -72,6 +78,38 @@ def test_personalized_report_has_only_the_three_required_sections() -> None:
         "关注标的动态",
         "今日操作提醒",
     ]
+
+
+def test_personalized_report_prepends_holdings_table_without_changing_items() -> (
+    None
+):
+    """The table extends the summary without altering auditable item records."""
+    draft = pre_market_personalized.build_report(
+        _context(positions=_positions(), watchlist=_watchlist())
+    )
+
+    assert draft["summary"].startswith(
+        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+    )
+    assert "| 600036 | 招商银行" in draft["summary"]
+    assert [item["title"] for item in draft["items"]] == [
+        "持仓今日影响",
+        "关注标的动态",
+        "今日操作提醒",
+    ]
+
+
+def test_personalized_report_uses_exact_no_holdings_copy_for_watchlist_only() -> (
+    None
+):
+    """A watchlist-only member gets useful context without a fake empty table."""
+    draft = pre_market_personalized.build_report(
+        _context(positions=[], watchlist=_watchlist())
+    )
+
+    assert draft["summary"].startswith(
+        "## 持仓概览\n\n暂无持仓，今日市场概况"
+    )
 
 
 def test_personalized_report_marks_missing_facts_as_missing() -> None:
@@ -218,6 +256,74 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert len(content) <= 200
 
 
+def test_personalized_push_uses_two_compact_holdings_and_overflow_count() -> None:
+    """WeCom receives the two largest holdings and an explicit overflow count."""
+    positions = [
+        {
+            "instrumentId": str(index),
+            "symbol": f"60003{index}",
+            "name": f"标的{index}",
+            "type": "A股",
+            "quantity": "100",
+            "avgCost": "10.00",
+            "price": "10.00",
+            "changePct": str(index - 1),
+            "weight": str(30 - index),
+            "quality": "FRESH",
+            "changeQuality": "FRESH",
+        }
+        for index in range(3)
+    ]
+
+    content = pre_market_personalized.format_push_content(
+        _context(positions=positions)
+    )
+
+    assert content.splitlines()[:3] == [
+        "**盘前持仓概览**",
+        "600030 标的0 30.00%｜-1.00%",
+        "600031 标的1 29.00%｜+0.00%",
+    ]
+    assert "另1项见完整报告" in content
+    assert "600032" not in content
+    assert len(content) <= 200
+
+
+def test_personalized_push_clips_only_name_and_keeps_complete_lines() -> None:
+    """Long names cannot cause a partial holding row or broken Markdown."""
+    position = {
+        "instrumentId": _HELD_ID,
+        "symbol": "600036",
+        "name": "这是一个非常非常长的持仓标的名称",
+        "type": "A股",
+        "quantity": "100",
+        "avgCost": "10",
+        "price": "11",
+        "changePct": "1",
+        "weight": "80",
+        "quality": "FRESH",
+        "changeQuality": "FRESH",
+    }
+
+    content = pre_market_personalized.format_push_content(
+        _context(positions=[position])
+    )
+
+    assert "600036 这是一个非常非常长的持仓… 80.00%｜+1.00%" in content
+    assert all(line and not line.endswith("**…") for line in content.splitlines())
+    assert len(content) <= 200
+
+
+def test_personalized_push_watchlist_only_uses_no_holdings_copy() -> None:
+    """A watchlist-only user is not shown a fake position row."""
+    content = pre_market_personalized.format_push_content(
+        _context(positions=[], watchlist=_watchlist())
+    )
+
+    assert content.splitlines()[1] == "暂无持仓，今日市场概况"
+    assert len(content) <= 200
+
+
 def test_personalized_push_uses_honest_empty_action_copy() -> None:
     content = pre_market_personalized.format_push_content(
         _context(positions=_positions(), pre_market={"reportDate": "2026-09-07"})
@@ -270,8 +376,9 @@ def test_personalized_push_stays_under_200_characters() -> None:
     )
 
     assert len(content) <= 200
-    assert content.count("\n") == 3
-    assert all(label in content for label in ("持仓：", "关注：", "行动：", "提醒："))
+    assert content.startswith("**盘前持仓概览**\n600036 招商银行")
+    assert "提醒：" in content
+    assert "行动：" in content
 
 
 def _install(monkeypatch, *, positions: list[dict], watchlist: list[dict]) -> dict:

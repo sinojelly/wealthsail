@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -64,6 +65,135 @@ def _context() -> dict:
     }
 
 
+def test_holdings_markdown_sorts_formats_marks_and_escapes() -> None:
+    """The table is stable, typed, safe, and honest about stale facts."""
+    context = {
+        "positions": [
+            {
+                "instrumentId": "fund",
+                "symbol": "110022",
+                "name": "基金|成长\nA",
+                "type": "场外基金",
+                "quantity": "118420.52",
+                "avgCost": "1.73",
+                "price": None,
+                "changePct": None,
+                "weight": None,
+                "quality": "FRESH",
+                "changeQuality": "UNAVAILABLE",
+            },
+            {
+                "instrumentId": "stock",
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "8500",
+                "avgCost": "38.82",
+                "price": "39.15",
+                "changePct": "0.84",
+                "weight": "34.85",
+                "quality": "FRESH",
+                "changeQuality": "STALE",
+            },
+            {
+                "instrumentId": "etf",
+                "symbol": "510300",
+                "name": "沪深300ETF",
+                "type": "场内ETF",
+                "quantity": "62000",
+                "avgCost": "4.14",
+                "price": "4.12",
+                "changePct": "-0.31",
+                "weight": "29.68",
+                "quality": "FRESH",
+                "changeQuality": "FRESH",
+            },
+        ]
+    }
+
+    lines = pre_market.holdings_markdown(context).splitlines()
+
+    assert lines[0] == "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+    assert lines[2].startswith("| 600036 | 招商银行⚠️ | 8,500股 |")
+    assert lines[3].startswith("| 510300 | 沪深300ETF | 62,000份 |")
+    assert lines[4].startswith(r"| 110022 | 基金\|成长 A⚠️ | 118,420.52份 |")
+    assert "| +0.84% | 34.85% |" in lines[2]
+    assert "| -0.31% | 29.68% |" in lines[3]
+    assert "| -- | -- | -- |" in lines[4]
+
+
+def test_position_table_rows_use_symbol_as_stable_tie_break() -> None:
+    """Equal weights cannot make report hashes depend on database row order."""
+    context = {
+        "positions": [
+            {
+                "symbol": symbol,
+                "name": symbol,
+                "type": "A股",
+                "quantity": "1",
+                "weight": "10",
+                "quality": "FRESH",
+                "changeQuality": "FRESH",
+            }
+            for symbol in ("600519", "000001")
+        ]
+    }
+
+    assert [row["symbol"] for row in pre_market.position_table_rows(context)] == [
+        "000001",
+        "600519",
+    ]
+
+
+def test_holdings_markdown_renders_non_finite_values_as_missing() -> None:
+    """Non-finite numbers must not leak into an auditable report."""
+    context = {
+        "positions": [
+            {
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "Infinity",
+                "avgCost": "NaN",
+                "price": None,
+                "changePct": None,
+                "weight": None,
+                "quality": "MISSING",
+                "changeQuality": "UNAVAILABLE",
+            }
+        ]
+    }
+
+    row = pre_market.holdings_markdown(context).splitlines()[2]
+    assert row == "| 600036 | 招商银行⚠️ | -- | -- | -- | -- | -- |"
+
+
+def test_holdings_markdown_neutralizes_inline_markdown_in_asset_names() -> None:
+    """An imported asset name cannot inject a link into the audit report."""
+    context = {
+        "positions": [
+            {
+                "symbol": "600036",
+                "name": "[查看](https://evil.example)",
+                "type": "A股",
+                "quantity": "1",
+                "quality": "FRESH",
+                "changeQuality": "FRESH",
+            }
+        ]
+    }
+
+    markdown = pre_market.holdings_markdown(context)
+
+    assert r"\[查看\]\(https://evil.example\)" in markdown
+
+
+def test_holdings_markdown_empty_state() -> None:
+    assert pre_market.holdings_markdown({"positions": []}) == (
+        "暂无持仓，今日市场概况"
+    )
+
+
 def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> None:
     draft = pre_market.build_report(_context())
 
@@ -77,7 +207,10 @@ def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> 
         "一句话总结",
     ]
     assert [item["title"] for item in draft["items"]] == expected_titles
-    assert draft["summary"].splitlines() == [
+    assert draft["summary"].startswith(
+        "## 持仓概览\n\n| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 当日 | 仓位 |"
+    )
+    assert draft["summary"].splitlines()[-7:] == [
         "1. 隔夜市场速览：美股主要指数：暂无；A50期货：暂无。",
         "2. 今日焦点事件：招商银行今日除权，预计低开。",
         "3. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
@@ -361,6 +494,62 @@ class _QueryRecorder:
         return []
 
 
+class _CoverageConnection:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.query = ""
+
+    async def fetch(self, query: str, *_args):
+        self.query = query
+        return self.rows
+
+
+@pytest.mark.asyncio
+async def test_pre_market_position_quotes_require_price_alignment_and_report_cutoff():
+    """A day change must belong to the persisted price shown in the report."""
+    as_of = datetime(2026, 9, 8, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
+    conn = _CoverageConnection(
+        [
+            {
+                "instrument_id": "11111111-1111-1111-1111-111111111111",
+                "change_pct": "0.84",
+                "quality_status": "STALE",
+                "source_as_of": as_of,
+            }
+        ]
+    )
+
+    result = await repository.get_pre_market_position_quotes(
+        conn,
+        {"11111111-1111-1111-1111-111111111111": "39.15"},
+        as_of,
+    )
+
+    assert result == {
+        "11111111-1111-1111-1111-111111111111": {
+            "changePct": "0.84",
+            "quality": "STALE",
+            "sourceAsOf": as_of,
+        }
+    }
+    assert "o.as_of <= $3" in conn.query
+    assert "o.value = target.market_price" in conn.query
+    assert "o.field_code IN ('CLOSE', 'NAV', 'ESTIMATED_NAV')" in conn.query
+
+
+@pytest.mark.asyncio
+async def test_pre_market_position_quotes_skip_database_for_empty_input():
+    """A member without priced holdings must not issue an unnecessary query."""
+    conn = _CoverageConnection([])
+
+    result = await repository.get_pre_market_position_quotes(
+        conn,
+        {},
+        datetime(2026, 9, 8, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert result == {}
+    assert conn.query == ""
 @pytest.mark.asyncio
 async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutoffs() -> (
     None

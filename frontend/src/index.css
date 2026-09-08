@@ -1773,8 +1773,45 @@ button:disabled {
 .report-section {
   margin-bottom: 28px;
 }
-.report-summary-text {
-  white-space: pre-line;
+.report-summary-markdown {
+  color: var(--slate-700);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.report-summary-markdown > :first-child {
+  margin-top: 0;
+}
+.report-summary-markdown > :last-child {
+  margin-bottom: 0;
+}
+.report-markdown-table-scroll {
+  max-width: 100%;
+  margin: 12px 0 16px;
+  overflow-x: auto;
+}
+.report-summary-markdown table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+.report-summary-markdown th,
+.report-summary-markdown td {
+  padding: 9px 10px;
+  border: 1px solid var(--slate-200);
+  text-align: left;
+  white-space: nowrap;
+}
+.report-summary-markdown th {
+  background: var(--slate-50);
+  font-weight: 700;
+}
+.report-value-up {
+  color: #dc2626;
+  font-weight: 700;
+}
+.report-value-down {
+  color: #059669;
+  font-weight: 700;
 }
 .section-title {
   margin-bottom: 13px;

@@ -455,7 +455,8 @@ async def build_report_context(
     audience_user_id: str | None = None,
     asset_scope: AssetScope | None = None,
 ) -> dict:
-    summary = await get_summary(conn, tenant_id, now_shanghai(), scope=asset_scope)
+    report_as_of = now_shanghai()
+    summary = await get_summary(conn, tenant_id, report_as_of, scope=asset_scope)
     # Historical zero-quantity snapshots are not active holdings. Filtering
     # here keeps fully closed portfolios in the no-holdings report mode.
     positions = _active_positions(
@@ -543,13 +544,32 @@ async def build_report_context(
             for position in positions
             if position.get("instrumentId")
         ]
+        position_quotes = await repository.get_pre_market_position_quotes(
+            conn,
+            {
+                str(position["instrumentId"]): position.get("price")
+                for position in positions
+                if position.get("instrumentId")
+            },
+            report_as_of,
+        )
+        for position in positions:
+            quote = position_quotes.get(str(position.get("instrumentId") or ""))
+            if quote is None:
+                position["changePct"] = None
+                position["changeQuality"] = "UNAVAILABLE"
+                position["changeSourceAsOf"] = None
+                continue
+            position["changePct"] = quote["changePct"]
+            position["changeQuality"] = quote["quality"]
+            position["changeSourceAsOf"] = quote["sourceAsOf"]
         # The personalized phase also reports on watched instruments, so its
         # action and cutoff lookups cover the union of held and watched ids.
         for item in watchlist:
             watched_id = item.get("instrumentId")
             if watched_id and str(watched_id) not in instrument_ids:
                 instrument_ids.append(str(watched_id))
-        report_date = now_shanghai().date()
+        report_date = report_as_of.date()
         corporate_actions = await repository.get_pre_market_corporate_actions(
             conn, instrument_ids, report_date, report_date + timedelta(days=3)
         )
