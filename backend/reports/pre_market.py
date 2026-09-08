@@ -322,7 +322,28 @@ def format_action_entry(
     summary = str(action.get("summary") or "").strip()
     if include_summary and summary and summary not in text:
         text += f"：{summary}"
+    notes: list[str] = []
+    if str(action.get("qualityStatus") or "FRESH").upper() == "STALE":
+        notes.append("数据可能过期")
+    sources = action.get("verifiedBy")
+    if isinstance(sources, (list, tuple)):
+        verified = [str(source).strip() for source in sources if str(source).strip()]
+    else:
+        verified = []
+    if not verified:
+        source_name = str(action.get("sourceName") or "").strip()
+        if source_name and source_name != "UNATTRIBUTED":
+            verified = [source_name]
+    if verified:
+        notes.append("来源：" + "、".join(verified))
+    if notes:
+        text += "（" + "；".join(notes) + "）"
     return text
+
+
+def _is_displayable_action(action: dict) -> bool:
+    """Only confirmed or explicitly stale facts may appear as company actions."""
+    return str(action.get("qualityStatus") or "FRESH").upper() in {"FRESH", "STALE"}
 
 
 def relevant_actions(context: dict) -> list[dict]:
@@ -339,6 +360,7 @@ def relevant_actions(context: dict) -> list[dict]:
         for action in actions
         if isinstance(action, dict)
         and str(action.get("instrumentId") or "") in relevant_ids
+        and _is_displayable_action(action)
     ]
 
 
@@ -365,13 +387,21 @@ def _attention(pre: dict) -> str:
         pre.get("economicEvents"), value_keys=("summary", "title", "name")
     )
     actions = pre.get("corporateActions")
+    displayable_actions = (
+        [
+            item
+            for item in actions
+            if isinstance(item, dict) and _is_displayable_action(item)
+        ]
+        if isinstance(actions, list)
+        else []
+    )
     action_text = (
         "；".join(
             format_action_entry(item, str(pre.get("reportDate") or ""))
-            for item in actions
-            if isinstance(item, dict)
+            for item in displayable_actions
         )
-        if isinstance(actions, list) and actions
+        if displayable_actions
         else _MISSING
     )
     subscription = list_text(
@@ -409,6 +439,7 @@ def matched_actions(context: dict) -> list[dict]:
         for action in actions
         if isinstance(action, dict)
         and str(action.get("instrumentId") or "") in held_ids
+        and _is_displayable_action(action)
     ]
 
 
@@ -1121,7 +1152,10 @@ def _quality(context: dict) -> str:
     if sentiment_quality in {"FRESH", "ESTIMATED", "STALE"}:
         return sentiment_quality
     pre = context.get("preMarket") or {}
-    if pre.get("corporateActions") or reminder_has_data(context):
+    if any(
+        isinstance(action, dict) and _is_displayable_action(action)
+        for action in (pre.get("corporateActions") or [])
+    ) or reminder_has_data(context):
         return "FRESH"
     return "UNAVAILABLE"
 

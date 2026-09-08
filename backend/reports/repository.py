@@ -84,7 +84,8 @@ async def get_pre_market_corporate_actions(
             SELECT DISTINCT ON (source_event_id)
                    instrument_id, action_type, action_date, ex_date,
                    record_date, pay_date, params, source_id, summary,
-                   source_event_id, revision, source_ref, created_at
+                   source_event_id, revision, source_ref, quality_status,
+                   verified_by, created_at
               FROM market.corporate_actions
              ORDER BY source_event_id, revision DESC, created_at DESC
         )
@@ -93,7 +94,8 @@ async def get_pre_market_corporate_actions(
                instrument.canonical_name AS name, ca.action_type,
                ca.action_date, ca.ex_date, ca.record_date, ca.pay_date,
                ca.params, ca.summary, ca.source_event_id, ca.revision,
-               ca.source_ref, source.name AS source_name
+               ca.source_ref, ca.quality_status, ca.verified_by,
+               source.name AS source_name
           FROM latest_revision ca
           JOIN reference.instruments instrument ON instrument.id = ca.instrument_id
           LEFT JOIN reference.data_sources source ON source.id = ca.source_id
@@ -141,6 +143,8 @@ async def get_pre_market_corporate_actions(
                 "sourceName": str(row["source_name"] or "UNATTRIBUTED"),
                 "sourceRef": str(row["source_ref"]) if row["source_ref"] else None,
                 "revision": int(row["revision"]),
+                "qualityStatus": str(row["quality_status"] or "UNAVAILABLE"),
+                "verifiedBy": tuple(str(value) for value in (row["verified_by"] or [])),
             }
         )
     return result

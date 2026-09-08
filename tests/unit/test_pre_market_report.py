@@ -742,8 +742,78 @@ async def test_pre_market_reference_queries_reject_future_aliases_and_late_cutof
     assert all("ia.effective_from <= $2" in query for query in conn.queries)
     assert "WITH latest_revision AS" in conn.queries[0]
     assert "action_date BETWEEN $2 AND $3" in conn.queries[0]
+    assert "quality_status" in conn.queries[0]
+    assert "verified_by" in conn.queries[0]
     assert conn.args[0][1:] == (trade_date, date(2026, 9, 3))
     assert "rule.cutoff_time <= TIME '15:00'" in conn.queries[1]
+
+
+def test_company_action_display_filters_unverified_conflicts_and_marks_stale_data() -> None:
+    context = _context()
+    context["preMarket"]["corporateActions"] = [
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": "600036",
+            "name": "招商银行",
+            "actionType": "CASH_DIVIDEND",
+            "actionDate": "2026-08-31",
+            "qualityStatus": "FRESH",
+            "verifiedBy": [
+                "AKSHARE_CORPORATE_ACTIONS",
+                "BAOSTOCK_CORPORATE_ACTIONS",
+            ],
+        },
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": "600036",
+            "name": "招商银行",
+            "actionType": "OTHER",
+            "actionDate": "2026-09-01",
+            "qualityStatus": "STALE",
+            "verifiedBy": ["AKSHARE_CORPORATE_ACTIONS"],
+        },
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": "600036",
+            "name": "招商银行",
+            "actionType": "RIGHTS_ISSUE",
+            "actionDate": "2026-09-02",
+            "qualityStatus": "CONFLICT",
+        },
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": "600036",
+            "name": "招商银行",
+            "actionType": "RIGHTS_ISSUE",
+            "actionDate": "2026-09-03",
+            "qualityStatus": "UNAVAILABLE",
+        },
+    ]
+
+    text = pre_market._attention(context["preMarket"])
+
+    assert "来源：AKSHARE_CORPORATE_ACTIONS、BAOSTOCK_CORPORATE_ACTIONS" in text
+    assert "数据可能过期；来源：AKSHARE_CORPORATE_ACTIONS" in text
+    assert "配股" not in text
+
+
+def test_conflicting_corporate_actions_do_not_make_pre_market_data_fresh() -> None:
+    context = _context()
+    context["marketSentiment"]["qualityStatus"] = "UNAVAILABLE"
+    context["preMarket"]["subscriptionRedemptionChanges"] = []
+    context["preMarket"]["fundCutoffRules"] = []
+    context["preMarket"]["corporateActions"] = [
+        {
+            "instrumentId": context["positions"][0]["instrumentId"],
+            "symbol": "600036",
+            "name": "招商银行",
+            "actionType": "RIGHTS_ISSUE",
+            "actionDate": "2026-09-02",
+            "qualityStatus": "CONFLICT",
+        }
+    ]
+
+    assert pre_market._quality(context) == "UNAVAILABLE"
 
 
 # --------------------------------------------------------------------------- #
