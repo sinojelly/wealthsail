@@ -109,10 +109,10 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_times() -> (
+async def test_scheduler_dispatches_report_sessions_and_global_source_refresh() -> (
     None
 ):
-    """Temporary sessions and an 18:00 drift must not enter production scheduling."""
+    """Four reports remain stable while the governed 06:00 source job is added."""
     shanghai = ZoneInfo("Asia/Shanghai")
     dispatched: list[str] = []
 
@@ -123,6 +123,7 @@ async def test_scheduler_dispatches_only_the_four_mvp_sessions_at_documented_tim
         return True
 
     assert {schedule.session for schedule in SCHEDULES} == {
+        "CORPORATE_ACTIONS_REFRESH",
         "PRE_MARKET",
         "INTRADAY",
         "FUND_1430",

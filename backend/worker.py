@@ -23,6 +23,7 @@ from backend.common.database import create_pool, verify_runtime_login_boundary
 from backend.config import get_settings, validate_runtime_settings
 from backend.jobs import runner
 from backend.jobs.data_tasks import DataTaskConsumer
+from backend.jobs.corporate_actions_sync import sync_corporate_actions
 from backend.jobs.outbox import OutboxConsumer
 from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
@@ -33,6 +34,22 @@ logger = logging.getLogger("wealthsail.worker")
 
 
 async def _execute_session(pool, settings, session: str, now: datetime) -> None:
+    if session == "CORPORATE_ACTIONS_REFRESH":
+        # This is a global source refresh, not a tenant report run.  It never
+        # creates workflow.jobs and must not cause normal report generation.
+        try:
+            stats = await sync_corporate_actions(pool, now)
+            logger.info(
+                "corporate_actions_refresh scanned=%d persisted=%d unavailable=%d failed=%d",
+                stats.scanned_instruments,
+                stats.persisted_actions,
+                stats.unavailable_instruments,
+                stats.failed_instruments,
+            )
+        except Exception:  # noqa: BLE001 -- retry on next trading day, keep Worker alive
+            logger.exception("corporate action refresh failed")
+        return
+
     # 1. 行情刷新（各时段抓取范围由 market service 决定）
     try:
         await market_service.refresh_market(pool, settings, session)
