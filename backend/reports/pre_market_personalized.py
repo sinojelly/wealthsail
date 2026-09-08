@@ -10,6 +10,7 @@ not repeated here. There is no model call in this phase.
 from __future__ import annotations
 
 from datetime import datetime
+from unicodedata import east_asian_width
 from zoneinfo import ZoneInfo
 
 from backend.common.database import tenant_transaction
@@ -220,48 +221,50 @@ def _push_percent(value: object, *, signed: bool = False) -> str:
     return f"{sign}{parsed:.2f}%"
 
 
-def _markdown_table_cell(value: object) -> str:
-    """Escape untrusted persisted text while preserving Markdown table structure."""
-    text = "--" if value is None else str(value)
-    escaped = text.replace("\\", "\\\\")
-    for character in ("|", "`", "*", "_", "[", "]", "(", ")", "<", ">", "!"):
-        escaped = escaped.replace(character, f"\\{character}")
-    return escaped.replace("\r", " ").replace("\n", " ").strip() or "--"
+def _display_width(value: str) -> int:
+    """Return terminal-style width so CJK holding names align in a code block."""
+    return sum(2 if east_asian_width(character) in {"F", "W"} else 1 for character in value)
 
 
-def _colored_day_change(value: object) -> str:
-    """Use WeCom's supported Markdown colours: warning for rises, info for falls."""
+def _holding_list_label(row: dict) -> str:
+    """Build the unpadded identifying column for one persisted position."""
+    name = str(row["name"]).replace("\r", " ").replace("\n", " ").strip() or "未命名标的"
+    symbol = str(row["symbol"]).replace("\r", " ").replace("\n", " ").strip() or "--"
+    return f"{name}({symbol})"
+
+
+def _holding_direction(value: object) -> str:
+    """Choose a direction icon from the actual persisted daily change only."""
     parsed = safe_decimal(value)
-    rendered = _push_percent(parsed, signed=True)
     if parsed is None or parsed == 0:
-        return rendered
-    colour = "warning" if parsed > 0 else "info"
-    return f'<font color="{colour}">{rendered}</font>'
+        return "➖"
+    return "📈" if parsed > 0 else "📉"
 
 
-def _holdings_push_table(rows: list[dict]) -> list[str]:
-    """Render every position as the compact four-column WeCom Markdown table."""
-    lines = [
-        "| 代码 | 名称 | 仓位 | 当日 |",
-        "| --- | --- | ---: | ---: |",
-    ]
-    for row in rows:
-        cells = (
-            _markdown_table_cell(row["symbol"]),
-            _markdown_table_cell(row["name"]),
-            _markdown_table_cell(_push_percent(row["weight"])),
-            _colored_day_change(row["changePct"]),
+def _holdings_push_list(rows: list[dict]) -> list[str]:
+    """Render every position as an aligned, one-line Markdown code-block list."""
+    labels = [_holding_list_label(row) for row in rows]
+    widest_label = max((_display_width(label) for label in labels), default=0)
+    lines = ["```"]
+    for row, label in zip(rows, labels, strict=True):
+        padding = " " * (widest_label - _display_width(label) + 1)
+        warning = " ⚠️" if row["quality"] != "FRESH" else ""
+        lines.append(
+            f"{_holding_direction(row['changePct'])} {label}{padding}"
+            f"仓位{_push_percent(row['weight'])} 当日{_push_percent(row['changePct'], signed=True)}{warning}"
         )
-        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("```")
     return lines
 
 
 def format_push_content(context: dict) -> str:
-    """Build the personalized WeCom push with its complete holdings table."""
+    """Build the personalized WeCom push with its complete aligned holdings list."""
     rows = position_table_rows(context)
     lines = ["**盘前持仓概览**"]
     if rows:
-        lines.extend(_holdings_push_table(rows))
+        lines.extend(_holdings_push_list(rows))
+        if any(row["quality"] != "FRESH" for row in rows):
+            lines.append("⚠️ 表示该标的数据质量不是 FRESH")
     else:
         lines.append("暂无持仓，今日市场概况")
     lines.append(f"提醒：{cutoff_push_text(context)}")

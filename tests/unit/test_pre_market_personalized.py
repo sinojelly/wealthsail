@@ -255,8 +255,8 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert "等共4条" in content
 
 
-def test_personalized_push_renders_every_holding_as_markdown_table() -> None:
-    """The push keeps every holding, including stale facts, in aligned columns."""
+def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
+    """The push keeps every holding in an aligned, non-table Markdown list."""
     positions = [
         {
             "instrumentId": str(index),
@@ -280,19 +280,18 @@ def test_personalized_push_renders_every_holding_as_markdown_table() -> None:
 
     assert content.splitlines()[:3] == [
         "**盘前持仓概览**",
-        "| 代码 | 名称 | 仓位 | 当日 |",
-        "| --- | --- | ---: | ---: |",
+        "```",
+        "📉 标的0(600000)  仓位30.00% 当日-1.00%",
     ]
-    assert "| 600000 | 标的0 | 30.00% | <font color=\"info\">-1.00%</font> |" in content
-    assert "| 600002 | 标的2 | 28.00% | <font color=\"warning\">+1.00%</font> |" in content
-    assert "| 600010 | 标的10 | 20.00% | <font color=\"warning\">+9.00%</font> |" in content
-    assert "⚠️" not in content
+    assert "📈 标的2(600002)  仓位28.00% 当日+1.00%" in content
+    assert "📈 标的10(600010) 仓位20.00% 当日+9.00% ⚠️" in content
     assert all(f"6000{index:02d}" in content for index in range(11))
-    assert "另" not in content
+    assert "| 代码 |" not in content
+    assert "⚠️ 表示该标的数据质量不是 FRESH" in content
 
 
-def test_personalized_push_keeps_full_name_in_markdown_table() -> None:
-    """The table preserves a long name instead of silently clipping it."""
+def test_personalized_push_keeps_full_name_in_aligned_list() -> None:
+    """The list preserves a long name instead of silently clipping it."""
     position = {
         "instrumentId": _HELD_ID,
         "symbol": "600036",
@@ -311,7 +310,7 @@ def test_personalized_push_keeps_full_name_in_markdown_table() -> None:
         _context(positions=[position])
     )
 
-    assert "| 600036 | 这是一个非常非常长的持仓标的名称 | 80.00% | <font color=\"warning\">+1.00%</font> |" in content
+    assert "📈 这是一个非常非常长的持仓标的名称(600036) 仓位80.00% 当日+1.00%" in content
 
 
 def test_personalized_push_watchlist_only_uses_no_holdings_copy() -> None:
@@ -355,7 +354,7 @@ def test_personalized_report_renders_cutoff_reminder() -> None:
     assert draft["items"][2]["quality"] == "FRESH"
 
 
-def test_personalized_push_retains_reminders_and_actions_after_markdown_table() -> None:
+def test_personalized_push_retains_reminders_and_actions_after_aligned_list() -> None:
     content = pre_market_personalized.format_push_content(
         _context(
             positions=_positions(),
@@ -375,7 +374,7 @@ def test_personalized_push_retains_reminders_and_actions_after_markdown_table() 
         )
     )
 
-    assert content.startswith("**盘前持仓概览**\n| 代码 | 名称 | 仓位 | 当日 |")
+    assert content.startswith("**盘前持仓概览**\n```")
     assert "提醒：" in content
     assert "行动：" in content
 
