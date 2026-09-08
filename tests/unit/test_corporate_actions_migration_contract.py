@@ -6,13 +6,16 @@ from pathlib import Path
 from scripts.migrate import _readback, load_migrations
 
 
-def test_058_is_the_latest_forward_only_migration() -> None:
+def test_058_remains_in_the_forward_only_migration_chain() -> None:
     root = Path(__file__).resolve().parents[2]
 
     migrations = load_migrations(root / "migrations")
 
-    assert migrations[-1].version == 58
-    assert migrations[-1].path.name == "058_corporate_actions_multisource_sync.sql"
+    assert any(
+        migration.version == 58
+        and migration.path.name == "058_corporate_actions_multisource_sync.sql"
+        for migration in migrations
+    )
 
 
 def test_058_adds_auditable_quality_and_controlled_worker_write_contract() -> None:
@@ -39,6 +42,19 @@ def test_058_adds_auditable_quality_and_controlled_worker_write_contract() -> No
     assert "GRANT INSERT ON market.corporate_actions TO wealthsail_worker" not in migration
     assert "GRANT UPDATE ON market.corporate_actions TO wealthsail_worker" not in migration
     assert "GRANT DELETE ON market.corporate_actions TO wealthsail_worker" not in migration
+
+
+def test_059_grants_worker_only_the_reads_needed_for_held_instrument_sync() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "059_corporate_actions_sync_read_grants.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "GRANT SELECT ON ledger.position_snapshots" in migration
+    assert "reference.instruments" in migration
+    assert "reference.instrument_aliases" in migration
+    assert "TO wealthsail_worker" in migration
+    assert "GRANT INSERT ON market.corporate_actions" not in migration
 
 
 def test_readback_verifies_multisource_corporate_action_boundary() -> None:

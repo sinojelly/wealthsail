@@ -537,6 +537,21 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("corporate action multi-source contract is missing or unsafe")
 
+    corporate_action_sync_reads = (
+        "ledger.position_snapshots",
+        "reference.instruments",
+        "reference.instrument_aliases",
+    )
+    if not all(
+        await conn.fetchval(
+            "SELECT has_table_privilege($1, $2, 'SELECT')",
+            "wealthsail_worker",
+            relation,
+        )
+        for relation in corporate_action_sync_reads
+    ):
+        raise RuntimeError("corporate action sync read grants are missing or unsafe")
+
     exposed_writes = await conn.fetchval(
         """
         SELECT COUNT(*)
