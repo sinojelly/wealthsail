@@ -478,6 +478,38 @@ def _sorted_by_weight(positions: list[dict]) -> list[dict]:
     )
 
 
+def _is_off_exchange_fund(position: dict) -> bool:
+    """Whether a report position represents an OTC mutual fund."""
+    return str(position.get("type") or "").upper() in {
+        "场外基金",
+        "OFF_EXCHANGE_FUND",
+        "FUND",
+    }
+
+
+def _stale_fund_summary(stale_funds: list[dict]) -> str:
+    """Describe multiple stale OTC funds without listing every fund name.
+
+    Fund NAVs are published after the trading day, so a shared stale batch is
+    one data-quality issue rather than one independent action per fund. Keep
+    the date qualifier truthful when imported NAV dates differ or are absent.
+    """
+    dates = [str(item.get("valuationDate") or "").strip() for item in stale_funds]
+    known_dates = sorted({value for value in dates if value})
+    if len(known_dates) == 1 and all(dates):
+        date_note = f"（最新净值日为{known_dates[0]}）"
+    elif known_dates and len(known_dates) == len(dates):
+        date_note = f"（最新净值日期不一致，最早为{known_dates[0]}）"
+    elif known_dates:
+        date_note = f"（最新净值日期不完整，已知最早为{known_dates[0]}）"
+    else:
+        date_note = "（最新净值日暂无）"
+    return (
+        f"{len(stale_funds)}只场外基金估值数据已过期{date_note}，"
+        "将影响估值与盈亏归因，请核对后再决策"
+    )
+
+
 def _position_health_risks(context: dict, *, concise: bool) -> list[str]:
     """持仓健康度风险项，按优先级返回短语列表（无风险则空）。
 
@@ -504,7 +536,24 @@ def _position_health_risks(context: dict, *, concise: bool) -> list[str]:
         for p in _sorted_by_weight(positions)
         if str(p.get("quality") or "").upper() in _STALE_QUALITIES
     ]
+    # 多只场外基金通常复用同一批迟到的官方净值；正文只给出一条
+    # 可执行的质量提醒，避免基金数量放大为同义的逐条噪音。
+    stale_funds = [
+        position
+        for position in stale
+        if _is_off_exchange_fund(position)
+        and str(position.get("quality") or "").upper() == "STALE"
+    ]
+    grouped_stale_fund_ids = {
+        id(position) for position in stale_funds
+    } if len(stale_funds) > 1 else set()
+    grouped_funds_emitted = False
     for position in stale:
+        if id(position) in grouped_stale_fund_ids:
+            if not grouped_funds_emitted:
+                risks.append(_stale_fund_summary(stale_funds))
+                grouped_funds_emitted = True
+            continue
         name = _position_label(position)
         quality = str(position.get("quality") or "").upper()
         is_stale = quality == "STALE"

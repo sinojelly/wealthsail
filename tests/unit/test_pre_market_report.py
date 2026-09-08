@@ -429,6 +429,67 @@ def test_holding_impact_flags_stale_valuation() -> None:
     assert pre_market.impact_push_text(context) == "招商银行估值过期"
 
 
+def test_holding_impact_groups_multiple_stale_off_exchange_funds() -> None:
+    """多个场外基金过期时只保留一条汇总风险，避免逐只刷屏。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["positions"] = [
+        {
+            "instrumentId": "fund-1",
+            "symbol": "110022",
+            "name": "易方达消费行业",
+            "type": "场外基金",
+            "quantity": "100",
+            "quality": "STALE",
+            "valuationDate": "2026-09-07",
+            "weight": "20",
+        },
+        {
+            "instrumentId": "fund-2",
+            "symbol": "001632",
+            "name": "天弘中证食品饮料",
+            "type": "场外基金",
+            "quantity": "100",
+            "quality": "STALE",
+            "valuationDate": "2026-09-07",
+            "weight": "15",
+        },
+    ]
+
+    expected = (
+        "2只场外基金估值数据已过期（最新净值日为2026-09-07），"
+        "将影响估值与盈亏归因，请核对后再决策。"
+    )
+    assert pre_market.holding_impact_text(context) == expected
+    assert pre_market.impact_push_text(context) == (
+        "2只场外基金估值数据已过期（最新净值日为2026-09-07），"
+        "将影响估值与盈亏归因，请核对后再决策"
+    )
+
+
+def test_holding_impact_keeps_one_stale_off_exchange_fund_individual() -> None:
+    """仅一只场外基金过期时保留名称和净值日期，方便用户核对。"""
+    context = _context()
+    context["preMarket"]["corporateActions"] = []
+    context["positions"] = [
+        {
+            "instrumentId": "fund-1",
+            "symbol": "110022",
+            "name": "易方达消费行业",
+            "type": "场外基金",
+            "quantity": "100",
+            "quality": "STALE",
+            "valuationDate": "2026-09-07",
+            "weight": "20",
+        }
+    ]
+
+    assert pre_market.holding_impact_text(context) == (
+        "易方达消费行业估值已过期（2026-09-07 以来未更新），"
+        "将影响估值与盈亏归因，请核对后再决策。"
+    )
+
+
 def test_holding_impact_stale_valuation_shows_date_when_available() -> None:
     """估值过期且知道最近估值日期时，文案显示具体日期增强可执行性。"""
     context = _context()
