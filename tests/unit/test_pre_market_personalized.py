@@ -285,7 +285,8 @@ def test_personalized_push_renders_every_holding_as_markdown_table() -> None:
     ]
     assert "| 600000 | 标的0 | 30.00% | <font color=\"info\">-1.00%</font> |" in content
     assert "| 600002 | 标的2 | 28.00% | <font color=\"warning\">+1.00%</font> |" in content
-    assert "| 600010 | 标的10⚠️ | 20.00% | <font color=\"warning\">+9.00%</font> |" in content
+    assert "| 600010 | 标的10 | 20.00% | <font color=\"warning\">+9.00%</font> |" in content
+    assert "⚠️" not in content
     assert all(f"6000{index:02d}" in content for index in range(11))
     assert "另" not in content
 

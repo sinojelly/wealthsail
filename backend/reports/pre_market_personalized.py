@@ -246,10 +246,9 @@ def _holdings_push_table(rows: list[dict]) -> list[str]:
         "| --- | --- | ---: | ---: |",
     ]
     for row in rows:
-        warning = "⚠️" if row["quality"] != "FRESH" else ""
         cells = (
             _markdown_table_cell(row["symbol"]),
-            _markdown_table_cell(f'{row["name"]}{warning}'),
+            _markdown_table_cell(row["name"]),
             _markdown_table_cell(_push_percent(row["weight"])),
             _colored_day_change(row["changePct"]),
         )
