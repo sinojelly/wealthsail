@@ -411,10 +411,17 @@ async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> N
     captured: dict[str, object] = {}
 
     async def fake_context(
-        conn, tenant_id, session, *, audience_user_id=None, asset_scope=None
+        conn,
+        tenant_id,
+        session,
+        *,
+        audience_user_id=None,
+        asset_scope=None,
+        settings=None,
     ):
         captured["audience"] = audience_user_id
         captured["scope"] = asset_scope
+        captured["settings"] = settings
         return {"positions": [{"instrumentId": "inst-1"}], "watchlist": []}
 
     async def fake_generate(*_a, **kwargs):
@@ -448,6 +455,7 @@ async def test_debug_personalized_phase_reaches_real_generator(monkeypatch) -> N
     # The real generator must own the asset scope, not the caller's role.
     assert captured["scope"].kind == "MINE"
     assert str(captured["scope"].owner_user_id) == USER_ID
+    assert captured["settings"].pre_market_holdings_enrichments_enabled is True
 
 
 @pytest.mark.asyncio
