@@ -153,6 +153,36 @@ def test_personalized_report_reports_held_corporate_action_impact() -> None:
     assert draft["items"][0]["quality"] == "FRESH"
 
 
+def test_personalized_report_uses_today_ex_rights_as_operation_reminder() -> None:
+    """除权除息是当天持仓可验证的操作提醒，而不只是影响说明。"""
+    draft = pre_market_personalized.build_report(
+        _context(
+            positions=_positions(),
+            pre_market={
+                "reportDate": "2026-09-07",
+                "corporateActions": [
+                    {
+                        "instrumentId": _HELD_ID,
+                        "symbol": "600036",
+                        "name": "招商银行",
+                        "actionType": "CASH_DIVIDEND",
+                        "actionDate": "2026-09-07",
+                        "exDate": "2026-09-07",
+                    }
+                ],
+            },
+        )
+    )
+
+    reminders = {
+        item["title"]: item["body"] for item in draft["items"]
+    }
+    assert reminders["今日操作提醒"] == (
+        "招商银行(600036)今日除权除息，价格可能出现技术性调整，请关注开盘价与实际到账信息。"
+    )
+    assert reminders["今日操作提醒"] != "今日无申赎截止提醒"
+
+
 def test_personalized_report_reports_watched_corporate_action() -> None:
     draft = pre_market_personalized.build_report(
         _context(
@@ -251,7 +281,8 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert "行动：" in content
     assert "标的0" in content and "标的1" in content and "标的2" in content
     assert "标的3" not in content
-    assert content.count("标的0") == 1
+    # 同一事实在「提醒」中提示当日操作，在「行动」中保留未来三天事件列表。
+    assert content.count("标的0") == 2
     assert "等共4条" in content
 
 

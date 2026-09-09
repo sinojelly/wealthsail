@@ -18,11 +18,11 @@ from backend.dependencies import now_shanghai
 from backend.portfolio.scope import AssetScope
 from backend.reports.pre_market import (
     action_list_text,
-    cutoff_push_text,
-    cutoff_text,
     format_action_entry,
     holding_impact_text,
     instrument_label,
+    operation_reminder_push_text,
+    operation_reminder_text,
     personalized_holdings_markdown,
     position_table_rows,
     reminder_has_data,
@@ -170,7 +170,7 @@ def build_report(context: dict, *, now: datetime | None = None) -> dict:
     # 持仓影响需要 positions 做归因，因此传整个 context 而非仅 preMarket。
     impact = holding_impact_text(context)
     watchlist = _watchlist_text(context, now=now)
-    reminder = cutoff_text(context)
+    reminder = operation_reminder_text(context)
     sections = (
         (_SECTION_TITLES[0], impact, "RISK", _impact_quality(pre)),
         (_SECTION_TITLES[1], watchlist, "FACT", _watchlist_quality(context)),
@@ -261,7 +261,7 @@ def format_push_content(context: dict) -> str:
         lines.extend(_holdings_push_list(rows))
     else:
         lines.append("暂无持仓，今日市场概况")
-    lines.append(f"提醒：{cutoff_push_text(context)}")
+    lines.append(f"提醒：{operation_reminder_push_text(context)}")
     lines.append(f"行动：{action_list_text(context, limit=3)}")
     return "\n".join(lines)
 

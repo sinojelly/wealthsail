@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
@@ -128,21 +129,44 @@ def reconcile_provider_results(
 async def fetch_akshare_actions(
     symbols: Sequence[str], *, provider: Any | None = None
 ) -> ProviderResult:
-    """Fetch one market-wide AkShare dividend table and retain requested symbols."""
+    """Fetch implemented A-share dividend details for the requested symbols.
 
-    wanted = {symbol.strip().zfill(6) for symbol in symbols}
+    ``stock_history_dividend`` only exposes per-stock cumulative statistics;
+    it cannot answer whether a holding has an ex-right/ex-dividend date today.
+    The sibling ``stock_history_dividend_detail`` endpoint supplies the
+    auditable, per-event dates used by the Worker instead.
+    """
+
+    wanted = tuple(dict.fromkeys(symbol.strip().zfill(6) for symbol in symbols))
     if not wanted:
         return ProviderResult.available(AKSHARE_CORPORATE_ACTIONS, ())
     try:
         if provider is None:
             import akshare as provider  # noqa: PLC0415
 
-        rows, source_ref = await asyncio.to_thread(_akshare_dividend_rows, provider)
+        outcomes = await asyncio.gather(
+            *(
+                asyncio.to_thread(_akshare_dividend_detail_rows, provider, symbol)
+                for symbol in wanted
+            ),
+            return_exceptions=True,
+        )
+        successful = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+        if not successful:
+            raise RuntimeError("AkShare dividend detail requests all failed")
         actions = tuple(
             action
+            for symbol, rows in zip(wanted, outcomes, strict=True)
+            if not isinstance(rows, Exception)
             for row in rows
-            if (action := _normalize_akshare_action(row, source_ref)) is not None
-            and action.symbol in wanted
+            if (
+                action := _normalize_akshare_detail_action(
+                    symbol,
+                    row,
+                    "akshare/stock_history_dividend_detail",
+                )
+            )
+            is not None
         )
         return ProviderResult.available(AKSHARE_CORPORATE_ACTIONS, actions)
     except Exception as exc:  # noqa: BLE001 - provider faults must degrade safely
@@ -169,32 +193,49 @@ async def fetch_baostock_actions(
         return ProviderResult.unavailable(BAOSTOCK_CORPORATE_ACTIONS, type(exc).__name__)
 
 
-def _akshare_dividend_rows(provider: Any) -> tuple[list[Any], str]:
-    for function_name in ("stock_dividend", "stock_dividend_cninfo"):
-        function = getattr(provider, function_name, None)
-        if function is None:
-            continue
-        frame = function()
-        if frame is None or getattr(frame, "empty", True):
-            return [], f"akshare/{function_name}"
-        return [row for _, row in frame.iterrows()], f"akshare/{function_name}"
-    raise RuntimeError("akshare has no supported dividend endpoint")
+def _akshare_dividend_detail_rows(provider: Any, symbol: str) -> list[Any]:
+    """Fetch one holding's implementation records from the AkShare API."""
+    function = getattr(provider, "stock_history_dividend_detail", None)
+    if function is None:
+        raise RuntimeError("akshare has no stock_history_dividend_detail endpoint")
+    frame = function(symbol=symbol, indicator="分红")
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    return [row for _, row in frame.iterrows()]
 
 
-def _normalize_akshare_action(row: Any, source_ref: str) -> CorporateAction | None:
+def _normalize_akshare_detail_action(
+    symbol: str, row: Any, source_ref: str
+) -> CorporateAction | None:
+    """Accept only implemented dividend rows with a concrete ex-right date."""
     columns = _row_columns(row)
-    symbol = _first_text(row, columns, ("股票代码", "代码"))
+    progress = _first_text(row, columns, ("进度", "实施进度"))
+    if progress != "实施":
+        return None
     ex_date = _first_date(row, columns, ("除权除息日", "除息日", "除权日"))
-    if symbol is None or ex_date is None:
+    if ex_date is None:
         return None
     cash = _first_text(row, columns, ("每股派息", "每股分红", "派息"))
+    bonus = _first_text(row, columns, ("送股",))
+    transfer = _first_text(row, columns, ("转增",))
+    params = {
+        key: value
+        for key, value in (
+            ("cashPerShare", cash),
+            ("bonusShares", bonus),
+            ("transferShares", transfer),
+        )
+        if value is not None and _is_nonzero(value)
+    }
     return CorporateAction(
         symbol=symbol.zfill(6),
-        action_type="CASH_DIVIDEND",
+        # Cash dividends can be corroborated by baostock.  Share-only
+        # distributions are still an ex-right event but have no cash leg.
+        action_type="CASH_DIVIDEND" if cash is not None else "EX_RIGHTS",
         ex_date=ex_date,
         record_date=_first_date(row, columns, ("股权登记日", "登记日")),
         pay_date=_first_date(row, columns, ("派息日", "红利发放日", "股息发放日")),
-        params={"cashPerShare": cash} if cash else {},
+        params=params,
         source_ref=source_ref,
     )
 
@@ -246,3 +287,11 @@ def _first_date(row: Any, columns: set[str], names: Sequence[str]) -> date | Non
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
+
+
+def _is_nonzero(value: str) -> bool:
+    """Drop provider zero placeholders from the persisted action parameters."""
+    try:
+        return Decimal(value) != 0
+    except (InvalidOperation, ValueError):
+        return True

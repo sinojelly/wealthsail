@@ -107,28 +107,78 @@ def test_unsupported_baostock_is_not_a_failure_for_exchange_fund() -> None:
 
 class _FakeFrame:
     empty = False
-    columns = ["股票代码", "除权除息日", "股权登记日", "派息日", "每股派息"]
+    columns = ["公告日期", "送股", "转增", "派息", "进度", "除权除息日", "股权登记日"]
 
     def iterrows(self):
         yield 0, {
-            "股票代码": "600519",
+            "公告日期": "2026-09-01",
+            "送股": "0",
+            "转增": "0",
+            "派息": "23.957",
+            "进度": "实施",
             "除权除息日": "2026-09-08",
             "股权登记日": "2026-09-05",
-            "派息日": "2026-09-10",
-            "每股派息": "23.957",
-        }
-        yield 1, {
-            "股票代码": "000001",
-            "除权除息日": "2026-09-09",
-            "股权登记日": "",
-            "派息日": "",
-            "每股派息": "0.3",
         }
 
 
 class _FakeAkshare:
-    def stock_dividend(self) -> _FakeFrame:
+    def stock_history_dividend_detail(
+        self, *, symbol: str, indicator: str = "分红"
+    ) -> _FakeFrame:
+        assert symbol == "600519"
+        assert indicator == "分红"
         return _FakeFrame()
+
+
+class _FakeHistoryDividendDetailFrame:
+    """AkShare ``stock_history_dividend_detail`` 的逐股票事件形态。"""
+
+    empty = False
+    columns = [
+        "公告日期",
+        "送股",
+        "转增",
+        "派息",
+        "进度",
+        "除权除息日",
+        "股权登记日",
+        "红股上市日",
+    ]
+
+    def iterrows(self):
+        yield 0, {
+            "公告日期": "2026-09-01",
+            "送股": "0",
+            "转增": "0",
+            "派息": "10.03",
+            "进度": "实施",
+            "除权除息日": "2026-09-10",
+            "股权登记日": "2026-09-09",
+            "红股上市日": "",
+        }
+        # 预案尚未落地，不能被当成今日除权除息事实写入报告。
+        yield 1, {
+            "公告日期": "2026-09-01",
+            "送股": "0",
+            "转增": "0",
+            "派息": "10.03",
+            "进度": "预案",
+            "除权除息日": "2026-09-11",
+            "股权登记日": "2026-09-10",
+            "红股上市日": "",
+        }
+
+
+class _FakeHistoryDividendDetailAkshare:
+    def __init__(self) -> None:
+        self.symbols: list[str] = []
+
+    def stock_history_dividend_detail(
+        self, *, symbol: str, indicator: str = "分红"
+    ) -> _FakeHistoryDividendDetailFrame:
+        assert indicator == "分红"
+        self.symbols.append(symbol)
+        return _FakeHistoryDividendDetailFrame()
 
 
 @pytest.mark.asyncio
@@ -141,8 +191,27 @@ async def test_akshare_fetch_filters_requested_symbols_and_normalizes_dates() ->
     assert action.symbol == "600519"
     assert action.ex_date == date(2026, 9, 8)
     assert action.record_date == date(2026, 9, 5)
-    assert action.pay_date == date(2026, 9, 10)
+    assert action.pay_date is None
     assert action.params == {"cashPerShare": "23.957"}
+
+
+@pytest.mark.asyncio
+async def test_akshare_fetch_uses_implemented_dividend_detail_rows_only() -> None:
+    """已实施且有除权日的逐股票记录才可成为盘前事实。"""
+    provider = _FakeHistoryDividendDetailAkshare()
+
+    result = await fetch_akshare_actions(["600519"], provider=provider)
+
+    assert provider.symbols == ["600519"]
+    assert result.state is ProviderState.AVAILABLE
+    assert len(result.actions) == 1
+    action = result.actions[0]
+    assert action.symbol == "600519"
+    assert action.action_type == "CASH_DIVIDEND"
+    assert action.ex_date == date(2026, 9, 10)
+    assert action.record_date == date(2026, 9, 9)
+    assert action.params == {"cashPerShare": "10.03"}
+    assert action.source_ref == "akshare/stock_history_dividend_detail"
 
 
 @dataclass

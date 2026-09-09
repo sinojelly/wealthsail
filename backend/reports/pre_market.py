@@ -863,8 +863,32 @@ def _reminder_phrases(context: dict, *, concise: bool) -> list[str]:
 
 
 def reminder_has_data(context: dict) -> bool:
-    """今日提醒是否具备事实输入（持仓 ∩ (截止规则 ∪ 申赎档案) 非空）。"""
-    return bool(_reminder_subjects(context))
+    """今日提醒是否具备事实输入（除权除息或基金申赎事实）。"""
+    return bool(_today_ex_rights_reminder_phrases(context)) or bool(
+        _reminder_subjects(context)
+    )
+
+
+def _today_ex_rights_reminder_phrases(context: dict, *, concise: bool = False) -> list[str]:
+    """只把报告日当天、已落库的除权除息写入操作提醒。"""
+    report_date = _report_date(context)
+    if not report_date:
+        return []
+    phrases: list[str] = []
+    for action in matched_actions(context):
+        if not _is_ex_rights_action(action):
+            continue
+        if _action_event_date(action) != report_date:
+            continue
+        label = instrument_label(action, include_symbol=True)
+        if concise:
+            phrases.append(f"{label}今日除权除息")
+        else:
+            phrases.append(
+                f"{label}今日除权除息，价格可能出现技术性调整，"
+                "请关注开盘价与实际到账信息"
+            )
+    return phrases
 
 
 def cutoff_text(context: dict) -> str:
@@ -896,6 +920,32 @@ def cutoff_push_text(context: dict, *, limit: int = 2) -> str:
         text += _FUND_STATUS_CAVEAT
     else:
         text += _CHANNEL_CAVEAT
+    return text
+
+
+def operation_reminder_text(context: dict) -> str:
+    """盘前操作提醒：今日除权除息优先，随后保留已有基金申赎事实。"""
+    action_phrases = _today_ex_rights_reminder_phrases(context)
+    if not action_phrases:
+        return cutoff_text(context)
+    fund_reminder = cutoff_text(context)
+    text = "；".join(action_phrases)
+    if fund_reminder != _NO_CUTOFF_REMINDER:
+        text += "；" + fund_reminder.rstrip("。")
+    return text + "。"
+
+
+def operation_reminder_push_text(context: dict, *, limit: int = 2) -> str:
+    """企微短句版提醒：不把无关的基金空态附在股票除权提醒后。"""
+    action_phrases = _today_ex_rights_reminder_phrases(context, concise=True)
+    if not action_phrases:
+        return cutoff_push_text(context, limit=limit)
+    text = "；".join(action_phrases[:limit])
+    if len(action_phrases) > limit:
+        text += f"等{len(action_phrases)}项"
+    fund_reminder = cutoff_push_text(context, limit=limit)
+    if fund_reminder != _NO_CUTOFF_REMINDER:
+        text += "；" + fund_reminder
     return text
 
 
@@ -1234,7 +1284,7 @@ def build_report(context: dict) -> dict:
     overnight = _overnight(pre)
     attention = _attention(pre)
     impact = holding_impact_text(context)
-    reminder = cutoff_text(context)
+    reminder = operation_reminder_text(context)
     focus = focus_event_text(context)
     if not focus.endswith("。"):
         focus += "。"
@@ -1355,7 +1405,7 @@ def format_push_content(context: dict) -> str:
     # 持仓影响：持仓 ∩ 今日公司行动 + 持仓健康度风险。
     impact = impact_push_text(context)
     # 今日提醒：持仓基金申赎状态（暂停/可正常）+ 15:00 前截止窗口。
-    reminder = cutoff_push_text(context)
+    reminder = operation_reminder_push_text(context)
     # 今日焦点事件：公告 > 除权 > 宏观（最多 3 条）。
     focus = focus_event_text(context)
     # 操作参考：规则引擎输出 1-2 条可执行建议。
