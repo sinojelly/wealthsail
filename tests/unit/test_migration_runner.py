@@ -290,6 +290,18 @@ def test_061_limits_worker_to_the_controlled_fund_profile_function() -> None:
     assert "GRANT DELETE ON reference.fund_profiles TO wealthsail_worker" not in migration
 
 
+def test_readback_requires_fund_subscription_status_write_boundary() -> None:
+    """升级器必须拒绝 Worker 绕过 061 的受控写入函数。"""
+    source = inspect.getsource(_readback)
+
+    assert "fund subscription status write boundary is missing or unsafe" in source
+    assert "reference.upsert_fund_profile_status" in source
+    assert "has_function_privilege" in source
+    assert "reference.fund_profiles" in source
+    for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+        assert privilege in source
+
+
 def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (

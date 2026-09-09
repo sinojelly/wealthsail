@@ -112,7 +112,7 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
 async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes() -> (
     None
 ):
-    """Four reports remain stable while the governed 06:00 source job is added."""
+    """四时段报告与 06:00/06:05/22:00 全局数据同步任务均应注册。"""
     shanghai = ZoneInfo("Asia/Shanghai")
     dispatched: list[str] = []
 
@@ -124,6 +124,7 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes(
 
     assert {schedule.session for schedule in SCHEDULES} == {
         "CORPORATE_ACTIONS_REFRESH",
+        "FUND_SUBSCRIPTION_STATUS_REFRESH",
         "FUND_NAV_HISTORY_REFRESH",
         "PRE_MARKET",
         "INTRADAY",

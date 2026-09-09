@@ -401,6 +401,74 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if not api_reads or public_pre_market_read or forbidden_effective_privileges:
         raise RuntimeError("pre-market reference read boundary is missing or unsafe")
 
+    # 061 keeps the Worker on a single audited SECURITY DEFINER path: it may
+    # refresh provider-backed fund states, but never receives table-write
+    # privileges over the reference facts read by reports.
+    fund_subscription_function = (
+        "reference.upsert_fund_profile_status("
+        "uuid,text,text,date,text,jsonb,timestamp with time zone)"
+    )
+    fund_subscription_security = await conn.fetchrow(
+        """
+        SELECT procedure.prosecdef,
+               COALESCE(procedure.proconfig, ARRAY[]::TEXT[]) AS proconfig
+          FROM pg_proc procedure
+          JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'reference'
+           AND procedure.proname = 'upsert_fund_profile_status'
+           AND pg_get_function_identity_arguments(procedure.oid) =
+               'p_instrument_id uuid, p_purchase_status text, '
+               'p_redemption_status text, p_effective_from date, '
+               'p_source_ref text, p_source_metadata jsonb, '
+               'p_retrieved_at timestamp with time zone'
+        """
+    )
+    fund_subscription_privileges = {
+        "worker_can_execute": bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "wealthsail_worker",
+                fund_subscription_function,
+            )
+        ),
+        "api_cannot_execute": not bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "wealthsail_api",
+                fund_subscription_function,
+            )
+        ),
+        "browser_cannot_execute": not bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "authenticated",
+                fund_subscription_function,
+            )
+        ),
+    }
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+            fund_subscription_privileges[
+                f"{role}_cannot_{privilege.lower()}"
+            ] = not bool(
+                await conn.fetchval(
+                    "SELECT has_table_privilege($1, $2, $3)",
+                    role,
+                    "reference.fund_profiles",
+                    privilege,
+                )
+            )
+    if (
+        fund_subscription_security is None
+        or not fund_subscription_security["prosecdef"]
+        or "search_path=reference, pg_catalog"
+        not in fund_subscription_security["proconfig"]
+        or not all(fund_subscription_privileges.values())
+    ):
+        raise RuntimeError(
+            "fund subscription status write boundary is missing or unsafe"
+        )
+
     corporate_action_columns = {
         row["column_name"]: row
         for row in await conn.fetch(
@@ -2344,7 +2412,7 @@ async def migrate(
         if not dry_run:
             await _readback(conn)
             print(
-                "READBACK OK: roles, RLS, runtime grants, Tiantian import, "
+                "READBACK OK: roles, RLS, runtime grants, Tiantian import/status, "
                 "identity session, tenant governance and trade-integrity contracts"
             )
     finally:
