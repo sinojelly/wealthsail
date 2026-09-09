@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { FileSearch, RefreshCw, Sparkles } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { canViewOperations, useAuthSession } from "../../app/auth-session";
@@ -20,6 +27,15 @@ import type { EvidenceRecord } from "./report-data";
 type TriggerVariant = {
   phase?: "MACRO" | "PERSONALIZED" | "ALERT";
 };
+
+const MIN_TIMELINE_WIDTH = 160;
+const MAX_TIMELINE_WIDTH = 500;
+const DEFAULT_TIMELINE_WIDTH = 292;
+const TIMELINE_KEYBOARD_STEP = 10;
+
+function clampTimelineWidth(width: number): number {
+  return Math.min(MAX_TIMELINE_WIDTH, Math.max(MIN_TIMELINE_WIDTH, width));
+}
 
 // 只从选中行恢复报告变体；受众与收件人始终由后端绑定到当前登录用户。
 // STANDARD 无需 phase，盘前宏观、盘前个性化和盘中告警则必须保持原变体。
@@ -51,6 +67,49 @@ export default function ReportsPage() {
   const handledRunId = useRef<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [timelineWidth, setTimelineWidth] = useState(DEFAULT_TIMELINE_WIDTH);
+  const timelineDrag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    function handlePointerMove(event: globalThis.PointerEvent) {
+      const drag = timelineDrag.current;
+      if (!drag) return;
+      setTimelineWidth(clampTimelineWidth(drag.startWidth + event.clientX - drag.startX));
+    }
+
+    function stopTimelineResize() {
+      timelineDrag.current = null;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopTimelineResize);
+    window.addEventListener("pointercancel", stopTimelineResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopTimelineResize);
+      window.removeEventListener("pointercancel", stopTimelineResize);
+    };
+  }, []);
+
+  function startTimelineResize(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    timelineDrag.current = {
+      startX: event.clientX,
+      startWidth: timelineWidth,
+    };
+  }
+
+  function handleTimelineResizeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const offset = event.key === "ArrowLeft"
+      ? -TIMELINE_KEYBOARD_STEP
+      : event.key === "ArrowRight"
+        ? TIMELINE_KEYBOARD_STEP
+        : 0;
+    if (!offset) return;
+    event.preventDefault();
+    setTimelineWidth((current) => clampTimelineWidth(current + offset));
+  }
 
   function handleGenerationResult(result: TriggerReportResult) {
     if (result.runId) {
@@ -178,7 +237,14 @@ export default function ReportsPage() {
             : "未知错误"}
         </div>
       ) : null}
-      <div className="reports-workspace">
+      <div
+        className="reports-workspace"
+        style={
+          {
+            "--report-timeline-width": `${timelineWidth}px`,
+          } as CSSProperties
+        }
+      >
         <ReportTimeline
           reports={reports}
           selectedId={selected?.id ?? ""}
@@ -190,6 +256,18 @@ export default function ReportsPage() {
           onGenerate={handleGenerateSession}
           canGenerate={canTrigger}
           isGenerating={isGenerating}
+        />
+        <div
+          aria-label="调整报告时间线宽度"
+          aria-orientation="vertical"
+          aria-valuemax={MAX_TIMELINE_WIDTH}
+          aria-valuemin={MIN_TIMELINE_WIDTH}
+          aria-valuenow={timelineWidth}
+          className="report-resize-handle"
+          onKeyDown={handleTimelineResizeKeyDown}
+          onPointerDown={startTimelineResize}
+          role="separator"
+          tabIndex={0}
         />
         {detailQuery.isLoading ? (
           <div className="report-viewer report-loading">正在加载报告…</div>

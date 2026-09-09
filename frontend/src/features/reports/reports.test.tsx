@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReportsPage from "./ReportsPage";
 import type { ReportDetail, ReportSummary } from "../../api/types";
@@ -95,6 +95,39 @@ it("renders a holdings Markdown table in the report summary", () => {
 
   expect(screen.getByRole("table")).toBeInTheDocument();
   expect(screen.getByText("+0.84%")).toHaveClass("report-value-up");
+});
+
+it("resizes the audit timeline within its supported width range", () => {
+  const { container } = renderWithSession(
+    <ReportsPage />,
+    "/reports?reportId=R-POST-20260823",
+  );
+  const workspace = container.querySelector<HTMLElement>(".reports-workspace");
+  const handle = screen.getByRole("separator", { name: "调整报告时间线宽度" });
+
+  expect(workspace).toHaveStyle({ "--report-timeline-width": "292px" });
+
+  fireEvent.pointerDown(handle, { clientX: 292 });
+  fireEvent.pointerMove(document, { clientX: 900 });
+  fireEvent.pointerUp(document);
+  expect(workspace).toHaveStyle({ "--report-timeline-width": "500px" });
+
+  fireEvent.pointerDown(handle, { clientX: 500 });
+  fireEvent.pointerMove(document, { clientX: -100 });
+  fireEvent.pointerUp(document);
+  expect(workspace).toHaveStyle({ "--report-timeline-width": "160px" });
+});
+
+it("allows keyboard resizing of the audit timeline separator", () => {
+  const { container } = renderWithSession(
+    <ReportsPage />,
+    "/reports?reportId=R-POST-20260823",
+  );
+  const workspace = container.querySelector<HTMLElement>(".reports-workspace");
+  const handle = screen.getByRole("separator", { name: "调整报告时间线宽度" });
+
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  expect(workspace).toHaveStyle({ "--report-timeline-width": "302px" });
 });
 
 it("opens a report evidence record with traceable provenance metadata", async () => {
