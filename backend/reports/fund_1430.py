@@ -449,77 +449,136 @@ def _sourced_line(label: str, body: str, source: str, limit: int) -> str:
     return f"{prefix}{body}{source}"
 
 
+def _estimate_time_label(estimates: list[dict]) -> str:
+    """Show the newest persisted valuation timestamp once for the whole push."""
+
+    times = [
+        _display_time(estimate.get("asOf"))
+        for estimate in estimates
+        if _display_time(estimate.get("asOf")) != _MISSING
+    ]
+    return max(times) if times else _MISSING
+
+
+def _estimate_source_label(estimates: list[dict]) -> str:
+    """Normalize the persisted provider label without claiming an unknown source."""
+
+    sources = {
+        str((estimate.get("metadata") or {}).get("estimateSource") or "").strip()
+        for estimate in estimates
+    }
+    sources.discard("")
+    if len(sources) == 1:
+        source = next(iter(sources))
+        if "sina" in source.lower() or "新浪" in source:
+            return "新浪财经"
+        return source
+    if not sources:
+        return "数据源未标注"
+    return "多数据源"
+
+
+def _unrealized_pnl(estimate: dict, context: dict) -> Decimal | None:
+    """Return the held fund's estimate-based P&L only with complete facts."""
+
+    instrument_id = str(estimate.get("instrumentId") or "")
+    estimate_value = _safe_decimal(estimate.get("value"))
+    if not instrument_id or estimate_value is None:
+        return None
+    holdings = [
+        position
+        for position in (context.get("positions") or [])
+        if isinstance(position, dict)
+        and str(position.get("instrumentId") or "") == instrument_id
+    ]
+    if not holdings:
+        return None
+    total = Decimal("0")
+    for position in holdings:
+        quantity = _safe_decimal(position.get("quantity"))
+        avg_cost = _safe_decimal(position.get("avgCost"))
+        if quantity is None or avg_cost is None:
+            return None
+        total += (estimate_value - avg_cost) * quantity
+    return total.quantize(Decimal("0.01"))
+
+
+def _fund_trend(estimate: dict, context: dict) -> str:
+    direct_display = estimate.get("trendDisplay")
+    if direct_display and str(direct_display) != "--":
+        return str(direct_display)
+    trends = context.get("fundTrends") or {}
+    if not isinstance(trends, dict):
+        return "数据不足"
+    display = trends.get(str(estimate.get("instrumentId") or ""))
+    return str(display) if display and str(display) != "--" else "数据不足"
+
+
+def _estimate_line(metric: dict, context: dict) -> str:
+    """One compact, complete fund valuation line for a WeCom text message."""
+
+    estimate = metric["estimate"]
+    marker = "（估）" if _quality(estimate.get("quality")) == "ESTIMATED" else ""
+    pnl = _unrealized_pnl(estimate, context)
+    pnl_text = f"{pnl:+.2f}" if pnl is not None else "数据不足"
+    return (
+        f"{_label(estimate)}{marker}预估 {metric['changePct']:+.2f}% "
+        f"{_fund_trend(estimate, context)} 盈亏 {pnl_text}"
+    )
+
+
+def _push_reminder(context: dict) -> str:
+    """Keep the WeCom reminder factual and brief; full rules remain auditable."""
+
+    rules = _cutoff_rule_groups(context)
+    if not rules:
+        return "申赎提醒：暂无。"
+    rule = next(
+        (
+            candidate
+            for candidate in rules[0]
+            if str(candidate.get("salesChannel") or "DEFAULT") == "DEFAULT"
+        ),
+        rules[0][0],
+    )
+    cutoff = str(rule.get("cutoffTime") or "")[:5] or _MISSING
+    return f"申赎提醒：{_label(rule)} {cutoff}前可操作（以渠道状态为准）。"
+
+
 def format_push_content(context: dict) -> str:
-    """Build a five-line WeCom FUND_1430 summary capped at 200 characters."""
+    """Build a compact WeCom FUND_1430 text flow capped at 200 characters.
+
+    Unlike the audit detail, the notification reports each fund's estimated
+    move, prior-day trend and estimate-based P&L exactly once.  It never
+    repeats the source, timestamp, range limitation or quality label per row.
+    """
+
     metrics = _metrics(context)
     estimates = [
         item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
     ]
-    first_metric = metrics[0] if metrics else None
     historical, valuation_date = _historical_reference(context)
-    if first_metric:
-        estimate = first_metric["estimate"]
-        date_prefix = f"{(valuation_date or _MISSING)[5:]}参考 " if historical else ""
-        overview = (
-            f"{date_prefix}{_compact_symbol(estimate.get('symbol'))}"
-            f"{first_metric['changePct']:+.2f}%（{_range_phrase(first_metric)}）"
-        )
-    else:
-        overview = _MISSING
-
-    first_estimate = estimates[0] if estimates else None
-    if first_estimate:
-        metadata = first_estimate.get("metadata") or {}
-        coverage = _safe_decimal(metadata.get("coveragePct"))
-        coverage_text = f"{coverage:.2f}%" if coverage is not None else _MISSING
-        as_of = _display_time(first_estimate.get("asOf"))
-        as_of_text = as_of[-5:] if as_of != _MISSING else _MISSING
-        confidence = (
-            f"{_compact_symbol(first_estimate.get('symbol'))}覆盖{coverage_text}，"
-            f"{as_of_text}更新"
-        )
-    else:
-        confidence = _MISSING
-
-    rules = [
-        item
-        for item in ((context.get("fund1430") or {}).get("fundCutoffRules") or [])
-        if isinstance(item, dict)
-    ]
-    if rules:
-        rule = rules[0]
-        cutoff = str(rule.get("cutoffTime") or "")[:5] or _MISSING
-        reminder = (
-            f"{_compact_symbol(rule.get('symbol'))}状态暂无；{cutoff}截止参考，"
-            "能否申赎以渠道为准"
-        )
-    else:
-        reminder = _MISSING
-
-    if not metrics:
-        summary = _MISSING
-    else:
-        # 推送总长 ≤200 字符，"建议"已合并到"总结"里只占一行。
-        triggered_all = _triggered_metrics(metrics)
-        positive = any(
-            metric["changePct"] > _ACTION_THRESHOLD for metric in triggered_all
-        )
-        negative = any(
-            metric["changePct"] < -_ACTION_THRESHOLD for metric in triggered_all
-        )
-        if positive and negative:
-            summary = "估值分化，按阈值控制"
-        elif positive:
-            summary = "估值偏强，避免追涨"
-        elif negative:
-            summary = "估值偏弱，先核风险"
-        else:
-            summary = "估值未越阈值，原计划"
-
-    lines = (
-        _sourced_line("估值", overview, _ESTIMATION_SOURCE, 40),
-        _sourced_line("可信", confidence, _ESTIMATION_SOURCE, 38),
-        _sourced_line("申赎", reminder, _RULE_SOURCE, 48),
-        _sourced_line("总结", summary, _RULE_SOURCE, 50),
+    period = "最近交易日" if historical else "今日"
+    historical_note = (
+        f"（{valuation_date or _MISSING}，非交易日历史参考）" if historical else ""
     )
+    header = f"📊 {period}基金估值（数据截至 {_estimate_time_label(estimates)}）{historical_note}："
+    source_line = f"所有基金估值来源：{_estimate_source_label(estimates)}，仅供参考。"
+    reminder_line = _push_reminder(context)
+    lines = [header]
+    remaining = len(metrics)
+    for metric in metrics:
+        line = _estimate_line(metric, context)
+        trial = "\n".join([*lines, line, source_line, reminder_line])
+        if len(trial) > 200:
+            break
+        lines.append(line)
+        remaining -= 1
+    if remaining:
+        more_line = f"另有{remaining}只基金请在完整报告查看。"
+        if len("\n".join([*lines, more_line, source_line, reminder_line])) <= 200:
+            lines.append(more_line)
+    if not metrics:
+        lines.append("基金估值：数据不足。")
+    lines.extend((source_line, reminder_line))
     return "\n".join(lines)

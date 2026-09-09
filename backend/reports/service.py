@@ -685,6 +685,24 @@ async def build_report_context(
             for position in positions
             if position.get("instrumentId") and position.get("type") == "场外基金"
         ]
+        fund_changes: dict[str, Decimal] = {}
+        for estimate in fund_estimates:
+            estimate_value = _safe_decimal(estimate.get("value"))
+            metadata = estimate.get("metadata") or {}
+            confirmed_nav = _safe_decimal(metadata.get("confirmedNav"))
+            instrument_id = str(estimate.get("instrumentId") or "")
+            if (
+                instrument_id
+                and estimate_value is not None
+                and confirmed_nav is not None
+                and confirmed_nav > ZERO
+            ):
+                fund_changes[instrument_id] = (
+                    (estimate_value / confirmed_nav - Decimal("1")) * Decimal("100")
+                )
+        fund_trends = await repository.resolve_instrument_trends(
+            conn, fund_ids, report_as_of.date(), fund_changes
+        ) if fund_changes else {}
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, fund_ids, now_shanghai().date()
         )
@@ -695,6 +713,11 @@ async def build_report_context(
         fund_1430_context = {
             "fundCutoffRules": cutoff_rules,
         }
+        for estimate in fund_estimates:
+            instrument_id = str(estimate.get("instrumentId") or "")
+            trend = fund_trends.get(instrument_id)
+            if trend is not None:
+                estimate["trendDisplay"] = trend.display
     if session == "POST_MARKET":
         report_date = now_shanghai().date()
         owner_user_id = asset_scope.owner_user_id if asset_scope is not None else None

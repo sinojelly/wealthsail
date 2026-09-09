@@ -252,12 +252,57 @@ def test_push_uses_persisted_estimate_and_remains_compact() -> None:
     push = _generator().format_push_content(_context())
 
     lines = push.splitlines()
-    assert len(lines) == 4
-    assert lines[0].startswith("估值：") and lines[0].endswith("【基于估值系统】")
-    assert lines[1].startswith("可信：") and lines[1].endswith("【基于估值系统】")
+    assert lines[0].startswith("📊 今日基金估值（数据截至 ")
+    assert "易方达消费中(110011)（估）预估 +4.10%" in push
+    assert "来源不提供区间" not in push
+    assert "质量ESTIMATED" not in push
     assert "+4.10%" in push
-    assert "72.50%" in push
     assert "14:45" in push
     assert "15:00" not in push
     assert "正常申赎" not in push
     assert len(push) <= 200
+
+
+def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> None:
+    """企微基金估值逐条只保留决策所需的增量信息。"""
+    context = _context()
+    context["positions"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "symbol": "110011",
+            "name": "易方达消费中",
+            "type": "场外基金",
+            "quantity": "1000",
+            "avgCost": "1.0200",
+        },
+        {
+            "instrumentId": FUND_B_ID,
+            "symbol": "161725",
+            "name": "招商中证白酒",
+            "type": "场外基金",
+            "quantity": "800",
+            "avgCost": "1.0000",
+        },
+    ]
+    for estimate in context["fundEstimates"]:
+        estimate["asOf"] = "2026-09-09T11:30:00+08:00"
+        estimate["metadata"].update(
+            {
+                "estimateSourceKind": "EXTERNAL_PROVIDER",
+                "estimateSource": "新浪财经",
+            }
+        )
+    context["fundTrends"] = {
+        FUND_A_ID: "📉连跌2天 (-2.10%)",
+        FUND_B_ID: "📈转涨",
+    }
+
+    push = _generator().format_push_content(context)
+
+    assert push.startswith("📊 今日基金估值（数据截至 2026-09-09 11:30）：")
+    assert "易方达消费中(110011)（估）预估 +4.10% 📉连跌2天 (-2.10%) 盈亏 +21.00" in push
+    assert "招商中证白酒(161725)预估 -4.00% 📈转涨 盈亏 -32.00" in push
+    assert "所有基金估值来源：新浪财经，仅供参考。" in push
+    assert "估值截至2026-09-09 11:30" not in push
+    assert "质量ESTIMATED" not in push
+    assert "来源不提供区间" not in push

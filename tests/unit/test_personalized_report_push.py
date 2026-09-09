@@ -13,6 +13,7 @@ from backend.common.tenancy import TenantContext
 from backend.config import Settings
 from backend.integrations.model_gateway import ModelResult
 from backend.reports import service as report_service
+from backend.reports.holding_trends import HoldingTrend
 from backend.reports.shared_market_brief import SharedBriefResult
 
 
@@ -755,3 +756,81 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
     assert context["fund1430"] == {"fundCutoffRules": [{"symbol": "110011"}]}
     fund_profiles.assert_not_awaited()
     fetch_equity_quotes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fund_1430_context_adds_cached_fund_trend_for_current_estimate(
+    monkeypatch,
+) -> None:
+    fund_id = "11111111-1111-1111-1111-111111111111"
+
+    class FundContextConnection(_ContextConnection):
+        async def fetch(self, _sql: str, _tenant_id: str):
+            return [
+                {
+                    "instrument_id": fund_id,
+                    "symbol": "110011",
+                    "name": "易方达消费中",
+                    "value": Decimal("1.0410"),
+                    "lower_value": None,
+                    "upper_value": None,
+                    "quality_status": "ESTIMATED",
+                    "as_of": date(2026, 9, 9),
+                    "snapshot_id": None,
+                    "method_version": "sina/fund-estimate/v1",
+                    "metadata": {"confirmedNav": "1.0000"},
+                }
+            ]
+
+    monkeypatch.setattr(
+        report_service, "get_summary", AsyncMock(return_value={"qualityStatus": "FRESH"})
+    )
+    monkeypatch.setattr(
+        report_service,
+        "get_positions",
+        AsyncMock(
+            return_value=[
+                {
+                    "instrumentId": fund_id,
+                    "symbol": "110011",
+                    "type": "场外基金",
+                    "quantity": "100",
+                    "avgCost": "1.00",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        report_service.market_service,
+        "get_market_sentiment",
+        AsyncMock(return_value={"qualityStatus": "FRESH"}),
+    )
+    resolve_trends = AsyncMock(
+        return_value={
+            fund_id: HoldingTrend(
+                display="📈 连涨2天 (+3.00%)",
+                previous_direction="UP",
+                streak_direction="UP",
+                streak_days=2,
+                streak_change_pct=Decimal("3"),
+                history_start_date=None,
+                history_end_date=None,
+                history_field_code="NAV",
+                quality="FRESH",
+            )
+        }
+    )
+    monkeypatch.setattr(report_service.repository, "resolve_instrument_trends", resolve_trends)
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_cutoff_rules",
+        AsyncMock(return_value=[]),
+    )
+
+    context = await report_service.build_report_context(
+        FundContextConnection(), "tenant-1", "FUND_1430"
+    )
+
+    assert context["fundEstimates"][0]["trendDisplay"] == "📈 连涨2天 (+3.00%)"
+    assert resolve_trends.await_args.args[1] == [fund_id]
+    assert resolve_trends.await_args.args[3] == {fund_id: Decimal("4.100")}
