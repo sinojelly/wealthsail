@@ -552,6 +552,111 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("corporate action sync read grants are missing or unsafe")
 
+    trend_cache_columns = {
+        row["column_name"]
+        for row in await conn.fetch(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_schema = 'market'
+               AND table_name = 'instrument_trend_snapshots'
+               AND column_name IN (
+                   'instrument_id', 'trade_date', 'previous_direction',
+                   'streak_direction', 'streak_days', 'streak_change_pct',
+                   'history_start_date', 'history_end_date', 'history_field_code',
+                   'quality_status', 'method_version', 'computed_at'
+               )
+            """
+        )
+    }
+    trend_cache_unique = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(constraint.oid)
+          FROM pg_constraint constraint
+          JOIN pg_class relation ON relation.oid = constraint.conrelid
+          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'market'
+           AND relation.relname = 'instrument_trend_snapshots'
+           AND constraint.contype = 'u'
+           AND pg_get_constraintdef(constraint.oid) =
+               'UNIQUE (instrument_id, trade_date)'
+        """
+    )
+    trend_cache_function = (
+        "market.upsert_instrument_trend_snapshot("
+        "uuid,date,text,text,integer,numeric,date,date,text,text,text)"
+    )
+    trend_cache_security = await conn.fetchrow(
+        """
+        SELECT procedure.prosecdef,
+               COALESCE(procedure.proconfig, ARRAY[]::TEXT[]) AS proconfig
+          FROM pg_proc procedure
+          JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'market'
+           AND procedure.proname = 'upsert_instrument_trend_snapshot'
+           AND pg_get_function_identity_arguments(procedure.oid) =
+               'p_instrument_id uuid, p_trade_date date, '
+               'p_previous_direction text, p_streak_direction text, '
+               'p_streak_days integer, p_streak_change_pct numeric, '
+               'p_history_start_date date, p_history_end_date date, '
+               'p_history_field_code text, p_quality_status text, '
+               'p_method_version text'
+        """
+    )
+    trend_cache_roles = ("wealthsail_api", "wealthsail_worker")
+    trend_cache_can_read = all(
+        await conn.fetchval(
+            "SELECT has_table_privilege($1, $2, 'SELECT')",
+            role,
+            "market.instrument_trend_snapshots",
+        )
+        for role in trend_cache_roles
+    )
+    trend_cache_can_execute = all(
+        await conn.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+            role,
+            trend_cache_function,
+        )
+        for role in trend_cache_roles
+    )
+    trend_cache_has_direct_write = any(
+        await conn.fetchval(
+            "SELECT has_table_privilege($1, $2, $3)",
+            role,
+            "market.instrument_trend_snapshots",
+            privilege,
+        )
+        for role in (*trend_cache_roles, "authenticated")
+        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+    )
+    required_trend_cache_columns = {
+        "instrument_id",
+        "trade_date",
+        "previous_direction",
+        "streak_direction",
+        "streak_days",
+        "streak_change_pct",
+        "history_start_date",
+        "history_end_date",
+        "history_field_code",
+        "quality_status",
+        "method_version",
+        "computed_at",
+    }
+    if (
+        trend_cache_columns != required_trend_cache_columns
+        or trend_cache_unique != "UNIQUE (instrument_id, trade_date)"
+        or trend_cache_security is None
+        or not trend_cache_security["prosecdef"]
+        or "search_path=pg_catalog, market, reference"
+        not in trend_cache_security["proconfig"]
+        or not trend_cache_can_read
+        or not trend_cache_can_execute
+        or trend_cache_has_direct_write
+    ):
+        raise RuntimeError("pre-market holding trend cache contract is missing or unsafe")
+
     exposed_writes = await conn.fetchval(
         """
         SELECT COUNT(*)
