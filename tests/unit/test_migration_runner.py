@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 60
-    assert migrations[-1].path.name == "060_pre_market_holding_trends.sql"
+    assert versions[-1] == 61
+    assert migrations[-1].path.name == "061_tiantian_fund_subscription_status.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
@@ -267,6 +267,27 @@ def test_047_adds_reference_fund_profiles_with_least_privilege() -> None:
     assert "GRANT INSERT" not in migration
     assert "GRANT UPDATE" not in migration
     assert "GRANT DELETE" not in migration
+
+
+def test_061_limits_worker_to_the_controlled_fund_profile_function() -> None:
+    """天天基金状态同步必须保留 fund_profiles 的最小权限边界。"""
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations" / "061_tiantian_fund_subscription_status.sql"
+    ).read_text(encoding="utf-8")
+
+    for contract in (
+        "TIANTIAN_FUND_STATUS",
+        "CREATE OR REPLACE FUNCTION reference.upsert_fund_profile_status",
+        "SECURITY DEFINER",
+        "SET search_path = reference, pg_catalog",
+        "GRANT EXECUTE ON FUNCTION reference.upsert_fund_profile_status",
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON reference.fund_profiles",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON reference.fund_profiles TO wealthsail_worker" not in migration
+    assert "GRANT UPDATE ON reference.fund_profiles TO wealthsail_worker" not in migration
+    assert "GRANT DELETE ON reference.fund_profiles TO wealthsail_worker" not in migration
 
 
 def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -> None:

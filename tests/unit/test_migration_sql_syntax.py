@@ -33,6 +33,7 @@ PARSER_BLIND_SPOTS = frozenset(
         "032_tenant_user_account_ownership.sql",
         "040_report_job_session_uniqueness.sql",
         "058_corporate_actions_multisource_sync.sql",
+        "061_tiantian_fund_subscription_status.sql",
     }
 )
 
