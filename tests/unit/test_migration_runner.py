@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 61
-    assert migrations[-1].path.name == "061_tiantian_fund_subscription_status.sql"
+    assert versions[-1] == 62
+    assert migrations[-1].path.name == "062_akshare_fund_dividends.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
@@ -288,6 +288,34 @@ def test_061_limits_worker_to_the_controlled_fund_profile_function() -> None:
     assert "GRANT INSERT ON reference.fund_profiles TO wealthsail_worker" not in migration
     assert "GRANT UPDATE ON reference.fund_profiles TO wealthsail_worker" not in migration
     assert "GRANT DELETE ON reference.fund_profiles TO wealthsail_worker" not in migration
+
+
+def test_062_registers_akshare_fund_dividends_without_direct_runtime_writes() -> None:
+    """基金分红来源必须进入既有公司行动受控写入边界。"""
+    root = Path(__file__).resolve().parents[2]
+    path = root / "migrations" / "062_akshare_fund_dividends.sql"
+
+    assert path.exists()
+    migration = path.read_text(encoding="utf-8")
+    for contract in (
+        "AKSHARE_FUND_DIVIDEND_ACTIONS",
+        "FUND_DIVIDEND",
+        "MARKET_DATA",
+        "OPEN_SOURCE",
+        "INTERNAL_REPORTING",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON market.corporate_actions" not in migration
+    assert "GRANT UPDATE ON market.corporate_actions" not in migration
+    assert "GRANT DELETE ON market.corporate_actions" not in migration
+
+
+def test_readback_requires_akshare_fund_dividend_source_and_event_type() -> None:
+    """迁移读回必须拒绝缺少基金分红来源或类型约束的数据库。"""
+    source = inspect.getsource(_readback)
+
+    assert "AKSHARE_FUND_DIVIDEND_ACTIONS" in source
+    assert "FUND_DIVIDEND" in source
 
 
 def test_readback_requires_fund_subscription_status_write_boundary() -> None:

@@ -19,6 +19,7 @@ from backend.integrations.baostock_adapter import BaostockDividendAdapter
 
 AKSHARE_CORPORATE_ACTIONS = "AKSHARE_CORPORATE_ACTIONS"
 BAOSTOCK_CORPORATE_ACTIONS = "BAOSTOCK_CORPORATE_ACTIONS"
+AKSHARE_FUND_DIVIDEND_ACTIONS = "AKSHARE_FUND_DIVIDEND_ACTIONS"
 
 
 class ProviderState(StrEnum):
@@ -38,10 +39,14 @@ class CorporateAction:
     source_ref: str | None
     quality_status: str = "FRESH"
     verified_by: tuple[str, ...] = ()
+    event_namespace: str = "CN"
 
     @property
     def source_event_id(self) -> str:
-        return f"auto-corporate-actions:CN:{self.symbol}:{self.ex_date.isoformat()}"
+        return (
+            f"auto-corporate-actions:{self.event_namespace}:"
+            f"{self.symbol}:{self.ex_date.isoformat()}"
+        )
 
 
 @dataclass(frozen=True)
@@ -173,6 +178,52 @@ async def fetch_akshare_actions(
         return ProviderResult.unavailable(AKSHARE_CORPORATE_ACTIONS, type(exc).__name__)
 
 
+async def fetch_akshare_fund_dividend_actions(
+    symbols: Sequence[str], *, as_of: date, provider: Any | None = None
+) -> ProviderResult:
+    """Fetch held OTC-fund dividend facts from AkShare's public annual list.
+
+    The upstream endpoint is market-wide rather than symbol-addressable, so it
+    is called once per required calendar year and filtered before the result
+    crosses into the Worker.  December also reads the following year so the
+    report's three-day look-ahead cannot miss a year boundary.
+    """
+    wanted = {symbol.strip().zfill(6) for symbol in symbols if symbol.strip()}
+    if not wanted:
+        return ProviderResult.available(AKSHARE_FUND_DIVIDEND_ACTIONS, ())
+    try:
+        if provider is None:
+            import akshare as provider  # noqa: PLC0415
+
+        years = [as_of.year]
+        if as_of.month == 12:
+            years.append(as_of.year + 1)
+        rows_by_year = await asyncio.gather(
+            *(
+                asyncio.to_thread(_akshare_fund_dividend_rows, provider, str(year))
+                for year in years
+            )
+        )
+        actions = tuple(
+            action
+            for rows in rows_by_year
+            for row in rows
+            if (
+                action := _normalize_akshare_fund_dividend_action(
+                    row,
+                    "akshare/fund_fh_em",
+                )
+            )
+            is not None
+            and action.symbol in wanted
+        )
+        return ProviderResult.available(AKSHARE_FUND_DIVIDEND_ACTIONS, actions)
+    except Exception as exc:  # noqa: BLE001 - provider faults must degrade safely
+        return ProviderResult.unavailable(
+            AKSHARE_FUND_DIVIDEND_ACTIONS, type(exc).__name__
+        )
+
+
 async def fetch_baostock_actions(
     symbols: Sequence[str], *, as_of: date, provider: Any | None = None
 ) -> ProviderResult:
@@ -199,6 +250,17 @@ def _akshare_dividend_detail_rows(provider: Any, symbol: str) -> list[Any]:
     if function is None:
         raise RuntimeError("akshare has no stock_history_dividend_detail endpoint")
     frame = function(symbol=symbol, indicator="分红")
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    return [row for _, row in frame.iterrows()]
+
+
+def _akshare_fund_dividend_rows(provider: Any, year: str) -> list[Any]:
+    """Read one annual fund-dividend table with a fixed, auditable ordering."""
+    function = getattr(provider, "fund_fh_em", None)
+    if function is None:
+        raise RuntimeError("akshare has no fund_fh_em endpoint")
+    frame = function(year=year, typ="", rank="DJR", sort="asc", page=-1)
     if frame is None or getattr(frame, "empty", True):
         return []
     return [row for _, row in frame.iterrows()]
@@ -237,6 +299,32 @@ def _normalize_akshare_detail_action(
         pay_date=_first_date(row, columns, ("派息日", "红利发放日", "股息发放日")),
         params=params,
         source_ref=source_ref,
+    )
+
+
+def _normalize_akshare_fund_dividend_action(
+    row: Any, source_ref: str
+) -> CorporateAction | None:
+    """Normalize an announced fund dividend only when its ex-dividend date exists."""
+    columns = _row_columns(row)
+    symbol = _first_text(row, columns, ("基金代码", "代码"))
+    ex_date = _first_date(row, columns, ("除息日期", "除息日"))
+    if symbol is None or ex_date is None:
+        return None
+    cash_per_unit = _first_text(row, columns, ("分红", "每份分红"))
+    return CorporateAction(
+        symbol=symbol.zfill(6),
+        action_type="FUND_DIVIDEND",
+        ex_date=ex_date,
+        record_date=_first_date(row, columns, ("权益登记日", "登记日")),
+        pay_date=_first_date(row, columns, ("分红发放日", "红利发放日", "派息日")),
+        params=(
+            {"cashPerUnit": cash_per_unit}
+            if cash_per_unit is not None and _is_nonzero(cash_per_unit)
+            else {}
+        ),
+        source_ref=source_ref,
+        event_namespace="FUND",
     )
 
 

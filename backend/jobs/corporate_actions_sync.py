@@ -11,8 +11,10 @@ from datetime import date, datetime
 from backend.common.database import Pool, system_connection
 from backend.integrations.corporate_actions import (
     BAOSTOCK_CORPORATE_ACTIONS,
+    AKSHARE_FUND_DIVIDEND_ACTIONS,
     CorporateAction,
     ProviderResult,
+    fetch_akshare_fund_dividend_actions,
     fetch_akshare_actions,
     fetch_baostock_actions,
     reconcile_provider_results,
@@ -22,7 +24,10 @@ logger = logging.getLogger("wealthsail.corporate_actions_sync")
 
 AkshareFetcher = Callable[[tuple[str, ...]], Awaitable[ProviderResult]]
 BaostockFetcher = Callable[[tuple[str, ...], date], Awaitable[ProviderResult]]
-_SUPPORTED_ASSET_TYPES = frozenset({"CN_STOCK", "EXCHANGE_FUND"})
+FundDividendFetcher = Callable[[tuple[str, ...], date], Awaitable[ProviderResult]]
+_SUPPORTED_ASSET_TYPES = frozenset(
+    {"CN_STOCK", "EXCHANGE_FUND", "OFF_EXCHANGE_FUND"}
+)
 
 
 @dataclass(frozen=True)
@@ -46,8 +51,9 @@ async def sync_corporate_actions(
     *,
     akshare_fetcher: AkshareFetcher | None = None,
     baostock_fetcher: BaostockFetcher | None = None,
+    fund_dividend_fetcher: FundDividendFetcher | None = None,
 ) -> CorporateActionSyncStats:
-    """Synchronise held A-share/ETF actions without creating workflow jobs."""
+    """Synchronise held stock/ETF/fund actions without creating workflow jobs."""
 
     as_of = now.date()
     async with system_connection(pool) as conn:
@@ -55,29 +61,49 @@ async def sync_corporate_actions(
         if not instruments:
             return CorporateActionSyncStats(0, 0, 0, 0)
 
-        symbols = tuple(instrument.symbol for instrument in instruments)
+        exchange_symbols = tuple(
+            instrument.symbol
+            for instrument in instruments
+            if instrument.asset_type != "OFF_EXCHANGE_FUND"
+        )
         stock_symbols = tuple(
             instrument.symbol
             for instrument in instruments
             if instrument.asset_type == "CN_STOCK"
         )
+        fund_symbols = tuple(
+            instrument.symbol
+            for instrument in instruments
+            if instrument.asset_type == "OFF_EXCHANGE_FUND"
+        )
         akshare = akshare_fetcher or _default_akshare_fetcher
         baostock = baostock_fetcher or _default_baostock_fetcher
-        akshare_result = await akshare(symbols)
+        fund_dividends = fund_dividend_fetcher or _default_fund_dividend_fetcher
+        akshare_result = await akshare(exchange_symbols)
         baostock_result = (
             await baostock(stock_symbols, as_of)
             if stock_symbols
             else ProviderResult.available(BAOSTOCK_CORPORATE_ACTIONS, ())
+        )
+        fund_dividend_result = (
+            await fund_dividends(fund_symbols, as_of)
+            if fund_symbols
+            else ProviderResult.available(AKSHARE_FUND_DIVIDEND_ACTIONS, ())
         )
 
         persisted = 0
         unavailable = 0
         failed = 0
         for instrument in instruments:
-            provider_results = [_for_symbol(akshare_result, instrument.symbol)]
+            if instrument.asset_type == "OFF_EXCHANGE_FUND":
+                provider_results = [
+                    _for_symbol(fund_dividend_result, instrument.symbol)
+                ]
+            else:
+                provider_results = [_for_symbol(akshare_result, instrument.symbol)]
             if instrument.asset_type == "CN_STOCK":
                 provider_results.append(_for_symbol(baostock_result, instrument.symbol))
-            else:
+            elif instrument.asset_type == "EXCHANGE_FUND":
                 provider_results.append(
                     ProviderResult.unsupported(BAOSTOCK_CORPORATE_ACTIONS)
                 )
@@ -196,3 +222,9 @@ async def _default_baostock_fetcher(
     symbols: tuple[str, ...], as_of: date
 ) -> ProviderResult:
     return await fetch_baostock_actions(symbols, as_of=as_of)
+
+
+async def _default_fund_dividend_fetcher(
+    symbols: tuple[str, ...], as_of: date
+) -> ProviderResult:
+    return await fetch_akshare_fund_dividend_actions(symbols, as_of=as_of)

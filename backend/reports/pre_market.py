@@ -15,11 +15,14 @@ _HEALTHY_HOLDINGS = "今日无重大事件，持仓估值整体新鲜"
 # 数据库仅有截止时间，没有渠道实际开放状态，任何"可申赎"表述都必须带此限定。
 _CHANNEL_CAVEAT = "（以渠道状态为准）"
 # 除权类行动（现金分红/送股/拆股）必然使除权参考价下调，可确定性提示低开。
-_EX_RIGHTS_TYPES = frozenset({"CASH_DIVIDEND", "STOCK_DIVIDEND", "SPLIT"})
+_EX_RIGHTS_TYPES = frozenset(
+    {"CASH_DIVIDEND", "STOCK_DIVIDEND", "FUND_DIVIDEND", "SPLIT"}
+)
 # 持仓估值质量中视为"过期/缺失"的状态（FRESH/ESTIMATED 视为可用）。
 _STALE_QUALITIES = frozenset({"STALE", "MISSING", "UNAVAILABLE"})
 ACTION_LABELS = {
     "CASH_DIVIDEND": "现金分红除权",
+    "FUND_DIVIDEND": "基金分红",
     "STOCK_DIVIDEND": "送股除权",
     "SPLIT": "拆股除权",
     "MERGER": "合并事项",
@@ -513,7 +516,7 @@ def matched_actions(context: dict) -> list[dict]:
 
 def _is_ex_rights_action(action: dict) -> bool:
     action_type = str(action.get("actionType") or "")
-    if action_type in {"EX_RIGHTS", "STOCK_DIVIDEND", "SPLIT"}:
+    if action_type in {"EX_RIGHTS", "STOCK_DIVIDEND", "FUND_DIVIDEND", "SPLIT"}:
         return True
     if action_type != "CASH_DIVIDEND":
         return False
@@ -540,10 +543,18 @@ def _action_impact_phrase(
         detail = f"：{summary}" if summary and summary != action_label else ""
         return f"{name}{when}{action_label}{detail}"
     if concise:
+        if action_type == "FUND_DIVIDEND":
+            return f"{name}今日基金分红除息，关注净值调整"
         if _is_ex_rights_action(action):
             return f"{name}今日除权，预计低开"
         return f"{name}今日{action_label}，关注公告"
     dated_prefix = "今日" if action.get("actionDate") else ""
+    if action_type == "FUND_DIVIDEND":
+        pay_date = str(action.get("payDate") or _MISSING)
+        return (
+            f"{name}{dated_prefix}基金分红除息，净值可能出现技术性调整；"
+            f"红利发放日为{pay_date}，实际收益以到账和税费为准"
+        )
     if action_type == "CASH_DIVIDEND" and _is_ex_rights_action(action):
         pay_date = str(action.get("payDate") or _MISSING)
         return (
@@ -881,6 +892,15 @@ def _today_ex_rights_reminder_phrases(context: dict, *, concise: bool = False) -
         if _action_event_date(action) != report_date:
             continue
         label = instrument_label(action, include_symbol=True)
+        if action.get("actionType") == "FUND_DIVIDEND":
+            if concise:
+                phrases.append(f"{label}今日基金分红除息")
+            else:
+                phrases.append(
+                    f"{label}今日基金分红除息，净值可能出现技术性调整，"
+                    "请关注净值与红利到账信息"
+                )
+            continue
         if concise:
             phrases.append(f"{label}今日除权除息")
         else:

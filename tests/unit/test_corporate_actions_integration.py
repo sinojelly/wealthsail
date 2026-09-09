@@ -5,6 +5,7 @@ from datetime import date
 
 import pytest
 
+from backend.integrations import corporate_actions
 from backend.integrations.corporate_actions import (
     CorporateAction,
     ProviderResult,
@@ -212,6 +213,72 @@ async def test_akshare_fetch_uses_implemented_dividend_detail_rows_only() -> Non
     assert action.record_date == date(2026, 9, 9)
     assert action.params == {"cashPerShare": "10.03"}
     assert action.source_ref == "akshare/stock_history_dividend_detail"
+
+
+class _FakeFundDividendFrame:
+    """AkShare ``fund_fh_em`` 的基金分红事实行。"""
+
+    empty = False
+    columns = ["基金代码", "基金简称", "权益登记日", "除息日期", "分红", "分红发放日"]
+
+    def iterrows(self):
+        yield 0, {
+            "基金代码": "110022",
+            "基金简称": "易方达消费行业",
+            "权益登记日": "2026-09-10",
+            "除息日期": "2026-09-11",
+            "分红": "0.05",
+            "分红发放日": "2026-09-14",
+        }
+        # 非持仓基金必须在 Provider 边界就被过滤，避免无关事实进入后续同步。
+        yield 1, {
+            "基金代码": "000001",
+            "基金简称": "示例基金",
+            "权益登记日": "2026-09-10",
+            "除息日期": "2026-09-11",
+            "分红": "0.01",
+            "分红发放日": "2026-09-14",
+        }
+
+
+class _FakeFundDividendAkshare:
+    def __init__(self) -> None:
+        self.years: list[str] = []
+
+    def fund_fh_em(
+        self, *, year: str, typ: str = "", rank: str = "BZDM", sort: str = "asc", page: int = -1
+    ) -> _FakeFundDividendFrame:
+        assert typ == ""
+        assert rank == "DJR"
+        assert sort == "asc"
+        assert page == -1
+        self.years.append(year)
+        return _FakeFundDividendFrame()
+
+
+@pytest.mark.asyncio
+async def test_akshare_fund_dividend_fetch_normalizes_held_fund_lifecycle_dates() -> None:
+    """基金分红必须保留登记、除息和发放日期，且仅返回当前持仓基金。"""
+    provider = _FakeFundDividendAkshare()
+    fetch = getattr(corporate_actions, "fetch_akshare_fund_dividend_actions", None)
+    assert callable(fetch)
+
+    result = await fetch(
+        ["110022"], as_of=date(2026, 9, 9), provider=provider
+    )
+
+    assert provider.years == ["2026"]
+    assert result.state is ProviderState.AVAILABLE
+    assert len(result.actions) == 1
+    action = result.actions[0]
+    assert action.symbol == "110022"
+    assert action.action_type == "FUND_DIVIDEND"
+    assert action.ex_date == date(2026, 9, 11)
+    assert action.record_date == date(2026, 9, 10)
+    assert action.pay_date == date(2026, 9, 14)
+    assert action.params == {"cashPerUnit": "0.05"}
+    assert action.source_ref == "akshare/fund_fh_em"
+    assert action.source_event_id == "auto-corporate-actions:FUND:110022:2026-09-11"
 
 
 @dataclass

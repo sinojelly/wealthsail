@@ -183,6 +183,43 @@ def test_personalized_report_uses_today_ex_rights_as_operation_reminder() -> Non
     assert reminders["今日操作提醒"] != "今日无申赎截止提醒"
 
 
+def test_personalized_report_describes_fund_dividend_as_a_fund_event() -> None:
+    """基金除息不能套用股票开盘价提醒，必须说明净值与到账口径。"""
+    fund_position = {
+        **_positions()[0],
+        "instrumentId": _HELD_ID,
+        "symbol": "110022",
+        "name": "易方达消费行业",
+        "type": "场外基金",
+    }
+    draft = pre_market_personalized.build_report(
+        _context(
+            positions=[fund_position],
+            pre_market={
+                "reportDate": "2026-09-11",
+                "corporateActions": [
+                    {
+                        "instrumentId": _HELD_ID,
+                        "symbol": "110022",
+                        "name": "易方达消费行业",
+                        "actionType": "FUND_DIVIDEND",
+                        "actionDate": "2026-09-11",
+                        "exDate": "2026-09-11",
+                        "recordDate": "2026-09-10",
+                        "payDate": "2026-09-14",
+                    }
+                ],
+            },
+        )
+    )
+
+    reminders = {item["title"]: item["body"] for item in draft["items"]}
+    assert reminders["今日操作提醒"].startswith(
+        "易方达消费行业(110022)今日基金分红除息，净值可能出现技术性调整，"
+        "请关注净值与红利到账信息"
+    )
+
+
 def test_personalized_report_reports_watched_corporate_action() -> None:
     draft = pre_market_personalized.build_report(
         _context(

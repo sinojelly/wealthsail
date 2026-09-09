@@ -21,7 +21,7 @@ class _Connection:
 
     async def fetch(self, query: str, *args: object):
         assert "ledger.position_snapshots" in query
-        assert args == (["CN_STOCK", "EXCHANGE_FUND"],)
+        assert args == (["CN_STOCK", "EXCHANGE_FUND", "OFF_EXCHANGE_FUND"],)
         return [
             {
                 "instrument_id": "00000000-0000-0000-0000-000000000001",
@@ -32,6 +32,11 @@ class _Connection:
                 "instrument_id": "00000000-0000-0000-0000-000000000002",
                 "symbol": "510300",
                 "asset_type": "EXCHANGE_FUND",
+            },
+            {
+                "instrument_id": "00000000-0000-0000-0000-000000000003",
+                "symbol": "110022",
+                "asset_type": "OFF_EXCHANGE_FUND",
             },
         ]
 
@@ -86,18 +91,44 @@ async def test_sync_persists_supported_held_actions_through_controlled_function(
         assert as_of == date(2026, 9, 8)
         return ProviderResult.available("BAOSTOCK_CORPORATE_ACTIONS", [])
 
+    async def fund_dividends(
+        symbols: tuple[str, ...], as_of: date
+    ) -> ProviderResult:
+        seen["fund_dividends"] = symbols
+        assert as_of == date(2026, 9, 8)
+        return ProviderResult.available(
+            "AKSHARE_FUND_DIVIDEND_ACTIONS",
+            [
+                CorporateAction(
+                    symbol="110022",
+                    action_type="FUND_DIVIDEND",
+                    ex_date=date(2026, 9, 9),
+                    record_date=date(2026, 9, 8),
+                    pay_date=date(2026, 9, 12),
+                    params={"cashPerUnit": "0.05"},
+                    source_ref="akshare/fund_fh_em",
+                    event_namespace="FUND",
+                )
+            ],
+        )
+
     result = await sync_corporate_actions(
         _Pool(conn),
         datetime(2026, 9, 8, 6, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
         akshare_fetcher=akshare,
         baostock_fetcher=baostock,
+        fund_dividend_fetcher=fund_dividends,
     )
 
-    assert seen == {"akshare": ("600519", "510300"), "baostock": ("600519",)}
-    assert result.scanned_instruments == 2
-    assert result.persisted_actions == 2
+    assert seen == {
+        "akshare": ("600519", "510300"),
+        "baostock": ("600519",),
+        "fund_dividends": ("110022",),
+    }
+    assert result.scanned_instruments == 3
+    assert result.persisted_actions == 3
     assert result.unavailable_instruments == 0
-    assert len(conn.persisted) == 2
+    assert len(conn.persisted) == 3
     assert conn.persisted[0][0] == "00000000-0000-0000-0000-000000000001"
 
 
@@ -113,13 +144,21 @@ async def test_sync_records_unavailable_without_creating_a_fake_action() -> None
     ) -> ProviderResult:
         return ProviderResult.unavailable("BAOSTOCK_CORPORATE_ACTIONS", "timeout")
 
+    async def unavailable_fund_dividends(
+        symbols: tuple[str, ...], as_of: date
+    ) -> ProviderResult:
+        assert symbols == ("110022",)
+        assert as_of == date(2026, 9, 8)
+        return ProviderResult.unavailable("AKSHARE_FUND_DIVIDEND_ACTIONS", "timeout")
+
     result = await sync_corporate_actions(
         _Pool(conn),
         datetime(2026, 9, 8, 6, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
         akshare_fetcher=unavailable_akshare,
         baostock_fetcher=unavailable_baostock,
+        fund_dividend_fetcher=unavailable_fund_dividends,
     )
 
     assert result.persisted_actions == 0
-    assert result.unavailable_instruments == 2
+    assert result.unavailable_instruments == 3
     assert conn.persisted == []

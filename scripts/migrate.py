@@ -509,6 +509,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
             [
                 "MANUAL_CORPORATE_ACTIONS",
                 "AKSHARE_CORPORATE_ACTIONS",
+                "AKSHARE_FUND_DIVIDEND_ACTIONS",
                 "BAOSTOCK_CORPORATE_ACTIONS",
             ],
         )
@@ -522,6 +523,17 @@ async def _readback(conn: asyncpg.Connection) -> None:
          WHERE namespace.nspname = 'market'
            AND relation.relname = 'corporate_actions'
            AND constraint.conname = 'corporate_actions_quality_status_check'
+        """
+    )
+    corporate_action_type_constraint = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(constraint.oid)
+          FROM pg_constraint constraint
+          JOIN pg_class relation ON relation.oid = constraint.conrelid
+          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'market'
+           AND relation.relname = 'corporate_actions'
+           AND constraint.conname = 'corporate_actions_action_type_check'
         """
     )
     required_corporate_action_columns = {
@@ -550,9 +562,12 @@ async def _readback(conn: asyncpg.Connection) -> None:
         != {
             "MANUAL_CORPORATE_ACTIONS",
             "AKSHARE_CORPORATE_ACTIONS",
+            "AKSHARE_FUND_DIVIDEND_ACTIONS",
             "BAOSTOCK_CORPORATE_ACTIONS",
         }
         or not corporate_action_quality_constraint
+        or not corporate_action_type_constraint
+        or "FUND_DIVIDEND" not in corporate_action_type_constraint
         or any(
             value not in corporate_action_quality_constraint
             for value in ("FRESH", "STALE", "UNAVAILABLE", "CONFLICT")
