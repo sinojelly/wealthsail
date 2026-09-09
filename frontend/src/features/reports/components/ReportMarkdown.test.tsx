@@ -62,11 +62,11 @@ it("renders a market value with red profit below it", () => {
 });
 
 it.each([
-  ["-1,234.56", "report-pnl-loss"],
-  ["0.00", "report-pnl-flat"],
-  ["--", "report-pnl-flat"],
-])("renders %s using %s", (amount, className) => {
+  ["-1,234.56", ["report-pnl-loss", "report-value-down"]],
+  ["0.00", ["report-pnl-flat"]],
+  ["--", ["report-pnl-flat"]],
+])("renders %s using %s", (amount, classNames) => {
   render(<ReportMarkdown>{nineColumnSummary(`185,000（盈亏 ${amount}）`)}</ReportMarkdown>);
 
-  expect(screen.getByText(amount)).toHaveClass(className);
+  expect(screen.getByText(amount)).toHaveClass(...classNames);
 });

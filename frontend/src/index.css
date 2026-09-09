@@ -1889,13 +1889,19 @@ button:disabled {
 }
 .report-holding-pnl {
   margin-top: 2px;
-  font-size: 9px;
-  line-height: 1.2;
+  font-size: 11px;
+  line-height: 1.7;
   font-weight: 700;
 }
 .report-pnl-profit { color: #cf1322; }
-.report-pnl-loss { color: #389e0d; }
+.report-pnl-loss { color: #1a6e1a; }
 .report-pnl-flat { color: #8c8c8c; }
+.report-summary-markdown .report-holdings-table .report-value-down {
+  color: #1a6e1a;
+  font-size: 11px;
+  line-height: 1.7;
+  font-weight: 700;
+}
 .report-holding-price-value {
   color: var(--slate-900);
   font-size: 12px;

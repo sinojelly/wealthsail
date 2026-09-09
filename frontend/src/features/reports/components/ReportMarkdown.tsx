@@ -94,7 +94,13 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
         <span className="report-holding-market-value">
           {marketValue.marketValue}
         </span>
-        <span className={["report-holding-pnl", pnlClass].join(" ")}>
+        <span
+          className={[
+            "report-holding-pnl",
+            pnlClass,
+            pnlClass === "report-pnl-loss" ? "report-value-down" : "",
+          ].filter(Boolean).join(" ")}
+        >
           {marketValue.pnlAmount}
         </span>
       </td>
