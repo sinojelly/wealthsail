@@ -109,7 +109,7 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduler_dispatches_report_sessions_and_global_source_refresh() -> (
+async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes() -> (
     None
 ):
     """Four reports remain stable while the governed 06:00 source job is added."""
@@ -124,6 +124,7 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refresh() 
 
     assert {schedule.session for schedule in SCHEDULES} == {
         "CORPORATE_ACTIONS_REFRESH",
+        "FUND_NAV_HISTORY_REFRESH",
         "PRE_MARKET",
         "INTRADAY",
         "FUND_1430",

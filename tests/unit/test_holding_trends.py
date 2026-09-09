@@ -44,6 +44,20 @@ def test_missing_history_is_unavailable() -> None:
     assert (trend.display, trend.quality) == ("--", "UNAVAILABLE")
 
 
+def test_official_historical_fund_nav_remains_usable_after_its_disclosure_day() -> None:
+    """Official NAV is historical by nature, so its age is not a trust failure."""
+    trends = _trend_module()
+    history = [
+        trends.PricePoint(date(2026, 9, 4), Decimal("1.0000"), "NAV", "STALE"),
+        trends.PricePoint(date(2026, 9, 7), Decimal("1.0100"), "NAV", "STALE"),
+        trends.PricePoint(date(2026, 9, 8), Decimal("1.0200"), "NAV", "STALE"),
+    ]
+
+    trend = trends.calculate_holding_trend(Decimal("0.5"), history)
+
+    assert (trend.display, trend.quality) == ("📈 连涨2天 (+2.00%)", "FRESH")
+
+
 class _CachedTrendConnection:
     def __init__(self) -> None:
         self.history_queries = 0

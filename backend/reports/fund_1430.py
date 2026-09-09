@@ -495,9 +495,9 @@ def _fund_trend(estimate: dict, context: dict) -> str:
         return str(direct_display)
     trends = context.get("fundTrends") or {}
     if not isinstance(trends, dict):
-        return "数据不足"
+        return "--"
     display = trends.get(str(estimate.get("instrumentId") or ""))
-    return str(display) if display and str(display) != "--" else "数据不足"
+    return str(display) if display and str(display) != "--" else "--"
 
 
 def _estimate_line(metric: dict, context: dict) -> str:
@@ -521,8 +521,6 @@ def _audit_estimate_line(metric: dict, context: dict) -> str:
     trend = _fund_trend(estimate, context)
     pnl = _unrealized_pnl(estimate, context)
     pnl_text = f"{pnl:+.2f}" if pnl is not None else "数据不足"
-    if trend == "数据不足":
-        trend = " 数据不足"
     return (
         f"{_label(estimate)} 预估 {metric['changePct']:+.2f}%{marker}{trend} "
         f"盈亏 {pnl_text}"

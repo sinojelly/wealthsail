@@ -1392,13 +1392,17 @@ async def resolve_instrument_trends(
                AND (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date < $2
                AND observation.value IS NOT NULL
                AND observation.value > 0
-               AND observation.quality_status = 'FRESH'
                AND (
                    (instrument.asset_type = 'OFF_EXCHANGE_FUND'
-                    AND observation.field_code = 'NAV')
+                    AND observation.field_code = 'NAV'
+                    -- Official NAV is necessarily dated; STALE here means
+                    -- that its disclosure date is older than today, not that
+                    -- the historical fact is untrusted.
+                    AND observation.quality_status IN ('FRESH', 'STALE'))
                    OR
                    (instrument.asset_type <> 'OFF_EXCHANGE_FUND'
-                    AND observation.field_code = 'CLOSE')
+                    AND observation.field_code = 'CLOSE'
+                    AND observation.quality_status = 'FRESH')
                )
              ORDER BY observation.subject_id,
                       (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date,

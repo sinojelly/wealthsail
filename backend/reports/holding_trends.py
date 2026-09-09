@@ -67,9 +67,11 @@ def calculate_holding_trend(
 ) -> HoldingTrend:
     """Calculate a prior-day streak without treating today's move as history.
 
-    Only fresh, positive and finite historical prices participate.  The caller
-    supplies at most 30 earlier trading dates, while this function remains
-    pure so it is straightforward to verify and cache.
+    Fresh closes participate for stocks and exchange funds.  Official unit NAV
+    disclosures also participate when marked STALE: their disclosure date is
+    historical by definition, while the source fact itself remains trusted.
+    The caller supplies at most 30 earlier trading dates, while this function
+    remains pure so it is straightforward to verify and cache.
     """
 
     today_direction = _direction(today_change_pct)
@@ -78,8 +80,11 @@ def calculate_holding_trend(
 
     clean_by_date: dict[date, PricePoint] = {}
     for point in history:
+        trusted_quality = point.quality == "FRESH" or (
+            point.field_code == "NAV" and point.quality == "STALE"
+        )
         if (
-            point.quality != "FRESH"
+            not trusted_quality
             or point.field_code not in {"CLOSE", "NAV"}
             or not point.price.is_finite()
             or point.price <= 0

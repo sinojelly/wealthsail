@@ -265,6 +265,16 @@ def test_push_uses_persisted_estimate_and_remains_compact() -> None:
     assert len(push) <= 200
 
 
+def test_push_uses_double_dash_when_official_nav_history_is_not_yet_sufficient() -> None:
+    """Missing historical NAV must not be described as an estimated trend fact."""
+    context = _context()
+    context["fundTrends"] = {}
+
+    push = _generator().format_push_content(context)
+
+    assert "预估 +4.10% -- 盈亏 数据不足" in push
+
+
 def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> None:
     """企微基金估值逐条只保留决策所需的增量信息。"""
     context = _context()

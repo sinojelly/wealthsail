@@ -24,6 +24,7 @@ from backend.config import get_settings, validate_runtime_settings
 from backend.jobs import runner
 from backend.jobs.data_tasks import DataTaskConsumer
 from backend.jobs.corporate_actions_sync import sync_corporate_actions
+from backend.jobs.fund_nav_sync import sync_fund_nav_history
 from backend.jobs.outbox import OutboxConsumer
 from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
@@ -48,6 +49,24 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
             )
         except Exception:  # noqa: BLE001 -- retry on next trading day, keep Worker alive
             logger.exception("corporate action refresh failed")
+        return
+
+    if session == "FUND_NAV_HISTORY_REFRESH":
+        # Historical official NAV is a global source fact.  It intentionally
+        # bypasses workflow.jobs and cannot produce a tenant report by itself.
+        try:
+            stats = await sync_fund_nav_history(pool, settings, now)
+            logger.info(
+                "fund_nav_history_refresh scanned=%d fetched=%d persisted=%d skipped=%d empty=%d failed=%d",
+                stats.scanned_instruments,
+                stats.fetched_observations,
+                stats.persisted_observations,
+                stats.skipped_observations,
+                stats.empty_instruments,
+                stats.failed_instruments,
+            )
+        except Exception:  # noqa: BLE001 -- retry next trading day, keep Worker alive
+            logger.exception("fund NAV history refresh failed")
         return
 
     # 1. 行情刷新（各时段抓取范围由 market service 决定）

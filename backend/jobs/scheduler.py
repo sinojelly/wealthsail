@@ -62,6 +62,14 @@ SCHEDULES: tuple[SessionSchedule, ...] = (
         minute=0,
         hour=6,
     ),
+    # The Worker confirms final disclosed fund NAVs after provider publication.
+    # It is a global market-fact refresh, never a tenant report generation job.
+    SessionSchedule(
+        "FUND_NAV_HISTORY_REFRESH",
+        "基金历史净值同步",
+        minute=0,
+        hour=22,
+    ),
     SessionSchedule(
         "PRE_MARKET",
         "盘前简报·宏观",
