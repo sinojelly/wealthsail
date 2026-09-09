@@ -9,6 +9,14 @@ const summary = `## 持仓概览
 | 510300 | 沪深300ETF | 62,000份 | 4.14 | 4.12（持仓 -0.48%） | 255,440 | -0.31% | 29.68% |
 | 110022 | 易方达消费行业⚠️ | 100份 | 1.50 | --（持仓 --） | 200 | -1.03%（9/7） | 20.00% |`;
 
+function nineColumnSummary(marketValue: string): string {
+  return `## 持仓概览
+
+| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 连续变化 | 仓位 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 600036 | 招商银行 | 100股 | 38.82 | 39.15（持仓 +0.85%） | ${marketValue} | +0.84% | 📈 连涨2天 (+3.00%) | 34.85% |`;
+}
+
 it("renders a structured holdings table with complete aligned values", () => {
   render(<ReportMarkdown>{summary}</ReportMarkdown>);
 
@@ -41,4 +49,24 @@ it("does not execute raw HTML from a report", () => {
   );
 
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
+});
+
+it("renders a market value with red profit below it", () => {
+  render(<ReportMarkdown>{nineColumnSummary("185,000（盈亏 +1,234.56）")}</ReportMarkdown>);
+
+  expect(screen.getByText("185,000")).toHaveClass("report-holding-market-value");
+  expect(screen.getByText("+1,234.56")).toHaveClass(
+    "report-holding-pnl",
+    "report-pnl-profit",
+  );
+});
+
+it.each([
+  ["-1,234.56", "report-pnl-loss"],
+  ["0.00", "report-pnl-flat"],
+  ["--", "report-pnl-flat"],
+])("renders %s using %s", (amount, className) => {
+  render(<ReportMarkdown>{nineColumnSummary(`185,000（盈亏 ${amount}）`)}</ReportMarkdown>);
+
+  expect(screen.getByText(amount)).toHaveClass(className);
 });
