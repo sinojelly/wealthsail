@@ -394,7 +394,7 @@ async def test_fund_1430_generation_is_deterministic_for_every_holdings_mode(
     assert captured["generation_mode"] == "FUND_1430_DETERMINISTIC"
     assert captured["model_result"] is None
     assert len(captured["push_content"]) <= 200
-    assert captured["draft"]["summary"].startswith("1. 今日估值概览：")
+    assert captured["draft"]["summary"].startswith("📊 今日基金估值（数据截至 ")
 
 
 def test_pre_market_audit_names_the_deterministic_generator_without_a_model_run() -> (

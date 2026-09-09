@@ -118,12 +118,11 @@ def test_external_provider_estimate_explains_source_without_fake_coverage() -> N
     confidence = next(
         item["body"] for item in report["items"] if item["title"] == "估值可信度"
     )
-    assert "Sina-Fund-Estimate外部盘中估值" in confidence
-    assert "不提供持仓覆盖率" in confidence
-    assert "基于暂无披露持仓" not in confidence
-    assert "今日估值整体温和（未触发±3%阈值）" in report["summary"]
-    assert "来源不提供区间" in report["summary"]
-    assert "区间：暂无" not in report["summary"]
+    assert "名称后的“（估）”标记" in confidence
+    assert "不提供持仓覆盖率" not in confidence
+    assert "估值截至" not in confidence
+    assert "来源不提供区间" not in report["summary"]
+    assert "所有基金估值来源：新浪财经，仅供参考。" in report["summary"]
 
 
 def test_non_trading_day_report_labels_latest_trading_day_as_historical() -> None:
@@ -161,10 +160,10 @@ def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
         "申赎提醒",
         "总结",
     ]
-    assert "易方达消费中(110011)预估+4.10%" in draft["summary"]
-    assert "区间+3.80%～+4.50%" in draft["summary"]
-    assert "覆盖率72.50%" in draft["summary"]
-    assert "基于2026-06-30披露持仓" in draft["summary"]
+    assert "易方达消费中(110011) 预估 +4.10%（估）" in draft["summary"]
+    assert "来源不提供区间" not in draft["summary"]
+    assert "覆盖率72.50%" not in draft["summary"]
+    assert "基于2026-06-30披露持仓" not in draft["summary"]
     assert "14:45" in draft["summary"]
     assert "15:00" not in draft["summary"]
     assert "正常申赎" not in draft["summary"]
@@ -197,7 +196,7 @@ def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
 
     draft = _generator().build_report(context)
 
-    assert "预估+4.10%" in draft["summary"]
+    assert "预估 +4.10%（估）" in draft["summary"]
     assert "99.00%" not in draft["summary"]
 
 
@@ -205,8 +204,9 @@ def test_quality_reflects_persisted_estimate_quality() -> None:
     draft = _generator().build_report(_context())
     confidence = next(item for item in draft["items"] if item["title"] == "估值可信度")
 
-    assert "质量ESTIMATED" in confidence["body"]
-    assert "质量STALE" in confidence["body"]
+    assert "质量ESTIMATED" not in confidence["body"]
+    assert "质量STALE" not in confidence["body"]
+    assert "其中1只为盘中估值" in confidence["body"]
     assert confidence["quality"] == "STALE"
 
 
@@ -241,7 +241,9 @@ def test_missing_data_is_explicit_and_never_fabricated() -> None:
     push = _generator().format_push_content(context)
     rendered = f"{draft['summary']}\n{push}"
 
-    assert draft["summary"].count("暂无") >= 5
+    assert "数据截至 暂无" in draft["summary"]
+    assert "基金估值：数据不足。" in draft["summary"]
+    assert "申赎提醒：暂无。" in draft["summary"]
     assert "None" not in rendered
     assert "null" not in rendered
     assert "--" not in rendered
@@ -306,3 +308,49 @@ def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> Non
     assert "估值截至2026-09-09 11:30" not in push
     assert "质量ESTIMATED" not in push
     assert "来源不提供区间" not in push
+
+
+def test_audit_summary_uses_compact_fund_lines_without_repeated_metadata() -> None:
+    """研报审计摘要与企微使用同一批估值、趋势和盈亏事实。"""
+    context = _context()
+    context["positions"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "symbol": "110011",
+            "name": "易方达消费中",
+            "type": "场外基金",
+            "quantity": "1000",
+            "avgCost": "1.0200",
+        },
+        {
+            "instrumentId": FUND_B_ID,
+            "symbol": "161725",
+            "name": "招商中证白酒",
+            "type": "场外基金",
+            "quantity": "800",
+            "avgCost": "1.0000",
+        },
+    ]
+    for estimate in context["fundEstimates"]:
+        estimate["asOf"] = "2026-09-09T14:51:00+08:00"
+        estimate["metadata"].update(
+            {
+                "estimateSourceKind": "EXTERNAL_PROVIDER",
+                "estimateSource": "新浪财经",
+            }
+        )
+    context["fundTrends"] = {
+        FUND_A_ID: "📉连跌2天(-2.10%)",
+        FUND_B_ID: "📉连跌3天(-3.20%)",
+    }
+
+    report = _generator().build_report(context)
+
+    assert report["summary"].startswith("📊 今日基金估值（数据截至 14:51）：")
+    assert "易方达消费中(110011) 预估 +4.10%（估）📉连跌2天(-2.10%) 盈亏 +21.00" in report["summary"]
+    assert "招商中证白酒(161725) 预估 -4.00%📉连跌3天(-3.20%) 盈亏 -32.00" in report["summary"]
+    assert "所有基金估值来源：新浪财经，仅供参考。" in report["summary"]
+    assert "来源不提供区间" not in report["summary"]
+    assert "估值截至" not in report["summary"]
+    assert "最近正式净值截至" not in report["summary"]
+    assert "不提供持仓覆盖率，质量 ESTIMATED" not in report["summary"]

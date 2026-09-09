@@ -114,18 +114,15 @@ def _overview(metrics: list[dict], context: dict) -> str:
     historical, valuation_date = _historical_reference(context)
     period = "最近交易日" if historical else "今日"
     if not metrics:
-        return f"{period}预估涨跌幅及估值区间：{_MISSING}。{_ESTIMATION_SOURCE}"
-    values = [
-        f"{_label(metric['estimate'])}预估{metric['changePct']:+.2f}%，"
-        f"{_range_phrase(metric)}"
-        for metric in metrics
-    ]
-    reference = (
-        f"估值日期{valuation_date or _MISSING}（非交易日历史参考）；"
-        if historical
-        else ""
+        return f"📊 {period}基金估值（数据截至 {_MISSING}）：\n基金估值：数据不足。"
+    historical_note = (
+        f"（{valuation_date or _MISSING}，非交易日历史参考）" if historical else ""
     )
-    return f"{reference}{'；'.join(values)}。{_ESTIMATION_SOURCE}"
+    header = (
+        f"📊 {period}基金估值（数据截至 "
+        f"{_estimate_time_short(context.get('fundEstimates') or [])}）{historical_note}："
+    )
+    return "\n".join([header, *(_audit_estimate_line(metric, context) for metric in metrics)])
 
 
 def _coverage_label(coverage: Decimal | None) -> str:
@@ -145,32 +142,14 @@ def _confidence(context: dict) -> str:
     ]
     if not estimates:
         return f"持仓覆盖率：{_MISSING}；数据新鲜度：{_MISSING}。{_ESTIMATION_SOURCE}"
-    values: list[str] = []
-    for estimate in estimates:
-        metadata = estimate.get("metadata") or {}
-        quality = str(estimate.get("quality") or _MISSING)
-        if metadata.get("estimateSourceKind") == "EXTERNAL_PROVIDER":
-            source = str(metadata.get("estimateSource") or "外部数据源")
-            confirmed_as_of = _display_time(metadata.get("confirmedNavAsOf"))
-            values.append(
-                f"{_label(estimate)}：{source}外部盘中估值，"
-                f"估值截至{_display_time(estimate.get('asOf'))}，"
-                f"最近正式净值截至{confirmed_as_of}，"
-                f"不提供持仓覆盖率，质量{quality}"
-            )
-            continue
-        coverage = _safe_decimal(metadata.get("coveragePct"))
-        coverage_text = f"{coverage:.2f}%" if coverage is not None else _MISSING
-        coverage_label = _coverage_label(coverage)
-        disclosed_on = str(metadata.get("disclosedOn") or _MISSING)
-        confirmed_as_of = str(metadata.get("confirmedNavAsOf") or _MISSING)
-        values.append(
-            f"{_label(estimate)}覆盖率{coverage_text}，"
-            f"基于{disclosed_on}披露持仓，参考价值{coverage_label}，"
-            f"估值截至{_display_time(estimate.get('asOf'))}，"
-            f"最近正式净值截至{confirmed_as_of}，质量{quality}"
-        )
-    return f"{'；'.join(values)}。{_ESTIMATION_SOURCE}"
+    estimated_count = sum(
+        _quality(estimate.get("quality")) == "ESTIMATED" for estimate in estimates
+    )
+    return (
+        f"本报告含{len(estimates)}只持有基金，其中{estimated_count}只为盘中估值"
+        "（以基金名称后的“（估）”标记）；数据不足时不计算连续变化或盈亏。"
+        f"{_ESTIMATION_SOURCE}"
+    )
 
 
 def _cutoff_rules(context: dict) -> list[dict]:
@@ -424,13 +403,15 @@ def build_report(context: dict) -> dict:
         }
         for title, body, item_type, item_quality in sections
     ]
+    audit_summary = "\n".join(
+        (
+            overview,
+            f"所有基金估值来源：{_estimate_source_label(estimates)}，仅供参考。",
+            _push_reminder(context),
+        )
+    )
     return {
-        "summary": "\n".join(
-            f"{index}. {title}：{body}"
-            for index, (title, body, _item_type, _item_quality) in enumerate(
-                sections, start=1
-            )
-        ),
+        "summary": audit_summary,
         "items": section_items
         + _evidence_items(context)
         + _cutoff_detail_items(context),
@@ -458,6 +439,11 @@ def _estimate_time_label(estimates: list[dict]) -> str:
         if _display_time(estimate.get("asOf")) != _MISSING
     ]
     return max(times) if times else _MISSING
+
+
+def _estimate_time_short(estimates: list[dict]) -> str:
+    displayed = _estimate_time_label(estimates)
+    return displayed[-5:] if displayed != _MISSING else _MISSING
 
 
 def _estimate_source_label(estimates: list[dict]) -> str:
@@ -524,6 +510,22 @@ def _estimate_line(metric: dict, context: dict) -> str:
     return (
         f"{_label(estimate)}{marker}预估 {metric['changePct']:+.2f}% "
         f"{_fund_trend(estimate, context)} 盈亏 {pnl_text}"
+    )
+
+
+def _audit_estimate_line(metric: dict, context: dict) -> str:
+    """Render one complete fund row for the report-audit summary text flow."""
+
+    estimate = metric["estimate"]
+    marker = "（估）" if _quality(estimate.get("quality")) == "ESTIMATED" else ""
+    trend = _fund_trend(estimate, context)
+    pnl = _unrealized_pnl(estimate, context)
+    pnl_text = f"{pnl:+.2f}" if pnl is not None else "数据不足"
+    if trend == "数据不足":
+        trend = " 数据不足"
+    return (
+        f"{_label(estimate)} 预估 {metric['changePct']:+.2f}%{marker}{trend} "
+        f"盈亏 {pnl_text}"
     )
 
 
