@@ -25,6 +25,7 @@ from backend.jobs import runner
 from backend.jobs.data_tasks import DataTaskConsumer
 from backend.jobs.corporate_actions_sync import sync_corporate_actions
 from backend.jobs.fund_nav_sync import sync_fund_nav_history
+from backend.jobs.fund_subscription_status_sync import sync_fund_subscription_status
 from backend.jobs.outbox import OutboxConsumer
 from backend.jobs.scheduler import Scheduler
 from backend.market import service as market_service
@@ -67,6 +68,24 @@ async def _execute_session(pool, settings, session: str, now: datetime) -> None:
             )
         except Exception:  # noqa: BLE001 -- retry next trading day, keep Worker alive
             logger.exception("fund NAV history refresh failed")
+        return
+
+    if session == "FUND_SUBSCRIPTION_STATUS_REFRESH":
+        # This is a global reference-data refresh.  It must complete before
+        # PRE_MARKET but never creates workflow.jobs or a report run itself.
+        try:
+            stats = await sync_fund_subscription_status(pool, now)
+            logger.info(
+                "fund_subscription_status_refresh scanned=%d available=%d changed=%d unchanged=%d unavailable=%d failed=%d",
+                stats.scanned_instruments,
+                stats.available_instruments,
+                stats.changed_instruments,
+                stats.unchanged_instruments,
+                stats.unavailable_instruments,
+                stats.failed_instruments,
+            )
+        except Exception:  # noqa: BLE001 -- retry next trading day, keep Worker alive
+            logger.exception("fund subscription status refresh failed")
         return
 
     # 1. 行情刷新（各时段抓取范围由 market service 决定）

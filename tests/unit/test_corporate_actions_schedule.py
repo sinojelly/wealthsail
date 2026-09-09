@@ -1,6 +1,7 @@
 """Tests for trading-day 06:00 corporate-action scheduling."""
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
@@ -44,6 +45,25 @@ def test_fund_nav_history_refresh_is_a_trading_day_ten_pm_phase() -> None:
     assert not due_at(
         "FUND_NAV_HISTORY_REFRESH",
         datetime(2026, 9, 6, 22, 0, tzinfo=shanghai),
+    )
+
+
+def test_fund_subscription_status_refresh_is_a_trading_day_six_oh_five_phase() -> None:
+    schedule = next(
+        schedule
+        for schedule in SCHEDULES
+        if schedule.phase == "FUND_SUBSCRIPTION_STATUS_REFRESH"
+    )
+    shanghai = ZoneInfo("Asia/Shanghai")
+
+    assert schedule.hour == 6 and schedule.minute == 5
+    assert due_at(
+        "FUND_SUBSCRIPTION_STATUS_REFRESH",
+        datetime(2026, 9, 8, 6, 5, tzinfo=shanghai),
+    )
+    assert not due_at(
+        "FUND_SUBSCRIPTION_STATUS_REFRESH",
+        datetime(2026, 9, 8, 6, 0, tzinfo=shanghai),
     )
 
 
@@ -94,6 +114,34 @@ async def test_worker_runs_global_nav_sync_without_creating_report_jobs(monkeypa
 
     now = datetime(2026, 9, 8, 22, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     await worker._execute_session(object(), Settings(_env_file=None), "FUND_NAV_HISTORY_REFRESH", now)
+
+    sync.assert_awaited_once()
+    worker.market_service.refresh_market.assert_not_awaited()
+    worker.runner.run_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_runs_subscription_status_sync_without_creating_report_jobs(
+    monkeypatch,
+) -> None:
+    sync = AsyncMock(
+        return_value=SimpleNamespace(
+            scanned_instruments=2,
+            available_instruments=2,
+            changed_instruments=1,
+            unchanged_instruments=1,
+            unavailable_instruments=0,
+            failed_instruments=0,
+        )
+    )
+    monkeypatch.setattr(worker, "sync_fund_subscription_status", sync)
+    monkeypatch.setattr(worker.market_service, "refresh_market", AsyncMock())
+    monkeypatch.setattr(worker.runner, "run_session", AsyncMock())
+
+    now = datetime(2026, 9, 8, 6, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    await worker._execute_session(
+        object(), Settings(_env_file=None), "FUND_SUBSCRIPTION_STATUS_REFRESH", now
+    )
 
     sync.assert_awaited_once()
     worker.market_service.refresh_market.assert_not_awaited()
