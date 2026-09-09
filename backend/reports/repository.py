@@ -9,6 +9,14 @@ from decimal import Decimal
 
 import asyncpg
 
+from backend.reports.holding_trends import (
+    HoldingTrend,
+    PricePoint,
+    calculate_holding_trend,
+    trend_from_cached_row,
+    unavailable_trend,
+)
+
 REPORT_SESSIONS = ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET")
 
 
@@ -1319,6 +1327,184 @@ async def get_pre_market_position_quotes(
             "sourceAsOf": row["source_as_of"],
         }
     return result
+
+
+async def resolve_instrument_trends(
+    conn: asyncpg.Connection,
+    instrument_ids: list[str],
+    trade_date: date,
+    today_changes: dict[str, Decimal],
+) -> dict[str, HoldingTrend]:
+    """Resolve one deterministic trend per current holding for a Shanghai day.
+
+    The cache stores only globally reusable price facts.  A same-day cache hit
+    bypasses historical reads; a miss reads no more than 30 prior trading dates
+    and inserts exactly once through migration 060's SECURITY DEFINER function.
+    """
+
+    ids = list(dict.fromkeys(instrument_ids))
+    if not ids:
+        return {}
+    trends: dict[str, HoldingTrend] = {
+        instrument_id: unavailable_trend() for instrument_id in ids
+    }
+    cached_rows = await conn.fetch(
+        """
+        SELECT instrument_id, previous_direction, streak_direction, streak_days,
+               streak_change_pct, quality_status
+          FROM market.instrument_trend_snapshots
+         WHERE instrument_id = ANY($1::uuid[])
+           AND trade_date = $2
+        """,
+        ids,
+        trade_date,
+    )
+    cached_ids: set[str] = set()
+    for row in cached_rows:
+        instrument_id = str(row["instrument_id"])
+        if instrument_id not in trends:
+            continue
+        trends[instrument_id] = trend_from_cached_row(
+            row, today_changes.get(instrument_id)
+        )
+        cached_ids.add(instrument_id)
+
+    missing_ids = [instrument_id for instrument_id in ids if instrument_id not in cached_ids]
+    if not missing_ids:
+        return trends
+
+    rows = await conn.fetch(
+        """
+        WITH market_points AS (
+            SELECT DISTINCT ON (
+                       observation.subject_id,
+                       (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date
+                   )
+                   observation.subject_id AS instrument_id,
+                   (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date AS as_of,
+                   observation.value AS price,
+                   observation.field_code,
+                   observation.quality_status
+              FROM market.market_observations observation
+              JOIN reference.instruments instrument
+                ON instrument.id = observation.subject_id
+             WHERE observation.subject_id = ANY($1::uuid[])
+               AND (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date < $2
+               AND observation.value IS NOT NULL
+               AND observation.value > 0
+               AND observation.quality_status = 'FRESH'
+               AND (
+                   (instrument.asset_type = 'OFF_EXCHANGE_FUND'
+                    AND observation.field_code = 'NAV')
+                   OR
+                   (instrument.asset_type <> 'OFF_EXCHANGE_FUND'
+                    AND observation.field_code = 'CLOSE')
+               )
+             ORDER BY observation.subject_id,
+                      (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date,
+                      observation.observed_at DESC, observation.revision DESC
+        ), snapshot_points AS (
+            SELECT DISTINCT ON (snapshot.instrument_id, snapshot.as_of)
+                   snapshot.instrument_id,
+                   snapshot.as_of,
+                   snapshot.market_price AS price,
+                   CASE WHEN instrument.asset_type = 'OFF_EXCHANGE_FUND'
+                        THEN 'NAV' ELSE 'CLOSE' END AS field_code,
+                   snapshot.data_quality_status AS quality_status
+              FROM ledger.position_snapshots snapshot
+              JOIN reference.instruments instrument
+                ON instrument.id = snapshot.instrument_id
+             WHERE snapshot.instrument_id = ANY($1::uuid[])
+               AND snapshot.as_of < $2
+               AND snapshot.market_price IS NOT NULL
+               AND snapshot.market_price > 0
+               AND snapshot.data_quality_status = 'FRESH'
+             ORDER BY snapshot.instrument_id, snapshot.as_of, snapshot.created_at DESC
+        ), history AS (
+            SELECT * FROM market_points
+            UNION ALL
+            SELECT snapshot.*
+              FROM snapshot_points snapshot
+             WHERE NOT EXISTS (
+                 SELECT 1
+                   FROM market_points market
+                  WHERE market.instrument_id = snapshot.instrument_id
+                    AND market.as_of = snapshot.as_of
+             )
+        )
+        SELECT instrument_id, as_of, price, field_code, quality_status
+          FROM history
+         ORDER BY instrument_id, as_of DESC
+        """,
+        missing_ids,
+        trade_date,
+    )
+    history_by_instrument: dict[str, list[PricePoint]] = {
+        instrument_id: [] for instrument_id in missing_ids
+    }
+    for row in rows:
+        instrument_id = str(row["instrument_id"])
+        if instrument_id not in history_by_instrument:
+            continue
+        try:
+            price = Decimal(str(row["price"]))
+        except (ArithmeticError, TypeError, ValueError):
+            continue
+        history_by_instrument[instrument_id].append(
+            PricePoint(
+                as_of=row["as_of"],
+                price=price,
+                field_code=str(row["field_code"]),
+                quality=str(row["quality_status"]),
+            )
+        )
+
+    lost_race_ids: list[str] = []
+    for instrument_id in missing_ids:
+        trend = calculate_holding_trend(
+            today_changes.get(instrument_id), history_by_instrument[instrument_id]
+        )
+        trends[instrument_id] = trend
+        inserted = await conn.fetchval(
+            """
+            SELECT market.upsert_instrument_trend_snapshot(
+                $1::uuid, $2::date, $3::text, $4::text, $5::integer,
+                $6::numeric, $7::date, $8::date, $9::text, $10::text, $11::text
+            )
+            """,
+            instrument_id,
+            trade_date,
+            trend.previous_direction,
+            trend.streak_direction,
+            trend.streak_days,
+            trend.streak_change_pct,
+            trend.history_start_date,
+            trend.history_end_date,
+            trend.history_field_code,
+            trend.quality,
+            "pre-market-v1",
+        )
+        if inserted is False:
+            lost_race_ids.append(instrument_id)
+
+    if lost_race_ids:
+        winner_rows = await conn.fetch(
+            """
+            SELECT instrument_id, previous_direction, streak_direction, streak_days,
+                   streak_change_pct, quality_status
+              FROM market.instrument_trend_snapshots
+             WHERE instrument_id = ANY($1::uuid[])
+               AND trade_date = $2
+            """,
+            lost_race_ids,
+            trade_date,
+        )
+        for row in winner_rows:
+            instrument_id = str(row["instrument_id"])
+            trends[instrument_id] = trend_from_cached_row(
+                row, today_changes.get(instrument_id)
+            )
+    return trends
 
 
 async def latest_day_change_pct(
