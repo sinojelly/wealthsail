@@ -164,6 +164,41 @@ def test_holdings_table_derives_complete_fund_values_from_summary() -> None:
     assert "⚠️ 表示价格或涨跌数据质量不是 FRESH" in markdown
 
 
+def test_personalized_markdown_has_trend_and_market_value_pnl() -> None:
+    context = {
+        "preMarket": {"holdingsEnrichmentsEnabled": True},
+        "positions": [
+            {
+                "symbol": "600036",
+                "name": "招商银行",
+                "type": "A股",
+                "quantity": "100",
+                "avgCost": "26.80",
+                "price": "39.15",
+                "marketValue": "3915",
+                "pnlAmount": "1234.56",
+                "changePct": "0.84",
+                "trendDisplay": "📈 连涨3天 (+3.50%)",
+                "weight": "34.85",
+                "quality": "FRESH",
+                "changeQuality": "FRESH",
+            }
+        ],
+    }
+
+    markdown = pre_market.personalized_holdings_markdown(context)
+
+    assert "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 连续变化 | 仓位 |" in markdown
+    assert "3,915（盈亏 +1,234.56）" in markdown
+    assert "📈 连涨3天 (+3.50%)" in markdown
+
+
+def test_standard_markdown_keeps_eight_columns() -> None:
+    markdown = pre_market.holdings_markdown(_context())
+
+    assert "连续变化" not in markdown.splitlines()[0]
+
+
 def test_holdings_warning_is_shown_for_every_non_fresh_quality() -> None:
     """ESTIMATED is not FRESH and therefore needs the same explained marker."""
     markdown = pre_market.holdings_markdown(

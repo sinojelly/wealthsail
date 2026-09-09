@@ -273,7 +273,6 @@ def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
         }
         for index in range(11)
     ]
-
     content = pre_market_personalized.format_push_content(
         _context(positions=positions)
     )
@@ -288,6 +287,23 @@ def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
     assert all(f"6000{index:02d}" in content for index in range(11))
     assert "| 代码 |" not in content
     assert "⚠️" not in content
+
+
+def test_personalized_report_uses_enriched_table_only_when_context_enables_it() -> None:
+    positions = _positions()
+    positions[0]["pnlAmount"] = "33.00"
+    positions[0]["trendDisplay"] = "📈 连涨2天 (+3.00%)"
+    draft = pre_market_personalized.build_report(
+        _context(
+            positions=positions,
+            pre_market={"holdingsEnrichmentsEnabled": True},
+        )
+    )
+
+    assert "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 连续变化 | 仓位 |" in draft[
+        "summary"
+    ]
+    assert "盈亏 +33.00" in draft["summary"]
 
 
 def test_personalized_push_keeps_full_name_in_aligned_list() -> None:

@@ -23,6 +23,7 @@ from backend.reports.pre_market import (
     format_action_entry,
     holding_impact_text,
     instrument_label,
+    personalized_holdings_markdown,
     position_table_rows,
     reminder_has_data,
     safe_decimal,
@@ -193,7 +194,11 @@ def build_report(context: dict, *, now: datetime | None = None) -> dict:
         )
     )
     return {
-        "summary": summary_with_holdings(context, section_summary),
+        "summary": summary_with_holdings(
+            context,
+            section_summary,
+            holdings_renderer=personalized_holdings_markdown,
+        ),
         "items": [
             {
                 "item_type": item_type,

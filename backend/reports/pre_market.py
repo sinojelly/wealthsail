@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -112,9 +113,11 @@ def position_table_rows(context: dict) -> list[dict]:
                 "avgCost": avg_cost,
                 "price": price,
                 "marketValue": market_value,
+                "pnlAmount": safe_decimal(position.get("pnlAmount")),
                 "pnlRate": pnl_rate,
                 "changePct": safe_decimal(position.get("changePct")),
                 "changeSourceAsOf": position.get("changeSourceAsOf"),
+                "trendDisplay": position.get("trendDisplay"),
                 "weight": weight,
                 "quality": _position_quality(position),
                 "isFund": is_fund,
@@ -235,9 +238,74 @@ def holdings_markdown(context: dict) -> str:
     return "\n".join(lines)
 
 
-def summary_with_holdings(context: dict, section_summary: str) -> str:
+def _format_pnl_amount(value: Decimal | None) -> str:
+    if value is None or not value.is_finite():
+        return "--"
+    return _format_table_number(value, places=2, signed=value > 0, grouped=True)
+
+
+def _trend_markdown_cell(value: object) -> str:
+    """Keep the generated display's readable parentheses while escaping text."""
+
+    return _markdown_cell(value).replace(r"\(", "(").replace(r"\)", ")")
+
+
+def personalized_holdings_markdown(context: dict) -> str:
+    """Render the enriched nine-column table for an enabled personal brief."""
+
+    pre_market = context.get("preMarket") or {}
+    if not bool(pre_market.get("holdingsEnrichmentsEnabled")):
+        return holdings_markdown(context)
+    rows = position_table_rows(context)
+    if not rows:
+        return "暂无持仓，今日市场概况"
+    lines = [
+        "| 代码 | 名称 | 持仓 | 成本价 | 最新价 | 市值 | 当日 | 连续变化 | 仓位 |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
+    ]
+    for row in rows:
+        warning = "⚠️" if row["quality"] != "FRESH" else ""
+        quantity = _format_table_number(row["quantity"], grouped=True)
+        price = _format_table_number(row["price"], grouped=True)
+        pnl_rate = _format_table_number(
+            row["pnlRate"], places=2, signed=True, suffix="%"
+        )
+        market_value = _format_table_number(row["marketValue"], grouped=True)
+        pnl_amount = _format_pnl_amount(row["pnlAmount"])
+        cells = (
+            row["symbol"],
+            f'{row["name"]}{warning}',
+            f'{quantity}{row["unit"]}' if quantity != "--" else "--",
+            _format_table_number(row["avgCost"]),
+            f"{price}（持仓 {pnl_rate}）",
+            f"{market_value}（盈亏 {pnl_amount}）",
+            _day_change_text(row),
+            row.get("trendDisplay") or "--",
+            _format_table_number(row["weight"], places=2, suffix="%"),
+        )
+        rendered_cells = [
+            _trend_markdown_cell(cell) if index == 7 else _markdown_cell(cell)
+            for index, cell in enumerate(cells)
+        ]
+        lines.append("| " + " | ".join(rendered_cells) + " |")
+    notes: list[str] = []
+    if any(row["quality"] != "FRESH" for row in rows):
+        notes.append("⚠️ 表示价格或涨跌数据质量不是 FRESH（估算、过期或不可用）")
+    if any(row["isFund"] for row in rows):
+        notes.append("基金“当日”采用最近披露净值涨跌幅，括号内为净值日期")
+    if notes:
+        lines.extend(("", "> " + "；".join(notes) + "。"))
+    return "\n".join(lines)
+
+
+def summary_with_holdings(
+    context: dict,
+    section_summary: str,
+    *,
+    holdings_renderer: Callable[[dict], str] = holdings_markdown,
+) -> str:
     """Prepend the shared holdings contract to a user-scoped PRE_MARKET body."""
-    return f"## 持仓概览\n\n{holdings_markdown(context)}\n\n{section_summary}"
+    return f"## 持仓概览\n\n{holdings_renderer(context)}\n\n{section_summary}"
 
 
 def instrument_label(item: dict, *, include_symbol: bool = True) -> str:
