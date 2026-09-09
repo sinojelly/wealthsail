@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     scheduler_tick_seconds: float = Field(default=20.0)
     job_recovery_window_minutes: int = Field(default=30, ge=5, le=240)
     job_recovery_max_attempts: int = Field(default=5, ge=1, le=20)
+    # Web-only enrichment of the 08:35 personalised pre-market holdings table.
+    # Disabling it preserves the historical eight-column report without
+    # querying or writing the shared instrument trend cache.
+    pre_market_holdings_enrichments_enabled: bool = Field(default=True)
 
     # --- Independent runtime monitor ---------------------------------------
     # The monitor is a separate systemd timer, so it can report a stopped

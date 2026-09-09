@@ -292,6 +292,7 @@ async def generate_report(
                 session,
                 audience_user_id=audience_user_id,
                 asset_scope=asset_scope,
+                settings=settings,
             )
         latest = await repository.latest_report(
             conn,
@@ -454,7 +455,9 @@ async def build_report_context(
     *,
     audience_user_id: str | None = None,
     asset_scope: AssetScope | None = None,
+    settings: Settings | None = None,
 ) -> dict:
+    settings = settings or Settings(_env_file=None)
     report_as_of = now_shanghai()
     summary = await get_summary(conn, tenant_id, report_as_of, scope=asset_scope)
     # Historical zero-quantity snapshots are not active holdings. Filtering
@@ -563,6 +566,40 @@ async def build_report_context(
             position["changePct"] = quote["changePct"]
             position["changeQuality"] = quote["quality"]
             position["changeSourceAsOf"] = quote["sourceAsOf"]
+        holdings_enrichments_enabled = bool(
+            settings.pre_market_holdings_enrichments_enabled
+        )
+        personalized_mine_scope = (
+            holdings_enrichments_enabled
+            and audience_user_id is not None
+            and asset_scope is not None
+            and asset_scope.kind == "MINE"
+            and asset_scope.owner_user_id == audience_user_id
+        )
+        if personalized_mine_scope and positions:
+            today_changes = {
+                str(position["instrumentId"]): change_pct
+                for position in positions
+                if position.get("instrumentId")
+                and position.get("changeQuality") == "FRESH"
+                and (change_pct := _safe_decimal(position.get("changePct")))
+                is not None
+            }
+            trends = await repository.resolve_instrument_trends(
+                conn,
+                [
+                    str(position["instrumentId"])
+                    for position in positions
+                    if position.get("instrumentId")
+                ],
+                report_as_of.date(),
+                today_changes,
+            )
+            for position in positions:
+                instrument_id = str(position.get("instrumentId") or "")
+                trend = trends.get(instrument_id)
+                position["trendDisplay"] = trend.display if trend else "--"
+                position["pnlAmount"] = _pre_market_position_pnl_amount(position)
         # The personalized phase also reports on watched instruments, so its
         # action and cutoff lookups cover the union of held and watched ids.
         for item in watchlist:
@@ -640,6 +677,7 @@ async def build_report_context(
             "fundProfiles": fund_profiles,
             "announcements": announcements,
             "reportDate": str(report_date),
+            "holdingsEnrichmentsEnabled": personalized_mine_scope,
         }
     if session == "FUND_1430":
         fund_ids = [
@@ -708,6 +746,18 @@ def _safe_decimal(value: object) -> Decimal | None:
     except (ArithmeticError, ValueError, TypeError):
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _pre_market_position_pnl_amount(position: dict) -> str | None:
+    """Return total unrealized P&L only when all displayed inputs are facts."""
+
+    price = _safe_decimal(position.get("price"))
+    avg_cost = _safe_decimal(position.get("avgCost"))
+    quantity = _safe_decimal(position.get("quantity"))
+    if price is None or avg_cost is None or quantity is None:
+        return None
+    amount = (price - avg_cost) * quantity
+    return f"{amount.quantize(Decimal('0.01')):.2f}"
 
 
 def _to_six_digit(code: str) -> str:

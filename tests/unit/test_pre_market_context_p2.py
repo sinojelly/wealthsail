@@ -10,12 +10,16 @@ from __future__ import annotations
 import types
 import unittest.mock as mock
 from datetime import datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from backend.integrations import market_data
+from backend.config import Settings
+from backend.portfolio.scope import AssetScope
 from backend.reports import service
+from backend.reports.holding_trends import HoldingTrend
 
 
 class _FakeDF:
@@ -407,3 +411,74 @@ async def test_fund_profiles_flow_into_pre_market_context(monkeypatch) -> None:
 
     assert ctx["preMarket"]["fundProfiles"] == profiles
     assert ctx["preMarket"]["fundProfiles"][0]["redemptionStatus"] == "SUSPENDED"
+
+
+@pytest.mark.asyncio
+async def test_personalized_context_adds_trend_and_pnl_when_enabled(monkeypatch) -> None:
+    conn = _stub_context_deps(monkeypatch, ak_items=[], db_actions=[], cutoff_rules=[])
+    awaitable_trends = mock.AsyncMock(
+        return_value={
+            "inst-kweichow": HoldingTrend(
+                display="📈 连涨2天 (+3.00%)",
+                previous_direction="UP",
+                streak_direction="UP",
+                streak_days=2,
+                streak_change_pct=Decimal("3"),
+                history_start_date=None,
+                history_end_date=None,
+                history_field_code="CLOSE",
+                quality="FRESH",
+            )
+        }
+    )
+    monkeypatch.setattr(service.repository, "resolve_instrument_trends", awaitable_trends)
+    service.get_positions.return_value = [
+        {
+            "instrumentId": "inst-kweichow",
+            "symbol": "600519",
+            "name": "贵州茅台",
+            "type": "A股",
+            "quantity": "2",
+            "avgCost": "100",
+            "price": "717.28",
+        }
+    ]
+    service.repository.get_pre_market_position_quotes.return_value = {
+        "inst-kweichow": {
+            "changePct": "1.0",
+            "quality": "FRESH",
+            "sourceAsOf": None,
+        }
+    }
+
+    context = await service.build_report_context(
+        conn,
+        "tenant-1",
+        "PRE_MARKET",
+        audience_user_id="user-1",
+        asset_scope=AssetScope(kind="MINE", owner_user_id="user-1"),
+        settings=Settings(
+            _env_file=None, pre_market_holdings_enrichments_enabled=True
+        ),
+    )
+
+    assert context["positions"][0]["trendDisplay"] == "📈 连涨2天 (+3.00%)"
+    assert context["positions"][0]["pnlAmount"] == "1234.56"
+    assert context["preMarket"]["holdingsEnrichmentsEnabled"] is True
+    awaitable_trends.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shared_context_never_resolves_personal_holding_trends(monkeypatch) -> None:
+    conn = _stub_context_deps(monkeypatch, ak_items=[], db_actions=[], cutoff_rules=[])
+    resolve_trends = mock.AsyncMock()
+    monkeypatch.setattr(service.repository, "resolve_instrument_trends", resolve_trends)
+
+    await service.build_report_context(
+        conn,
+        "tenant-1",
+        "PRE_MARKET",
+        settings=Settings(_env_file=None),
+    )
+
+    resolve_trends.assert_not_awaited()

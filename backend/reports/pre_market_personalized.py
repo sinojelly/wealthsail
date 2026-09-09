@@ -288,6 +288,7 @@ async def generate_pre_market_personalized(
             "PRE_MARKET",
             audience_user_id=ctx.user_id,
             asset_scope=scope,
+            settings=settings,
         )
     if not context["positions"] and not context["watchlist"]:
         return None
