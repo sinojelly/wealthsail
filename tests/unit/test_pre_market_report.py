@@ -1183,6 +1183,48 @@ async def test_fund_profiles_query_is_effective_window_scoped() -> None:
     assert "DISTINCT ON (profile.instrument_id)" in query
 
 
+@pytest.mark.asyncio
+async def test_fund_profiles_decodes_json_metadata_returned_as_text() -> None:
+    """A JSONB text codec must not make either report generator crash."""
+
+    conn = _CoverageConnection(
+        [
+            {
+                "instrument_id": "11111111-1111-1111-1111-111111111111",
+                "symbol": "110022",
+                "name": "易方达消费行业",
+                "purchase_status": "OPEN",
+                "redemption_status": "SUSPENDED",
+                "source_ref": "tiantian:fund_purchase_em",
+                "source_metadata": '{"purchaseRaw":"开放申购","redemptionRaw":"暂停赎回"}',
+                "retrieved_at": datetime(2026, 9, 10, 6, 5, tzinfo=ZoneInfo("Asia/Shanghai")),
+            }
+        ]
+    )
+
+    profiles = await repository.get_pre_market_fund_profiles(
+        conn,
+        ["11111111-1111-1111-1111-111111111111"],
+        date(2026, 9, 10),
+    )
+
+    assert profiles == [
+        {
+            "instrumentId": "11111111-1111-1111-1111-111111111111",
+            "symbol": "110022",
+            "name": "易方达消费行业",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "SUSPENDED",
+            "sourceRef": "tiantian:fund_purchase_em",
+            "sourceMetadata": {
+                "purchaseRaw": "开放申购",
+                "redemptionRaw": "暂停赎回",
+            },
+            "retrievedAt": "2026-09-10T06:05:00+08:00",
+        }
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # 今日焦点事件：公告 > 除权 > 宏观，只展示今天，每条 ≤ 30 字
 # --------------------------------------------------------------------------- #

@@ -20,6 +20,20 @@ from backend.reports.holding_trends import (
 REPORT_SESSIONS = ("PRE_MARKET", "INTRADAY", "FUND_1430", "POST_MARKET")
 
 
+def _json_object(value: object) -> dict:
+    """Normalize driver-dependent JSONB values without breaking report reads."""
+
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 async def get_user_watchlist_context(
     conn: asyncpg.Connection, user_id: str
 ) -> list[dict]:
@@ -258,7 +272,7 @@ async def get_pre_market_fund_profiles(
             "purchaseStatus": str(row["purchase_status"]),
             "redemptionStatus": str(row["redemption_status"]),
             "sourceRef": str(row["source_ref"] or ""),
-            "sourceMetadata": dict(row["source_metadata"] or {}),
+            "sourceMetadata": _json_object(row["source_metadata"]),
             "retrievedAt": row["retrieved_at"].isoformat()
             if row["retrieved_at"]
             else None,
