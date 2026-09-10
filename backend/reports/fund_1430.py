@@ -159,19 +159,6 @@ def _cutoff_rules(context: dict) -> list[dict]:
     ]
 
 
-def _cutoff_rule_groups(context: dict) -> list[list[dict]]:
-    groups: dict[str, list[dict]] = {}
-    for rule in _cutoff_rules(context):
-        key = str(
-            rule.get("instrumentId")
-            or rule.get("symbol")
-            or rule.get("name")
-            or id(rule)
-        )
-        groups.setdefault(key, []).append(rule)
-    return list(groups.values())
-
-
 def _held_otc_funds(context: dict) -> list[dict]:
     """Return each held OTC fund once, including records without a status row."""
 
@@ -185,13 +172,8 @@ def _held_otc_funds(context: dict) -> list[dict]:
     return list(funds.values())
 
 
-def _subscription_reminders(context: dict) -> list[tuple[int, str]]:
-    """Build verified, per-fund reminders without inferring an open status.
-
-    The priority is used only by the compact WeCom view: an actual suspension
-    is more actionable than an unavailable record, which is more useful than
-    a normal open status.  The audit card keeps every held fund's reminder.
-    """
+def _subscription_reminder_lines(context: dict) -> list[str]:
+    """Summarize verified subscription status without repeating normal funds."""
 
     fund_context = context.get("fund1430") or {}
     profiles = {
@@ -199,36 +181,15 @@ def _subscription_reminders(context: dict) -> list[tuple[int, str]]:
         for profile in (fund_context.get("fundProfiles") or [])
         if isinstance(profile, dict) and profile.get("instrumentId")
     }
-    cutoffs: dict[str, dict] = {}
-    for rules in _cutoff_rule_groups(context):
-        rule = next(
-            (
-                candidate
-                for candidate in rules
-                if str(candidate.get("salesChannel") or "DEFAULT") == "DEFAULT"
-            ),
-            rules[0],
-        )
-        instrument_id = str(rule.get("instrumentId") or "")
-        if instrument_id:
-            cutoffs[instrument_id] = rule
-
-    reminders: list[tuple[int, str]] = []
+    suspended_lines: list[str] = []
+    unknown_lines: list[str] = []
+    normal_count = 0
     for fund in _held_otc_funds(context):
         instrument_id = str(fund.get("instrumentId") or "")
         label = _label(fund)
         profile = profiles.get(instrument_id)
-        cutoff_rule = cutoffs.get(instrument_id)
         if profile is None:
-            cutoff_note = ""
-            if cutoff_rule is not None:
-                cutoff = str(cutoff_rule.get("cutoffTime") or "")[:5]
-                channel = str(cutoff_rule.get("salesChannel") or "DEFAULT")
-                channel_text = "默认渠道" if channel == "DEFAULT" else channel
-                cutoff_note = f"；{channel_text}{cutoff}截止参考"
-            reminders.append(
-                (1, f"{label}：未取得可核验状态{cutoff_note}（天天基金状态未取得，实际渠道为准）")
-            )
+            unknown_lines.append(f"{label}：未取得可核验状态")
             continue
 
         purchase = str(profile.get("purchaseStatus") or "").upper()
@@ -239,36 +200,32 @@ def _subscription_reminders(context: dict) -> list[tuple[int, str]]:
         if redemption == "SUSPENDED":
             suspended.append("暂停赎回")
         if suspended:
-            reminders.append(
-                (0, f"{label}：{'、'.join(suspended)}（天天基金状态，实际渠道为准）")
-            )
+            suspended_lines.append(f"{label}：{'、'.join(suspended)}")
             continue
 
         if purchase == "OPEN" and redemption == "OPEN":
-            cutoff_note = ""
-            if cutoff_rule is not None:
-                cutoff = str(cutoff_rule.get("cutoffTime") or "")[:5]
-                channel = str(cutoff_rule.get("salesChannel") or "DEFAULT")
-                channel_text = "默认渠道" if channel == "DEFAULT" else channel
-                cutoff_note = f"；{channel_text}{cutoff}截止参考"
-            reminders.append(
-                (2, f"{label}：状态正常{cutoff_note}（天天基金状态，实际渠道为准）")
-            )
+            normal_count += 1
             continue
 
         # A malformed legacy row is not evidence of an open fund.  Preserve
         # the same explicit downgrade used for a source record that is absent.
-        reminders.append(
-            (1, f"{label}：未取得可核验状态（天天基金状态未取得，实际渠道为准）")
-        )
-    return reminders
+        unknown_lines.append(f"{label}：未取得可核验状态")
+
+    if not suspended_lines and not unknown_lines:
+        return [f"{normal_count}只基金申购赎回状态正常"] if normal_count else []
+
+    lines = [*suspended_lines, *unknown_lines]
+    if normal_count:
+        lines.append(f"其余 {normal_count} 只申购赎回状态正常")
+    lines.append("数据来源：天天基金公开状态，实际以销售渠道为准")
+    return lines
 
 
 def _reminder(context: dict) -> str:
-    reminders = _subscription_reminders(context)
-    if not reminders:
+    lines = _subscription_reminder_lines(context)
+    if not lines:
         return f"{_MISSING}。{_RULE_SOURCE}"
-    return "；".join(text for _, text in reminders)
+    return "\n".join(lines)
 
 
 def _triggered_metrics(metrics: list[dict]) -> list[dict]:
@@ -467,7 +424,7 @@ def _compact_items(
         # must reflect the least fresh record rather than only the first row.
         confidence_item["quality"] = estimate_quality
         items.append(confidence_item)
-    if _subscription_reminders(context):
+    if _subscription_reminder_lines(context):
         # A single concise reminder supersedes per-fund cutoff cards.  It is
         # operational guidance, not a valuation fact, so no snapshot is faked.
         items.append(
@@ -709,12 +666,12 @@ def _audit_estimate_line(metric: dict, context: dict) -> str:
 
 
 def _push_reminder(context: dict) -> str:
-    """Reuse audit reminders, with the three most actionable items for WeCom."""
+    """Use the same grouped status facts in the compact WeCom message."""
 
-    reminders = sorted(_subscription_reminders(context), key=lambda item: item[0])[:3]
-    if not reminders:
+    lines = _subscription_reminder_lines(context)
+    if not lines:
         return "申赎提醒：暂无。"
-    return "申赎提醒：" + "；".join(text for _, text in reminders)
+    return "申赎提醒：" + "\n".join(lines)
 
 
 def format_push_content(context: dict) -> str:

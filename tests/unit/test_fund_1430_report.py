@@ -168,14 +168,14 @@ def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
     assert "来源不提供区间" not in draft["summary"]
     assert "覆盖率72.50%" not in draft["summary"]
     assert "基于2026-06-30披露持仓" not in draft["summary"]
-    assert "14:45" in draft["summary"]
+    assert "14:45" not in draft["summary"]
     assert "15:00" not in draft["summary"]
     assert "正常申赎" not in draft["summary"]
     assert all("估值明细" not in item["title"] for item in draft["items"])
 
 
-def test_subscription_reminder_uses_verified_status_and_never_assumes_open() -> None:
-    """A missing profile must remain explicit while real states reach both views."""
+def test_subscription_reminder_groups_verified_statuses_without_repeating_normal() -> None:
+    """Only suspended/unknown funds are listed; normal funds are summarized."""
 
     context = _context()
     context["positions"].append(
@@ -208,17 +208,42 @@ def test_subscription_reminder_uses_verified_status_and_never_assumes_open() -> 
     reminder = next(item["body"] for item in report["items"] if item["title"] == "申赎提醒")
     push = _generator().format_push_content(context)
 
-    expected_open = (
-        "易方达消费中(110011)：状态正常；默认渠道14:45截止参考"
-        "（天天基金状态，实际渠道为准）"
+    expected = (
+        "招商中证白酒(161725)：暂停赎回\n"
+        "天弘中证食品饮料(001632)：未取得可核验状态\n"
+        "其余 1 只申购赎回状态正常\n"
+        "数据来源：天天基金公开状态，实际以销售渠道为准"
     )
-    expected_suspended = "招商中证白酒(161725)：暂停赎回（天天基金状态，实际渠道为准）"
-    expected_unknown = "天弘中证食品饮料(001632)：未取得可核验状态（天天基金状态未取得，实际渠道为准）"
-    assert expected_open in reminder
-    assert expected_suspended in reminder
-    assert expected_unknown in reminder
-    assert expected_suspended in push
-    assert expected_unknown in push
+    assert reminder == expected
+    assert expected in push
+    assert "易方达消费中(110011)：状态正常" not in reminder
+
+
+def test_subscription_reminder_collapses_all_normal_funds_to_one_sentence() -> None:
+    """All-normal portfolios do not repeat a source caveat or fund names."""
+
+    context = _context()
+    context["fund1430"]["fundProfiles"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "symbol": "110011",
+            "name": "易方达消费中",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "OPEN",
+        },
+        {
+            "instrumentId": FUND_B_ID,
+            "symbol": "161725",
+            "name": "招商中证白酒",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "OPEN",
+        },
+    ]
+
+    report = _generator().build_report(context)
+    reminder = next(item["body"] for item in report["items"] if item["title"] == "申赎提醒")
+
+    assert reminder == "2只基金申购赎回状态正常"
 
 
 def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
@@ -306,7 +331,7 @@ def test_push_uses_persisted_estimate_and_remains_compact() -> None:
     assert "来源不提供区间" not in push
     assert "质量ESTIMATED" not in push
     assert "+4.10%" in push
-    assert "14:45" in push
+    assert "14:45" not in push
     assert "15:00" not in push
     assert "正常申赎" not in push
     assert len(push) <= 200
