@@ -394,7 +394,9 @@ async def test_fund_1430_generation_is_deterministic_for_every_holdings_mode(
     assert captured["generation_mode"] == "FUND_1430_DETERMINISTIC"
     assert captured["model_result"] is None
     assert len(captured["push_content"]) <= 200
-    assert captured["draft"]["summary"].startswith("📊 今日基金估值（数据截至 ")
+    assert captured["draft"]["summary"].startswith(
+        "📊 今日基金估值（盘中估算，非最终净值；数据截至 "
+    )
 
 
 def test_pre_market_audit_names_the_deterministic_generator_without_a_model_run() -> (
@@ -726,7 +728,13 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
     )
     cutoff_rules = AsyncMock(return_value=[{"symbol": "110011"}])
     fund_profiles = AsyncMock(
-        side_effect=AssertionError("ungoverned subscription status used")
+        return_value=[
+            {
+                "instrumentId": "11111111-1111-1111-1111-111111111111",
+                "purchaseStatus": "OPEN",
+                "redemptionStatus": "OPEN",
+            }
+        ]
     )
     monkeypatch.setattr(
         report_service.repository,
@@ -753,8 +761,17 @@ async def test_fund_1430_context_reads_effective_cutoffs_for_held_funds(
 
     assert context["fund1430"]["fundCutoffRules"] == [{"symbol": "110011"}]
     assert cutoff_rules.await_args.args[1] == ["11111111-1111-1111-1111-111111111111"]
-    assert context["fund1430"] == {"fundCutoffRules": [{"symbol": "110011"}]}
-    fund_profiles.assert_not_awaited()
+    assert context["fund1430"] == {
+        "fundCutoffRules": [{"symbol": "110011"}],
+        "fundProfiles": [
+            {
+                "instrumentId": "11111111-1111-1111-1111-111111111111",
+                "purchaseStatus": "OPEN",
+                "redemptionStatus": "OPEN",
+            }
+        ],
+    }
+    fund_profiles.assert_awaited_once()
     fetch_equity_quotes.assert_not_awaited()
 
 
@@ -824,6 +841,11 @@ async def test_fund_1430_context_adds_cached_fund_trend_for_current_estimate(
     monkeypatch.setattr(
         report_service.repository,
         "get_pre_market_cutoff_rules",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        report_service.repository,
+        "get_pre_market_fund_profiles",
         AsyncMock(return_value=[]),
     )
 

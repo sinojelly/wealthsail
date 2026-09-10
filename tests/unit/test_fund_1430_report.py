@@ -9,6 +9,7 @@ from backend.reports import service as report_service
 
 FUND_A_ID = "11111111-1111-1111-1111-111111111111"
 FUND_B_ID = "22222222-2222-2222-2222-222222222222"
+FUND_C_ID = "33333333-3333-3333-3333-333333333333"
 
 
 def _generator():
@@ -173,6 +174,53 @@ def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
     assert all("估值明细" not in item["title"] for item in draft["items"])
 
 
+def test_subscription_reminder_uses_verified_status_and_never_assumes_open() -> None:
+    """A missing profile must remain explicit while real states reach both views."""
+
+    context = _context()
+    context["positions"].append(
+        {
+            "instrumentId": FUND_C_ID,
+            "symbol": "001632",
+            "name": "天弘中证食品饮料",
+            "type": "场外基金",
+            "quantity": "600",
+        }
+    )
+    context["fund1430"]["fundProfiles"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "symbol": "110011",
+            "name": "易方达消费中",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "OPEN",
+        },
+        {
+            "instrumentId": FUND_B_ID,
+            "symbol": "161725",
+            "name": "招商中证白酒",
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "SUSPENDED",
+        },
+    ]
+
+    report = _generator().build_report(context)
+    reminder = next(item["body"] for item in report["items"] if item["title"] == "申赎提醒")
+    push = _generator().format_push_content(context)
+
+    expected_open = (
+        "易方达消费中(110011)：状态正常；默认渠道14:45截止参考"
+        "（天天基金状态，实际渠道为准）"
+    )
+    expected_suspended = "招商中证白酒(161725)：暂停赎回（天天基金状态，实际渠道为准）"
+    expected_unknown = "天弘中证食品饮料(001632)：未取得可核验状态（天天基金状态未取得，实际渠道为准）"
+    assert expected_open in reminder
+    assert expected_suspended in reminder
+    assert expected_unknown in reminder
+    assert expected_suspended in push
+    assert expected_unknown in push
+
+
 def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
     context = _context()
     context["fund1430"].update(
@@ -311,8 +359,8 @@ def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> Non
     push = _generator().format_push_content(context)
 
     assert push.startswith("📊 今日基金估值（数据截至 2026-09-09 11:30）：")
-    assert "易方达消费中(110011)（估）预估 +4.10% 📉连跌2天 (-2.10%) 盈亏 +21.00" in push
-    assert "招商中证白酒(161725)预估 -4.00% 📈转涨 盈亏 -32.00" in push
+    assert "申赎提醒：易方达消费中(110011)：未取得可核验状态" in push
+    assert "招商中证白酒(161725)：未取得可核验状态" in push
     assert "所有基金估值来源：新浪财经，仅供参考。" in push
     assert "估值截至2026-09-09 11:30" not in push
     assert "质量ESTIMATED" not in push

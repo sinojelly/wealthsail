@@ -714,12 +714,18 @@ async def build_report_context(
         cutoff_rules = await repository.get_pre_market_cutoff_rules(
             conn, fund_ids, now_shanghai().date()
         )
+        # Reuse the Worker-persisted TianTian status facts.  Report generation
+        # remains read-only and does not make provider requests on demand.
+        fund_profiles = await repository.get_pre_market_fund_profiles(
+            conn, fund_ids, now_shanghai().date()
+        )
         # Report generation is read-only: the Worker has already fetched the
         # latest dated disclosure and component quotes, then persisted one
         # traceable ESTIMATED_NAV observation per held fund.  Never fall back
         # to static fund_lookthrough seeds or perform Provider I/O here.
         fund_1430_context = {
             "fundCutoffRules": cutoff_rules,
+            "fundProfiles": fund_profiles,
         }
         for estimate in fund_estimates:
             instrument_id = str(estimate.get("instrumentId") or "")

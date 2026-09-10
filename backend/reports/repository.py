@@ -228,7 +228,8 @@ async def get_pre_market_fund_profiles(
                profile.instrument_id, COALESCE(alias.ticker, '') AS symbol,
                instrument.canonical_name AS name,
                profile.purchase_status, profile.redemption_status,
-               profile.effective_from, profile.effective_to
+               profile.effective_from, profile.effective_to,
+               profile.source_ref, profile.source_metadata, profile.retrieved_at
           FROM reference.fund_profiles profile
           JOIN reference.instruments instrument ON instrument.id = profile.instrument_id
           LEFT JOIN LATERAL (
@@ -256,6 +257,11 @@ async def get_pre_market_fund_profiles(
             "name": str(row["name"]),
             "purchaseStatus": str(row["purchase_status"]),
             "redemptionStatus": str(row["redemption_status"]),
+            "sourceRef": str(row["source_ref"] or ""),
+            "sourceMetadata": dict(row["source_metadata"] or {}),
+            "retrievedAt": row["retrieved_at"].isoformat()
+            if row["retrieved_at"]
+            else None,
         }
         for row in rows
     ]

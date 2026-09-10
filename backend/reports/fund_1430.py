@@ -172,12 +172,35 @@ def _cutoff_rule_groups(context: dict) -> list[list[dict]]:
     return list(groups.values())
 
 
-def _reminder(context: dict) -> str:
-    rule_groups = _cutoff_rule_groups(context)
-    if not rule_groups:
-        return f"{_MISSING}。{_RULE_SOURCE}"
-    reminders: list[str] = []
-    for rules in rule_groups[:2]:
+def _held_otc_funds(context: dict) -> list[dict]:
+    """Return each held OTC fund once, including records without a status row."""
+
+    funds: dict[str, dict] = {}
+    for position in context.get("positions") or []:
+        if not isinstance(position, dict) or position.get("type") != "场外基金":
+            continue
+        instrument_id = str(position.get("instrumentId") or "")
+        if instrument_id:
+            funds.setdefault(instrument_id, position)
+    return list(funds.values())
+
+
+def _subscription_reminders(context: dict) -> list[tuple[int, str]]:
+    """Build verified, per-fund reminders without inferring an open status.
+
+    The priority is used only by the compact WeCom view: an actual suspension
+    is more actionable than an unavailable record, which is more useful than
+    a normal open status.  The audit card keeps every held fund's reminder.
+    """
+
+    fund_context = context.get("fund1430") or {}
+    profiles = {
+        str(profile.get("instrumentId") or ""): profile
+        for profile in (fund_context.get("fundProfiles") or [])
+        if isinstance(profile, dict) and profile.get("instrumentId")
+    }
+    cutoffs: dict[str, dict] = {}
+    for rules in _cutoff_rule_groups(context):
         rule = next(
             (
                 candidate
@@ -186,17 +209,66 @@ def _reminder(context: dict) -> str:
             ),
             rules[0],
         )
-        cutoff = str(rule.get("cutoffTime") or "")[:5] or _MISSING
-        channel = str(rule.get("salesChannel") or "DEFAULT")
-        channel_text = "默认渠道" if channel == "DEFAULT" else channel
+        instrument_id = str(rule.get("instrumentId") or "")
+        if instrument_id:
+            cutoffs[instrument_id] = rule
+
+    reminders: list[tuple[int, str]] = []
+    for fund in _held_otc_funds(context):
+        instrument_id = str(fund.get("instrumentId") or "")
+        label = _label(fund)
+        profile = profiles.get(instrument_id)
+        cutoff_rule = cutoffs.get(instrument_id)
+        if profile is None:
+            cutoff_note = ""
+            if cutoff_rule is not None:
+                cutoff = str(cutoff_rule.get("cutoffTime") or "")[:5]
+                channel = str(cutoff_rule.get("salesChannel") or "DEFAULT")
+                channel_text = "默认渠道" if channel == "DEFAULT" else channel
+                cutoff_note = f"；{channel_text}{cutoff}截止参考"
+            reminders.append(
+                (1, f"{label}：未取得可核验状态{cutoff_note}（天天基金状态未取得，实际渠道为准）")
+            )
+            continue
+
+        purchase = str(profile.get("purchaseStatus") or "").upper()
+        redemption = str(profile.get("redemptionStatus") or "").upper()
+        suspended: list[str] = []
+        if purchase == "SUSPENDED":
+            suspended.append("暂停申购")
+        if redemption == "SUSPENDED":
+            suspended.append("暂停赎回")
+        if suspended:
+            reminders.append(
+                (0, f"{label}：{'、'.join(suspended)}（天天基金状态，实际渠道为准）")
+            )
+            continue
+
+        if purchase == "OPEN" and redemption == "OPEN":
+            cutoff_note = ""
+            if cutoff_rule is not None:
+                cutoff = str(cutoff_rule.get("cutoffTime") or "")[:5]
+                channel = str(cutoff_rule.get("salesChannel") or "DEFAULT")
+                channel_text = "默认渠道" if channel == "DEFAULT" else channel
+                cutoff_note = f"；{channel_text}{cutoff}截止参考"
+            reminders.append(
+                (2, f"{label}：状态正常{cutoff_note}（天天基金状态，实际渠道为准）")
+            )
+            continue
+
+        # A malformed legacy row is not evidence of an open fund.  Preserve
+        # the same explicit downgrade used for a source record that is absent.
         reminders.append(
-            f"{_label(rule)}：{channel_text}{cutoff}截止参考，"
-            "实际能否申赎以销售渠道为准"
+            (1, f"{label}：未取得可核验状态（天天基金状态未取得，实际渠道为准）")
         )
-    remaining = len(rule_groups) - len(reminders)
-    if remaining:
-        reminders.append(f"另有{remaining}只基金的截止规则，请在报告明细中核对")
-    return f"{'；'.join(reminders)}。{_RULE_SOURCE}"
+    return reminders
+
+
+def _reminder(context: dict) -> str:
+    reminders = _subscription_reminders(context)
+    if not reminders:
+        return f"{_MISSING}。{_RULE_SOURCE}"
+    return "；".join(text for _, text in reminders)
 
 
 def _triggered_metrics(metrics: list[dict]) -> list[dict]:
@@ -395,7 +467,7 @@ def _compact_items(
         # must reflect the least fresh record rather than only the first row.
         confidence_item["quality"] = estimate_quality
         items.append(confidence_item)
-    if _cutoff_rules(context):
+    if _subscription_reminders(context):
         # A single concise reminder supersedes per-fund cutoff cards.  It is
         # operational guidance, not a valuation fact, so no snapshot is faked.
         items.append(
@@ -637,21 +709,12 @@ def _audit_estimate_line(metric: dict, context: dict) -> str:
 
 
 def _push_reminder(context: dict) -> str:
-    """Keep the WeCom reminder factual and brief; full rules remain auditable."""
+    """Reuse audit reminders, with the three most actionable items for WeCom."""
 
-    rules = _cutoff_rule_groups(context)
-    if not rules:
+    reminders = sorted(_subscription_reminders(context), key=lambda item: item[0])[:3]
+    if not reminders:
         return "申赎提醒：暂无。"
-    rule = next(
-        (
-            candidate
-            for candidate in rules[0]
-            if str(candidate.get("salesChannel") or "DEFAULT") == "DEFAULT"
-        ),
-        rules[0][0],
-    )
-    cutoff = str(rule.get("cutoffTime") or "")[:5] or _MISSING
-    return f"申赎提醒：{_label(rule)} {cutoff}前可操作（以渠道状态为准）。"
+    return "申赎提醒：" + "；".join(text for _, text in reminders)
 
 
 def format_push_content(context: dict) -> str:
@@ -676,6 +739,7 @@ def format_push_content(context: dict) -> str:
     reminder_line = _push_reminder(context)
     lines = [header]
     remaining = len(metrics)
+    rendered_metrics = 0
     for metric in metrics:
         line = _estimate_line(metric, context)
         trial = "\n".join([*lines, line, source_line, reminder_line])
@@ -683,7 +747,10 @@ def format_push_content(context: dict) -> str:
             break
         lines.append(line)
         remaining -= 1
-    if remaining:
+        rendered_metrics += 1
+    # Do not claim that additional rows exist when the status reminder itself
+    # consumed the compact-message budget before any valuation row could fit.
+    if remaining and rendered_metrics:
         more_line = f"另有{remaining}只基金请在完整报告查看。"
         if len("\n".join([*lines, more_line, source_line, reminder_line])) <= 200:
             lines.append(more_line)
