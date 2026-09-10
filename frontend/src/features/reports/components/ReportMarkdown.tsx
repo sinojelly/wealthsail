@@ -47,22 +47,30 @@ function holdingPriceParts(children: ReactNode) {
 
 function holdingMarketValueParts(children: ReactNode) {
   const matched = plainText(children).match(
-    /^(.*?)（(?:累计)?盈亏\s*([+-]?[0-9][0-9,]*(?:\.[0-9]{2})?|--)）$/,
+    /^(.*?)\s*（(?:累计)?盈亏\s*([+-]?[0-9][0-9,]*(?:\.[0-9]{2})?|--)\s*）$/,
   );
-  return matched ? { marketValue: matched[1] || "--", pnlAmount: matched[2] } : null;
+  return matched
+    ? { marketValue: matched[1].trim() || "--", pnlAmount: matched[2] }
+    : null;
 }
 
 type StyledTableKind = "holdings" | "fund-estimate" | null;
 
 function styledTableKind(children: ReactNode): StyledTableKind {
-  const header = plainText(children);
+  const header = plainText(children).replace(/\s+/g, "");
   if (
     header.startsWith("代码名称持仓成本价最新价市值当日仓位")
     || header.startsWith("代码名称持仓成本价最新价市值当日连续变化仓位")
   ) {
     return "holdings";
   }
-  if (header.startsWith("基金名称代码当日预估涨跌市值连续变化")) {
+  if (
+    header.includes("基金名称")
+    && header.includes("代码")
+    && header.includes("当日预估涨跌")
+    && header.includes("市值")
+    && header.includes("连续变化")
+  ) {
     return "fund-estimate";
   }
   return null;
@@ -90,6 +98,7 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
   }
   const marketValue = tableKind ? holdingMarketValueParts(children) : null;
   if (marketValue) {
+    const isFundEstimate = tableKind === "fund-estimate";
     const pnlClass = marketValue.pnlAmount === "--"
       ? "report-pnl-flat"
       : marketValue.pnlAmount.startsWith("+")
@@ -99,7 +108,12 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
           : "report-pnl-flat";
     return (
       <td className="report-holding-market">
-        <span className="report-holding-market-value">
+        <span
+          className={[
+            "report-holding-market-value",
+            isFundEstimate ? "report-fund-estimate-market-value" : "",
+          ].filter(Boolean).join(" ")}
+        >
           {marketValue.marketValue}
         </span>
         <span
@@ -107,6 +121,7 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
             "report-holding-pnl",
             pnlClass,
             pnlClass === "report-pnl-loss" ? "report-value-down" : "",
+            isFundEstimate ? "report-fund-estimate-pnl" : "",
           ].filter(Boolean).join(" ")}
         >
           {marketValue.pnlAmount}

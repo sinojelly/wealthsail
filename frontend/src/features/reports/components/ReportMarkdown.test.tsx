@@ -24,6 +24,12 @@ const fundEstimateSummary = `📊 今日基金估值（数据截至 14:51）：
 | 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |
 | 招商中证白酒 | 161725 | -4.00% | 768.00（累计盈亏 -32.00） | 📉连跌3天(-3.20%) |`;
 
+const fundEstimateWithSpacing = `📊 今日基金估值（数据截至 14:51）：
+
+| 基金名称 | 代码 | 当日预估涨跌 | 估算市值 | 连续变化 |
+| --- | --- | ---: | ---: | --- |
+| 易方达消费中（估） | 110011 | +4.10% | 336,397.17  （累计盈亏 +131529.67） | 📉连跌2天(-2.10%) |`;
+
 it("renders a structured holdings table with complete aligned values", () => {
   render(<ReportMarkdown>{summary}</ReportMarkdown>);
 
@@ -97,4 +103,23 @@ it("renders the FUND_1430 audit summary as a colored estimate table", () => {
     "report-value-down",
   );
   expect(within(table).getByText("📉连跌2天(-2.10%)")).toBeInTheDocument();
+});
+
+it("splits a spaced fund estimate value into a two-line colored market cell", () => {
+  render(<ReportMarkdown>{fundEstimateWithSpacing}</ReportMarkdown>);
+
+  const table = screen.getByRole("table");
+  expect(table).toHaveClass("report-holdings-table");
+  expect(within(table).getByText("336,397.17")).toHaveClass(
+    "report-holding-market-value",
+    "report-fund-estimate-market-value",
+  );
+  expect(within(table).getByText("+131529.67")).toHaveClass(
+    "report-holding-pnl",
+    "report-pnl-profit",
+    "report-fund-estimate-pnl",
+  );
+  expect(
+    within(table).queryByText("336,397.17  （累计盈亏 +131529.67）"),
+  ).not.toBeInTheDocument();
 });

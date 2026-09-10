@@ -1924,6 +1924,15 @@ button:disabled {
 .report-pnl-profit { color: #cf1322; }
 .report-pnl-loss { color: #1a6e1a; }
 .report-pnl-flat { color: #8c8c8c; }
+/* FUND_1430 audit cells use a compact two-line financial hierarchy. */
+.report-fund-estimate-market-value {
+  font-size: 15px;
+  font-weight: 750;
+}
+.report-fund-estimate-pnl {
+  font-size: 13px;
+  line-height: 1.45;
+}
 .report-summary-markdown .report-holdings-table .report-value-down {
   color: #1a6e1a;
   font-size: 11px;
