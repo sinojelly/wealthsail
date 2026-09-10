@@ -118,7 +118,7 @@ def test_external_provider_estimate_explains_source_without_fake_coverage() -> N
     confidence = next(
         item["body"] for item in report["items"] if item["title"] == "估值可信度"
     )
-    assert "名称后的“（估）”标记" in confidence
+    assert "盘中估算，非最终净值" in confidence
     assert "不提供持仓覆盖率" not in confidence
     assert "估值截至" not in confidence
     assert "来源不提供区间" not in report["summary"]
@@ -154,25 +154,23 @@ def test_non_trading_day_report_labels_latest_trading_day_as_historical() -> Non
 def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
     draft = _generator().build_report(_context())
 
-    assert [item["title"] for item in draft["items"][:4]] == [
+    assert [item["title"] for item in draft["items"]] == [
         "今日估值概览",
+        "最大亏损 Top 3",
+        "最大盈利标的",
         "估值可信度",
         "申赎提醒",
-        "总结",
     ]
-    assert "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |" in draft["summary"]
-    assert "| 易方达消费中（估） | 110011 | +4.10% |" in draft["summary"]
+    assert "基金估值（盘中估算，非最终净值" in draft["summary"]
+    assert "| 基金名称 | 代码 | 当日预估 | 市值 | 累计盈亏 | 连续变化 |" in draft["summary"]
+    assert "| 易方达消费中 | 110011 | +4.10% |" in draft["summary"]
     assert "来源不提供区间" not in draft["summary"]
     assert "覆盖率72.50%" not in draft["summary"]
     assert "基于2026-06-30披露持仓" not in draft["summary"]
     assert "14:45" in draft["summary"]
     assert "15:00" not in draft["summary"]
     assert "正常申赎" not in draft["summary"]
-    evidence = [item for item in draft["items"] if item["item_type"] == "FUND_ESTIMATE"]
-    assert len(evidence) == 2
-    assert evidence[0]["_evidence"]["source_snapshot_id"] == (
-        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    )
+    assert all("估值明细" not in item["title"] for item in draft["items"])
 
 
 def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
@@ -197,7 +195,7 @@ def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
 
     draft = _generator().build_report(context)
 
-    assert "| 易方达消费中（估） | 110011 | +4.10% |" in draft["summary"]
+    assert "| 易方达消费中 | 110011 | +4.10% |" in draft["summary"]
     assert "99.00%" not in draft["summary"]
 
 
@@ -207,7 +205,7 @@ def test_quality_reflects_persisted_estimate_quality() -> None:
 
     assert "质量ESTIMATED" not in confidence["body"]
     assert "质量STALE" not in confidence["body"]
-    assert "其中1只为盘中估值" in confidence["body"]
+    assert "其中1只采用盘中估算" in confidence["body"]
     assert confidence["quality"] == "STALE"
 
 
@@ -229,10 +227,10 @@ def test_exact_three_percent_does_not_trigger_action_threshold() -> None:
     ]
 
     draft = _generator().build_report(context)
-    action = next(item for item in draft["items"] if item["title"] == "总结")
+    overview = next(item for item in draft["items"] if item["title"] == "今日估值概览")
 
-    assert "未触发±3%阈值" in action["body"]
-    assert "按原计划操作" in action["body"]
+    assert "未触发±3%估值偏离阈值" in overview["body"]
+    assert all(item["title"] != "总结" for item in draft["items"])
 
 
 def test_missing_data_is_explicit_and_never_fabricated() -> None:
@@ -357,11 +355,14 @@ def test_audit_summary_uses_structured_fund_table_without_repeated_metadata() ->
 
     report = _generator().build_report(context)
 
-    assert report["summary"].startswith("📊 今日基金估值（数据截至 14:51）：")
+    assert report["summary"].startswith(
+        "📊 今日基金估值（盘中估算，非最终净值；数据截至 14:51）："
+    )
     assert "今日整体预估均值：+0.05%；上涨1只、下跌1只、平盘0只。" in report["summary"]
-    assert "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |" in report["summary"]
-    assert "| 招商中证白酒 | 161725 | -4.00% | 768.00（累计盈亏 -32.00） | 📉连跌3天(-3.20%) |" in report["summary"]
-    assert "| 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |" in report["summary"]
+    assert "基金估值（盘中估算，非最终净值" in report["summary"]
+    assert "| 基金名称 | 代码 | 当日预估 | 市值 | 累计盈亏 | 连续变化 |" in report["summary"]
+    assert "| 招商中证白酒 | 161725 | -4.00% | 768.00 | -32.00 | 📉连跌3天(-3.20%) |" in report["summary"]
+    assert "| 易方达消费中 | 110011 | +4.10% | 1,041.00 | +21.00 | 📉连跌2天(-2.10%) |" in report["summary"]
     assert report["summary"].index("| 招商中证白酒") < report["summary"].index(
         "| 易方达消费中"
     )
@@ -370,3 +371,26 @@ def test_audit_summary_uses_structured_fund_table_without_repeated_metadata() ->
     assert "估值截至" not in report["summary"]
     assert "最近正式净值截至" not in report["summary"]
     assert "不提供持仓覆盖率，质量 ESTIMATED" not in report["summary"]
+
+
+def test_report_compacts_fund_item_cards_and_keeps_estimate_evidence() -> None:
+    """A fund table replaces per-fund cards without discarding source snapshots."""
+
+    context = _context()
+    report = _generator().build_report(context)
+
+    assert [item["title"] for item in report["items"]] == [
+        "今日估值概览",
+        "最大亏损 Top 3",
+        "最大盈利标的",
+        "估值可信度",
+        "申赎提醒",
+    ]
+    assert "易方达消费中" not in report["items"][0]["body"]
+    assert "招商中证白酒(161725) -4.00%" in report["items"][1]["body"]
+    assert "易方达消费中(110011) +4.10%" in report["items"][2]["body"]
+    assert "盘中估算，非最终净值" in report["items"][3]["body"]
+    assert all("暂无" not in item["body"] for item in report["items"])
+    assert report["items"][0]["_evidence"]["source_snapshot_id"] == (
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    )

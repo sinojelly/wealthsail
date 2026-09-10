@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReportsPage from "./ReportsPage";
+import ReportViewer from "./components/ReportViewer";
 import type { ReportDetail, ReportSummary } from "../../api/types";
 import { renderWithSession } from "../../test/render-with-session";
 import { reportDetailFixture, reportsFixture } from "../../test/fixtures";
@@ -144,6 +145,40 @@ it("opens a report evidence record with traceable provenance metadata", async ()
   expect(drawer).toHaveTextContent("SHA-256");
   expect(drawer).toHaveTextContent("源快照");
   expect(drawer).toHaveTextContent("WealthSail-Fund-Estimator");
+});
+
+it("shows a concrete source and one footer note for unlinked report items", () => {
+  reportState.detail = {
+    ...reportDetailFixture,
+    items: [
+      reportDetailFixture.items[0],
+      {
+        ...reportDetailFixture.items[0],
+        id: "E-FUND-002",
+        title: "估值可信度",
+        evidence: [],
+      },
+      {
+        ...reportDetailFixture.items[0],
+        id: "E-FUND-003",
+        title: "申赎提醒",
+        evidence: [],
+      },
+    ],
+  };
+
+  render(
+    <ReportViewer
+      report={reportState.detail}
+      onEvidence={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText("WealthSail-Fund-Estimator")).toBeInTheDocument();
+  expect(document.querySelector(".report-evidence-note")).toHaveTextContent(
+    "2条条目未关联源快照",
+  );
+  expect(screen.queryByText("未关联可核验源快照")).not.toBeInTheDocument();
 });
 
 it("opens the report selected by a reportId deep link", () => {

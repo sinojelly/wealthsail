@@ -19,10 +19,10 @@ function nineColumnSummary(marketValue: string): string {
 
 const fundEstimateSummary = `📊 今日基金估值（数据截至 14:51）：
 
-| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |
-| --- | --- | ---: | ---: | --- |
-| 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |
-| 招商中证白酒 | 161725 | -4.00% | 768.00（累计盈亏 -32.00） | 📉连跌3天(-3.20%) |`;
+| 基金名称 | 代码 | 当日预估 | 市值 | 累计盈亏 | 连续变化 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 易方达消费中 | 110011 | +4.10% | 1,041.00 | +21.00 | 📉连跌2天(-2.10%) |
+| 招商中证白酒 | 161725 | -4.00% | 768.00 | -32.00 | 📉连跌3天(-3.20%) |`;
 
 const fundEstimateWithSpacing = `📊 今日基金估值（数据截至 14:51）：
 
@@ -97,13 +97,12 @@ it("renders the FUND_1430 audit summary as a colored estimate table", () => {
   expect(within(table).getByText("-4.00%")).toHaveClass("report-value-down");
   expect(within(table).getByText("1,041.00")).toHaveClass("report-holding-market-value");
   expect(within(table).getByText("+21.00")).toHaveClass(
-    "report-holding-pnl",
+    "report-fund-estimate-pnl-value",
     "report-pnl-profit",
   );
   expect(within(table).getByText("-32.00")).toHaveClass(
-    "report-holding-pnl",
+    "report-fund-estimate-pnl-value",
     "report-pnl-loss",
-    "report-value-down",
   );
   expect(within(table).getByText("📉连跌2天(-2.10%)")).toBeInTheDocument();
 });

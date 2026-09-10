@@ -1884,14 +1884,15 @@ button:disabled {
 .report-summary-markdown .report-holdings-table th:nth-child(8) { width: 12%; }
 .report-summary-markdown .report-holdings-table th:nth-child(9) { width: 8%; }
 .report-summary-markdown .report-holdings-table.report-fund-estimate-table {
-  /* The five-column FUND_1430 table must not inherit the nine-column layout. */
-  min-width: 760px;
+  /* FUND_1430 has an independent six-column financial layout. */
+  min-width: 860px;
 }
-.report-summary-markdown .report-fund-estimate-table th:nth-child(1) { width: 34%; }
-.report-summary-markdown .report-fund-estimate-table th:nth-child(2) { width: 12%; }
-.report-summary-markdown .report-fund-estimate-table th:nth-child(3) { width: 16%; }
-.report-summary-markdown .report-fund-estimate-table th:nth-child(4) { width: 22%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(1) { width: 30%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(2) { width: 10%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(3) { width: 14%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(4) { width: 16%; }
 .report-summary-markdown .report-fund-estimate-table th:nth-child(5) { width: 16%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(6) { width: 14%; }
 .report-summary-markdown .report-holdings-table td:nth-child(1) {
   color: var(--slate-500);
   font-variant-numeric: tabular-nums;
@@ -1913,8 +1914,8 @@ button:disabled {
   font-weight: 400;
   white-space: nowrap;
 }
-.report-summary-markdown .report-fund-estimate-table th:nth-child(5),
-.report-summary-markdown .report-fund-estimate-table td:nth-child(5) {
+.report-summary-markdown .report-fund-estimate-table th:nth-child(6),
+.report-summary-markdown .report-fund-estimate-table td:nth-child(6) {
   text-align: left;
 }
 .report-summary-markdown .report-holdings-table tbody tr:last-child td {
@@ -1956,6 +1957,18 @@ button:disabled {
 .report-fund-estimate-pnl {
   font-size: 13px;
   line-height: 1.45;
+}
+.report-fund-estimate-pnl-cell {
+  font-variant-numeric: tabular-nums;
+}
+.report-fund-estimate-pnl-value {
+  font-size: 13px;
+  font-weight: 700;
+}
+.report-evidence-note {
+  margin: 12px 0 0;
+  color: var(--slate-500);
+  font-size: 12px;
 }
 .report-summary-markdown .report-holdings-table .report-value-down {
   color: #1a6e1a;

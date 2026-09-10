@@ -54,6 +54,16 @@ function holdingMarketValueParts(children: ReactNode) {
     : null;
 }
 
+function fundEstimatePnlAmount(children: ReactNode): string | null {
+  const value = plainText(children);
+  return /^[+-][0-9][0-9,]*(?:\.[0-9]{2})?$/.test(value) ? value : null;
+}
+
+function fundEstimateMarketValue(children: ReactNode): string | null {
+  const value = plainText(children);
+  return /^[0-9][0-9,]*(?:\.[0-9]{2})?$/.test(value) ? value : null;
+}
+
 type StyledTableKind = "holdings" | "fund-estimate" | null;
 
 function styledTableKind(children: ReactNode): StyledTableKind {
@@ -67,7 +77,7 @@ function styledTableKind(children: ReactNode): StyledTableKind {
   if (
     header.includes("基金名称")
     && header.includes("代码")
-    && header.includes("当日预估涨跌")
+    && (header.includes("当日预估涨跌") || header.includes("当日预估"))
     && header.includes("市值")
     && header.includes("连续变化")
   ) {
@@ -125,6 +135,33 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
           ].filter(Boolean).join(" ")}
         >
           {marketValue.pnlAmount}
+        </span>
+      </td>
+    );
+  }
+  const fundMarketValue = tableKind === "fund-estimate"
+    ? fundEstimateMarketValue(children)
+    : null;
+  if (fundMarketValue) {
+    return (
+      <td className="report-holding-market">
+        <span className="report-holding-market-value report-fund-estimate-market-value">
+          {fundMarketValue}
+        </span>
+      </td>
+    );
+  }
+  const fundPnl = tableKind === "fund-estimate"
+    ? fundEstimatePnlAmount(children)
+    : null;
+  if (fundPnl) {
+    const pnlClass = fundPnl.startsWith("+")
+      ? "report-pnl-profit"
+      : "report-pnl-loss";
+    return (
+      <td className="report-fund-estimate-pnl-cell">
+        <span className={["report-fund-estimate-pnl-value", pnlClass].join(" ")}>
+          {fundPnl}
         </span>
       </td>
     );

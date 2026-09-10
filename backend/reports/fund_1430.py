@@ -111,18 +111,17 @@ def _historical_reference(context: dict) -> tuple[bool, str | None]:
 
 
 def _overview(metrics: list[dict], context: dict) -> str:
-    historical, valuation_date = _historical_reference(context)
-    period = "最近交易日" if historical else "今日"
     if not metrics:
-        return f"📊 {period}基金估值（数据截至 {_MISSING}）：\n基金估值：数据不足。"
-    historical_note = (
-        f"（{valuation_date or _MISSING}，非交易日历史参考）" if historical else ""
+        return ""
+    # The audit table owns the per-fund facts.  This card deliberately remains
+    # a one-sentence aggregate so a tenant holding many funds is not presented
+    # with the same valuation list twice.
+    threshold_note = (
+        "已触发±3%估值偏离阈值，请结合风险预算复核。"
+        if _triggered_metrics(metrics)
+        else "未触发±3%估值偏离阈值。"
     )
-    header = (
-        f"📊 {period}基金估值（数据截至 "
-        f"{_estimate_time_short(context.get('fundEstimates') or [])}）{historical_note}："
-    )
-    return "\n".join([header, *(_audit_estimate_line(metric, context) for metric in metrics)])
+    return f"已获取{len(metrics)}只持有基金的盘中预估；{_audit_estimate_summary(metrics)}{threshold_note}"
 
 
 def _coverage_label(coverage: Decimal | None) -> str:
@@ -141,14 +140,13 @@ def _confidence(context: dict) -> str:
         item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
     ]
     if not estimates:
-        return f"持仓覆盖率：{_MISSING}；数据新鲜度：{_MISSING}。{_ESTIMATION_SOURCE}"
+        return ""
     estimated_count = sum(
         _quality(estimate.get("quality")) == "ESTIMATED" for estimate in estimates
     )
     return (
-        f"本报告含{len(estimates)}只持有基金，其中{estimated_count}只为盘中估值"
-        "（以基金名称后的“（估）”标记）；数据不足时不计算连续变化或盈亏。"
-        f"{_ESTIMATION_SOURCE}"
+        f"共{len(estimates)}只持有基金，其中{estimated_count}只采用盘中估算，非最终净值；"
+        "连续变化仅基于已持久化的可信历史净值。来源：估值系统。"
     )
 
 
@@ -192,7 +190,7 @@ def _reminder(context: dict) -> str:
         channel = str(rule.get("salesChannel") or "DEFAULT")
         channel_text = "默认渠道" if channel == "DEFAULT" else channel
         reminders.append(
-            f"{_label(rule)}：状态：{_MISSING}；{channel_text}{cutoff}截止参考，"
+            f"{_label(rule)}：{channel_text}{cutoff}截止参考，"
             "实际能否申赎以销售渠道为准"
         )
     remaining = len(rule_groups) - len(reminders)
@@ -300,59 +298,112 @@ def _estimate_quality(estimates: list[dict]) -> str:
     )
 
 
-def _evidence_items(context: dict) -> list[dict]:
-    items: list[dict] = []
-    for estimate in context.get("fundEstimates") or []:
-        if not isinstance(estimate, dict):
-            continue
-        metric = _estimate_metric(estimate)
-        quality = _quality(estimate.get("quality"))
-        if metric is None:
-            body = f"预估涨跌幅及区间：{_MISSING}。{_ESTIMATION_SOURCE}"
-            severity = "WARNING"
-        else:
-            body = (
-                f"预估涨跌幅{metric['changePct']:+.2f}%，"
-                f"{_range_phrase(metric)}。{_ESTIMATION_SOURCE}"
-            )
-            severity = "INFO"
-        item = {
-            "item_type": "FUND_ESTIMATE",
-            "subject_id": estimate.get("instrumentId"),
-            "severity": severity,
-            "title": f"{_label(estimate)}估值明细",
-            "body": body,
-            "quality": quality,
+def _attach_estimate_evidence(item: dict, metric: dict) -> dict:
+    """Attach one representative persisted snapshot to an aggregate claim.
+
+    Report items have a one-to-one evidence-link contract.  The table remains
+    the complete per-fund view, while each concise aggregate card points to
+    the source snapshot that directly supports its highlighted fact.
+    """
+
+    estimate = metric["estimate"]
+    snapshot_id = estimate.get("snapshotId")
+    if snapshot_id:
+        item["_evidence"] = {
+            "source_snapshot_id": snapshot_id,
+            "claim_type": "VALUATION",
+            "link_claim_type": "FACT",
+            "as_of": estimate.get("asOf"),
+            "excerpt": item["body"],
+            "quality": _quality(estimate.get("quality")),
         }
-        if estimate.get("snapshotId"):
-            item["_evidence"] = {
-                "source_snapshot_id": estimate["snapshotId"],
-                "claim_type": "VALUATION",
-                "link_claim_type": "FACT",
-                "as_of": estimate.get("asOf"),
-                "excerpt": body,
-                "quality": quality,
-            }
-        items.append(item)
-    return items
+    return item
 
 
-def _cutoff_detail_items(context: dict) -> list[dict]:
+def _metric_item(
+    *, title: str, body: str, item_type: str, metric: dict, severity: str = "INFO"
+) -> dict:
+    """Create a compact card and preserve the selected fund's source link."""
+
+    return _attach_estimate_evidence(
+        {
+            "item_type": item_type,
+            "subject_id": metric["estimate"].get("instrumentId"),
+            "severity": severity,
+            "title": title,
+            "body": body,
+            "quality": _quality(metric["estimate"].get("quality")),
+        },
+        metric,
+    )
+
+
+def _compact_items(
+    metrics: list[dict], context: dict, estimate_quality: str
+) -> list[dict]:
+    """Keep FUND_1430 audit cards decision-focused; the table holds all rows."""
+
     items: list[dict] = []
-    for rule in _cutoff_rules(context):
-        cutoff = str(rule.get("cutoffTime") or "")[:5] or _MISSING
-        channel = str(rule.get("salesChannel") or "DEFAULT")
-        channel_text = "默认渠道" if channel == "DEFAULT" else channel
+    if metrics:
+        items.append(
+            _metric_item(
+                title=(
+                    "最近交易日估值概览"
+                    if _historical_reference(context)[0]
+                    else "今日估值概览"
+                ),
+                body=_overview(metrics, context),
+                item_type="FACT",
+                metric=metrics[0],
+            )
+        )
+        losses = sorted(
+            (metric for metric in metrics if metric["changePct"] < 0),
+            key=lambda metric: metric["changePct"],
+        )[:3]
+        if losses:
+            body = "；".join(
+                f"{_label(metric['estimate'])} {metric['changePct']:+.2f}%"
+                for metric in losses
+            )
+            items.append(
+                _metric_item(
+                    title="最大亏损 Top 3",
+                    body=body,
+                    item_type="RISK",
+                    metric=losses[0],
+                )
+            )
+        gains = [metric for metric in metrics if metric["changePct"] > 0]
+        if gains:
+            best = max(gains, key=lambda metric: metric["changePct"])
+            items.append(
+                _metric_item(
+                    title="最大盈利标的",
+                    body=f"{_label(best['estimate'])} {best['changePct']:+.2f}%",
+                    item_type="FACT",
+                    metric=best,
+                )
+            )
+        confidence_item = _metric_item(
+            title="估值可信度",
+            body=_confidence(context),
+            item_type="FACT",
+            metric=metrics[0],
+        )
+        # Confidence describes the entire estimate set, therefore its quality
+        # must reflect the least fresh record rather than only the first row.
+        confidence_item["quality"] = estimate_quality
+        items.append(confidence_item)
+    if _cutoff_rules(context):
+        # A single concise reminder supersedes per-fund cutoff cards.  It is
+        # operational guidance, not a valuation fact, so no snapshot is faked.
         items.append(
             {
                 "item_type": "TODO",
-                "subject_id": rule.get("instrumentId"),
                 "severity": "INFO",
-                "title": f"{_label(rule)}{channel_text}申赎截止明细",
-                "body": (
-                    f"状态：{_MISSING}；{channel_text}{cutoff}截止参考，"
-                    f"实际能否申赎以销售渠道为准。{_RULE_SOURCE}"
-                ),
+                "title": "申赎提醒",
+                "body": _reminder(context),
                 "quality": "FRESH",
             }
         )
@@ -362,47 +413,10 @@ def _cutoff_detail_items(context: dict) -> list[dict]:
 def build_report(context: dict) -> dict:
     """Build the complete four-section FUND_1430 report without model I/O."""
     metrics = _metrics(context)
-    historical, _valuation_date = _historical_reference(context)
-    overview = _overview(metrics, context)
-    confidence = _confidence(context)
-    reminder = _reminder(context)
-    summary = _summary(metrics, context)
     estimates = context.get("fundEstimates") or []
     estimate_quality = _estimate_quality(
         [estimate for estimate in estimates if isinstance(estimate, dict)]
     )
-    cutoff_rules = (context.get("fund1430") or {}).get("fundCutoffRules") or []
-    sections = (
-        (
-            "最近交易日估值概览" if historical else "今日估值概览",
-            overview,
-            "FACT",
-            "ESTIMATED" if metrics else "UNAVAILABLE",
-        ),
-        (
-            "估值可信度",
-            confidence,
-            "FACT",
-            estimate_quality,
-        ),
-        ("申赎提醒", reminder, "TODO", "FRESH" if cutoff_rules else "UNAVAILABLE"),
-        (
-            "总结",
-            summary,
-            "ACTION_PLAN",
-            "ESTIMATED" if (metrics or cutoff_rules) else "UNAVAILABLE",
-        ),
-    )
-    section_items = [
-        {
-            "item_type": item_type,
-            "severity": "WARNING" if item_quality == "UNAVAILABLE" else "INFO",
-            "title": title,
-            "body": body,
-            "quality": item_quality,
-        }
-        for title, body, item_type, item_quality in sections
-    ]
     audit_summary = "\n".join(
         (
             _audit_estimate_table(metrics, context),
@@ -412,9 +426,7 @@ def build_report(context: dict) -> dict:
     )
     return {
         "summary": audit_summary,
-        "items": section_items
-        + _evidence_items(context)
-        + _cutoff_detail_items(context),
+        "items": _compact_items(metrics, context, estimate_quality),
         "quality": estimate_quality if metrics else "UNAVAILABLE",
         # Authoritative subscription/redemption status is not persisted yet.
         "status": "PARTIAL",
@@ -553,7 +565,7 @@ def _audit_estimate_table(metrics: list[dict], context: dict) -> str:
         item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
     ]
     header = (
-        f"📊 {period}基金估值（数据截至 "
+        f"📊 {period}基金估值（盘中估算，非最终净值；数据截至 "
         f"{_estimate_time_short(estimates)}）{historical_note}："
     )
     if not metrics:
@@ -563,23 +575,23 @@ def _audit_estimate_table(metrics: list[dict], context: dict) -> str:
         header,
         _audit_estimate_summary(metrics),
         "",
-        "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |",
-        "| --- | --- | ---: | ---: | --- |",
+        "| 基金名称 | 代码 | 当日预估 | 市值 | 累计盈亏 | 连续变化 |",
+        "| --- | --- | ---: | ---: | ---: | --- |",
     ]
     # This ordering is audit-web-only.  WeCom keeps the existing list order
     # through its separate formatter so mobile delivery semantics do not change.
     for metric in sorted(metrics, key=lambda item: item["changePct"]):
         estimate = metric["estimate"]
-        marker = "（估）" if _quality(estimate.get("quality")) == "ESTIMATED" else ""
         market_value = _estimated_market_value(estimate, context)
         pnl = _unrealized_pnl(estimate, context)
         market_value_text = f"{market_value:,.2f}" if market_value is not None else "--"
         pnl_text = f"{pnl:+.2f}" if pnl is not None else "--"
         cells = (
-            f"{estimate.get('name') or estimate.get('symbol') or '未命名基金'}{marker}",
+            estimate.get("name") or estimate.get("symbol") or "未命名基金",
             estimate.get("symbol") or "--",
             f"{metric['changePct']:+.2f}%",
-            f"{market_value_text}（累计盈亏 {pnl_text}）",
+            market_value_text,
+            pnl_text,
             _fund_trend(estimate, context),
         )
         lines.append("| " + " | ".join(_markdown_cell(cell) for cell in cells) + " |")

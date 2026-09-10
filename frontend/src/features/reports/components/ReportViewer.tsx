@@ -46,6 +46,14 @@ function itemToEvidence(item: ReportItem, evidence: ReportEvidence): EvidenceRec
   };
 }
 
+function evidenceLabel(report: ReportDetail, evidence: ReportEvidence): string {
+  const sourceName = evidence.sourceName?.trim();
+  if (sourceName) return sourceName;
+  // A valuation snapshot is still a real persisted source even when a legacy
+  // row predates a named data-source record; avoid displaying an opaque ID.
+  return report.session === "FUND_1430" ? "估值系统" : "来源快照";
+}
+
 export default function ReportViewer({
   report,
   onEvidence,
@@ -55,6 +63,9 @@ export default function ReportViewer({
 }) {
   const asOfLabel = formatShanghaiDateTime(report.asOf);
   const display = reportDisplayMeta(report);
+  const unlinkedItemCount = report.items.filter(
+    (item) => item.evidence.length === 0,
+  ).length;
   return (
     <article className="report-viewer">
       <header className="report-viewer-header">
@@ -134,15 +145,18 @@ export default function ReportViewer({
                       onClick={() => onEvidence(itemToEvidence(item, item.evidence[0]))}
                     >
                       <ExternalLink size={11} />
-                      {item.evidence[0].id.slice(0, 8)}
+                      {evidenceLabel(report, item.evidence[0])}
                     </button>
-                  ) : (
-                    <span className="muted">未关联可核验源快照</span>
-                  )}
+                  ) : null}
                 </article>
               );
             })}
           </div>
+          {unlinkedItemCount > 0 ? (
+            <p className="report-evidence-note">
+              {unlinkedItemCount}条条目未关联源快照，已在可用条目中标注来源。
+            </p>
+          ) : null}
         </section>
 
         {report.modelRun ? (
