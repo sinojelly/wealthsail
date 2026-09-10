@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from backend.common.database import Pool, system_connection
 from backend.integrations.corporate_actions import (
@@ -61,11 +61,6 @@ async def sync_corporate_actions(
         if not instruments:
             return CorporateActionSyncStats(0, 0, 0, 0)
 
-        exchange_symbols = tuple(
-            instrument.symbol
-            for instrument in instruments
-            if instrument.asset_type != "OFF_EXCHANGE_FUND"
-        )
         stock_symbols = tuple(
             instrument.symbol
             for instrument in instruments
@@ -74,12 +69,12 @@ async def sync_corporate_actions(
         fund_symbols = tuple(
             instrument.symbol
             for instrument in instruments
-            if instrument.asset_type == "OFF_EXCHANGE_FUND"
+            if instrument.asset_type in {"EXCHANGE_FUND", "OFF_EXCHANGE_FUND"}
         )
         akshare = akshare_fetcher or _default_akshare_fetcher
         baostock = baostock_fetcher or _default_baostock_fetcher
         fund_dividends = fund_dividend_fetcher or _default_fund_dividend_fetcher
-        akshare_result = await akshare(exchange_symbols)
+        akshare_result = await akshare(stock_symbols)
         baostock_result = (
             await baostock(stock_symbols, as_of)
             if stock_symbols
@@ -95,7 +90,7 @@ async def sync_corporate_actions(
         unavailable = 0
         failed = 0
         for instrument in instruments:
-            if instrument.asset_type == "OFF_EXCHANGE_FUND":
+            if instrument.asset_type in {"EXCHANGE_FUND", "OFF_EXCHANGE_FUND"}:
                 provider_results = [
                     _for_symbol(fund_dividend_result, instrument.symbol)
                 ]
@@ -118,6 +113,8 @@ async def sync_corporate_actions(
                 continue
             try:
                 for action in reconciled.actions:
+                    if not _is_in_report_window(action, as_of):
+                        continue
                     await _persist_action(conn, instrument.instrument_id, action)
                     persisted += 1
             except Exception:  # noqa: BLE001 - one symbol must not block the batch
@@ -135,6 +132,11 @@ async def sync_corporate_actions(
         failed,
     )
     return CorporateActionSyncStats(len(instruments), persisted, unavailable, failed)
+
+
+def _is_in_report_window(action: CorporateAction, as_of: date) -> bool:
+    """Keep ingestion aligned with the pre-market's today-through-day-three view."""
+    return as_of <= action.ex_date <= as_of + timedelta(days=3)
 
 
 async def _load_held_instruments(conn) -> list[HeldInstrument]:

@@ -136,10 +136,10 @@ async def fetch_akshare_actions(
 ) -> ProviderResult:
     """Fetch implemented A-share dividend details for the requested symbols.
 
-    ``stock_history_dividend`` only exposes per-stock cumulative statistics;
-    it cannot answer whether a holding has an ex-right/ex-dividend date today.
-    The sibling ``stock_history_dividend_detail`` endpoint supplies the
-    auditable, per-event dates used by the Worker instead.
+    ``stock_fhps_detail_em`` is the Eastmoney per-stock distribution-detail
+    endpoint.  Unlike a cumulative-statistics feed, it preserves each
+    implemented record's ex-right date, record date, cash distribution and
+    bonus/transfer ratios for the audit trail.
     """
 
     wanted = tuple(dict.fromkeys(symbol.strip().zfill(6) for symbol in symbols))
@@ -168,7 +168,7 @@ async def fetch_akshare_actions(
                 action := _normalize_akshare_detail_action(
                     symbol,
                     row,
-                    "akshare/stock_history_dividend_detail",
+                    "akshare/stock_fhps_detail_em",
                 )
             )
             is not None
@@ -246,10 +246,10 @@ async def fetch_baostock_actions(
 
 def _akshare_dividend_detail_rows(provider: Any, symbol: str) -> list[Any]:
     """Fetch one holding's implementation records from the AkShare API."""
-    function = getattr(provider, "stock_history_dividend_detail", None)
+    function = getattr(provider, "stock_fhps_detail_em", None)
     if function is None:
-        raise RuntimeError("akshare has no stock_history_dividend_detail endpoint")
-    frame = function(symbol=symbol, indicator="分红")
+        raise RuntimeError("akshare has no stock_fhps_detail_em endpoint")
+    frame = function(symbol=symbol)
     if frame is None or getattr(frame, "empty", True):
         return []
     return [row for _, row in frame.iterrows()]
@@ -271,21 +271,30 @@ def _normalize_akshare_detail_action(
 ) -> CorporateAction | None:
     """Accept only implemented dividend rows with a concrete ex-right date."""
     columns = _row_columns(row)
-    progress = _first_text(row, columns, ("进度", "实施进度"))
-    if progress != "实施":
+    progress = _first_text(row, columns, ("方案进度", "进度", "实施进度"))
+    if progress not in {"实施", "实施分配"}:
         return None
     ex_date = _first_date(row, columns, ("除权除息日", "除息日", "除权日"))
     if ex_date is None:
         return None
-    cash = _first_text(row, columns, ("每股派息", "每股分红", "派息"))
-    bonus = _first_text(row, columns, ("送股",))
-    transfer = _first_text(row, columns, ("转增",))
+    cash = _first_text(
+        row,
+        columns,
+        ("现金分红-现金分红比例", "每股派息", "每股分红", "派息"),
+    )
+    cash_description = _first_text(row, columns, ("现金分红-现金分红比例描述",))
+    bonus = _first_text(row, columns, ("送转股份-送股比例", "送股"))
+    transfer = _first_text(row, columns, ("送转股份-转股比例", "转增"))
     params = {
         key: value
         for key, value in (
-            ("cashPerShare", cash),
-            ("bonusShares", bonus),
-            ("transferShares", transfer),
+            # The upstream unit is not guaranteed to be one share.  Retain
+            # the source's ratio and description verbatim rather than
+            # mislabelling it as a per-share cash amount.
+            ("cashDividendRatio", cash),
+            ("cashDividendDescription", cash_description),
+            ("bonusShareRatio", bonus),
+            ("transferShareRatio", transfer),
         )
         if value is not None and _is_nonzero(value)
     }
@@ -293,7 +302,7 @@ def _normalize_akshare_detail_action(
         symbol=symbol.zfill(6),
         # Cash dividends can be corroborated by baostock.  Share-only
         # distributions are still an ex-right event but have no cash leg.
-        action_type="CASH_DIVIDEND" if cash is not None else "EX_RIGHTS",
+        action_type="CASH_DIVIDEND" if cash is not None and _is_nonzero(cash) else "EX_RIGHTS",
         ex_date=ex_date,
         record_date=_first_date(row, columns, ("股权登记日", "登记日")),
         pay_date=_first_date(row, columns, ("派息日", "红利发放日", "股息发放日")),

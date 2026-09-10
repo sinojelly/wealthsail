@@ -123,24 +123,20 @@ class _FakeFrame:
 
 
 class _FakeAkshare:
-    def stock_history_dividend_detail(
-        self, *, symbol: str, indicator: str = "分红"
-    ) -> _FakeFrame:
+    def stock_fhps_detail_em(self, *, symbol: str) -> _FakeFrame:
         assert symbol == "600519"
-        assert indicator == "分红"
         return _FakeFrame()
 
 
 class _FakeHistoryDividendDetailFrame:
-    """AkShare ``stock_history_dividend_detail`` 的逐股票事件形态。"""
+    """AkShare ``stock_fhps_detail_em`` 的逐股票事件形态。"""
 
     empty = False
     columns = [
-        "公告日期",
-        "送股",
-        "转增",
-        "派息",
-        "进度",
+        "现金分红-现金分红比例",
+        "送转股份-送股比例",
+        "送转股份-转股比例",
+        "方案进度",
         "除权除息日",
         "股权登记日",
         "红股上市日",
@@ -148,22 +144,20 @@ class _FakeHistoryDividendDetailFrame:
 
     def iterrows(self):
         yield 0, {
-            "公告日期": "2026-09-01",
-            "送股": "0",
-            "转增": "0",
-            "派息": "10.03",
-            "进度": "实施",
+            "现金分红-现金分红比例": "10.03",
+            "送转股份-送股比例": "0",
+            "送转股份-转股比例": "0",
+            "方案进度": "实施分配",
             "除权除息日": "2026-09-10",
             "股权登记日": "2026-09-09",
             "红股上市日": "",
         }
         # 预案尚未落地，不能被当成今日除权除息事实写入报告。
         yield 1, {
-            "公告日期": "2026-09-01",
-            "送股": "0",
-            "转增": "0",
-            "派息": "10.03",
-            "进度": "预案",
+            "现金分红-现金分红比例": "10.03",
+            "送转股份-送股比例": "0",
+            "送转股份-转股比例": "0",
+            "方案进度": "预案",
             "除权除息日": "2026-09-11",
             "股权登记日": "2026-09-10",
             "红股上市日": "",
@@ -174,12 +168,47 @@ class _FakeHistoryDividendDetailAkshare:
     def __init__(self) -> None:
         self.symbols: list[str] = []
 
-    def stock_history_dividend_detail(
-        self, *, symbol: str, indicator: str = "分红"
+    def stock_fhps_detail_em(
+        self, *, symbol: str
     ) -> _FakeHistoryDividendDetailFrame:
-        assert indicator == "分红"
         self.symbols.append(symbol)
         return _FakeHistoryDividendDetailFrame()
+
+
+class _FakeStockFhpsDetailFrame:
+    """AkShare ``stock_fhps_detail_em`` 的已实施分红送配记录。"""
+
+    empty = False
+    columns = [
+        "报告期",
+        "现金分红-现金分红比例",
+        "现金分红-现金分红比例描述",
+        "送转股份-送股比例",
+        "送转股份-转股比例",
+        "股权登记日",
+        "除权除息日",
+        "方案进度",
+        "最新公告日期",
+    ]
+
+    def iterrows(self):
+        yield 0, {
+            "报告期": "2025-12-31",
+            "现金分红-现金分红比例": "10.03",
+            "现金分红-现金分红比例描述": "每10股派10.03元（含税）",
+            "送转股份-送股比例": "0",
+            "送转股份-转股比例": "1",
+            "股权登记日": "2026-09-09",
+            "除权除息日": "2026-09-10",
+            "方案进度": "实施分配",
+            "最新公告日期": "2026-09-03",
+        }
+
+
+class _FakeStockFhpsDetailAkshare:
+    def stock_fhps_detail_em(self, *, symbol: str) -> _FakeStockFhpsDetailFrame:
+        assert symbol == "600519"
+        return _FakeStockFhpsDetailFrame()
 
 
 @pytest.mark.asyncio
@@ -193,7 +222,7 @@ async def test_akshare_fetch_filters_requested_symbols_and_normalizes_dates() ->
     assert action.ex_date == date(2026, 9, 8)
     assert action.record_date == date(2026, 9, 5)
     assert action.pay_date is None
-    assert action.params == {"cashPerShare": "23.957"}
+    assert action.params == {"cashDividendRatio": "23.957"}
 
 
 @pytest.mark.asyncio
@@ -211,8 +240,28 @@ async def test_akshare_fetch_uses_implemented_dividend_detail_rows_only() -> Non
     assert action.action_type == "CASH_DIVIDEND"
     assert action.ex_date == date(2026, 9, 10)
     assert action.record_date == date(2026, 9, 9)
-    assert action.params == {"cashPerShare": "10.03"}
-    assert action.source_ref == "akshare/stock_history_dividend_detail"
+    assert action.params == {"cashDividendRatio": "10.03"}
+    assert action.source_ref == "akshare/stock_fhps_detail_em"
+
+
+@pytest.mark.asyncio
+async def test_akshare_fetch_uses_stock_fhps_detail_for_implemented_a_share_actions() -> None:
+    """防止 A 股同步退回缺少送配字段的新旧详情接口。"""
+    result = await fetch_akshare_actions(["600519"], provider=_FakeStockFhpsDetailAkshare())
+
+    assert result.state is ProviderState.AVAILABLE
+    assert len(result.actions) == 1
+    action = result.actions[0]
+    assert action.symbol == "600519"
+    assert action.action_type == "CASH_DIVIDEND"
+    assert action.ex_date == date(2026, 9, 10)
+    assert action.record_date == date(2026, 9, 9)
+    assert action.params == {
+        "cashDividendRatio": "10.03",
+        "cashDividendDescription": "每10股派10.03元（含税）",
+        "transferShareRatio": "1",
+    }
+    assert action.source_ref == "akshare/stock_fhps_detail_em"
 
 
 class _FakeFundDividendFrame:

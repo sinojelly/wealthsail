@@ -74,15 +74,6 @@ async def test_sync_persists_supported_held_actions_through_controlled_function(
                     params={},
                     source_ref="akshare/test",
                 ),
-                CorporateAction(
-                    symbol="510300",
-                    action_type="CASH_DIVIDEND",
-                    ex_date=date(2026, 9, 9),
-                    record_date=None,
-                    pay_date=None,
-                    params={},
-                    source_ref="akshare/test",
-                ),
             ],
         )
 
@@ -99,6 +90,16 @@ async def test_sync_persists_supported_held_actions_through_controlled_function(
         return ProviderResult.available(
             "AKSHARE_FUND_DIVIDEND_ACTIONS",
             [
+                CorporateAction(
+                    symbol="510300",
+                    action_type="FUND_DIVIDEND",
+                    ex_date=date(2026, 9, 9),
+                    record_date=date(2026, 9, 8),
+                    pay_date=date(2026, 9, 12),
+                    params={"cashPerUnit": "0.03"},
+                    source_ref="akshare/fund_fh_em",
+                    event_namespace="FUND",
+                ),
                 CorporateAction(
                     symbol="110022",
                     action_type="FUND_DIVIDEND",
@@ -121,15 +122,75 @@ async def test_sync_persists_supported_held_actions_through_controlled_function(
     )
 
     assert seen == {
-        "akshare": ("600519", "510300"),
+        "akshare": ("600519",),
         "baostock": ("600519",),
-        "fund_dividends": ("110022",),
+        "fund_dividends": ("510300", "110022"),
     }
     assert result.scanned_instruments == 3
     assert result.persisted_actions == 3
     assert result.unavailable_instruments == 0
     assert len(conn.persisted) == 3
     assert conn.persisted[0][0] == "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_sync_persists_only_actions_in_the_next_three_calendar_days() -> None:
+    """防止过期或超出盘前展示窗口的公司行动污染可见数据。"""
+    conn = _Connection()
+
+    async def akshare(symbols: tuple[str, ...]) -> ProviderResult:
+        return ProviderResult.available(
+            "AKSHARE_CORPORATE_ACTIONS",
+            [
+                CorporateAction(
+                    symbol="600519",
+                    action_type="CASH_DIVIDEND",
+                    ex_date=date(2026, 9, 7),
+                    record_date=None,
+                    pay_date=None,
+                    params={},
+                    source_ref="akshare/test",
+                ),
+                CorporateAction(
+                    symbol="600519",
+                    action_type="CASH_DIVIDEND",
+                    ex_date=date(2026, 9, 11),
+                    record_date=None,
+                    pay_date=None,
+                    params={},
+                    source_ref="akshare/test",
+                ),
+                CorporateAction(
+                    symbol="600519",
+                    action_type="CASH_DIVIDEND",
+                    ex_date=date(2026, 9, 12),
+                    record_date=None,
+                    pay_date=None,
+                    params={},
+                    source_ref="akshare/test",
+                ),
+            ],
+        )
+
+    async def baostock(symbols: tuple[str, ...], as_of: date) -> ProviderResult:
+        return ProviderResult.available("BAOSTOCK_CORPORATE_ACTIONS", [])
+
+    async def fund_dividends(
+        symbols: tuple[str, ...], as_of: date
+    ) -> ProviderResult:
+        return ProviderResult.available("AKSHARE_FUND_DIVIDEND_ACTIONS", [])
+
+    result = await sync_corporate_actions(
+        _Pool(conn),
+        datetime(2026, 9, 8, 6, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        akshare_fetcher=akshare,
+        baostock_fetcher=baostock,
+        fund_dividend_fetcher=fund_dividends,
+    )
+
+    assert result.persisted_actions == 1
+    assert len(conn.persisted) == 1
+    assert conn.persisted[0][2] == date(2026, 9, 11)
 
 
 @pytest.mark.asyncio
@@ -147,7 +208,7 @@ async def test_sync_records_unavailable_without_creating_a_fake_action() -> None
     async def unavailable_fund_dividends(
         symbols: tuple[str, ...], as_of: date
     ) -> ProviderResult:
-        assert symbols == ("110022",)
+        assert symbols == ("510300", "110022")
         assert as_of == date(2026, 9, 8)
         return ProviderResult.unavailable("AKSHARE_FUND_DIVIDEND_ACTIONS", "timeout")
 
