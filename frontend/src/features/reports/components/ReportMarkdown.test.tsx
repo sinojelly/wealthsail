@@ -88,7 +88,10 @@ it("renders the FUND_1430 audit summary as a colored estimate table", () => {
   render(<ReportMarkdown>{fundEstimateSummary}</ReportMarkdown>);
 
   const table = screen.getByRole("table");
-  expect(table).toHaveClass("report-holdings-table");
+  expect(table).toHaveClass(
+    "report-holdings-table",
+    "report-fund-estimate-table",
+  );
   expect(within(table).getByText("基金名称")).toBeInTheDocument();
   expect(within(table).getByText("+4.10%")).toHaveClass("report-value-up");
   expect(within(table).getByText("-4.00%")).toHaveClass("report-value-down");

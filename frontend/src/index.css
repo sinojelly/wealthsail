@@ -1883,6 +1883,15 @@ button:disabled {
 .report-summary-markdown .report-holdings-table th:nth-child(7) { width: 9%; }
 .report-summary-markdown .report-holdings-table th:nth-child(8) { width: 12%; }
 .report-summary-markdown .report-holdings-table th:nth-child(9) { width: 8%; }
+.report-summary-markdown .report-holdings-table.report-fund-estimate-table {
+  /* The five-column FUND_1430 table must not inherit the nine-column layout. */
+  min-width: 760px;
+}
+.report-summary-markdown .report-fund-estimate-table th:nth-child(1) { width: 34%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(2) { width: 12%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(3) { width: 16%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(4) { width: 22%; }
+.report-summary-markdown .report-fund-estimate-table th:nth-child(5) { width: 16%; }
 .report-summary-markdown .report-holdings-table td:nth-child(1) {
   color: var(--slate-500);
   font-variant-numeric: tabular-nums;
@@ -1892,6 +1901,21 @@ button:disabled {
   font-weight: 700;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+.report-summary-markdown .report-fund-estimate-table td:nth-child(1) {
+  color: var(--slate-900);
+  font-weight: 700;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.report-summary-markdown .report-fund-estimate-table td:nth-child(2) {
+  color: var(--slate-500);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.report-summary-markdown .report-fund-estimate-table th:nth-child(5),
+.report-summary-markdown .report-fund-estimate-table td:nth-child(5) {
+  text-align: left;
 }
 .report-summary-markdown .report-holdings-table tbody tr:last-child td {
   border-bottom: 0;

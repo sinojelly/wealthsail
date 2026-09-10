@@ -156,7 +156,14 @@ export default function ReportMarkdown({ children }: { children: string }) {
               <StyledTableContext.Provider value={tableKind}>
                 <div className="report-holdings-table-card">
                   <div className="report-markdown-table-scroll">
-                    <table className="report-holdings-table">
+                    <table
+                      className={[
+                        "report-holdings-table",
+                        tableKind === "fund-estimate"
+                          ? "report-fund-estimate-table"
+                          : "",
+                      ].filter(Boolean).join(" ")}
+                    >
                       {tableChildren}
                     </table>
                   </div>
