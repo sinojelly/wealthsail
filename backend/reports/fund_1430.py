@@ -405,7 +405,7 @@ def build_report(context: dict) -> dict:
     ]
     audit_summary = "\n".join(
         (
-            overview,
+            _audit_estimate_table(metrics, context),
             f"所有基金估值来源：{_estimate_source_label(estimates)}，仅供参考。",
             _push_reminder(context),
         )
@@ -487,6 +487,84 @@ def _unrealized_pnl(estimate: dict, context: dict) -> Decimal | None:
             return None
         total += (estimate_value - avg_cost) * quantity
     return total.quantize(Decimal("0.01"))
+
+
+def _estimated_market_value(estimate: dict, context: dict) -> Decimal | None:
+    """Return the estimate-priced fund value only when every quantity is known.
+
+    The audit table labels this value as a market value, but it is deliberately
+    calculated with the same persisted 14:30 estimate as the adjacent daily
+    change and P&L; it never borrows a stale portfolio value.
+    """
+
+    instrument_id = str(estimate.get("instrumentId") or "")
+    estimate_value = _safe_decimal(estimate.get("value"))
+    if not instrument_id or estimate_value is None:
+        return None
+    holdings = [
+        position
+        for position in (context.get("positions") or [])
+        if isinstance(position, dict)
+        and str(position.get("instrumentId") or "") == instrument_id
+    ]
+    if not holdings:
+        return None
+    total = Decimal("0")
+    for position in holdings:
+        quantity = _safe_decimal(position.get("quantity"))
+        if quantity is None:
+            return None
+        total += estimate_value * quantity
+    return total.quantize(Decimal("0.01"))
+
+
+def _markdown_cell(value: object) -> str:
+    """Escape a governed fact before it becomes a GFM table cell."""
+
+    text = str(value if value is not None else "--")
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip() or "--"
+
+
+def _audit_estimate_table(metrics: list[dict], context: dict) -> str:
+    """Render the audit-only FUND_1430 table; WeCom keeps its text flow."""
+
+    historical, valuation_date = _historical_reference(context)
+    period = "最近交易日" if historical else "今日"
+    historical_note = (
+        f"（{valuation_date or _MISSING}，非交易日历史参考）" if historical else ""
+    )
+    estimates = [
+        item for item in (context.get("fundEstimates") or []) if isinstance(item, dict)
+    ]
+    header = (
+        f"📊 {period}基金估值（数据截至 "
+        f"{_estimate_time_short(estimates)}）{historical_note}："
+    )
+    if not metrics:
+        return f"{header}\n基金估值：数据不足。"
+
+    lines = [
+        header,
+        "",
+        "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |",
+        "| --- | --- | ---: | ---: | --- |",
+    ]
+    for metric in metrics:
+        estimate = metric["estimate"]
+        marker = "（估）" if _quality(estimate.get("quality")) == "ESTIMATED" else ""
+        market_value = _estimated_market_value(estimate, context)
+        pnl = _unrealized_pnl(estimate, context)
+        market_value_text = f"{market_value:,.2f}" if market_value is not None else "--"
+        pnl_text = f"{pnl:+.2f}" if pnl is not None else "--"
+        cells = (
+            f"{estimate.get('name') or estimate.get('symbol') or '未命名基金'}{marker}",
+            estimate.get("symbol") or "--",
+            f"{metric['changePct']:+.2f}%",
+            f"{market_value_text}（累计盈亏 {pnl_text}）",
+            _fund_trend(estimate, context),
+        )
+        lines.append("| " + " | ".join(_markdown_cell(cell) for cell in cells) + " |")
+    return "\n".join(lines)
 
 
 def _fund_trend(estimate: dict, context: dict) -> str:

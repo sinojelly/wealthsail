@@ -160,7 +160,8 @@ def test_report_uses_persisted_estimates_and_preserves_evidence() -> None:
         "申赎提醒",
         "总结",
     ]
-    assert "易方达消费中(110011) 预估 +4.10%（估）" in draft["summary"]
+    assert "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |" in draft["summary"]
+    assert "| 易方达消费中（估） | 110011 | +4.10% |" in draft["summary"]
     assert "来源不提供区间" not in draft["summary"]
     assert "覆盖率72.50%" not in draft["summary"]
     assert "基于2026-06-30披露持仓" not in draft["summary"]
@@ -196,7 +197,7 @@ def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
 
     draft = _generator().build_report(context)
 
-    assert "预估 +4.10%（估）" in draft["summary"]
+    assert "| 易方达消费中（估） | 110011 | +4.10% |" in draft["summary"]
     assert "99.00%" not in draft["summary"]
 
 
@@ -320,8 +321,8 @@ def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> Non
     assert "来源不提供区间" not in push
 
 
-def test_audit_summary_uses_compact_fund_lines_without_repeated_metadata() -> None:
-    """研报审计摘要与企微使用同一批估值、趋势和盈亏事实。"""
+def test_audit_summary_uses_structured_fund_table_without_repeated_metadata() -> None:
+    """网页审计摘要提供基金表格；企微仍由独立文本格式器负责。"""
     context = _context()
     context["positions"] = [
         {
@@ -357,8 +358,9 @@ def test_audit_summary_uses_compact_fund_lines_without_repeated_metadata() -> No
     report = _generator().build_report(context)
 
     assert report["summary"].startswith("📊 今日基金估值（数据截至 14:51）：")
-    assert "易方达消费中(110011) 预估 +4.10%（估）📉连跌2天(-2.10%) 盈亏 +21.00" in report["summary"]
-    assert "招商中证白酒(161725) 预估 -4.00%📉连跌3天(-3.20%) 盈亏 -32.00" in report["summary"]
+    assert "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |" in report["summary"]
+    assert "| 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |" in report["summary"]
+    assert "| 招商中证白酒 | 161725 | -4.00% | 768.00（累计盈亏 -32.00） | 📉连跌3天(-3.20%) |" in report["summary"]
     assert "所有基金估值来源：新浪财经，仅供参考。" in report["summary"]
     assert "来源不提供区间" not in report["summary"]
     assert "估值截至" not in report["summary"]

@@ -47,23 +47,31 @@ function holdingPriceParts(children: ReactNode) {
 
 function holdingMarketValueParts(children: ReactNode) {
   const matched = plainText(children).match(
-    /^(.*?)（盈亏\s*([+-]?[0-9][0-9,]*(?:\.[0-9]{2})?|--)）$/,
+    /^(.*?)（(?:累计)?盈亏\s*([+-]?[0-9][0-9,]*(?:\.[0-9]{2})?|--)）$/,
   );
   return matched ? { marketValue: matched[1] || "--", pnlAmount: matched[2] } : null;
 }
 
-function isHoldingsTable(children: ReactNode): boolean {
+type StyledTableKind = "holdings" | "fund-estimate" | null;
+
+function styledTableKind(children: ReactNode): StyledTableKind {
   const header = plainText(children);
-  return (
+  if (
     header.startsWith("代码名称持仓成本价最新价市值当日仓位")
     || header.startsWith("代码名称持仓成本价最新价市值当日连续变化仓位")
-  );
+  ) {
+    return "holdings";
+  }
+  if (header.startsWith("基金名称代码当日预估涨跌市值连续变化")) {
+    return "fund-estimate";
+  }
+  return null;
 }
 
-const HoldingsTableContext = createContext(false);
+const StyledTableContext = createContext<StyledTableKind>(null);
 
 function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
-  const isHoldingTable = useContext(HoldingsTableContext);
+  const tableKind = useContext(StyledTableContext);
   const price = holdingPriceParts(children);
   if (price) {
     return (
@@ -80,7 +88,7 @@ function ReportTableCell({ children }: ComponentPropsWithoutRef<"td">) {
       </td>
     );
   }
-  const marketValue = isHoldingTable ? holdingMarketValueParts(children) : null;
+  const marketValue = tableKind ? holdingMarketValueParts(children) : null;
   if (marketValue) {
     const pnlClass = marketValue.pnlAmount === "--"
       ? "report-pnl-flat"
@@ -121,8 +129,8 @@ export default function ReportMarkdown({ children }: { children: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           table: ({ children: tableChildren }) => {
-            const holdingsTable = isHoldingsTable(tableChildren);
-            if (!holdingsTable) {
+            const tableKind = styledTableKind(tableChildren);
+            if (!tableKind) {
               return (
                 <div className="report-markdown-table-scroll">
                   <table>{tableChildren}</table>
@@ -130,7 +138,7 @@ export default function ReportMarkdown({ children }: { children: string }) {
               );
             }
             return (
-              <HoldingsTableContext.Provider value>
+              <StyledTableContext.Provider value={tableKind}>
                 <div className="report-holdings-table-card">
                   <div className="report-markdown-table-scroll">
                     <table className="report-holdings-table">
@@ -142,7 +150,7 @@ export default function ReportMarkdown({ children }: { children: string }) {
                     <span><i className="report-legend-down" />亏损 / 下跌</span>
                   </div>
                 </div>
-              </HoldingsTableContext.Provider>
+              </StyledTableContext.Provider>
             );
           },
           td: ReportTableCell,
