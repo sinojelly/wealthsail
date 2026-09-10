@@ -17,7 +17,7 @@ class _Frame:
         yield 0, {
             "基金代码": "110022",
             "基金简称": "易方达消费行业",
-            "申购状态": "限制大额申购",
+            "申购状态": "限制大额申购（单日限购 100000 元）",
             "赎回状态": "开放赎回",
             "下一开放日": "",
         }
@@ -57,16 +57,17 @@ async def test_fetch_filters_held_symbols_and_maps_verified_statuses() -> None:
     )
 
     assert set(statuses) == {"110022", "012733"}
-    assert statuses["110022"].purchase_status == "SUSPENDED"
+    assert statuses["110022"].purchase_status == "LIMITED"
     assert statuses["110022"].redemption_status == "OPEN"
     assert statuses["012733"].purchase_status == "OPEN"
     assert statuses["012733"].redemption_status == "OPEN"
     assert statuses["110022"].source_ref == "akshare/fund_purchase_em"
     assert statuses["110022"].metadata == {
         "fundName": "易方达消费行业",
-        "purchaseStatusRaw": "限制大额申购",
+        "purchaseStatusRaw": "限制大额申购（单日限购 100000 元）",
         "redemptionStatusRaw": "开放赎回",
         "nextOpenDate": None,
+        "dailyPurchaseLimit": "100000",
     }
 
 

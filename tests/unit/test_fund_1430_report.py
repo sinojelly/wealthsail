@@ -10,6 +10,7 @@ from backend.reports import service as report_service
 FUND_A_ID = "11111111-1111-1111-1111-111111111111"
 FUND_B_ID = "22222222-2222-2222-2222-222222222222"
 FUND_C_ID = "33333333-3333-3333-3333-333333333333"
+FUND_D_ID = "44444444-4444-4444-4444-444444444444"
 
 
 def _generator():
@@ -209,9 +210,9 @@ def test_subscription_reminder_groups_verified_statuses_without_repeating_normal
     push = _generator().format_push_content(context)
 
     expected = (
-        "招商中证白酒(161725)：暂停赎回\n"
-        "天弘中证食品饮料(001632)：未取得可核验状态\n"
-        "其余 1 只申购赎回状态正常\n"
+        "招商中证白酒(161725)：暂停赎回，今日无法赎回\n"
+        "天弘中证食品饮料(001632)：状态待确认，建议自行核实\n"
+        "其余 1 只14:45 前可申购\n"
         "数据来源：天天基金公开状态，实际以销售渠道为准"
     )
     assert reminder == expected
@@ -239,11 +240,84 @@ def test_subscription_reminder_collapses_all_normal_funds_to_one_sentence() -> N
             "redemptionStatus": "OPEN",
         },
     ]
+    context["fund1430"]["fundCutoffRules"] = [
+        {
+            "instrumentId": instrument_id,
+            "salesChannel": "DEFAULT",
+            "cutoffTime": "15:00:00",
+            "timezone": "Asia/Shanghai",
+        }
+        for instrument_id in (FUND_A_ID, FUND_B_ID)
+    ]
 
     report = _generator().build_report(context)
     reminder = next(item["body"] for item in report["items"] if item["title"] == "申赎提醒")
 
-    assert reminder == "2只基金申购赎回状态正常"
+    assert reminder == "2只基金15:00 前可申购"
+
+
+def test_subscription_reminder_uses_deadlines_and_actionable_purchase_states() -> None:
+    """Deadline, limit, suspension and unknown facts render without inference."""
+
+    context = _context()
+    context["positions"].extend(
+        [
+            {
+                "instrumentId": FUND_C_ID,
+                "symbol": "001632",
+                "name": "天弘中证食品饮料",
+                "type": "场外基金",
+                "quantity": "600",
+            },
+            {
+                "instrumentId": FUND_D_ID,
+                "symbol": "070019",
+                "name": "嘉实价值优势",
+                "type": "场外基金",
+                "quantity": "400",
+            },
+        ]
+    )
+    context["fund1430"]["fundProfiles"] = [
+        {
+            "instrumentId": FUND_A_ID,
+            "purchaseStatus": "OPEN",
+            "redemptionStatus": "OPEN",
+            "sourceMetadata": {},
+        },
+        {
+            "instrumentId": FUND_B_ID,
+            "purchaseStatus": "LIMITED",
+            "redemptionStatus": "OPEN",
+            "sourceMetadata": {"dailyPurchaseLimit": "100000"},
+        },
+        {
+            "instrumentId": FUND_C_ID,
+            "purchaseStatus": "SUSPENDED",
+            "redemptionStatus": "OPEN",
+            "sourceMetadata": {},
+        },
+    ]
+    context["fund1430"]["fundCutoffRules"] = [
+        {
+            "instrumentId": instrument_id,
+            "salesChannel": "DEFAULT",
+            "cutoffTime": "15:00:00",
+            "timezone": "Asia/Shanghai",
+        }
+        for instrument_id in (FUND_A_ID, FUND_B_ID, FUND_C_ID, FUND_D_ID)
+    ]
+
+    report = _generator().build_report(context)
+    reminder = next(item["body"] for item in report["items"] if item["title"] == "申赎提醒")
+
+    assert reminder == (
+        "天弘中证食品饮料(001632)：暂停申购，今日无法加仓\n"
+        "招商中证白酒(161725)：15:00 前可申购，单日限购 10 万\n"
+        "嘉实价值优势(070019)：状态待确认，建议自行核实\n"
+        "其余 1 只15:00 前可申购\n"
+        "数据来源：天天基金公开状态，实际以销售渠道为准"
+    )
 
 
 def test_report_ignores_legacy_approximate_lookthrough_seed() -> None:
@@ -384,8 +458,8 @@ def test_push_formats_fund_estimates_once_with_trend_and_unrealized_pnl() -> Non
     push = _generator().format_push_content(context)
 
     assert push.startswith("📊 今日基金估值（数据截至 2026-09-09 11:30）：")
-    assert "申赎提醒：易方达消费中(110011)：未取得可核验状态" in push
-    assert "招商中证白酒(161725)：未取得可核验状态" in push
+    assert "申赎提醒：易方达消费中(110011)：状态待确认，建议自行核实" in push
+    assert "招商中证白酒(161725)：状态待确认，建议自行核实" in push
     assert "所有基金估值来源：新浪财经，仅供参考。" in push
     assert "估值截至2026-09-09 11:30" not in push
     assert "质量ESTIMATED" not in push

@@ -34,6 +34,11 @@ PARSER_BLIND_SPOTS = frozenset(
         "040_report_job_session_uniqueness.sql",
         "058_corporate_actions_multisource_sync.sql",
         "061_tiantian_fund_subscription_status.sql",
+        # 063 extends the 061 PL/pgSQL write function and maintains its
+        # automatic baseline with PostgreSQL trigger DDL. sqlglot cannot
+        # parse DROP TRIGGER ... ON schema.table, so its contract test and
+        # deploy-time readback provide the mandatory coverage instead.
+        "063_default_fund_cutoff_rules.sql",
     }
 )
 

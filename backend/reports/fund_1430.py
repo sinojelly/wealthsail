@@ -172,8 +172,46 @@ def _held_otc_funds(context: dict) -> list[dict]:
     return list(funds.values())
 
 
+def _cutoff_by_instrument(context: dict) -> dict[str, str]:
+    """Resolve the effective DEFAULT deadline, then the earliest channel rule."""
+
+    groups: dict[str, list[dict]] = {}
+    for rule in _cutoff_rules(context):
+        instrument_id = str(rule.get("instrumentId") or "")
+        cutoff = str(rule.get("cutoffTime") or "")[:5]
+        if instrument_id and cutoff:
+            groups.setdefault(instrument_id, []).append(rule)
+
+    result: dict[str, str] = {}
+    for instrument_id, rules in groups.items():
+        selected = next(
+            (
+                rule
+                for rule in rules
+                if str(rule.get("salesChannel") or "DEFAULT") == "DEFAULT"
+            ),
+            min(rules, key=lambda rule: str(rule.get("cutoffTime") or "")),
+        )
+        cutoff = str(selected.get("cutoffTime") or "")[:5]
+        if cutoff:
+            result[instrument_id] = cutoff
+    return result
+
+
+def _limit_text(profile: dict) -> str | None:
+    """Render a provider-declared CNY daily limit; absent values stay absent."""
+
+    metadata = profile.get("sourceMetadata") or {}
+    amount = _safe_decimal(metadata.get("dailyPurchaseLimit"))
+    if amount is None or amount <= 0:
+        return None
+    if amount >= Decimal("10000") and amount % Decimal("10000") == 0:
+        return f"{amount / Decimal('10000'):g} 万"
+    return f"{amount:,.2f} 元"
+
+
 def _subscription_reminder_lines(context: dict) -> list[str]:
-    """Summarize verified subscription status without repeating normal funds."""
+    """Turn persisted status plus effective deadlines into action reminders."""
 
     fund_context = context.get("fund1430") or {}
     profiles = {
@@ -181,42 +219,71 @@ def _subscription_reminder_lines(context: dict) -> list[str]:
         for profile in (fund_context.get("fundProfiles") or [])
         if isinstance(profile, dict) and profile.get("instrumentId")
     }
+    cutoffs = _cutoff_by_instrument(context)
     suspended_lines: list[str] = []
+    limited_lines: list[str] = []
     unknown_lines: list[str] = []
-    normal_count = 0
+    normal_by_cutoff: dict[str, int] = {}
+    normal_without_cutoff = 0
     for fund in _held_otc_funds(context):
         instrument_id = str(fund.get("instrumentId") or "")
         label = _label(fund)
         profile = profiles.get(instrument_id)
+        cutoff = cutoffs.get(instrument_id)
         if profile is None:
-            unknown_lines.append(f"{label}：未取得可核验状态")
+            unknown_lines.append(f"{label}：状态待确认，建议自行核实")
             continue
 
         purchase = str(profile.get("purchaseStatus") or "").upper()
         redemption = str(profile.get("redemptionStatus") or "").upper()
-        suspended: list[str] = []
+        if purchase == "SUSPENDED" and redemption == "SUSPENDED":
+            suspended_lines.append(f"{label}：暂停申购、暂停赎回，今日无法加仓或赎回")
+            continue
         if purchase == "SUSPENDED":
-            suspended.append("暂停申购")
+            suspended_lines.append(f"{label}：暂停申购，今日无法加仓")
+            continue
         if redemption == "SUSPENDED":
-            suspended.append("暂停赎回")
-        if suspended:
-            suspended_lines.append(f"{label}：{'、'.join(suspended)}")
+            suspended_lines.append(f"{label}：暂停赎回，今日无法赎回")
+            continue
+
+        if purchase == "LIMITED" and redemption == "OPEN":
+            if cutoff:
+                limit = _limit_text(profile)
+                limited_lines.append(
+                    f"{label}：{cutoff} 前可申购，单日限购 {limit or '待确认'}"
+                )
+            else:
+                limited_lines.append(f"{label}：限购状态已确认，截止时间待确认")
             continue
 
         if purchase == "OPEN" and redemption == "OPEN":
-            normal_count += 1
+            if cutoff:
+                normal_by_cutoff[cutoff] = normal_by_cutoff.get(cutoff, 0) + 1
+            else:
+                normal_without_cutoff += 1
             continue
 
         # A malformed legacy row is not evidence of an open fund.  Preserve
         # the same explicit downgrade used for a source record that is absent.
-        unknown_lines.append(f"{label}：未取得可核验状态")
+        unknown_lines.append(f"{label}：状态待确认，建议自行核实")
 
-    if not suspended_lines and not unknown_lines:
-        return [f"{normal_count}只基金申购赎回状态正常"] if normal_count else []
+    normal_groups = sorted(normal_by_cutoff.items())
+    has_exceptions = bool(suspended_lines or limited_lines or unknown_lines)
+    normal_lines: list[str] = []
+    for cutoff, count in normal_groups:
+        if has_exceptions and len(normal_groups) == 1 and not normal_without_cutoff:
+            normal_lines.append(f"其余 {count} 只{cutoff} 前可申购")
+        else:
+            normal_lines.append(f"{count}只基金{cutoff} 前可申购")
+    if normal_without_cutoff:
+        prefix = "其余 " if has_exceptions and not normal_groups else ""
+        normal_lines.append(f"{prefix}{normal_without_cutoff}只基金状态正常，截止时间待确认")
 
-    lines = [*suspended_lines, *unknown_lines]
-    if normal_count:
-        lines.append(f"其余 {normal_count} 只申购赎回状态正常")
+    if not has_exceptions:
+        return normal_lines
+
+    lines = [*suspended_lines, *limited_lines, *unknown_lines]
+    lines.extend(normal_lines)
     lines.append("数据来源：天天基金公开状态，实际以销售渠道为准")
     return lines
 

@@ -469,6 +469,74 @@ async def _readback(conn: asyncpg.Connection) -> None:
             "fund subscription status write boundary is missing or unsafe"
         )
 
+    # 063 makes the industry-standard 15:00 deadline explicit and governed:
+    # every current OTC fund has a durable DEFAULT rule, and a definer trigger
+    # applies the same baseline to future OTC instruments.  Manual rules with
+    # a later effective date may override the baseline for QDII/special funds.
+    default_fund_cutoff_source = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM reference.data_sources
+             WHERE name = 'WEALTHSAIL_DEFAULT_FUND_CUTOFF'
+               AND source_type = 'MARKET_DATA'
+               AND status = 'ACTIVE'
+        )
+        """
+    )
+    missing_default_fund_cutoffs = await conn.fetchval(
+        """
+        SELECT count(*)
+          FROM reference.instruments instrument
+         WHERE instrument.asset_type = 'OFF_EXCHANGE_FUND'
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM reference.instrument_cutoff_rules rule
+                 JOIN reference.data_sources source ON source.id = rule.source_id
+                WHERE rule.instrument_id = instrument.id
+                  AND rule.sales_channel = 'DEFAULT'
+                  AND rule.cutoff_time = TIME '15:00'
+                  AND rule.timezone = 'Asia/Shanghai'
+                  AND rule.effective_from = DATE '1970-01-01'
+                  AND source.name = 'WEALTHSAIL_DEFAULT_FUND_CUTOFF'
+                  AND source.status = 'ACTIVE'
+           )
+        """
+    )
+    default_fund_cutoff_trigger = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM pg_trigger trigger
+              JOIN pg_class relation ON relation.oid = trigger.tgrelid
+              JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+             WHERE trigger.tgname = 'seed_default_off_exchange_fund_cutoff_trigger'
+               AND namespace.nspname = 'reference'
+               AND relation.relname = 'instruments'
+               AND NOT trigger.tgisinternal
+        )
+        """
+    )
+    purchase_status_constraint = await conn.fetchval(
+        """
+        SELECT pg_get_constraintdef(constraint.oid)
+          FROM pg_constraint constraint
+          JOIN pg_class relation ON relation.oid = constraint.conrelid
+          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'reference'
+           AND relation.relname = 'fund_profiles'
+           AND constraint.conname = 'fund_profiles_purchase_status_check'
+        """
+    )
+    if (
+        not default_fund_cutoff_source
+        or int(missing_default_fund_cutoffs or 0) != 0
+        or not default_fund_cutoff_trigger
+        or not purchase_status_constraint
+        or "LIMITED" not in purchase_status_constraint
+    ):
+        raise RuntimeError("default fund cutoff contract is missing or unsafe")
+
     corporate_action_columns = {
         row["column_name"]: row
         for row in await conn.fetch(

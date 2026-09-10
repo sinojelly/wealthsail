@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
 
@@ -94,8 +95,8 @@ def _normalize_purchase_rows(
             continue
         purchase_raw = _row_text(row, "申购状态")
         redemption_raw = _row_text(row, "赎回状态")
-        purchase_status = _normalize_status(purchase_raw)
-        redemption_status = _normalize_status(redemption_raw)
+        purchase_status = _normalize_purchase_status(purchase_raw)
+        redemption_status = _normalize_redemption_status(redemption_raw)
         if purchase_status is None or redemption_status is None:
             continue
         statuses[symbol] = FundSubscriptionStatus(
@@ -108,6 +109,7 @@ def _normalize_purchase_rows(
                 "purchaseStatusRaw": purchase_raw,
                 "redemptionStatusRaw": redemption_raw,
                 "nextOpenDate": _row_text(row, "下一开放日"),
+                "dailyPurchaseLimit": _daily_purchase_limit(purchase_raw),
             },
         )
     return statuses
@@ -124,7 +126,19 @@ def _normalize_symbol(value: object) -> str | None:
     return text.zfill(6)
 
 
-def _normalize_status(value: str | None) -> str | None:
+def _normalize_purchase_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if "暂停" in value:
+        return "SUSPENDED"
+    if "限制" in value or "限额" in value:
+        return "LIMITED"
+    if "开放" in value or "正常" in value:
+        return "OPEN"
+    return None
+
+
+def _normalize_redemption_status(value: str | None) -> str | None:
     if value is None:
         return None
     if "暂停" in value or "限制" in value:
@@ -132,6 +146,25 @@ def _normalize_status(value: str | None) -> str | None:
     if "开放" in value or "正常" in value:
         return "OPEN"
     return None
+
+
+def _daily_purchase_limit(value: str | None) -> str | None:
+    """Return a confirmed CNY daily limit only when the provider states one."""
+
+    if value is None:
+        return None
+    match = re.search(r"(?:限购|限额)\s*([0-9]+(?:\.[0-9]+)?)\s*(万元|万|元)?", value)
+    if match is None:
+        return None
+    try:
+        amount = Decimal(match.group(1))
+    except (InvalidOperation, ValueError):
+        return None
+    if match.group(2) in {"万", "万元"}:
+        amount *= Decimal("10000")
+    if not amount.is_finite() or amount <= 0:
+        return None
+    return format(amount.normalize(), "f")
 
 
 def _row_text(row: Any, column: str) -> str | None:

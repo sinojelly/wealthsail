@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 62
-    assert migrations[-1].path.name == "062_akshare_fund_dividends.sql"
+    assert versions[-1] == 63
+    assert migrations[-1].path.name == "063_default_fund_cutoff_rules.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
@@ -310,6 +310,28 @@ def test_062_registers_akshare_fund_dividends_without_direct_runtime_writes() ->
     assert "GRANT DELETE ON market.corporate_actions" not in migration
 
 
+def test_063_seeds_default_fund_cutoffs_and_preserves_override_boundary() -> None:
+    """Every OTC fund gets a 15:00 baseline while later rules can override it."""
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "migrations" / "063_default_fund_cutoff_rules.sql"
+
+    assert path.exists()
+    migration = path.read_text(encoding="utf-8")
+    for contract in (
+        "WEALTHSAIL_DEFAULT_FUND_CUTOFF",
+        "OFF_EXCHANGE_FUND",
+        "TIME '15:00'",
+        "Asia/Shanghai",
+        "reference.seed_default_off_exchange_fund_cutoff",
+        "CREATE TRIGGER seed_default_off_exchange_fund_cutoff_trigger",
+        "LIMITED",
+        "dailyPurchaseLimit",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON reference.instrument_cutoff_rules TO wealthsail_worker" not in migration
+
+
 def test_readback_requires_akshare_fund_dividend_source_and_event_type() -> None:
     """迁移读回必须拒绝缺少基金分红来源或类型约束的数据库。"""
     source = inspect.getsource(_readback)
@@ -328,6 +350,18 @@ def test_readback_requires_fund_subscription_status_write_boundary() -> None:
     assert "reference.fund_profiles" in source
     for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
         assert privilege in source
+
+
+def test_readback_requires_default_fund_cutoff_contract() -> None:
+    """迁移读回应验证默认截止时间、后续自动预置与限购状态契约。"""
+
+    source = inspect.getsource(_readback)
+
+    assert "WEALTHSAIL_DEFAULT_FUND_CUTOFF" in source
+    assert "OFF_EXCHANGE_FUND" in source
+    assert "seed_default_off_exchange_fund_cutoff_trigger" in source
+    assert "fund_profiles_purchase_status_check" in source
+    assert "LIMITED" in source
 
 
 def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -> None:

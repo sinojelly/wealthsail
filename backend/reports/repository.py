@@ -230,7 +230,8 @@ async def get_pre_market_fund_profiles(
     """Read effective OTC-fund subscription/redemption openness.
 
     Returns the latest effective ``reference.fund_profiles`` row per instrument
-    (``purchase_status`` / ``redemption_status`` in ``OPEN``/``SUSPENDED``).
+    (``purchase_status`` in ``OPEN``/``LIMITED``/``SUSPENDED`` and
+    ``redemption_status`` in ``OPEN``/``SUSPENDED``).
     An absent row means "no verified status" — the caller must render that as
     "no cutoff reminder" and never guess openness.
     """
