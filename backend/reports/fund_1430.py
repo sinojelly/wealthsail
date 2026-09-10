@@ -525,6 +525,22 @@ def _markdown_cell(value: object) -> str:
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip() or "--"
 
 
+def _audit_estimate_summary(metrics: list[dict]) -> str:
+    """Summarize only persisted, valid estimate changes for the audit view."""
+
+    changes = [metric["changePct"] for metric in metrics]
+    if not changes:
+        return "今日整体预估均值：--；上涨0只、下跌0只、平盘0只。"
+    average = sum(changes, start=Decimal("0")) / len(changes)
+    up_count = sum(change > 0 for change in changes)
+    down_count = sum(change < 0 for change in changes)
+    flat_count = len(changes) - up_count - down_count
+    return (
+        f"今日整体预估均值：{average:+.2f}%；"
+        f"上涨{up_count}只、下跌{down_count}只、平盘{flat_count}只。"
+    )
+
+
 def _audit_estimate_table(metrics: list[dict], context: dict) -> str:
     """Render the audit-only FUND_1430 table; WeCom keeps its text flow."""
 
@@ -545,11 +561,14 @@ def _audit_estimate_table(metrics: list[dict], context: dict) -> str:
 
     lines = [
         header,
+        _audit_estimate_summary(metrics),
         "",
         "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |",
         "| --- | --- | ---: | ---: | --- |",
     ]
-    for metric in metrics:
+    # This ordering is audit-web-only.  WeCom keeps the existing list order
+    # through its separate formatter so mobile delivery semantics do not change.
+    for metric in sorted(metrics, key=lambda item: item["changePct"]):
         estimate = metric["estimate"]
         marker = "（估）" if _quality(estimate.get("quality")) == "ESTIMATED" else ""
         market_value = _estimated_market_value(estimate, context)

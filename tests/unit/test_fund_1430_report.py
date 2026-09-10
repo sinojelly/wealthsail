@@ -358,9 +358,13 @@ def test_audit_summary_uses_structured_fund_table_without_repeated_metadata() ->
     report = _generator().build_report(context)
 
     assert report["summary"].startswith("📊 今日基金估值（数据截至 14:51）：")
+    assert "今日整体预估均值：+0.05%；上涨1只、下跌1只、平盘0只。" in report["summary"]
     assert "| 基金名称 | 代码 | 当日预估涨跌 | 市值 | 连续变化 |" in report["summary"]
-    assert "| 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |" in report["summary"]
     assert "| 招商中证白酒 | 161725 | -4.00% | 768.00（累计盈亏 -32.00） | 📉连跌3天(-3.20%) |" in report["summary"]
+    assert "| 易方达消费中（估） | 110011 | +4.10% | 1,041.00（累计盈亏 +21.00） | 📉连跌2天(-2.10%) |" in report["summary"]
+    assert report["summary"].index("| 招商中证白酒") < report["summary"].index(
+        "| 易方达消费中"
+    )
     assert "所有基金估值来源：新浪财经，仅供参考。" in report["summary"]
     assert "来源不提供区间" not in report["summary"]
     assert "估值截至" not in report["summary"]
