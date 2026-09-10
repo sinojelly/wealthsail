@@ -241,15 +241,20 @@ def _holding_direction(value: object) -> str:
 
 
 def _holdings_push_list(rows: list[dict]) -> list[str]:
-    """Render every position as one consistent Markdown list line."""
-    lines = ["```"]
+    """Render every position as one mobile-safe Markdown list line.
+
+    WeCom desktop tolerates long fenced code blocks, while some mobile clients
+    render an interrupted or long block with large blank regions.  These are
+    ordinary Markdown lines deliberately: the report audit table remains
+    independent and unchanged.
+    """
+    lines: list[str] = []
     for row in rows:
         label = _holding_list_label(row)
         lines.append(
             f"{_holding_direction(row['changePct'])} {label} "
             f"仓位{_push_percent(row['weight'])} 当日{_push_percent(row['changePct'], signed=True)}"
         )
-    lines.append("```")
     return lines
 
 

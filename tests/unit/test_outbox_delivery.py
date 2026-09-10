@@ -14,6 +14,7 @@ from backend.integrations import wecom, wecom_bot
 from backend.jobs.outbox import (
     DeliveryCommand,
     _send,
+    _render_delivery_content,
     build_delivery_command,
     claim_batch,
 )
@@ -242,6 +243,32 @@ async def test_report_delivery_renders_a_clickable_internal_markdown_link(
         in captured["content"]
     )
     assert len(captured["content"].encode("utf-8")) <= 2048
+
+
+def test_markdown_delivery_drops_an_incomplete_final_line_when_truncated() -> None:
+    """A phone must not receive a cut-off holding row before the report link."""
+    command = DeliveryCommand(
+        channel_type="wecom",
+        recipient="wecom-user-7",
+        content="盘前持仓概览\n完整持仓行\n" + ("超长基金名称" * 500),
+        message_type="markdown",
+        link_path="/reports?reportId=report-1",
+    )
+
+    rendered = _render_delivery_content(
+        command,
+        Settings(
+            _env_file=None,
+            web_base_url="https://wealthsail.example.com",
+        ),
+    )
+
+    assert "完整持仓行" in rendered
+    assert "超长基金名称" not in rendered
+    assert rendered.endswith(
+        "[查看完整报告](https://wealthsail.example.com/reports?reportId=report-1)"
+    )
+    assert len(rendered.encode("utf-8")) <= 2048
 
 
 @pytest.mark.asyncio

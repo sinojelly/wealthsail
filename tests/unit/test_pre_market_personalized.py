@@ -320,8 +320,8 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert "等共4条" in content
 
 
-def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
-    """The push keeps every holding in an aligned, non-table Markdown list."""
+def test_personalized_push_renders_every_holding_as_mobile_safe_list() -> None:
+    """Mobile WeCom receives ordinary lines, never one long fenced code block."""
     positions = [
         {
             "instrumentId": str(index),
@@ -342,15 +342,15 @@ def test_personalized_push_renders_every_holding_as_aligned_list() -> None:
         _context(positions=positions)
     )
 
-    assert content.splitlines()[:3] == [
+    assert content.splitlines()[:2] == [
         "**盘前持仓概览**",
-        "```",
         "📉 标的0(600000) 仓位30.00% 当日-1.00%",
     ]
     assert "📈 标的2(600002) 仓位28.00% 当日+1.00%" in content
     assert "📈 标的10(600010) 仓位20.00% 当日+9.00%" in content
     assert all(f"6000{index:02d}" in content for index in range(11))
     assert "| 代码 |" not in content
+    assert "```" not in content
     assert "⚠️" not in content
 
 
@@ -435,7 +435,7 @@ def test_personalized_report_renders_cutoff_reminder() -> None:
     assert draft["items"][2]["quality"] == "FRESH"
 
 
-def test_personalized_push_retains_reminders_and_actions_after_aligned_list() -> None:
+def test_personalized_push_retains_reminders_and_actions_after_mobile_list() -> None:
     content = pre_market_personalized.format_push_content(
         _context(
             positions=_positions(),
@@ -455,7 +455,8 @@ def test_personalized_push_retains_reminders_and_actions_after_aligned_list() ->
         )
     )
 
-    assert content.startswith("**盘前持仓概览**\n```")
+    assert content.startswith("**盘前持仓概览**\n📈 招商银行(600036)")
+    assert "```" not in content
     assert "提醒：" in content
     assert "行动：" in content
 

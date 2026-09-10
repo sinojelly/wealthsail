@@ -135,6 +135,21 @@ def _truncate_utf8(value: str, byte_limit: int) -> str:
     return encoded[:byte_limit].decode("utf-8", errors="ignore").rstrip()
 
 
+def _truncate_markdown_at_line_boundary(value: str, byte_limit: int) -> str:
+    """Trim a Markdown preview without delivering a partially rendered row.
+
+    Long mobile WeCom messages are easier to read when a holding list ends at
+    its last complete line.  A one-line message retains the generic UTF-8
+    fallback so notification content is never discarded solely for lacking a
+    newline.
+    """
+    if len(value.encode("utf-8")) <= byte_limit:
+        return value
+    truncated = _truncate_utf8(value, byte_limit)
+    last_newline = truncated.rfind("\n")
+    return truncated[:last_newline].rstrip() if last_newline >= 0 else truncated
+
+
 def _plain_markdown_body(value: str) -> str:
     """Keep preview text safe while preserving the fixed WeCom colour tags."""
     parts = _WECOM_FONT_TAG_PATTERN.split(value)
@@ -170,7 +185,9 @@ def _render_delivery_content(command: DeliveryCommand, settings: Settings) -> st
     remaining = MAX_WECOM_TEXT_BYTES - len(suffix.encode("utf-8"))
     if remaining <= 0:
         raise DeliveryRejectedError("WeCom report link exceeds the message limit")
-    body = _truncate_utf8(_plain_markdown_body(command.content), remaining)
+    body = _truncate_markdown_at_line_boundary(
+        _plain_markdown_body(command.content), remaining
+    )
     return f"{body}{suffix}"
 
 
