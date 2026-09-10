@@ -599,6 +599,14 @@ async def build_report_context(
                 instrument_id = str(position.get("instrumentId") or "")
                 trend = trends.get(instrument_id)
                 position["trendDisplay"] = trend.display if trend else "--"
+                position["trendDirection"] = trend.streak_direction if trend else None
+                position["trendDays"] = trend.streak_days if trend else None
+                position["trendChangePct"] = (
+                    str(trend.streak_change_pct)
+                    if trend and trend.streak_change_pct is not None
+                    else None
+                )
+                position["trendQuality"] = trend.quality if trend else "UNAVAILABLE"
                 position["pnlAmount"] = _pre_market_position_pnl_amount(position)
         # The personalized phase also reports on watched instruments, so its
         # action and cutoff lookups cover the union of held and watched ids.

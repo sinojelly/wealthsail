@@ -121,8 +121,8 @@ def test_personalized_report_marks_missing_facts_as_missing() -> None:
     # 有持仓、当日无匹配公司行动且估值健康 → 确定性结论（区别于"无数据"的「暂无」）。
     assert bodies["持仓今日影响"] == "今日无重大事件，持仓估值整体新鲜"
     assert "贵州茅台" in bodies["关注标的动态"]
-    # 有持仓基金但无申赎截止/状态数据 → 无提醒的确定性空态。
-    assert bodies["今日操作提醒"] == "今日无申赎截止提醒"
+    # 无风险条件时，今日操作提醒不再逐只枚举申赎状态。
+    assert bodies["今日操作提醒"] == "今日无异常，持有场外基金15:00前可正常申赎。"
     assert draft["quality"] == "FRESH"
 
 
@@ -153,8 +153,8 @@ def test_personalized_report_reports_held_corporate_action_impact() -> None:
     assert draft["items"][0]["quality"] == "FRESH"
 
 
-def test_personalized_report_uses_today_ex_rights_as_operation_reminder() -> None:
-    """除权除息是当天持仓可验证的操作提醒，而不只是影响说明。"""
+def test_personalized_report_keeps_stock_ex_rights_out_of_fund_operation_reminder() -> None:
+    """股票除权保留在持仓影响，不占用基金操作提醒的有限位置。"""
     draft = pre_market_personalized.build_report(
         _context(
             positions=_positions(),
@@ -177,10 +177,7 @@ def test_personalized_report_uses_today_ex_rights_as_operation_reminder() -> Non
     reminders = {
         item["title"]: item["body"] for item in draft["items"]
     }
-    assert reminders["今日操作提醒"] == (
-        "招商银行(600036)今日除权除息，价格可能出现技术性调整，请关注开盘价与实际到账信息。"
-    )
-    assert reminders["今日操作提醒"] != "今日无申赎截止提醒"
+    assert reminders["今日操作提醒"] == "今日无异常，持有场外基金15:00前可正常申赎。"
 
 
 def test_personalized_report_describes_fund_dividend_as_a_fund_event() -> None:
@@ -214,9 +211,9 @@ def test_personalized_report_describes_fund_dividend_as_a_fund_event() -> None:
     )
 
     reminders = {item["title"]: item["body"] for item in draft["items"]}
-    assert reminders["今日操作提醒"].startswith(
-        "易方达消费行业(110022)今日基金分红除息，净值可能出现技术性调整，"
-        "请关注净值与红利到账信息"
+    assert reminders["今日操作提醒"] == (
+        "易方达消费行业(110022)今日基金分红除息，"
+        "净值可能技术性调整，请关注红利到账。"
     )
 
 
@@ -318,8 +315,8 @@ def test_personalized_push_limits_actions_to_three_and_reports_total() -> None:
     assert "行动：" in content
     assert "标的0" in content and "标的1" in content and "标的2" in content
     assert "标的3" not in content
-    # 同一事实在「提醒」中提示当日操作，在「行动」中保留未来三天事件列表。
-    assert content.count("标的0") == 2
+    # 股票除权由行动列表展示，不占用仅面向基金风险的今日操作提醒。
+    assert content.count("标的0") == 1
     assert "等共4条" in content
 
 

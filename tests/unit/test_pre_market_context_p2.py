@@ -463,6 +463,10 @@ async def test_personalized_context_adds_trend_and_pnl_when_enabled(monkeypatch)
     )
 
     assert context["positions"][0]["trendDisplay"] == "📈 连涨2天 (+3.00%)"
+    assert context["positions"][0]["trendDirection"] == "UP"
+    assert context["positions"][0]["trendDays"] == 2
+    assert context["positions"][0]["trendChangePct"] == "3"
+    assert context["positions"][0]["trendQuality"] == "FRESH"
     assert context["positions"][0]["pnlAmount"] == "1234.56"
     assert context["preMarket"]["holdingsEnrichmentsEnabled"] is True
     awaitable_trends.assert_awaited_once()

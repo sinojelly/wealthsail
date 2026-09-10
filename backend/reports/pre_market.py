@@ -757,6 +757,12 @@ _NO_CUTOFF_REMINDER = "今日无申赎截止提醒"
 _DEFAULT_CUTOFF_HINT = "；持有场外基金默认 15:00 前可提交申购/赎回（以渠道状态为准）"
 # 基金申赎开放状态（fund_profiles 由公告回填），展示时带来源限定。
 _FUND_STATUS_CAVEAT = "（以基金公告为准）"
+_OPERATION_REMINDER_NORMAL = "今日无异常，持有场外基金15:00前可正常申赎。"
+_OPERATION_REMINDER_LIMIT = 3
+_FUND_VALUATION_ALERT_PCT = Decimal("-2")
+_FUND_CONCENTRATION_ALERT_PCT = Decimal("30")
+_CASH_ALERT_PCT = Decimal("5")
+_FUND_STREAK_ALERT_DAYS = 3
 
 
 def _no_cutoff_reminder_text(context: dict) -> str:
@@ -943,30 +949,137 @@ def cutoff_push_text(context: dict, *, limit: int = 2) -> str:
     return text
 
 
+def _is_held_off_exchange_fund(position: dict) -> bool:
+    return (
+        str(position.get("type") or "").upper()
+        in {"场外基金", "OFF_EXCHANGE_FUND", "FUND"}
+        and (quantity := safe_decimal(position.get("quantity"))) is not None
+        and quantity > 0
+    )
+
+
+def _operation_reminder_candidates(context: dict) -> list[tuple[int, Decimal, str]]:
+    """Build only actionable fund reminders from persisted, quality-checked facts."""
+    candidates: list[tuple[int, Decimal, str]] = []
+    seen_instruments: set[str] = set()
+    report_date = _report_date(context)
+
+    for action in matched_actions(context):
+        if (
+            action.get("actionType") != "FUND_DIVIDEND"
+            or not report_date
+            or _action_event_date(action) != report_date
+        ):
+            continue
+        instrument_id = str(action.get("instrumentId") or action.get("symbol") or "")
+        if not instrument_id or instrument_id in seen_instruments:
+            continue
+        seen_instruments.add(instrument_id)
+        candidates.append(
+            (
+                0,
+                Decimal("0"),
+                f"{instrument_label(action)}今日基金分红除息，"
+                "净值可能技术性调整，请关注红利到账",
+            )
+        )
+
+    for position in context.get("positions") or []:
+        if not isinstance(position, dict) or not _is_held_off_exchange_fund(position):
+            continue
+        instrument_id = str(position.get("instrumentId") or position.get("symbol") or "")
+        if not instrument_id or instrument_id in seen_instruments:
+            continue
+        label = instrument_label(position)
+        change_pct = safe_decimal(position.get("changePct"))
+        change_quality = str(position.get("changeQuality") or "").upper()
+        if (
+            change_pct is not None
+            and change_pct <= _FUND_VALUATION_ALERT_PCT
+            and change_quality in {"FRESH", "ESTIMATED"}
+        ):
+            seen_instruments.add(instrument_id)
+            change_label = "预估下跌" if change_quality == "ESTIMATED" else "当日下跌"
+            candidates.append(
+                (
+                    1,
+                    change_pct,
+                    f"{label}{change_label}{abs(change_pct):.2f}%，"
+                    "请关注估值波动，避免情绪化赎回",
+                )
+            )
+            continue
+
+        weight = safe_decimal(position.get("weight"))
+        if weight is not None and weight > _FUND_CONCENTRATION_ALERT_PCT:
+            seen_instruments.add(instrument_id)
+            candidates.append(
+                (
+                    2,
+                    -weight,
+                    f"{label}仓位{weight:.2f}%，超过30%阈值，"
+                    "建议评估集中度并避免继续加仓",
+                )
+            )
+            continue
+
+        trend_days = position.get("trendDays")
+        trend_change_pct = safe_decimal(position.get("trendChangePct"))
+        if (
+            str(position.get("trendDirection") or "").upper() == "DOWN"
+            and isinstance(trend_days, int)
+            and trend_days >= _FUND_STREAK_ALERT_DAYS
+            and trend_change_pct is not None
+            and str(position.get("trendQuality") or "").upper() == "FRESH"
+        ):
+            seen_instruments.add(instrument_id)
+            candidates.append(
+                (
+                    3,
+                    -Decimal(trend_days),
+                    f"{label}已连跌{trend_days}天（累计{trend_change_pct:+.2f}%），"
+                    "请关注趋势是否延续",
+                )
+            )
+
+    summary = context.get("summary")
+    total_asset = safe_decimal(summary.get("totalAsset")) if isinstance(summary, dict) else None
+    cash_balance = safe_decimal(summary.get("cashBalance")) if isinstance(summary, dict) else None
+    if (
+        total_asset is not None
+        and total_asset > 0
+        and cash_balance is not None
+        and cash_balance >= 0
+    ):
+        cash_pct = cash_balance / total_asset * Decimal("100")
+        if cash_pct < _CASH_ALERT_PCT:
+            candidates.append(
+                (
+                    4,
+                    cash_pct,
+                    f"现金占比{cash_pct:.2f}%，低于5%阈值，"
+                    "建议预留流动性，避免新增高波动仓位",
+                )
+            )
+    return sorted(candidates, key=lambda item: (item[0], item[1], item[2]))
+
+
+def _operation_reminder_phrases(context: dict, *, limit: int) -> list[str]:
+    return [text for _, _, text in _operation_reminder_candidates(context)[:limit]]
+
+
 def operation_reminder_text(context: dict) -> str:
-    """盘前操作提醒：今日除权除息优先，随后保留已有基金申赎事实。"""
-    action_phrases = _today_ex_rights_reminder_phrases(context)
-    if not action_phrases:
-        return cutoff_text(context)
-    fund_reminder = cutoff_text(context)
-    text = "；".join(action_phrases)
-    if fund_reminder != _NO_CUTOFF_REMINDER:
-        text += "；" + fund_reminder.rstrip("。")
-    return text + "。"
+    """盘前操作提醒：最多三条可执行的基金风险或公司行动提示。"""
+    phrases = _operation_reminder_phrases(context, limit=_OPERATION_REMINDER_LIMIT)
+    return "；".join(phrases) + "。" if phrases else _OPERATION_REMINDER_NORMAL
 
 
-def operation_reminder_push_text(context: dict, *, limit: int = 2) -> str:
-    """企微短句版提醒：不把无关的基金空态附在股票除权提醒后。"""
-    action_phrases = _today_ex_rights_reminder_phrases(context, concise=True)
-    if not action_phrases:
-        return cutoff_push_text(context, limit=limit)
-    text = "；".join(action_phrases[:limit])
-    if len(action_phrases) > limit:
-        text += f"等{len(action_phrases)}项"
-    fund_reminder = cutoff_push_text(context, limit=limit)
-    if fund_reminder != _NO_CUTOFF_REMINDER:
-        text += "；" + fund_reminder
-    return text
+def operation_reminder_push_text(context: dict, *, limit: int = 3) -> str:
+    """企微与报告正文共享同一组至多三条的可执行提醒。"""
+    phrases = _operation_reminder_phrases(
+        context, limit=min(max(limit, 1), _OPERATION_REMINDER_LIMIT)
+    )
+    return "；".join(phrases) + "。" if phrases else _OPERATION_REMINDER_NORMAL
 
 
 # 今日焦点事件的空态文案（区别于「暂无」数据缺失的措辞）。

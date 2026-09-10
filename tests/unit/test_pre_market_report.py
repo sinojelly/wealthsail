@@ -335,7 +335,7 @@ def test_full_report_has_seven_grounded_sections_and_explicit_missing_data() -> 
         "3. 今日重点关注：经济数据发布：暂无；持仓公司行动：招商银行(600036)今日现金分红除权；申赎状态变化：暂无。",
         "4. 持仓今日影响：招商银行(600036)现金分红除权，价格可能出现技术性调整；现金到账日为2026-09-04，实际收益以到账和税费为准。",
         "5. 操作参考：招商银行今日除权，若除权后价格偏低，可关注填权行情；易方达消费行业今日15:00前可申赎，请留意截止时间。",
-        "6. 今日操作提醒：易方达消费行业(110022)默认渠道截止时间15:00（Asia/Shanghai），今日15:00前可提交申购/赎回（以渠道状态为准）。",
+        "6. 今日操作提醒：今日无异常，持有场外基金15:00前可正常申赎。",
         "7. 一句话总结：情绪偏强；招商银行除权；1只基金15:00前可提交。",
     ]
     assert draft["status"] == "PARTIAL"
@@ -362,7 +362,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_700_chars() -> 
     push = pre_market.format_push_content(context)
 
     assert "暂无持仓" in draft["summary"]
-    assert "今日无申赎截止提醒" in draft["summary"]
+    assert "今日无异常，持有场外基金15:00前可正常申赎。" in draft["summary"]
     assert draft["summary"].count("暂无") >= 6
     assert "None" not in draft["summary"]
     assert "null" not in draft["summary"]
@@ -370,7 +370,7 @@ def test_missing_fields_are_never_invented_and_push_stays_within_700_chars() -> 
         "🌏 隔夜市场：美股暂无；A50期货暂无",
         "📌 今日关注：经济数据暂无；公司行动今日及未来3天暂无已录入公司行动；申赎状态暂无",
         "📊 持仓影响：暂无持仓",
-        "⏰ 今日提醒：今日无申赎截止提醒",
+        "⏰ 今日提醒：今日无异常，持有场外基金15:00前可正常申赎。",
         "🎯 今日焦点：今日暂无重大事件关注",
         "🧭 操作参考：今日无明确操作参考",
         "💡 一句话总结：暂无",
@@ -402,13 +402,12 @@ def test_standard_push_dates_future_actions_and_folds_after_three() -> None:
     assert "等共4条" in attention
 
 
-def test_push_states_cutoff_window_with_channel_caveat() -> None:
-    """今日提醒给出 15:00 前的操作窗口，但不断言渠道一定开放。"""
+def test_push_uses_actionable_operation_reminder_instead_of_cutoff_enumeration() -> None:
+    """推送只保留可执行提醒，不再逐只展示正常基金截止窗口。"""
     push = pre_market.format_push_content(_context())
 
     assert "招商银行今日除权，预计低开" in push
-    assert "易方达消费行业今日15:00前可提交申购/赎回" in push
-    assert "（以渠道状态为准）" in push
+    assert "今日无异常，持有场外基金15:00前可正常申赎。" in push
     assert len(push) <= 700
 
 
@@ -907,6 +906,7 @@ def _rule(
 def _reminder_context(*, positions: list[dict], profiles=(), rules=()) -> dict:
     return {
         "positions": positions,
+        "summary": {"totalAsset": "100000", "cashBalance": "10000"},
         "policy": {"single_position_limit": "30.00"},
         "marketSentiment": {
             "tradeDate": "2026-09-01",
@@ -915,6 +915,7 @@ def _reminder_context(*, positions: list[dict], profiles=(), rules=()) -> dict:
             "qualityStatus": "FRESH",
         },
         "preMarket": {
+            "reportDate": "2026-09-01",
             "usIndices": [],
             "a50Future": None,
             "economicEvents": [],
@@ -952,6 +953,115 @@ def test_reminder_held_fund_without_status_data() -> None:
     )
     assert pre_market.cutoff_text(context) == expected
     assert pre_market.cutoff_push_text(context) == expected
+
+
+def test_operation_reminder_uses_one_normal_state_when_no_risk_rule_matches() -> None:
+    """防止今日操作提醒重新逐只罗列正常申赎状态。"""
+    context = _reminder_context(
+        positions=[_fund_position()],
+        profiles=[_profile()],
+        rules=[_rule()],
+    )
+
+    expected = "今日无异常，持有场外基金15:00前可正常申赎。"
+    assert pre_market.operation_reminder_text(context) == expected
+    assert pre_market.operation_reminder_push_text(context) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "context", "expected"),
+    [
+        (
+            "fund_valuation_drop",
+            _reminder_context(
+                positions=[{**_fund_position(), "changePct": "-2.50", "changeQuality": "ESTIMATED"}]
+            ),
+            "易方达消费行业(110022)预估下跌2.50%，请关注估值波动，避免情绪化赎回",
+        ),
+        (
+            "fund_concentration",
+            _reminder_context(positions=[{**_fund_position(), "weight": "35.00"}]),
+            "易方达消费行业(110022)仓位35.00%，超过30%阈值，建议评估集中度并避免继续加仓",
+        ),
+        (
+            "fund_downward_streak",
+            _reminder_context(
+                positions=[
+                    {
+                        **_fund_position(),
+                        "trendDirection": "DOWN",
+                        "trendDays": 3,
+                        "trendChangePct": "-4.20",
+                        "trendQuality": "FRESH",
+                    }
+                ]
+            ),
+            "易方达消费行业(110022)已连跌3天（累计-4.20%），请关注趋势是否延续",
+        ),
+        (
+            "low_cash",
+            {
+                **_reminder_context(positions=[_fund_position()]),
+                "summary": {"totalAsset": "100000", "cashBalance": "3000"},
+            },
+            "现金占比3.00%，低于5%阈值，建议预留流动性，避免新增高波动仓位",
+        ),
+        (
+            "fund_dividend",
+            {
+                **_reminder_context(positions=[_fund_position()]),
+                "preMarket": {
+                    **_reminder_context(positions=[_fund_position()])["preMarket"],
+                    "corporateActions": [
+                        {
+                            "instrumentId": _FUND_ID,
+                            "symbol": "110022",
+                            "name": "易方达消费行业",
+                            "actionType": "FUND_DIVIDEND",
+                            "actionDate": "2026-09-01",
+                            "exDate": "2026-09-01",
+                        }
+                    ],
+                },
+            },
+            "易方达消费行业(110022)今日基金分红除息，净值可能技术性调整，请关注红利到账",
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_operation_reminder_emits_each_actionable_rule(
+    name: str, context: dict, expected: str
+) -> None:
+    """每个可操作条件都必须产生确定性提醒，而非回退到申赎枚举。"""
+    assert expected in pre_market.operation_reminder_text(context)
+
+
+def test_operation_reminder_keeps_only_the_three_highest_priority_actions() -> None:
+    """防止多个条件命中时重新刷屏，且同一基金不得重复占用提醒位置。"""
+    dividend = {**_fund_position(), "instrumentId": "fund-dividend", "symbol": "110023", "name": "分红基金"}
+    valuation = {**_fund_position(), "instrumentId": "fund-valuation", "symbol": "110024", "name": "估值基金", "changePct": "-2.50", "changeQuality": "ESTIMATED"}
+    concentration = {**_fund_position(), "instrumentId": "fund-concentration", "symbol": "110025", "name": "集中基金", "weight": "35.00"}
+    streak = {**_fund_position(), "instrumentId": "fund-streak", "symbol": "110026", "name": "连跌基金", "trendDirection": "DOWN", "trendDays": 4, "trendChangePct": "-5.10", "trendQuality": "FRESH"}
+    context = _reminder_context(positions=[dividend, valuation, concentration, streak])
+    context["summary"] = {"totalAsset": "100000", "cashBalance": "3000"}
+    context["preMarket"]["corporateActions"] = [
+        {
+            "instrumentId": "fund-dividend",
+            "symbol": "110023",
+            "name": "分红基金",
+            "actionType": "FUND_DIVIDEND",
+            "actionDate": "2026-09-01",
+            "exDate": "2026-09-01",
+        }
+    ]
+
+    reminder = pre_market.operation_reminder_text(context)
+    assert reminder.count("；") == 2
+    assert "分红基金(110023)今日基金分红除息" in reminder
+    assert "估值基金(110024)预估下跌2.50%" in reminder
+    assert "集中基金(110025)仓位35.00%" in reminder
+    assert "连跌基金" not in reminder
+    assert "现金占比" not in reminder
 
 
 def test_reminder_open_fund_with_cutoff_shows_window() -> None:
