@@ -33,6 +33,7 @@ from backend.integrations.market_data import (
     Observation,
     fetch_fund_nav_history,
 )
+from backend.jobs.fund_nav_range_sync import fetch_and_persist_fund_nav_range
 from backend.market import repository as market_repository
 from backend.portfolio import repository as portfolio_repository
 from backend.portfolio.imports.analytics import (
@@ -43,7 +44,11 @@ from backend.portfolio.imports.analytics import (
 
 logger = logging.getLogger("wealthsail.data_tasks")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
-_SUPPORTED_JOB_TYPES = ("FUND_NAV_BACKFILL", "POSITION_PERIOD_METRICS_REBUILD")
+_SUPPORTED_JOB_TYPES = (
+    "FUND_NAV_BACKFILL",
+    "POSITION_PERIOD_METRICS_REBUILD",
+    "FUND_NAV_RANGE_FETCH",
+)
 _PROJECTION_REPAIR_INTERVAL_SECONDS = 60.0
 _ERROR_TEXT_LIMIT = 500
 _URL_QUERY_PATTERN = re.compile(r"(https?://[^\s?]+)\?[^\s]*", re.IGNORECASE)
@@ -289,7 +294,8 @@ async def claim_data_task(
                 SELECT id
                   FROM workflow.job_runs
                  WHERE job_type IN ('FUND_NAV_BACKFILL',
-                                    'POSITION_PERIOD_METRICS_REBUILD')
+                                    'POSITION_PERIOD_METRICS_REBUILD',
+                                    'FUND_NAV_RANGE_FETCH')
                    AND (
                        (status IN ('PENDING', 'FAILED') AND
                            CASE WHEN status = 'PENDING'
@@ -807,6 +813,18 @@ async def process_data_task(
         lease.attempt_count,
         as_of.isoformat(),
     )
+    if lease.job_type == "FUND_NAV_RANGE_FETCH":
+        fund_code = lease.payload.get("fundCode")
+        if not isinstance(fund_code, str):
+            raise ValueError("fund NAV range fetch requires a fundCode payload")
+        result = await fetch_and_persist_fund_nav_range(pool, fund_code)
+        logger.info(
+            "fund_nav_range_fetch_completed run_id=%s fund_code=%s source=%s",
+            lease.run_id,
+            result.fund_code,
+            result.data_source,
+        )
+        return
     if lease.payload.get("projectionOnly") is True:
         try:
             positions_updated, accounts_updated = (

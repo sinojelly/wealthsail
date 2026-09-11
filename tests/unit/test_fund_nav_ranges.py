@@ -9,6 +9,7 @@ import pytest
 
 from backend.integrations.fund_nav_ranges import (
     build_fund_nav_range,
+    fetch_fund_identity,
     fetch_fund_nav_range,
 )
 
@@ -98,3 +99,25 @@ async def test_fetch_parses_akshare_accumulated_nav_history() -> None:
     assert result.highest_nav == Decimal("1.25")
     assert result.lowest_nav == Decimal("1.00")
     assert result.drawdown_from_high == Decimal("12.0000")
+
+
+@pytest.mark.asyncio
+async def test_on_demand_identity_resolution_uses_provider_name_without_guessing() -> None:
+    """A range cache row needs a provider-confirmed name, not a code-derived label."""
+
+    class Frame:
+        empty = False
+        columns = ("item", "value")
+
+        def iterrows(self):
+            yield 0, {"item": "基金代码", "value": "110022"}
+            yield 1, {"item": "基金名称", "value": "易方达消费行业"}
+
+    class Provider:
+        def fund_individual_basic_info_xq(self, **_kwargs):
+            return Frame()
+
+    assert await fetch_fund_identity("110022", provider=Provider()) == (
+        "易方达消费行业",
+        "OFF_EXCHANGE_FUND",
+    )

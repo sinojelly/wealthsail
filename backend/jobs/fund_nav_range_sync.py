@@ -9,7 +9,11 @@ from typing import Awaitable, Callable, Sequence
 
 from backend.common.database import Pool, system_connection
 from backend.config import Settings
-from backend.integrations.fund_nav_ranges import FundNavRange, fetch_fund_nav_range
+from backend.integrations.fund_nav_ranges import (
+    FundNavRange,
+    fetch_fund_identity,
+    fetch_fund_nav_range,
+)
 
 
 logger = logging.getLogger("wealthsail.fund_nav_range_sync")
@@ -37,6 +41,32 @@ class FundNavRangeSyncStats:
 
 RangeFetcher = Callable[..., Awaitable[FundNavRange]]
 RangePersister = Callable[[Pool, FundNavRange], Awaitable[None]]
+FundIdentityResolver = Callable[[str], Awaitable[tuple[str, str]]]
+
+
+async def fetch_and_persist_fund_nav_range(
+    pool: Pool,
+    fund_code: str,
+    *,
+    identity_resolver: FundIdentityResolver | None = None,
+    range_fetcher: RangeFetcher | None = None,
+    persister: RangePersister | None = None,
+) -> FundNavRange:
+    """Resolve one fund identity, then refresh its shared accumulated-NAV cache.
+
+    The API only creates a durable request.  This Worker-only helper owns all
+    provider I/O, so an API restart cannot lose a requested refresh.  A range
+    provider outage remains an explicit ``UNAVAILABLE`` row; an identity lookup
+    outage is retried by the durable job because a name must never be invented.
+    """
+
+    resolver = identity_resolver or fetch_fund_identity
+    fetched = range_fetcher or fetch_fund_nav_range
+    persist = persister or persist_fund_nav_range
+    fund_name, fund_type = await resolver(fund_code)
+    result = await fetched(fund_code, fund_name=fund_name, fund_type=fund_type)
+    await persist(pool, result)
+    return result
 
 
 async def sync_fund_nav_ranges(

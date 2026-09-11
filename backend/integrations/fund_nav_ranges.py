@@ -124,6 +124,30 @@ async def fetch_fund_nav_range(
         return _unavailable(fund_code, fund_name, fund_type)
 
 
+async def fetch_fund_identity(
+    fund_code: str, *, provider: Any | None = None
+) -> tuple[str, str]:
+    """Resolve the canonical name for a requested Chinese mutual-fund code.
+
+    AkShare exposes this lightweight identity response through its Xueqiu
+    adapter.  It is used only in the Worker, before fetching accumulated NAV;
+    failures propagate so the durable task retries rather than writing a
+    fabricated name to the shared reference cache.
+    """
+
+    if len(fund_code) != 6 or not fund_code.isdigit():
+        raise ValueError("fund code must contain exactly six digits")
+    if provider is None:
+        import akshare as provider  # noqa: PLC0415
+    frame = await asyncio.to_thread(
+        provider.fund_individual_basic_info_xq, symbol=fund_code
+    )
+    name = _identity_name_from_frame(frame)
+    if not name:
+        raise RuntimeError("AkShare fund identity response has no fund name")
+    return (name, "OFF_EXCHANGE_FUND")
+
+
 def _history_from_frame(frame: Any) -> list[tuple[date, Decimal]]:
     if frame is None or getattr(frame, "empty", True) or not hasattr(frame, "iterrows"):
         raise RuntimeError("AkShare accumulated NAV response is empty or malformed")
@@ -144,6 +168,19 @@ def _history_from_frame(frame: Any) -> list[tuple[date, Decimal]]:
     if not points:
         raise RuntimeError("AkShare accumulated NAV response has no usable rows")
     return points
+
+
+def _identity_name_from_frame(frame: Any) -> str | None:
+    """Read AkShare's transposed ``item``/``value`` fund metadata response."""
+
+    if frame is None or getattr(frame, "empty", True) or not hasattr(frame, "iterrows"):
+        return None
+    for _, row in frame.iterrows():
+        item = str(_row_value(row, "item") or "").strip()
+        if item == "基金名称":
+            name = str(_row_value(row, "value") or "").strip()
+            return name or None
+    return None
 
 
 def _unavailable(fund_code: str, fund_name: str, fund_type: str) -> FundNavRange:
