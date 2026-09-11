@@ -83,10 +83,24 @@ export function fmtPercent(value: number | string | null): string {
   return parsed == null ? "--" : `${parsed.toFixed(2)}%`;
 }
 
-/** 当前分位在表格中的展示形态："72.50% 分位"。 */
+/** 当前分位的五档语义标签（20% 一档，含下界不含上界，顶部档含 100）。 */
+export function percentileBand(
+  value: number | string | null,
+): "接近历史底部" | "历史偏低" | "历史中位" | "历史偏高" | "接近历史顶部" | null {
+  const parsed = toNumber(value);
+  if (parsed == null) return null;
+  if (parsed < 20) return "接近历史底部";
+  if (parsed < 40) return "历史偏低";
+  if (parsed < 60) return "历史中位";
+  if (parsed < 80) return "历史偏高";
+  return "接近历史顶部";
+}
+
+/** 当前分位在表格中的展示形态："72.50% 分位 · 历史偏高"。 */
 export function fmtPercentileLabel(value: number | string | null): string {
   const parsed = toNumber(value);
-  return parsed == null ? "--" : `${parsed.toFixed(2)}% 分位`;
+  if (parsed == null) return "--";
+  return `${parsed.toFixed(2)}% 分位 · ${percentileBand(value)}`;
 }
 
 export function fmtDate(value: string | null): string {
@@ -101,4 +115,15 @@ export function fmtTimestamp(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+/** YYYY/MM/DD 补零格式，用于表格脚注的更新日期。 */
+export function fmtDateSlash(value: string | null): string {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
 }

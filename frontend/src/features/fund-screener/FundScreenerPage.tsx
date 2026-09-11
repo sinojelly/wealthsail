@@ -4,6 +4,7 @@ import { Download, RefreshCw, Search } from "lucide-react";
 import PageHeader from "../../components/layout/PageHeader";
 import {
   fmtDate,
+  fmtDateSlash,
   fmtNav,
   fmtPercent,
   fmtPercentileLabel,
@@ -267,6 +268,16 @@ export default function FundScreenerPage() {
   }
 
   const items: FundNavRange[] = searchQuery.data ?? [];
+  // 脚注的"更新于"取本次结果中最新的缓存更新日期
+  const latestUpdated = fmtDateSlash(
+    items.reduce<string | null>(
+      (latest, item) =>
+        item.updatedAt && (!latest || item.updatedAt > latest)
+          ? item.updatedAt
+          : latest,
+      null,
+    ),
+  );
   // 输入恰好是 6 位代码但缓存无匹配时，允许直接查询该代码（走未收录流程）
   const directCode = isSixDigitCode(debouncedKeyword)
     ? debouncedKeyword
@@ -403,6 +414,12 @@ export default function FundScreenerPage() {
               </tbody>
             </table>
           </div>
+        ) : null}
+
+        {debouncedKeyword.length > 0 && items.length > 0 ? (
+          <p className="fund-source-line">
+            数据来源：天天基金 · 历史极值基于累计净值计算 · 更新于 {latestUpdated}
+          </p>
         ) : null}
 
         {debouncedKeyword.length > 0 &&
