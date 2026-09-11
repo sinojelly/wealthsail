@@ -26,10 +26,11 @@ async def search_funds(
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """Search cached fund ranges only; an empty result is a normal outcome."""
+    """Search cached fund ranges; an empty result is a normal outcome.  An
+    exact six-digit code miss auto-enqueues one durable Worker fetch job."""
 
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await service.search(conn, keyword)
+        data = await service.search(conn, keyword, tenant_id=ctx.tenant_id)
     return ok(data, request_id=request_id, as_of=now_shanghai())
 
 

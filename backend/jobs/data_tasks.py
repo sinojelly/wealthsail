@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import socket
 import time
@@ -824,6 +825,9 @@ async def process_data_task(
             result.fund_code,
             result.data_source,
         )
+        # 限速：同一消费循环内连续抓取间隔 1-2 秒随机，避免触发数据源限流。
+        # 休眠放在认领任务的处理尾部，不占用数据库租约心跳以外的资源。
+        await asyncio.sleep(random.uniform(1.0, 2.0))
         return
     if lease.payload.get("projectionOnly") is True:
         try:

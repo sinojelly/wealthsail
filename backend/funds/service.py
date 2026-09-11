@@ -52,13 +52,31 @@ def _range_dto(row) -> dict:
     }
 
 
-async def search(conn: Connection, keyword: str) -> list[dict]:
-    """Search the persisted cache only; this endpoint never triggers provider I/O."""
+async def search(
+    conn: Connection, keyword: str, *, tenant_id: str
+) -> list[dict]:
+    """Search the persisted cache by code or name.
+
+    When the keyword is an exact six-digit fund code absent from the cache,
+    one durable fetch job is enqueued (idempotent per tenant+code) so a later
+    search can hit.  Enqueueing is a plain DB write; all provider I/O stays
+    Worker-only.
+    """
 
     normalized = keyword.strip()
     if not normalized:
         raise ValidationError_("搜索关键词不能为空")
-    return [_range_dto(row) for row in await repository.search_nav_ranges(conn, normalized)]
+    results = [
+        _range_dto(row)
+        for row in await repository.search_nav_ranges(conn, normalized)
+    ]
+    if _FUND_CODE.fullmatch(normalized) and not any(
+        item["fundCode"] == normalized for item in results
+    ):
+        await repository.enqueue_nav_range_fetch(
+            conn, tenant_id=tenant_id, fund_code=normalized
+        )
+    return results
 
 
 async def get_range(conn: Connection, fund_code: str) -> dict:

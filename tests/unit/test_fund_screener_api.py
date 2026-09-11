@@ -63,7 +63,7 @@ def test_search_returns_cached_matches_without_calling_a_provider(monkeypatch) -
 
     assert response.status_code == 200
     assert response.json()["data"][0]["fundCode"] == "110022"
-    found.assert_awaited_once_with(ANY, "1100")
+    found.assert_awaited_once_with(ANY, "1100", tenant_id=TENANT_ID)
 
 
 def test_range_returns_not_collected_as_a_successful_read(monkeypatch) -> None:
@@ -103,3 +103,92 @@ def test_fetch_accepts_one_durable_request_and_returns_accepted(monkeypatch) -> 
     assert response.status_code == 202
     assert response.json()["data"]["message"] == "已提交抓取请求"
     enqueue.assert_awaited_once_with(ANY, tenant_id=TENANT_ID, fund_code="110022")
+
+
+def test_search_miss_on_exact_code_enqueues_durable_fetch(monkeypatch) -> None:
+    """A six-digit code absent from the cache must auto-queue one Worker fetch."""
+
+    _transaction(monkeypatch)
+    from backend.funds import repository as funds_repository
+
+    empty_search = AsyncMock(return_value=[])
+    enqueue = AsyncMock(return_value={"id": "run-1", "created": True})
+    with (
+        patch(
+            "backend.funds.repository.search_nav_ranges", new=empty_search
+        ),
+        patch(
+            "backend.funds.repository.enqueue_nav_range_fetch", new=enqueue
+        ),
+    ):
+        response = _client().get("/api/v1/funds/search", params={"keyword": "163407"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
+    enqueue.assert_awaited_once_with(
+        ANY, tenant_id=TENANT_ID, fund_code="163407"
+    )
+
+
+def test_search_fuzzy_keyword_miss_does_not_enqueue(monkeypatch) -> None:
+    """Only an exact six-digit code may trigger an enqueue; names never do."""
+
+    _transaction(monkeypatch)
+    from backend.funds import repository as funds_repository
+
+    empty_search = AsyncMock(return_value=[])
+    enqueue = AsyncMock()
+    with (
+        patch(
+            "backend.funds.repository.search_nav_ranges", new=empty_search
+        ),
+        patch(
+            "backend.funds.repository.enqueue_nav_range_fetch", new=enqueue
+        ),
+    ):
+        response = _client().get(
+            "/api/v1/funds/search", params={"keyword": "沪深300"}
+        )
+
+    assert response.status_code == 200
+    enqueue.assert_not_awaited()
+
+
+def test_search_hit_on_exact_code_does_not_enqueue(monkeypatch) -> None:
+    """An already-cached code must not schedule redundant fetch work."""
+
+    _transaction(monkeypatch)
+    from backend.funds import repository as funds_repository
+
+    cached = AsyncMock(
+        return_value=[
+            {
+                "fund_code": "110022",
+                "fund_name": "易方达消费行业",
+                "fund_type": "OFF_EXCHANGE_FUND",
+                "latest_nav": 1.0,
+                "latest_nav_date": None,
+                "highest_nav": 1.0,
+                "highest_nav_date": None,
+                "lowest_nav": 1.0,
+                "lowest_nav_date": None,
+                "drawdown_from_high": 0,
+                "rise_from_low": 0,
+                "current_percentile": None,
+                "inception_date": None,
+                "data_source": "AKSHARE",
+                "updated_at": None,
+            }
+        ]
+    )
+    enqueue = AsyncMock()
+    with (
+        patch("backend.funds.repository.search_nav_ranges", new=cached),
+        patch(
+            "backend.funds.repository.enqueue_nav_range_fetch", new=enqueue
+        ),
+    ):
+        response = _client().get("/api/v1/funds/search", params={"keyword": "110022"})
+
+    assert response.status_code == 200
+    enqueue.assert_not_awaited()

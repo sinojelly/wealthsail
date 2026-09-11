@@ -47,8 +47,15 @@ async def get_nav_range(conn: Connection, fund_code: str):
 async def enqueue_nav_range_fetch(
     conn: Connection, *, tenant_id: str, fund_code: str
 ):
-    """Create one durable on-demand refresh request per tenant and fund code."""
+    """Create one durable on-demand refresh request per tenant and fund code.
 
+    An existing request is reused as-is while it is still pending, running, or
+    awaiting a retry.  Only a terminal row (already completed, or failed with
+    retries exhausted) is reset back to PENDING so the code can be fetched
+    again instead of being stuck forever behind its first request.
+    """
+
+    job_key = f"fund-nav-range-fetch:{fund_code}"
     row = await conn.fetchrow(
         """
         INSERT INTO workflow.job_runs (
@@ -60,8 +67,28 @@ async def enqueue_nav_range_fetch(
         RETURNING id, status, job_type
         """,
         tenant_id,
-        f"fund-nav-range-fetch:{fund_code}",
+        job_key,
         json.dumps({"fundCode": fund_code}, ensure_ascii=False),
+    )
+    if row is not None:
+        return {**dict(row), "created": True}
+    row = await conn.fetchrow(
+        """
+        UPDATE workflow.job_runs
+           SET status = 'PENDING', available_at = now(), started_at = NULL,
+               finished_at = NULL, error_class = NULL, next_retry_at = NULL,
+               attempt_count = 0, lease_token = NULL, lease_owner = NULL,
+               lease_until = NULL, heartbeat_at = now()
+         WHERE tenant_id = $1
+           AND job_key = $2
+           AND (
+               status = 'COMPLETED'
+               OR (status = 'FAILED' AND next_retry_at IS NULL)
+           )
+        RETURNING id, status, job_type
+        """,
+        tenant_id,
+        job_key,
     )
     if row is not None:
         return {**dict(row), "created": True}
@@ -73,7 +100,7 @@ async def enqueue_nav_range_fetch(
            AND job_key = $2
         """,
         tenant_id,
-        f"fund-nav-range-fetch:{fund_code}",
+        job_key,
     )
     if existing is None:
         raise RuntimeError("fund NAV range fetch conflict row disappeared")
