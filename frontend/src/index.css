@@ -5336,3 +5336,119 @@ button:disabled {
   color: var(--slate-500);
   line-height: 1.5;
 }
+
+/* 基金筛选：搜索框、结果表与详情卡片 */
+.fund-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.fund-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: white;
+  color: var(--slate-400);
+}
+.fund-search-box:focus-within {
+  border-color: var(--teal);
+  outline: 3px solid rgb(13 148 136 / 10%);
+}
+.fund-search-box input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--navy);
+  font-size: 13px;
+}
+.fund-search-box .muted {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.fund-row {
+  cursor: pointer;
+}
+.fund-row:hover {
+  background: var(--slate-50);
+}
+.fund-row.is-selected {
+  background: rgb(13 148 136 / 8%);
+}
+.link-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--teal);
+  font-size: inherit;
+  text-decoration: underline;
+}
+.link-button:hover {
+  color: var(--teal-dark);
+}
+.fund-detail {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--slate-100);
+}
+.fund-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.fund-detail-head strong {
+  font-size: 15px;
+}
+.fund-detail-head .mono {
+  color: var(--slate-600);
+}
+.fund-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.fund-stat {
+  padding: 10px 12px;
+  border: 1px solid var(--slate-100);
+  border-radius: 10px;
+  background: var(--slate-50);
+}
+.fund-stat dt {
+  color: var(--slate-500);
+  font-size: 10px;
+  font-weight: 600;
+}
+.fund-stat dd {
+  margin: 4px 0 0;
+  color: var(--navy);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.fund-stat small {
+  display: block;
+  margin-top: 2px;
+  color: var(--slate-500);
+  font-size: 10px;
+}
+.fund-source-line {
+  margin: 12px 0 0;
+  color: var(--slate-500);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.fund-fetch-hint {
+  margin: 8px 0 0;
+  color: var(--slate-600);
+  font-size: 12px;
+  line-height: 1.5;
+}

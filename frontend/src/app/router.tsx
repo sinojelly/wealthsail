@@ -17,6 +17,9 @@ const RiskPolicyPage = lazy(
 );
 const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
 const MarketHot = lazy(() => import("../features/market/MarketHot"));
+const FundScreenerPage = lazy(
+  () => import("../features/fund-screener/FundScreenerPage"),
+);
 const LoginPage = lazy(() => import("../features/login/LoginPage"));
 
 function LazyPage({ children }: { children: ReactNode }) {
@@ -118,6 +121,14 @@ export function AppRoutes() {
           element={
             <LazyPage>
               <MarketHot />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="fund-screener"
+          element={
+            <LazyPage>
+              <FundScreenerPage />
             </LazyPage>
           }
         />

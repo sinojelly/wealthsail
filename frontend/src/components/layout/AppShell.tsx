@@ -5,6 +5,7 @@ import {
   BookOpenCheck,
   ChevronLeft,
   ChevronRight,
+  Filter,
   Flame,
   LogOut,
   Menu,
@@ -20,6 +21,7 @@ import ChatDrawer from "../../features/chat/ChatDrawer";
 const navItems = [
   { to: "/dashboard", label: "资产看板", icon: BarChart3 },
   { to: "/market-hot", label: "市场热点", icon: Flame },
+  { to: "/fund-screener", label: "基金筛选", icon: Filter },
   { to: "/reports", label: "研报审计", icon: BookOpenCheck },
   { to: "/risk-policy", label: "风控政策", icon: ShieldCheck },
   { to: "/settings", label: "账号安全", icon: Settings },
@@ -35,6 +37,7 @@ const pageTitles: Record<string, string> = {
   "/dashboard": "资产看板",
   "/onboarding": "初始化导入",
   "/market-hot": "市场热点",
+  "/fund-screener": "基金筛选",
   "/reports": "研报审计",
   "/risk-policy": "风控政策",
   "/settings": "账号安全",
