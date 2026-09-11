@@ -5460,13 +5460,14 @@ button:disabled {
   font-size: 10px;
   font-weight: 400;
 }
-/* 基金筛选专用红绿：回撤红、上涨绿（按用户指定的展示约定） */
-.fund-drawdown {
+/* 基金筛选专用红绿：回撤红、上涨绿（按用户指定的展示约定）。
+   提高优先级以压过 .data-table td 的默认字色。 */
+.data-table td.fund-drawdown {
   color: #dc2626;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.fund-rise {
+.data-table td.fund-rise {
   color: #16a34a;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
