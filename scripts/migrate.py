@@ -537,6 +537,97 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("default fund cutoff contract is missing or unsafe")
 
+    fund_nav_range_columns = {
+        row["column_name"]
+        for row in await conn.fetch(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_schema = 'reference'
+               AND table_name = 'fund_nav_ranges'
+            """
+        )
+    }
+    fund_nav_range_function = (
+        "reference.upsert_fund_nav_range("
+        "text,text,text,numeric,date,numeric,date,numeric,date,"
+        "numeric,numeric,numeric,date,text)"
+    )
+    fund_nav_range_security = await conn.fetchrow(
+        """
+        SELECT procedure.prosecdef,
+               COALESCE(procedure.proconfig, ARRAY[]::TEXT[]) AS proconfig
+          FROM pg_proc procedure
+          JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'reference'
+           AND procedure.proname = 'upsert_fund_nav_range'
+           AND pg_get_function_identity_arguments(procedure.oid) =
+               'p_fund_code text, p_fund_name text, p_fund_type text, '
+               'p_latest_nav numeric, p_latest_nav_date date, '
+               'p_highest_nav numeric, p_highest_nav_date date, '
+               'p_lowest_nav numeric, p_lowest_nav_date date, '
+               'p_drawdown_from_high numeric, p_rise_from_low numeric, '
+               'p_current_percentile numeric, p_inception_date date, '
+               'p_data_source text'
+        """
+    )
+    fund_nav_range_privileges = {
+        "api_can_read": bool(
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, 'SELECT')",
+                "wealthsail_api",
+                "reference.fund_nav_ranges",
+            )
+        ),
+        "worker_can_execute": bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "wealthsail_worker",
+                fund_nav_range_function,
+            )
+        ),
+        "api_cannot_execute": not bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "wealthsail_api",
+                fund_nav_range_function,
+            )
+        ),
+        "browser_cannot_execute": not bool(
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                "authenticated",
+                fund_nav_range_function,
+            )
+        ),
+    }
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+            fund_nav_range_privileges[
+                f"{role}_cannot_{privilege.lower()}"
+            ] = not bool(
+                await conn.fetchval(
+                    "SELECT has_table_privilege($1, $2, $3)",
+                    role,
+                    "reference.fund_nav_ranges",
+                    privilege,
+                )
+            )
+    required_fund_nav_range_columns = {
+        "fund_code", "fund_name", "fund_type", "latest_nav", "latest_nav_date",
+        "highest_nav", "highest_nav_date", "lowest_nav", "lowest_nav_date",
+        "drawdown_from_high", "rise_from_low", "current_percentile",
+        "inception_date", "data_source", "updated_at",
+    }
+    if (
+        fund_nav_range_columns != required_fund_nav_range_columns
+        or fund_nav_range_security is None
+        or not fund_nav_range_security["prosecdef"]
+        or "search_path=reference, pg_catalog" not in fund_nav_range_security["proconfig"]
+        or not all(fund_nav_range_privileges.values())
+    ):
+        raise RuntimeError("fund_nav_ranges cache boundary is missing or unsafe")
+
     corporate_action_columns = {
         row["column_name"]: row
         for row in await conn.fetch(

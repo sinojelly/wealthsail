@@ -42,6 +42,9 @@ class SessionSchedule:
     # Fixed sessions can be caught up after a short Worker restart.  The
     # persistent job key keeps repeated ticks idempotent across processes.
     catch_up_minutes: int = 15
+    # Most sessions follow the mainland trading calendar.  Shared source-cache
+    # refreshes can opt out when late provider disclosure needs a daily retry.
+    trading_day_only: bool = True
     # Internal dispatch value (what the runner executes).  For split pre-market
     # the public session ``PRE_MARKET`` expands into two phases five minutes
     # apart; legacy sessions dispatch under their own name.
@@ -75,6 +78,14 @@ SCHEDULES: tuple[SessionSchedule, ...] = (
         "基金历史净值同步",
         minute=0,
         hour=22,
+    ),
+    SessionSchedule(
+        "FUND_NAV_RANGE_REFRESH",
+        "基金累计净值区间同步",
+        minute=0,
+        hour=2,
+        dow=(1, 2, 3, 4, 5, 6, 7),
+        trading_day_only=False,
     ),
     SessionSchedule(
         "PRE_MARKET",
@@ -217,13 +228,16 @@ class Scheduler:
         due = [schedule for schedule in SCHEDULES if is_due(schedule, now)]
         if not due:
             return
-        if self._trading_day_check is not None and not await self._trading_day_check(
-            now
-        ):
-            logger.info(
-                "calendar marks %s as non-trading; sessions skipped", now.date()
-            )
-            return
+        if self._trading_day_check is not None and not await self._trading_day_check(now):
+            trading_day_due = [schedule for schedule in due if schedule.trading_day_only]
+            due = [schedule for schedule in due if not schedule.trading_day_only]
+            if trading_day_due:
+                logger.info(
+                    "calendar marks %s as non-trading; trading sessions skipped",
+                    now.date(),
+                )
+            if not due:
+                return
         dispatches: list[tuple[SessionSchedule, tuple[str, str]]] = []
         for schedule in due:
             key = _fire_key(schedule, now)

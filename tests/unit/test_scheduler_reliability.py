@@ -124,9 +124,10 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes(
 
     assert {schedule.session for schedule in SCHEDULES} == {
         "CORPORATE_ACTIONS_REFRESH",
-        "FUND_SUBSCRIPTION_STATUS_REFRESH",
-        "FUND_NAV_HISTORY_REFRESH",
-        "PRE_MARKET",
+            "FUND_SUBSCRIPTION_STATUS_REFRESH",
+            "FUND_NAV_HISTORY_REFRESH",
+            "FUND_NAV_RANGE_REFRESH",
+            "PRE_MARKET",
         "INTRADAY",
         "FUND_1430",
         "POST_MARKET",

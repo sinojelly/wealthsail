@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 63
-    assert migrations[-1].path.name == "063_default_fund_cutoff_rules.sql"
+    assert versions[-1] == 64
+    assert migrations[-1].path.name == "064_fund_nav_ranges.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
@@ -332,6 +332,32 @@ def test_063_seeds_default_fund_cutoffs_and_preserves_override_boundary() -> Non
     assert "GRANT INSERT ON reference.instrument_cutoff_rules TO wealthsail_worker" not in migration
 
 
+def test_064_adds_a_least_privilege_fund_nav_range_cache() -> None:
+    """Fund-screener cache facts must remain API-readable and Worker-governed."""
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "migrations" / "064_fund_nav_ranges.sql"
+
+    assert path.exists()
+    migration = path.read_text(encoding="utf-8")
+    for contract in (
+        "CREATE TABLE reference.fund_nav_ranges",
+        "fund_code TEXT PRIMARY KEY",
+        "drawdown_from_high",
+        "rise_from_low",
+        "current_percentile",
+        "data_source TEXT NOT NULL",
+        "AKSHARE",
+        "UNAVAILABLE",
+        "CREATE OR REPLACE FUNCTION reference.upsert_fund_nav_range",
+        "SECURITY DEFINER",
+        "GRANT SELECT ON reference.fund_nav_ranges TO wealthsail_api",
+        "GRANT EXECUTE ON FUNCTION reference.upsert_fund_nav_range",
+    ):
+        assert contract in migration
+    assert "GRANT INSERT ON reference.fund_nav_ranges TO wealthsail_worker" not in migration
+
+
 def test_readback_requires_akshare_fund_dividend_source_and_event_type() -> None:
     """迁移读回必须拒绝缺少基金分红来源或类型约束的数据库。"""
     source = inspect.getsource(_readback)
@@ -362,6 +388,16 @@ def test_readback_requires_default_fund_cutoff_contract() -> None:
     assert "seed_default_off_exchange_fund_cutoff_trigger" in source
     assert "fund_profiles_purchase_status_check" in source
     assert "LIMITED" in source
+
+
+def test_readback_requires_fund_nav_range_cache_boundary() -> None:
+    """Production migration verification must reject a missing or writable cache."""
+
+    source = inspect.getsource(_readback)
+
+    assert "reference.fund_nav_ranges" in source
+    assert "upsert_fund_nav_range" in source
+    assert "fund_nav_ranges cache boundary is missing or unsafe" in source
 
 
 def test_048_registers_watchlist_instrument_via_definer_without_table_writes() -> None:
