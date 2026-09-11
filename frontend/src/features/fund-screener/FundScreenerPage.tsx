@@ -6,6 +6,7 @@ import {
   fmtDate,
   fmtNav,
   fmtPercent,
+  fmtPercentileLabel,
   fmtTimestamp,
   getFundRange,
   searchFunds,
@@ -333,13 +334,13 @@ export default function FundScreenerPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>代码</th>
-                  <th>名称</th>
-                  <th>类型</th>
+                  <th>基金</th>
                   <th className="num">最新净值</th>
-                  <th className="num">净值日期</th>
-                  <th className="num">距高点回撤</th>
-                  <th className="num">更新时间</th>
+                  <th className="num">历史最高</th>
+                  <th className="num">历史最低</th>
+                  <th className="num">距最高回撤</th>
+                  <th className="num">距最低上涨</th>
+                  <th className="num">当前分位</th>
                 </tr>
               </thead>
               <tbody>
@@ -360,17 +361,43 @@ export default function FundScreenerPage() {
                     role="button"
                     aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
                   >
-                    <td className="mono">{item.fundCode}</td>
-                    <td>{item.fundName}</td>
-                    <td>{item.fundType}</td>
-                    <td className="num">{fmtNav(item.latestNav)}</td>
-                    <td className="num">{fmtDate(item.latestNavDate)}</td>
-                    <td className="num trend-down">
+                    <td>
+                      {item.fundName}
+                      <small className="cell-note mono">{item.fundCode}</small>
+                    </td>
+                    <td className="num">
+                      {fmtNav(item.latestNav)}
+                      <small className="cell-note">
+                        {fmtDate(item.latestNavDate)}
+                      </small>
+                    </td>
+                    <td className="num">
+                      {fmtNav(item.highestNav)}
+                      <small className="cell-note">
+                        {fmtDate(item.highestNavDate)}
+                      </small>
+                    </td>
+                    <td className="num">
+                      {fmtNav(item.lowestNav)}
+                      <small className="cell-note">
+                        {fmtDate(item.lowestNavDate)}
+                      </small>
+                    </td>
+                    <td className="num fund-drawdown">
                       {item.status === "UNAVAILABLE"
                         ? "--"
                         : fmtPercent(item.drawdownFromHigh)}
                     </td>
-                    <td className="num">{fmtTimestamp(item.updatedAt)}</td>
+                    <td className="num fund-rise">
+                      {item.status === "UNAVAILABLE"
+                        ? "--"
+                        : fmtPercent(item.riseFromLow)}
+                    </td>
+                    <td className="num">
+                      {item.status === "UNAVAILABLE"
+                        ? "--"
+                        : fmtPercentileLabel(item.currentPercentile)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

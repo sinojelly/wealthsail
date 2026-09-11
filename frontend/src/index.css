@@ -5452,3 +5452,22 @@ button:disabled {
   font-size: 12px;
   line-height: 1.5;
 }
+/* 基金筛选表格：单元格内灰色小字（代码/日期） */
+.cell-note {
+  display: block;
+  margin-top: 1px;
+  color: var(--slate-400);
+  font-size: 10px;
+  font-weight: 400;
+}
+/* 基金筛选专用红绿：回撤红、上涨绿（按用户指定的展示约定） */
+.fund-drawdown {
+  color: #dc2626;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.fund-rise {
+  color: #16a34a;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

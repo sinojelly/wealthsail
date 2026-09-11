@@ -83,6 +83,12 @@ export function fmtPercent(value: number | string | null): string {
   return parsed == null ? "--" : `${parsed.toFixed(2)}%`;
 }
 
+/** 当前分位在表格中的展示形态："72.50% 分位"。 */
+export function fmtPercentileLabel(value: number | string | null): string {
+  const parsed = toNumber(value);
+  return parsed == null ? "--" : `${parsed.toFixed(2)}% 分位`;
+}
+
 export function fmtDate(value: string | null): string {
   if (!value) return "--";
   const date = new Date(value);
