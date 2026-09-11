@@ -64,3 +64,4 @@ backend/static/avatars/*
 # 本地 agent 记忆与项目数据，不进入源码仓库
 .workbuddy/
 .trae/
+.tmp/
