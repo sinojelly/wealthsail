@@ -39,6 +39,7 @@ def test_fund_screener_routes_are_mounted_under_standard_api_prefix() -> None:
 
     paths = create_app().openapi()["paths"]
 
+    assert "get" in paths["/api/v1/funds/browse"]
     assert "get" in paths["/api/v1/funds/search"]
     assert "get" in paths["/api/v1/funds/{fund_code}/range"]
     assert "post" in paths["/api/v1/funds/{fund_code}/fetch"]
@@ -347,3 +348,78 @@ def test_name_search_falls_back_to_similarity(monkeypatch) -> None:
     enqueue.assert_awaited_once_with(
         ANY, tenant_id=TENANT_ID, fund_code="163417"
     )
+
+
+def _cached_row(fund_code: str, fund_name: str) -> dict:
+    return {
+        "fund_code": fund_code,
+        "fund_name": fund_name,
+        "fund_type": "OFF_EXCHANGE_FUND",
+        "latest_nav": 1.0,
+        "latest_nav_date": None,
+        "highest_nav": 1.0,
+        "highest_nav_date": None,
+        "lowest_nav": 1.0,
+        "lowest_nav_date": None,
+        "drawdown_from_high": 0,
+        "rise_from_low": 0,
+        "current_percentile": 10,
+        "inception_date": None,
+        "data_source": "AKSHARE",
+        "updated_at": None,
+    }
+
+
+def test_browse_stable_returns_cached_rows(monkeypatch) -> None:
+    """The stable entry joins the master types and returns cached rows only."""
+
+    _transaction(monkeypatch)
+
+    by_type = AsyncMock(return_value=[_cached_row("110022", "易方达消费行业")])
+    with patch("backend.funds.repository.browse_fund_cache_by_type", new=by_type):
+        response = _client().get(
+            "/api/v1/funds/browse", params={"category": "stable"}
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [item["fundCode"] for item in data] == ["110022"]
+    assert data[0]["status"] == "AVAILABLE"
+    patterns = by_type.await_args.args[1]
+    assert "债券型-%" in patterns and "货币型-%" in patterns
+
+
+def test_browse_undervalued_uses_percentile_threshold(monkeypatch) -> None:
+    """The undervalued entry filters below 30 and sorts ascending."""
+
+    _transaction(monkeypatch)
+
+    by_percentile = AsyncMock(
+        return_value=[_cached_row("000751", "嘉实新兴产业股票")]
+    )
+    with patch(
+        "backend.funds.repository.browse_fund_cache_by_percentile",
+        new=by_percentile,
+    ):
+        response = _client().get(
+            "/api/v1/funds/browse", params={"category": "undervalued"}
+        )
+
+    assert response.status_code == 200
+    kwargs = by_percentile.await_args.kwargs
+    assert kwargs["max_percentile"] == 30
+    assert kwargs["desc"] is False
+
+
+def test_browse_unknown_category_rejected(monkeypatch) -> None:
+    _transaction(monkeypatch)
+
+    with patch(
+        "backend.funds.repository.browse_fund_cache_by_type",
+        new=AsyncMock(return_value=[]),
+    ):
+        response = _client().get(
+            "/api/v1/funds/browse", params={"category": "bogus"}
+        )
+
+    assert response.status_code == 400

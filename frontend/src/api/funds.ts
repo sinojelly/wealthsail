@@ -45,6 +45,24 @@ export async function searchFunds(keyword: string): Promise<FundNavRange[]> {
   return envelope.data;
 }
 
+/** 快速筛选类别：缓存浏览，不触发抓取。 */
+export type FundBrowseCategory =
+  | "stable"
+  | "growth"
+  | "index"
+  | "overseas"
+  | "undervalued"
+  | "near_high";
+
+export async function browseFunds(
+  category: FundBrowseCategory,
+): Promise<FundNavRange[]> {
+  const envelope = await request<FundNavRange[]>(
+    `/v1/funds/browse?category=${encodeURIComponent(category)}`,
+  );
+  return envelope.data;
+}
+
 export async function getFundRange(
   fundCode: string,
 ): Promise<FundRangeResponse> {

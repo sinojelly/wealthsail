@@ -5438,6 +5438,32 @@ button:disabled {
     background-position: -200% 0;
   }
 }
+/* 基金筛选：快速筛选 chips */
+.fund-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.fund-chip {
+  border: 1px solid var(--slate-200);
+  background: var(--slate-50);
+  color: var(--slate-700);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.fund-chip:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
+.fund-chip.is-active {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
 /* 基金筛选红绿：回撤绿（跌）、上涨红（涨），按 A 股红涨绿跌习惯。
    提高优先级以压过 .data-table td 的默认字色。 */
 .data-table td.fund-drawdown {

@@ -90,6 +90,73 @@ async def get_nav_ranges_by_codes(conn: Connection, fund_codes: list[str]):
     )
 
 
+_BROWSE_SELECT = """
+    SELECT r.fund_code, r.fund_name, r.fund_type, r.latest_nav,
+           r.latest_nav_date, r.highest_nav, r.highest_nav_date,
+           r.lowest_nav, r.lowest_nav_date, r.drawdown_from_high,
+           r.rise_from_low, r.current_percentile, r.inception_date,
+           r.data_source, r.updated_at
+      FROM reference.fund_nav_ranges r
+      JOIN reference.fund_master m ON m.fund_code = r.fund_code
+"""
+
+
+async def browse_fund_cache_by_type(
+    conn: Connection,
+    patterns: list[str],
+    *,
+    limit: int = 20,
+    desc: bool = False,
+):
+    """Cached funds whose master type matches any pattern, by percentile.
+
+    The cache table's own fund_type is unreliable (early daily-sync rows store
+    the internal OFF_EXCHANGE_FUND value), so classification always comes from
+    the joined master list.
+    """
+
+    order = "DESC" if desc else "ASC"
+    return await conn.fetch(
+        _BROWSE_SELECT
+        + f"""
+         WHERE m.fund_type LIKE ANY($1)
+         ORDER BY r.current_percentile {order} NULLS LAST, r.fund_code
+         LIMIT $2
+        """,
+        patterns,
+        limit,
+    )
+
+
+async def browse_fund_cache_by_percentile(
+    conn: Connection,
+    *,
+    min_percentile: float | None = None,
+    max_percentile: float | None = None,
+    limit: int = 20,
+    desc: bool = False,
+):
+    """Cached funds above/below a percentile threshold."""
+
+    order = "DESC" if desc else "ASC"
+    if min_percentile is not None:
+        condition = "r.current_percentile > $1"
+        args: list = [min_percentile]
+    else:
+        condition = "r.current_percentile < $1"
+        args = [max_percentile]
+    return await conn.fetch(
+        _BROWSE_SELECT
+        + f"""
+         WHERE {condition}
+         ORDER BY r.current_percentile {order} NULLS LAST, r.fund_code
+         LIMIT $2
+        """,
+        *args,
+        limit,
+    )
+
+
 async def get_nav_range(conn: Connection, fund_code: str):
     """Return one cache row, or ``None`` when the fund has not been collected."""
 

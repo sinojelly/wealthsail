@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
@@ -17,6 +18,44 @@ _FUND_CODE = re.compile(r"^[0-9]{6}$")
 # 模糊词（如"混合"）可能命中成百上千条主数据，无上限会瞬间制造大量抓取任务
 _MASTER_SEARCH_LIMIT = 10
 _AUTO_ENQUEUE_LIMIT = 5
+# 快速筛选：每个入口最多返回的缓存行数
+_BROWSE_LIMIT = 20
+
+
+@dataclass(frozen=True, slots=True)
+class BrowseCategory:
+    """Quick-filter spec: master type patterns or a percentile threshold."""
+
+    patterns: tuple[str, ...] | None = None
+    min_percentile: float | None = None
+    max_percentile: float | None = None
+    desc: bool = False
+
+
+# 类型值来自 AkShare fund_name_em 的中文分类（见 fund_master 导入），
+# 前缀匹配（LIKE ANY）；分位条件只看缓存里已有的行，不触发抓取。
+_BROWSE_CATEGORIES: dict[str, BrowseCategory] = {
+    "stable": BrowseCategory(
+        patterns=("债券型-%", "货币型-%", "FOF-稳健型", "指数型-固收")
+    ),
+    "growth": BrowseCategory(
+        patterns=(
+            "股票型",
+            "混合型-偏股",
+            "混合型-灵活",
+            "混合型-平衡",
+            "混合型-绝对收益",
+            "FOF-均衡型",
+            "FOF-进取型",
+        )
+    ),
+    "index": BrowseCategory(patterns=("指数型-股票", "指数型-其他")),
+    "overseas": BrowseCategory(
+        patterns=("QDII-%", "指数型-海外股票", "Reits", "REITs")
+    ),
+    "undervalued": BrowseCategory(max_percentile=30),
+    "near_high": BrowseCategory(min_percentile=70, desc=True),
+}
 
 
 def _not_collected_dto(row) -> dict:
@@ -149,6 +188,31 @@ async def search(
             )
             enqueued += 1
     return results
+
+
+async def browse(conn: Connection, category: str) -> list[dict]:
+    """Return cached funds matching a quick-filter category.
+
+    Only cached rows are shown (never triggers a fetch); classification joins
+    the master list because the cache table's own fund_type is unreliable.
+    """
+
+    spec = _BROWSE_CATEGORIES.get(category)
+    if spec is None:
+        raise ValidationError_("未知的筛选类别")
+    if spec.patterns is not None:
+        rows = await repository.browse_fund_cache_by_type(
+            conn, list(spec.patterns), limit=_BROWSE_LIMIT, desc=spec.desc
+        )
+    else:
+        rows = await repository.browse_fund_cache_by_percentile(
+            conn,
+            min_percentile=spec.min_percentile,
+            max_percentile=spec.max_percentile,
+            limit=_BROWSE_LIMIT,
+            desc=spec.desc,
+        )
+    return [_range_dto(row) for row in rows]
 
 
 async def get_range(conn: Connection, fund_code: str) -> dict:

@@ -34,6 +34,20 @@ async def search_funds(
     return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
+@router.get("/browse")
+async def browse_funds(
+    category: str = Query(min_length=2, max_length=20),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Browse cached funds by quick-filter category; cache-only, no fetching."""
+
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await service.browse(conn, category)
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
 @router.get("/{fund_code}/range")
 async def fund_range(
     fund_code: str,

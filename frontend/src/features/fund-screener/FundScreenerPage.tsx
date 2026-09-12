@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, Search } from "lucide-react";
 import PageHeader from "../../components/layout/PageHeader";
 import {
+  browseFunds,
   fmtDate,
   fmtDateSlash,
   fmtNav,
@@ -12,6 +13,7 @@ import {
   getFundRange,
   searchFunds,
   triggerFundFetch,
+  type FundBrowseCategory,
   type FundNavRange,
   type FundRangeResponse,
 } from "../../api/funds";
@@ -23,6 +25,16 @@ const FETCH_CYCLE_BACKSTOP_MS = 90_000;
 /** 搜索结果含未收录基金时的刷新间隔与总窗口。 */
 const SEARCH_POLL_INTERVAL_MS = 5_000;
 const SEARCH_POLL_WINDOW_MS = 120_000;
+
+/** 快速筛选入口（浏览缓存，不触发抓取）。 */
+const QUICK_FILTERS: { key: FundBrowseCategory; label: string }[] = [
+  { key: "stable", label: "稳健理财" },
+  { key: "growth", label: "追求收益" },
+  { key: "index", label: "指数投资" },
+  { key: "overseas", label: "海外配置" },
+  { key: "undervalued", label: "历史低估" },
+  { key: "near_high", label: "接近高点" },
+];
 
 function isSixDigitCode(value: string): boolean {
   return /^[0-9]{6}$/.test(value);
@@ -219,6 +231,129 @@ function FundDetail({
   );
 }
 
+/** 搜索/快速筛选共用的净值区间表格。 */
+function RangeTable({
+  rows,
+  activeCode,
+  onSelect,
+}: {
+  rows: FundNavRange[];
+  activeCode: string | null;
+  onSelect: (code: string) => void;
+}) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>基金</th>
+          <th className="num">最新净值</th>
+          <th className="num">历史最高</th>
+          <th className="num">历史最低</th>
+          <th className="num">距最高回撤</th>
+          <th className="num">距最低上涨</th>
+          <th className="num">当前分位</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((item) => {
+          const isPending = item.status === "NOT_COLLECTED";
+          return (
+            <tr
+              key={item.fundCode}
+              className={`fund-row ${
+                activeCode === item.fundCode ? "is-selected" : ""
+              }`}
+              onClick={() => onSelect(item.fundCode)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(item.fundCode);
+                }
+              }}
+              tabIndex={0}
+              role="button"
+              aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
+            >
+              <td>
+                {item.fundName}
+                <small className="cell-note mono">{item.fundCode}</small>
+                {isPending ? (
+                  <small className="cell-note">
+                    净值数据抓取中，完成后自动填充…
+                  </small>
+                ) : null}
+              </td>
+              <td className="num">
+                {isPending ? (
+                  <FetchingCell />
+                ) : (
+                  <>
+                    {fmtNav(item.latestNav)}
+                    <small className="cell-note">
+                      {fmtDate(item.latestNavDate)}
+                    </small>
+                  </>
+                )}
+              </td>
+              <td className="num">
+                {isPending ? (
+                  <SkeletonCell />
+                ) : (
+                  <>
+                    {fmtNav(item.highestNav)}
+                    <small className="cell-note">
+                      {fmtDate(item.highestNavDate)}
+                    </small>
+                  </>
+                )}
+              </td>
+              <td className="num">
+                {isPending ? (
+                  <SkeletonCell />
+                ) : (
+                  <>
+                    {fmtNav(item.lowestNav)}
+                    <small className="cell-note">
+                      {fmtDate(item.lowestNavDate)}
+                    </small>
+                  </>
+                )}
+              </td>
+              <td className="num fund-drawdown">
+                {isPending ? (
+                  <SkeletonCell />
+                ) : item.status === "UNAVAILABLE" ? (
+                  "--"
+                ) : (
+                  fmtPercent(item.drawdownFromHigh)
+                )}
+              </td>
+              <td className="num fund-rise">
+                {isPending ? (
+                  <SkeletonCell />
+                ) : item.status === "UNAVAILABLE" ? (
+                  "--"
+                ) : (
+                  fmtPercent(item.riseFromLow)
+                )}
+              </td>
+              <td className="num">
+                {isPending ? (
+                  <SkeletonCell />
+                ) : item.status === "UNAVAILABLE" ? (
+                  "--"
+                ) : (
+                  fmtPercentileLabel(item.currentPercentile)
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 interface FetchCycle {
   code: string;
 }
@@ -227,6 +362,8 @@ export default function FundScreenerPage() {
   const [keyword, setKeyword] = useState("");
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [browseCategory, setBrowseCategory] =
+    useState<FundBrowseCategory | null>(null);
   const [fetchCycle, setFetchCycle] = useState<FetchCycle | null>(null);
   const fetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 搜索结果存在未收录基金时的轮询截止时间（0 = 未在轮询）
@@ -260,10 +397,17 @@ export default function FundScreenerPage() {
     },
   });
 
+  const browseQuery = useQuery({
+    queryKey: ["funds", "browse", browseCategory],
+    queryFn: () => browseFunds(browseCategory as FundBrowseCategory),
+    enabled: browseCategory != null,
+  });
+
   // 输入恰好是 6 位代码但缓存无匹配时，自动进入该代码的抓取流程
   const directCode = isSixDigitCode(debouncedKeyword)
     ? debouncedKeyword
     : null;
+  const searchActive = debouncedKeyword.length > 0;
   const autoLookup = Boolean(
     directCode && !searchQuery.isFetching && (searchQuery.data ?? []).length === 0,
   );
@@ -274,7 +418,9 @@ export default function FundScreenerPage() {
   const autoSelectCode =
     allNotCollected && !searchQuery.isFetching ? items[0].fundCode : null;
   const activeCode =
-    selectedCode ?? (autoLookup ? directCode : null) ?? autoSelectCode;
+    selectedCode ??
+    (autoLookup ? directCode : null) ??
+    (searchActive ? autoSelectCode : null);
 
   const detailQuery = useQuery({
     queryKey: ["funds", "range", activeCode],
@@ -321,9 +467,23 @@ export default function FundScreenerPage() {
     fetchMutation.reset();
   }
 
+  function toggleBrowse(key: FundBrowseCategory) {
+    if (browseCategory === key) {
+      setBrowseCategory(null);
+      return;
+    }
+    setBrowseCategory(key);
+    setKeyword("");
+    setDebouncedKeyword("");
+    clearSelection();
+  }
+
+  const browseActive = browseCategory != null && !searchActive;
+  const browseItems: FundNavRange[] = browseQuery.data ?? [];
+  const tableItems = searchActive ? items : browseItems;
   // 脚注的"更新于"取本次结果中最新的缓存更新日期
   const latestUpdated = fmtDateSlash(
-    items.reduce<string | null>(
+    tableItems.reduce<string | null>(
       (latest, item) =>
         item.updatedAt && (!latest || item.updatedAt > latest)
           ? item.updatedAt
@@ -361,7 +521,7 @@ export default function FundScreenerPage() {
     <>
       <PageHeader
         title="基金筛选"
-        description="按代码或名称搜索基金，查看累计净值的历史区间、回撤与分位（未收录的 6 位代码会自动触发抓取）"
+        description="按代码或名称搜索基金，或用快速筛选浏览已收录基金的净值区间、回撤与分位"
       />
 
       <div className="panel">
@@ -384,6 +544,23 @@ export default function FundScreenerPage() {
           </div>
         </div>
 
+        <div className="fund-chips" role="group" aria-label="快速筛选">
+          {QUICK_FILTERS.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              className={`fund-chip ${
+                browseCategory === filter.key && !searchActive
+                  ? "is-active"
+                  : ""
+              }`}
+              onClick={() => toggleBrowse(filter.key)}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+
         {searchQuery.isError ? (
           <div className="alert alert-danger" role="alert">
             <strong>搜索失败</strong>
@@ -391,129 +568,46 @@ export default function FundScreenerPage() {
           </div>
         ) : null}
 
-        {debouncedKeyword.length > 0 && items.length > 0 ? (
+        {searchActive && items.length > 0 ? (
           <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>基金</th>
-                  <th className="num">最新净值</th>
-                  <th className="num">历史最高</th>
-                  <th className="num">历史最低</th>
-                  <th className="num">距最高回撤</th>
-                  <th className="num">距最低上涨</th>
-                  <th className="num">当前分位</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => {
-                  const isPending = item.status === "NOT_COLLECTED";
-                  return (
-                    <tr
-                      key={item.fundCode}
-                      className={`fund-row ${
-                        activeCode === item.fundCode ? "is-selected" : ""
-                      }`}
-                      onClick={() => selectFund(item.fundCode)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          selectFund(item.fundCode);
-                        }
-                      }}
-                      tabIndex={0}
-                      role="button"
-                      aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
-                    >
-                      <td>
-                        {item.fundName}
-                        <small className="cell-note mono">
-                          {item.fundCode}
-                        </small>
-                        {isPending ? (
-                          <small className="cell-note">
-                            净值数据抓取中，完成后自动填充…
-                          </small>
-                        ) : null}
-                      </td>
-                      <td className="num">
-                        {isPending ? (
-                          <FetchingCell />
-                        ) : (
-                          <>
-                            {fmtNav(item.latestNav)}
-                            <small className="cell-note">
-                              {fmtDate(item.latestNavDate)}
-                            </small>
-                          </>
-                        )}
-                      </td>
-                      <td className="num">
-                        {isPending ? (
-                          <SkeletonCell />
-                        ) : (
-                          <>
-                            {fmtNav(item.highestNav)}
-                            <small className="cell-note">
-                              {fmtDate(item.highestNavDate)}
-                            </small>
-                          </>
-                        )}
-                      </td>
-                      <td className="num">
-                        {isPending ? (
-                          <SkeletonCell />
-                        ) : (
-                          <>
-                            {fmtNav(item.lowestNav)}
-                            <small className="cell-note">
-                              {fmtDate(item.lowestNavDate)}
-                            </small>
-                          </>
-                        )}
-                      </td>
-                      <td className="num fund-drawdown">
-                        {isPending ? (
-                          <SkeletonCell />
-                        ) : item.status === "UNAVAILABLE" ? (
-                          "--"
-                        ) : (
-                          fmtPercent(item.drawdownFromHigh)
-                        )}
-                      </td>
-                      <td className="num fund-rise">
-                        {isPending ? (
-                          <SkeletonCell />
-                        ) : item.status === "UNAVAILABLE" ? (
-                          "--"
-                        ) : (
-                          fmtPercent(item.riseFromLow)
-                        )}
-                      </td>
-                      <td className="num">
-                        {isPending ? (
-                          <SkeletonCell />
-                        ) : item.status === "UNAVAILABLE" ? (
-                          "--"
-                        ) : (
-                          fmtPercentileLabel(item.currentPercentile)
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <RangeTable
+              rows={items}
+              activeCode={activeCode}
+              onSelect={selectFund}
+            />
           </div>
         ) : null}
 
-        {debouncedKeyword.length > 0 &&
+        {searchActive &&
         !searchQuery.isFetching &&
         items.length === 0 &&
         !searchQuery.isError &&
         directCode == null ? (
           <div className="search-result-hint">
             未找到匹配的已收录基金，可尝试其他代码或名称。
+          </div>
+        ) : null}
+
+        {browseActive && browseQuery.isError ? (
+          <div className="alert alert-danger" role="alert">
+            <strong>筛选失败</strong>
+            <p>暂时无法获取筛选结果，请稍后重试。</p>
+          </div>
+        ) : null}
+
+        {browseActive && browseQuery.isSuccess && browseItems.length > 0 ? (
+          <div className="table-wrap">
+            <RangeTable
+              rows={browseItems}
+              activeCode={activeCode}
+              onSelect={selectFund}
+            />
+          </div>
+        ) : null}
+
+        {browseActive && browseQuery.isSuccess && browseItems.length === 0 ? (
+          <div className="search-result-hint">
+            暂无符合条件的基金——数据会随搜索与抓取逐步累积。
           </div>
         ) : null}
 
@@ -529,7 +623,7 @@ export default function FundScreenerPage() {
           />
         ) : null}
 
-        {debouncedKeyword.length > 0 && items.length > 0 ? (
+        {tableItems.length > 0 && (searchActive || browseActive) ? (
           <p className="fund-source-line">
             数据来源：天天基金 · 历史极值基于累计净值计算 · 更新于 {latestUpdated}
           </p>
