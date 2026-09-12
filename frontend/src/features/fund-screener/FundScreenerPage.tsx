@@ -28,6 +28,21 @@ function isSixDigitCode(value: string): boolean {
   return /^[0-9]{6}$/.test(value);
 }
 
+/** 未收录行的加载占位：转圈 + 文案。 */
+function FetchingCell() {
+  return (
+    <span className="fetching-cell">
+      <RefreshCw className="spin" size={12} />
+      正在获取…
+    </span>
+  );
+}
+
+/** 未收录行的骨架占位块。 */
+function SkeletonCell() {
+  return <span className="skeleton-block" aria-hidden="true" />;
+}
+
 /** 抓取中 / 刚提交失败时的公共提示。 */
 function FetchFeedback({
   inFlight,
@@ -391,67 +406,102 @@ export default function FundScreenerPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
-                  <tr
-                    key={item.fundCode}
-                    className={`fund-row ${
-                      activeCode === item.fundCode ? "is-selected" : ""
-                    }`}
-                    onClick={() => selectFund(item.fundCode)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        selectFund(item.fundCode);
-                      }
-                    }}
-                    tabIndex={0}
-                    role="button"
-                    aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
-                  >
-                    <td>
-                      {item.fundName}
-                      <small className="cell-note mono">{item.fundCode}</small>
-                      {item.status === "NOT_COLLECTED" ? (
-                        <small className="cell-note">
-                          净值数据抓取中，完成后自动填充…
+                {items.map((item) => {
+                  const isPending = item.status === "NOT_COLLECTED";
+                  return (
+                    <tr
+                      key={item.fundCode}
+                      className={`fund-row ${
+                        activeCode === item.fundCode ? "is-selected" : ""
+                      }`}
+                      onClick={() => selectFund(item.fundCode)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectFund(item.fundCode);
+                        }
+                      }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
+                    >
+                      <td>
+                        {item.fundName}
+                        <small className="cell-note mono">
+                          {item.fundCode}
                         </small>
-                      ) : null}
-                    </td>
-                    <td className="num">
-                      {fmtNav(item.latestNav)}
-                      <small className="cell-note">
-                        {fmtDate(item.latestNavDate)}
-                      </small>
-                    </td>
-                    <td className="num">
-                      {fmtNav(item.highestNav)}
-                      <small className="cell-note">
-                        {fmtDate(item.highestNavDate)}
-                      </small>
-                    </td>
-                    <td className="num">
-                      {fmtNav(item.lowestNav)}
-                      <small className="cell-note">
-                        {fmtDate(item.lowestNavDate)}
-                      </small>
-                    </td>
-                    <td className="num fund-drawdown">
-                      {item.status === "UNAVAILABLE"
-                        ? "--"
-                        : fmtPercent(item.drawdownFromHigh)}
-                    </td>
-                    <td className="num fund-rise">
-                      {item.status === "UNAVAILABLE"
-                        ? "--"
-                        : fmtPercent(item.riseFromLow)}
-                    </td>
-                    <td className="num">
-                      {item.status === "UNAVAILABLE"
-                        ? "--"
-                        : fmtPercentileLabel(item.currentPercentile)}
-                    </td>
-                  </tr>
-                ))}
+                        {isPending ? (
+                          <small className="cell-note">
+                            净值数据抓取中，完成后自动填充…
+                          </small>
+                        ) : null}
+                      </td>
+                      <td className="num">
+                        {isPending ? (
+                          <FetchingCell />
+                        ) : (
+                          <>
+                            {fmtNav(item.latestNav)}
+                            <small className="cell-note">
+                              {fmtDate(item.latestNavDate)}
+                            </small>
+                          </>
+                        )}
+                      </td>
+                      <td className="num">
+                        {isPending ? (
+                          <SkeletonCell />
+                        ) : (
+                          <>
+                            {fmtNav(item.highestNav)}
+                            <small className="cell-note">
+                              {fmtDate(item.highestNavDate)}
+                            </small>
+                          </>
+                        )}
+                      </td>
+                      <td className="num">
+                        {isPending ? (
+                          <SkeletonCell />
+                        ) : (
+                          <>
+                            {fmtNav(item.lowestNav)}
+                            <small className="cell-note">
+                              {fmtDate(item.lowestNavDate)}
+                            </small>
+                          </>
+                        )}
+                      </td>
+                      <td className="num fund-drawdown">
+                        {isPending ? (
+                          <SkeletonCell />
+                        ) : item.status === "UNAVAILABLE" ? (
+                          "--"
+                        ) : (
+                          fmtPercent(item.drawdownFromHigh)
+                        )}
+                      </td>
+                      <td className="num fund-rise">
+                        {isPending ? (
+                          <SkeletonCell />
+                        ) : item.status === "UNAVAILABLE" ? (
+                          "--"
+                        ) : (
+                          fmtPercent(item.riseFromLow)
+                        )}
+                      </td>
+                      <td className="num">
+                        {isPending ? (
+                          <SkeletonCell />
+                        ) : item.status === "UNAVAILABLE" ? (
+                          "--"
+                        ) : (
+                          fmtPercentileLabel(item.currentPercentile)
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
