@@ -15,7 +15,6 @@ GRANT UPDATE (available_at, started_at, next_retry_at, attempt_count,
     ON workflow.job_runs TO wealthsail_api;
 
 COMMENT ON TABLE workflow.job_runs IS
-    'Durable job runs; 066 grants the API role SELECT plus the scheduling '
-    'columns it needs to requeue terminal fund-screener fetch requests.';
+    'Durable job runs; 066 grants the API role SELECT plus the scheduling columns it needs to requeue terminal fund-screener fetch requests.';
 
 COMMIT;
