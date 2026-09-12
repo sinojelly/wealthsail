@@ -265,6 +265,8 @@ export default function FundScreenerPage() {
       fetchTimerRef.current = null;
     }
     setFetchCycle(null);
+    // 清掉上一次点击残留的提交失败状态，避免错误提示泄漏到其他基金
+    fetchMutation.reset();
   }
 
   const items: FundNavRange[] = searchQuery.data ?? [];
