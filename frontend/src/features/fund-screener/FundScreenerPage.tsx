@@ -20,6 +20,9 @@ import {
 const FETCH_POLL_INTERVAL_MS = 5_000;
 /** 单次抓取周期的兜底时限，超时后停止轮询并恢复按钮。 */
 const FETCH_CYCLE_BACKSTOP_MS = 90_000;
+/** 搜索结果含未收录基金时的刷新间隔与总窗口。 */
+const SEARCH_POLL_INTERVAL_MS = 5_000;
+const SEARCH_POLL_WINDOW_MS = 120_000;
 
 function isSixDigitCode(value: string): boolean {
   return /^[0-9]{6}$/.test(value);
@@ -211,6 +214,8 @@ export default function FundScreenerPage() {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [fetchCycle, setFetchCycle] = useState<FetchCycle | null>(null);
   const fetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 搜索结果存在未收录基金时的轮询截止时间（0 = 未在轮询）
+  const searchPollDeadlineRef = useRef(0);
 
   // 输入防抖 500ms，避免逐字符打接口
   useEffect(() => {
@@ -222,6 +227,22 @@ export default function FundScreenerPage() {
     queryKey: ["funds", "search", debouncedKeyword],
     queryFn: () => searchFunds(debouncedKeyword),
     enabled: debouncedKeyword.length > 0,
+    // 结果里还有"未收录"的基金时轮询：Worker 抓取完成后行数据自动填充
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasPending =
+        data?.some((item) => item.status === "NOT_COLLECTED") ?? false;
+      if (!hasPending) {
+        searchPollDeadlineRef.current = 0;
+        return false;
+      }
+      const now = Date.now();
+      if (searchPollDeadlineRef.current === 0) {
+        searchPollDeadlineRef.current = now + SEARCH_POLL_WINDOW_MS;
+      }
+      if (now > searchPollDeadlineRef.current) return false;
+      return SEARCH_POLL_INTERVAL_MS;
+    },
   });
 
   // 输入恰好是 6 位代码但缓存无匹配时，自动进入该代码的抓取流程
@@ -231,7 +252,14 @@ export default function FundScreenerPage() {
   const autoLookup = Boolean(
     directCode && !searchQuery.isFetching && (searchQuery.data ?? []).length === 0,
   );
-  const activeCode = selectedCode ?? (autoLookup ? directCode : null);
+  // 名称搜索结果全部未收录时，自动选中第一只进入抓取流程
+  const items: FundNavRange[] = searchQuery.data ?? [];
+  const allNotCollected =
+    items.length > 0 && items.every((item) => item.status === "NOT_COLLECTED");
+  const autoSelectCode =
+    allNotCollected && !searchQuery.isFetching ? items[0].fundCode : null;
+  const activeCode =
+    selectedCode ?? (autoLookup ? directCode : null) ?? autoSelectCode;
 
   const detailQuery = useQuery({
     queryKey: ["funds", "range", activeCode],
@@ -278,7 +306,6 @@ export default function FundScreenerPage() {
     fetchMutation.reset();
   }
 
-  const items: FundNavRange[] = searchQuery.data ?? [];
   // 脚注的"更新于"取本次结果中最新的缓存更新日期
   const latestUpdated = fmtDateSlash(
     items.reduce<string | null>(
@@ -384,6 +411,11 @@ export default function FundScreenerPage() {
                     <td>
                       {item.fundName}
                       <small className="cell-note mono">{item.fundCode}</small>
+                      {item.status === "NOT_COLLECTED" ? (
+                        <small className="cell-note">
+                          净值数据抓取中，完成后自动填充…
+                        </small>
+                      ) : null}
                     </td>
                     <td className="num">
                       {fmtNav(item.latestNav)}
