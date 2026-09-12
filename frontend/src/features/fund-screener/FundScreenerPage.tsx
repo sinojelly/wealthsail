@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search } from "lucide-react";
 import PageHeader from "../../components/layout/PageHeader";
 import {
   fmtDate,
@@ -23,26 +23,6 @@ const FETCH_CYCLE_BACKSTOP_MS = 90_000;
 
 function isSixDigitCode(value: string): boolean {
   return /^[0-9]{6}$/.test(value);
-}
-
-function FundStat({
-  label,
-  value,
-  valueClass,
-  note,
-}: {
-  label: string;
-  value: string;
-  valueClass?: string;
-  note?: string;
-}) {
-  return (
-    <div className="fund-stat">
-      <dt>{label}</dt>
-      <dd className={valueClass}>{value}</dd>
-      {note ? <small>{note}</small> : null}
-    </div>
-  );
 }
 
 /** 抓取中 / 刚提交失败时的公共提示。 */
@@ -70,7 +50,7 @@ function FetchFeedback({
   return null;
 }
 
-/** 详情卡片：AVAILABLE / NOT_COLLECTED / UNAVAILABLE 三态。 */
+/** 详情区：未收录时自动抓取的提示（非卡片，纯文本行 + 操作按钮）。 */
 function FundDetail({
   fundCode,
   detail,
@@ -90,9 +70,10 @@ function FundDetail({
 }) {
   if (isError) {
     return (
-      <div className="alert alert-danger" role="alert">
-        <strong>区间数据读取失败</strong>
-        <p>暂时无法读取该基金的净值区间，请稍后重试。</p>
+      <div className="fund-detail">
+        <p className="fund-fetch-hint" role="alert">
+          区间数据读取失败，请稍后重试。
+        </p>
       </div>
     );
   }
@@ -100,7 +81,7 @@ function FundDetail({
   if (isLoading || detail == null) {
     return (
       <div className="fund-detail" role="status">
-        正在加载数据…
+        <p className="fund-fetch-hint">正在加载数据…</p>
       </div>
     );
   }
@@ -108,36 +89,12 @@ function FundDetail({
   if (detail.status === "NOT_COLLECTED") {
     return (
       <div className="fund-detail">
-        <div className="alert alert-warning">
-          <strong>{fundCode} 未收录</strong>
-          <p>
-            该基金尚未进入净值区间缓存。点击下方按钮提交按需抓取，
-            Worker 将从数据源获取累计净值并计算历史区间。
-          </p>
-          <button
-            type="button"
-            className="btn-primary btn-sm"
-            onClick={() => onFetch(fundCode)}
-            disabled={fetchInFlight}
-          >
-            <Download size={14} />
-            {fetchInFlight ? "正在获取数据" : "获取数据"}
-          </button>
-          <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
-        </div>
-      </div>
-    );
-  }
-
-  if (detail.status === "UNAVAILABLE") {
-    return (
-      <div className="fund-detail">
-        <div className="alert alert-danger">
-          <strong>暂时无法获取</strong>
-          <p>
-            {detail.fundName}（{detail.fundCode}）的数据源抓取失败，
-            当前没有可展示的净值区间，稍后可重试。
-          </p>
+        <p className="search-result-hint">
+          <strong>{fundCode}</strong>{" "}
+          尚未收录，已自动提交按需抓取请求，通常几秒到几分钟内完成，完成后自动刷新。
+        </p>
+        <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
+        {fetchFailed ? (
           <button
             type="button"
             className="btn-primary btn-sm"
@@ -145,67 +102,94 @@ function FundDetail({
             disabled={fetchInFlight}
           >
             <RefreshCw size={14} />
+            重试
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (detail.status === "UNAVAILABLE") {
+    return (
+      <div className="fund-detail">
+        <p className="search-result-hint" role="alert">
+          <strong>{detail.fundName}</strong>（{detail.fundCode}）的数据源抓取失败，
+          暂时无法获取，可稍后重试。
+        </p>
+        <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
+        {!fetchFailed ? (
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            onClick={() => onFetch(detail.fundCode)}
+            disabled={fetchInFlight}
+          >
+            <RefreshCw size={14} />
             {fetchInFlight ? "正在获取数据" : "重试获取"}
           </button>
-          <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
-          <p className="mono">
-            数据来源：{detail.dataSource} · 更新时间：
-            {fmtTimestamp(detail.updatedAt)}
-          </p>
-        </div>
+        ) : null}
+        <p className="fund-source-line mono">
+          数据来源：{detail.dataSource} · 更新时间：
+          {fmtTimestamp(detail.updatedAt)}
+        </p>
       </div>
     );
   }
 
   return (
     <div className="fund-detail">
-      <div className="fund-detail-head">
-        <strong>{detail.fundName}</strong>
-        <span className="mono">{detail.fundCode}</span>
-        <span className="status-pill">{detail.fundType}</span>
-      </div>
-      <dl className="fund-stat-grid">
-        <FundStat
-          label="最新净值（累计）"
-          value={fmtNav(detail.latestNav)}
-          note={`净值日期 ${fmtDate(detail.latestNavDate)}`}
-        />
-        <FundStat
-          label="历史最高"
-          value={fmtNav(detail.highestNav)}
-          note={`出现于 ${fmtDate(detail.highestNavDate)}`}
-        />
-        <FundStat
-          label="历史最低"
-          value={fmtNav(detail.lowestNav)}
-          note={`出现于 ${fmtDate(detail.lowestNavDate)}`}
-        />
-        <FundStat
-          label="距高点回撤"
-          value={fmtPercent(detail.drawdownFromHigh)}
-          valueClass="trend-down"
-          note="当前净值相对历史最高"
-        />
-        <FundStat
-          label="距低点涨幅"
-          value={fmtPercent(detail.riseFromLow)}
-          valueClass="trend-up"
-          note="当前净值相对历史最低"
-        />
-        <FundStat
-          label="当前分位"
-          value={
-            detail.currentPercentile == null
-              ? "--"
-              : fmtPercent(detail.currentPercentile)
-          }
-          note="处于历史净值区间位置"
-        />
-        <FundStat label="成立日期" value={fmtDate(detail.inceptionDate)} />
-      </dl>
-      <p className="fund-source-line mono">
-        数据来源：AkShare · 更新时间：{fmtTimestamp(detail.updatedAt)} ·
-        仅使用累计净值，不构成投资建议
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>基金</th>
+            <th className="num">最新净值</th>
+            <th className="num">历史最高</th>
+            <th className="num">历史最低</th>
+            <th className="num">距最高回撤</th>
+            <th className="num">距最低上涨</th>
+            <th className="num">当前分位</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              {detail.fundName}
+              <small className="cell-note mono">{detail.fundCode}</small>
+            </td>
+            <td className="num">
+              {fmtNav(detail.latestNav)}
+              <small className="cell-note">
+                {fmtDate(detail.latestNavDate)}
+              </small>
+            </td>
+            <td className="num">
+              {fmtNav(detail.highestNav)}
+              <small className="cell-note">
+                {fmtDate(detail.highestNavDate)}
+              </small>
+            </td>
+            <td className="num">
+              {fmtNav(detail.lowestNav)}
+              <small className="cell-note">
+                {fmtDate(detail.lowestNavDate)}
+              </small>
+            </td>
+            <td className="num fund-drawdown">
+              {fmtPercent(detail.drawdownFromHigh)}
+            </td>
+            <td className="num fund-rise">
+              {fmtPercent(detail.riseFromLow)}
+            </td>
+            <td className="num">
+              {fmtPercentileLabel(detail.currentPercentile)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="fund-source-line">
+        成立日期：{fmtDate(detail.inceptionDate)} · 数据来源：天天基金（AkShare）
+        · 历史极值基于累计净值计算 · 更新于 {fmtDateSlash(detail.updatedAt)} ·
+        不构成投资建议
       </p>
     </div>
   );
@@ -234,13 +218,22 @@ export default function FundScreenerPage() {
     enabled: debouncedKeyword.length > 0,
   });
 
+  // 输入恰好是 6 位代码但缓存无匹配时，自动进入该代码的抓取流程
+  const directCode = isSixDigitCode(debouncedKeyword)
+    ? debouncedKeyword
+    : null;
+  const autoLookup = Boolean(
+    directCode && !searchQuery.isFetching && (searchQuery.data ?? []).length === 0,
+  );
+  const activeCode = selectedCode ?? (autoLookup ? directCode : null);
+
   const detailQuery = useQuery({
-    queryKey: ["funds", "range", selectedCode],
-    queryFn: () => getFundRange(selectedCode as string),
-    enabled: selectedCode != null,
+    queryKey: ["funds", "range", activeCode],
+    queryFn: () => getFundRange(activeCode as string),
+    enabled: activeCode != null,
     // 抓取周期内轮询缓存；拿到终态（已收录/确认不可用）或超时后停止
     refetchInterval: (query) => {
-      if (fetchCycle == null || fetchCycle.code !== selectedCode) return false;
+      if (fetchCycle == null || fetchCycle.code !== activeCode) return false;
       const data = query.state.data;
       if (data && data.status === "AVAILABLE") return false;
       return FETCH_POLL_INTERVAL_MS;
@@ -269,6 +262,16 @@ export default function FundScreenerPage() {
     fetchMutation.reset();
   }
 
+  function clearSelection() {
+    setSelectedCode(null);
+    if (fetchTimerRef.current) {
+      clearTimeout(fetchTimerRef.current);
+      fetchTimerRef.current = null;
+    }
+    setFetchCycle(null);
+    fetchMutation.reset();
+  }
+
   const items: FundNavRange[] = searchQuery.data ?? [];
   // 脚注的"更新于"取本次结果中最新的缓存更新日期
   const latestUpdated = fmtDateSlash(
@@ -280,28 +283,37 @@ export default function FundScreenerPage() {
       null,
     ),
   );
-  // 输入恰好是 6 位代码但缓存无匹配时，允许直接查询该代码（走未收录流程）
-  const directCode = isSixDigitCode(debouncedKeyword)
-    ? debouncedKeyword
-    : null;
-  const showDirectLookup =
-    directCode != null && !searchQuery.isFetching && items.length === 0;
 
+  const detail: FundRangeResponse | null = detailQuery.data ?? null;
+  const fetchFailed = fetchMutation.isError;
   // 抓取周期是否仍在进行：周期匹配当前基金，且尚未拿到可用数据
-  const detail = detailQuery.data ?? null;
   const fetchInFlight =
     fetchCycle != null &&
-    fetchCycle.code === selectedCode &&
+    fetchCycle.code === activeCode &&
     (detail == null ||
       detail.status === "NOT_COLLECTED" ||
       detail.status === "UNAVAILABLE") &&
-    !fetchMutation.isError;
+    !fetchFailed;
+
+  // 未收录时自动提交抓取请求：后端 search 已幂等入队，这里补一次触发以进入轮询
+  const { mutate: mutateFetch } = fetchMutation;
+  const shouldAutoFetch =
+    detail != null &&
+    detail.status === "NOT_COLLECTED" &&
+    fetchCycle == null &&
+    !fetchFailed &&
+    activeCode != null;
+  useEffect(() => {
+    if (shouldAutoFetch && activeCode != null) {
+      mutateFetch(activeCode);
+    }
+  }, [shouldAutoFetch, activeCode, mutateFetch]);
 
   return (
     <>
       <PageHeader
         title="基金筛选"
-        description="按代码或名称搜索基金，查看累计净值的历史区间、回撤与分位（仅缓存已收录基金）"
+        description="按代码或名称搜索基金，查看累计净值的历史区间、回撤与分位（未收录的 6 位代码会自动触发抓取）"
       />
 
       <div className="panel">
@@ -311,7 +323,10 @@ export default function FundScreenerPage() {
             <input
               type="text"
               value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
+              onChange={(event) => {
+                setKeyword(event.target.value);
+                clearSelection();
+              }}
               placeholder="输入基金代码或名称，如 110022 / 沪深300"
               aria-label="搜索基金"
             />
@@ -325,20 +340,6 @@ export default function FundScreenerPage() {
           <div className="alert alert-danger" role="alert">
             <strong>搜索失败</strong>
             <p>暂时无法搜索基金，请稍后重试。</p>
-          </div>
-        ) : null}
-
-        {showDirectLookup && directCode != null ? (
-          <div className="search-result-hint">
-            未找到与“{debouncedKeyword}”匹配的已收录基金。
-            {directCode} 可能尚未收录，
-            <button
-              type="button"
-              className="link-button"
-              onClick={() => selectFund(directCode)}
-            >
-              直接查询 {directCode} 的净值区间
-            </button>
           </div>
         ) : null}
 
@@ -361,7 +362,7 @@ export default function FundScreenerPage() {
                   <tr
                     key={item.fundCode}
                     className={`fund-row ${
-                      selectedCode === item.fundCode ? "is-selected" : ""
+                      activeCode === item.fundCode ? "is-selected" : ""
                     }`}
                     onClick={() => selectFund(item.fundCode)}
                     onKeyDown={(event) => {
@@ -418,12 +419,6 @@ export default function FundScreenerPage() {
           </div>
         ) : null}
 
-        {debouncedKeyword.length > 0 && items.length > 0 ? (
-          <p className="fund-source-line">
-            数据来源：天天基金 · 历史极值基于累计净值计算 · 更新于 {latestUpdated}
-          </p>
-        ) : null}
-
         {debouncedKeyword.length > 0 &&
         !searchQuery.isFetching &&
         items.length === 0 &&
@@ -434,16 +429,22 @@ export default function FundScreenerPage() {
           </div>
         ) : null}
 
-        {selectedCode != null ? (
+        {activeCode != null ? (
           <FundDetail
-            fundCode={selectedCode}
+            fundCode={activeCode}
             detail={detail}
             isLoading={detailQuery.isLoading}
             isError={detailQuery.isError}
             fetchInFlight={fetchInFlight}
-            fetchFailed={fetchMutation.isError}
-            onFetch={(code) => fetchMutation.mutate(code)}
+            fetchFailed={fetchFailed}
+            onFetch={(code) => mutateFetch(code)}
           />
+        ) : null}
+
+        {debouncedKeyword.length > 0 && items.length > 0 ? (
+          <p className="fund-source-line">
+            数据来源：天天基金 · 历史极值基于累计净值计算 · 更新于 {latestUpdated}
+          </p>
         ) : null}
       </div>
     </>
