@@ -134,6 +134,7 @@ def test_search_fuzzy_keyword_miss_does_not_enqueue(monkeypatch) -> None:
 
     empty_search = AsyncMock(return_value=[])
     empty_master = AsyncMock(return_value=[])
+    empty_similar = AsyncMock(return_value=[])
     enqueue = AsyncMock()
     with (
         patch(
@@ -141,6 +142,10 @@ def test_search_fuzzy_keyword_miss_does_not_enqueue(monkeypatch) -> None:
         ),
         patch(
             "backend.funds.repository.search_fund_master", new=empty_master
+        ),
+        patch(
+            "backend.funds.repository.search_fund_master_similar",
+            new=empty_similar,
         ),
         patch(
             "backend.funds.repository.enqueue_nav_range_fetch", new=enqueue
@@ -298,3 +303,47 @@ def test_name_search_caps_auto_enqueue_at_five(monkeypatch) -> None:
     assert len(data) == 7
     assert sum(1 for item in data if item["status"] == "NOT_COLLECTED") == 7
     assert enqueue.await_count == 5
+
+
+def test_name_search_falls_back_to_similarity(monkeypatch) -> None:
+    """A full marketing name misses ILIKE but hits the trigram fallback."""
+
+    _transaction(monkeypatch)
+
+    empty_search = AsyncMock(return_value=[])
+    empty_master = AsyncMock(return_value=[])
+    similar = AsyncMock(
+        return_value=[_master_row("163417", "兴全合宜混合(LOF)A")]
+    )
+    by_codes = AsyncMock(return_value=[])
+    enqueue = AsyncMock(return_value={"id": "run-1", "created": True})
+    with (
+        patch(
+            "backend.funds.repository.search_nav_ranges", new=empty_search
+        ),
+        patch(
+            "backend.funds.repository.search_fund_master", new=empty_master
+        ),
+        patch(
+            "backend.funds.repository.search_fund_master_similar", new=similar
+        ),
+        patch(
+            "backend.funds.repository.get_nav_ranges_by_codes", new=by_codes
+        ),
+        patch(
+            "backend.funds.repository.enqueue_nav_range_fetch", new=enqueue
+        ),
+    ):
+        response = _client().get(
+            "/api/v1/funds/search",
+            params={"keyword": "兴全合宜灵活配置混合(LOF)A"},
+        )
+
+    data = response.json()["data"]
+    assert response.status_code == 200
+    assert [item["status"] for item in data] == ["NOT_COLLECTED"]
+    assert data[0]["fundCode"] == "163417"
+    similar.assert_awaited_once()
+    enqueue.assert_awaited_once_with(
+        ANY, tenant_id=TENANT_ID, fund_code="163417"
+    )

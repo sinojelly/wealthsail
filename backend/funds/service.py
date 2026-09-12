@@ -111,6 +111,12 @@ async def search(
     master_rows = await repository.search_fund_master(
         conn, normalized, limit=_MASTER_SEARCH_LIMIT
     )
+    if not master_rows:
+        # 全称粘贴常与 AkShare 简称有措辞差异（如"灵活配置"），退化到
+        # pg_trgm 相似度匹配
+        master_rows = await repository.search_fund_master_similar(
+            conn, normalized, limit=_MASTER_SEARCH_LIMIT
+        )
     remaining = [
         str(row["fund_code"])
         for row in master_rows

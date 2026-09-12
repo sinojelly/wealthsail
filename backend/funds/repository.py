@@ -51,6 +51,29 @@ async def search_fund_master(conn: Connection, keyword: str, *, limit: int = 10)
     )
 
 
+async def search_fund_master_similar(
+    conn: Connection, keyword: str, *, limit: int = 10
+):
+    """Trigram-similarity fallback for full marketing names.
+
+    AkShare stores abbreviated names ("兴全合宜混合(LOF)A") while users paste
+    the full name ("兴全合宜灵活配置混合(LOF)A"); ILIKE misses those, the
+    pg_trgm % operator (068) does not.
+    """
+
+    return await conn.fetch(
+        """
+        SELECT fund_code, fund_name, fund_type
+          FROM reference.fund_master
+         WHERE fund_name % $1
+         ORDER BY similarity(fund_name, $1) DESC, fund_code
+         LIMIT $2
+        """,
+        keyword,
+        limit,
+    )
+
+
 async def get_nav_ranges_by_codes(conn: Connection, fund_codes: list[str]):
     """Load cached range rows for an explicit code list."""
 
