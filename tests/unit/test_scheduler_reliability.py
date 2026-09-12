@@ -127,6 +127,7 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes(
             "FUND_SUBSCRIPTION_STATUS_REFRESH",
             "FUND_NAV_HISTORY_REFRESH",
             "FUND_NAV_RANGE_REFRESH",
+            "FUND_MASTER_REFRESH",
             "PRE_MARKET",
         "INTRADAY",
         "FUND_1430",

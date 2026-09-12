@@ -28,6 +28,45 @@ async def search_nav_ranges(conn: Connection, keyword: str):
     )
 
 
+async def search_fund_master(conn: Connection, keyword: str, *, limit: int = 10):
+    """Find master-list funds by name or code, best matches first."""
+
+    pattern = f"%{keyword}%"
+    return await conn.fetch(
+        """
+        SELECT fund_code, fund_name, fund_type
+          FROM reference.fund_master
+         WHERE fund_name ILIKE $1 OR fund_code ILIKE $1
+         ORDER BY CASE WHEN fund_code = $2 THEN 0
+                       WHEN fund_name = $3 THEN 1
+                       WHEN fund_name ILIKE $2 || '%' THEN 2
+                       ELSE 3 END,
+                  fund_code
+         LIMIT $4
+        """,
+        pattern,
+        keyword,
+        keyword,
+        limit,
+    )
+
+
+async def get_nav_ranges_by_codes(conn: Connection, fund_codes: list[str]):
+    """Load cached range rows for an explicit code list."""
+
+    return await conn.fetch(
+        """
+        SELECT fund_code, fund_name, fund_type, latest_nav, latest_nav_date,
+               highest_nav, highest_nav_date, lowest_nav, lowest_nav_date,
+               drawdown_from_high, rise_from_low, current_percentile,
+               inception_date, data_source, updated_at
+          FROM reference.fund_nav_ranges
+         WHERE fund_code = ANY($1)
+        """,
+        fund_codes,
+    )
+
+
 async def get_nav_range(conn: Connection, fund_code: str):
     """Return one cache row, or ``None`` when the fund has not been collected."""
 

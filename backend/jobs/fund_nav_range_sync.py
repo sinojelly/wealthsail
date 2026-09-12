@@ -58,12 +58,25 @@ async def fetch_and_persist_fund_nav_range(
     provider I/O, so an API restart cannot lose a requested refresh.  A range
     provider outage remains an explicit ``UNAVAILABLE`` row; an identity lookup
     outage is retried by the durable job because a name must never be invented.
+
+    With no explicit resolver the identity resolves from the shared fund
+    master table first and only falls back to the provider on a miss.
     """
 
-    resolver = identity_resolver or fetch_fund_identity
+    if identity_resolver is None:
+        from backend.jobs.fund_master_sync import (  # noqa: PLC0415
+            master_first_identity_resolver,
+        )
+
+        def _master_conn_factory(_fund_code: str):
+            return system_connection(pool)
+
+        identity_resolver = master_first_identity_resolver(
+            _master_conn_factory, fetch_fund_identity
+        )
     fetched = range_fetcher or fetch_fund_nav_range
     persist = persister or persist_fund_nav_range
-    fund_name, fund_type = await resolver(fund_code)
+    fund_name, fund_type = await identity_resolver(fund_code)
     result = await fetched(fund_code, fund_name=fund_name, fund_type=fund_type)
     await persist(pool, result)
     return result

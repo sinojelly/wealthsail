@@ -13,6 +13,31 @@ from backend.funds import repository
 
 
 _FUND_CODE = re.compile(r"^[0-9]{6}$")
+# 名称搜索的展示上限，以及单次搜索自动入队抓取的上限：
+# 模糊词（如"混合"）可能命中成百上千条主数据，无上限会瞬间制造大量抓取任务
+_MASTER_SEARCH_LIMIT = 10
+_AUTO_ENQUEUE_LIMIT = 5
+
+
+def _not_collected_dto(row) -> dict:
+    return {
+        "fundCode": str(row["fund_code"]),
+        "fundName": str(row["fund_name"]),
+        "fundType": str(row["fund_type"]),
+        "latestNav": None,
+        "latestNavDate": None,
+        "highestNav": None,
+        "highestNavDate": None,
+        "lowestNav": None,
+        "lowestNavDate": None,
+        "drawdownFromHigh": None,
+        "riseFromLow": None,
+        "currentPercentile": None,
+        "inceptionDate": None,
+        "dataSource": None,
+        "updatedAt": None,
+        "status": "NOT_COLLECTED",
+    }
 
 
 def normalize_fund_code(value: str) -> str:
@@ -55,27 +80,68 @@ def _range_dto(row) -> dict:
 async def search(
     conn: Connection, keyword: str, *, tenant_id: str
 ) -> list[dict]:
-    """Search the persisted cache by code or name.
+    """Search cached ranges first, then the market-wide fund master list.
 
-    When the keyword is an exact six-digit fund code absent from the cache,
-    one durable fetch job is enqueued (idempotent per tenant+code) so a later
-    search can hit.  Enqueueing is a plain DB write; all provider I/O stays
-    Worker-only.
+    A six-digit code absent from the cache enqueues one durable fetch job
+    (idempotent per tenant+code).  A name keyword resolves through the master
+    list: cached funds render normally, uncached ones show as NOT_COLLECTED
+    with up to ``_AUTO_ENQUEUE_LIMIT`` of them auto-enqueued per search.
+    Enqueueing is a plain DB write; all provider I/O stays Worker-only.
     """
 
     normalized = keyword.strip()
     if not normalized:
         raise ValidationError_("搜索关键词不能为空")
+
+    if _FUND_CODE.fullmatch(normalized):
+        cached = await repository.get_nav_range(conn, normalized)
+        if cached is not None:
+            return [_range_dto(cached)]
+        await repository.enqueue_nav_range_fetch(
+            conn, tenant_id=tenant_id, fund_code=normalized
+        )
+        return []
+
     results = [
         _range_dto(row)
         for row in await repository.search_nav_ranges(conn, normalized)
     ]
-    if _FUND_CODE.fullmatch(normalized) and not any(
-        item["fundCode"] == normalized for item in results
-    ):
-        await repository.enqueue_nav_range_fetch(
-            conn, tenant_id=tenant_id, fund_code=normalized
-        )
+    cached_codes = {item["fundCode"] for item in results}
+
+    master_rows = await repository.search_fund_master(
+        conn, normalized, limit=_MASTER_SEARCH_LIMIT
+    )
+    remaining = [
+        str(row["fund_code"])
+        for row in master_rows
+        if str(row["fund_code"]) not in cached_codes
+    ]
+    cached_extra = (
+        await repository.get_nav_ranges_by_codes(conn, remaining)
+        if remaining
+        else []
+    )
+    cached_by_code = {
+        str(row["fund_code"]): row for row in cached_extra
+    }
+
+    enqueued = 0
+    for row in master_rows:
+        fund_code = str(row["fund_code"])
+        if fund_code in cached_codes:
+            continue
+        cached_row = cached_by_code.get(fund_code)
+        if cached_row is not None:
+            # 主数据命中、且缓存里其实已有（名称拼写与缓存不同的场景）
+            results.append(_range_dto(cached_row))
+            cached_codes.add(fund_code)
+            continue
+        results.append(_not_collected_dto(row))
+        if enqueued < _AUTO_ENQUEUE_LIMIT:
+            await repository.enqueue_nav_range_fetch(
+                conn, tenant_id=tenant_id, fund_code=fund_code
+            )
+            enqueued += 1
     return results
 
 

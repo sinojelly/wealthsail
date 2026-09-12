@@ -15,9 +15,9 @@ export interface FundNavRange {
   riseFromLow: number | null;
   currentPercentile: number | null;
   inceptionDate: string | null;
-  dataSource: "AKSHARE" | "UNAVAILABLE";
+  dataSource: "AKSHARE" | "UNAVAILABLE" | null;
   updatedAt: string | null;
-  status: "AVAILABLE" | "UNAVAILABLE";
+  status: "AVAILABLE" | "UNAVAILABLE" | "NOT_COLLECTED";
 }
 
 /** 未收录基金：后端显式返回的非错误状态。 */

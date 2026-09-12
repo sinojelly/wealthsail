@@ -87,14 +87,12 @@ function FundDetail({
   }
 
   if (detail.status === "NOT_COLLECTED") {
-    return (
-      <div className="fund-detail">
-        <p className="search-result-hint">
-          <strong>{fundCode}</strong>{" "}
-          尚未收录，已自动提交按需抓取请求，通常几秒到几分钟内完成，完成后自动刷新。
-        </p>
-        <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
-        {fetchFailed ? (
+    if (fetchFailed) {
+      return (
+        <div className="fund-detail">
+          <p className="fund-fetch-hint" role="alert">
+            抓取请求提交失败，请稍后重试。
+          </p>
           <button
             type="button"
             className="btn-primary btn-sm"
@@ -104,7 +102,15 @@ function FundDetail({
             <RefreshCw size={14} />
             重试
           </button>
-        ) : null}
+        </div>
+      );
+    }
+    return (
+      <div className="fund-detail" role="status">
+        <p className="fund-fetch-hint">
+          <RefreshCw className="spin" size={14} />
+          正在获取 {fundCode} 的净值数据，通常几秒内完成…
+        </p>
       </div>
     );
   }

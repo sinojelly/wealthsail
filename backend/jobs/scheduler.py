@@ -106,6 +106,14 @@ SCHEDULES: tuple[SessionSchedule, ...] = (
     SessionSchedule("INTRADAY", "盘中跟踪", minute=0, hour=9, every_minutes=5),
     SessionSchedule("FUND_1430", "基金 2:30 报告", minute=30, hour=14),
     SessionSchedule("POST_MARKET", "盘后复盘", minute=30, hour=15),
+    SessionSchedule(
+        "FUND_MASTER_REFRESH",
+        "基金主数据同步",
+        minute=30,
+        hour=3,
+        dow=(6,),
+        trading_day_only=False,
+    ),
 )
 
 
