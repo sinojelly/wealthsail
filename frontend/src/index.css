@@ -5536,3 +5536,132 @@ button:disabled {
   margin-right: 6px;
   color: var(--gold);
 }
+
+
+/* 个人中心：账户 Hero 卡 + 左侧功能导航 + 右侧详情 */
+.account-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.account-hero-avatar {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--gold);
+  color: #121212;
+  font-size: 22px;
+  font-weight: 800;
+  border: 2px solid rgba(201, 162, 39, 0.45);
+}
+.account-hero-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.account-hero-meta {
+  flex: 1;
+  min-width: 0;
+}
+.account-hero-meta strong {
+  display: block;
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.account-hero-meta > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: #b0b0b0;
+  font-size: 11px;
+}
+.account-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.account-nav {
+  display: grid;
+  gap: 12px;
+}
+.account-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid #2e2e2e;
+  border-radius: 12px;
+  background: #1c1c1c;
+  color: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.account-nav-item:hover {
+  background: #242424;
+}
+.account-nav-item.is-active {
+  background: var(--wine);
+  border-color: rgba(201, 162, 39, 0.4);
+}
+.account-nav-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #242424;
+  color: #b0b0b0;
+}
+.account-nav-item.is-active .account-nav-icon {
+  background: rgba(201, 162, 39, 0.2);
+  color: var(--gold);
+}
+.account-nav-text {
+  flex: 1;
+  min-width: 0;
+}
+.account-nav-text strong {
+  display: block;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 650;
+}
+.account-nav-text small {
+  display: block;
+  margin-top: 2px;
+  color: #666666;
+  font-size: 10px;
+}
+.account-nav-item.is-active .account-nav-text small {
+  color: #b0b0b0;
+}
+.account-nav-chevron {
+  color: #666666;
+}
+.account-nav-item.is-active .account-nav-chevron {
+  color: var(--gold);
+}
+.account-detail {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .account-layout {
+    grid-template-columns: 1fr;
+  }
+  .account-nav {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
