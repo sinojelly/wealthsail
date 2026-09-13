@@ -18,19 +18,19 @@
 }
 
 .login-glow-a {
-  width: 560px;
-  height: 560px;
-  top: 6%;
-  left: -8%;
-  background: radial-gradient(circle, rgba(139, 0, 0, 0.55), transparent 70%);
+  width: 760px;
+  height: 760px;
+  top: 12%;
+  left: 2%;
+  background: radial-gradient(circle, rgba(139, 0, 0, 0.62), transparent 70%);
 }
 
 .login-glow-b {
-  width: 520px;
-  height: 520px;
-  bottom: -14%;
-  left: 6%;
-  background: radial-gradient(circle, rgba(201, 162, 39, 0.3), transparent 70%);
+  width: 620px;
+  height: 620px;
+  bottom: -6%;
+  left: 16%;
+  background: radial-gradient(circle, rgba(201, 162, 39, 0.26), transparent 70%);
 }
 
 .login-shell {
@@ -57,10 +57,9 @@
 
 .login-logo-img {
   display: block;
-  height: 60px;
+  height: 64px;
   width: auto;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  mix-blend-mode: screen;
 }
 
 .login-hero h1 {
