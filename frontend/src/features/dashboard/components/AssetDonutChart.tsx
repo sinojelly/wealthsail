@@ -6,7 +6,7 @@ import type { AllocationItem } from "../../../api/types";
 import EmptyState from "../../../components/data-state/EmptyState";
 
 const CATEGORY_COLOR: Record<string, string> = {
-  A股: "#2dd4bf",
+  A股: "#5ac8fa",
   场内ETF: "#0ea5e9",
   场外基金: "#8b5cf6",
   现金: "#94a3b8",
@@ -71,7 +71,7 @@ export default function AssetDonutChart({
                     "占比",
                   ]}
                   contentStyle={{
-                    border: "1px solid #30363d",
+                    border: "1px solid rgba(255, 255, 255, 0.15)",
                     borderRadius: 8,
                     fontSize: 10,
                   }}

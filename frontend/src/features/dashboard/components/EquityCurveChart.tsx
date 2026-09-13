@@ -59,12 +59,12 @@ export default function EquityCurveChart({
             >
               <defs>
                 <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#2dd4bf" stopOpacity={0.18} />
-                  <stop offset="100%" stopColor="#2dd4bf" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#5ac8fa" stopOpacity={0.18} />
+                  <stop offset="100%" stopColor="#5ac8fa" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid
-                stroke="#30363d"
+                stroke="rgba(255, 255, 255, 0.15)"
                 strokeDasharray="3 4"
                 vertical={false}
               />
@@ -88,7 +88,7 @@ export default function EquityCurveChart({
                   "总资产",
                 ]}
                 contentStyle={{
-                  border: "1px solid #30363d",
+                  border: "1px solid rgba(255, 255, 255, 0.15)",
                   borderRadius: 8,
                   fontSize: 10,
                 }}
@@ -97,7 +97,7 @@ export default function EquityCurveChart({
                 isAnimationActive={false}
                 type="monotone"
                 dataKey="portfolioChart"
-                stroke="#2dd4bf"
+                stroke="#5ac8fa"
                 strokeWidth={2}
                 fill="url(#portfolioFill)"
                 dot={false}
