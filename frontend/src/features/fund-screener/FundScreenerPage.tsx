@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search, SearchX, X } from "lucide-react";
 import PageHeader from "../../components/layout/PageHeader";
 import {
   browseFunds,
@@ -365,6 +365,8 @@ export default function FundScreenerPage() {
   const [browseCategory, setBrowseCategory] =
     useState<FundBrowseCategory | null>(null);
   const [fetchCycle, setFetchCycle] = useState<FetchCycle | null>(null);
+  // 详情弹窗：用户点击行时打开；自动选中的流程只显示内嵌进度面板
+  const [modalCode, setModalCode] = useState<string | null>(null);
   const fetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 搜索结果存在未收录基金时的轮询截止时间（0 = 未在轮询）
   const searchPollDeadlineRef = useRef(0);
@@ -448,6 +450,8 @@ export default function FundScreenerPage() {
 
   function selectFund(code: string) {
     setSelectedCode(code);
+    // 点击行时弹出详情弹窗（自动选中的流程不弹，保留内嵌进度面板）
+    setModalCode(code);
     if (fetchTimerRef.current) {
       clearTimeout(fetchTimerRef.current);
       fetchTimerRef.current = null;
@@ -459,6 +463,7 @@ export default function FundScreenerPage() {
 
   function clearSelection() {
     setSelectedCode(null);
+    setModalCode(null);
     if (fetchTimerRef.current) {
       clearTimeout(fetchTimerRef.current);
       fetchTimerRef.current = null;
@@ -584,6 +589,7 @@ export default function FundScreenerPage() {
         !searchQuery.isError &&
         directCode == null ? (
           <div className="search-result-hint">
+            <SearchX size={18} className="empty-icon" />
             未找到匹配的已收录基金，可尝试其他代码或名称。
           </div>
         ) : null}
@@ -607,11 +613,12 @@ export default function FundScreenerPage() {
 
         {browseActive && browseQuery.isSuccess && browseItems.length === 0 ? (
           <div className="search-result-hint">
+            <SearchX size={18} className="empty-icon" />
             暂无符合条件的基金——数据会随搜索与抓取逐步累积。
           </div>
         ) : null}
 
-        {activeCode != null ? (
+        {activeCode != null && modalCode == null ? (
           <FundDetail
             fundCode={activeCode}
             detail={detail}
@@ -629,6 +636,43 @@ export default function FundScreenerPage() {
           </p>
         ) : null}
       </div>
+
+      {modalCode != null ? (
+        <div
+          className="modal-overlay"
+          onClick={() => setModalCode(null)}
+          role="presentation"
+        >
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${activeCode} 净值区间详情`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <span className="modal-title">净值区间详情</span>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="关闭详情"
+                onClick={() => setModalCode(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <FundDetail
+              fundCode={modalCode}
+              detail={detail}
+              isLoading={detailQuery.isLoading}
+              isError={detailQuery.isError}
+              fetchInFlight={fetchInFlight}
+              fetchFailed={fetchFailed}
+              onFetch={(code) => mutateFetch(code)}
+            />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
