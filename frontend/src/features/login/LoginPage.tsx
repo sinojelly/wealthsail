@@ -302,6 +302,11 @@ export default function LoginPage() {
             ) : null}
           </form>
         </div>
+        <p className="login-backlink">
+          <button type="button" onClick={() => navigate("/")}>
+            返回工作台
+          </button>
+        </p>
       </div>
     </div>
   );
