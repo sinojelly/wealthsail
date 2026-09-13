@@ -62,22 +62,26 @@
   content: "";
   position: absolute;
   inset: -26px -56px;
+  z-index: 0;
   background: radial-gradient(
     ellipse at 22% 78%,
-    rgba(170, 72, 66, 0.55) 0%,
-    rgba(110, 25, 30, 0.42) 42%,
-    transparent 72%
+    rgba(170, 72, 66, 0.5) 0%,
+    rgba(110, 25, 30, 0.4) 40%,
+    rgba(110, 25, 30, 0.18) 58%,
+    transparent 75%
   );
-  filter: blur(14px);
   pointer-events: none;
 }
 
 .login-logo-img {
   position: relative;
+  z-index: 2;
   display: block;
   height: 44px;
   width: auto;
   border-radius: 8px;
+  opacity: 1;
+  visibility: visible;
 }
 
 /* 图片加载失败时回退到文字标 */

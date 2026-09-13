@@ -5665,3 +5665,23 @@ button:disabled {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
 }
+
+
+/* 侧边栏：品牌 Logo 图片（加载失败回退文字标） */
+.brand-logo-img {
+  position: relative;
+  z-index: 2;
+  display: block;
+  height: 40px;
+  width: auto;
+  border-radius: 8px;
+  opacity: 1;
+  visibility: visible;
+}
+.brand-row[data-logo-failed=true] .brand-logo-img {
+  display: none;
+}
+.brand-row[data-logo-failed=false] .brand-mark,
+.brand-row[data-logo-failed=false] .brand-copy {
+  display: none;
+}
