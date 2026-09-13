@@ -20,8 +20,8 @@
 .login-glow-a {
   width: 900px;
   height: 900px;
-  bottom: -38%;
-  left: -18%;
+  bottom: -20%;
+  left: -12%;
   background: radial-gradient(
     circle,
     rgba(139, 20, 10, 0.5) 0%,
@@ -36,7 +36,6 @@
 
 .login-shell {
   position: relative;
-  z-index: 1;
   width: min(960px, 92vw);
   display: grid;
   grid-template-columns: 1.1fr 1fr;
@@ -50,31 +49,54 @@
 }
 
 .login-logo {
-  display: flex;
+  position: relative;
+  display: inline-flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 28px;
+  padding: 8px 16px;
 }
 
-.login-logo-mark {
-  width: 56px;
-  height: 56px;
-  display: grid;
-  place-items: center;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 46px;
-  font-weight: 800;
-  background: linear-gradient(
-    105deg,
-    #b31217 0%,
-    #d0543f 32%,
-    #d4af37 60%,
-    #f3dd94 100%
+/* Logo 衬底光晕：与图片底色同系（左下暖红→右上暗），矩形边缘溶入 */
+.login-logo::before {
+  content: "";
+  position: absolute;
+  inset: -26px -56px;
+  background: radial-gradient(
+    ellipse at 22% 78%,
+    rgba(170, 72, 66, 0.55) 0%,
+    rgba(110, 25, 30, 0.42) 42%,
+    transparent 72%
   );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 3px 8px rgba(139, 0, 0, 0.45));
+  filter: blur(14px);
+  pointer-events: none;
+}
+
+.login-logo-img {
+  position: relative;
+  display: block;
+  height: 44px;
+  width: auto;
+  border-radius: 8px;
+}
+
+/* 图片加载失败时回退到文字标 */
+.login-logo .login-logo-mark,
+.login-logo .login-logo-name {
+  display: none;
+}
+.login-logo.logo-failed .login-logo-img {
+  display: none;
+}
+.login-logo.logo-failed .login-logo-mark {
+  display: grid;
+}
+.login-logo.logo-failed .login-logo-name {
+  display: block;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--gold);
 }
 
 .login-hero h1 {
