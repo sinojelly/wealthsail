@@ -56,16 +56,24 @@
 }
 
 .login-logo-mark {
-  width: 46px;
-  height: 46px;
+  width: 56px;
+  height: 56px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  font-size: 24px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 44px;
   font-weight: 800;
-  color: #121212;
-  background: linear-gradient(135deg, #e6c56a, #a07c1c);
-  box-shadow: 0 8px 24px rgba(201, 162, 39, 0.35);
+  background: linear-gradient(
+    105deg,
+    #8b0000 0%,
+    #b3402a 30%,
+    #c9a227 58%,
+    #f3dd94 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 8px rgba(139, 0, 0, 0.45));
 }
 
 .login-logo-name {
