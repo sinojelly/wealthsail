@@ -136,8 +136,13 @@ export default function LoginPage() {
       <div className="login-shell">
         <header className="login-hero">
           <div className="login-logo">
-            <span className="login-logo-mark">W</span>
-            <span className="login-logo-name">WealthSail</span>
+            <img
+              src="/logo.png"
+              alt="WealthSail"
+              className="login-logo-img"
+              width={1018}
+              height={288}
+            />
           </div>
           <h1>让每一笔投资，都有据可依</h1>
           <p className="login-slogan">
