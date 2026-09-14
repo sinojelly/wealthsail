@@ -65,3 +65,6 @@ backend/static/avatars/*
 .workbuddy/
 .trae/
 .tmp/
+
+# 本地面试资料（不提交）
+INTERVIEW_PREP.md

@@ -66,7 +66,18 @@ export default function AppShell() {
         className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}
         aria-label="主导航"
       >
-        <div className="brand-row">
+        <div className="brand-row" data-logo-failed="false">
+          <img
+            src="/logo.png"
+            alt="WealthSail"
+            className="brand-logo-img"
+            onError={(event) => {
+              event.currentTarget.parentElement?.setAttribute(
+                "data-logo-failed",
+                "true",
+              );
+            }}
+          />
           <div className="brand-mark">W</div>
           <div className="brand-copy">
             <strong>WealthSail</strong>

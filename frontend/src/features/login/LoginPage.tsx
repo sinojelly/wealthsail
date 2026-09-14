@@ -56,6 +56,8 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 品牌 Logo 图片加载失败时回退到文字标
+  const [logoFailed, setLogoFailed] = useState(false);
 
   const needsNewPassword = mode === "invited-register" || Boolean(resetToken);
   const passwordLength = Array.from(password).length;
@@ -135,7 +137,13 @@ export default function LoginPage() {
       <div className="login-glow login-glow-b" />
       <div className="login-shell">
         <header className="login-hero">
-          <div className="login-logo">
+          <div className={`login-logo ${logoFailed ? "logo-failed" : ""}`}>
+            <img
+              src="/logo.png"
+              alt="WealthSail"
+              className="login-logo-img"
+              onError={() => setLogoFailed(true)}
+            />
             <span className="login-logo-mark">W</span>
             <span className="login-logo-name">WealthSail</span>
           </div>
