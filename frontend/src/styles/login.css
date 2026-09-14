@@ -406,7 +406,7 @@
 }
 
 
-/* ── 游走的红色光带：细芯强光，柔和曲线游走 ──────────────────────────── */
+/* ── 游走的红色光带：珠链——光珠沿弯曲路径排开，整串呈现曲线形态 ────── */
 .light-beam {
   position: absolute;
   inset: 0;
@@ -415,61 +415,91 @@
 
 .light-beam i {
   position: absolute;
-  offset-path: path("M -320 540 C 60 470, 260 590, 560 545 S 1020 470, 1280 525 S 1620 590, 1900 500");
-  offset-rotate: auto;
+  offset-path: path("M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500");
+  offset-rotate: 0deg;
   offset-distance: 0%;
-  border-radius: 999px;
+  border-radius: 50%;
+  animation: beam-run 14s linear infinite;
 }
 
-/* 外层：暗红，宽而淡 */
-.lb-halo {
-  width: 880px;
+/* 头部：白热亮珠 */
+.lb-h1 {
+  width: 110px;
+  height: 38px;
+  margin: -19px -55px;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 246, 244, 0.95) 0%,
+    rgba(255, 107, 91, 0.8) 45%,
+    rgba(229, 57, 53, 0) 78%
+  );
+  filter: blur(1.5px);
+}
+
+/* 珠链：逐颗缩小、变暗、更糊，负延迟依次落后 */
+.lb-h2 {
+  width: 76px;
+  height: 30px;
+  margin: -15px -38px;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 107, 91, 0.7) 0%,
+    rgba(229, 57, 53, 0) 75%
+  );
+  filter: blur(2.5px);
+  animation-delay: -0.5s;
+}
+
+.lb-h3 {
+  width: 60px;
+  height: 24px;
+  margin: -12px -30px;
+  background: radial-gradient(
+    closest-side,
+    rgba(229, 57, 53, 0.5) 0%,
+    rgba(180, 40, 35, 0) 75%
+  );
+  filter: blur(4px);
+  animation-delay: -1s;
+}
+
+.lb-h4 {
+  width: 48px;
+  height: 20px;
+  margin: -10px -24px;
+  background: radial-gradient(
+    closest-side,
+    rgba(180, 40, 35, 0.38) 0%,
+    rgba(150, 30, 26, 0) 75%
+  );
+  filter: blur(6px);
+  animation-delay: -1.5s;
+}
+
+.lb-h5 {
+  width: 38px;
+  height: 16px;
+  margin: -8px -19px;
+  background: radial-gradient(
+    closest-side,
+    rgba(150, 30, 26, 0.26) 0%,
+    rgba(120, 22, 18, 0) 75%
+  );
+  filter: blur(8px);
+  animation-delay: -1.9s;
+}
+
+.lb-h6 {
+  width: 30px;
   height: 13px;
-  margin: -6.5px -440px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(140, 30, 26, 0.2) 22%,
-    rgba(165, 38, 32, 0.24) 50%,
-    rgba(140, 30, 26, 0.2) 78%,
-    transparent 100%
+  margin: -6.5px -15px;
+  background: radial-gradient(
+    closest-side,
+    rgba(120, 22, 18, 0.16) 0%,
+    rgba(100, 18, 14, 0) 75%
   );
-  filter: blur(11px);
-  animation: beam-run 14s linear infinite;
-}
-
-/* 中层：亮红，柔和发光 */
-.lb-mid {
-  width: 760px;
-  height: 3.5px;
-  margin: -1.75px -380px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 92, 82, 0.5) 22%,
-    rgba(255, 118, 106, 0.72) 50%,
-    rgba(255, 92, 82, 0.5) 78%,
-    transparent 100%
-  );
-  filter: blur(2px);
-  animation: beam-run 14s linear infinite;
-}
-
-/* 最内层：纯白高光核心，极细最亮 */
-.lb-core {
-  width: 700px;
-  height: 1.5px;
-  margin: -0.75px -350px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 245, 243, 0.85) 20%,
-    #ffffff 50%,
-    rgba(255, 245, 243, 0.85) 80%,
-    transparent 100%
-  );
-  filter: blur(0.4px);
-  animation: beam-run 14s linear infinite;
+  filter: blur(10px);
+  animation-delay: -2.3s;
 }
 
 @keyframes beam-run {
