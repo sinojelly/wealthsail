@@ -139,7 +139,7 @@ export default function LoginPage() {
         <header className="login-hero">
           <div className={`login-logo ${logoFailed ? "logo-failed" : ""}`}>
             <img
-              src="/logo.png?v=20260914g"
+              src="/logo.png?v=20260914h"
               alt="WealthSail"
               className="login-logo-img"
               onError={() => setLogoFailed(true)}

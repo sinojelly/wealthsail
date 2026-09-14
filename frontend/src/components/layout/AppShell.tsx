@@ -68,7 +68,7 @@ export default function AppShell() {
       >
         <div className="brand-row" data-logo-failed="false">
           <img
-            src="/logo.png?v=20260914g"
+            src="/logo.png?v=20260914h"
             alt="WealthSail"
             className="brand-logo-img"
             onError={(event) => {
