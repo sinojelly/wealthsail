@@ -426,43 +426,43 @@
   stroke-dashoffset: var(--off, 0);
 }
 
-/* 锥形尾：宽度/段长/偏移逐层递减，细层拖在后方形成流星尾 */
+/* 流星：头部白热亮芯最短，拖尾逐层更长更淡更糊，只占路径约 25% */
 .beam-l1 {
-  stroke-width: 16;
-  stroke-dasharray: 46 54;
-  --off: 0;
-  opacity: 0.3;
+  stroke-width: 22;
+  stroke-dasharray: 30 70;
+  --off: -18;
+  opacity: 0.18;
   filter: url(#beam-blur-lg);
 }
 
 .beam-l2 {
-  stroke-width: 10;
-  stroke-dasharray: 40 60;
-  --off: -5;
-  opacity: 0.45;
+  stroke-width: 12;
+  stroke-dasharray: 23 77;
+  --off: -13;
+  opacity: 0.3;
   filter: url(#beam-blur-md);
 }
 
 .beam-l3 {
   stroke-width: 6;
-  stroke-dasharray: 34 66;
-  --off: -10;
-  opacity: 0.65;
+  stroke-dasharray: 17 83;
+  --off: -8;
+  opacity: 0.55;
   filter: url(#beam-blur-md);
 }
 
 .beam-l4 {
-  stroke-width: 3.5;
-  stroke-dasharray: 28 72;
-  --off: -15;
-  opacity: 0.85;
+  stroke-width: 3;
+  stroke-dasharray: 13 87;
+  --off: -3;
+  opacity: 0.9;
   filter: url(#beam-blur-sm);
 }
 
 .beam-l5 {
-  stroke-width: 1.6;
-  stroke-dasharray: 22 78;
-  --off: -20;
+  stroke-width: 1.5;
+  stroke-dasharray: 10 90;
+  --off: 0;
   opacity: 1;
   filter: url(#beam-blur-sm);
 }
