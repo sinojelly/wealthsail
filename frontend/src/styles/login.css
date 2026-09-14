@@ -422,57 +422,109 @@
 .beam-l5 {
   stroke: url(#beam-grad);
   stroke-linecap: round;
-  animation: beam-run 12s linear infinite;
-  stroke-dashoffset: var(--off, 0);
+  fill: none;
 }
 
-/* 流星：头部白热亮芯最短，拖尾逐层更长更淡更糊，只占路径约 25% */
+/* 流星：五层 dash 段错开，独立 keyframes 固定 px 值（避免 var/calc 兼容问题） */
 .beam-l1 {
   stroke-width: 22;
   stroke-dasharray: 30 70;
-  --off: -18;
+  stroke-dashoffset: -18px;
   opacity: 0.18;
   filter: url(#beam-blur-lg);
+  animation: beam-run-1 12s linear infinite;
 }
 
 .beam-l2 {
   stroke-width: 12;
   stroke-dasharray: 23 77;
-  --off: -13;
+  stroke-dashoffset: -13px;
   opacity: 0.3;
   filter: url(#beam-blur-md);
+  animation: beam-run-2 12s linear infinite;
 }
 
 .beam-l3 {
   stroke-width: 6;
   stroke-dasharray: 17 83;
-  --off: -8;
+  stroke-dashoffset: -8px;
   opacity: 0.55;
   filter: url(#beam-blur-md);
+  animation: beam-run-3 12s linear infinite;
 }
 
 .beam-l4 {
   stroke-width: 3;
   stroke-dasharray: 13 87;
-  --off: -3;
+  stroke-dashoffset: -3px;
   opacity: 0.9;
   filter: url(#beam-blur-sm);
+  animation: beam-run-4 12s linear infinite;
 }
 
 .beam-l5 {
   stroke-width: 1.5;
   stroke-dasharray: 10 90;
-  --off: 0;
+  stroke-dashoffset: 0px;
   opacity: 1;
   filter: url(#beam-blur-sm);
+  animation: beam-run-5 12s linear infinite;
 }
 
-@keyframes beam-run {
+@keyframes beam-run-1 {
+  from {
+    stroke-dashoffset: -18px;
+  }
   to {
-    stroke-dashoffset: calc(var(--off) - 100);
+    stroke-dashoffset: -118px;
   }
 }
 
+@keyframes beam-run-2 {
+  from {
+    stroke-dashoffset: -13px;
+  }
+  to {
+    stroke-dashoffset: -113px;
+  }
+}
+
+@keyframes beam-run-3 {
+  from {
+    stroke-dashoffset: -8px;
+  }
+  to {
+    stroke-dashoffset: -108px;
+  }
+}
+
+@keyframes beam-run-4 {
+  from {
+    stroke-dashoffset: -3px;
+  }
+  to {
+    stroke-dashoffset: -103px;
+  }
+}
+
+@keyframes beam-run-5 {
+  from {
+    stroke-dashoffset: 0px;
+  }
+  to {
+    stroke-dashoffset: -100px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beam-l1,
+  .beam-l2,
+  .beam-l3,
+  .beam-l4,
+  .beam-l5 {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .beam-l1,
   .beam-l2,

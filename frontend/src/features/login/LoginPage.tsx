@@ -168,18 +168,16 @@ export default function LoginPage() {
           <filter id="beam-blur-sm" x="-10%" y="-10%" width="120%" height="120%">
             <feGaussianBlur stdDeviation="1" />
           </filter>
+        </defs>
+        {["beam-l1", "beam-l2", "beam-l3", "beam-l4", "beam-l5"].map((cls) => (
           <path
-            id="beam-path"
+            key={cls}
+            className={cls}
             d="M -120 640 C 200 520, 380 700, 620 600 S 980 380, 1180 470 S 1420 620, 1560 430"
             fill="none"
-            pathLength="100"
+            pathLength={100}
           />
-        </defs>
-        <use href="#beam-path" className="beam-l1" filter="url(#beam-blur-lg)" />
-        <use href="#beam-path" className="beam-l2" filter="url(#beam-blur-md)" />
-        <use href="#beam-path" className="beam-l3" filter="url(#beam-blur-md)" />
-        <use href="#beam-path" className="beam-l4" filter="url(#beam-blur-sm)" />
-        <use href="#beam-path" className="beam-l5" filter="url(#beam-blur-sm)" />
+        ))}
       </svg>
       <div className="login-shell">
         <header className="login-hero">
