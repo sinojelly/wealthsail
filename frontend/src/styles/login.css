@@ -75,7 +75,7 @@
   position: relative;
   z-index: 2;
   display: block;
-  height: 72px;
+  height: 88px;
   width: auto;
   filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.65));
 }
