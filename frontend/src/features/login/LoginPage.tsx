@@ -175,7 +175,7 @@ export default function LoginPage() {
             pathLength="100"
           />
         </defs>
-        {["beam-l1", "beam-l2", "beam-l3"].map((cls) => (
+        {["beam-l1", "beam-l2", "beam-l3", "beam-l4", "beam-l5"].map((cls) => (
           <path
             key={cls}
             className={cls}

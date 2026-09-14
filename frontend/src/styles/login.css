@@ -419,44 +419,116 @@
    短段叠加成一道连续发光体，无分层感 */
 .beam-l1,
 .beam-l2,
-.beam-l3 {
+.beam-l3,
+.beam-l4,
+.beam-l5 {
   stroke: url(#beam-grad);
   stroke-linecap: round;
   fill: none;
-  stroke-dasharray: 24 76;
-  animation: beam-run 12s linear infinite;
 }
 
-/* 外层：暗红大范围晕开 */
-.beam-l1 {
-  stroke-width: 13;
-  opacity: 0.32;
-  filter: url(#beam-blur-lg);
-}
-
-/* 中层：红光过渡 */
-.beam-l2 {
-  stroke-width: 4.5;
-  opacity: 0.6;
-  filter: url(#beam-blur-md);
-}
-
-/* 内层：白热亮芯，几乎清晰 */
-.beam-l3 {
+/* 霓虹光感套在弯曲短段上：白热锐芯 + 紧贴亮红 + 逐层加宽加糊，
+   dash 段长递增、偏移递进 1.5——晕层完全包裹亮芯 */
+.beam-l5 {
+  stroke: #FFF0EC;
   stroke-width: 1.5;
+  stroke-dasharray: 22 78;
+  stroke-dashoffset: 0px;
   opacity: 1;
   filter: url(#beam-blur-sm);
+  animation: beam-run-5 12s linear infinite;
 }
 
-@keyframes beam-run {
+.beam-l4 {
+  stroke: #FF6B5B;
+  stroke-width: 4;
+  stroke-dasharray: 25 75;
+  stroke-dashoffset: -1.5px;
+  opacity: 0.9;
+  filter: url(#beam-blur-sm);
+  animation: beam-run-4 12s linear infinite;
+}
+
+.beam-l3 {
+  stroke: url(#beam-grad);
+  stroke-width: 8;
+  stroke-dasharray: 29 71;
+  stroke-dashoffset: -3px;
+  opacity: 0.6;
+  filter: url(#beam-blur-md);
+  animation: beam-run-3 12s linear infinite;
+}
+
+.beam-l2 {
+  stroke: url(#beam-grad);
+  stroke-width: 14;
+  stroke-dasharray: 33 67;
+  stroke-dashoffset: -4.5px;
+  opacity: 0.32;
+  filter: url(#beam-blur-md);
+  animation: beam-run-2 12s linear infinite;
+}
+
+.beam-l1 {
+  stroke: url(#beam-grad);
+  stroke-width: 22;
+  stroke-dasharray: 37 63;
+  stroke-dashoffset: -6px;
+  opacity: 0.16;
+  filter: url(#beam-blur-lg);
+  animation: beam-run-1 12s linear infinite;
+}
+
+@keyframes beam-run-5 {
   from {
-    stroke-dashoffset: -14px;
+    stroke-dashoffset: 0px;
   }
   to {
-    stroke-dashoffset: -114px;
+    stroke-dashoffset: -100px;
   }
 }
 
+@keyframes beam-run-4 {
+  from {
+    stroke-dashoffset: -1.5px;
+  }
+  to {
+    stroke-dashoffset: -101.5px;
+  }
+}
+
+@keyframes beam-run-3 {
+  from {
+    stroke-dashoffset: -3px;
+  }
+  to {
+    stroke-dashoffset: -103px;
+  }
+}
+
+@keyframes beam-run-2 {
+  from {
+    stroke-dashoffset: -4.5px;
+  }
+  to {
+    stroke-dashoffset: -104.5px;
+  }
+}
+
+@keyframes beam-run-1 {
+  from {
+    stroke-dashoffset: -6px;
+  }
+  to {
+    stroke-dashoffset: -106px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-beam path {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .login-beam path {
     animation: none;
