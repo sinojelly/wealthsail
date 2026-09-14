@@ -49,39 +49,19 @@
 }
 
 .login-logo {
-  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 28px;
-  padding: 8px 16px;
 }
 
 /* Logo 衬底光晕：与图片底色同系（左下暖红→右上暗），矩形边缘溶入 */
-.login-logo::before {
-  content: "";
-  position: absolute;
-  inset: -26px -56px;
-  z-index: 0;
-  background: radial-gradient(
-    ellipse at 22% 78%,
-    rgba(170, 72, 66, 0.5) 0%,
-    rgba(110, 25, 30, 0.4) 40%,
-    rgba(110, 25, 30, 0.18) 58%,
-    transparent 75%
-  );
-  pointer-events: none;
-}
+
 
 .login-logo-img {
-  position: relative;
-  z-index: 2;
   display: block;
-  height: 44px;
+  height: 40px;
   width: auto;
-  border-radius: 8px;
-  opacity: 1;
-  visibility: visible;
 }
 
 /* 图片加载失败时回退到文字标 */
