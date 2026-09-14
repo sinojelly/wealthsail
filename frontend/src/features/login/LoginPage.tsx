@@ -136,7 +136,8 @@ export default function LoginPage() {
       <div className="login-glow login-glow-a" />
       <div className="login-glow login-glow-b" />
       <div className="light-beam" aria-hidden="true">
-        <i className="lb-glow" />
+        <i className="lb-halo" />
+        <i className="lb-mid" />
         <i className="lb-core" />
       </div>
       <div className="login-shell">
