@@ -415,7 +415,7 @@
 
 .light-beam i {
   position: absolute;
-  offset-path: path("M -320 540 C 60 470, 260 590, 560 545 S 1020 470, 1280 525 S 1620 590, 1900 500");
+  offset-path: path("M -80 560 C 60 430, 260 670, 560 560 S 860 410, 1090 540 S 1230 640, 1360 520");
   offset-rotate: auto;
   offset-distance: 0%;
   border-radius: 999px;
@@ -423,7 +423,7 @@
 
 /* 外层：暗红大晕，最宽最糊最淡 */
 .lb-halo {
-  width: 880px;
+  width: 780px;
   height: 12px;
   margin: -6px -440px;
   background: linear-gradient(
@@ -440,7 +440,7 @@
 
 /* 中层：红光，中心白热偏粉、右端缓慢衰减（拖尾） */
 .lb-mid {
-  width: 760px;
+  width: 660px;
   height: 4.5px;
   margin: -2.25px -380px;
   background: linear-gradient(
@@ -458,7 +458,7 @@
 
 /* 内层：白热高光芯，前段快速升起、后段缓慢衰减 */
 .lb-core {
-  width: 700px;
+  width: 580px;
   height: 1.5px;
   margin: -0.75px -350px;
   background: linear-gradient(
