@@ -135,6 +135,47 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-glow login-glow-a" />
       <div className="login-glow login-glow-b" />
+      <svg
+        className="login-ribbon"
+        viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="ribbon-grad"
+            gradientUnits="userSpaceOnUse"
+            x1="-120"
+            y1="640"
+            x2="1560"
+            y2="430"
+          >
+            <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
+            <stop offset="0.15" stopColor="#8B2E2E" />
+            <stop offset="0.4" stopColor="#E53935" />
+            <stop offset="0.55" stopColor="#FF5252" />
+            <stop offset="0.75" stopColor="#E53935" />
+            <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
+          </linearGradient>
+          <filter
+            id="ribbon-blur"
+            x="-20%"
+            y="-20%"
+            width="140%"
+            height="140%"
+          >
+            <feGaussianBlur stdDeviation="7" />
+          </filter>
+          <path
+            id="ribbon-path"
+            d="M -120 640 C 200 520, 380 700, 620 600 S 980 380, 1180 470 S 1420 620, 1560 430"
+            fill="none"
+            pathLength="100"
+          />
+        </defs>
+        <use href="#ribbon-path" className="ribbon-glow" filter="url(#ribbon-blur)" />
+        <use href="#ribbon-path" className="ribbon-core" />
+      </svg>
       <div className="login-shell">
         <header className="login-hero">
           <div className={`login-logo ${logoFailed ? "logo-failed" : ""}`}>

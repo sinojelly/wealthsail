@@ -404,3 +404,44 @@
     animation: none;
   }
 }
+
+
+/* ── 游走的红色光带：SVG path + dashoffset 动画（纯 SVG/CSS，无 JS） ─── */
+.login-ribbon {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ribbon-glow {
+  stroke: url(#ribbon-grad);
+  stroke-width: 10;
+  stroke-linecap: round;
+  stroke-dasharray: 40 60;
+  opacity: 0.55;
+  animation: ribbon-run 14s linear infinite;
+}
+
+.ribbon-core {
+  stroke: url(#ribbon-grad);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 26 74;
+  animation: ribbon-run 12s linear infinite;
+}
+
+@keyframes ribbon-run {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ribbon-glow,
+  .ribbon-core {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
