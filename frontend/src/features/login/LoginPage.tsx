@@ -135,12 +135,48 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-glow login-glow-a" />
       <div className="login-glow login-glow-b" />
-      <div className="ribbon-light" aria-hidden="true">
-        <i className="rl-halo" />
-        <i className="rl-trail t2" />
-        <i className="rl-trail t1" />
-        <i className="rl-core" />
-      </div>
+      <svg
+        className="login-beam"
+        viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="beam-grad"
+            gradientUnits="userSpaceOnUse"
+            x1="-120"
+            y1="640"
+            x2="1560"
+            y2="430"
+          >
+            <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
+            <stop offset="0.18" stopColor="#8B2E2E" />
+            <stop offset="0.42" stopColor="#E53935" />
+            <stop offset="0.55" stopColor="#FF6B5B" />
+            <stop offset="0.78" stopColor="#E53935" />
+            <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
+          </linearGradient>
+          <filter id="beam-blur-lg" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="10" />
+          </filter>
+          <filter id="beam-blur-md" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" />
+          </filter>
+          <filter id="beam-blur-sm" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur stdDeviation="1" />
+          </filter>
+          <path
+            id="beam-path"
+            d="M -120 640 C 200 520, 380 700, 620 600 S 980 380, 1180 470 S 1420 620, 1560 430"
+            fill="none"
+            pathLength="100"
+          />
+        </defs>
+        <use href="#beam-path" className="beam-halo" filter="url(#beam-blur-lg)" />
+        <use href="#beam-path" className="beam-mid" filter="url(#beam-blur-md)" />
+        <use href="#beam-path" className="beam-core" filter="url(#beam-blur-sm)" />
+      </svg>
       <div className="login-shell">
         <header className="login-hero">
           <div className={`login-logo ${logoFailed ? "logo-failed" : ""}`}>

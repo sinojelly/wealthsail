@@ -406,86 +406,55 @@
 }
 
 
-/* ── 游走的红色光带：多层模糊光珠 + offset-path 沿曲线移动（纯 CSS） ── */
-.ribbon-light {
+/* ── 游走的红色光束：三层同路径笔触（外晕/中晕/亮芯）+ 大幅高斯模糊 ── */
+.login-beam {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
-.ribbon-light i {
-  position: absolute;
-  offset-path: path("M -120 640 C 200 520, 380 700, 620 600 S 980 380, 1180 470 S 1420 620, 1560 430");
-  offset-rotate: auto;
-  offset-distance: 0%;
-  border-radius: 50%;
+.beam-halo {
+  stroke: url(#beam-grad);
+  stroke-width: 16;
+  stroke-linecap: round;
+  stroke-dasharray: 44 56;
+  opacity: 0.3;
+  animation: beam-run 14s linear infinite;
 }
 
-/* 外围红晕（体积感） */
-.rl-halo {
-  width: 340px;
-  height: 160px;
-  margin: -80px -170px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(229, 57, 53, 0.4) 0%,
-    rgba(180, 30, 30, 0.22) 40%,
-    rgba(139, 46, 46, 0) 72%
-  );
-  filter: blur(12px);
-  animation: ribbon-run 12s linear infinite;
+.beam-mid {
+  stroke: url(#beam-grad);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dasharray: 34 66;
+  opacity: 0.65;
+  animation: beam-run 12.5s linear infinite;
+  animation-delay: -0.7s;
 }
 
-/* 拖尾影子：滞后跟随，更淡更糊 */
-.rl-trail {
-  width: 280px;
-  height: 130px;
-  margin: -65px -140px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(229, 57, 53, 0.28) 0%,
-    rgba(139, 46, 46, 0) 70%
-  );
-  filter: blur(18px);
-  animation: ribbon-run 12s linear infinite;
+.beam-core {
+  stroke: url(#beam-grad);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 26 74;
+  opacity: 0.95;
+  animation: beam-run 12s linear infinite;
+  animation-delay: -1.3s;
 }
 
-.rl-trail.t1 {
-  animation-delay: -11.5s;
-  opacity: 0.6;
-}
-
-.rl-trail.t2 {
-  animation-delay: -10.8s;
-  opacity: 0.35;
-  filter: blur(24px);
-}
-
-/* 亮芯：中心接近白热，向外快速过渡到亮红 */
-.rl-core {
-  width: 190px;
-  height: 84px;
-  margin: -42px -95px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(255, 240, 232, 0.95) 0%,
-    rgba(255, 82, 82, 0.85) 22%,
-    rgba(229, 57, 53, 0.5) 50%,
-    rgba(139, 46, 46, 0) 74%
-  );
-  filter: blur(2px);
-  animation: ribbon-run 12s linear infinite;
-}
-
-@keyframes ribbon-run {
+@keyframes beam-run {
   to {
-    offset-distance: 100%;
+    stroke-dashoffset: -100;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ribbon-light i {
+  .beam-halo,
+  .beam-mid,
+  .beam-core {
     animation: none;
-    opacity: 0;
+    stroke-dashoffset: 0;
   }
 }
