@@ -140,15 +140,36 @@
   margin: 0;
 }
 
-/* 金边卡片 */
+/* 金边卡片：渐变描边（左上暗红 -> 右下金） */
 .glass {
+  position: relative;
   background: #1c1c1c;
-  border: 1px solid rgba(201, 162, 39, 0.4);
+  border: 1px solid rgba(201, 162, 39, 0.2);
   border-radius: 20px;
   box-shadow:
     0 0 40px rgba(201, 162, 39, 0.08),
     0 24px 60px rgba(0, 0, 0, 0.55);
   padding: 28px;
+}
+
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  padding: 1.5px;
+  background: linear-gradient(
+    135deg,
+    #D47366 0%,
+    #E9A590 48%,
+    #FDDDC5 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
 
 .login-tabs {
