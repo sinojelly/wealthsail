@@ -415,41 +415,74 @@
   pointer-events: none;
 }
 
-.beam-halo {
+.beam-l1,
+.beam-l2,
+.beam-l3,
+.beam-l4,
+.beam-l5 {
   stroke: url(#beam-grad);
-  stroke-width: 16;
   stroke-linecap: round;
-  stroke-dasharray: 44 56;
-  opacity: 0.3;
-  animation: beam-run 14s linear infinite;
-}
-
-.beam-mid {
-  stroke: url(#beam-grad);
-  stroke-width: 5;
-  stroke-linecap: round;
-  stroke-dasharray: 34 66;
-  opacity: 0.65;
-  animation: beam-run 12.5s linear infinite;
-  animation-delay: -0.7s;
-}
-
-.beam-core {
-  stroke: url(#beam-grad);
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-dasharray: 26 74;
-  opacity: 0.95;
   animation: beam-run 12s linear infinite;
-  animation-delay: -1.3s;
+  stroke-dashoffset: var(--off, 0);
+}
+
+/* 锥形尾：宽度/段长/偏移逐层递减，细层拖在后方形成流星尾 */
+.beam-l1 {
+  stroke-width: 16;
+  stroke-dasharray: 46 54;
+  --off: 0;
+  opacity: 0.3;
+  filter: url(#beam-blur-lg);
+}
+
+.beam-l2 {
+  stroke-width: 10;
+  stroke-dasharray: 40 60;
+  --off: -5;
+  opacity: 0.45;
+  filter: url(#beam-blur-md);
+}
+
+.beam-l3 {
+  stroke-width: 6;
+  stroke-dasharray: 34 66;
+  --off: -10;
+  opacity: 0.65;
+  filter: url(#beam-blur-md);
+}
+
+.beam-l4 {
+  stroke-width: 3.5;
+  stroke-dasharray: 28 72;
+  --off: -15;
+  opacity: 0.85;
+  filter: url(#beam-blur-sm);
+}
+
+.beam-l5 {
+  stroke-width: 1.6;
+  stroke-dasharray: 22 78;
+  --off: -20;
+  opacity: 1;
+  filter: url(#beam-blur-sm);
 }
 
 @keyframes beam-run {
   to {
-    stroke-dashoffset: -100;
+    stroke-dashoffset: calc(var(--off) - 100);
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .beam-l1,
+  .beam-l2,
+  .beam-l3,
+  .beam-l4,
+  .beam-l5 {
+    animation: none;
+    stroke-dashoffset: var(--off, 0);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .beam-halo,
   .beam-mid,

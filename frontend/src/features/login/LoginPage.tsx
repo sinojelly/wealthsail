@@ -153,7 +153,9 @@ export default function LoginPage() {
             <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
             <stop offset="0.18" stopColor="#8B2E2E" />
             <stop offset="0.42" stopColor="#E53935" />
-            <stop offset="0.55" stopColor="#FF6B5B" />
+            <stop offset="0.5" stopColor="#FF5252" />
+            <stop offset="0.56" stopColor="#FFD9D0" />
+            <stop offset="0.64" stopColor="#FF6B5B" />
             <stop offset="0.78" stopColor="#E53935" />
             <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
           </linearGradient>
@@ -173,9 +175,11 @@ export default function LoginPage() {
             pathLength="100"
           />
         </defs>
-        <use href="#beam-path" className="beam-halo" filter="url(#beam-blur-lg)" />
-        <use href="#beam-path" className="beam-mid" filter="url(#beam-blur-md)" />
-        <use href="#beam-path" className="beam-core" filter="url(#beam-blur-sm)" />
+        <use href="#beam-path" className="beam-l1" filter="url(#beam-blur-lg)" />
+        <use href="#beam-path" className="beam-l2" filter="url(#beam-blur-md)" />
+        <use href="#beam-path" className="beam-l3" filter="url(#beam-blur-md)" />
+        <use href="#beam-path" className="beam-l4" filter="url(#beam-blur-sm)" />
+        <use href="#beam-path" className="beam-l5" filter="url(#beam-blur-sm)" />
       </svg>
       <div className="login-shell">
         <header className="login-hero">
