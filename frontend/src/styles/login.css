@@ -406,7 +406,7 @@
 }
 
 
-/* ── 游走的红色光带：细长渐变光条（中心白热 -> 两端透明）+ blur ────── */
+/* ── 游走的红色光带：三层光束（白热细芯/红光中层/暗红外晕）───────────── */
 .light-beam {
   position: absolute;
   inset: 0;
@@ -415,44 +415,61 @@
 
 .light-beam i {
   position: absolute;
-  offset-path: path("M -260 660 C 180 540, 420 720, 680 610 S 1020 380, 1240 480 S 1520 660, 1760 480");
-  offset-rotate: auto;
+  offset-path: path("M -320 520 C 120 460, 340 580, 640 540 S 1080 460, 1340 520 S 1640 580, 1900 480");
+  offset-rotate: 0deg;
   offset-distance: 0%;
   border-radius: 999px;
 }
 
-/* 外层光晕：更宽更糊 */
-.lb-glow {
-  width: 640px;
-  height: 26px;
-  margin: -13px -320px;
+/* 外层：暗红，低透明度，大范围模糊 */
+.lb-halo {
+  width: 860px;
+  height: 10px;
+  margin: -5px -430px;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(229, 57, 53, 0.5) 22%,
-    rgba(255, 82, 82, 0.75) 50%,
-    rgba(229, 57, 53, 0.5) 78%,
+    rgba(150, 35, 30, 0.28) 25%,
+    rgba(180, 45, 38, 0.32) 50%,
+    rgba(150, 35, 30, 0.28) 75%,
     transparent 100%
   );
-  filter: blur(10px);
-  animation: beam-run 11s linear infinite;
+  filter: blur(11px);
+  animation: beam-run 14s linear infinite;
 }
 
-/* 内层亮芯：细且亮，中心白热 */
-.lb-core {
-  width: 560px;
+/* 中层：红色，柔和发光 */
+.lb-mid {
+  width: 740px;
   height: 5px;
-  margin: -2.5px -280px;
+  margin: -2.5px -370px;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255, 82, 82, 0.85) 20%,
-    #fff2f0 50%,
-    rgba(255, 82, 82, 0.85) 80%,
+    rgba(255, 82, 82, 0.55) 25%,
+    rgba(255, 122, 106, 0.78) 50%,
+    rgba(255, 82, 82, 0.55) 75%,
     transparent 100%
   );
-  filter: blur(2.5px);
-  animation: beam-run 11s linear infinite;
+  filter: blur(3px);
+  animation: beam-run 14s linear infinite;
+}
+
+/* 最内层：白色高光核心，极细最亮 */
+.lb-core {
+  width: 680px;
+  height: 2px;
+  margin: -1px -340px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 228, 222, 0.95) 25%,
+    #fff6f4 50%,
+    rgba(255, 220, 214, 0.9) 75%,
+    transparent 100%
+  );
+  filter: blur(1px);
+  animation: beam-run 14s linear infinite;
 }
 
 @keyframes beam-run {
