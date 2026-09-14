@@ -406,111 +406,60 @@
 }
 
 
-/* ── 游走的红色光带：珠链——光珠沿弯曲路径排开，整串呈现曲线形态 ────── */
-.light-beam {
+/* ── 游走的红色光束：一条弯曲发光体（三层同路径笔触，短段游走）───────── */
+.login-beam {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
-.light-beam i {
-  position: absolute;
-  offset-path: path("M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500");
-  offset-rotate: 0deg;
-  offset-distance: 0%;
-  border-radius: 50%;
-  animation: beam-run 14s linear infinite;
+/* 三层完全同参数（同 dash、同速度），仅宽度/模糊/透明度不同——
+   短段叠加成一道连续发光体，无分层感 */
+.beam-l1,
+.beam-l2,
+.beam-l3 {
+  stroke: url(#beam-grad);
+  stroke-linecap: round;
+  fill: none;
+  stroke-dasharray: 24 76;
+  animation: beam-run 12s linear infinite;
 }
 
-/* 头部：白热亮珠 */
-.lb-h1 {
-  width: 110px;
-  height: 38px;
-  margin: -19px -55px;
-  background: radial-gradient(
-    closest-side,
-    rgba(255, 246, 244, 0.95) 0%,
-    rgba(255, 107, 91, 0.8) 45%,
-    rgba(229, 57, 53, 0) 78%
-  );
-  filter: blur(1.5px);
+/* 外层：暗红大范围晕开 */
+.beam-l1 {
+  stroke-width: 13;
+  opacity: 0.32;
+  filter: url(#beam-blur-lg);
 }
 
-/* 珠链：逐颗缩小、变暗、更糊，负延迟依次落后 */
-.lb-h2 {
-  width: 76px;
-  height: 30px;
-  margin: -15px -38px;
-  background: radial-gradient(
-    closest-side,
-    rgba(255, 107, 91, 0.7) 0%,
-    rgba(229, 57, 53, 0) 75%
-  );
-  filter: blur(2.5px);
-  animation-delay: -0.5s;
+/* 中层：红光过渡 */
+.beam-l2 {
+  stroke-width: 4.5;
+  opacity: 0.6;
+  filter: url(#beam-blur-md);
 }
 
-.lb-h3 {
-  width: 60px;
-  height: 24px;
-  margin: -12px -30px;
-  background: radial-gradient(
-    closest-side,
-    rgba(229, 57, 53, 0.5) 0%,
-    rgba(180, 40, 35, 0) 75%
-  );
-  filter: blur(4px);
-  animation-delay: -1s;
-}
-
-.lb-h4 {
-  width: 48px;
-  height: 20px;
-  margin: -10px -24px;
-  background: radial-gradient(
-    closest-side,
-    rgba(180, 40, 35, 0.38) 0%,
-    rgba(150, 30, 26, 0) 75%
-  );
-  filter: blur(6px);
-  animation-delay: -1.5s;
-}
-
-.lb-h5 {
-  width: 38px;
-  height: 16px;
-  margin: -8px -19px;
-  background: radial-gradient(
-    closest-side,
-    rgba(150, 30, 26, 0.26) 0%,
-    rgba(120, 22, 18, 0) 75%
-  );
-  filter: blur(8px);
-  animation-delay: -1.9s;
-}
-
-.lb-h6 {
-  width: 30px;
-  height: 13px;
-  margin: -6.5px -15px;
-  background: radial-gradient(
-    closest-side,
-    rgba(120, 22, 18, 0.16) 0%,
-    rgba(100, 18, 14, 0) 75%
-  );
-  filter: blur(10px);
-  animation-delay: -2.3s;
+/* 内层：白热亮芯，几乎清晰 */
+.beam-l3 {
+  stroke-width: 1.5;
+  opacity: 1;
+  filter: url(#beam-blur-sm);
 }
 
 @keyframes beam-run {
+  from {
+    stroke-dashoffset: -14px;
+  }
   to {
-    offset-distance: 100%;
+    stroke-dashoffset: -114px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .light-beam i {
+  .login-beam path {
     animation: none;
-    opacity: 0;
+    stroke-dashoffset: -14px;
   }
 }
