@@ -21,6 +21,9 @@ import {
 
 type Mode = "login" | "invited-register" | "password-reset";
 const MIN_PASSWORD_LENGTH = 8;
+// 更大的上下振幅让登录页背景中的光束在扫过时保持可见的波浪感。
+const LOGIN_BEAM_PATH =
+  "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
 function consumeResetTokenFromLocation(): string {
   const url = new URL(window.location.href);
@@ -143,7 +146,7 @@ export default function LoginPage() {
       >
         <path
           className="beam-halo"
-          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
           stroke="#8b2e2e"
@@ -151,7 +154,7 @@ export default function LoginPage() {
         />
         <path
           className="beam-glow"
-          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
           stroke="#ff4d4d"
@@ -159,7 +162,7 @@ export default function LoginPage() {
         />
         <path
           className="beam-core"
-          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
           stroke="#ffffff"

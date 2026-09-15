@@ -420,34 +420,36 @@
 .beam-core {
   fill: none;
   stroke-linecap: round;
-  animation: beam-travel 10s linear infinite;
+  animation: beam-travel 11s linear infinite;
 }
 
-/* 三层使用相同的短段：圆形端帽和模糊光晕令两端快速收窄、消散。 */
+/* 较长的暗红段落在核心之后，形成头亮、尾暗的连续扫光。 */
 .beam-halo {
-  stroke-dasharray: 14 86;
+  --beam-offset: 20;
+  stroke-dasharray: 48 52;
   opacity: 0.24;
   filter: blur(6px);
 }
 
 .beam-glow {
-  stroke-dasharray: 14 86;
+  --beam-offset: 6;
+  stroke-dasharray: 34 66;
   opacity: 0.88;
   filter: blur(1px);
 }
 
 /* 最上层不模糊，形成白热而清晰的中心。 */
 .beam-core {
-  stroke-dasharray: 14 86;
+  stroke-dasharray: 28 72;
   opacity: 1;
 }
 
 @keyframes beam-travel {
   from {
-    stroke-dashoffset: 0;
+    stroke-dashoffset: var(--beam-offset, 0);
   }
   to {
-    stroke-dashoffset: -100;
+    stroke-dashoffset: calc(var(--beam-offset, 0) - 100);
   }
 }
 

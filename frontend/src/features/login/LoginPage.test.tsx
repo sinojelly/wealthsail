@@ -73,6 +73,8 @@ it("renders a white-hot beam core inside two red glow layers", () => {
 
   const beam = container.querySelector("svg.login-beam");
   const paths = beam?.querySelectorAll("path");
+  const sweepingCurve =
+    "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
   expect(paths).toHaveLength(3);
   expect(paths?.[0]).toHaveClass("beam-halo");
@@ -84,6 +86,9 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   expect(paths?.[2]).toHaveClass("beam-core");
   expect(paths?.[2]).toHaveAttribute("stroke", "#ffffff");
   expect(paths?.[2]).toHaveAttribute("stroke-width", "0.5");
+  expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
+  expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
+  expect(paths?.[2]).toHaveAttribute("d", sweepingCurve);
 });
 
 it("consumes a reset token from the fragment and immediately scrubs the URL", () => {
