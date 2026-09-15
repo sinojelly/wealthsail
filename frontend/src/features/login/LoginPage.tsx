@@ -153,7 +153,7 @@ export default function LoginPage() {
             <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
             <stop offset="0.15" stopColor="#8B2E2E" />
             <stop offset="0.42" stopColor="#C23030" />
-            <stop offset="0.52" stopColor="#FF5252" />
+            <stop offset="0.52" stopColor="#FF4D4D" />
             <stop offset="0.6" stopColor="#FFC9C0" />
             <stop offset="0.68" stopColor="#FF5252" />
             <stop offset="0.85" stopColor="#C23030" />
@@ -167,6 +167,9 @@ export default function LoginPage() {
           </filter>
           <filter id="beam-blur-sm" x="-10%" y="-10%" width="120%" height="120%">
             <feGaussianBlur stdDeviation="1.2" />
+          </filter>
+          <filter id="beam-blur-xs" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur stdDeviation="2" />
           </filter>
         </defs>
         {["beam-l1", "beam-l2", "beam-l3", "beam-l4", "beam-l5"].map((cls) => (
