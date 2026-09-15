@@ -149,8 +149,8 @@ export default function LoginPage() {
           <linearGradient
             id="beam-scan-halo-gradient"
             gradientUnits="userSpaceOnUse"
-            x1="-520"
-            x2="300"
+            x1="-640"
+            x2="360"
             y1="0"
             y2="0"
           >
@@ -171,8 +171,8 @@ export default function LoginPage() {
           <linearGradient
             id="beam-scan-core-gradient"
             gradientUnits="userSpaceOnUse"
-            x1="-520"
-            x2="300"
+            x1="-640"
+            x2="360"
             y1="0"
             y2="0"
           >
@@ -197,14 +197,14 @@ export default function LoginPage() {
           d={LOGIN_BEAM_PATH}
           fill="none"
           stroke="url(#beam-scan-halo-gradient)"
-          strokeWidth="5"
+          strokeWidth="6"
         />
         <path
           className="beam-scan-core"
           d={LOGIN_BEAM_PATH}
           fill="none"
           stroke="url(#beam-scan-core-gradient)"
-          strokeWidth="1"
+          strokeWidth="1.2"
         />
       </svg>
       <div className="login-shell">

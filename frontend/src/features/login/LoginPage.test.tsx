@@ -74,6 +74,8 @@ it("renders only the red-white scanning beam without a static red track", () => 
   const beam = container.querySelector("svg.login-beam");
   const paths = beam?.querySelectorAll("path");
   const gradients = beam?.querySelectorAll("linearGradient");
+  const haloGradient = beam?.querySelector("#beam-scan-halo-gradient");
+  const coreGradient = beam?.querySelector("#beam-scan-core-gradient");
   const gradientMotion = beam?.querySelectorAll(
     'animateTransform[attributeName="gradientTransform"]',
   );
@@ -83,16 +85,20 @@ it("renders only the red-white scanning beam without a static red track", () => 
   expect(paths).toHaveLength(2);
   expect(paths?.[0]).toHaveClass("beam-scan-halo");
   expect(paths?.[0]).toHaveAttribute("stroke", "url(#beam-scan-halo-gradient)");
-  expect(paths?.[0]).toHaveAttribute("stroke-width", "5");
+  expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
   expect(paths?.[1]).toHaveClass("beam-scan-core");
   expect(paths?.[1]).toHaveAttribute("stroke", "url(#beam-scan-core-gradient)");
-  expect(paths?.[1]).toHaveAttribute("stroke-width", "1");
+  expect(paths?.[1]).toHaveAttribute("stroke-width", "1.2");
   expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
   expect(beam?.querySelector(".beam-base-halo")).not.toBeInTheDocument();
   expect(beam?.querySelector(".beam-base-core")).not.toBeInTheDocument();
   expect(beam?.querySelector(".beam-highlight")).not.toBeInTheDocument();
   expect(gradients).toHaveLength(2);
+  expect(haloGradient).toHaveAttribute("x1", "-640");
+  expect(haloGradient).toHaveAttribute("x2", "360");
+  expect(coreGradient).toHaveAttribute("x1", "-640");
+  expect(coreGradient).toHaveAttribute("x2", "360");
   expect(gradientMotion).toHaveLength(2);
   expect(gradientMotion?.[0]).toHaveAttribute("dur", "8s");
   expect(gradientMotion?.[0]).toHaveAttribute("repeatCount", "indefinite");
