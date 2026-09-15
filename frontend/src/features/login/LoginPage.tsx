@@ -135,11 +135,50 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-glow login-glow-a" />
       <div className="login-glow login-glow-b" />
-      <div className="light-beam" aria-hidden="true">
-        <i className="lb-halo" />
-        <i className="lb-mid" />
-        <i className="lb-core" />
-      </div>
+      <svg
+        className="login-beam"
+        viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="beam-grad"
+            gradientUnits="userSpaceOnUse"
+            x1="-150"
+            y1="580"
+            x2="1680"
+            y2="500"
+          >
+            <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
+            <stop offset="0.15" stopColor="#8B2E2E" />
+            <stop offset="0.42" stopColor="#C23030" />
+            <stop offset="0.52" stopColor="#FF5252" />
+            <stop offset="0.6" stopColor="#FFC9C0" />
+            <stop offset="0.68" stopColor="#FF5252" />
+            <stop offset="0.85" stopColor="#C23030" />
+            <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
+          </linearGradient>
+          <filter id="beam-blur-lg" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="12" />
+          </filter>
+          <filter id="beam-blur-md" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="5" />
+          </filter>
+          <filter id="beam-blur-sm" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur stdDeviation="1.2" />
+          </filter>
+        </defs>
+        {["beam-l1", "beam-l2", "beam-l3", "beam-l4", "beam-l5"].map((cls) => (
+          <path
+            key={cls}
+            className={cls}
+            d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+            fill="none"
+            pathLength={100}
+          />
+        ))}
+      </svg>
       <div className="login-shell">
         <header className="login-hero">
           <div className={`login-logo ${logoFailed ? "logo-failed" : ""}`}>
