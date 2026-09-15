@@ -144,12 +144,78 @@ export default function LoginPage() {
         preserveAspectRatio="xMidYMid slice"
         aria-hidden="true"
       >
+        <defs>
+          {/* 渐变随光束横向推进：尾部先透明，再过渡到暗红、亮红与白热头部。 */}
+          <linearGradient
+            id="beam-tail-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="-760"
+            x2="520"
+            y1="0"
+            y2="0"
+          >
+            <stop offset="0" stopColor="#8b2e2e" stopOpacity="0" />
+            <stop offset="0.56" stopColor="#8b2e2e" stopOpacity="0.04" />
+            <stop offset="0.88" stopColor="#8b2e2e" stopOpacity="0.3" />
+            <stop offset="1" stopColor="#ff4d4d" stopOpacity="0.62" />
+            <animateTransform
+              attributeName="gradientTransform"
+              dur="11s"
+              from="0 0"
+              repeatCount="indefinite"
+              to="1900 0"
+              type="translate"
+            />
+          </linearGradient>
+          <linearGradient
+            id="beam-body-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="-420"
+            x2="520"
+            y1="0"
+            y2="0"
+          >
+            <stop offset="0" stopColor="#8b2e2e" stopOpacity="0" />
+            <stop offset="0.6" stopColor="#ff4d4d" stopOpacity="0.18" />
+            <stop offset="0.9" stopColor="#ff4d4d" stopOpacity="0.88" />
+            <stop offset="1" stopColor="#ff6b5f" stopOpacity="1" />
+            <animateTransform
+              attributeName="gradientTransform"
+              dur="11s"
+              from="0 0"
+              repeatCount="indefinite"
+              to="1900 0"
+              type="translate"
+            />
+          </linearGradient>
+          <linearGradient
+            id="beam-core-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="-230"
+            x2="520"
+            y1="0"
+            y2="0"
+          >
+            <stop offset="0" stopColor="#ff4d4d" stopOpacity="0" />
+            <stop offset="0.72" stopColor="#ff4d4d" stopOpacity="0.26" />
+            <stop offset="0.93" stopColor="#ffffff" stopOpacity="0.95" />
+            <stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+            <animateTransform
+              attributeName="gradientTransform"
+              dur="11s"
+              from="0 0"
+              repeatCount="indefinite"
+              to="1900 0"
+              type="translate"
+            />
+          </linearGradient>
+        </defs>
         <path
           className="beam-halo"
           d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
-          stroke="#8b2e2e"
+          stroke="url(#beam-tail-gradient)"
           strokeWidth="6"
         >
           <animate
@@ -165,7 +231,7 @@ export default function LoginPage() {
           d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
-          stroke="#ff4d4d"
+          stroke="url(#beam-body-gradient)"
           strokeWidth="2"
         >
           <animate
@@ -181,7 +247,7 @@ export default function LoginPage() {
           d={LOGIN_BEAM_PATH}
           fill="none"
           pathLength="100"
-          stroke="#ffffff"
+          stroke="url(#beam-core-gradient)"
           strokeWidth="0.5"
         >
           <animate

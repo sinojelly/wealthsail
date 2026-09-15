@@ -76,18 +76,22 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   const motion = beam?.querySelectorAll(
     'animate[attributeName="stroke-dashoffset"]',
   );
+  const gradients = beam?.querySelectorAll("linearGradient");
+  const gradientMotion = beam?.querySelectorAll(
+    'animateTransform[attributeName="gradientTransform"]',
+  );
   const sweepingCurve =
     "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
   expect(paths).toHaveLength(3);
   expect(paths?.[0]).toHaveClass("beam-halo");
-  expect(paths?.[0]).toHaveAttribute("stroke", "#8b2e2e");
+  expect(paths?.[0]).toHaveAttribute("stroke", "url(#beam-tail-gradient)");
   expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
   expect(paths?.[1]).toHaveClass("beam-glow");
-  expect(paths?.[1]).toHaveAttribute("stroke", "#ff4d4d");
+  expect(paths?.[1]).toHaveAttribute("stroke", "url(#beam-body-gradient)");
   expect(paths?.[1]).toHaveAttribute("stroke-width", "2");
   expect(paths?.[2]).toHaveClass("beam-core");
-  expect(paths?.[2]).toHaveAttribute("stroke", "#ffffff");
+  expect(paths?.[2]).toHaveAttribute("stroke", "url(#beam-core-gradient)");
   expect(paths?.[2]).toHaveAttribute("stroke-width", "0.5");
   expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
@@ -101,6 +105,10 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   expect(motion?.[2]).toHaveAttribute("to", "-100");
   expect(motion?.[2]).toHaveAttribute("dur", "11s");
   expect(motion?.[2]).toHaveAttribute("repeatCount", "indefinite");
+  expect(gradients).toHaveLength(3);
+  expect(gradientMotion).toHaveLength(3);
+  expect(gradientMotion?.[0]).toHaveAttribute("dur", "11s");
+  expect(gradientMotion?.[0]).toHaveAttribute("repeatCount", "indefinite");
 });
 
 it("consumes a reset token from the fragment and immediately scrubs the URL", () => {
