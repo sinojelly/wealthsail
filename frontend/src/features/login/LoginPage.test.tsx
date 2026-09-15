@@ -64,7 +64,7 @@ it("offers password reset but not public self registration", () => {
   ).not.toBeInTheDocument();
 });
 
-it("renders a three-layer animated red beam with a crisp core", () => {
+it("renders a white-hot beam core inside two red glow layers", () => {
   const { container } = render(
     <MemoryRouter>
       <LoginPage />
@@ -77,13 +77,13 @@ it("renders a three-layer animated red beam with a crisp core", () => {
   expect(paths).toHaveLength(3);
   expect(paths?.[0]).toHaveClass("beam-halo");
   expect(paths?.[0]).toHaveAttribute("stroke", "#8b2e2e");
-  expect(paths?.[0]).toHaveAttribute("stroke-width", "10");
+  expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
   expect(paths?.[1]).toHaveClass("beam-glow");
   expect(paths?.[1]).toHaveAttribute("stroke", "#ff4d4d");
-  expect(paths?.[1]).toHaveAttribute("stroke-width", "4");
+  expect(paths?.[1]).toHaveAttribute("stroke-width", "2");
   expect(paths?.[2]).toHaveClass("beam-core");
-  expect(paths?.[2]).toHaveAttribute("stroke", "#ff4d4d");
-  expect(paths?.[2]).toHaveAttribute("stroke-width", "1");
+  expect(paths?.[2]).toHaveAttribute("stroke", "#ffffff");
+  expect(paths?.[2]).toHaveAttribute("stroke-width", "0.5");
 });
 
 it("consumes a reset token from the fragment and immediately scrubs the URL", () => {

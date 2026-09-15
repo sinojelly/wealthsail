@@ -147,7 +147,7 @@ export default function LoginPage() {
           fill="none"
           pathLength="100"
           stroke="#8b2e2e"
-          strokeWidth="10"
+          strokeWidth="6"
         />
         <path
           className="beam-glow"
@@ -155,15 +155,15 @@ export default function LoginPage() {
           fill="none"
           pathLength="100"
           stroke="#ff4d4d"
-          strokeWidth="4"
+          strokeWidth="2"
         />
         <path
           className="beam-core"
           d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
           fill="none"
           pathLength="100"
-          stroke="#ff4d4d"
-          strokeWidth="1"
+          stroke="#ffffff"
+          strokeWidth="0.5"
         />
       </svg>
       <div className="login-shell">
