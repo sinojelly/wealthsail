@@ -406,7 +406,7 @@
 }
 
 
-/* ── 单束游走红光：两层短段光晕托住白热核心，不使用渐变光带 ── */
+/* ── 一条红色光轨：扫描渐变只改变局部亮度，不生成第二条线 ── */
 .login-beam {
   position: absolute;
   inset: 0;
@@ -415,38 +415,32 @@
   pointer-events: none;
 }
 
-.beam-halo,
-.beam-glow,
-.beam-core {
+.beam-base-halo,
+.beam-base-core,
+.beam-scan-halo,
+.beam-scan-core {
   fill: none;
   stroke-linecap: round;
 }
 
-/* 较长的暗红段落在核心之后，形成头亮、尾暗的连续扫光。 */
-.beam-halo {
-  stroke-dasharray: 48 52;
-  opacity: 0.24;
+/* 整条基线保持暗红，先建立唯一、连续的光束轨道。 */
+.beam-base-halo {
+  opacity: 0.28;
   filter: blur(6px);
 }
 
-.beam-glow {
-  stroke-dasharray: 34 66;
-  opacity: 0.88;
-  filter: blur(1px);
+.beam-base-core {
+  opacity: 0.58;
+  filter: drop-shadow(0 0 1px rgba(139, 46, 46, 0.72));
 }
 
-/* 最上层不模糊，形成白热而清晰的中心。 */
-.beam-core {
-  stroke-dasharray: 28 72;
-  opacity: 1;
+/* 扫描层在同一条光轨中把经过位置提亮为红白能量点。 */
+.beam-scan-halo {
+  filter: blur(4px);
 }
 
-/* 一根极细的暖白高光沿既有红色光束扫过，光晕仅服务于这段高光。 */
-.beam-highlight {
-  fill: none;
-  stroke-dasharray: 7 93;
-  stroke-linecap: round;
+.beam-scan-core {
   filter:
-    drop-shadow(0 0 1px rgba(255, 248, 236, 0.95))
-    drop-shadow(0 0 4px rgba(255, 77, 77, 0.9));
+    drop-shadow(0 0 1px rgba(255, 247, 238, 0.95))
+    drop-shadow(0 0 4px rgba(255, 77, 77, 0.86));
 }

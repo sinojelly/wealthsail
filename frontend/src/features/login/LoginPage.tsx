@@ -145,22 +145,23 @@ export default function LoginPage() {
         aria-hidden="true"
       >
         <defs>
-          {/* 渐变随光束横向推进：尾部先透明，再过渡到暗红、亮红与白热头部。 */}
+          {/* 扫描亮度在同一轨道上前进：后方暗红、前沿亮红，末端白热。 */}
           <linearGradient
-            id="beam-tail-gradient"
+            id="beam-scan-halo-gradient"
             gradientUnits="userSpaceOnUse"
-            x1="-760"
-            x2="520"
+            x1="-520"
+            x2="300"
             y1="0"
             y2="0"
           >
             <stop offset="0" stopColor="#8b2e2e" stopOpacity="0" />
-            <stop offset="0.56" stopColor="#8b2e2e" stopOpacity="0.04" />
-            <stop offset="0.88" stopColor="#8b2e2e" stopOpacity="0.3" />
-            <stop offset="1" stopColor="#ff4d4d" stopOpacity="0.62" />
+            <stop offset="0.58" stopColor="#8b2e2e" stopOpacity="0" />
+            <stop offset="0.78" stopColor="#8b2e2e" stopOpacity="0.22" />
+            <stop offset="0.92" stopColor="#ff4d4d" stopOpacity="0.82" />
+            <stop offset="1" stopColor="#ff4d4d" stopOpacity="0" />
             <animateTransform
               attributeName="gradientTransform"
-              dur="11s"
+              dur="8s"
               from="0 0"
               repeatCount="indefinite"
               to="1900 0"
@@ -168,41 +169,21 @@ export default function LoginPage() {
             />
           </linearGradient>
           <linearGradient
-            id="beam-body-gradient"
+            id="beam-scan-core-gradient"
             gradientUnits="userSpaceOnUse"
-            x1="-420"
-            x2="520"
-            y1="0"
-            y2="0"
-          >
-            <stop offset="0" stopColor="#8b2e2e" stopOpacity="0" />
-            <stop offset="0.6" stopColor="#ff4d4d" stopOpacity="0.18" />
-            <stop offset="0.9" stopColor="#ff4d4d" stopOpacity="0.88" />
-            <stop offset="1" stopColor="#ff6b5f" stopOpacity="1" />
-            <animateTransform
-              attributeName="gradientTransform"
-              dur="11s"
-              from="0 0"
-              repeatCount="indefinite"
-              to="1900 0"
-              type="translate"
-            />
-          </linearGradient>
-          <linearGradient
-            id="beam-core-gradient"
-            gradientUnits="userSpaceOnUse"
-            x1="-230"
-            x2="520"
+            x1="-520"
+            x2="300"
             y1="0"
             y2="0"
           >
             <stop offset="0" stopColor="#ff4d4d" stopOpacity="0" />
-            <stop offset="0.72" stopColor="#ff4d4d" stopOpacity="0.26" />
-            <stop offset="0.93" stopColor="#ffffff" stopOpacity="0.95" />
-            <stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+            <stop offset="0.7" stopColor="#ff4d4d" stopOpacity="0.08" />
+            <stop offset="0.87" stopColor="#ff4d4d" stopOpacity="0.72" />
+            <stop offset="0.96" stopColor="#fff7ee" stopOpacity="1" />
+            <stop offset="1" stopColor="#fff7ee" stopOpacity="0" />
             <animateTransform
               attributeName="gradientTransform"
-              dur="11s"
+              dur="8s"
               from="0 0"
               repeatCount="indefinite"
               to="1900 0"
@@ -210,71 +191,36 @@ export default function LoginPage() {
             />
           </linearGradient>
         </defs>
+        {/* 静态基线让整条曲线始终是一根红色光轨。 */}
         <path
-          className="beam-halo"
+          className="beam-base-halo"
           d={LOGIN_BEAM_PATH}
           fill="none"
-          pathLength="100"
-          stroke="url(#beam-tail-gradient)"
+          stroke="#8b2e2e"
           strokeWidth="6"
-        >
-          <animate
-            attributeName="stroke-dashoffset"
-            dur="11s"
-            from="20"
-            repeatCount="indefinite"
-            to="-80"
-          />
-        </path>
+        />
         <path
-          className="beam-glow"
+          className="beam-base-core"
           d={LOGIN_BEAM_PATH}
           fill="none"
-          pathLength="100"
-          stroke="url(#beam-body-gradient)"
-          strokeWidth="2"
-        >
-          <animate
-            attributeName="stroke-dashoffset"
-            dur="11s"
-            from="6"
-            repeatCount="indefinite"
-            to="-94"
-          />
-        </path>
+          stroke="#8b2e2e"
+          strokeWidth="1"
+        />
+        {/* 两层扫描光严格共享同一路径和时钟，亮起的只是同一条红线的局部。 */}
         <path
-          className="beam-core"
+          className="beam-scan-halo"
           d={LOGIN_BEAM_PATH}
           fill="none"
-          pathLength="100"
-          stroke="url(#beam-core-gradient)"
-          strokeWidth="0.5"
-        >
-          <animate
-            attributeName="stroke-dashoffset"
-            dur="11s"
-            from="0"
-            repeatCount="indefinite"
-            to="-100"
-          />
-        </path>
-        {/* 独立的细高光只扫过短路径段，不改变底层红色光束的外形。 */}
+          stroke="url(#beam-scan-halo-gradient)"
+          strokeWidth="5"
+        />
         <path
-          className="beam-highlight"
+          className="beam-scan-core"
           d={LOGIN_BEAM_PATH}
           fill="none"
-          pathLength="100"
-          stroke="#fff8ec"
-          strokeWidth="0.8"
-        >
-          <animate
-            attributeName="stroke-dashoffset"
-            dur="5.5s"
-            from="0"
-            repeatCount="indefinite"
-            to="-100"
-          />
-        </path>
+          stroke="url(#beam-scan-core-gradient)"
+          strokeWidth="1"
+        />
       </svg>
       <div className="login-shell">
         <header className="login-hero">

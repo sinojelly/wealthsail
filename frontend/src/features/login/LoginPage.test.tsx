@@ -64,7 +64,7 @@ it("offers password reset but not public self registration", () => {
   ).not.toBeInTheDocument();
 });
 
-it("renders a white-hot beam core inside two red glow layers", () => {
+it("renders one red beam track with a synchronized brightness scan", () => {
   const { container } = render(
     <MemoryRouter>
       <LoginPage />
@@ -73,9 +73,6 @@ it("renders a white-hot beam core inside two red glow layers", () => {
 
   const beam = container.querySelector("svg.login-beam");
   const paths = beam?.querySelectorAll("path");
-  const motion = beam?.querySelectorAll(
-    'animate[attributeName="stroke-dashoffset"]',
-  );
   const gradients = beam?.querySelectorAll("linearGradient");
   const gradientMotion = beam?.querySelectorAll(
     'animateTransform[attributeName="gradientTransform"]',
@@ -84,37 +81,26 @@ it("renders a white-hot beam core inside two red glow layers", () => {
     "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
   expect(paths).toHaveLength(4);
-  expect(paths?.[0]).toHaveClass("beam-halo");
-  expect(paths?.[0]).toHaveAttribute("stroke", "url(#beam-tail-gradient)");
+  expect(paths?.[0]).toHaveClass("beam-base-halo");
+  expect(paths?.[0]).toHaveAttribute("stroke", "#8b2e2e");
   expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
-  expect(paths?.[1]).toHaveClass("beam-glow");
-  expect(paths?.[1]).toHaveAttribute("stroke", "url(#beam-body-gradient)");
-  expect(paths?.[1]).toHaveAttribute("stroke-width", "2");
-  expect(paths?.[2]).toHaveClass("beam-core");
-  expect(paths?.[2]).toHaveAttribute("stroke", "url(#beam-core-gradient)");
-  expect(paths?.[2]).toHaveAttribute("stroke-width", "0.5");
-  expect(paths?.[3]).toHaveClass("beam-highlight");
-  expect(paths?.[3]).toHaveAttribute("stroke", "#fff8ec");
-  expect(paths?.[3]).toHaveAttribute("stroke-width", "0.8");
+  expect(paths?.[1]).toHaveClass("beam-base-core");
+  expect(paths?.[1]).toHaveAttribute("stroke", "#8b2e2e");
+  expect(paths?.[1]).toHaveAttribute("stroke-width", "1");
+  expect(paths?.[2]).toHaveClass("beam-scan-halo");
+  expect(paths?.[2]).toHaveAttribute("stroke", "url(#beam-scan-halo-gradient)");
+  expect(paths?.[2]).toHaveAttribute("stroke-width", "5");
+  expect(paths?.[3]).toHaveClass("beam-scan-core");
+  expect(paths?.[3]).toHaveAttribute("stroke", "url(#beam-scan-core-gradient)");
+  expect(paths?.[3]).toHaveAttribute("stroke-width", "1");
   expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[2]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[3]).toHaveAttribute("d", sweepingCurve);
-  expect(motion).toHaveLength(4);
-  expect(motion?.[0]).toHaveAttribute("from", "20");
-  expect(motion?.[0]).toHaveAttribute("to", "-80");
-  expect(motion?.[1]).toHaveAttribute("from", "6");
-  expect(motion?.[1]).toHaveAttribute("to", "-94");
-  expect(motion?.[2]).toHaveAttribute("from", "0");
-  expect(motion?.[2]).toHaveAttribute("to", "-100");
-  expect(motion?.[2]).toHaveAttribute("dur", "11s");
-  expect(motion?.[2]).toHaveAttribute("repeatCount", "indefinite");
-  expect(motion?.[3]).toHaveAttribute("dur", "5.5s");
-  expect(motion?.[3]).toHaveAttribute("from", "0");
-  expect(motion?.[3]).toHaveAttribute("to", "-100");
-  expect(gradients).toHaveLength(3);
-  expect(gradientMotion).toHaveLength(3);
-  expect(gradientMotion?.[0]).toHaveAttribute("dur", "11s");
+  expect(beam?.querySelector(".beam-highlight")).not.toBeInTheDocument();
+  expect(gradients).toHaveLength(2);
+  expect(gradientMotion).toHaveLength(2);
+  expect(gradientMotion?.[0]).toHaveAttribute("dur", "8s");
   expect(gradientMotion?.[0]).toHaveAttribute("repeatCount", "indefinite");
 });
 
