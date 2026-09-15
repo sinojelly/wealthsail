@@ -151,7 +151,15 @@ export default function LoginPage() {
           pathLength="100"
           stroke="#8b2e2e"
           strokeWidth="6"
-        />
+        >
+          <animate
+            attributeName="stroke-dashoffset"
+            dur="11s"
+            from="20"
+            repeatCount="indefinite"
+            to="-80"
+          />
+        </path>
         <path
           className="beam-glow"
           d={LOGIN_BEAM_PATH}
@@ -159,7 +167,15 @@ export default function LoginPage() {
           pathLength="100"
           stroke="#ff4d4d"
           strokeWidth="2"
-        />
+        >
+          <animate
+            attributeName="stroke-dashoffset"
+            dur="11s"
+            from="6"
+            repeatCount="indefinite"
+            to="-94"
+          />
+        </path>
         <path
           className="beam-core"
           d={LOGIN_BEAM_PATH}
@@ -167,7 +183,15 @@ export default function LoginPage() {
           pathLength="100"
           stroke="#ffffff"
           strokeWidth="0.5"
-        />
+        >
+          <animate
+            attributeName="stroke-dashoffset"
+            dur="11s"
+            from="0"
+            repeatCount="indefinite"
+            to="-100"
+          />
+        </path>
       </svg>
       <div className="login-shell">
         <header className="login-hero">

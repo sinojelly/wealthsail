@@ -420,19 +420,16 @@
 .beam-core {
   fill: none;
   stroke-linecap: round;
-  animation: beam-travel 11s linear infinite;
 }
 
 /* 较长的暗红段落在核心之后，形成头亮、尾暗的连续扫光。 */
 .beam-halo {
-  --beam-offset: 20;
   stroke-dasharray: 48 52;
   opacity: 0.24;
   filter: blur(6px);
 }
 
 .beam-glow {
-  --beam-offset: 6;
   stroke-dasharray: 34 66;
   opacity: 0.88;
   filter: blur(1px);
@@ -442,21 +439,4 @@
 .beam-core {
   stroke-dasharray: 28 72;
   opacity: 1;
-}
-
-@keyframes beam-travel {
-  from {
-    stroke-dashoffset: var(--beam-offset, 0);
-  }
-  to {
-    stroke-dashoffset: calc(var(--beam-offset, 0) - 100);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .beam-halo,
-  .beam-glow,
-  .beam-core {
-    animation: none;
-  }
 }
