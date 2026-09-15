@@ -258,6 +258,23 @@ export default function LoginPage() {
             to="-100"
           />
         </path>
+        {/* 独立的细高光只扫过短路径段，不改变底层红色光束的外形。 */}
+        <path
+          className="beam-highlight"
+          d={LOGIN_BEAM_PATH}
+          fill="none"
+          pathLength="100"
+          stroke="#fff8ec"
+          strokeWidth="0.8"
+        >
+          <animate
+            attributeName="stroke-dashoffset"
+            dur="5.5s"
+            from="0"
+            repeatCount="indefinite"
+            to="-100"
+          />
+        </path>
       </svg>
       <div className="login-shell">
         <header className="login-hero">

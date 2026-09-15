@@ -83,7 +83,7 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   const sweepingCurve =
     "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
-  expect(paths).toHaveLength(3);
+  expect(paths).toHaveLength(4);
   expect(paths?.[0]).toHaveClass("beam-halo");
   expect(paths?.[0]).toHaveAttribute("stroke", "url(#beam-tail-gradient)");
   expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
@@ -93,10 +93,14 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   expect(paths?.[2]).toHaveClass("beam-core");
   expect(paths?.[2]).toHaveAttribute("stroke", "url(#beam-core-gradient)");
   expect(paths?.[2]).toHaveAttribute("stroke-width", "0.5");
+  expect(paths?.[3]).toHaveClass("beam-highlight");
+  expect(paths?.[3]).toHaveAttribute("stroke", "#fff8ec");
+  expect(paths?.[3]).toHaveAttribute("stroke-width", "0.8");
   expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[2]).toHaveAttribute("d", sweepingCurve);
-  expect(motion).toHaveLength(3);
+  expect(paths?.[3]).toHaveAttribute("d", sweepingCurve);
+  expect(motion).toHaveLength(4);
   expect(motion?.[0]).toHaveAttribute("from", "20");
   expect(motion?.[0]).toHaveAttribute("to", "-80");
   expect(motion?.[1]).toHaveAttribute("from", "6");
@@ -105,6 +109,9 @@ it("renders a white-hot beam core inside two red glow layers", () => {
   expect(motion?.[2]).toHaveAttribute("to", "-100");
   expect(motion?.[2]).toHaveAttribute("dur", "11s");
   expect(motion?.[2]).toHaveAttribute("repeatCount", "indefinite");
+  expect(motion?.[3]).toHaveAttribute("dur", "5.5s");
+  expect(motion?.[3]).toHaveAttribute("from", "0");
+  expect(motion?.[3]).toHaveAttribute("to", "-100");
   expect(gradients).toHaveLength(3);
   expect(gradientMotion).toHaveLength(3);
   expect(gradientMotion?.[0]).toHaveAttribute("dur", "11s");

@@ -440,3 +440,13 @@
   stroke-dasharray: 28 72;
   opacity: 1;
 }
+
+/* 一根极细的暖白高光沿既有红色光束扫过，光晕仅服务于这段高光。 */
+.beam-highlight {
+  fill: none;
+  stroke-dasharray: 7 93;
+  stroke-linecap: round;
+  filter:
+    drop-shadow(0 0 1px rgba(255, 248, 236, 0.95))
+    drop-shadow(0 0 4px rgba(255, 77, 77, 0.9));
+}
