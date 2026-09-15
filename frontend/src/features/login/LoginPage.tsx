@@ -191,22 +191,7 @@ export default function LoginPage() {
             />
           </linearGradient>
         </defs>
-        {/* 静态基线让整条曲线始终是一根红色光轨。 */}
-        <path
-          className="beam-base-halo"
-          d={LOGIN_BEAM_PATH}
-          fill="none"
-          stroke="#8b2e2e"
-          strokeWidth="6"
-        />
-        <path
-          className="beam-base-core"
-          d={LOGIN_BEAM_PATH}
-          fill="none"
-          stroke="#8b2e2e"
-          strokeWidth="1"
-        />
-        {/* 两层扫描光严格共享同一路径和时钟，亮起的只是同一条红线的局部。 */}
+        {/* 两层扫描光严格共享同一路径和时钟：红色光晕托住暖白核心。 */}
         <path
           className="beam-scan-halo"
           d={LOGIN_BEAM_PATH}

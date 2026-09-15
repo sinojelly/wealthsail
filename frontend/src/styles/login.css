@@ -406,7 +406,7 @@
 }
 
 
-/* ── 一条红色光轨：扫描渐变只改变局部亮度，不生成第二条线 ── */
+/* ── 无底轨的红白扫描光束：只在扫过曲线时出现 ── */
 .login-beam {
   position: absolute;
   inset: 0;
@@ -415,26 +415,13 @@
   pointer-events: none;
 }
 
-.beam-base-halo,
-.beam-base-core,
 .beam-scan-halo,
 .beam-scan-core {
   fill: none;
   stroke-linecap: round;
 }
 
-/* 整条基线保持暗红，先建立唯一、连续的光束轨道。 */
-.beam-base-halo {
-  opacity: 0.28;
-  filter: blur(6px);
-}
-
-.beam-base-core {
-  opacity: 0.58;
-  filter: drop-shadow(0 0 1px rgba(139, 46, 46, 0.72));
-}
-
-/* 扫描层在同一条光轨中把经过位置提亮为红白能量点。 */
+/* 扫描层在原有曲线上形成红白能量点，不保留静态底轨。 */
 .beam-scan-halo {
   filter: blur(4px);
 }

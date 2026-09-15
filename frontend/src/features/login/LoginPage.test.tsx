@@ -64,7 +64,7 @@ it("offers password reset but not public self registration", () => {
   ).not.toBeInTheDocument();
 });
 
-it("renders one red beam track with a synchronized brightness scan", () => {
+it("renders only the red-white scanning beam without a static red track", () => {
   const { container } = render(
     <MemoryRouter>
       <LoginPage />
@@ -80,23 +80,17 @@ it("renders one red beam track with a synchronized brightness scan", () => {
   const sweepingCurve =
     "M -180 620 C 80 230, 340 790, 650 560 C 920 270, 1110 780, 1360 500 C 1510 330, 1590 610, 1720 470";
 
-  expect(paths).toHaveLength(4);
-  expect(paths?.[0]).toHaveClass("beam-base-halo");
-  expect(paths?.[0]).toHaveAttribute("stroke", "#8b2e2e");
-  expect(paths?.[0]).toHaveAttribute("stroke-width", "6");
-  expect(paths?.[1]).toHaveClass("beam-base-core");
-  expect(paths?.[1]).toHaveAttribute("stroke", "#8b2e2e");
+  expect(paths).toHaveLength(2);
+  expect(paths?.[0]).toHaveClass("beam-scan-halo");
+  expect(paths?.[0]).toHaveAttribute("stroke", "url(#beam-scan-halo-gradient)");
+  expect(paths?.[0]).toHaveAttribute("stroke-width", "5");
+  expect(paths?.[1]).toHaveClass("beam-scan-core");
+  expect(paths?.[1]).toHaveAttribute("stroke", "url(#beam-scan-core-gradient)");
   expect(paths?.[1]).toHaveAttribute("stroke-width", "1");
-  expect(paths?.[2]).toHaveClass("beam-scan-halo");
-  expect(paths?.[2]).toHaveAttribute("stroke", "url(#beam-scan-halo-gradient)");
-  expect(paths?.[2]).toHaveAttribute("stroke-width", "5");
-  expect(paths?.[3]).toHaveClass("beam-scan-core");
-  expect(paths?.[3]).toHaveAttribute("stroke", "url(#beam-scan-core-gradient)");
-  expect(paths?.[3]).toHaveAttribute("stroke-width", "1");
   expect(paths?.[0]).toHaveAttribute("d", sweepingCurve);
   expect(paths?.[1]).toHaveAttribute("d", sweepingCurve);
-  expect(paths?.[2]).toHaveAttribute("d", sweepingCurve);
-  expect(paths?.[3]).toHaveAttribute("d", sweepingCurve);
+  expect(beam?.querySelector(".beam-base-halo")).not.toBeInTheDocument();
+  expect(beam?.querySelector(".beam-base-core")).not.toBeInTheDocument();
   expect(beam?.querySelector(".beam-highlight")).not.toBeInTheDocument();
   expect(gradients).toHaveLength(2);
   expect(gradientMotion).toHaveLength(2);
