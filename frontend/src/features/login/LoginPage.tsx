@@ -152,11 +152,11 @@ export default function LoginPage() {
           >
             <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
             <stop offset="0.15" stopColor="#8B2E2E" />
-            <stop offset="0.42" stopColor="#C23030" />
-            <stop offset="0.52" stopColor="#FF4D4D" />
-            <stop offset="0.6" stopColor="#FFC9C0" />
-            <stop offset="0.68" stopColor="#FF5252" />
-            <stop offset="0.85" stopColor="#C23030" />
+            <stop offset="0.42" stopColor="#FF4D4D" />
+            <stop offset="0.52" stopColor="#FF8A7A" />
+            <stop offset="0.6" stopColor="#FFFFFF" />
+            <stop offset="0.68" stopColor="#FF8A7A" />
+            <stop offset="0.85" stopColor="#FF4D4D" />
             <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
           </linearGradient>
           <filter id="beam-blur-lg" x="-30%" y="-30%" width="160%" height="160%">
