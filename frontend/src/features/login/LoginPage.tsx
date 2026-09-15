@@ -141,46 +141,13 @@ export default function LoginPage() {
         preserveAspectRatio="xMidYMid slice"
         aria-hidden="true"
       >
-        <defs>
-          <linearGradient
-            id="beam-grad"
-            gradientUnits="userSpaceOnUse"
-            x1="-150"
-            y1="580"
-            x2="1680"
-            y2="500"
-          >
-            <stop offset="0" stopColor="#8B2E2E" stopOpacity="0" />
-            <stop offset="0.15" stopColor="#8B2E2E" />
-            <stop offset="0.42" stopColor="#FF4D4D" />
-            <stop offset="0.52" stopColor="#FF8A7A" />
-            <stop offset="0.6" stopColor="#FFFFFF" />
-            <stop offset="0.68" stopColor="#FF8A7A" />
-            <stop offset="0.85" stopColor="#FF4D4D" />
-            <stop offset="1" stopColor="#8B2E2E" stopOpacity="0" />
-          </linearGradient>
-          <filter id="beam-blur-lg" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="12" />
-          </filter>
-          <filter id="beam-blur-md" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="5" />
-          </filter>
-          <filter id="beam-blur-sm" x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="1.2" />
-          </filter>
-          <filter id="beam-blur-xs" x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="2" />
-          </filter>
-        </defs>
-        {["beam-l1", "beam-l2", "beam-l3", "beam-l4", "beam-l5"].map((cls) => (
-          <path
-            key={cls}
-            className={cls}
-            d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
-            fill="none"
-            pathLength={100}
-          />
-        ))}
+        <path
+          className="beam-line"
+          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          fill="none"
+          stroke="#ff3b30"
+          strokeWidth="1"
+        />
       </svg>
       <div className="login-shell">
         <header className="login-hero">

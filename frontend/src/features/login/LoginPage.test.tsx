@@ -64,6 +64,22 @@ it("offers password reset but not public self registration", () => {
   ).not.toBeInTheDocument();
 });
 
+it("renders exactly one thin red curved beam on the login page", () => {
+  const { container } = render(
+    <MemoryRouter>
+      <LoginPage />
+    </MemoryRouter>,
+  );
+
+  const beam = container.querySelector("svg.login-beam");
+  const paths = beam?.querySelectorAll("path");
+
+  expect(paths).toHaveLength(1);
+  expect(paths?.[0]).toHaveClass("beam-line");
+  expect(paths?.[0]).toHaveAttribute("stroke", "#ff3b30");
+  expect(paths?.[0]).toHaveAttribute("stroke-width", "1");
+});
+
 it("consumes a reset token from the fragment and immediately scrubs the URL", () => {
   window.history.replaceState({}, "", "/login#reset-token=secret%2Ftoken");
   render(
