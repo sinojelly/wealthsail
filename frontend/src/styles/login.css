@@ -406,7 +406,7 @@
 }
 
 
-/* ── 单根极细红色曲线：微弱贴线光感，不叠加光带或渐变 ── */
+/* ── 单束游走红光：两层短段光晕托住清晰 1px 核心，不使用渐变光带 ── */
 .login-beam {
   position: absolute;
   inset: 0;
@@ -415,8 +415,46 @@
   pointer-events: none;
 }
 
-.beam-line {
+.beam-halo,
+.beam-glow,
+.beam-core {
+  fill: none;
   stroke-linecap: round;
-  /* 1px 曲线本体之外仅保留 1px 半径阴影，避免扩散成色块。 */
-  filter: drop-shadow(0 0 1px rgba(255, 59, 48, 0.72));
+  animation: beam-travel 10s linear infinite;
+}
+
+/* 宽、淡且更长的暗红段构成拖尾；只模糊光晕段，不模糊核心线。 */
+.beam-halo {
+  stroke-dasharray: 36 64;
+  opacity: 0.26;
+  filter: blur(3px);
+}
+
+.beam-glow {
+  stroke-dasharray: 26 74;
+  opacity: 0.68;
+  filter: blur(0.9px);
+}
+
+/* 最上层始终保持清晰，作为移动光束的亮红前端。 */
+.beam-core {
+  stroke-dasharray: 16 84;
+  opacity: 1;
+}
+
+@keyframes beam-travel {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beam-halo,
+  .beam-glow,
+  .beam-core {
+    animation: none;
+  }
 }

@@ -142,10 +142,27 @@ export default function LoginPage() {
         aria-hidden="true"
       >
         <path
-          className="beam-line"
+          className="beam-halo"
           d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
           fill="none"
-          stroke="#ff3b30"
+          pathLength="100"
+          stroke="#8b2e2e"
+          strokeWidth="10"
+        />
+        <path
+          className="beam-glow"
+          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          fill="none"
+          pathLength="100"
+          stroke="#ff4d4d"
+          strokeWidth="4"
+        />
+        <path
+          className="beam-core"
+          d="M -150 580 C 100 380, 320 700, 620 550 C 900 420, 1080 660, 1320 540 C 1480 460, 1560 560, 1680 500"
+          fill="none"
+          pathLength="100"
+          stroke="#ff4d4d"
           strokeWidth="1"
         />
       </svg>
