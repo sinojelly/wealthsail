@@ -3,6 +3,7 @@ import { configureAuthLifecycle, setAccessToken } from "../api/client";
 import * as identityApi from "../api/identity";
 import type { LoginResponse, PlatformRole, TenantRole } from "../api/types";
 import { queryClient } from "./query-client";
+import { rememberAccount, removeStoredAccount } from "./multi-account";
 
 export interface AuthSession {
   userId: string;
@@ -64,11 +65,14 @@ function sessionFromLogin(result: LoginResponse): AuthSession {
   };
 }
 
-async function installLogin(result: LoginResponse): Promise<AuthSession> {
+export async function installLogin(
+  result: LoginResponse,
+): Promise<AuthSession> {
   await clearPrivateSessionState();
   setAccessToken(result.accessToken);
   const session = sessionFromLogin(result);
   setSession(session);
+  rememberAccount(session);
   return session;
 }
 
@@ -102,6 +106,9 @@ export async function logout(options: { notifyServer?: boolean } = {}) {
     } catch {
       // 本地退出必须可靠；服务端 refresh token 仍会在到期后失效。
     }
+  }
+  if (currentSession) {
+    removeStoredAccount(currentSession.userId);
   }
   setAccessToken(null);
   setSession(null);

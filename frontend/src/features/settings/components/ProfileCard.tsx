@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
-import { Camera, LogOut, Save, UploadCloud } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { logout, updateSessionDisplayName } from "../../../app/auth-session";
+import { ArrowLeftRight, Camera, Save, UploadCloud } from "lucide-react";
+import { updateSessionDisplayName } from "../../../app/auth-session";
 import { updateProfile, uploadAvatar } from "../../../api/identity";
 import type { MeProfile } from "../../../api/types";
+import AccountSwitcher from "./AccountSwitcher";
 
 interface ProfileCardProps {
   profile: MeProfile;
@@ -11,7 +11,6 @@ interface ProfileCardProps {
 }
 
 export default function ProfileCard({ profile, onChanged }: ProfileCardProps) {
-  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [nickname, setNickname] = useState(profile.nickname);
   const [saving, setSaving] = useState(false);
@@ -72,10 +71,7 @@ export default function ProfileCard({ profile, onChanged }: ProfileCardProps) {
     }
   }
 
-  function handleSwitchAccount() {
-    logout();
-    navigate("/login", { replace: true });
-  }
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   const avatarSrc = profile.avatarUrl || "";
 
@@ -164,12 +160,14 @@ export default function ProfileCard({ profile, onChanged }: ProfileCardProps) {
           <button
             type="button"
             className="btn-danger"
-            onClick={handleSwitchAccount}
+            onClick={() => setSwitcherOpen((open) => !open)}
           >
-            <LogOut size={15} />
+            <ArrowLeftRight size={15} />
             切换账号
           </button>
         </div>
+
+        {switcherOpen ? <AccountSwitcher /> : null}
       </div>
     </section>
   );

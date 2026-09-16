@@ -5686,3 +5686,145 @@ button:disabled {
 .brand-row[data-logo-failed=false] .brand-copy {
   display: none;
 }
+
+
+/* ── 多账号切换面板 ──────────────────────────────────────────────────── */
+.account-switcher {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+.account-switcher-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.account-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid rgba(251, 233, 183, 0.2);
+  border-radius: 10px;
+  background: rgba(113, 33, 34, 0.35);
+}
+.account-switcher-item.is-current {
+  border-color: rgba(251, 233, 183, 0.45);
+  background: rgba(251, 233, 183, 0.08);
+}
+.account-switcher-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.account-switcher-main:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.account-switcher-avatar {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(251, 233, 183, 0.15);
+  color: #FBE9B7;
+  font-size: 12px;
+  font-weight: 700;
+}
+.account-switcher-copy {
+  min-width: 0;
+  display: grid;
+}
+.account-switcher-copy strong {
+  color: #FBFEF7;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-switcher-copy small {
+  color: rgba(251, 254, 247, 0.55);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-switcher-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #FBE9B7;
+  font-size: 10px;
+  font-style: normal;
+}
+.account-switcher-badge.is-expired {
+  color: rgba(255, 138, 122, 0.9);
+}
+.account-switcher-remove {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(251, 233, 183, 0.2);
+  border-radius: 6px;
+  color: rgba(255, 138, 122, 0.8);
+  background: transparent;
+  cursor: pointer;
+}
+.account-switcher-remove:hover {
+  background: rgba(255, 138, 122, 0.12);
+}
+.account-switcher-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px;
+  border: 1px dashed rgba(251, 233, 183, 0.35);
+  border-radius: 10px;
+  color: #FBE9B7;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+.account-switcher-add:hover {
+  background: rgba(251, 233, 183, 0.08);
+}
+.account-switcher-form {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(251, 233, 183, 0.2);
+  border-radius: 10px;
+  background: rgba(113, 33, 34, 0.35);
+}
+.account-switcher-form input {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(251, 233, 183, 0.25);
+  border-radius: 8px;
+  color: #FBFEF7;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+}
+.account-switcher-form input:focus {
+  outline: none;
+  border-color: #FBE9B7;
+}
+.account-switcher-form-actions {
+  display: flex;
+  gap: 8px;
+}
