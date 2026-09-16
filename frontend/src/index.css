@@ -75,7 +75,7 @@ textarea:focus-visible {
 
 .app-shell {
   min-height: 100vh;
-  background: var(--slate-50);
+  background: #232323;
 }
 .sidebar {
   position: fixed;
@@ -84,9 +84,9 @@ textarea:focus-visible {
   width: 240px;
   display: flex;
   flex-direction: column;
-  color: #b0b0b0;
-  background: var(--wine);
-  border-right: 1px solid rgba(201, 162, 39, 0.3);
+  color: rgba(255, 247, 234, 0.85);
+  background: #712122;
+  border-right: 1px solid rgba(251, 233, 183, 0.22);
   transition:
     width 180ms ease,
     transform 180ms ease;
@@ -97,7 +97,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 11px;
   padding: 0 18px;
-  border-bottom: 1px solid rgba(201, 162, 39, 0.3);
+  border-bottom: 1px solid rgba(251, 233, 183, 0.22);
   overflow: hidden;
 }
 .brand-mark {
@@ -107,8 +107,8 @@ textarea:focus-visible {
   display: grid;
   place-items: center;
   border-radius: 10px;
-  background: var(--gold);
-  color: #121212;
+  background: rgba(251, 233, 183, 0.14);
+  color: #FBE9B7;
   font-weight: 800;
 }
 .brand-copy,
@@ -125,7 +125,7 @@ textarea:focus-visible {
 .brand-copy span,
 .user-copy span {
   margin-top: 1px;
-  color: #b0b0b0;
+  color: rgba(251, 254, 247, 0.6);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -142,7 +142,7 @@ textarea:focus-visible {
   gap: 12px;
   padding: 0 13px;
   border-radius: 8px;
-  color: #b0b0b0;
+  color: rgba(255, 247, 234, 0.85);
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
@@ -151,15 +151,15 @@ textarea:focus-visible {
 }
 .nav-item:hover {
   color: #ffffff;
-  background: #1c1c1c;
+  background: rgba(255, 255, 255, 0.08);
 }
 .nav-item.active {
-  color: #ffffff;
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 3px 0 0 var(--gold);
+  color: #F7FBEA;
+  background: rgba(247, 251, 234, 0.14);
+  box-shadow: inset 3px 0 0 #FBE9B7;
 }
 .nav-item.active svg {
-  color: #e0b84a;
+  color: #FBE9B7;
 }
 .sidebar-footer {
   margin-top: auto;
@@ -168,7 +168,8 @@ textarea:focus-visible {
   align-items: center;
   gap: 11px;
   padding: 14px 16px;
-  border-top: 1px solid #242424;
+  border-top: 1px solid rgba(251, 233, 183, 0.15);
+  background: #5E1A1B;
   overflow: hidden;
 }
 .avatar {
@@ -178,8 +179,8 @@ textarea:focus-visible {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: rgba(82, 196, 26, 0.18);
-  background: #134e4a;
+  color: #FBE9B7;
+  background: rgba(251, 233, 183, 0.15);
   font-size: 13px;
   font-weight: 700;
 }
@@ -195,10 +196,10 @@ textarea:focus-visible {
   height: 24px;
   display: grid;
   place-items: center;
-  border: 1px solid #2e2e2e;
+  border: 1px solid rgba(251, 233, 183, 0.3);
   border-radius: 50%;
-  color: #b0b0b0;
-  background: var(--navy);
+  color: #FBE9B7;
+  background: #712122;
 }
 .mobile-close,
 .mobile-menu,
@@ -219,26 +220,26 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 0 28px;
-  border-bottom: 1px solid var(--slate-200);
-  background: #1c1c1c;
+  border-bottom: 1px solid rgba(251, 233, 183, 0.22);
+  background: #712122;
   
 }
 .breadcrumb {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--slate-400);
+  color: rgba(251, 254, 247, 0.6);
   font-size: 12px;
 }
 .breadcrumb strong {
-  color: var(--slate-700);
+  color: #FBFEF7;
   font-weight: 600;
 }
 .topbar-meta {
   display: flex;
   align-items: center;
   gap: 14px;
-  color: var(--slate-500);
+  color: rgba(251, 254, 247, 0.7);
   font-size: 11px;
 }
 .icon-button {
@@ -247,14 +248,14 @@ textarea:focus-visible {
   display: inline-grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--slate-200);
+  border: 1px solid rgba(251, 233, 183, 0.3);
   border-radius: 8px;
-  color: var(--slate-500);
-  background: #1c1c1c;
+  color: #FBE9B7;
+  background: rgba(255, 255, 255, 0.04);
 }
 .icon-button:hover {
-  color: var(--navy);
-  background: var(--slate-50);
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
 }
 .notification {
   position: relative;
