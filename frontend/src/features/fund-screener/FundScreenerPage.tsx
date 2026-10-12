@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Sparkles, ListPlus } from "lucide-react";
@@ -9,6 +9,7 @@ import {
   chooseFund,
   chooseIndex,
   locateSearch,
+  resolveFund,
   type Selection,
 } from "./selection";
 import MacroContextStrip from "./components/MacroContextStrip";
@@ -32,7 +33,9 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     id: string;
     target: string;
     until: number;
+    attempt: number;
   } | null>(null);
+  const attemptRef = useRef(0);
   const [timedOut, setTimedOut] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const directions = useQuery({
@@ -62,6 +65,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     directionId,
     indexId,
     fundId: params.get("instrument"),
+    fundMarket: params.get("fundMarket"),
     fundCode,
   };
   const page = Math.max(1, Number(params.get("page")) || 1);
@@ -88,11 +92,14 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     queryFn: ({ signal }) => api.searchResearch(fundCode!, signal),
     enabled: !!fundCode,
   });
-  const selectedFund =
-    funds.data?.items.find((f) => f.fundCode === fundCode) ??
-    (direct?.code === fundCode
-      ? direct
-      : restore.data?.find((f) => f.kind === "fund" && f.code === fundCode));
+  const selectedFund = resolveFund<api.ResearchFund | api.SearchResult>(
+    selection,
+    [
+      ...(direct ? [direct] : []),
+      ...(funds.data?.items ?? []),
+      ...(restore.data?.filter((f) => f.kind === "fund") ?? []),
+    ],
+  );
   const mode = fundCode ? "fund" : "index";
   const objectId =
     mode === "fund"
@@ -118,15 +125,24 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       }),
   });
   const refresh = useMutation({
-    mutationFn: () => api.refreshResearch(analysisMode, analysisId!),
-    onSuccess: (data) => {
+    mutationFn: (input: {
+      kind: "index" | "fund" | "nav";
+      id: string;
+      target: string;
+    }) => api.refreshResearch(input.kind, input.id),
+    onSuccess: (data, input) => {
       setTimedOut(false);
-      setRun({ id: data.runId, target, until: Date.now() + 120000 });
+      setRun({
+        id: data.runId,
+        target: input.target,
+        attempt: ++attemptRef.current,
+        until: Date.now() + 120000,
+      });
     },
   });
   const activeRun = run?.target === target ? run : null;
   const status = useQuery({
-    queryKey: [subject, "refresh-status", activeRun?.id],
+    queryKey: [subject, "refresh-status", activeRun?.id, activeRun?.attempt],
     queryFn: ({ signal }) => api.getRefreshStatus(activeRun!.id, signal),
     enabled: !!activeRun && !timedOut,
     refetchInterval: (q) =>
@@ -155,6 +171,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       ["index", next.indexId],
       ["instrument", next.fundId],
       ["fund", next.fundCode],
+      ["fundMarket", next.fundMarket],
     ] as const) {
       if (v) p.set(k, v);
       else p.delete(k);
@@ -351,6 +368,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
           <FundResultsTable
             data={funds.data}
             selectedCode={fundCode}
+            selectedId={selectedFund?.instrumentId}
+            selectedMarket={selectedFund?.market}
             indexName={index?.name}
             onSelect={selectFund}
             page={page}
@@ -379,7 +398,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
           loading={diagnosis.isLoading && !!objectId}
           error={diagnosis.isError}
           onRefresh={() => {
-            if (analysisId) refresh.mutate();
+            if (analysisId)
+              refresh.mutate({ kind: analysisMode, id: analysisId, target });
           }}
           refreshing={busy || refresh.isPending}
           canRefresh={!!analysisId}
@@ -390,7 +410,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
               aria-label={mode === "index" ? "关注指数" : "加入自选基金"}
               disabled={
                 mode === "index" ||
-                !selectedFund?.instrumentId ||
+                !selectedFund?.market ||
                 add.isPending ||
                 watching ||
                 add.isSuccess

@@ -88,9 +88,15 @@ async def screen(conn, query: ScreenQuery):
         SELECT CASE WHEN s.as_of >= (
           SELECT max(calendar_date) FROM reference.trading_calendars
           WHERE market=c.market AND is_trading_day
-            AND calendar_date < (now() AT TIME ZONE 'Asia/Shanghai')::date
+            AND calendar_date <= reference.research_available_day((s.result->>'publicationHour')::integer,
+                (now() AT TIME ZONE 'Asia/Shanghai')::date, now())
         ) THEN (s.result->>'score')::numeric ELSE NULL END AS technical_score,
-        jsonb_array_length(s.points) AS history_days, s.result->>'state' AS technical_state
+        jsonb_array_length(s.points) AS history_days,
+        CASE WHEN (s.result->>'publicationHour') IS NULL THEN 'UNVERIFIED'
+          WHEN s.as_of < (SELECT max(calendar_date) FROM reference.trading_calendars
+            WHERE market=c.market AND is_trading_day AND calendar_date<=reference.research_available_day(
+              (s.result->>'publicationHour')::integer,(now() AT TIME ZONE 'Asia/Shanghai')::date,now())) THEN 'STALE'
+          ELSE s.result->>'state' END AS technical_state
         FROM market.investment_analysis_snapshots s
         WHERE s.subject_kind='fund' AND s.subject_key=c.instrument_id::text
           AND s.retrieved_at<=LEAST(COALESCE({cutoff_param}::timestamptz,now()),now())

@@ -1,7 +1,22 @@
 """Research history validation, without synthetic OHLC or missing-day fills."""
 
 import math
-from datetime import date
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
+
+
+def published_day(as_of, publish_hour, now):
+    """Latest potentially published calendar day; callers apply market calendars."""
+    local = now.astimezone(ZoneInfo("Asia/Shanghai"))
+    if (
+        type(publish_hour) is not int
+        or not 0 <= publish_hour <= 23
+        or as_of > local.date()
+    ):
+        return None
+    if as_of < local.date() or local.hour >= publish_hour:
+        return as_of
+    return as_of - timedelta(days=1)
 
 
 def normalize(rows):

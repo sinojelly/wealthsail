@@ -81,14 +81,33 @@ async def index_analysis(
 
 
 @router.get("/investment/fund-ranges/{fund_code}/analysis")
-async def nav_analysis(fund_code: str, pool=Depends(get_pool), ctx=Depends(get_tenant_context), request_id=Depends(get_request_id)):
+async def nav_analysis(
+    fund_code: str,
+    pool=Depends(get_pool),
+    ctx=Depends(get_tenant_context),
+    request_id=Depends(get_request_id),
+):
     from backend.funds.service import get_range
+
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         facts = await get_range(conn, fund_code)
-    return ok({"state": "UNSUPPORTED" if facts["status"] == "AVAILABLE" else facts["status"],
-               "score": None, "indicators": {}, "points": [], "reasons": [], "range": facts,
-               "asOf": facts.get("latestNavDate"), "source": facts.get("dataSource"), "seriesKind": "ACCUMULATED_NAV"},
-              request_id=request_id, as_of=now_shanghai())
+    return ok(
+        {
+            "state": "UNSUPPORTED"
+            if facts["status"] == "AVAILABLE"
+            else facts["status"],
+            "score": None,
+            "indicators": {},
+            "points": [],
+            "reasons": [],
+            "range": facts,
+            "asOf": facts.get("latestNavDate"),
+            "source": facts.get("dataSource"),
+            "seriesKind": "ACCUMULATED_NAV",
+        },
+        request_id=request_id,
+        as_of=now_shanghai(),
+    )
 
 
 @router.get("/investment/instruments/{instrument_id}/analysis")

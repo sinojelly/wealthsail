@@ -3,6 +3,110 @@ import userEvent from "@testing-library/user-event";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
 
+it("polls a second refresh even when the backend reuses the completed run ID", async () => {
+  const user = userEvent.setup();
+  api.refresh.mockResolvedValue({ runId: "same-id", created: true });
+  api.refreshStatus.mockResolvedValue({ status: "COMPLETED" });
+  renderWithSession(<FundScreenerPage />);
+  await screen.findByRole("heading", { name: "沪深300" });
+  const update = await screen.findByRole("button", { name: "更新研究数据" });
+  await waitFor(() => expect(update).toBeEnabled());
+  await user.click(update);
+  await screen.findByText("研究数据已更新。");
+  const first = api.refreshStatus.mock.calls.length;
+  await user.click(update);
+  await waitFor(() =>
+    expect(api.refreshStatus.mock.calls.length).toBeGreaterThan(first),
+  );
+});
+
+it("resolves equal codes by the instrument identity supplied in the URL", async () => {
+  const same = {
+    ...fund,
+    instrumentId: "other-id",
+    fundName: "场外同码基金",
+    tradeForm: "FUND",
+    market: "FUND_CN",
+  };
+  api.funds.mockResolvedValue({
+    items: [fund, same],
+    total: 2,
+    page: 1,
+    pageSize: 20,
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=other-id&fundMarket=FUND_CN",
+  );
+  await waitFor(() =>
+    expect(api.analysis).toHaveBeenLastCalledWith(
+      "fund",
+      "other-id",
+      expect.anything(),
+    ),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "场外同码基金" }),
+  ).toBeInTheDocument();
+});
+
+it("allows verified master-only OTC results to use watchlist auto-registration", async () => {
+  const user = userEvent.setup();
+  api.search.mockResolvedValue([
+    {
+      ...fund,
+      instrumentId: null,
+      kind: "fund",
+      id: "FUND_CN:110022",
+      fundCode: "110022",
+      code: "110022",
+      fundName: "场外基金",
+      name: "场外基金",
+      tradeForm: "FUND",
+      market: "FUND_CN",
+      indexId: null,
+      directionId: null,
+    },
+  ]);
+  renderWithSession(<FundScreenerPage />);
+  await user.type(
+    await screen.findByRole("combobox", { name: "全局搜索" }),
+    "110022",
+  );
+  await user.click(await screen.findByRole("option", { name: /场外基金/ }));
+  await user.click(screen.getByRole("button", { name: "加入自选基金" }));
+  await waitFor(() =>
+    expect(api.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: "110022",
+        market: "FUND_CN",
+        assetType: "FUND",
+      }),
+    ),
+  );
+});
+
+it("shows collected ETF analysis and its score in the expanded list", async () => {
+  const user = userEvent.setup();
+  api.funds.mockResolvedValue({
+    items: [
+      {
+        ...fund,
+        dataState: "READY",
+        technicalScore: 75,
+        technicalState: "STRONG",
+      },
+    ],
+    total: 1,
+    page: 1,
+    pageSize: 20,
+  });
+  renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByRole("button", { name: /展开更多列/ }));
+  expect(await screen.findByText("已分析")).toBeInTheDocument();
+  expect(screen.getByText("75 · 趋势较强")).toBeInTheDocument();
+});
+
 const api = vi.hoisted(() => ({
   directions: vi.fn(),
   indices: vi.fn(),

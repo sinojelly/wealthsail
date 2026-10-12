@@ -5,6 +5,8 @@ from uuid import UUID
 from backend.investment import repository
 from backend.investment.schemas import ScreenQuery
 from backend.errors import NotFoundError
+from backend.dependencies import now_shanghai
+from backend.market.research_history import published_day
 
 
 def _iso(value):
@@ -99,7 +101,11 @@ def fund_dto(r):
         "technicalScore": r.get("technical_score"),
         "technicalState": r.get("technical_state"),
         "historyDays": r.get("history_days", 0),
-        "dataState": "UNAVAILABLE"
+        "dataState": "READY"
+        if r.get("technical_score") is not None
+        else r.get("technical_state")
+        if r.get("technical_state") is not None
+        else "UNAVAILABLE"
         if r.get("data_source") == "UNAVAILABLE"
         else "RANGE_ONLY"
         if r.get("latest_nav") is not None
@@ -108,7 +114,9 @@ def fund_dto(r):
 
 
 async def screen(conn, query):
-    query = query.model_copy(update={"analysis_at": query.analysis_at or datetime.now(timezone.utc)})
+    query = query.model_copy(
+        update={"analysis_at": query.analysis_at or datetime.now(timezone.utc)}
+    )
     rows, total = await repository.screen(conn, query)
     return {
         "items": [fund_dto(dict(row)) for row in rows],
@@ -183,11 +191,21 @@ async def analysis(conn, kind, subject_id):
     if isinstance(result, str):
         result = json.loads(result)
     if result.get("score") is not None:
-        expected = await conn.fetchval("""SELECT max(calendar_date)
+        now = now_shanghai()
+        cutoff = published_day(now.date(), result.get("publicationHour"), now)
+        expected = await conn.fetchval(
+            """SELECT max(calendar_date)
           FROM reference.trading_calendars WHERE market=$1 AND is_trading_day
-            AND calendar_date < (now() AT TIME ZONE 'Asia/Shanghai')::date""", result.get("market"))
+            AND calendar_date <= $2""",
+            result.get("market"),
+            cutoff,
+        )
         if expected is None or row["as_of"] < expected:
-            result = {**result, "score": None, "state": "STALE" if expected else "UNVERIFIED"}
+            result = {
+                **result,
+                "score": None,
+                "state": "STALE" if expected else "UNVERIFIED",
+            }
     points = row.get("points", [])
     return {
         **result,
@@ -203,6 +221,7 @@ async def analysis(conn, kind, subject_id):
 async def enqueue_refresh(conn, tenant_id, body):
     if body.kind == "nav":
         from backend.funds.service import enqueue_fetch
+
         return await enqueue_fetch(conn, tenant_id=tenant_id, fund_code=body.id)
     from backend.jobs.investment_research import load_subject
 

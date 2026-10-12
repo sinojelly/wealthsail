@@ -9,7 +9,8 @@ from uuid import UUID
 from backend.common.database import system_connection
 from backend.errors import NotFoundError, DataUnavailableError
 from backend.indicators.technical import VERSION, analyze
-from backend.market.research_history import normalize, quality
+from backend.market.research_history import normalize, quality, published_day
+from backend.dependencies import now_shanghai
 
 
 async def load_subject(conn, kind, subject_id):
@@ -92,7 +93,7 @@ async def fetch_history(subject, kind, start, end):
     )
 
 
-async def refresh_subject(pool, settings, kind, subject_id, as_of):
+async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     async with system_connection(pool) as conn:
         subject = await load_subject(conn, kind, subject_id)
     rows, series_kind, source = await asyncio.wait_for(
@@ -110,12 +111,15 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of):
         if kind == "index"
         else bool(config.get("sourceVerified"))
     )
-    publish_hour = subject.get("publish_hour") if kind == "index" else config.get("publishHour")
+    publish_hour = (
+        subject.get("publish_hour") if kind == "index" else config.get("publishHour")
+    )
     verified = verified and isinstance(publish_hour, int) and 0 <= publish_hour <= 23
-    eligible_day = as_of
-    from zoneinfo import ZoneInfo
-    if publish_hour is not None and datetime.now(ZoneInfo("Asia/Shanghai")).hour < publish_hour:
-        eligible_day = as_of - timedelta(days=1)
+    eligible_day = published_day(as_of, publish_hour, now or now_shanghai())
+    if eligible_day is not None:
+        rows = [p for p in rows if p["date"] <= eligible_day.isoformat()]
+        if not rows:
+            raise DataUnavailableError("已发布窗口内没有有效历史数据")
     async with system_connection(pool) as conn:
         calendar = await conn.fetch(
             """SELECT calendar_date FROM reference.trading_calendars
@@ -136,10 +140,17 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of):
     )
     result = analyze(rows, quality=state)
     result["market"] = subject["market"]
+    result["publicationHour"] = publish_hour
     if series_kind == "ACCUMULATED_NAV":
         result.update(score=None, state="UNSUPPORTED", indicators={}, reasons=[])
     raw = json.dumps(
-            {"points": rows, "source": source, "seriesKind": series_kind, "quality": state},
+        {
+            "points": rows,
+            "source": source,
+            "seriesKind": series_kind,
+            "quality": state,
+            "publicationHour": publish_hour,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -167,6 +178,7 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of):
 async def sync_research(pool, settings, now: datetime):
     import logging
     from backend.jobs.investment_macro import sync_macro
+
     logger = logging.getLogger("wealthsail.investment_research")
     try:
         await asyncio.wait_for(sync_macro(pool, now), timeout=90)
@@ -184,7 +196,7 @@ async def sync_research(pool, settings, now: datetime):
         ("fund", str(r["instrument_id"])) for r in funds
     ]:
         try:
-            await refresh_subject(pool, settings, kind, key, now.date())
+            await refresh_subject(pool, settings, kind, key, now.date(), now=now)
             succeeded += 1
         except Exception:  # noqa: BLE001 -- isolate provider failure per subject
             logger.exception("research_subject_refresh_failed kind=%s id=%s", kind, key)

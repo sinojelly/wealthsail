@@ -47,9 +47,14 @@ def test_worker_claims_and_dispatches_investment_task():
 async def test_old_stored_score_is_suppressed_on_read():
     from datetime import date
     from backend.investment.service import analysis
+
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"result": {"score": 85, "state": "STRONG", "market": "SSE"},
-                                 "as_of": date(2025, 1, 1), "input_hash": "hash", "source_uri": "fixture://history"}
+    conn.fetchrow.return_value = {
+        "result": {"score": 85, "state": "STRONG", "market": "SSE"},
+        "as_of": date(2025, 1, 1),
+        "input_hash": "hash",
+        "source_uri": "fixture://history",
+    }
     conn.fetchval.return_value = date(2026, 10, 12)
     result = await analysis(conn, "index", "hs300")
     assert result["score"] is None
@@ -61,8 +66,13 @@ async def test_unregistered_fund_refresh_reuses_existing_nav_job(monkeypatch):
     from backend.investment.service import enqueue_refresh
     from backend.investment.schemas import RefreshRequest
     from backend.funds import service as funds
-    enqueue = AsyncMock(return_value={"runId": "nav-job", "created": True, "status": "QUEUED"})
+
+    enqueue = AsyncMock(
+        return_value={"runId": "nav-job", "created": True, "status": "QUEUED"}
+    )
     monkeypatch.setattr(funds, "enqueue_fetch", enqueue)
-    result = await enqueue_refresh(object(), "tenant-a", RefreshRequest(kind="nav", id="110022"))
+    result = await enqueue_refresh(
+        object(), "tenant-a", RefreshRequest(kind="nav", id="110022")
+    )
     assert result["runId"] == "nav-job"
     enqueue.assert_awaited_once()

@@ -28,6 +28,7 @@ export interface ResearchFund {
   latestDate: string | null;
   navRangePosition: number | null;
   technicalScore: number | null;
+  technicalState?: string | null;
   dataState: string;
   updatedAt: string | null;
 }
