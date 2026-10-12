@@ -59,6 +59,7 @@ class SessionSchedule:
 
 
 SCHEDULES: tuple[SessionSchedule, ...] = (
+    SessionSchedule("INVESTMENT_RESEARCH_REFRESH", "投资研究更新", minute=30, hour=22),
     SessionSchedule(
         "CORPORATE_ACTIONS_REFRESH",
         "公司行动数据同步",

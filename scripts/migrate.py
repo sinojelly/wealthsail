@@ -519,13 +519,13 @@ async def _readback(conn: asyncpg.Connection) -> None:
     )
     purchase_status_constraint = await conn.fetchval(
         """
-        SELECT pg_get_constraintdef(constraint.oid)
-          FROM pg_constraint constraint
-          JOIN pg_class relation ON relation.oid = constraint.conrelid
+        SELECT pg_get_constraintdef(catalog_constraint.oid)
+          FROM pg_constraint catalog_constraint
+          JOIN pg_class relation ON relation.oid = catalog_constraint.conrelid
           JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
          WHERE namespace.nspname = 'reference'
            AND relation.relname = 'fund_profiles'
-           AND constraint.conname = 'fund_profiles_purchase_status_check'
+           AND catalog_constraint.conname = 'fund_profiles_purchase_status_check'
         """
     )
     if (
@@ -603,9 +603,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     }
     for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
         for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
-            fund_nav_range_privileges[
-                f"{role}_cannot_{privilege.lower()}"
-            ] = not bool(
+            fund_nav_range_privileges[f"{role}_cannot_{privilege.lower()}"] = not bool(
                 await conn.fetchval(
                     "SELECT has_table_privilege($1, $2, $3)",
                     role,
@@ -614,16 +612,28 @@ async def _readback(conn: asyncpg.Connection) -> None:
                 )
             )
     required_fund_nav_range_columns = {
-        "fund_code", "fund_name", "fund_type", "latest_nav", "latest_nav_date",
-        "highest_nav", "highest_nav_date", "lowest_nav", "lowest_nav_date",
-        "drawdown_from_high", "rise_from_low", "current_percentile",
-        "inception_date", "data_source", "updated_at",
+        "fund_code",
+        "fund_name",
+        "fund_type",
+        "latest_nav",
+        "latest_nav_date",
+        "highest_nav",
+        "highest_nav_date",
+        "lowest_nav",
+        "lowest_nav_date",
+        "drawdown_from_high",
+        "rise_from_low",
+        "current_percentile",
+        "inception_date",
+        "data_source",
+        "updated_at",
     }
     if (
         fund_nav_range_columns != required_fund_nav_range_columns
         or fund_nav_range_security is None
         or not fund_nav_range_security["prosecdef"]
-        or "search_path=reference, pg_catalog" not in fund_nav_range_security["proconfig"]
+        or "search_path=reference, pg_catalog"
+        not in fund_nav_range_security["proconfig"]
         or not all(fund_nav_range_privileges.values())
     ):
         raise RuntimeError("fund_nav_ranges cache boundary is missing or unsafe")
@@ -645,13 +655,13 @@ async def _readback(conn: asyncpg.Connection) -> None:
     }
     corporate_action_unique = await conn.fetchval(
         """
-        SELECT pg_get_constraintdef(constraint.oid)
-          FROM pg_constraint constraint
-          JOIN pg_class relation ON relation.oid = constraint.conrelid
+        SELECT pg_get_constraintdef(catalog_constraint.oid)
+          FROM pg_constraint catalog_constraint
+          JOIN pg_class relation ON relation.oid = catalog_constraint.conrelid
           JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
          WHERE namespace.nspname = 'market'
            AND relation.relname = 'corporate_actions'
-           AND constraint.conname =
+           AND catalog_constraint.conname =
                'corporate_actions_source_event_id_revision_key'
         """
     )
@@ -675,24 +685,24 @@ async def _readback(conn: asyncpg.Connection) -> None:
     }
     corporate_action_quality_constraint = await conn.fetchval(
         """
-        SELECT pg_get_constraintdef(constraint.oid)
-          FROM pg_constraint constraint
-          JOIN pg_class relation ON relation.oid = constraint.conrelid
+        SELECT pg_get_constraintdef(catalog_constraint.oid)
+          FROM pg_constraint catalog_constraint
+          JOIN pg_class relation ON relation.oid = catalog_constraint.conrelid
           JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
          WHERE namespace.nspname = 'market'
            AND relation.relname = 'corporate_actions'
-           AND constraint.conname = 'corporate_actions_quality_status_check'
+           AND catalog_constraint.conname = 'corporate_actions_quality_status_check'
         """
     )
     corporate_action_type_constraint = await conn.fetchval(
         """
-        SELECT pg_get_constraintdef(constraint.oid)
-          FROM pg_constraint constraint
-          JOIN pg_class relation ON relation.oid = constraint.conrelid
+        SELECT pg_get_constraintdef(catalog_constraint.oid)
+          FROM pg_constraint catalog_constraint
+          JOIN pg_class relation ON relation.oid = catalog_constraint.conrelid
           JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
          WHERE namespace.nspname = 'market'
            AND relation.relname = 'corporate_actions'
-           AND constraint.conname = 'corporate_actions_action_type_check'
+           AND catalog_constraint.conname = 'corporate_actions_action_type_check'
         """
     )
     required_corporate_action_columns = {
@@ -732,9 +742,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
             for value in ("FRESH", "STALE", "UNAVAILABLE", "CONFLICT")
         )
     ):
-        raise RuntimeError(
-            "corporate action ingestion contract is missing or unsafe"
-        )
+        raise RuntimeError("corporate action ingestion contract is missing or unsafe")
 
     corporate_action_sync_function = (
         "market.upsert_corporate_action_sync("
@@ -777,7 +785,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         or not worker_can_sync_corporate_actions
         or api_can_sync_corporate_actions
     ):
-        raise RuntimeError("corporate action multi-source contract is missing or unsafe")
+        raise RuntimeError(
+            "corporate action multi-source contract is missing or unsafe"
+        )
 
     corporate_action_sync_reads = (
         "ledger.position_snapshots",
@@ -785,12 +795,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "reference.instrument_aliases",
     )
     if not all(
-        await conn.fetchval(
-            "SELECT has_table_privilege($1, $2, 'SELECT')",
-            "wealthsail_worker",
-            relation,
-        )
-        for relation in corporate_action_sync_reads
+        [
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, 'SELECT')",
+                "wealthsail_worker",
+                relation,
+            )
+            for relation in corporate_action_sync_reads
+        ]
     ):
         raise RuntimeError("corporate action sync read grants are missing or unsafe")
 
@@ -813,14 +825,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
     }
     trend_cache_unique = await conn.fetchval(
         """
-        SELECT pg_get_constraintdef(constraint.oid)
-          FROM pg_constraint constraint
-          JOIN pg_class relation ON relation.oid = constraint.conrelid
+        SELECT pg_get_constraintdef(catalog_constraint.oid)
+          FROM pg_constraint catalog_constraint
+          JOIN pg_class relation ON relation.oid = catalog_constraint.conrelid
           JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
          WHERE namespace.nspname = 'market'
            AND relation.relname = 'instrument_trend_snapshots'
-           AND constraint.contype = 'u'
-           AND pg_get_constraintdef(constraint.oid) =
+           AND catalog_constraint.contype = 'u'
+           AND pg_get_constraintdef(catalog_constraint.oid) =
                'UNIQUE (instrument_id, trade_date)'
         """
     )
@@ -847,30 +859,36 @@ async def _readback(conn: asyncpg.Connection) -> None:
     )
     trend_cache_roles = ("wealthsail_api", "wealthsail_worker")
     trend_cache_can_read = all(
-        await conn.fetchval(
-            "SELECT has_table_privilege($1, $2, 'SELECT')",
-            role,
-            "market.instrument_trend_snapshots",
-        )
-        for role in trend_cache_roles
+        [
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, 'SELECT')",
+                role,
+                "market.instrument_trend_snapshots",
+            )
+            for role in trend_cache_roles
+        ]
     )
     trend_cache_can_execute = all(
-        await conn.fetchval(
-            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
-            role,
-            trend_cache_function,
-        )
-        for role in trend_cache_roles
+        [
+            await conn.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                role,
+                trend_cache_function,
+            )
+            for role in trend_cache_roles
+        ]
     )
     trend_cache_has_direct_write = any(
-        await conn.fetchval(
-            "SELECT has_table_privilege($1, $2, $3)",
-            role,
-            "market.instrument_trend_snapshots",
-            privilege,
-        )
-        for role in (*trend_cache_roles, "authenticated")
-        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+        [
+            await conn.fetchval(
+                "SELECT has_table_privilege($1, $2, $3)",
+                role,
+                "market.instrument_trend_snapshots",
+                privilege,
+            )
+            for role in (*trend_cache_roles, "authenticated")
+            for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+        ]
     )
     required_trend_cache_columns = {
         "instrument_id",
@@ -897,7 +915,9 @@ async def _readback(conn: asyncpg.Connection) -> None:
         or not trend_cache_can_execute
         or trend_cache_has_direct_write
     ):
-        raise RuntimeError("pre-market holding trend cache contract is missing or unsafe")
+        raise RuntimeError(
+            "pre-market holding trend cache contract is missing or unsafe"
+        )
 
     exposed_writes = await conn.fetchval(
         """
@@ -1574,14 +1594,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
     watchlist_primary_key = await conn.fetchval(
         """
         SELECT array_agg(attribute.attname ORDER BY key_column.ordinality)
-          FROM pg_constraint constraint
-          JOIN LATERAL unnest(constraint.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+          FROM pg_constraint catalog_constraint
+          JOIN LATERAL unnest(catalog_constraint.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
             ON TRUE
           JOIN pg_attribute attribute
-            ON attribute.attrelid = constraint.conrelid
+            ON attribute.attrelid = catalog_constraint.conrelid
            AND attribute.attnum = key_column.attnum
-         WHERE constraint.conrelid='identity.watchlist'::regclass
-           AND constraint.contype='p'
+         WHERE catalog_constraint.conrelid='identity.watchlist'::regclass
+           AND catalog_constraint.contype='p'
         """
     )
     watchlist_rls_enabled = await conn.fetchval(
@@ -1689,7 +1709,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         )
         for row in await conn.fetch(
             """
-            SELECT conname, contype, convalidated,
+            SELECT conname, contype::text AS contype, convalidated,
                    pg_get_constraintdef(oid) AS definition
               FROM pg_constraint
              WHERE conrelid='reporting.reports'::regclass
@@ -1718,7 +1738,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
 
     expected_variant_check = (
         "checkreport_variant=anyarray["
-        "'standard','pre_market_macro','pre_market_personalized']"
+        "'standard','pre_market_macro','pre_market_personalized','intraday_alert']"
     )
     expected_audience_fk = (
         "foreignkeytenant_id,audience_user_idreferences"
@@ -1731,7 +1751,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "checkreport_variant='standard'andaudience_user_idisnullor"
         "report_variant='pre_market_macro'andaudience_user_idisnullor"
         "report_variant='pre_market_personalized'and"
-        "audience_user_idisnotnull"
+        "audience_user_idisnotnullor"
+        "report_variant='intraday_alert'andaudience_user_idisnotnull"
     )
     old_report_uniqueness_exists = await conn.fetchval(
         """
@@ -1930,14 +1951,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
     }
     shared_pre_market_trigger = await conn.fetchrow(
         """
-        SELECT trigger.tgenabled,
+        SELECT trigger.tgenabled::text AS tgenabled,
                trigger.tgtype,
                pg_get_expr(trigger.tgqual, trigger.tgrelid) AS tgqual,
                function_namespace.nspname AS function_schema,
                proc.proname AS function_name,
                format_type(proc.prorettype, NULL) AS return_type,
                language.lanname AS language_name,
-               proc.provolatile,
+               proc.provolatile::text AS provolatile,
                proc.prosecdef,
                proc.pronargs,
                proc.proconfig,

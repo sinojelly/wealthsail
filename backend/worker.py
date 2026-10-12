@@ -38,6 +38,11 @@ logger = logging.getLogger("wealthsail.worker")
 
 
 async def _execute_session(pool, settings, session: str, now: datetime) -> None:
+    if session == "INVESTMENT_RESEARCH_REFRESH":
+        from backend.jobs.investment_research import sync_research
+        stats = await sync_research(pool, settings, now)
+        logger.info("investment_research_refresh %s", stats)
+        return
     if session == "CORPORATE_ACTIONS_REFRESH":
         # This is a global source refresh, not a tenant report run.  It never
         # creates workflow.jobs and must not cause normal report generation.

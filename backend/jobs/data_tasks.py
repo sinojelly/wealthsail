@@ -49,6 +49,7 @@ _SUPPORTED_JOB_TYPES = (
     "FUND_NAV_BACKFILL",
     "POSITION_PERIOD_METRICS_REBUILD",
     "FUND_NAV_RANGE_FETCH",
+    "INVESTMENT_RESEARCH_REFRESH",
 )
 _PROJECTION_REPAIR_INTERVAL_SECONDS = 60.0
 _ERROR_TEXT_LIMIT = 500
@@ -296,7 +297,8 @@ async def claim_data_task(
                   FROM workflow.job_runs
                  WHERE job_type IN ('FUND_NAV_BACKFILL',
                                     'POSITION_PERIOD_METRICS_REBUILD',
-                                    'FUND_NAV_RANGE_FETCH')
+                                    'FUND_NAV_RANGE_FETCH',
+                                    'INVESTMENT_RESEARCH_REFRESH')
                    AND (
                        (status IN ('PENDING', 'FAILED') AND
                            CASE WHEN status = 'PENDING'
@@ -814,6 +816,13 @@ async def process_data_task(
         lease.attempt_count,
         as_of.isoformat(),
     )
+    if lease.job_type == "INVESTMENT_RESEARCH_REFRESH":
+        from backend.jobs.investment_research import refresh_subject
+        kind, key = lease.payload.get("kind"), lease.payload.get("id")
+        if kind not in ("index", "fund") or not isinstance(key, str):
+            raise ValueError("invalid investment research task")
+        await refresh_subject(pool, settings, kind, key, as_of)
+        return
     if lease.job_type == "FUND_NAV_RANGE_FETCH":
         fund_code = lease.payload.get("fundCode")
         if not isinstance(fund_code, str):

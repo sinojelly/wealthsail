@@ -1,4 +1,5 @@
 """All investment context queries are database-only and parameterized."""
+
 from backend.investment.schemas import ScreenQuery
 
 
@@ -12,7 +13,8 @@ async def directions(conn):
 
 
 async def indices(conn, direction_id):
-    return await conn.fetch("""
+    return await conn.fetch(
+        """
         SELECT i.*, count(DISTINCT f.instrument_id) AS fund_count
         FROM reference.research_indices i
         JOIN reference.direction_index_links d ON d.index_id=i.id
@@ -21,7 +23,9 @@ async def indices(conn, direction_id):
           AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
         WHERE d.direction_id=$1
         GROUP BY i.id ORDER BY i.sort_order, i.id
-    """, direction_id)
+    """,
+        direction_id,
+    )
 
 
 async def macro(conn):
@@ -46,40 +50,76 @@ def _where(query):
         conditions.append(sql.replace("?", f"${len(params)}"))
 
     if query.keyword.strip():
-        add("(c.fund_name ILIKE ? OR c.fund_code ILIKE ?)", f"%{query.keyword.strip()}%")
+        add(
+            "(c.fund_name ILIKE ? OR c.fund_code ILIKE ?)", f"%{query.keyword.strip()}%"
+        )
     if query.fund_type:
         add("c.fund_type=?", query.fund_type)
     if query.trade_form:
         add("c.trade_form=?", query.trade_form)
     if query.index_id:
-        add("EXISTS (SELECT 1 FROM reference.fund_index_links f WHERE f.instrument_id=c.instrument_id AND f.index_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))", query.index_id)
+        add(
+            "EXISTS (SELECT 1 FROM reference.fund_index_links f WHERE f.instrument_id=c.instrument_id AND f.index_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))",
+            query.index_id,
+        )
     if query.direction_id:
-        add("EXISTS (SELECT 1 FROM reference.fund_index_links f JOIN reference.direction_index_links d ON d.index_id=f.index_id WHERE f.instrument_id=c.instrument_id AND d.direction_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))", query.direction_id)
+        add(
+            "EXISTS (SELECT 1 FROM reference.fund_index_links f JOIN reference.direction_index_links d ON d.index_id=f.index_id WHERE f.instrument_id=c.instrument_id AND d.direction_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))",
+            query.direction_id,
+        )
     if query.nav_position_min is not None:
         add("r.current_percentile>=?", query.nav_position_min)
     if query.nav_position_max is not None:
         add("r.current_percentile<=?", query.nav_position_max)
+    if query.scorable_only:
+        conditions.append("a.technical_score IS NOT NULL")
+    if query.min_history_days:
+        add("a.history_days>=?", query.min_history_days)
     return (" WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
 async def screen(conn, query: ScreenQuery):
     where, params = _where(query)
-    base = """FROM reference.research_fund_catalog c
-      LEFT JOIN reference.fund_nav_ranges r ON c.trade_form='FUND' AND r.fund_code=c.fund_code"""
+    params.append(query.analysis_at)
+    cutoff_param = f"${len(params)}"
+    base = f"""FROM reference.research_fund_catalog c
+      LEFT JOIN reference.fund_nav_ranges r ON c.trade_form='FUND' AND r.fund_code=c.fund_code
+      LEFT JOIN LATERAL (
+        SELECT CASE WHEN s.as_of >= (
+          SELECT max(calendar_date) FROM reference.trading_calendars
+          WHERE market=c.market AND is_trading_day
+            AND calendar_date < (now() AT TIME ZONE 'Asia/Shanghai')::date
+        ) THEN (s.result->>'score')::numeric ELSE NULL END AS technical_score,
+        jsonb_array_length(s.points) AS history_days, s.result->>'state' AS technical_state
+        FROM market.investment_analysis_snapshots s
+        WHERE s.subject_kind='fund' AND s.subject_key=c.instrument_id::text
+          AND s.retrieved_at<=LEAST(COALESCE({cutoff_param}::timestamptz,now()),now())
+        ORDER BY s.retrieved_at DESC LIMIT 1
+      ) a ON TRUE"""
     total = await conn.fetchval("SELECT count(*) " + base + where, *params)
-    sort = {"name": "c.fund_name", "code": "c.fund_code", "navPosition": "r.current_percentile"}[query.sort_by]
+    sort = {
+        "name": "c.fund_name",
+        "code": "c.fund_code",
+        "navPosition": "r.current_percentile",
+        "technicalScore": "a.technical_score",
+    }[query.sort_by]
     order = "DESC" if query.sort_order == "desc" else "ASC"
     rows = await conn.fetch(
-        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at "
-        + base + where + f" ORDER BY {sort} {order} NULLS LAST, c.market, c.fund_code"
-        + f" LIMIT ${len(params)+1} OFFSET ${len(params)+2}",
-        *params, query.page_size, (query.page-1)*query.page_size,
+        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at, a.technical_score, a.history_days, a.technical_state "
+        + base
+        + where
+        + f" ORDER BY {sort} {order} NULLS LAST, c.market, c.fund_code"
+        + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}",
+        *params,
+        query.page_size,
+        (query.page - 1) * query.page_size,
     )
     return rows, total
 
 
 async def location(conn, instrument_id):
-    return await conn.fetchrow("""
+    return await conn.fetchrow(
+        """
       SELECT f.index_id, d.direction_id, r.market_id, r.style_id
       FROM reference.fund_index_links f
       JOIN reference.direction_index_links d ON d.index_id=f.index_id
@@ -87,15 +127,20 @@ async def location(conn, instrument_id):
       WHERE f.instrument_id=$1 AND f.effective_from<=CURRENT_DATE
         AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
       ORDER BY r.sort_order, d.direction_id, f.index_id LIMIT 1
-    """, instrument_id)
+    """,
+        instrument_id,
+    )
 
 
 async def search_indices(conn, keyword):
-    return await conn.fetch("""
+    return await conn.fetch(
+        """
       SELECT DISTINCT ON (i.id) i.*, d.direction_id, r.market_id, r.style_id
       FROM reference.research_indices i
       JOIN reference.direction_index_links d ON d.index_id=i.id
       JOIN reference.research_directions r ON r.id=d.direction_id
       WHERE i.name ILIKE $1 OR i.code ILIKE $1
       ORDER BY i.id, r.sort_order, d.direction_id LIMIT 10
-    """, f"%{keyword}%")
+    """,
+        f"%{keyword}%",
+    )
