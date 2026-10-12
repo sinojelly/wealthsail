@@ -15,13 +15,17 @@ import {
   X,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { canViewOperations, logout, useAuthSession } from "../../app/auth-session";
+import {
+  canViewOperations,
+  logout,
+  useAuthSession,
+} from "../../app/auth-session";
 import ChatDrawer from "../../features/chat/ChatDrawer";
 
 const navItems = [
   { to: "/dashboard", label: "资产看板", icon: BarChart3 },
   { to: "/market-hot", label: "市场热点", icon: Flame },
-  { to: "/fund-screener", label: "基金筛选", icon: Filter },
+  { to: "/fund-screener", label: "投资机会", icon: Filter },
   { to: "/reports", label: "研报审计", icon: BookOpenCheck },
   { to: "/risk-policy", label: "风控政策", icon: ShieldCheck },
   { to: "/settings", label: "账号安全", icon: Settings },
@@ -37,7 +41,7 @@ const pageTitles: Record<string, string> = {
   "/dashboard": "资产看板",
   "/onboarding": "初始化导入",
   "/market-hot": "市场热点",
-  "/fund-screener": "基金筛选",
+  "/fund-screener": "投资机会",
   "/reports": "研报审计",
   "/risk-policy": "风控政策",
   "/settings": "账号安全",
@@ -108,7 +112,9 @@ export default function AppShell() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar">{session?.displayName.slice(0, 1) ?? "?"}</div>
+          <div className="avatar">
+            {session?.displayName.slice(0, 1) ?? "?"}
+          </div>
           <div className="user-copy">
             <strong>{session?.displayName ?? "未登录"}</strong>
             <span>{session?.role ?? ""}</span>

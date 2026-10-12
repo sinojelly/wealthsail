@@ -1,678 +1,426 @@
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { RefreshCw, Search, SearchX, X } from "lucide-react";
-import PageHeader from "../../components/layout/PageHeader";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
+import { Sparkles, ListPlus } from "lucide-react";
+import { useAuthSession, getSessionSubject } from "../../app/auth-session";
+import * as api from "../../api/investment";
+import * as watchlist from "../../api/watchlist";
 import {
-  browseFunds,
-  fmtDate,
-  fmtDateSlash,
-  fmtNav,
-  fmtPercent,
-  fmtPercentileLabel,
-  fmtTimestamp,
-  getFundRange,
-  searchFunds,
-  triggerFundFetch,
-  type FundBrowseCategory,
-  type FundNavRange,
-  type FundRangeResponse,
-} from "../../api/funds";
-
-/** 抓取提交后的轮询间隔；Worker 完成写入缓存后下一次查询即拿到终态。 */
-const FETCH_POLL_INTERVAL_MS = 5_000;
-/** 单次抓取周期的兜底时限，超时后停止轮询并恢复按钮。 */
-const FETCH_CYCLE_BACKSTOP_MS = 90_000;
-/** 搜索结果含未收录基金时的刷新间隔与总窗口。 */
-const SEARCH_POLL_INTERVAL_MS = 5_000;
-const SEARCH_POLL_WINDOW_MS = 120_000;
-
-/** 快速筛选入口（浏览缓存，不触发抓取）。 */
-const QUICK_FILTERS: { key: FundBrowseCategory; label: string }[] = [
-  { key: "stable", label: "稳健理财" },
-  { key: "growth", label: "追求收益" },
-  { key: "index", label: "指数投资" },
-  { key: "overseas", label: "海外配置" },
-  { key: "undervalued", label: "历史低估" },
-  { key: "near_high", label: "接近高点" },
-];
-
-function isSixDigitCode(value: string): boolean {
-  return /^[0-9]{6}$/.test(value);
-}
-
-/** 未收录行的加载占位：转圈 + 文案。 */
-function FetchingCell() {
-  return (
-    <span className="fetching-cell">
-      <RefreshCw className="spin" size={12} />
-      正在获取…
-    </span>
-  );
-}
-
-/** 未收录行的骨架占位块。 */
-function SkeletonCell() {
-  return <span className="skeleton-block" aria-hidden="true" />;
-}
-
-/** 抓取中 / 刚提交失败时的公共提示。 */
-function FetchFeedback({
-  inFlight,
-  failed,
-}: {
-  inFlight: boolean;
-  failed: boolean;
-}) {
-  if (inFlight) {
-    return (
-      <p className="fund-fetch-hint" role="status">
-        正在获取数据…通常几秒到几分钟内完成，页面会自动刷新结果。
-      </p>
-    );
-  }
-  if (failed) {
-    return (
-      <p className="fund-fetch-hint" role="alert">
-        抓取请求提交失败，请稍后重试。
-      </p>
-    );
-  }
-  return null;
-}
-
-/** 详情区：未收录时自动抓取的提示（非卡片，纯文本行 + 操作按钮）。 */
-function FundDetail({
-  fundCode,
-  detail,
-  isLoading,
-  isError,
-  fetchInFlight,
-  fetchFailed,
-  onFetch,
-}: {
-  fundCode: string;
-  detail: FundRangeResponse | null;
-  isLoading: boolean;
-  isError: boolean;
-  fetchInFlight: boolean;
-  fetchFailed: boolean;
-  onFetch: (code: string) => void;
-}) {
-  if (isError) {
-    return (
-      <div className="fund-detail">
-        <p className="fund-fetch-hint" role="alert">
-          区间数据读取失败，请稍后重试。
-        </p>
-      </div>
-    );
-  }
-
-  if (isLoading || detail == null) {
-    return (
-      <div className="fund-detail" role="status">
-        <p className="fund-fetch-hint">正在加载数据…</p>
-      </div>
-    );
-  }
-
-  if (detail.status === "NOT_COLLECTED") {
-    if (fetchFailed) {
-      return (
-        <div className="fund-detail">
-          <p className="fund-fetch-hint" role="alert">
-            抓取请求提交失败，请稍后重试。
-          </p>
-          <button
-            type="button"
-            className="btn-primary btn-sm"
-            onClick={() => onFetch(fundCode)}
-            disabled={fetchInFlight}
-          >
-            <RefreshCw size={14} />
-            重试
-          </button>
-        </div>
-      );
-    }
-    return (
-      <div className="fund-detail" role="status">
-        <p className="fund-fetch-hint">
-          <RefreshCw className="spin" size={14} />
-          正在获取 {fundCode} 的净值数据，通常几秒内完成…
-        </p>
-      </div>
-    );
-  }
-
-  if (detail.status === "UNAVAILABLE") {
-    return (
-      <div className="fund-detail">
-        <p className="search-result-hint" role="alert">
-          <strong>{detail.fundName}</strong>（{detail.fundCode}）的数据源抓取失败，
-          暂时无法获取，可稍后重试。
-        </p>
-        <FetchFeedback inFlight={fetchInFlight} failed={fetchFailed} />
-        {!fetchFailed ? (
-          <button
-            type="button"
-            className="btn-primary btn-sm"
-            onClick={() => onFetch(detail.fundCode)}
-            disabled={fetchInFlight}
-          >
-            <RefreshCw size={14} />
-            {fetchInFlight ? "正在获取数据" : "重试获取"}
-          </button>
-        ) : null}
-        <p className="fund-source-line mono">
-          数据来源：{detail.dataSource} · 更新时间：
-          {fmtTimestamp(detail.updatedAt)}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fund-detail">
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>基金</th>
-            <th className="num">最新净值</th>
-            <th className="num">历史最高</th>
-            <th className="num">历史最低</th>
-            <th className="num">距最高回撤</th>
-            <th className="num">距最低上涨</th>
-            <th className="num">当前分位</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              {detail.fundName}
-              <small className="cell-note mono">{detail.fundCode}</small>
-            </td>
-            <td className="num">
-              {fmtNav(detail.latestNav)}
-              <small className="cell-note">
-                {fmtDate(detail.latestNavDate)}
-              </small>
-            </td>
-            <td className="num">
-              {fmtNav(detail.highestNav)}
-              <small className="cell-note">
-                {fmtDate(detail.highestNavDate)}
-              </small>
-            </td>
-            <td className="num">
-              {fmtNav(detail.lowestNav)}
-              <small className="cell-note">
-                {fmtDate(detail.lowestNavDate)}
-              </small>
-            </td>
-            <td className="num fund-drawdown">
-              {fmtPercent(detail.drawdownFromHigh)}
-            </td>
-            <td className="num fund-rise">
-              {fmtPercent(detail.riseFromLow)}
-            </td>
-            <td className="num">
-              {fmtPercentileLabel(detail.currentPercentile)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p className="fund-source-line">
-        成立日期：{fmtDate(detail.inceptionDate)} · 数据来源：天天基金（AkShare）
-        · 历史极值基于累计净值计算 · 更新于 {fmtDateSlash(detail.updatedAt)} ·
-        不构成投资建议
-      </p>
-    </div>
-  );
-}
-
-/** 搜索/快速筛选共用的净值区间表格。 */
-function RangeTable({
-  rows,
-  activeCode,
-  onSelect,
-}: {
-  rows: FundNavRange[];
-  activeCode: string | null;
-  onSelect: (code: string) => void;
-}) {
-  return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>基金</th>
-          <th className="num">最新净值</th>
-          <th className="num">历史最高</th>
-          <th className="num">历史最低</th>
-          <th className="num">距最高回撤</th>
-          <th className="num">距最低上涨</th>
-          <th className="num">当前分位</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((item) => {
-          const isPending = item.status === "NOT_COLLECTED";
-          return (
-            <tr
-              key={item.fundCode}
-              className={`fund-row ${
-                activeCode === item.fundCode ? "is-selected" : ""
-              }`}
-              onClick={() => onSelect(item.fundCode)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelect(item.fundCode);
-                }
-              }}
-              tabIndex={0}
-              role="button"
-              aria-label={`查看 ${item.fundName}（${item.fundCode}）净值区间`}
-            >
-              <td>
-                {item.fundName}
-                <small className="cell-note mono">{item.fundCode}</small>
-                {isPending ? (
-                  <small className="cell-note">
-                    净值数据抓取中，完成后自动填充…
-                  </small>
-                ) : null}
-              </td>
-              <td className="num">
-                {isPending ? (
-                  <FetchingCell />
-                ) : (
-                  <>
-                    {fmtNav(item.latestNav)}
-                    <small className="cell-note">
-                      {fmtDate(item.latestNavDate)}
-                    </small>
-                  </>
-                )}
-              </td>
-              <td className="num">
-                {isPending ? (
-                  <SkeletonCell />
-                ) : (
-                  <>
-                    {fmtNav(item.highestNav)}
-                    <small className="cell-note">
-                      {fmtDate(item.highestNavDate)}
-                    </small>
-                  </>
-                )}
-              </td>
-              <td className="num">
-                {isPending ? (
-                  <SkeletonCell />
-                ) : (
-                  <>
-                    {fmtNav(item.lowestNav)}
-                    <small className="cell-note">
-                      {fmtDate(item.lowestNavDate)}
-                    </small>
-                  </>
-                )}
-              </td>
-              <td className="num fund-drawdown">
-                {isPending ? (
-                  <SkeletonCell />
-                ) : item.status === "UNAVAILABLE" ? (
-                  "--"
-                ) : (
-                  fmtPercent(item.drawdownFromHigh)
-                )}
-              </td>
-              <td className="num fund-rise">
-                {isPending ? (
-                  <SkeletonCell />
-                ) : item.status === "UNAVAILABLE" ? (
-                  "--"
-                ) : (
-                  fmtPercent(item.riseFromLow)
-                )}
-              </td>
-              <td className="num">
-                {isPending ? (
-                  <SkeletonCell />
-                ) : item.status === "UNAVAILABLE" ? (
-                  "--"
-                ) : (
-                  fmtPercentileLabel(item.currentPercentile)
-                )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-interface FetchCycle {
-  code: string;
-}
+  chooseFund,
+  chooseIndex,
+  locateSearch,
+  type Selection,
+} from "./selection";
+import MacroContextStrip from "./components/MacroContextStrip";
+import DirectionExplorer from "./components/DirectionExplorer";
+import GlobalResearchSearch from "./components/GlobalResearchSearch";
+import IndexComparison from "./components/IndexComparison";
+import FundResultsTable from "./components/FundResultsTable";
+import ResearchDiagnosis from "./components/ResearchDiagnosis";
+import "./opportunities.css";
 
 export default function FundScreenerPage() {
-  const [keyword, setKeyword] = useState("");
-  const [debouncedKeyword, setDebouncedKeyword] = useState("");
-  const [selectedCode, setSelectedCode] = useState<string | null>(null);
-  const [browseCategory, setBrowseCategory] =
-    useState<FundBrowseCategory | null>(null);
-  const [fetchCycle, setFetchCycle] = useState<FetchCycle | null>(null);
-  // 详情弹窗：用户点击行时打开；自动选中的流程只显示内嵌进度面板
-  const [modalCode, setModalCode] = useState<string | null>(null);
-  const fetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 搜索结果存在未收录基金时的轮询截止时间（0 = 未在轮询）
-  const searchPollDeadlineRef = useRef(0);
+  const subject = getSessionSubject(useAuthSession());
+  return <ResearchWorkspace key={subject} subject={subject} />;
+}
 
-  // 输入防抖 500ms，避免逐字符打接口
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedKeyword(keyword.trim()), 500);
-    return () => clearTimeout(timer);
-  }, [keyword]);
-
-  const searchQuery = useQuery({
-    queryKey: ["funds", "search", debouncedKeyword],
-    queryFn: () => searchFunds(debouncedKeyword),
-    enabled: debouncedKeyword.length > 0,
-    // 结果里还有"未收录"的基金时轮询：Worker 抓取完成后行数据自动填充
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const hasPending =
-        data?.some((item) => item.status === "NOT_COLLECTED") ?? false;
-      if (!hasPending) {
-        searchPollDeadlineRef.current = 0;
-        return false;
-      }
-      const now = Date.now();
-      if (searchPollDeadlineRef.current === 0) {
-        searchPollDeadlineRef.current = now + SEARCH_POLL_WINDOW_MS;
-      }
-      if (now > searchPollDeadlineRef.current) return false;
-      return SEARCH_POLL_INTERVAL_MS;
-    },
+function ResearchWorkspace({ subject }: { subject: string }) {
+  const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const [direct, setDirect] = useState<api.SearchResult | null>(null);
+  const [run, setRun] = useState<{
+    id: string;
+    target: string;
+    until: number;
+  } | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const directions = useQuery({
+    queryKey: [subject, "directions"],
+    queryFn: ({ signal }) => api.getDirections(signal),
   });
-
-  const browseQuery = useQuery({
-    queryKey: ["funds", "browse", browseCategory],
-    queryFn: () => browseFunds(browseCategory as FundBrowseCategory),
-    enabled: browseCategory != null,
+  const context = useQuery({
+    queryKey: [subject, "market-context"],
+    queryFn: ({ signal }) => api.getMarketContext(signal),
   });
-
-  // 输入恰好是 6 位代码但缓存无匹配时，自动进入该代码的抓取流程
-  const directCode = isSixDigitCode(debouncedKeyword)
-    ? debouncedKeyword
-    : null;
-  const searchActive = debouncedKeyword.length > 0;
-  const autoLookup = Boolean(
-    directCode && !searchQuery.isFetching && (searchQuery.data ?? []).length === 0,
-  );
-  // 名称搜索结果全部未收录时，自动选中第一只进入抓取流程
-  const items: FundNavRange[] = searchQuery.data ?? [];
-  const allNotCollected =
-    items.length > 0 && items.every((item) => item.status === "NOT_COLLECTED");
-  const autoSelectCode =
-    allNotCollected && !searchQuery.isFetching ? items[0].fundCode : null;
-  const activeCode =
-    selectedCode ??
-    (autoLookup ? directCode : null) ??
-    (searchActive ? autoSelectCode : null);
-
-  const detailQuery = useQuery({
-    queryKey: ["funds", "range", activeCode],
-    queryFn: () => getFundRange(activeCode as string),
-    enabled: activeCode != null,
-    // 抓取周期内轮询缓存；拿到终态（已收录/确认不可用）或超时后停止
-    refetchInterval: (query) => {
-      if (fetchCycle == null || fetchCycle.code !== activeCode) return false;
-      const data = query.state.data;
-      if (data && data.status === "AVAILABLE") return false;
-      return FETCH_POLL_INTERVAL_MS;
-    },
+  const unlinked = params.get("unlinked") === "1";
+  const directionId = unlinked
+    ? null
+    : (params.get("direction") ?? directions.data?.[0]?.id ?? null);
+  const direction = directions.data?.find((d) => d.id === directionId);
+  const indices = useQuery({
+    queryKey: [subject, "indices", directionId],
+    queryFn: ({ signal }) => api.getIndices(directionId!, signal),
+    enabled: !!directionId,
   });
-
-  const fetchMutation = useMutation({
-    mutationFn: triggerFundFetch,
+  const indexId = unlinked
+    ? null
+    : (params.get("index") ?? indices.data?.[0]?.id ?? null);
+  const index = indices.data?.find((i) => i.id === indexId);
+  const fundCode = params.get("fund");
+  const selection: Selection = {
+    directionId,
+    indexId,
+    fundId: params.get("instrument"),
+    fundCode,
+  };
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const filters: api.ScreenFilters = {
+    directionId: directionId ?? undefined,
+    indexId: indexId ?? undefined,
+    page,
+    pageSize: 20,
+    keyword: params.get("keyword") ?? undefined,
+    tradeForm: params.get("tradeForm") ?? undefined,
+    sortBy: params.get("sortBy") ?? "name",
+    sortOrder: params.get("sortOrder") ?? "asc",
+    analysisAsOf: params.get("analysisAsOf") ?? undefined,
+    scorableOnly: params.get("scorableOnly") ?? undefined,
+    minHistoryDays: params.get("minHistoryDays") ?? undefined,
+  };
+  const funds = useQuery({
+    queryKey: [subject, "research-funds", filters],
+    queryFn: ({ signal }) => api.screenFunds(filters, signal),
+    enabled: unlinked || indices.isSuccess,
+  });
+  const restore = useQuery({
+    queryKey: [subject, "restore-fund", fundCode],
+    queryFn: ({ signal }) => api.searchResearch(fundCode!, signal),
+    enabled: !!fundCode,
+  });
+  const selectedFund =
+    funds.data?.items.find((f) => f.fundCode === fundCode) ??
+    (direct?.code === fundCode
+      ? direct
+      : restore.data?.find((f) => f.kind === "fund" && f.code === fundCode));
+  const mode = fundCode ? "fund" : "index";
+  const objectId =
+    mode === "fund"
+      ? (selectedFund?.instrumentId ?? params.get("instrument"))
+      : indexId;
+  const analysisMode = mode === "fund" && !objectId ? "nav" : mode;
+  const analysisId = objectId ?? (mode === "fund" ? fundCode : null);
+  const target = `${subject}:${analysisMode}:${analysisId}`;
+  const diagnosis = useQuery({
+    queryKey: [subject, "analysis", analysisMode, analysisId],
+    queryFn: ({ signal }) => api.getAnalysis(analysisMode, analysisId!, signal),
+    enabled: !!analysisId,
+  });
+  const watched = useQuery({
+    queryKey: [subject, "watchlist"],
+    queryFn: () => watchlist.list(),
+  });
+  const add = useMutation({
+    mutationFn: (input: watchlist.AddWatchlistInput) => watchlist.add(input),
+    onSuccess: () =>
+      client.invalidateQueries({
+        predicate: (q) => q.queryKey.includes("watchlist"),
+      }),
+  });
+  const refresh = useMutation({
+    mutationFn: () => api.refreshResearch(analysisMode, analysisId!),
     onSuccess: (data) => {
-      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
-      setFetchCycle({ code: data.fundCode });
-      fetchTimerRef.current = setTimeout(() => {
-        setFetchCycle(null);
-      }, FETCH_CYCLE_BACKSTOP_MS);
+      setTimedOut(false);
+      setRun({ id: data.runId, target, until: Date.now() + 120000 });
     },
   });
-
-  function selectFund(code: string) {
-    setSelectedCode(code);
-    // 点击行时弹出详情弹窗（自动选中的流程不弹，保留内嵌进度面板）
-    setModalCode(code);
-    if (fetchTimerRef.current) {
-      clearTimeout(fetchTimerRef.current);
-      fetchTimerRef.current = null;
-    }
-    setFetchCycle(null);
-    // 清掉上一次点击残留的提交失败状态，避免错误提示泄漏到其他基金
-    fetchMutation.reset();
-  }
-
-  function clearSelection() {
-    setSelectedCode(null);
-    setModalCode(null);
-    if (fetchTimerRef.current) {
-      clearTimeout(fetchTimerRef.current);
-      fetchTimerRef.current = null;
-    }
-    setFetchCycle(null);
-    fetchMutation.reset();
-  }
-
-  function toggleBrowse(key: FundBrowseCategory) {
-    if (browseCategory === key) {
-      setBrowseCategory(null);
-      return;
-    }
-    setBrowseCategory(key);
-    setKeyword("");
-    setDebouncedKeyword("");
-    clearSelection();
-  }
-
-  const browseActive = browseCategory != null && !searchActive;
-  const browseItems: FundNavRange[] = browseQuery.data ?? [];
-  const tableItems = searchActive ? items : browseItems;
-  // 脚注的"更新于"取本次结果中最新的缓存更新日期
-  const latestUpdated = fmtDateSlash(
-    tableItems.reduce<string | null>(
-      (latest, item) =>
-        item.updatedAt && (!latest || item.updatedAt > latest)
-          ? item.updatedAt
-          : latest,
-      null,
-    ),
-  );
-
-  const detail: FundRangeResponse | null = detailQuery.data ?? null;
-  const fetchFailed = fetchMutation.isError;
-  // 抓取周期是否仍在进行：周期匹配当前基金，且尚未拿到可用数据
-  const fetchInFlight =
-    fetchCycle != null &&
-    fetchCycle.code === activeCode &&
-    (detail == null ||
-      detail.status === "NOT_COLLECTED" ||
-      detail.status === "UNAVAILABLE") &&
-    !fetchFailed;
-
-  // 未收录时自动提交抓取请求：后端 search 已幂等入队，这里补一次触发以进入轮询
-  const { mutate: mutateFetch } = fetchMutation;
-  const shouldAutoFetch =
-    detail != null &&
-    detail.status === "NOT_COLLECTED" &&
-    fetchCycle == null &&
-    !fetchFailed &&
-    activeCode != null;
+  const activeRun = run?.target === target ? run : null;
+  const status = useQuery({
+    queryKey: [subject, "refresh-status", activeRun?.id],
+    queryFn: ({ signal }) => api.getRefreshStatus(activeRun!.id, signal),
+    enabled: !!activeRun && !timedOut,
+    refetchInterval: (q) =>
+      ["COMPLETED", "FAILED"].includes(q.state.data?.status ?? "")
+        ? false
+        : 5000,
+  });
   useEffect(() => {
-    if (shouldAutoFetch && activeCode != null) {
-      mutateFetch(activeCode);
+    if (!activeRun) return;
+    const t = setTimeout(
+      () => setTimedOut(true),
+      Math.max(0, activeRun.until - Date.now()),
+    );
+    return () => clearTimeout(t);
+  }, [activeRun]);
+  useEffect(() => {
+    if (status.data?.status === "COMPLETED")
+      void client.invalidateQueries({
+        queryKey: [subject, "analysis", analysisMode, analysisId],
+      });
+  }, [status.data?.status, client, subject, analysisMode, analysisId]);
+  function updateSelection(next: Selection) {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of [
+      ["direction", next.directionId],
+      ["index", next.indexId],
+      ["instrument", next.fundId],
+      ["fund", next.fundCode],
+    ] as const) {
+      if (v) p.set(k, v);
+      else p.delete(k);
     }
-  }, [shouldAutoFetch, activeCode, mutateFetch]);
-
+    if (next.directionId) p.delete("unlinked");
+    else p.set("unlinked", "1");
+    p.delete("page");
+    p.delete("analysisAsOf");
+    setParams(p);
+    setRun(null);
+    setTimedOut(false);
+    add.reset();
+    refresh.reset();
+  }
+  function selectFund(f: api.ResearchFund) {
+    setDirect(null);
+    updateSelection(chooseFund(selection, f));
+  }
+  function searchSelect(item: api.SearchResult) {
+    setDirect(item);
+    updateSelection(
+      locateSearch({
+        ...item,
+        id: item.kind === "fund" ? (item.instrumentId ?? "") : item.id,
+      }),
+    );
+  }
+  function filter(k: string, v: string) {
+    const p = new URLSearchParams(params);
+    if (v) p.set(k, v);
+    else p.delete(k);
+    p.delete("page");
+    p.delete("analysisAsOf");
+    setParams(p, { replace: true });
+  }
+  const title =
+    mode === "fund"
+      ? (selectedFund?.fundName ??
+        ("name" in (selectedFund ?? {})
+          ? (selectedFund as api.SearchResult).name
+          : fundCode!))
+      : (index?.name ?? "请选择指数");
+  const path = [
+    direction?.marketLabel ?? "未确认市场",
+    direction?.label ?? "未确认方向",
+    index?.name ?? (fundCode ? "未确认关联指数" : null),
+    fundCode,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+  const watching = watched.data?.some((f) => f.symbol === fundCode);
+  const busy =
+    !!activeRun &&
+    !timedOut &&
+    !["COMPLETED", "FAILED"].includes(status.data?.status ?? "");
+  const message = refresh.isError
+    ? "更新提交失败，请重试。"
+    : status.isError
+      ? "更新状态读取失败，请稍后重试。"
+      : timedOut
+        ? "后台仍在处理，可稍后查看研究结果。"
+        : status.data?.status === "FAILED"
+          ? "更新失败，保留上次数据，可重试。"
+          : status.data?.status === "COMPLETED"
+            ? "研究数据已更新。"
+            : "";
   return (
-    <>
-      <PageHeader
-        title="基金筛选"
-        description="按代码或名称搜索基金，或用快速筛选浏览已收录基金的净值区间、回撤与分位"
+    <div className="opportunities">
+      <header className="op-page-header">
+        <div>
+          <h1 aria-label="投资机会中心">
+            <Sparkles size={20} />
+            投资机会中心 <span className="op-research-badge">研究模式</span>
+          </h1>
+          <p>从市场环境到指数与基金的连续研究工作台</p>
+        </div>
+        <span className="op-muted">● 可核验研究 · 缺失数据不生成结论</span>
+      </header>
+      <GlobalResearchSearch
+        key={subject}
+        subject={subject}
+        onSelect={searchSelect}
       />
-
-      <div className="panel">
-        <div className="fund-search-row">
-          <div className="fund-search-box">
-            <Search size={15} />
-            <input
-              type="text"
-              value={keyword}
-              onChange={(event) => {
-                setKeyword(event.target.value);
-                clearSelection();
-              }}
-              placeholder="输入基金代码或名称，如 110022 / 沪深300"
-              aria-label="搜索基金"
-            />
-            {searchQuery.isFetching ? (
-              <span className="muted">搜索中…</span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="fund-chips" role="group" aria-label="快速筛选">
-          {QUICK_FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={`fund-chip ${
-                browseCategory === filter.key && !searchActive
-                  ? "is-active"
-                  : ""
-              }`}
-              onClick={() => toggleBrowse(filter.key)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-
-        {searchQuery.isError ? (
-          <div className="alert alert-danger" role="alert">
-            <strong>搜索失败</strong>
-            <p>暂时无法搜索基金，请稍后重试。</p>
-          </div>
-        ) : null}
-
-        {searchActive && items.length > 0 ? (
-          <div className="table-wrap">
-            <RangeTable
-              rows={items}
-              activeCode={activeCode}
-              onSelect={selectFund}
-            />
-          </div>
-        ) : null}
-
-        {searchActive &&
-        !searchQuery.isFetching &&
-        items.length === 0 &&
-        !searchQuery.isError &&
-        directCode == null ? (
-          <div className="search-result-hint">
-            <SearchX size={18} className="empty-icon" />
-            未找到匹配的已收录基金，可尝试其他代码或名称。
-          </div>
-        ) : null}
-
-        {browseActive && browseQuery.isError ? (
-          <div className="alert alert-danger" role="alert">
-            <strong>筛选失败</strong>
-            <p>暂时无法获取筛选结果，请稍后重试。</p>
-          </div>
-        ) : null}
-
-        {browseActive && browseQuery.isSuccess && browseItems.length > 0 ? (
-          <div className="table-wrap">
-            <RangeTable
-              rows={browseItems}
-              activeCode={activeCode}
-              onSelect={selectFund}
-            />
-          </div>
-        ) : null}
-
-        {browseActive && browseQuery.isSuccess && browseItems.length === 0 ? (
-          <div className="search-result-hint">
-            <SearchX size={18} className="empty-icon" />
-            暂无符合条件的基金——数据会随搜索与抓取逐步累积。
-          </div>
-        ) : null}
-
-        {activeCode != null && modalCode == null ? (
-          <FundDetail
-            fundCode={activeCode}
-            detail={detail}
-            isLoading={detailQuery.isLoading}
-            isError={detailQuery.isError}
-            fetchInFlight={fetchInFlight}
-            fetchFailed={fetchFailed}
-            onFetch={(code) => mutateFetch(code)}
-          />
-        ) : null}
-
-        {tableItems.length > 0 && (searchActive || browseActive) ? (
-          <p className="fund-source-line">
-            数据来源：天天基金 · 历史极值基于累计净值计算 · 更新于 {latestUpdated}
-          </p>
-        ) : null}
-      </div>
-
-      {modalCode != null ? (
-        <div
-          className="modal-overlay"
-          onClick={() => setModalCode(null)}
-          role="presentation"
-        >
-          <div
-            className="modal-card"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`${activeCode} 净值区间详情`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header">
-              <span className="modal-title">净值区间详情</span>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="关闭详情"
-                onClick={() => setModalCode(null)}
-              >
-                <X size={16} />
-              </button>
+      <MacroContextStrip data={context.data} error={context.isError} />
+      {directions.isError && (
+        <p role="alert">方向读取失败，仍可直接搜索基金。</p>
+      )}
+      <DirectionExplorer
+        directions={directions.data ?? []}
+        selected={direction}
+        onSelect={(id) => {
+          setDirect(null);
+          updateSelection({
+            directionId: id,
+            indexId: null,
+            fundId: null,
+            fundCode: null,
+          });
+        }}
+      />
+      <div className="op-workspace">
+        <section className="op-panel op-candidates">
+          <header>
+            <div>
+              <h2>候选选择</h2>
+              <p aria-label="研究路径">{path}</p>
             </div>
-            <FundDetail
-              fundCode={modalCode}
-              detail={detail}
-              isLoading={detailQuery.isLoading}
-              isError={detailQuery.isError}
-              fetchInFlight={fetchInFlight}
-              fetchFailed={fetchFailed}
-              onFetch={(code) => mutateFetch(code)}
-            />
+            <span>选择指数研究风险暴露，选择基金研究投资工具</span>
+          </header>
+          <IndexComparison
+            items={indices.data ?? []}
+            selectedId={indexId}
+            onSelect={(id) => {
+              setDirect(null);
+              updateSelection(chooseIndex(selection, id));
+            }}
+            loading={indices.isLoading && !!directionId}
+            error={indices.isError}
+          />
+          <div className="op-filter-toggle">
+            <button
+              aria-expanded={filtersOpen}
+              onClick={() => setFiltersOpen(!filtersOpen)}
+            >
+              高级筛选
+            </button>
+            <span>服务端组合筛选 · 范围内候选</span>
           </div>
-        </div>
-      ) : null}
-    </>
+          {filtersOpen && (
+            <div className="op-filters">
+              <label>
+                关键词
+                <input
+                  aria-label="基金列表关键词"
+                  value={params.get("keyword") ?? ""}
+                  onChange={(e) => filter("keyword", e.target.value)}
+                />
+              </label>
+              <label>
+                类型
+                <select
+                  value={params.get("tradeForm") ?? ""}
+                  onChange={(e) => filter("tradeForm", e.target.value)}
+                >
+                  <option value="">全部</option>
+                  <option value="ETF">ETF</option>
+                  <option value="FUND">场外基金</option>
+                </select>
+              </label>
+              <label>
+                排序
+                <select
+                  value={params.get("sortBy") ?? "name"}
+                  onChange={(e) => filter("sortBy", e.target.value)}
+                >
+                  <option value="name">名称</option>
+                  <option value="code">代码</option>
+                  <option value="navPosition">净值区间位置</option>
+                  <option value="technicalScore">技术状态评分</option>
+                </select>
+              </label>
+              <label>
+                指标覆盖
+                <select
+                  value={params.get("scorableOnly") ?? "false"}
+                  onChange={(e) => filter("scorableOnly", e.target.value)}
+                >
+                  <option value="false">全部候选</option>
+                  <option value="true">可完整评分</option>
+                </select>
+              </label>
+              <label>
+                最少历史日数
+                <input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  value={params.get("minHistoryDays") ?? ""}
+                  onChange={(e) => filter("minHistoryDays", e.target.value)}
+                />
+              </label>
+              <label>
+                顺序
+                <select
+                  value={params.get("sortOrder") ?? "asc"}
+                  onChange={(e) => filter("sortOrder", e.target.value)}
+                >
+                  <option value="asc">升序</option>
+                  <option value="desc">降序</option>
+                </select>
+              </label>
+            </div>
+          )}
+          <FundResultsTable
+            data={funds.data}
+            selectedCode={fundCode}
+            indexName={index?.name}
+            onSelect={selectFund}
+            page={page}
+            onPage={(p) => {
+              const next = new URLSearchParams(params);
+              next.set("page", String(p));
+              if (funds.data?.analysisAsOf)
+                next.set("analysisAsOf", funds.data.analysisAsOf);
+              setParams(next);
+            }}
+            loading={funds.isFetching}
+            error={funds.isError}
+          />
+        </section>
+        <ResearchDiagnosis
+          key={target}
+          title={title}
+          code={mode === "fund" ? fundCode! : index?.code}
+          mode={mode}
+          path={
+            direction
+              ? `${direction.marketLabel} / ${direction.label}`
+              : "直接搜索"
+          }
+          data={diagnosis.data}
+          loading={diagnosis.isLoading && !!objectId}
+          error={diagnosis.isError}
+          onRefresh={() => {
+            if (analysisId) refresh.mutate();
+          }}
+          refreshing={busy || refresh.isPending}
+          canRefresh={!!analysisId}
+          message={message}
+          watchButton={
+            <button
+              className="op-watch"
+              aria-label={mode === "index" ? "关注指数" : "加入自选基金"}
+              disabled={
+                mode === "index" ||
+                !selectedFund?.instrumentId ||
+                add.isPending ||
+                watching ||
+                add.isSuccess
+              }
+              title={
+                mode === "index" ? "指数关注服务尚未接入" : "加入现有基金自选"
+              }
+              onClick={() => {
+                if (selectedFund?.market && fundCode)
+                  add.mutate({
+                    symbol: fundCode,
+                    name: title,
+                    assetType:
+                      selectedFund.tradeForm === "ETF" ? "ETF" : "FUND",
+                    market: selectedFund.market,
+                    currency: selectedFund.currency,
+                  });
+              }}
+            >
+              <ListPlus size={16} />
+              {mode === "index"
+                ? "关注指数"
+                : watching || add.isSuccess
+                  ? "已加入自选"
+                  : "加入自选基金"}
+            </button>
+          }
+        />
+      </div>
+      {add.isError && <p role="alert">加入自选失败，请重试。</p>}
+    </div>
   );
 }
