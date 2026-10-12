@@ -14,6 +14,8 @@ export interface FundNavRange {
   drawdownFromHigh: number | null;
   riseFromLow: number | null;
   currentPercentile: number | null;
+  navRangePosition?: number | null;
+  historyStartDate?: string | null;
   inceptionDate: string | null;
   dataSource: "AKSHARE" | "UNAVAILABLE" | null;
   updatedAt: string | null;
@@ -118,7 +120,8 @@ export function percentileBand(
 export function fmtPercentileLabel(value: number | string | null): string {
   const parsed = toNumber(value);
   if (parsed == null) return "--";
-  return `${parsed.toFixed(2)}% 分位 · ${percentileBand(value)}`;
+  const bands = ["区间底部", "区间偏低", "区间中部", "区间偏高", "区间顶部"];
+  return `区间位置 ${parsed.toFixed(2)}% · ${bands[Math.min(4, Math.max(0, Math.floor(parsed / 20)))]}`;
 }
 
 export function fmtDate(value: string | null): string {
