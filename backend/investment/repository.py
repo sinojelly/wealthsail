@@ -1,0 +1,101 @@
+"""All investment context queries are database-only and parameterized."""
+from backend.investment.schemas import ScreenQuery
+
+
+async def directions(conn):
+    return await conn.fetch("""
+        SELECT d.*, count(DISTINCT l.index_id) AS index_count
+        FROM reference.research_directions d
+        LEFT JOIN reference.direction_index_links l ON l.direction_id=d.id
+        GROUP BY d.id ORDER BY d.sort_order, d.id
+    """)
+
+
+async def indices(conn, direction_id):
+    return await conn.fetch("""
+        SELECT i.*, count(DISTINCT f.instrument_id) AS fund_count
+        FROM reference.research_indices i
+        JOIN reference.direction_index_links d ON d.index_id=i.id
+        LEFT JOIN reference.fund_index_links f ON f.index_id=i.id
+          AND f.effective_from<=CURRENT_DATE
+          AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+        WHERE d.direction_id=$1
+        GROUP BY i.id ORDER BY i.sort_order, i.id
+    """, direction_id)
+
+
+async def macro(conn):
+    return await conn.fetch("""
+        SELECT DISTINCT ON (c.field_code) c.field_code, c.label, c.dimension,
+          o.value, o.as_of, o.quality_status, o.revision,
+          s.published_at, s.retrieved_at, ds.name AS source_name
+        FROM reference.macro_indicator_catalog c
+        LEFT JOIN market.market_observations o
+          ON o.field_code=c.field_code AND o.subject_type='MACRO_SERIES'
+        LEFT JOIN market.source_snapshots s ON s.id=o.snapshot_id
+        LEFT JOIN reference.data_sources ds ON ds.id=o.source_id
+        ORDER BY c.field_code, o.as_of DESC NULLS LAST, o.revision DESC NULLS LAST
+    """)
+
+
+def _where(query):
+    conditions, params = [], []
+
+    def add(sql, value):
+        params.append(value)
+        conditions.append(sql.replace("?", f"${len(params)}"))
+
+    if query.keyword.strip():
+        add("(c.fund_name ILIKE ? OR c.fund_code ILIKE ?)", f"%{query.keyword.strip()}%")
+    if query.fund_type:
+        add("c.fund_type=?", query.fund_type)
+    if query.trade_form:
+        add("c.trade_form=?", query.trade_form)
+    if query.index_id:
+        add("EXISTS (SELECT 1 FROM reference.fund_index_links f WHERE f.instrument_id=c.instrument_id AND f.index_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))", query.index_id)
+    if query.direction_id:
+        add("EXISTS (SELECT 1 FROM reference.fund_index_links f JOIN reference.direction_index_links d ON d.index_id=f.index_id WHERE f.instrument_id=c.instrument_id AND d.direction_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))", query.direction_id)
+    if query.nav_position_min is not None:
+        add("r.current_percentile>=?", query.nav_position_min)
+    if query.nav_position_max is not None:
+        add("r.current_percentile<=?", query.nav_position_max)
+    return (" WHERE " + " AND ".join(conditions) if conditions else ""), params
+
+
+async def screen(conn, query: ScreenQuery):
+    where, params = _where(query)
+    base = """FROM reference.research_fund_catalog c
+      LEFT JOIN reference.fund_nav_ranges r ON c.trade_form='FUND' AND r.fund_code=c.fund_code"""
+    total = await conn.fetchval("SELECT count(*) " + base + where, *params)
+    sort = {"name": "c.fund_name", "code": "c.fund_code", "navPosition": "r.current_percentile"}[query.sort_by]
+    order = "DESC" if query.sort_order == "desc" else "ASC"
+    rows = await conn.fetch(
+        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at "
+        + base + where + f" ORDER BY {sort} {order} NULLS LAST, c.market, c.fund_code"
+        + f" LIMIT ${len(params)+1} OFFSET ${len(params)+2}",
+        *params, query.page_size, (query.page-1)*query.page_size,
+    )
+    return rows, total
+
+
+async def location(conn, instrument_id):
+    return await conn.fetchrow("""
+      SELECT f.index_id, d.direction_id, r.market_id, r.style_id
+      FROM reference.fund_index_links f
+      JOIN reference.direction_index_links d ON d.index_id=f.index_id
+      JOIN reference.research_directions r ON r.id=d.direction_id
+      WHERE f.instrument_id=$1 AND f.effective_from<=CURRENT_DATE
+        AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+      ORDER BY r.sort_order, d.direction_id, f.index_id LIMIT 1
+    """, instrument_id)
+
+
+async def search_indices(conn, keyword):
+    return await conn.fetch("""
+      SELECT DISTINCT ON (i.id) i.*, d.direction_id, r.market_id, r.style_id
+      FROM reference.research_indices i
+      JOIN reference.direction_index_links d ON d.index_id=i.id
+      JOIN reference.research_directions r ON r.id=d.direction_id
+      WHERE i.name ILIKE $1 OR i.code ILIKE $1
+      ORDER BY i.id, r.sort_order, d.direction_id LIMIT 10
+    """, f"%{keyword}%")
