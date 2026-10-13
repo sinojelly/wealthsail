@@ -148,7 +148,7 @@ async def test_macro_worker_persists_facts_with_unverified_publication(monkeypat
 
     monkeypatch.setattr(
         investment_macro,
-        "fetch_economic_calendar",
+        "fetch_macro_history",
         AsyncMock(
             return_value=[
                 {"name": "中国制造业PMI", "date": "2026-09", "value": "51", "unit": ""}
