@@ -9,7 +9,9 @@ from uuid import UUID
 from backend.common.database import system_connection
 from backend.errors import NotFoundError, DataUnavailableError
 from backend.indicators.technical import VERSION, analyze
-from backend.market.research_history import normalize, quality, published_day
+from backend.market.research_history import (
+    calendar_market, fund_history, normalize, quality, published_day,
+)
 from backend.dependencies import now_shanghai
 
 
@@ -39,6 +41,10 @@ async def fetch_history(subject, kind, start, end):
     import akshare as ak
 
     code = subject["code"]
+    metadata = subject.get("metadata", {})
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata)
+    config = metadata.get("research", {})
     if kind == "index":
         if subject["market"] not in ("SSE", "SZSE") or not subject.get(
             "provider_symbol"
@@ -74,23 +80,19 @@ async def fetch_history(subject, kind, start, end):
                 ).to_dict("records")
             ),
             "ETF_HFQ",
-            "AKSHARE/fund_etf_hist_em",
+            config.get("sourceUri") or "AKSHARE/fund_etf_hist_em",
         )
     frame = await asyncio.to_thread(
         ak.fund_open_fund_info_em,
         symbol=code,
-        indicator="累计净值走势",
+        indicator="单位净值走势",
         period="成立来",
     )
-    return (
-        normalize(
-            frame.rename(columns={"净值日期": "date", "累计净值": "close"}).to_dict(
-                "records"
-            )
-        ),
-        "ACCUMULATED_NAV",
-        "AKSHARE/fund_open_fund_info_em",
+    points, series_kind = fund_history(
+        frame.to_dict("records"), return_verified=config.get("returnSeriesVerified") is True,
+        start=start, end=end,
     )
+    return points, series_kind, config.get("sourceUri") or "AKSHARE/fund_open_fund_info_em"
 
 
 async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
@@ -99,7 +101,7 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     rows, series_kind, source = await asyncio.wait_for(
         fetch_history(subject, kind, as_of - timedelta(days=365 * 5), as_of), timeout=90
     )
-    rows = [p for p in rows if p["date"] <= as_of.isoformat()]
+    rows = [p for p in rows if (as_of - timedelta(days=365 * 5)).isoformat() <= p["date"] <= as_of.isoformat()]
     if not rows:
         raise DataUnavailableError("来源没有有效历史数据")
     metadata = subject.get("metadata", {})
@@ -109,12 +111,12 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     verified = (
         bool(subject.get("verified_at"))
         if kind == "index"
-        else bool(config.get("sourceVerified"))
+        else config.get("sourceVerified") is True and bool(config.get("sourceUri"))
     )
     publish_hour = (
         subject.get("publish_hour") if kind == "index" else config.get("publishHour")
     )
-    verified = verified and isinstance(publish_hour, int) and 0 <= publish_hour <= 23
+    verified = verified and type(publish_hour) is int and 0 <= publish_hour <= 23
     eligible_day = published_day(as_of, publish_hour, now or now_shanghai())
     if eligible_day is not None:
         rows = [p for p in rows if p["date"] <= eligible_day.isoformat()]
@@ -124,7 +126,7 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
         calendar = await conn.fetch(
             """SELECT calendar_date FROM reference.trading_calendars
           WHERE market=$1 AND is_trading_day AND calendar_date BETWEEN $2 AND $3 ORDER BY calendar_date""",
-            subject["market"],
+            calendar_market(subject["market"]),
             date.fromisoformat(rows[0]["date"]),
             eligible_day,
         )
@@ -138,9 +140,16 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
         verified=verified,
         missing=bool(days - {p["date"] for p in rows}),
     )
+    if any(p.get("returnQuality") == "CONFLICT" for p in rows):
+        state = "CONFLICT"
     result = analyze(rows, quality=state)
     result["market"] = subject["market"]
     result["publicationHour"] = publish_hour
+    result["calendarMarket"] = calendar_market(subject["market"])
+    result["dataQuality"] = state
+    result["returnSeriesVerified"] = (
+        config.get("returnSeriesVerified") is True if kind == "fund" else False
+    )
     if series_kind == "ACCUMULATED_NAV":
         result.update(score=None, state="UNSUPPORTED", indicators={}, reasons=[])
     raw = json.dumps(
@@ -150,6 +159,9 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
             "seriesKind": series_kind,
             "quality": state,
             "publicationHour": publish_hour,
+            "calendarMarket": calendar_market(subject["market"]),
+            "sourceVerified": verified,
+            "returnSeriesVerified": result["returnSeriesVerified"],
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -189,7 +201,19 @@ async def sync_research(pool, settings, now: datetime):
             "SELECT id FROM reference.research_indices WHERE verified_at IS NOT NULL AND provider_symbol IS NOT NULL"
         )
         funds = await conn.fetch(
-            "SELECT DISTINCT instrument_id FROM reference.fund_index_links WHERE effective_from<=CURRENT_DATE AND (effective_to IS NULL OR effective_to>=CURRENT_DATE)"
+            """SELECT DISTINCT c.instrument_id
+              FROM reference.research_fund_catalog c
+              JOIN reference.instruments i ON i.id=c.instrument_id
+              WHERE (
+                i.metadata->'research'->'sourceVerified'='true'::jsonb
+                AND length(COALESCE(i.metadata->'research'->>'sourceUri',''))>0
+                AND i.metadata->'research'->'publishHour' IS NOT NULL
+              ) OR EXISTS (
+                SELECT 1 FROM reference.fund_index_links f
+                WHERE f.instrument_id=c.instrument_id AND f.verified_at IS NOT NULL
+                  AND f.effective_from<=CURRENT_DATE
+                  AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+              ) ORDER BY c.instrument_id"""
         )
     succeeded = failed = 0
     for kind, key in [("index", str(r["id"])) for r in indices] + [

@@ -30,10 +30,22 @@ class FundLink(BaseModel):
     source_uri: HttpUrl = Field(alias="sourceUri")
 
 
+class FundSource(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    instrument_id: UUID = Field(alias="instrumentId")
+    source_uri: HttpUrl = Field(alias="sourceUri")
+    publish_hour: int = Field(alias="publishHour", ge=0, le=23, strict=True)
+    source_verified: bool = Field(default=True, alias="sourceVerified", strict=True)
+    return_series_verified: bool = Field(
+        default=False, alias="returnSeriesVerified", strict=True
+    )
+
+
 class ReferenceImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     indices: list[IndexSource] = []
     links: list[FundLink] = []
+    funds: list[FundSource] = []
 
 
 async def register(pool, data: ReferenceImport):
@@ -45,6 +57,19 @@ async def register(pool, data: ReferenceImport):
                                           item.id, item.provider_symbol, str(item.source_uri), item.publish_hour)
                 if not row:
                     raise ValueError(f"unknown research index: {item.id}")
+            for item in data.funds:
+                config = item.model_dump(mode="json", by_alias=True, exclude={"instrument_id"})
+                row = await conn.fetchrow(
+                    """UPDATE reference.instruments SET metadata=jsonb_set(
+                      COALESCE(metadata,'{}'::jsonb),'{research}',
+                      COALESCE(metadata->'research','{}'::jsonb) || $2::jsonb
+                        || jsonb_build_object('verifiedAt',now()),true)
+                      WHERE id=$1 AND asset_type IN ('EXCHANGE_FUND','OFF_EXCHANGE_FUND')
+                      RETURNING id""",
+                    item.instrument_id, json.dumps(config),
+                )
+                if not row:
+                    raise ValueError(f"unknown research fund: {item.instrument_id}")
             for item in data.links:
                 await conn.execute("""INSERT INTO reference.fund_index_links(instrument_id,index_id,effective_from,source_uri,verified_at)
                   VALUES($1,$2,CURRENT_DATE,$3,now()) ON CONFLICT(instrument_id,index_id,effective_from)
