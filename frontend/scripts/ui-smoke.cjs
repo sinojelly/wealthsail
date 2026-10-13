@@ -182,12 +182,14 @@ const path = require("node:path");
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.getByRole("link", { name: "账号安全" }).click();
-    await page.getByRole("heading", { name: "账号安全" }).waitFor({ timeout: 15_000 });
+    await page.getByRole("heading", { name: "个人中心" }).waitFor({ timeout: 15_000 });
+    await page.getByRole("button", { name: "安全设置 认证与会话" }).click();
     await page.getByText("仅内存 · 不落盘", { exact: true }).waitFor({ timeout: 20_000 });
     step("authenticated account endpoint rendered");
 
     await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 });
-    await page.getByRole("heading", { name: "账号安全" }).waitFor({ timeout: 30_000 });
+    await page.getByRole("heading", { name: "个人中心" }).waitFor({ timeout: 30_000 });
+    await page.getByRole("button", { name: "安全设置 认证与会话" }).click();
     await page.getByText("仅内存 · 不落盘", { exact: true }).waitFor({ timeout: 20_000 });
     if (!successfulAuthWrites.has("/api/v1/auth/refresh")) {
       throw new Error("refresh lifecycle did not complete successfully after page reload");

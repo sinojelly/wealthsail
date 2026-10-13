@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+const apiTarget = process.env.WS_LOCAL_API_TARGET ?? "http://127.0.0.1:8000";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
@@ -9,12 +11,12 @@ export default defineConfig({
     proxy: {
       // 开发环境把 /api 代理到本地 FastAPI 后端（uvicorn backend.main:app --port 8000）
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: true,
       },
       // 头像等静态资源
       "/static": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: true,
       },
     },
@@ -26,11 +28,11 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: true,
       },
       "/static": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: true,
       },
     },

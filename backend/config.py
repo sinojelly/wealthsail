@@ -8,6 +8,7 @@ every variable via env files (see docs/10 §8.1 api.env / worker.env).
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -297,4 +298,6 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # Local launchers can select an isolated file without rewriting root .env.
+    env_file = os.environ.get("WEALTHSAIL_ENV_FILE")
+    return Settings(_env_file=env_file) if env_file is not None else Settings()
