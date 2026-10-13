@@ -11,6 +11,8 @@ pnpm dev
 
 默认开发地址为 `http://localhost:5173`。可通过 `VITE_API_BASE_URL` 指定后端 API 根路径；未配置时使用同源 `/api`。
 
+Windows 一键编译、启动数据库/后端及测试账号见 [本地运行文档](../docs/26.Windows-local-development.md)。在仓库根目录执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1` 即可使用便携 PostgreSQL，无需 Docker 或安装数据库服务。已安装依赖时可加 `-SkipInstall`；停止服务使用 `-Action Stop`。只启动前端不能完成真实登录。
+
 ## 质量命令
 
 ```bash
@@ -42,6 +44,6 @@ pnpm build      # 类型检查 + Vite 生产构建
 
 金额、份额、价格和比例在业务边界均使用十进制字符串。精确运算通过 `decimal.js` 完成；只有 `chart-number-adapter.ts` 可以把字符串转成 JavaScript `number`，且结果只能用于图表坐标，禁止回写事实账本。
 
-## Fixture 与目标系统
+## API 与测试数据
 
-当前页面数据和少量异步服务为可交互 fixture，用于在后端接口接入前完成设计与流程验收。标有 `TARGET` 的代码说明了正式接入边界：访问令牌仅保存在内存、刷新令牌使用 HttpOnly Cookie、结算和策略预览由服务端执行、所有写操作由后端再次校验 `tenant_id` 与角色权限。
+运行中的页面使用真实后端 API；`src/test/fixtures.ts` 的确定性数据只用于自动化测试。访问令牌保存在内存、刷新令牌使用 HttpOnly Cookie，结算和策略预览由服务端执行，写操作由后端再次校验 `tenant_id` 与角色权限。开发和 preview 服务通过 `/api` 代理到 `http://127.0.0.1:8000`，可用 `WS_LOCAL_API_TARGET` 调整代理目标。
