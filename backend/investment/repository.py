@@ -30,16 +30,50 @@ async def indices(conn, direction_id):
 
 async def macro(conn):
     return await conn.fetch("""
-        SELECT DISTINCT ON (c.field_code) c.field_code, c.label, c.dimension,
-          o.value, o.as_of, o.quality_status, o.revision,
-          s.published_at, s.retrieved_at, ds.name AS source_name
+        SELECT c.field_code, c.label, c.dimension, c.max_age_days,
+          o.value, o.unit, o.as_of, o.observed_at, o.quality_status, o.revision,
+          o.published_at, o.retrieved_at, o.source_name, o.source_uri
         FROM reference.macro_indicator_catalog c
-        LEFT JOIN market.market_observations o
-          ON o.field_code=c.field_code AND o.subject_type='MACRO_SERIES'
-        LEFT JOIN market.source_snapshots s ON s.id=o.snapshot_id
-        LEFT JOIN reference.data_sources ds ON ds.id=o.source_id
-        ORDER BY c.field_code, o.as_of DESC NULLS LAST, o.revision DESC NULLS LAST
+        LEFT JOIN LATERAL (
+          SELECT o.*, s.published_at, s.retrieved_at, ds.name AS source_name,
+            COALESCE(NULLIF(o.metadata->>'sourceUri',''),s.origin_uri) AS source_uri
+          FROM market.market_observations o
+          JOIN market.source_snapshots s ON s.id=o.snapshot_id
+          LEFT JOIN reference.data_sources ds ON ds.id=o.source_id
+          WHERE o.field_code=c.field_code AND o.subject_type='MACRO_SERIES'
+            AND o.as_of<=now() AND o.observed_at<=now() AND s.retrieved_at<=now()
+            AND (s.published_at IS NULL OR s.published_at<=now())
+          ORDER BY o.as_of DESC,o.revision DESC,o.observed_at DESC,s.retrieved_at DESC
+          LIMIT 1
+        ) o ON TRUE
+        ORDER BY c.field_code
     """)
+
+
+async def macro_history(conn, start, end):
+    """Latest available revision per indicator and reporting period, read only."""
+    return await conn.fetch(
+        """
+        SELECT DISTINCT ON (c.field_code,o.as_of)
+          c.field_code,c.label,c.dimension,c.max_age_days,
+          o.value,o.unit,o.as_of,o.observed_at,o.quality_status,o.revision,
+          s.published_at,s.retrieved_at,ds.name AS source_name,
+          COALESCE(NULLIF(o.metadata->>'sourceUri',''),s.origin_uri) AS source_uri
+        FROM reference.macro_indicator_catalog c
+        JOIN market.market_observations o
+          ON o.field_code=c.field_code AND o.subject_type='MACRO_SERIES'
+        JOIN market.source_snapshots s ON s.id=o.snapshot_id
+        LEFT JOIN reference.data_sources ds ON ds.id=o.source_id
+        WHERE o.as_of>=($1::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+          AND o.as_of<=LEAST($2::timestamptz,now())
+          AND o.observed_at<=LEAST($2::timestamptz,now())
+          AND s.retrieved_at<=LEAST($2::timestamptz,now())
+          AND (s.published_at IS NULL OR s.published_at<=LEAST($2::timestamptz,now()))
+        ORDER BY c.field_code,o.as_of,o.revision DESC,o.observed_at DESC,s.retrieved_at DESC
+        """,
+        start,
+        end,
+    )
 
 
 def _where(query):

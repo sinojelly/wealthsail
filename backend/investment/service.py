@@ -1,5 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 import json
+import math
 from uuid import UUID
 
 from backend.investment import repository
@@ -13,19 +15,63 @@ def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+def _macro_timestamp(value, now):
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=now.tzinfo)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=now.tzinfo)
+    raise ValueError("invalid macro timestamp")
+
+
+def _macro_available(row, now):
+    try:
+        return all(
+            row.get(field) is None or _macro_timestamp(row[field], now) <= now
+            for field in ("as_of", "observed_at", "retrieved_at", "published_at")
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def _macro_number(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+        return number if number.is_finite() and math.isfinite(float(number)) else None
+    except (InvalidOperation, ValueError, TypeError, OverflowError):
+        return None
+
+
 def macro_dto(row):
+    now = now_shanghai()
     verified = (
         row.get("published_at") is not None and row.get("quality_status") == "FRESH"
     )
-    value = row.get("value")
-    state = (
-        "READY" if verified else "UNVERIFIED" if value is not None else "NOT_COLLECTED"
-    )
+    value = _macro_number(row.get("value"))
+    state = "NOT_COLLECTED" if value is None else "READY" if verified else "UNVERIFIED"
+    if value is None and row.get("value") is not None:
+        state = "CONFLICT"
     published = row.get("published_at")
-    if isinstance(published, datetime) and datetime.now(
-        published.tzinfo
-    ) - published > timedelta(days=45):
-        state = "STALE"
+    if not _macro_available(row, now):
+        value, state = None, "NOT_COLLECTED"
+        row = {
+            **row,
+            "as_of": None,
+            "retrieved_at": None,
+            "source_name": None,
+            "source_uri": None,
+            "revision": None,
+        }
+        published = None
+    elif verified and value is not None:
+        max_age = row.get("max_age_days")
+        if not isinstance(max_age, int) or max_age <= 0:
+            state = "UNVERIFIED"
+        elif now - _macro_timestamp(published, now) > timedelta(days=max_age):
+            state = "STALE"
     return {
         "code": row["field_code"],
         "label": row.get("label", row["field_code"]),
@@ -35,16 +81,103 @@ def macro_dto(row):
         "publishedAt": _iso(published),
         "retrievedAt": _iso(row.get("retrieved_at")),
         "source": row.get("source_name"),
+        "sourceUri": row.get("source_uri"),
+        "unit": row.get("unit"),
         "revision": row.get("revision"),
         "state": state,
         "assessment": None,
     }
 
 
-async def market_context(conn):
-    items = [macro_dto(dict(row)) for row in await repository.macro(conn)]
+async def market_context(conn, months=36):
+    if type(months) is not int or not 1 <= months <= 120:
+        raise ValueError("macro history months must be between 1 and 120")
+    now = now_shanghai()
+    month_number = now.year * 12 + now.month - months
+    start = date(month_number // 12, month_number % 12 + 1, 1)
+    catalogue = [dict(row) for row in await repository.macro(conn)]
+    histories = {}
+    for record in await repository.macro_history(conn, start, now):
+        row = dict(record)
+        if not _macro_available(row, now) or row.get("as_of") is None:
+            continue
+        period = (
+            _macro_timestamp(row["as_of"], now)
+            .astimezone(now.tzinfo)
+            .date()
+            .replace(day=1)
+        )
+        if period < start or period > now.date():
+            continue
+        key = row["field_code"], period
+        if key not in histories or (row.get("revision") or 0) > (
+            histories[key].get("revision") or 0
+        ):
+            histories[key] = row
+    items = []
+    for catalog_row in catalogue:
+        points = []
+        for (code, period), row in sorted(histories.items()):
+            if (
+                code != catalog_row["field_code"]
+                or _macro_number(row.get("value")) is None
+            ):
+                continue
+            dto = macro_dto({**catalog_row, **row})
+            points.append(
+                {
+                    "asOf": period.isoformat(),
+                    "value": dto["value"],
+                    "unit": dto["unit"],
+                    "source": dto["source"],
+                    "sourceUri": dto["sourceUri"],
+                    "state": dto["state"],
+                    "publishedAt": dto["publishedAt"],
+                    "retrievedAt": dto["retrievedAt"],
+                    "revision": dto["revision"],
+                }
+            )
+        item = macro_dto(catalog_row)
+        if points:
+            latest = points[-1]
+            row = histories[
+                (catalog_row["field_code"], date.fromisoformat(latest["asOf"]))
+            ]
+            item = macro_dto({**catalog_row, **row})
+        change, trend = None, "INSUFFICIENT"
+        if len(points) >= 2:
+            previous, latest = points[-2:]
+            old_day, new_day = (
+                date.fromisoformat(previous["asOf"]),
+                date.fromisoformat(latest["asOf"]),
+            )
+            old_source = previous["sourceUri"] or previous["source"]
+            new_source = latest["sourceUri"] or latest["source"]
+            comparable = (
+                new_day.year * 12 + new_day.month - old_day.year * 12 - old_day.month
+                == 1
+                and old_source is not None
+                and old_source == new_source
+                and previous["unit"] is not None
+                and previous["unit"] == latest["unit"]
+            )
+            change = latest["value"] - previous["value"] if comparable else None
+            trend = "OBSERVED" if comparable else "GAP"
+        items.append(
+            {
+                **item,
+                "history": points,
+                "historyMonths": months,
+                "sampleCount": len(points),
+                "periodChange": change,
+                "trendState": trend,
+            }
+        )
     return {
         "items": items,
+        "months": months,
+        "windowStart": start.isoformat(),
+        "windowEnd": now.date().isoformat(),
         "assessment": None,
         "state": "READY"
         if items and all(x["state"] == "READY" for x in items)

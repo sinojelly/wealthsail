@@ -42,6 +42,9 @@ export interface SearchResult extends Partial<ResearchFund> {
 }
 export interface MacroContext {
   state: string;
+  months?: number;
+  windowStart?: string;
+  windowEnd?: string;
   items: Array<{
     code: string;
     label: string;
@@ -50,6 +53,23 @@ export interface MacroContext {
     publishedAt: string | null;
     source: string | null;
     state: string;
+    unit?: string | null;
+    sourceUri?: string | null;
+    historyMonths?: number;
+    sampleCount?: number;
+    periodChange?: number | null;
+    trendState?: string;
+    history?: Array<{
+      asOf: string;
+      value: number;
+      unit?: string | null;
+      source?: string | null;
+      sourceUri?: string | null;
+      state?: string;
+      publishedAt?: string | null;
+      retrievedAt?: string | null;
+      revision?: number;
+    }>;
   }>;
 }
 export interface Analysis {
@@ -100,8 +120,8 @@ export const getIndices = (id: string, signal?: AbortSignal) =>
     `/investment/directions/${encodeURIComponent(id)}/indices`,
     signal,
   );
-export const getMarketContext = (signal?: AbortSignal) =>
-  read<MacroContext>("/investment/market-context", signal);
+export const getMarketContext = (signal?: AbortSignal, months = 36) =>
+  read<MacroContext>(`/investment/market-context?months=${months}`, signal);
 export const searchResearch = (keyword: string, signal?: AbortSignal) =>
   read<SearchResult[]>(
     `/investment/search?keyword=${encodeURIComponent(keyword)}`,

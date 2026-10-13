@@ -3,6 +3,27 @@ import userEvent from "@testing-library/user-event";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
 
+it("queries and preserves the selected macro history window", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByRole("button", { name: /市场环境概览/ }));
+  await user.selectOptions(screen.getByLabelText("宏观观察窗口"), "60");
+  await waitFor(() => expect(api.context).toHaveBeenLastCalledWith(expect.anything(), 60));
+});
+
+it("refreshes the candidate list when research data is updated", async () => {
+  const user = userEvent.setup();
+  api.refresh.mockResolvedValue({ runId: "new-data", created: true });
+  api.refreshStatus.mockResolvedValue({ status: "COMPLETED" });
+  renderWithSession(<FundScreenerPage />);
+  await screen.findByRole("heading", { name: "沪深300" });
+  const button = await screen.findByRole("button", { name: "更新研究数据" });
+  await waitFor(() => expect(button).toBeEnabled());
+  const before = api.funds.mock.calls.length;
+  await user.click(button);
+  await waitFor(() => expect(api.funds.mock.calls.length).toBeGreaterThan(before));
+});
+
 it("polls a second refresh even when the backend reuses the completed run ID", async () => {
   const user = userEvent.setup();
   api.refresh.mockResolvedValue({ runId: "same-id", created: true });

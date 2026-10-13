@@ -8,6 +8,21 @@ from tests.integration.test_investment_database import database_url
 
 
 @pytest.mark.asyncio
+async def test_macro_context_catalogue_covers_growth_inflation_and_liquidity():
+    from backend.investment.repository import macro
+    conn = await asyncpg.connect(database_url())
+    try:
+        await conn.execute("SET ROLE wealthsail_api")
+        catalog = {row["field_code"]: row["dimension"] for row in await macro(conn)}
+        assert catalog["PMI"] == "growth"
+        assert catalog["CPI_YOY"] == "inflation"
+        assert catalog["PPI_YOY"] == "inflation"
+        assert catalog["M2_YOY"] == "liquidity"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_can_register_fund_source_without_changing_identity():
     from backend.common.database import create_pool
     from scripts.register_investment_reference import ReferenceImport, register

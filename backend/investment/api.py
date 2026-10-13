@@ -24,11 +24,12 @@ async def _read(operation, pool, ctx, request_id, *args):
 
 @router.get("/investment/market-context")
 async def market_context(
+    months: int = Query(default=36, ge=1, le=120),
     pool=Depends(get_pool),
     ctx=Depends(get_tenant_context),
     request_id=Depends(get_request_id),
 ):
-    return await _read(service.market_context, pool, ctx, request_id)
+    return await _read(service.market_context, pool, ctx, request_id, months)
 
 
 @router.get("/investment/directions")

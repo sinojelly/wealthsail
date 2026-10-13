@@ -38,13 +38,15 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const attemptRef = useRef(0);
   const [timedOut, setTimedOut] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const requestedMonths = Number(params.get("macroMonths"));
+  const macroMonths = [12, 36, 60].includes(requestedMonths) ? requestedMonths : 36;
   const directions = useQuery({
     queryKey: [subject, "directions"],
     queryFn: ({ signal }) => api.getDirections(signal),
   });
   const context = useQuery({
-    queryKey: [subject, "market-context"],
-    queryFn: ({ signal }) => api.getMarketContext(signal),
+    queryKey: [subject, "market-context", macroMonths],
+    queryFn: ({ signal }) => api.getMarketContext(signal, macroMonths),
   });
   const unlinked = params.get("unlinked") === "1";
   const directionId = unlinked
@@ -150,6 +152,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         ? false
         : 5000,
   });
+  const completedAttempt = useRef(0);
   useEffect(() => {
     if (!activeRun) return;
     const t = setTimeout(
@@ -159,11 +162,22 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     return () => clearTimeout(t);
   }, [activeRun]);
   useEffect(() => {
-    if (status.data?.status === "COMPLETED")
+    if (status.data?.status === "COMPLETED" && activeRun &&
+        completedAttempt.current !== activeRun.attempt) {
+      completedAttempt.current = activeRun.attempt;
       void client.invalidateQueries({
-        queryKey: [subject, "analysis", analysisMode, analysisId],
+        predicate: (q) => q.queryKey[0] === subject &&
+          ["analysis", "research-funds", "restore-fund", "research-search"].some(
+            (key) => q.queryKey.includes(key)),
       });
-  }, [status.data?.status, client, subject, analysisMode, analysisId]);
+      setParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete("analysisAsOf");
+        next.delete("page");
+        return next;
+      }, { replace: true });
+    }
+  }, [status.data?.status, activeRun, client, subject, setParams]);
   function updateSelection(next: Selection) {
     const p = new URLSearchParams(params);
     for (const [k, v] of [
@@ -255,7 +269,12 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         subject={subject}
         onSelect={searchSelect}
       />
-      <MacroContextStrip data={context.data} error={context.isError} />
+      <MacroContextStrip data={context.data} error={context.isError}
+        months={macroMonths} onMonthsChange={(months) => {
+          const next = new URLSearchParams(params);
+          next.set("macroMonths", String(months));
+          setParams(next);
+        }} />
       {directions.isError && (
         <p role="alert">方向读取失败，仍可直接搜索基金。</p>
       )}
