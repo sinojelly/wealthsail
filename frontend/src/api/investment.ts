@@ -31,6 +31,13 @@ export interface ResearchFund {
   technicalState?: string | null;
   dataState: string;
   updatedAt: string | null;
+  performanceState?: string | null;
+  valueState?: string | null;
+  valueEligible?: boolean | null;
+  return63?: number | null;
+  return252?: number | null;
+  maxDrawdown?: number | null;
+  volatility20?: number | null;
 }
 export interface SearchResult extends Partial<ResearchFund> {
   kind: "index" | "fund";
@@ -72,6 +79,52 @@ export interface MacroContext {
     }>;
   }>;
 }
+export interface PerformanceEvidence {
+  state: string;
+  eligible: boolean;
+  return63: number | null;
+  return252: number | null;
+  maxDrawdown: number | null;
+  volatility20: number | null;
+  historyStart: string | null;
+  historyEnd: string | null;
+  sampleCount: number;
+  reasons: string[];
+}
+export interface OperatingCosts {
+  state: string;
+  managementRate?: number | null;
+  custodyRate?: number | null;
+  salesServiceRate?: number | null;
+  totalRate?: number | null;
+  sourceUri?: string | null;
+  retrievedAt?: string | null;
+}
+export interface ValuationEvidence {
+  state: string;
+  latest?: number | null;
+  percentile?: number | null;
+  sampleCount?: number;
+  historyStart?: string | null;
+  historyEnd?: string | null;
+  sourceUri?: string | null;
+}
+export interface ValueEvidence {
+  eligible: boolean;
+  state: "RESEARCH_CANDIDATE" | "NOT_CANDIDATE" | "INCOMPLETE";
+  reasons: string[];
+  evidence: {
+    pe?: ValuationEvidence;
+    pb?: ValuationEvidence;
+    costs?: OperatingCosts;
+    performance?: {
+      state: string;
+      eligible: boolean;
+      maxDrawdown?: number | null;
+    };
+    limitations?: string[];
+  };
+}
 export interface Analysis {
   state: string;
   score: number | null;
@@ -89,6 +142,24 @@ export interface Analysis {
   inputHash?: string;
   algorithmVersion?: string;
   seriesKind?: string;
+  performance?: PerformanceEvidence;
+  costs?: OperatingCosts;
+  valueEvidence?: ValueEvidence;
+  valuation?: {
+    state: string;
+    requestedEnd?: string | null;
+    sourceUri?: string | null;
+    pe?: {
+      state: string;
+      metric?: string;
+      points?: Array<{ date: string; value: number }>;
+    };
+    pb?: {
+      state: string;
+      metric?: string;
+      points?: Array<{ date: string; value: number }>;
+    };
+  };
 }
 export interface ScreenFilters {
   directionId?: string;
@@ -99,6 +170,8 @@ export interface ScreenFilters {
   sortOrder?: string;
   analysisAsOf?: string;
   scorableOnly?: string;
+  performanceOnly?: string;
+  valueCandidateOnly?: string;
   minHistoryDays?: string;
   page: number;
   pageSize: number;

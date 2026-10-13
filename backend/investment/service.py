@@ -9,6 +9,8 @@ from backend.investment.schemas import ScreenQuery
 from backend.errors import NotFoundError
 from backend.dependencies import now_shanghai
 from backend.market.research_history import published_day
+from backend.indicators.value_evidence import evaluate
+from copy import deepcopy
 
 
 def _iso(value):
@@ -54,6 +56,8 @@ def macro_dto(row):
     state = "NOT_COLLECTED" if value is None else "READY" if verified else "UNVERIFIED"
     if value is None and row.get("value") is not None:
         state = "CONFLICT"
+    if row.get("quality_status") in {"CONFLICT", "UNAVAILABLE"}:
+        value, state = None, row["quality_status"]
     published = row.get("published_at")
     if not _macro_available(row, now):
         value, state = None, "NOT_COLLECTED"
@@ -117,13 +121,16 @@ async def market_context(conn, months=36):
     items = []
     for catalog_row in catalogue:
         points = []
+        latest_period, latest_row = None, None
         for (code, period), row in sorted(histories.items()):
-            if (
-                code != catalog_row["field_code"]
-                or _macro_number(row.get("value")) is None
-            ):
+            if code != catalog_row["field_code"]:
                 continue
+            # Latest available revision governs the current fact even if it is
+            # unusable. Removing its historical point must not restore old data.
+            latest_period, latest_row = period, row
             dto = macro_dto({**catalog_row, **row})
+            if dto["value"] is None:
+                continue
             points.append(
                 {
                     "asOf": period.isoformat(),
@@ -138,12 +145,18 @@ async def market_context(conn, months=36):
                 }
             )
         item = macro_dto(catalog_row)
-        if points:
-            latest = points[-1]
-            row = histories[
-                (catalog_row["field_code"], date.fromisoformat(latest["asOf"]))
-            ]
-            item = macro_dto({**catalog_row, **row})
+        if latest_row is not None:
+            catalogue_key = None
+            if catalog_row.get("as_of") is not None and _macro_available(catalog_row, now):
+                catalogue_key = (
+                    _macro_timestamp(catalog_row["as_of"], now)
+                    .astimezone(now.tzinfo).date().replace(day=1),
+                    catalog_row.get("revision") or 0,
+                )
+            if catalogue_key is None or (
+                latest_period, latest_row.get("revision") or 0
+            ) >= catalogue_key:
+                item = macro_dto({**catalog_row, **latest_row})
         change, trend = None, "INSUFFICIENT"
         if len(points) >= 2:
             previous, latest = points[-2:]
@@ -154,7 +167,12 @@ async def market_context(conn, months=36):
             old_source = previous["sourceUri"] or previous["source"]
             new_source = latest["sourceUri"] or latest["source"]
             comparable = (
-                new_day.year * 12 + new_day.month - old_day.year * 12 - old_day.month
+                item["value"] is not None
+                and item["asOf"] is not None
+                and _macro_timestamp(item["asOf"], now)
+                    .astimezone(now.tzinfo).date().replace(day=1) == new_day
+                and item["revision"] == latest["revision"]
+                and new_day.year * 12 + new_day.month - old_day.year * 12 - old_day.month
                 == 1
                 and old_source is not None
                 and old_source == new_source
@@ -219,6 +237,9 @@ async def indices(conn, direction_id):
 
 
 def fund_dto(r):
+    performance = r.get("performance") or {}
+    if isinstance(performance, str):
+        performance = json.loads(performance)
     return {
         "instrumentId": str(r["instrument_id"]) if r["instrument_id"] else None,
         "fundCode": r["fund_code"],
@@ -231,6 +252,10 @@ def fund_dto(r):
         "latestDate": _iso(r.get("latest_nav_date")),
         "navRangePosition": r.get("current_percentile"),
         "updatedAt": _iso(r.get("updated_at")),
+        "performanceState": r.get("performance_state") or performance.get("state") or "NOT_COLLECTED",
+        "valueEligible": r.get("value_eligible") is True,
+        "valueState": r.get("value_state") or "INCOMPLETE",
+        **{key: performance.get(key) for key in ("return63", "return252", "maxDrawdown", "volatility20")},
         "technicalScore": r.get("technical_score"),
         "technicalState": r.get("technical_state"),
         "historyDays": r.get("history_days", 0),
@@ -307,7 +332,8 @@ async def analysis(conn, kind, subject_id):
         """
         SELECT result,as_of,input_hash,source_uri,points,retrieved_at,series_kind
         FROM market.investment_analysis_snapshots
-        WHERE subject_kind=$1 AND subject_key=$2 ORDER BY retrieved_at DESC LIMIT 1
+        WHERE subject_kind=$1 AND subject_key=$2 AND retrieved_at<=now() AND available_at<=now()
+        ORDER BY retrieved_at DESC,id DESC LIMIT 1
     """,
         kind,
         subject_id,
@@ -323,14 +349,15 @@ async def analysis(conn, kind, subject_id):
     result = row["result"]
     if isinstance(result, str):
         result = json.loads(result)
-    if result.get("score") is not None:
+    result = deepcopy(result)
+    if result.get("score") is not None or result.get("performance"):
         now = now_shanghai()
         cutoff = published_day(now.date(), result.get("publicationHour"), now)
         expected = await conn.fetchval(
             """SELECT max(calendar_date)
           FROM reference.trading_calendars WHERE market=$1 AND is_trading_day
             AND calendar_date <= $2""",
-            result.get("market"),
+            result.get("calendarMarket") or result.get("market"),
             cutoff,
         )
         if expected is None or row["as_of"] < expected:
@@ -338,7 +365,68 @@ async def analysis(conn, kind, subject_id):
                 **result,
                 "score": None,
                 "state": "STALE" if expected else "UNVERIFIED",
+                "dataQuality": "STALE" if expected else "UNVERIFIED",
+                **({"performance": {
+                    **result["performance"], "eligible": False,
+                    "state": "STALE" if expected else "UNVERIFIED",
+                }} if result.get("performance") else {}),
             }
+    if result.get("score") is not None or result.get("performance"):
+        if kind == "fund":
+            governance = await conn.fetchrow("""SELECT i.metadata,
+              EXISTS(SELECT 1 FROM reference.fund_index_links f
+                JOIN reference.research_indices idx ON idx.id=f.index_id
+                WHERE f.instrument_id=i.id AND f.index_id=$2
+                  AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+                  AND f.verified_at<=now() AND idx.verified_at<=now() AND idx.valuation=$3::jsonb)
+              AND (SELECT count(DISTINCT f.index_id) FROM reference.fund_index_links f
+                JOIN reference.research_indices idx ON idx.id=f.index_id
+                WHERE f.instrument_id=i.id AND f.effective_from<=CURRENT_DATE
+                  AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+                  AND f.verified_at<=now() AND idx.verified_at<=now())=1 AS mapping_valid
+              FROM reference.instruments i WHERE i.id::text=$1""", subject_id,
+              result.get("fundamentals", {}).get("indexId"),
+              json.dumps(result.get("fundamentals", {}).get("valuationConfig") or {}))
+            meta = governance.get("metadata", {}) if governance else {}
+            meta = json.loads(meta) if isinstance(meta, str) else meta
+            config = meta.get("research", {})
+            trusted = (config.get("sourceVerified") is True and config.get("sourceUri") == row["source_uri"]
+                       and config.get("publishHour") == result.get("publicationHour")
+                       and (row.get("series_kind") != "PROVIDER_RETURN_INDEX" or config.get("returnSeriesVerified") is True))
+        else:
+            governance = await conn.fetchrow("""SELECT verified_at,source_uri,publish_hour
+              FROM reference.research_indices WHERE id=$1""", subject_id)
+            trusted = bool(governance and governance.get("verified_at") and
+                           governance.get("source_uri") == row["source_uri"] and
+                           governance.get("publish_hour") == result.get("publicationHour"))
+        if not trusted and result.get("dataQuality") != "STALE":
+            result.update(score=None, state="UNVERIFIED", dataQuality="UNVERIFIED")
+            if result.get("performance"):
+                result["performance"].update(eligible=False, state="UNVERIFIED")
+        facts = result.get("fundamentals") or {}
+        costs = deepcopy(facts.get("costs") or {"state": "UNAVAILABLE"})
+        valuation = deepcopy(facts.get("valuation") or {"state": "UNAVAILABLE"})
+        if costs.get("retrievedAt"):
+            retrieved = _macro_timestamp(costs["retrievedAt"], now_shanghai())
+            if not now_shanghai()-timedelta(days=45) <= retrieved <= now_shanghai():
+                costs["state"] = "STALE"
+        else:
+            costs["state"] = "UNVERIFIED"
+        if facts.get("valuationConfig"):
+            now = now_shanghai()
+            end = await conn.fetchval("""SELECT max(calendar_date) FROM reference.trading_calendars
+              WHERE market=$1 AND is_trading_day AND calendar_date<=$2""",
+              result.get("calendarMarket") or result.get("market"),
+              published_day(now.date(), facts["valuationConfig"].get("publishHour"), now))
+            if end is None or valuation.get("requestedEnd") != end.isoformat():
+                valuation["state"] = "STALE" if end else "UNVERIFIED"
+        if not trusted:
+            valuation["state"] = "UNVERIFIED"
+            costs["state"] = "UNVERIFIED"
+        result.update(costs=costs, valuation=valuation)
+        if kind == "fund":
+            result["valueEvidence"] = evaluate(valuation, costs, result.get("performance"),
+                                               mapped=bool(governance and governance.get("mapping_valid")))
     points = row.get("points", [])
     return {
         **result,

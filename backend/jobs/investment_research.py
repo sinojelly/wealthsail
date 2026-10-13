@@ -9,6 +9,9 @@ from uuid import UUID
 from backend.common.database import system_connection
 from backend.errors import NotFoundError, DataUnavailableError
 from backend.indicators.technical import VERSION, analyze
+from backend.indicators.performance import VERSION as PERFORMANCE_VERSION, analyze as analyze_performance
+from backend.indicators.value_evidence import VERSION as VALUE_VERSION, evaluate
+from backend.jobs.investment_fundamentals import refresh_fundamentals
 from backend.market.research_history import (
     calendar_market, fund_history, normalize, quality, published_day,
 )
@@ -18,7 +21,7 @@ from backend.dependencies import now_shanghai
 async def load_subject(conn, kind, subject_id):
     if kind == "index":
         row = await conn.fetchrow(
-            "SELECT code,market,provider_symbol,source_uri,verified_at,publish_hour FROM reference.research_indices WHERE id=$1",
+            "SELECT code,market,provider_symbol,source_uri,verified_at,publish_hour,valuation FROM reference.research_indices WHERE id=$1",
             subject_id,
         )
     else:
@@ -98,12 +101,6 @@ async def fetch_history(subject, kind, start, end):
 async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     async with system_connection(pool) as conn:
         subject = await load_subject(conn, kind, subject_id)
-    rows, series_kind, source = await asyncio.wait_for(
-        fetch_history(subject, kind, as_of - timedelta(days=365 * 5), as_of), timeout=90
-    )
-    rows = [p for p in rows if (as_of - timedelta(days=365 * 5)).isoformat() <= p["date"] <= as_of.isoformat()]
-    if not rows:
-        raise DataUnavailableError("来源没有有效历史数据")
     metadata = subject.get("metadata", {})
     if isinstance(metadata, str):
         metadata = json.loads(metadata)
@@ -118,19 +115,27 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     )
     verified = verified and type(publish_hour) is int and 0 <= publish_hour <= 23
     eligible_day = published_day(as_of, publish_hour, now or now_shanghai())
+    rows, series_kind, source = await asyncio.wait_for(
+        fetch_history(subject, kind, as_of - timedelta(days=365 * 5), eligible_day or as_of), timeout=90
+    )
+    rows = [p for p in rows if (as_of - timedelta(days=365 * 5)).isoformat() <= p["date"] <= as_of.isoformat()]
+    if not rows:
+        raise DataUnavailableError("来源没有有效历史数据")
     if eligible_day is not None:
         rows = [p for p in rows if p["date"] <= eligible_day.isoformat()]
         if not rows:
             raise DataUnavailableError("已发布窗口内没有有效历史数据")
     async with system_connection(pool) as conn:
         calendar = await conn.fetch(
-            """SELECT calendar_date FROM reference.trading_calendars
-          WHERE market=$1 AND is_trading_day AND calendar_date BETWEEN $2 AND $3 ORDER BY calendar_date""",
+            """SELECT calendar_date,is_trading_day FROM reference.trading_calendars
+          WHERE market=$1 AND calendar_date BETWEEN $2 AND $3 ORDER BY calendar_date""",
             calendar_market(subject["market"]),
             date.fromisoformat(rows[0]["date"]),
             eligible_day,
         )
-    days = {str(r["calendar_date"]) for r in calendar}
+    covered_days = {str(r["calendar_date"]) for r in calendar}
+    days = {str(r["calendar_date"]) for r in calendar if r.get("is_trading_day", True)}
+    observed_days = {p["date"] for p in rows}
     latest = date.fromisoformat(rows[-1]["date"])
     # Do not infer source publication schedules or manufacturing OHLC for NAV.
     expected = date.fromisoformat(max(days)) if days else None
@@ -138,8 +143,12 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
         latest=latest,
         expected=expected,
         verified=verified,
-        missing=bool(days - {p["date"] for p in rows}),
+        missing=bool({day for day in days if day<=rows[-1]["date"]} - observed_days),
     )
+    if observed_days - covered_days:
+        state = "UNVERIFIED"
+    elif observed_days - days:
+        state = "CONFLICT"
     if any(p.get("returnQuality") == "CONFLICT" for p in rows):
         state = "CONFLICT"
     result = analyze(rows, quality=state)
@@ -150,6 +159,23 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     result["returnSeriesVerified"] = (
         config.get("returnSeriesVerified") is True if kind == "fund" else False
     )
+    result["performance"] = analyze_performance(
+        rows, series_kind=series_kind, quality=state,
+        return_index_verified=result["returnSeriesVerified"],
+    )
+    try:
+        facts = await refresh_fundamentals(pool, kind, subject_id, subject, as_of,
+                                           now=now or now_shanghai())
+    except Exception:  # noqa: BLE001 -- failed evidence cannot suppress historical prices
+        import logging
+        logging.getLogger("wealthsail.investment_research").exception("fundamentals_refresh_failed")
+        facts = {}
+    result["fundamentals"] = facts
+    result["costs"] = facts.get("costs") or {"state": "UNAVAILABLE"}
+    result["valuation"] = facts.get("valuation") or {"state": "UNAVAILABLE"}
+    if kind == "fund":
+        result["valueEvidence"] = evaluate(result["valuation"], result["costs"],
+                                           result["performance"], mapped=facts.get("mapped") is True)
     if series_kind == "ACCUMULATED_NAV":
         result.update(score=None, state="UNSUPPORTED", indicators={}, reasons=[])
     raw = json.dumps(
@@ -162,6 +188,9 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
             "calendarMarket": calendar_market(subject["market"]),
             "sourceVerified": verified,
             "returnSeriesVerified": result["returnSeriesVerified"],
+            "performanceVersion": PERFORMANCE_VERSION,
+            "valueVersion": VALUE_VERSION,
+            "fundamentals": facts,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -181,7 +210,7 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
             source,
             series_kind,
             latest,
-            VERSION,
+            f"{VERSION}+{PERFORMANCE_VERSION}+{VALUE_VERSION}",
             json.dumps(result),
             json.dumps(rows),
         )

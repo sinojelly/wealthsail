@@ -204,7 +204,7 @@ async def test_future_macro_facts_never_appear_in_context(monkeypatch, field):
 
 
 @pytest.mark.asyncio
-async def test_history_context_prefers_last_revision_and_omits_bad_values(monkeypatch):
+async def test_history_context_preserves_latest_bad_period_without_old_value_fallback(monkeypatch):
     _context_sources(
         monkeypatch,
         [
@@ -217,7 +217,89 @@ async def test_history_context_prefers_last_revision_and_omits_bad_values(monkey
     assert item["sampleCount"] == 1
     assert item["history"][0]["value"] == Decimal("0.2")
     assert item["history"][0]["revision"] == 2
-    assert item["value"] == Decimal("0.2")
+    assert item["value"] is None
+    assert item["state"] == "CONFLICT"
+    assert item["asOf"] == "2026-09-01"
+    assert item["periodChange"] is None
+
+
+@pytest.mark.parametrize("quality", ["CONFLICT", "UNAVAILABLE"])
+def test_macro_dto_preserves_explicit_failed_quality_for_finite_values(monkeypatch, quality):
+    monkeypatch.setattr(service, "now_shanghai", lambda: NOW)
+    item = service.macro_dto(_row(value=Decimal("99"), quality_status=quality))
+    assert item["state"] == quality
+    assert item["value"] is None
+    assert item["asOf"] == "2026-09-01"
+    assert item["sourceUri"] == "https://data.eastmoney.com/cjsj/cpi.html"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quality", ["CONFLICT", "UNAVAILABLE"])
+async def test_failed_latest_macro_month_cannot_create_value_or_period_change(monkeypatch, quality):
+    _context_sources(monkeypatch, [
+        _row(date(2026, 8, 1), Decimal("49")),
+        _row(date(2026, 9, 1), Decimal("99"), quality_status=quality),
+    ])
+    item = (await service.market_context(object()))["items"][0]
+    assert item["value"] is None and item["state"] == quality
+    assert item["asOf"] == "2026-09-01"
+    assert item["sampleCount"] == 1
+    assert [p["value"] for p in item["history"]] == [Decimal("49")]
+    assert item["periodChange"] is None
+    assert item["trendState"] in {"GAP", "INSUFFICIENT"}
+
+
+@pytest.mark.asyncio
+async def test_latest_bad_revision_cannot_restore_an_earlier_valid_revision(monkeypatch):
+    _context_sources(monkeypatch, [
+        _row(date(2026, 8, 1), Decimal("49")),
+        _row(date(2026, 9, 1), Decimal("50"), revision=1),
+        _row(date(2026, 9, 1), Decimal("99"), quality_status="CONFLICT", revision=2),
+    ])
+    item = (await service.market_context(object()))["items"][0]
+    assert item["value"] is None and item["state"] == "CONFLICT"
+    assert item["revision"] == 2
+    assert [(p["asOf"], p["value"]) for p in item["history"]] == [("2026-08-01", Decimal("49"))]
+    assert item["periodChange"] is None
+
+
+@pytest.mark.asyncio
+async def test_latest_catalog_conflict_is_not_replaced_by_older_valid_history(monkeypatch):
+    _context_sources(monkeypatch, [
+        _row(date(2026, 8, 1), Decimal("49")),
+        _row(date(2026, 9, 1), Decimal("50")),
+    ], catalogue=[_row(date(2026, 10, 1), Decimal("99"), quality_status="CONFLICT")])
+    item = (await service.market_context(object()))["items"][0]
+    assert item["value"] is None and item["state"] == "CONFLICT"
+    assert item["asOf"] == "2026-10-01"
+    assert item["sampleCount"] == 2
+    assert item["periodChange"] is None
+    assert item["trendState"] == "GAP"
+
+
+@pytest.mark.asyncio
+async def test_latest_catalog_conflict_compares_reporting_month_in_shanghai_timezone(monkeypatch):
+    _context_sources(monkeypatch, [
+        _row(date(2026, 8, 1), Decimal("49")),
+        _row(date(2026, 9, 1), Decimal("50")),
+    ], catalogue=[_row(
+        datetime(2026, 9, 30, 16, tzinfo=ZoneInfo("UTC")), Decimal("99"),
+        quality_status="CONFLICT",
+    )])
+    item = (await service.market_context(object()))["items"][0]
+    assert item["value"] is None and item["state"] == "CONFLICT"
+    assert item["periodChange"] is None
+
+
+@pytest.mark.asyncio
+async def test_adjacent_utc_reporting_timestamps_use_local_months_for_change(monkeypatch):
+    _context_sources(monkeypatch, [
+        _row(datetime(2026, 7, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("49")),
+        _row(datetime(2026, 8, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("50")),
+    ])
+    item = (await service.market_context(object()))["items"][0]
+    assert [p["asOf"] for p in item["history"]] == ["2026-08-01", "2026-09-01"]
+    assert item["periodChange"] == 1 and item["trendState"] == "OBSERVED"
 
 
 @pytest.mark.asyncio

@@ -82,6 +82,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     sortOrder: params.get("sortOrder") ?? "asc",
     analysisAsOf: params.get("analysisAsOf") ?? undefined,
     scorableOnly: params.get("scorableOnly") ?? undefined,
+    performanceOnly: params.get("performanceOnly") ?? undefined,
+    valueCandidateOnly: params.get("valueCandidateOnly") ?? undefined,
     minHistoryDays: params.get("minHistoryDays") ?? undefined,
   };
   const funds = useQuery({
@@ -360,6 +362,22 @@ function ResearchWorkspace({ subject }: { subject: string }) {
                 >
                   <option value="false">全部候选</option>
                   <option value="true">可完整评分</option>
+                </select>
+              </label>
+              <label>
+                研究资格
+                <select value={params.get("valueCandidateOnly") ?? "false"}
+                  onChange={(e) => filter("valueCandidateOnly", e.target.value)}>
+                  <option value="false">全部候选</option>
+                  <option value="true">估值、成本与风险证据候选</option>
+                </select>
+              </label>
+              <label>
+                收益风险覆盖
+                <select value={params.get("performanceOnly") ?? "false"}
+                  onChange={(e) => filter("performanceOnly", e.target.value)}>
+                  <option value="false">全部历史状态</option>
+                  <option value="true">可比收益与风险数据齐备</option>
                 </select>
               </label>
               <label>

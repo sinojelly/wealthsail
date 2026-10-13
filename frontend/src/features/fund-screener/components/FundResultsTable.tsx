@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Check, Landmark } from "lucide-react";
 import type { ResearchFund, ScreenResult } from "../../../api/investment";
 export default function FundResultsTable({
@@ -45,6 +45,15 @@ export default function FundResultsTable({
     MIXED: "信号不一致",
     WEAK: "趋势偏弱",
   };
+  const qualificationLabels: Record<string, string> = {
+    RESEARCH_CANDIDATE: "满足研究门槛",
+    NOT_CANDIDATE: "未达研究门槛",
+    INCOMPLETE: "证据不足",
+  };
+  const percent = (value: number | null | undefined) =>
+    value == null || !Number.isFinite(value)
+      ? "—"
+      : `${(value * 100).toFixed(2)}%`;
   return (
     <section>
       <div className="op-section-label">
@@ -73,53 +82,75 @@ export default function FundResultsTable({
           </thead>
           <tbody>
             {data?.items.map((f) => (
-              <tr
-                key={`${f.market}:${f.fundCode}`}
-                className={isSelected(f) ? "op-selected" : ""}
-              >
-                <td>
-                  <button
-                    aria-pressed={isSelected(f)}
-                    onClick={() => onSelect(f)}
-                  >
-                    <span className="op-fund-icon">
-                      {isSelected(f) ? (
-                        <Check size={17} />
-                      ) : (
-                        <Landmark size={17} />
-                      )}
-                    </span>
-                    <span>
-                      <strong>{f.fundName}</strong>
-                      <small>{f.fundCode}</small>
-                    </span>
-                  </button>
-                </td>
-                <td>{f.tradeForm === "ETF" ? "ETF" : "场外"}</td>
-                <td>—</td>
-                <td>—</td>
+              <Fragment key={f.instrumentId ?? `${f.market}:${f.fundCode}`}>
+                <tr className={isSelected(f) ? "op-selected" : ""}>
+                  <td>
+                    <button
+                      aria-pressed={isSelected(f)}
+                      onClick={() => onSelect(f)}
+                    >
+                      <span className="op-fund-icon">
+                        {isSelected(f) ? (
+                          <Check size={17} />
+                        ) : (
+                          <Landmark size={17} />
+                        )}
+                      </span>
+                      <span>
+                        <strong>{f.fundName}</strong>
+                        <small>{f.fundCode}</small>
+                      </span>
+                    </button>
+                  </td>
+                  <td>{f.tradeForm === "ETF" ? "ETF" : "场外"}</td>
+                  <td>—</td>
+                  <td>—</td>
+                  {more && (
+                    <>
+                      <td>
+                        {f.navRangePosition == null
+                          ? "—"
+                          : `${Number(f.navRangePosition).toFixed(2)}%`}
+                      </td>
+                      <td>
+                        {f.latestValue == null
+                          ? "—"
+                          : Number(f.latestValue).toFixed(4)}
+                        <small>{f.latestDate}</small>
+                      </td>
+                      <td>
+                        {f.technicalScore == null
+                          ? "—"
+                          : `${Number(f.technicalScore).toFixed(0)} · ${technicalLabels[f.technicalState ?? ""] ?? "技术状态"}`}
+                      </td>
+                    </>
+                  )}
+                  <td>{labels[f.dataState] ?? "待核验"}</td>
+                </tr>
                 {more && (
-                  <>
-                    <td>
-                      {f.navRangePosition == null
-                        ? "—"
-                        : `${Number(f.navRangePosition).toFixed(2)}%`}
+                  <tr>
+                    <td colSpan={8}>
+                      <p>
+                        研究资格：
+                        {qualificationLabels[f.valueState ?? "INCOMPLETE"] ??
+                          "证据不足"}{" "}
+                        · 历史风险：
+                        {labels[f.performanceState ?? "NOT_COLLECTED"] ??
+                          "待核验"}
+                      </p>
+                      <p>
+                        63 观察日收益：{percent(f.return63)} · 252 观察日收益：
+                        {percent(f.return252)} · 样本最大回撤：
+                        {percent(f.maxDrawdown)} · 20 观察日年化波动率：
+                        {percent(f.volatility20)}
+                      </p>
+                      {f.valueEligible && (
+                        <small>仅列为研究候选，完整依据见右侧诊断。</small>
+                      )}
                     </td>
-                    <td>
-                      {f.latestValue == null
-                        ? "—"
-                        : Number(f.latestValue).toFixed(4)}
-                      <small>{f.latestDate}</small>
-                    </td>
-                    <td>
-                      {f.technicalScore == null
-                        ? "—"
-                        : `${Number(f.technicalScore).toFixed(0)} · ${technicalLabels[f.technicalState ?? ""] ?? "技术状态"}`}
-                    </td>
-                  </>
+                  </tr>
                 )}
-                <td>{labels[f.dataState] ?? "待核验"}</td>
-              </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>

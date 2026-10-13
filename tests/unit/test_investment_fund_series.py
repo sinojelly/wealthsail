@@ -12,6 +12,12 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_fundamental_sources(monkeypatch):
+    from backend.jobs import investment_research
+    monkeypatch.setattr(investment_research, "refresh_fundamentals", AsyncMock(return_value={}))
+
+
 def nav_rows():
     # A cash distribution can lower unit NAV while reported total return rises.
     return [

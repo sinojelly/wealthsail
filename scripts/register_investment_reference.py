@@ -3,16 +3,37 @@
 Usage: python -m scripts.register_investment_reference --input reviewed.json
 The file must cite the tracking/index source and the verified publication hour.
 """
+
 import argparse
 import asyncio
 import json
 from pathlib import Path
 from uuid import UUID
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 from backend.common.database import create_pool, system_connection
 from backend.config import get_settings
+from backend.integrations.investment_fundamentals import _SYMBOLS
+
+
+class IndexValuation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    provider: Literal["LEGULEGU"]
+    symbol: str = Field(strict=True)
+    source_uri: HttpUrl = Field(alias="sourceUri")
+    verified: bool = Field(strict=True)
+    publish_hour: int = Field(alias="publishHour", strict=True, ge=0, le=23)
+
+    @field_validator("symbol")
+    @classmethod
+    def supported_symbol(cls, value):
+        if value not in _SYMBOLS:
+            raise ValueError(
+                "valuation index symbol is outside the pinned provider whitelist"
+            )
+        return value
 
 
 class IndexSource(BaseModel):
@@ -21,6 +42,7 @@ class IndexSource(BaseModel):
     provider_symbol: str = Field(alias="providerSymbol", min_length=1)
     source_uri: HttpUrl = Field(alias="sourceUri")
     publish_hour: int = Field(alias="publishHour", ge=0, le=23)
+    valuation: IndexValuation | None = None
 
 
 class FundLink(BaseModel):
@@ -52,13 +74,24 @@ async def register(pool, data: ReferenceImport):
     async with system_connection(pool) as conn:
         async with conn.transaction():
             for item in data.indices:
-                row = await conn.fetchrow("""UPDATE reference.research_indices SET provider_symbol=$2,
-                    source_uri=$3,verified_at=now(),publish_hour=$4 WHERE id=$1 RETURNING id""",
-                                          item.id, item.provider_symbol, str(item.source_uri), item.publish_hour)
+                row = await conn.fetchrow(
+                    """UPDATE reference.research_indices SET provider_symbol=$2,
+                    source_uri=$3,verified_at=now(),publish_hour=$4,
+                    valuation=COALESCE($5::jsonb,valuation) WHERE id=$1 RETURNING id""",
+                    item.id,
+                    item.provider_symbol,
+                    str(item.source_uri),
+                    item.publish_hour,
+                    item.valuation.model_dump_json(by_alias=True)
+                    if item.valuation
+                    else None,
+                )
                 if not row:
                     raise ValueError(f"unknown research index: {item.id}")
             for item in data.funds:
-                config = item.model_dump(mode="json", by_alias=True, exclude={"instrument_id"})
+                config = item.model_dump(
+                    mode="json", by_alias=True, exclude={"instrument_id"}
+                )
                 row = await conn.fetchrow(
                     """UPDATE reference.instruments SET metadata=jsonb_set(
                       COALESCE(metadata,'{}'::jsonb),'{research}',
@@ -66,15 +99,20 @@ async def register(pool, data: ReferenceImport):
                         || jsonb_build_object('verifiedAt',now()),true)
                       WHERE id=$1 AND asset_type IN ('EXCHANGE_FUND','OFF_EXCHANGE_FUND')
                       RETURNING id""",
-                    item.instrument_id, json.dumps(config),
+                    item.instrument_id,
+                    json.dumps(config),
                 )
                 if not row:
                     raise ValueError(f"unknown research fund: {item.instrument_id}")
             for item in data.links:
-                await conn.execute("""INSERT INTO reference.fund_index_links(instrument_id,index_id,effective_from,source_uri,verified_at)
+                await conn.execute(
+                    """INSERT INTO reference.fund_index_links(instrument_id,index_id,effective_from,source_uri,verified_at)
                   VALUES($1,$2,CURRENT_DATE,$3,now()) ON CONFLICT(instrument_id,index_id,effective_from)
                   DO UPDATE SET source_uri=EXCLUDED.source_uri,verified_at=EXCLUDED.verified_at""",
-                                   item.instrument_id, item.index_id, str(item.source_uri))
+                    item.instrument_id,
+                    item.index_id,
+                    str(item.source_uri),
+                )
 
 
 async def main():
@@ -82,7 +120,9 @@ async def main():
     parser.add_argument("--input", type=Path, required=True)
     args = parser.parse_args()
     data = ReferenceImport.model_validate(json.loads(args.input.read_text("utf-8")))
-    pool = await create_pool(get_settings().worker_database_url, runtime_role="wealthsail_worker")
+    pool = await create_pool(
+        get_settings().worker_database_url, runtime_role="wealthsail_worker"
+    )
     try:
         await register(pool, data)
     finally:

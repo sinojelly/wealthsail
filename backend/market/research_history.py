@@ -28,6 +28,12 @@ def normalize(rows):
     by_date = {}
     for row in rows:
         day = date.fromisoformat(str(row["date"])[:10]).isoformat()
+        if any(
+            isinstance(row.get(key), bool) for key in ("open", "high", "low", "close")
+        ):
+            raise ValueError("invalid price")
+        if isinstance(row.get("volume"), bool):
+            raise ValueError("invalid volume")
         point = {
             "date": day,
             **{
@@ -42,7 +48,10 @@ def normalize(rows):
             point["returnQuality"] = row["returnQuality"]
         if (
             point["close"] is None
-            or point["close"] <= 0
+            or any(
+                point[key] is not None and point[key] <= 0
+                for key in ("open", "high", "low", "close")
+            )
             or any(
                 v is not None and not math.isfinite(v)
                 for k, v in point.items()
@@ -50,8 +59,13 @@ def normalize(rows):
             )
         ):
             raise ValueError("invalid price")
-        if point["high"] is not None and point["low"] is not None:
-            if not (0 < point["low"] <= point["close"] <= point["high"]):
+        if point["volume"] is not None and point["volume"] < 0:
+            raise ValueError("invalid volume")
+        for key in ("open", "close"):
+            if point[key] is not None and (
+                (point["low"] is not None and point[key] < point["low"])
+                or (point["high"] is not None and point[key] > point["high"])
+            ):
                 raise ValueError("invalid OHLC")
         if day in by_date and by_date[day] != point:
             raise ValueError("conflicting duplicate date")

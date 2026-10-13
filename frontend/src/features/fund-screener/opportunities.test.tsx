@@ -3,6 +3,15 @@ import userEvent from "@testing-library/user-event";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
 
+it("filters evidence candidates through the server independently of technical score", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByRole("button", { name: "高级筛选" }));
+  await user.selectOptions(screen.getByLabelText("研究资格"), "true");
+  await waitFor(() => expect(api.funds).toHaveBeenLastCalledWith(
+    expect.objectContaining({ valueCandidateOnly: "true" }), expect.anything()));
+});
+
 it("queries and preserves the selected macro history window", async () => {
   const user = userEvent.setup();
   renderWithSession(<FundScreenerPage />);

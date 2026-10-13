@@ -107,6 +107,10 @@ def _where(query):
         add("r.current_percentile<=?", query.nav_position_max)
     if query.scorable_only:
         conditions.append("a.technical_score IS NOT NULL")
+    if query.performance_only:
+        conditions.append("a.performance_eligible IS TRUE")
+    if query.value_candidate_only:
+        conditions.append("a.value_eligible IS TRUE")
     if query.min_history_days:
         add("a.history_days>=?", query.min_history_days)
     return (" WHERE " + " AND ".join(conditions) if conditions else ""), params
@@ -117,24 +121,70 @@ async def screen(conn, query: ScreenQuery):
     params.append(query.analysis_at)
     cutoff_param = f"${len(params)}"
     base = f"""FROM reference.research_fund_catalog c
+      LEFT JOIN reference.instruments i ON i.id=c.instrument_id
       LEFT JOIN reference.fund_nav_ranges r ON c.trade_form='FUND' AND r.fund_code=c.fund_code
       LEFT JOIN LATERAL (
-        SELECT CASE WHEN s.as_of >= (
-          SELECT max(calendar_date) FROM reference.trading_calendars
-          WHERE market=c.market AND is_trading_day
-            AND calendar_date <= reference.research_available_day((s.result->>'publicationHour')::integer,
-                (now() AT TIME ZONE 'Asia/Shanghai')::date, now())
-        ) THEN (s.result->>'score')::numeric ELSE NULL END AS technical_score,
-        jsonb_array_length(s.points) AS history_days,
-        CASE WHEN (s.result->>'publicationHour') IS NULL THEN 'UNVERIFIED'
-          WHEN s.as_of < (SELECT max(calendar_date) FROM reference.trading_calendars
-            WHERE market=c.market AND is_trading_day AND calendar_date<=reference.research_available_day(
-              (s.result->>'publicationHour')::integer,(now() AT TIME ZONE 'Asia/Shanghai')::date,now())) THEN 'STALE'
-          ELSE s.result->>'state' END AS technical_state
-        FROM market.investment_analysis_snapshots s
+        SELECT * FROM market.investment_analysis_snapshots s
         WHERE s.subject_kind='fund' AND s.subject_key=c.instrument_id::text
           AND s.retrieved_at<=LEAST(COALESCE({cutoff_param}::timestamptz,now()),now())
-        ORDER BY s.retrieved_at DESC LIMIT 1
+          AND s.available_at<=now()
+        ORDER BY s.retrieved_at DESC,s.id DESC LIMIT 1
+      ) s ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT max(calendar_date) AS expected_day FROM reference.trading_calendars
+        WHERE market=CASE WHEN c.market IN ('SSE','SZSE','FUND_CN') THEN 'SSE' ELSE c.market END
+          AND is_trading_day AND calendar_date<=reference.research_available_day(
+            (s.result->>'publicationHour')::integer,(now() AT TIME ZONE 'Asia/Shanghai')::date,now())
+      ) d ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT max(calendar_date) AS expected_day FROM reference.trading_calendars
+        WHERE market=CASE WHEN c.market IN ('SSE','SZSE','FUND_CN') THEN 'SSE' ELSE c.market END
+          AND is_trading_day AND calendar_date<=reference.research_available_day(
+            (s.result->'fundamentals'->'valuationConfig'->>'publishHour')::integer,
+            (now() AT TIME ZONE 'Asia/Shanghai')::date,now())
+      ) v ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          i.metadata->'research'->>'sourceVerified'='true'
+          AND i.metadata->'research'->>'sourceUri'=s.source_uri
+          AND i.metadata->'research'->>'publishHour'=s.result->>'publicationHour'
+          AND (s.series_kind!='PROVIDER_RETURN_INDEX'
+            OR i.metadata->'research'->>'returnSeriesVerified'='true'),false) AS source_verified
+      ) g ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT CASE WHEN g.source_verified AND s.as_of=d.expected_day
+          THEN (s.result->>'score')::numeric ELSE NULL END AS technical_score,
+        jsonb_array_length(s.points) AS history_days,
+        s.result->'performance' AS performance,
+        CASE WHEN d.expected_day IS NULL OR s.as_of>d.expected_day THEN 'UNVERIFIED'
+          WHEN s.as_of<d.expected_day THEN 'STALE'
+          WHEN NOT g.source_verified THEN 'UNVERIFIED'
+          ELSE s.result->'performance'->>'state' END AS performance_state,
+        COALESCE(g.source_verified AND s.as_of=d.expected_day
+          AND s.result->'performance'->>'eligible'='true',false) AS performance_eligible,
+        CASE WHEN d.expected_day IS NULL OR s.as_of>d.expected_day THEN 'UNVERIFIED'
+          WHEN s.as_of<d.expected_day THEN 'STALE'
+          WHEN NOT g.source_verified THEN 'UNVERIFIED'
+          ELSE s.result->>'state' END AS technical_state,
+        COALESCE(g.source_verified AND s.as_of=d.expected_day
+          AND s.result->'performance'->>'eligible'='true'
+          AND s.result->'valueEvidence'->>'eligible'='true'
+          AND (s.result->'fundamentals'->'valuation'->>'requestedEnd')::date=v.expected_day
+          AND (s.result->'fundamentals'->'costs'->>'retrievedAt')::timestamptz
+            BETWEEN now()-interval '45 days' AND now()
+          AND EXISTS(SELECT 1 FROM reference.fund_index_links f
+            JOIN reference.research_indices idx ON idx.id=f.index_id
+            WHERE f.instrument_id=c.instrument_id
+              AND f.index_id=s.result->'fundamentals'->>'indexId'
+              AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+              AND f.verified_at<=now() AND idx.verified_at<=now()
+              AND idx.valuation=s.result->'fundamentals'->'valuationConfig')
+          AND (SELECT count(DISTINCT f.index_id) FROM reference.fund_index_links f
+            JOIN reference.research_indices idx ON idx.id=f.index_id
+            WHERE f.instrument_id=c.instrument_id
+              AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+              AND f.verified_at<=now() AND idx.verified_at<=now())=1,false) AS value_eligible,
+        s.result->'valueEvidence'->>'state' AS stored_value_state
       ) a ON TRUE"""
     total = await conn.fetchval("SELECT count(*) " + base + where, *params)
     sort = {
@@ -145,7 +195,7 @@ async def screen(conn, query: ScreenQuery):
     }[query.sort_by]
     order = "DESC" if query.sort_order == "desc" else "ASC"
     rows = await conn.fetch(
-        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at, a.technical_score, a.history_days, a.technical_state "
+        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at, a.technical_score, a.history_days, a.technical_state, a.performance, a.performance_state, a.value_eligible, CASE WHEN a.value_eligible THEN 'RESEARCH_CANDIDATE' WHEN a.stored_value_state='NOT_CANDIDATE' AND a.performance_eligible THEN 'NOT_CANDIDATE' ELSE 'INCOMPLETE' END AS value_state "
         + base
         + where
         + f" ORDER BY {sort} {order} NULLS LAST, c.market, c.fund_code"

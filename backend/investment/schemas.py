@@ -23,6 +23,8 @@ class ScreenQuery(BaseModel):
     sort_order: Literal["asc", "desc"] = Field(default="asc", alias="sortOrder")
     analysis_at: datetime | None = Field(default=None, alias="analysisAsOf")
     scorable_only: bool = Field(default=False, alias="scorableOnly")
+    performance_only: bool = Field(default=False, alias="performanceOnly")
+    value_candidate_only: bool = Field(default=False, alias="valueCandidateOnly")
     min_history_days: int = Field(default=0, alias="minHistoryDays", ge=0, le=10000)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
