@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import date, timedelta
+from datetime import date
 from uuid import UUID
 
 from backend.common.database import system_connection
@@ -10,7 +10,7 @@ from backend.integrations.investment_fundamentals import (
     fetch_fund_costs,
     fetch_index_valuation,
 )
-from backend.market.research_history import calendar_market, published_day
+from backend.market.research_history import published_day, years_before, expected_trading_day
 
 
 def _object(value):
@@ -84,12 +84,7 @@ async def _index_valuation(pool, subject_id, subject, as_of, now, *, allow_cache
         cutoff = published_day(as_of, config["publishHour"], now)
         if cutoff is not None:
             async with system_connection(pool) as conn:
-                end = await conn.fetchval(
-                    """SELECT max(calendar_date) FROM reference.trading_calendars
-                      WHERE market=$1 AND is_trading_day AND calendar_date<=$2""",
-                    calendar_market(subject.get("market")),
-                    cutoff,
-                )
+                end = await expected_trading_day(conn,subject.get("market"),cutoff)
     if allow_cache and end is not None:
         async with system_connection(pool) as conn:
             row = await conn.fetchrow(
@@ -113,7 +108,7 @@ async def _index_valuation(pool, subject_id, subject, as_of, now, *, allow_cache
     else:
         try:
             result = await fetch_index_valuation(
-                {**subject, "valuation": config}, end - timedelta(days=365 * 5), end
+                {**subject, "valuation": config}, years_before(end,5), end
             )
         except Exception as exc:  # noqa: BLE001 -- valuation must not block price research
             result = _missing_valuation(

@@ -131,15 +131,29 @@ async def screen(conn, query: ScreenQuery):
         ORDER BY s.retrieved_at DESC,s.id DESC LIMIT 1
       ) s ON TRUE
       LEFT JOIN LATERAL (
-        SELECT max(calendar_date) AS expected_day FROM reference.trading_calendars
+        SELECT COALESCE(CASE WHEN s.series_kind IN ('UNIT_NAV','PROVIDER_RETURN_INDEX')
+          THEN s.result->'navObservations'->-1 END,s.points->-1) AS latest_point
+      ) n ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT CASE WHEN count(*) FILTER (WHERE calendar_date>=COALESCE((s.points->0->>'date')::date,s.as_of))=
+          reference.research_available_day((s.result->>'publicationHour')::integer,
+            (now() AT TIME ZONE 'Asia/Shanghai')::date,now())-COALESCE((s.points->0->>'date')::date,s.as_of)+1
+          THEN max(calendar_date) FILTER (WHERE is_trading_day) ELSE NULL END AS expected_day
+        FROM reference.trading_calendars
         WHERE market=CASE WHEN c.market IN ('SSE','SZSE','FUND_CN') THEN 'SSE' ELSE c.market END
-          AND is_trading_day AND calendar_date<=reference.research_available_day(
+          AND calendar_date<=reference.research_available_day(
             (s.result->>'publicationHour')::integer,(now() AT TIME ZONE 'Asia/Shanghai')::date,now())
       ) d ON TRUE
       LEFT JOIN LATERAL (
-        SELECT max(calendar_date) AS expected_day FROM reference.trading_calendars
+        SELECT CASE WHEN EXISTS(SELECT 1 FROM reference.trading_calendars tail
+          WHERE tail.market=CASE WHEN c.market IN ('SSE','SZSE','FUND_CN') THEN 'SSE' ELSE c.market END
+            AND tail.calendar_date=reference.research_available_day(
+              (s.result->'fundamentals'->'valuationConfig'->>'publishHour')::integer,
+              (now() AT TIME ZONE 'Asia/Shanghai')::date,now()))
+          THEN max(calendar_date) FILTER (WHERE is_trading_day) ELSE NULL END AS expected_day
+        FROM reference.trading_calendars
         WHERE market=CASE WHEN c.market IN ('SSE','SZSE','FUND_CN') THEN 'SSE' ELSE c.market END
-          AND is_trading_day AND calendar_date<=reference.research_available_day(
+          AND calendar_date<=reference.research_available_day(
             (s.result->'fundamentals'->'valuationConfig'->>'publishHour')::integer,
             (now() AT TIME ZONE 'Asia/Shanghai')::date,now())
       ) v ON TRUE
@@ -195,7 +209,7 @@ async def screen(conn, query: ScreenQuery):
     }[query.sort_by]
     order = "DESC" if query.sort_order == "desc" else "ASC"
     rows = await conn.fetch(
-        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at, a.technical_score, a.history_days, a.technical_state, a.performance, a.performance_state, a.value_eligible, CASE WHEN a.value_eligible THEN 'RESEARCH_CANDIDATE' WHEN a.stored_value_state='NOT_CANDIDATE' AND a.performance_eligible THEN 'NOT_CANDIDATE' ELSE 'INCOMPLETE' END AS value_state "
+        "SELECT c.*, r.latest_nav, r.latest_nav_date, r.current_percentile, r.data_source, r.updated_at, s.series_kind AS latest_series_kind, n.latest_point AS latest_point, COALESCE((n.latest_point->>'date')::date,s.as_of) AS latest_series_date, a.technical_score, a.history_days, a.technical_state, a.performance, a.performance_state, a.value_eligible, CASE WHEN a.value_eligible THEN 'RESEARCH_CANDIDATE' WHEN a.stored_value_state='NOT_CANDIDATE' AND a.performance_eligible THEN 'NOT_CANDIDATE' ELSE 'INCOMPLETE' END AS value_state "
         + base
         + where
         + f" ORDER BY {sort} {order} NULLS LAST, c.market, c.fund_code"

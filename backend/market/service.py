@@ -659,67 +659,83 @@ async def _tenant_owner_user(pool: Pool, tenant_id: str) -> str | None:
 
 
 async def fill_trading_calendar(pool: Pool) -> int:
-    """Backfill 2024–2026 SSE trading calendar from the Sina exchange calendar.
+    """Refresh five actual calendar years through the confirmed source window.
 
-    2024→today: known official dates; workdays absent from the official list are
-    holidays (false). Future dates (official calendar not yet published): workday
-    fallback true, to be corrected on the next run after publication.
+    The Sina adapter returns its complete exchange trading-date history. Days
+    absent inside that history's first/last dates are closed sessions. Nothing
+    outside its confirmed range or after today is inferred or overwritten.
     """
+    today = now_shanghai().date()
+    try:
+        start = today.replace(year=today.year - 5)
+    except ValueError:
+        start = today.replace(year=today.year - 5, day=28)
 
-    def _fetch_dates() -> set[str]:
+    def _fetch_dates() -> set[date]:
         import akshare
 
         df = akshare.tool_trade_date_hist_sina()
-        return {str(d)[:10] for d in df["trade_date"].tolist()}
+        if df is None or df.empty or "trade_date" not in df.columns:
+            raise ValueError("exchange calendar is unavailable")
+        return {date.fromisoformat(str(day)[:10]) for day in df["trade_date"].tolist()}
 
     try:
-        official = await asyncio.to_thread(_fetch_dates)
+        official = await asyncio.wait_for(asyncio.to_thread(_fetch_dates), timeout=20)
     except Exception as exc:  # noqa: BLE001
-        logger.error("交易日历拉取失败: %s", exc)
+        logger.error("交易日历拉取失败: %s", type(exc).__name__)
         return 0
 
-    today = now_shanghai().date()
+    if not official:
+        return 0
     rows: list[tuple] = []
-    cursor = date(2024, 1, 1)
-    end = date(2026, 12, 31)
+    cursor = max(start, min(official))
+    end = min(today, max(official))
     while cursor <= end:
-        if cursor.weekday() >= 5:
-            rows.append((cursor, False))
-        elif cursor.isoformat() in official:
-            rows.append((cursor, True))
-        else:
-            # 2024..today 的缺失工作日 = 官方节假日；未来日期 = 工作日兜底
-            rows.append((cursor, cursor > today))
-        cursor += date.resolution  # timedelta(days=1)
+        rows.append((cursor, cursor in official))
+        cursor += date.resolution
+    if not rows:
+        return 0
 
     async with system_connection(pool) as conn:
         inserted = await repository.upsert_trading_calendar_rows(conn, rows)
-    logger.info("交易日历填充完成: %d 天 (2024-2026, SSE)", inserted)
+    logger.info("交易日历填充完成: %d 天 (%s..%s, SSE)", inserted, rows[0][0], end)
     return inserted
 
 
 async def ensure_trading_calendar(pool: Pool) -> dict:
-    """Populate the governed SSE calendar when a deployment has no rows.
+    """Require complete recent coverage, including the current calendar day.
 
-    The read path can safely fall back to persisted official NAV dates, but
-    the scheduler still benefits from a complete holiday calendar.  Upsert is
-    idempotent, so concurrent cold starts may both fetch without corrupting
-    state; subsequent starts are database-only.
+    Legacy future rows have no provenance distinguishing them from old weekday
+    forecasts. Their presence requires rechecking current dates against the
+    provider; those future rows remain untouched for a separate audited repair.
     """
+    today = now_shanghai().date()
+    try:
+        start = today.replace(year=today.year - 5)
+    except ValueError:
+        start = today.replace(year=today.year - 5, day=28)
+    required = (today - start).days + 1
+    coverage_sql = """SELECT count(*) FROM reference.trading_calendars
+      WHERE market='SSE' AND calendar_date BETWEEN $1 AND $2"""
     async with system_connection(pool) as conn:
-        existing = await conn.fetchval(
-            """
-            SELECT count(*)
-              FROM reference.trading_calendars
-             WHERE market = 'SSE'
-            """
+        existing = int(await conn.fetchval(coverage_sql, start, today) or 0)
+        future = int(
+            await conn.fetchval(
+                "SELECT count(*) FROM reference.trading_calendars WHERE market='SSE' AND calendar_date>$1",
+                today,
+            )
+            or 0
         )
-    if int(existing or 0) > 0:
-        return {"status": "SKIPPED", "reason": "CALENDAR_EXISTS", "rows": int(existing)}
+    if existing == required and future == 0:
+        return {"status": "SKIPPED", "reason": "CALENDAR_CURRENT", "rows": existing}
     inserted = await fill_trading_calendar(pool)
+    if inserted == 0:
+        return {"status": "ABSTAINED", "reason": "PROVIDER_UNAVAILABLE", "rows": 0}
+    async with system_connection(pool) as conn:
+        complete = int(await conn.fetchval(coverage_sql, start, today) or 0) == required
     return {
-        "status": "COMPLETED" if inserted > 0 else "ABSTAINED",
-        "reason": None if inserted > 0 else "PROVIDER_UNAVAILABLE",
+        "status": "COMPLETED" if complete else "PARTIAL",
+        "reason": None if complete else "PROVIDER_INCOMPLETE",
         "rows": inserted,
     }
 

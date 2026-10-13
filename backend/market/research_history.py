@@ -10,6 +10,24 @@ def calendar_market(market):
     return "SSE" if market in {"SSE", "SZSE", "FUND_CN"} else market
 
 
+def years_before(day, years):
+    """Calendar-year lookback, retaining leap-year boundary semantics."""
+    try:
+        return day.replace(year=day.year-years)
+    except ValueError:
+        return day.replace(year=day.year-years,day=28)
+
+
+async def expected_trading_day(conn, market, cutoff, history_start=None):
+    """A stale calendar cannot certify freshness by falling back to its tail."""
+    start=history_start or cutoff
+    return await conn.fetchval("""SELECT CASE WHEN $2::date IS NOT NULL AND $3::date<=$2
+      AND count(*) FILTER (WHERE calendar_date>=$3)=($2::date-$3::date+1)
+      THEN max(calendar_date) FILTER (WHERE is_trading_day) ELSE NULL END
+      FROM reference.trading_calendars
+      WHERE market=$1 AND calendar_date<=$2""",calendar_market(market),cutoff,start)
+
+
 def published_day(as_of, publish_hour, now):
     """Latest potentially published calendar day; callers apply market calendars."""
     local = now.astimezone(ZoneInfo("Asia/Shanghai"))

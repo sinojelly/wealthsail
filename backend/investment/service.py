@@ -8,7 +8,7 @@ from backend.investment import repository
 from backend.investment.schemas import ScreenQuery
 from backend.errors import NotFoundError
 from backend.dependencies import now_shanghai
-from backend.market.research_history import published_day
+from backend.market.research_history import published_day, expected_trading_day
 from backend.indicators.value_evidence import evaluate
 from copy import deepcopy
 
@@ -240,6 +240,30 @@ def fund_dto(r):
     performance = r.get("performance") or {}
     if isinstance(performance, str):
         performance = json.loads(performance)
+    point = r.get("latest_point") or {}
+    if isinstance(point, str):
+        try:
+            point = json.loads(point)
+        except (TypeError, ValueError):
+            point = {}
+    if not isinstance(point, dict):
+        point = {}
+    series = r.get("latest_series_kind")
+    basis = {
+        "PROVIDER_RETURN_INDEX": "UNIT_NAV",
+        "UNIT_NAV": "UNIT_NAV",
+        "ETF_HFQ": "ADJUSTED_PRICE",
+        "ACCUMULATED_NAV": "ACCUMULATED_NAV",
+    }.get(series)
+    raw_value = point.get("unitNav" if series == "PROVIDER_RETURN_INDEX" else "close")
+    latest_value = _macro_number(raw_value) if basis else None
+    latest_date = r.get("latest_series_date")
+    if latest_value is None or latest_value <= 0:
+        latest_value = _macro_number(r.get("latest_nav"))
+        latest_date = r.get("latest_nav_date")
+        basis = "ACCUMULATED_NAV" if latest_value is not None else None
+    if latest_value is None or latest_value <= 0:
+        latest_value, latest_date, basis = None, None, None
     return {
         "instrumentId": str(r["instrument_id"]) if r["instrument_id"] else None,
         "fundCode": r["fund_code"],
@@ -248,8 +272,9 @@ def fund_dto(r):
         "tradeForm": r["trade_form"],
         "market": r["market"],
         "currency": r["currency"],
-        "latestValue": r.get("latest_nav"),
-        "latestDate": _iso(r.get("latest_nav_date")),
+        "latestValue": latest_value,
+        "latestDate": _iso(latest_date),
+        "latestValueBasis": basis,
         "navRangePosition": r.get("current_percentile"),
         "updatedAt": _iso(r.get("updated_at")),
         "performanceState": r.get("performance_state") or performance.get("state") or "NOT_COLLECTED",
@@ -353,22 +378,20 @@ async def analysis(conn, kind, subject_id):
     if result.get("score") is not None or result.get("performance"):
         now = now_shanghai()
         cutoff = published_day(now.date(), result.get("publicationHour"), now)
-        expected = await conn.fetchval(
-            """SELECT max(calendar_date)
-          FROM reference.trading_calendars WHERE market=$1 AND is_trading_day
-            AND calendar_date <= $2""",
-            result.get("calendarMarket") or result.get("market"),
-            cutoff,
-        )
-        if expected is None or row["as_of"] < expected:
+        stored_points=row.get("points") or []
+        stored_points=json.loads(stored_points) if isinstance(stored_points,str) else stored_points
+        start=date.fromisoformat(stored_points[0]["date"]) if stored_points else row["as_of"]
+        expected = await expected_trading_day(conn,result.get("calendarMarket") or result.get("market"),cutoff,start)
+        if expected is None or row["as_of"] != expected:
+            quality = "STALE" if expected and row["as_of"] < expected else "UNVERIFIED"
             result = {
                 **result,
                 "score": None,
-                "state": "STALE" if expected else "UNVERIFIED",
-                "dataQuality": "STALE" if expected else "UNVERIFIED",
+                "state": quality,
+                "dataQuality": quality,
                 **({"performance": {
                     **result["performance"], "eligible": False,
-                    "state": "STALE" if expected else "UNVERIFIED",
+                    "state": quality,
                 }} if result.get("performance") else {}),
             }
     if result.get("score") is not None or result.get("performance"):
@@ -414,9 +437,7 @@ async def analysis(conn, kind, subject_id):
             costs["state"] = "UNVERIFIED"
         if facts.get("valuationConfig"):
             now = now_shanghai()
-            end = await conn.fetchval("""SELECT max(calendar_date) FROM reference.trading_calendars
-              WHERE market=$1 AND is_trading_day AND calendar_date<=$2""",
-              result.get("calendarMarket") or result.get("market"),
+            end = await expected_trading_day(conn,result.get("calendarMarket") or result.get("market"),
               published_day(now.date(), facts["valuationConfig"].get("publishHour"), now))
             if end is None or valuation.get("requestedEnd") != end.isoformat():
                 valuation["state"] = "STALE" if end else "UNVERIFIED"

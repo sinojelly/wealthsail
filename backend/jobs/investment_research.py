@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from uuid import UUID
 
 from backend.common.database import system_connection
@@ -13,9 +13,10 @@ from backend.indicators.performance import VERSION as PERFORMANCE_VERSION, analy
 from backend.indicators.value_evidence import VERSION as VALUE_VERSION, evaluate
 from backend.jobs.investment_fundamentals import refresh_fundamentals
 from backend.market.research_history import (
-    calendar_market, fund_history, normalize, quality, published_day,
+    calendar_market, fund_history, normalize, quality, published_day, years_before,
 )
 from backend.dependencies import now_shanghai
+from backend.market.service import ensure_trading_calendar
 
 
 async def load_subject(conn, kind, subject_id):
@@ -115,10 +116,11 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     )
     verified = verified and type(publish_hour) is int and 0 <= publish_hour <= 23
     eligible_day = published_day(as_of, publish_hour, now or now_shanghai())
+    history_start = years_before(as_of,5)
     rows, series_kind, source = await asyncio.wait_for(
-        fetch_history(subject, kind, as_of - timedelta(days=365 * 5), eligible_day or as_of), timeout=90
+        fetch_history(subject, kind, history_start, eligible_day or as_of), timeout=90
     )
-    rows = [p for p in rows if (as_of - timedelta(days=365 * 5)).isoformat() <= p["date"] <= as_of.isoformat()]
+    rows = [p for p in rows if history_start.isoformat() <= p["date"] <= as_of.isoformat()]
     if not rows:
         raise DataUnavailableError("来源没有有效历史数据")
     if eligible_day is not None:
@@ -148,14 +150,28 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
     if observed_days - covered_days:
         state = "UNVERIFIED"
     elif observed_days - days:
+        if series_kind not in {"UNIT_NAV", "PROVIDER_RETURN_INDEX"}:
+            state = "CONFLICT"
+    nav_observations = rows if series_kind in {"UNIT_NAV", "PROVIDER_RETURN_INDEX"} else None
+    if nav_observations is not None and covered_days and not (observed_days-covered_days):
+        rows = [point for point in rows if point["date"] in days]
+        if not rows:
+            raise DataUnavailableError("没有已核验交易日内的研究净值")
+        latest = date.fromisoformat(rows[-1]["date"])
+        state = quality(latest=latest, expected=expected, verified=verified,
+                        missing=bool({day for day in days if day<=rows[-1]["date"]} - {p["date"] for p in rows}))
+    if any(p.get("returnQuality") == "CONFLICT" for p in (nav_observations or rows)):
         state = "CONFLICT"
-    if any(p.get("returnQuality") == "CONFLICT" for p in rows):
-        state = "CONFLICT"
+    if eligible_day is None or len(covered_days)!=(eligible_day-date.fromisoformat((nav_observations or rows)[0]["date"])).days+1:
+        state="UNVERIFIED"
     result = analyze(rows, quality=state)
     result["market"] = subject["market"]
     result["publicationHour"] = publish_hour
     result["calendarMarket"] = calendar_market(subject["market"])
     result["dataQuality"] = state
+    if nav_observations is not None:
+        result["navObservations"] = nav_observations
+        result["sampling"] = "verified_trading_sessions"
     result["returnSeriesVerified"] = (
         config.get("returnSeriesVerified") is True if kind == "fund" else False
     )
@@ -191,6 +207,8 @@ async def refresh_subject(pool, settings, kind, subject_id, as_of, *, now=None):
             "performanceVersion": PERFORMANCE_VERSION,
             "valueVersion": VALUE_VERSION,
             "fundamentals": facts,
+            "navObservations": nav_observations,
+            "sampling": "verified_trading_sessions",
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -221,6 +239,11 @@ async def sync_research(pool, settings, now: datetime):
     from backend.jobs.investment_macro import sync_macro
 
     logger = logging.getLogger("wealthsail.investment_research")
+    try:
+        calendar = await ensure_trading_calendar(pool)
+        logger.info("research_calendar_refresh %s", calendar)
+    except Exception:  # noqa: BLE001 -- retain facts, missing calendar blocks eligibility
+        logger.exception("research_calendar_refresh_failed")
     try:
         await asyncio.wait_for(sync_macro(pool, now), timeout=90)
     except Exception:  # noqa: BLE001 -- provider failure must not block fund research

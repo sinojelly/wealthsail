@@ -1,10 +1,10 @@
 """Four-session scheduler (PRE_MARKET / INTRADAY / FUND_1430 / POST_MARKET).
 
 A lightweight asyncio tick loop (no APScheduler dependency, per the pinned
-requirements) matches each session's cron semantics and only fires on trading
-days (reference.trading_calendars, falling back to Mon–Fri). Job execution
-itself is delegated to the lease runner, so a crashed worker is recovered by
-the next tick.
+requirements) matches each session's cron semantics. Report sessions follow
+trading days (reference.trading_calendars, falling back to Mon–Fri), while
+shared source refreshes can run every calendar day. Report job execution is
+delegated to the lease runner for crash recovery.
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ class SessionSchedule:
     hour: int
     dow: tuple[int, ...] = (1, 2, 3, 4, 5)
     every_minutes: int = 0  # >0 → fire every N minutes while inside the hour range
-    # Fixed sessions can be caught up after a short Worker restart.  The
-    # persistent job key keeps repeated ticks idempotent across processes.
+    # Fixed sessions can be caught up after a short Worker restart. Reports
+    # use persistent job keys; shared research uses immutable input hashes.
     catch_up_minutes: int = 15
     # Most sessions follow the mainland trading calendar.  Shared source-cache
     # refreshes can opt out when late provider disclosure needs a daily retry.
@@ -59,7 +59,18 @@ class SessionSchedule:
 
 
 SCHEDULES: tuple[SessionSchedule, ...] = (
-    SessionSchedule("INVESTMENT_RESEARCH_REFRESH", "投资研究更新", minute=30, hour=22),
+    # Refresh after the previous research day's late NAV disclosures. Macro
+    # releases also occur on closed exchange days, so this is a daily source
+    # task. Restart catch-up ends before the 08:30 report sessions begin.
+    SessionSchedule(
+        "INVESTMENT_RESEARCH_REFRESH",
+        "投资研究更新",
+        minute=30,
+        hour=6,
+        dow=(1, 2, 3, 4, 5, 6, 7),
+        trading_day_only=False,
+        catch_up_minutes=120,
+    ),
     SessionSchedule(
         "CORPORATE_ACTIONS_REFRESH",
         "公司行动数据同步",
@@ -187,7 +198,7 @@ async def is_trading_day(conn, day: datetime) -> bool:
 
 
 class Scheduler:
-    """Tick loop that dispatches due sessions to an execution callback."""
+    """Dispatch reports inline and own one independent research refresh task."""
 
     def __init__(
         self,
@@ -203,6 +214,7 @@ class Scheduler:
         timezone = ZoneInfo(settings.timezone)
         self._now_provider = now_provider or (lambda: datetime.now(timezone))
         self._task: asyncio.Task | None = None
+        self._research_task: asyncio.Task | None = None
         self._last_fired: set[tuple[str, str]] = set()
 
     def start(self) -> None:
@@ -216,6 +228,15 @@ class Scheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._research_task is not None:
+            research = self._research_task
+            if not research.done() and not research.cancelling():
+                research.cancel()
+            try:
+                await research
+            except asyncio.CancelledError:
+                pass
+            self._research_task = None
 
     async def _loop(self) -> None:
         logger.info(
@@ -237,8 +258,12 @@ class Scheduler:
         due = [schedule for schedule in SCHEDULES if is_due(schedule, now)]
         if not due:
             return
-        if self._trading_day_check is not None and not await self._trading_day_check(now):
-            trading_day_due = [schedule for schedule in due if schedule.trading_day_only]
+        if self._trading_day_check is not None and not await self._trading_day_check(
+            now
+        ):
+            trading_day_due = [
+                schedule for schedule in due if schedule.trading_day_only
+            ]
             due = [schedule for schedule in due if not schedule.trading_day_only]
             if trading_day_due:
                 logger.info(
@@ -252,6 +277,14 @@ class Scheduler:
             key = _fire_key(schedule, now)
             if key in self._last_fired:
                 continue
+            if (
+                schedule.phase == "INVESTMENT_RESEARCH_REFRESH"
+                and self._research_task is not None
+                and not self._research_task.done()
+            ):
+                # Do not consume a new day's slot while yesterday's refresh
+                # is still running. A later tick can retry within its window.
+                continue
             self._last_fired.add(key)
             dispatches.append((schedule, key))
         if not dispatches:
@@ -262,9 +295,22 @@ class Scheduler:
             self._last_fired = {
                 key for key in self._last_fired if key[1].startswith(today)
             }
-        await asyncio.gather(
-            *(self._dispatch(schedule, now) for schedule, _key in dispatches)
-        )
+        foreground = []
+        research_started = False
+        for schedule, _key in dispatches:
+            if schedule.phase == "INVESTMENT_RESEARCH_REFRESH":
+                self._research_task = asyncio.create_task(
+                    self._dispatch(schedule, now),
+                    name="wealthsail-investment-research",
+                )
+                research_started = True
+            else:
+                foreground.append(self._dispatch(schedule, now))
+        await asyncio.gather(*foreground)
+        if research_started:
+            # Start collection promptly, then let subsequent ticks dispatch
+            # report sessions while research waits on provider I/O.
+            await asyncio.sleep(0)
 
     async def _dispatch(self, schedule: SessionSchedule, now: datetime) -> None:
         """Execute one due phase while isolating it from sibling failures."""

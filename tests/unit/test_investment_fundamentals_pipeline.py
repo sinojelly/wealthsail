@@ -95,7 +95,7 @@ async def test_index_valuation_uses_published_calendar_day_and_immutable_fact(
         object(), "index", "hs300", _index(), NOW.date(), now=NOW
     )
     assert fetch.await_args.args[2] == date(2026, 10, 13)
-    assert conn.fetchval.await_args.args[1:] == ("SSE", date(2026, 10, 13))
+    assert conn.fetchval.await_args.args[1:] == ("SSE", date(2026, 10, 13), date(2026, 10, 13))
     assert result["valuation"]["expectedAsOf"] == "2026-10-13"
     assert result["mapped"] is True and result["indexId"] == "hs300"
     assert result["valuationConfig"] == CONFIG

@@ -16,6 +16,7 @@ import pytest
 def isolate_fundamental_sources(monkeypatch):
     from backend.jobs import investment_research
     monkeypatch.setattr(investment_research, "refresh_fundamentals", AsyncMock(return_value={}))
+    monkeypatch.setattr(investment_research, "ensure_trading_calendar", AsyncMock(return_value={}))
 
 
 def nav_rows():
@@ -97,6 +98,8 @@ async def test_fund_quality_reuses_mainland_calendar_and_keeps_unscored_indicato
     conn = AsyncMock()
     conn.fetch.return_value = [{"calendar_date": date(2026, 10, 8)},
                               {"calendar_date": date(2026, 10, 9)},
+                              {"calendar_date": date(2026, 10, 10), "is_trading_day": False},
+                              {"calendar_date": date(2026, 10, 11), "is_trading_day": False},
                               {"calendar_date": date(2026, 10, 12)}]
 
     @asynccontextmanager

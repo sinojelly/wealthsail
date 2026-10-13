@@ -80,6 +80,7 @@ async def test_fetch_uses_published_window_before_building_return_index(monkeypa
     now = datetime(2026, 10, 13, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
     await worker.refresh_subject(object(), object(), "fund", "key", now.date(), now=now)
     assert fetch.await_args.args[3] == date(2026, 10, 12)
+    assert fetch.await_args.args[2] == date(2021, 10, 13)
 
 
 @pytest.mark.asyncio
@@ -159,3 +160,28 @@ async def test_calendar_missing_early_history_does_not_certify_five_years(monkey
     result = json.loads(conn.execute.await_args.args[-2])
     assert result["dataQuality"] == "UNVERIFIED"
     assert result["performance"]["eligible"] is False
+
+
+@pytest.mark.asyncio
+async def test_disclosed_nav_on_closed_day_is_preserved_but_not_a_trading_sample(monkeypatch):
+    worker, conn, _ = worker_fixture(monkeypatch, series='PROVIDER_RETURN_INDEX')
+    conn.fetch.return_value[20]['is_trading_day']=False
+    now=datetime(2026,10,12,23,tzinfo=ZoneInfo('Asia/Shanghai'))
+    await worker.refresh_subject(object(),object(),'fund','key',now.date(),now=now)
+    result=json.loads(conn.execute.await_args.args[-2])
+    points=json.loads(conn.execute.await_args.args[-1])
+    assert result['dataQuality']=='READY'
+    assert result['performance']['sampleCount']==252
+    assert result['performance']['state']=='INSUFFICIENT'
+    assert len(result['navObservations'])==253
+    assert len(points)==252
+
+
+@pytest.mark.asyncio
+async def test_old_calendar_tail_cannot_certify_current_history(monkeypatch):
+    worker,conn,_=worker_fixture(monkeypatch)
+    now=datetime(2026,10,13,23,tzinfo=ZoneInfo('Asia/Shanghai'))
+    await worker.refresh_subject(object(),object(),'fund','key',now.date(),now=now)
+    result=json.loads(conn.execute.await_args.args[-2])
+    assert result['dataQuality']=='UNVERIFIED'
+    assert result['performance']['eligible'] is False

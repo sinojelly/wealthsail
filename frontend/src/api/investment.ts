@@ -26,6 +26,7 @@ export interface ResearchFund {
   currency: string;
   latestValue: number | null;
   latestDate: string | null;
+  latestValueBasis?: "UNIT_NAV" | "ACCUMULATED_NAV" | "ADJUSTED_PRICE" | null;
   navRangePosition: number | null;
   technicalScore: number | null;
   technicalState?: string | null;

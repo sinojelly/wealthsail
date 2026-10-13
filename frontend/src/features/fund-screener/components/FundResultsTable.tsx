@@ -50,6 +50,11 @@ export default function FundResultsTable({
     NOT_CANDIDATE: "未达研究门槛",
     INCOMPLETE: "证据不足",
   };
+  const valueBasisLabels: Record<string, string> = {
+    UNIT_NAV: "单位净值",
+    ACCUMULATED_NAV: "累计净值",
+    ADJUSTED_PRICE: "后复权",
+  };
   const percent = (value: number | null | undefined) =>
     value == null || !Number.isFinite(value)
       ? "—"
@@ -73,7 +78,7 @@ export default function FundResultsTable({
               {more && (
                 <>
                   <th>净值区间位置</th>
-                  <th>最新净值</th>
+                  <th>最新值</th>
                   <th>技术状态评分</th>
                 </>
               )}
@@ -113,9 +118,13 @@ export default function FundResultsTable({
                           : `${Number(f.navRangePosition).toFixed(2)}%`}
                       </td>
                       <td>
-                        {f.latestValue == null
+                        {f.latestValue == null ||
+                        !Number.isFinite(Number(f.latestValue))
                           ? "—"
                           : Number(f.latestValue).toFixed(4)}
+                        {f.latestValue != null && f.latestValueBasis && (
+                          <small>{valueBasisLabels[f.latestValueBasis]}</small>
+                        )}
                         <small>{f.latestDate}</small>
                       </td>
                       <td>
