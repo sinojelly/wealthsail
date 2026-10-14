@@ -511,7 +511,7 @@ it("presents direction transmission, counter-cases and follow-up checks", async 
     />,
   );
   await user.click(screen.getByRole("button", { name: /查看驱动与风险/ }));
-  expect(screen.getByText("市场可能已计价。")).toBeInTheDocument();
+  expect(screen.getByText("反方条件：市场可能已计价。")).toBeInTheDocument();
   expect(screen.getByText(/企业利润与估值/)).toBeInTheDocument();
   expect(screen.getByText(/实际利润与融资利率/)).toBeInTheDocument();
   expect(

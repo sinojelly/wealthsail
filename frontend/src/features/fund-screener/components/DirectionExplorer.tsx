@@ -72,7 +72,7 @@ export default function DirectionExplorer({
                   <strong>{channel.label}</strong>
                   <p>观察：{channel.observation}</p>
                   <p>可能影响：{channel.impact}</p>
-                  <p>{channel.counterCase}</p>
+                  <p>反方条件：{channel.counterCase}</p>
                   <p>待验证：{channel.watchFor.join("、")}</p>
                   <small>依据：{channel.evidenceCodes.join("、")}</small>
                 </article>
