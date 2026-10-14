@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+  <title>Daily Treasury Par Yield Curve Rates</title>
+  <updated>2025-10-14T00:00:00Z</updated>
+  <entry><content type="application/xml"><m:properties><d:NEW_DATE m:type="Edm.DateTime">2025-10-13T00:00:00</d:NEW_DATE><d:BC_10YEAR m:type="Edm.Double">4.10</d:BC_10YEAR><d:BC_5YEAR m:type="Edm.Double">3.70</d:BC_5YEAR></m:properties></content></entry>
+  <entry><content type="application/xml"><m:properties><d:NEW_DATE m:type="Edm.DateTime">2025-10-14T00:00:00</d:NEW_DATE><d:BC_10YEAR m:type="Edm.Double">4.20</d:BC_10YEAR></m:properties></content></entry>
+</feed>
