@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 import ipaddress
 import json
 import os
@@ -205,6 +206,24 @@ def stop_requested() -> bool:
 def check_stop_request() -> None:
     if stop_requested():
         raise KeyboardInterrupt
+
+
+@contextmanager
+def launcher_lock(path: Path):
+    """Acquire the Windows byte lock before any access to the protected byte."""
+    import msvcrt
+
+    lock = path.open("a+b")
+    try:
+        lock.seek(0)
+        try:
+            # Windows permits locking beyond EOF; no seed byte is necessary.
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            raise RuntimeError("Already running; use -Action Status or -Action Stop") from None
+        yield
+    finally:
+        lock.close()
 
 
 def runtime_action(action: str, env: dict[str, str], supplied_bin: Path | None) -> None:
@@ -488,45 +507,38 @@ def main() -> None:
     if os.name != "nt" or sys.version_info[:2] != (3, 12):
         raise RuntimeError("Use Windows and Python 3.12 via start-local.ps1")
     from scripts.local_postgres import start_database, stop_database
-    import msvcrt
 
     # One supervisor per checkout; releasing this OS lock also handles crashes.
-    lock = (LOCAL / "launcher.lock").open("a+b")
-    lock.seek(0)
-    if lock.read(1) == b"":
-        lock.write(b"0")
-        lock.flush()
-    lock.seek(0)
-    try:
-        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        lock.close()
-        raise RuntimeError("Already running; use -Action Status or -Action Stop") from None
-    binary_dir = args.postgres_bin.resolve() if args.postgres_bin else LOCAL / "postgres/pgsql/bin"
-    state = {"pid": os.getpid(), "created": process_info(os.getpid(), env)["created"],
-             "run_id": secrets.token_hex(16), "phase": "preparing", "postgres_bin": str(binary_dir),
-             "web_port": args.web_port, "api_port": args.api_port, "db_port": args.db_port}
-    write_state(state)
-    database_started = False
-    try:
-        settings, binary_dir = prepare_runtime(args, env)
-        state["phase"] = "starting"
-        write_state(state)
-        database_started = True
-        start_database(binary_dir, LOCAL, args.db_port, settings["postgres_password"], env)
-        check_stop_request()
-        print("Applying local database migrations...", flush=True)
-        run([str(VENV_PY), str(Path(__file__).resolve()), "--initialize", "--db-port", str(args.db_port)], env)
-        if not stop_requested():
-            serve(args, env)
-    finally:
+    with launcher_lock(LOCAL / "launcher.lock"):
+        binary_dir = args.postgres_bin.resolve() if args.postgres_bin else LOCAL / "postgres/pgsql/bin"
+        run_id = secrets.token_hex(16)
+        database_started = False
         try:
-            if database_started:
-                stop_database(binary_dir, LOCAL, env)
+            state = {"pid": os.getpid(), "created": process_info(os.getpid(), env)["created"],
+                     "run_id": run_id, "phase": "preparing", "postgres_bin": str(binary_dir),
+                     "web_port": args.web_port, "api_port": args.api_port, "db_port": args.db_port}
+            write_state(state)
+            settings, binary_dir = prepare_runtime(args, env)
+            state["phase"] = "starting"
+            write_state(state)
+            database_started = True
+            start_database(binary_dir, LOCAL, args.db_port, settings["postgres_password"], env)
+            check_stop_request()
+            print("Applying local database migrations...", flush=True)
+            run([str(VENV_PY), str(Path(__file__).resolve()), "--initialize", "--db-port", str(args.db_port)], env)
+            if not stop_requested():
+                serve(args, env)
         finally:
-            (LOCAL / "run.json").unlink(missing_ok=True)
-            (LOCAL / "stop-request").unlink(missing_ok=True)
-            lock.close()
+            try:
+                if database_started:
+                    stop_database(binary_dir, LOCAL, env)
+            finally:
+                current = read_state()
+                if current and current.get("run_id") == run_id:
+                    (LOCAL / "run.json").unlink(missing_ok=True)
+                flag = LOCAL / "stop-request"
+                if flag.exists() and flag.read_text("utf-8") == run_id:
+                    flag.unlink()
 
 
 if __name__ == "__main__":
