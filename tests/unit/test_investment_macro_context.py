@@ -45,6 +45,12 @@ def _row(period=date(2026, 9, 1), value=Decimal("-0.2"), **changes):
 def _context_sources(monkeypatch, rows, catalogue=None):
     monkeypatch.setattr(service, "now_shanghai", lambda: NOW)
     monkeypatch.setattr(
+        service,
+        "read_macro_evidence",
+        AsyncMock(return_value={"releases": [], "schedules": [], "events": []}),
+        raising=False,
+    )
+    monkeypatch.setattr(
         repository, "macro", AsyncMock(return_value=catalogue or [_row(value=None)])
     )
     monkeypatch.setattr(
@@ -155,6 +161,111 @@ async def test_single_macro_month_cannot_create_a_trend(monkeypatch):
     assert item["periodChange"] is None and item["trendState"] == "INSUFFICIENT"
 
 
+@pytest.mark.asyncio
+async def test_context_official_period_verification_and_fixed_research_window(
+    monkeypatch,
+):
+    rows = [_row(date(2025, month, 1), Decimal(str(month))) for month in range(1, 13)]
+    rows += [_row(date(2026, month, 1), Decimal(str(month))) for month in range(1, 10)]
+    _context_sources(monkeypatch, rows)
+    monkeypatch.setattr(
+        service,
+        "read_macro_evidence",
+        AsyncMock(
+            return_value={
+                "releases": [
+                    {
+                        "field_code": "CPI_YOY",
+                        "reference_period": "2026-09",
+                        "value": Decimal(9),
+                        "unit": "%",
+                        "source_uri": "https://www.stats.gov.cn/sj/zxfb/test",
+                        "publisher": "国家统计局",
+                        "published_at": NOW - timedelta(hours=1),
+                        "retrieved_at": NOW - timedelta(minutes=1),
+                        "revision": 1,
+                    }
+                ],
+                "schedules": [],
+                "events": [],
+            }
+        ),
+        raising=False,
+    )
+    small = await service.market_context(object(), months=3)
+    large = await service.market_context(object(), months=36)
+    item = small["items"][0]
+    assert item["referencePeriod"] == "2026-09"
+    assert item["valueVerification"] == "VERIFIED"
+    assert item["publicationStatus"] == "CONFIRMED"
+    assert item["sampleCount"] == 2
+    assert item["statistics"] == large["items"][0]["statistics"]
+    assert item["statistics"]["sampleCount"] == 21
+    assert item["statistics"]["change6Months"] == Decimal(6)
+    assert small["research"]["methodVersion"] == "macro-research-v1"
+    assert small["assessment"] is None
+
+
+@pytest.mark.asyncio
+async def test_directions_attach_macro_channels_and_only_related_official_events(
+    monkeypatch,
+):
+    _context_sources(monkeypatch, [_row()])
+    monkeypatch.setattr(
+        repository,
+        "directions",
+        AsyncMock(
+            return_value=[
+                {
+                    "id": "a-share:broad",
+                    "parent_id": None,
+                    "market_id": "a-share",
+                    "style_id": "broad",
+                    "market_label": "A股",
+                    "label": "宽基",
+                    "framework": "盈利与估值",
+                    "index_count": 3,
+                }
+            ]
+        ),
+    )
+    event = {
+        "event_key": "event1",
+        "title": "官方数据发布",
+        "category": "DATA_RELEASE",
+        "source_type": "OFFICIAL_FACT",
+        "source_uri": "https://www.stats.gov.cn/sj/zxfb/test",
+        "publisher": "国家统计局",
+        "published_at": NOW - timedelta(days=1),
+        "retrieved_at": NOW,
+        "summary": "统计数据",
+        "direction_ids": ["a-share:broad"],
+    }
+    monkeypatch.setattr(
+        service,
+        "read_macro_evidence",
+        AsyncMock(
+            return_value={
+                "releases": [],
+                "schedules": [],
+                "events": [
+                    event,
+                    {
+                        **event,
+                        "event_key": "future",
+                        "published_at": NOW + timedelta(days=1),
+                    },
+                ],
+            }
+        ),
+        raising=False,
+    )
+    result = await service.directions(object())
+    assert result[0]["macroResearch"]["channels"][0]["counterCase"]
+    assert [e["id"] for e in result[0]["relatedEvents"]] == ["event1"]
+    assert result[0]["state"] == "NOT_EVALUATED" and result[0]["assessment"] is None
+
+
 @pytest.mark.parametrize("max_age,state", [(3, "STALE"), (60, "READY")])
 def test_macro_freshness_uses_indicator_catalog_age(monkeypatch, max_age, state):
     monkeypatch.setattr(service, "now_shanghai", lambda: NOW)
@@ -204,7 +315,9 @@ async def test_future_macro_facts_never_appear_in_context(monkeypatch, field):
 
 
 @pytest.mark.asyncio
-async def test_history_context_preserves_latest_bad_period_without_old_value_fallback(monkeypatch):
+async def test_history_context_preserves_latest_bad_period_without_old_value_fallback(
+    monkeypatch,
+):
     _context_sources(
         monkeypatch,
         [
@@ -224,7 +337,9 @@ async def test_history_context_preserves_latest_bad_period_without_old_value_fal
 
 
 @pytest.mark.parametrize("quality", ["CONFLICT", "UNAVAILABLE"])
-def test_macro_dto_preserves_explicit_failed_quality_for_finite_values(monkeypatch, quality):
+def test_macro_dto_preserves_explicit_failed_quality_for_finite_values(
+    monkeypatch, quality
+):
     monkeypatch.setattr(service, "now_shanghai", lambda: NOW)
     item = service.macro_dto(_row(value=Decimal("99"), quality_status=quality))
     assert item["state"] == quality
@@ -235,11 +350,16 @@ def test_macro_dto_preserves_explicit_failed_quality_for_finite_values(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("quality", ["CONFLICT", "UNAVAILABLE"])
-async def test_failed_latest_macro_month_cannot_create_value_or_period_change(monkeypatch, quality):
-    _context_sources(monkeypatch, [
-        _row(date(2026, 8, 1), Decimal("49")),
-        _row(date(2026, 9, 1), Decimal("99"), quality_status=quality),
-    ])
+async def test_failed_latest_macro_month_cannot_create_value_or_period_change(
+    monkeypatch, quality
+):
+    _context_sources(
+        monkeypatch,
+        [
+            _row(date(2026, 8, 1), Decimal("49")),
+            _row(date(2026, 9, 1), Decimal("99"), quality_status=quality),
+        ],
+    )
     item = (await service.market_context(object()))["items"][0]
     assert item["value"] is None and item["state"] == quality
     assert item["asOf"] == "2026-09-01"
@@ -250,25 +370,40 @@ async def test_failed_latest_macro_month_cannot_create_value_or_period_change(mo
 
 
 @pytest.mark.asyncio
-async def test_latest_bad_revision_cannot_restore_an_earlier_valid_revision(monkeypatch):
-    _context_sources(monkeypatch, [
-        _row(date(2026, 8, 1), Decimal("49")),
-        _row(date(2026, 9, 1), Decimal("50"), revision=1),
-        _row(date(2026, 9, 1), Decimal("99"), quality_status="CONFLICT", revision=2),
-    ])
+async def test_latest_bad_revision_cannot_restore_an_earlier_valid_revision(
+    monkeypatch,
+):
+    _context_sources(
+        monkeypatch,
+        [
+            _row(date(2026, 8, 1), Decimal("49")),
+            _row(date(2026, 9, 1), Decimal("50"), revision=1),
+            _row(
+                date(2026, 9, 1), Decimal("99"), quality_status="CONFLICT", revision=2
+            ),
+        ],
+    )
     item = (await service.market_context(object()))["items"][0]
     assert item["value"] is None and item["state"] == "CONFLICT"
     assert item["revision"] == 2
-    assert [(p["asOf"], p["value"]) for p in item["history"]] == [("2026-08-01", Decimal("49"))]
+    assert [(p["asOf"], p["value"]) for p in item["history"]] == [
+        ("2026-08-01", Decimal("49"))
+    ]
     assert item["periodChange"] is None
 
 
 @pytest.mark.asyncio
-async def test_latest_catalog_conflict_is_not_replaced_by_older_valid_history(monkeypatch):
-    _context_sources(monkeypatch, [
-        _row(date(2026, 8, 1), Decimal("49")),
-        _row(date(2026, 9, 1), Decimal("50")),
-    ], catalogue=[_row(date(2026, 10, 1), Decimal("99"), quality_status="CONFLICT")])
+async def test_latest_catalog_conflict_is_not_replaced_by_older_valid_history(
+    monkeypatch,
+):
+    _context_sources(
+        monkeypatch,
+        [
+            _row(date(2026, 8, 1), Decimal("49")),
+            _row(date(2026, 9, 1), Decimal("50")),
+        ],
+        catalogue=[_row(date(2026, 10, 1), Decimal("99"), quality_status="CONFLICT")],
+    )
     item = (await service.market_context(object()))["items"][0]
     assert item["value"] is None and item["state"] == "CONFLICT"
     assert item["asOf"] == "2026-10-01"
@@ -278,25 +413,39 @@ async def test_latest_catalog_conflict_is_not_replaced_by_older_valid_history(mo
 
 
 @pytest.mark.asyncio
-async def test_latest_catalog_conflict_compares_reporting_month_in_shanghai_timezone(monkeypatch):
-    _context_sources(monkeypatch, [
-        _row(date(2026, 8, 1), Decimal("49")),
-        _row(date(2026, 9, 1), Decimal("50")),
-    ], catalogue=[_row(
-        datetime(2026, 9, 30, 16, tzinfo=ZoneInfo("UTC")), Decimal("99"),
-        quality_status="CONFLICT",
-    )])
+async def test_latest_catalog_conflict_compares_reporting_month_in_shanghai_timezone(
+    monkeypatch,
+):
+    _context_sources(
+        monkeypatch,
+        [
+            _row(date(2026, 8, 1), Decimal("49")),
+            _row(date(2026, 9, 1), Decimal("50")),
+        ],
+        catalogue=[
+            _row(
+                datetime(2026, 9, 30, 16, tzinfo=ZoneInfo("UTC")),
+                Decimal("99"),
+                quality_status="CONFLICT",
+            )
+        ],
+    )
     item = (await service.market_context(object()))["items"][0]
     assert item["value"] is None and item["state"] == "CONFLICT"
     assert item["periodChange"] is None
 
 
 @pytest.mark.asyncio
-async def test_adjacent_utc_reporting_timestamps_use_local_months_for_change(monkeypatch):
-    _context_sources(monkeypatch, [
-        _row(datetime(2026, 7, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("49")),
-        _row(datetime(2026, 8, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("50")),
-    ])
+async def test_adjacent_utc_reporting_timestamps_use_local_months_for_change(
+    monkeypatch,
+):
+    _context_sources(
+        monkeypatch,
+        [
+            _row(datetime(2026, 7, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("49")),
+            _row(datetime(2026, 8, 31, 16, tzinfo=ZoneInfo("UTC")), Decimal("50")),
+        ],
+    )
     item = (await service.market_context(object()))["items"][0]
     assert [p["asOf"] for p in item["history"]] == ["2026-08-01", "2026-09-01"]
     assert item["periodChange"] == 1 and item["trendState"] == "OBSERVED"
