@@ -101,6 +101,7 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
             "postgres_password", "api_password", "jwt", "refresh", "reset", "binding")}
         settings["routing"] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
         settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    configure_macro(settings, args.db_port)
     url = f"http://127.0.0.1:{args.web_port}"
     api_settings = {
         "APP_ENV": "development", "AUTH_DEV_MODE": "false",
@@ -117,6 +118,39 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
         "\n".join(f"{key}={value}" for key, value in api_settings.items()) + "\n",
         encoding="utf-8")
     return settings
+
+
+def configure_macro(settings: dict[str, str], db_port: int) -> None:
+    """Give the source-only collector its own restricted local login/config."""
+    if "worker_password" not in settings:
+        settings["worker_password"] = secrets.token_hex(32)
+        (LOCAL / "secrets.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    macro_settings = {
+        "APP_ENV": "development",
+        "WORKER_DATABASE_URL": f"postgresql://wealthsail_worker_login:{settings['worker_password']}"
+                               f"@127.0.0.1:{db_port}/wealthsail_local?sslmode=disable",
+        "WORKER_DATABASE_POOL_MODE": "direct",
+        "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "2",
+    }
+    (LOCAL / "macro.env").write_text(
+        "\n".join(f"{key}={value}" for key, value in macro_settings.items()) + "\n", encoding="utf-8")
+
+
+def refresh_local_macro(args: argparse.Namespace, env: dict[str, str]) -> None:
+    """Upgrade and backfill macro facts in the already running local database."""
+    path = LOCAL / "secrets.json"
+    if not path.exists():
+        raise RuntimeError("Start the local services first, then use -Action RefreshMacro")
+    state = read_state()
+    if not state or state.get("phase") != "ready" or not state_alive(state, env):
+        raise RuntimeError("Local services must be ready; use -Action Status and avoid concurrent Start/Stop")
+    settings = json.loads(path.read_text("utf-8"))
+    db_port = state.get("db_port", args.db_port)
+    configure_macro(settings, db_port)
+    python = select_python(env, skip_install=True)
+    run([str(python), str(Path(__file__).resolve()), "--initialize", "--db-port", str(db_port)], env)
+    run([str(python), "-m", "backend.jobs.macro_worker", "--once"],
+        {**env, "WEALTHSAIL_ENV_FILE": str(LOCAL / "macro.env")})
 
 
 def select_python(env: dict[str, str], *, skip_install: bool) -> Path:
@@ -199,7 +233,7 @@ def runtime_action(action: str, env: dict[str, str], supplied_bin: Path | None) 
     print("Not running; any remaining managed PostgreSQL has been stopped.")
 
 
-async def initialize_database(dsn: str, api_password: str) -> None:
+async def initialize_database(dsn: str, api_password: str, worker_password: str | None = None) -> None:
     validate_local_target(dsn)
     import asyncpg
     from backend.common.auth import hash_password
@@ -221,6 +255,9 @@ async def initialize_database(dsn: str, api_password: str) -> None:
         await conn.execute((ROOT / "scripts/provision_supabase_roles.sql").read_text("utf-8"))
         literal = await conn.fetchval("SELECT quote_literal($1::text)", api_password)
         await conn.execute(f"ALTER ROLE wealthsail_api_login WITH PASSWORD {literal}")
+        if worker_password is not None:
+            worker_literal = await conn.fetchval("SELECT quote_literal($1::text)", worker_password)
+            await conn.execute(f"ALTER ROLE wealthsail_worker_login WITH PASSWORD {worker_literal}")
         async with conn.transaction():
             await conn.execute("""CREATE TABLE IF NOT EXISTS public.wealthsail_local_seed
                                   (version integer PRIMARY KEY, created_at timestamptz DEFAULT now())""")
@@ -276,6 +313,13 @@ async def initialize_database(dsn: str, api_password: str) -> None:
         await verify_runtime_login_boundary(pool, process="api")
     finally:
         await pool.close()
+    if worker_password is not None:
+        worker_dsn = f"postgresql://wealthsail_worker_login:{worker_password}@{parts.hostname}:{parts.port}{parts.path}?sslmode=disable"
+        worker_pool = await create_pool(worker_dsn, min_size=1, max_size=1, runtime_role="wealthsail_worker")
+        try:
+            await verify_runtime_login_boundary(worker_pool, process="worker")
+        finally:
+            await worker_pool.close()
     print("Local database ready (migrations, restricted API role, OWNER account)")
 
 
@@ -309,10 +353,7 @@ def wait_ready(url: str, processes: list[subprocess.Popen], *, api: bool = False
     raise RuntimeError(f"Service not ready after 90s: {url}; see .local/logs")
 
 
-def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
-    env.update({"WEALTHSAIL_ENV_FILE": str(LOCAL / "api.env"),
-                "WS_LOCAL_API_TARGET": f"http://127.0.0.1:{args.api_port}",
-                "VITE_API_BASE_URL": "/api"})
+def service_commands(args: argparse.Namespace) -> list[tuple[str, list[str], Path]]:
     commands = [
         ("api", [str(VENV_PY), "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1",
                  "--port", str(args.api_port)], ROOT),
@@ -320,6 +361,22 @@ def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
                       "preview", "--host", "127.0.0.1", "--port", str(args.web_port),
                       "--strictPort"], ROOT / "frontend"),
     ]
+    if not getattr(args, "skip_macro", False):
+        commands.append(("macro", [str(VENV_PY), "-m", "backend.jobs.macro_worker"], ROOT))
+    return commands
+
+
+def service_environment(name: str, env: dict[str, str]) -> dict[str, str]:
+    if name == "macro":
+        return {**env, "WEALTHSAIL_ENV_FILE": str(LOCAL / "macro.env")}
+    return dict(env)
+
+
+def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
+    env.update({"WEALTHSAIL_ENV_FILE": str(LOCAL / "api.env"),
+                "WS_LOCAL_API_TARGET": f"http://127.0.0.1:{args.api_port}",
+                "VITE_API_BASE_URL": "/api"})
+    commands = service_commands(args)
     processes: list[subprocess.Popen] = []
     handles = []
     try:
@@ -327,7 +384,7 @@ def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
             stdout = (LOCAL / f"logs/{name}.stdout.log").open("w", encoding="utf-8")
             stderr = (LOCAL / f"logs/{name}.stderr.log").open("w", encoding="utf-8")
             handles.extend([stdout, stderr])
-            processes.append(subprocess.Popen(command, cwd=directory, env=env,
+            processes.append(subprocess.Popen(command, cwd=directory, env=service_environment(name, env),
                                                stdout=stdout, stderr=stderr,
                                                creationflags=subprocess.CREATE_NO_WINDOW))
         web = f"http://127.0.0.1:{args.web_port}"
@@ -346,7 +403,8 @@ def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
             write_state(state)
         print(f"\nWeb: {web}\nAPI: http://127.0.0.1:{args.api_port}/docs"
               f"\nAccount: {EMAIL}\nInitial password: {PASSWORD}"
-              "\nPress Ctrl+C to stop API/frontend/database; local data is retained.", flush=True)
+              "\nMacro data: background startup check and daily 06:30 refresh (unless -SkipMacro)."
+              "\nPress Ctrl+C to stop local services/database; local data is retained.", flush=True)
         if not args.no_browser:
             webbrowser.open(web)
         while all(process.poll() is None for process in processes):
@@ -398,13 +456,14 @@ def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("start", "stop", "status"), default="start")
+    parser.add_argument("--action", choices=("start", "stop", "status", "refreshmacro"), default="start")
     parser.add_argument("--postgres-bin", type=Path)
     parser.add_argument("--db-port", type=int, default=55432)
     parser.add_argument("--api-port", type=int, default=8000)
     parser.add_argument("--web-port", type=int, default=5173)
     parser.add_argument("--skip-install", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--skip-macro", action="store_true")
     parser.add_argument("--initialize", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if str(ROOT) not in sys.path:
@@ -414,6 +473,9 @@ def main() -> None:
     env = child_environment(dict(os.environ), LOCAL)
     env.update({"WS_LOCAL_API_TARGET": f"http://127.0.0.1:{args.api_port}",
                 "VITE_API_BASE_URL": "/api"})
+    if args.action == "refreshmacro":
+        refresh_local_macro(args, env)
+        return
     if args.action != "start":
         runtime_action(args.action, env, args.postgres_bin)
         return
@@ -421,7 +483,7 @@ def main() -> None:
         import asyncio
         settings = json.loads((LOCAL / "secrets.json").read_text("utf-8"))
         dsn = f"postgresql://postgres:{settings['postgres_password']}@127.0.0.1:{args.db_port}/wealthsail_local?sslmode=disable"
-        asyncio.run(initialize_database(dsn, settings["api_password"]))
+        asyncio.run(initialize_database(dsn, settings["api_password"], settings.get("worker_password")))
         return
     if os.name != "nt" or sys.version_info[:2] != (3, 12):
         raise RuntimeError("Use Windows and Python 3.12 via start-local.ps1")

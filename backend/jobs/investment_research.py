@@ -244,8 +244,13 @@ async def sync_research(pool, settings, now: datetime):
         logger.info("research_calendar_refresh %s", calendar)
     except Exception:  # noqa: BLE001 -- retain facts, missing calendar blocks eligibility
         logger.exception("research_calendar_refresh_failed")
+    macro_observations = None
     try:
-        await asyncio.wait_for(sync_macro(pool, now), timeout=90)
+        macro_stats = await asyncio.wait_for(sync_macro(pool, now), timeout=90)
+        macro_observations = macro_stats["observations"]
+        logger.info("research_macro_sync observations=%s", macro_observations)
+        if macro_observations == 0:
+            logger.warning("research_macro_history_empty observations=0")
     except Exception:  # noqa: BLE001 -- provider failure must not block fund research
         logger.exception("research_macro_sync_failed")
     async with system_connection(pool) as conn:
@@ -278,4 +283,10 @@ async def sync_research(pool, settings, now: datetime):
             logger.exception("research_subject_refresh_failed kind=%s id=%s", kind, key)
             failed += 1
         await asyncio.sleep(1)
+    logger.info(
+        "research_sync_completed succeeded=%d failed=%d macro_observations=%s",
+        succeeded,
+        failed,
+        macro_observations,
+    )
     return {"succeeded": succeeded, "failed": failed}

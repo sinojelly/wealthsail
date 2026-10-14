@@ -21,6 +21,7 @@ from datetime import datetime
 
 from backend.common.database import create_pool, verify_runtime_login_boundary
 from backend.config import get_settings, validate_runtime_settings
+from backend.dependencies import now_shanghai
 from backend.jobs import runner
 from backend.jobs.data_tasks import DataTaskConsumer
 from backend.jobs.corporate_actions_sync import sync_corporate_actions
@@ -156,6 +157,17 @@ async def _recovery_loop(pool, settings) -> None:
         await asyncio.sleep(interval)
 
 
+async def _bootstrap_macro_history(pool) -> None:
+    """Fill missing global macro history without delaying existing loops."""
+    try:
+        from backend.jobs.investment_macro_refresh import ensure_macro_history
+
+        stats = await ensure_macro_history(pool, now_shanghai())
+        logger.info("investment_macro_bootstrap %s", stats)
+    except Exception:  # noqa: BLE001 -- provider failure must not stop Worker loops
+        logger.exception("investment_macro_bootstrap_failed")
+
+
 async def main() -> None:
     settings = validate_runtime_settings(get_settings(), process="worker")
     logging.basicConfig(
@@ -226,6 +238,9 @@ async def main() -> None:
     scheduler.start()
     consumer.start()
     data_tasks.start()
+    macro_startup_task = asyncio.create_task(
+        _bootstrap_macro_history(pool), name="wealthsail-macro-bootstrap"
+    )
 
     stop_event = asyncio.Event()
 
@@ -240,19 +255,23 @@ async def main() -> None:
             pass
 
     logger.info("wealthsail worker running (scheduler + outbox + data tasks)")
-    await stop_event.wait()
-    logger.info("shutting down worker…")
-    await scheduler.stop()
-    await consumer.stop()
-    await data_tasks.stop()
-    recovery_task.cancel()
     try:
-        await recovery_task
-    except asyncio.CancelledError:
-        pass
-    await close_http_client()
-    await pool.close()
-    logger.info("worker stopped")
+        await stop_event.wait()
+    finally:
+        logger.info("shutting down worker…")
+        macro_startup_task.cancel()
+        recovery_task.cancel()
+        await scheduler.stop()
+        await consumer.stop()
+        await data_tasks.stop()
+        for task in (macro_startup_task, recovery_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await close_http_client()
+        await pool.close()
+        logger.info("worker stopped")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,14 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Start', 'Stop', 'Status')][string]$Action = 'Start',
+    [ValidateSet('Start', 'Stop', 'Status', 'RefreshMacro')][string]$Action = 'Start',
     [string]$PostgresBin,
     [ValidateRange(1024, 65535)][int]$DbPort = 55432,
     [ValidateRange(1024, 65535)][int]$ApiPort = 8000,
     [ValidateRange(1024, 65535)][int]$WebPort = 5173,
     [switch]$SkipInstall,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$SkipMacro
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +41,7 @@ $launcherArgs = @(
 )
 if ($SkipInstall) { $launcherArgs += '--skip-install' }
 if ($NoBrowser) { $launcherArgs += '--no-browser' }
+if ($SkipMacro) { $launcherArgs += '--skip-macro' }
 if ($PostgresBin) { $launcherArgs += @('--postgres-bin', $PostgresBin) }
 & $selected.Command @($selected.Args) @launcherArgs
 exit $LASTEXITCODE
