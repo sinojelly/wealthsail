@@ -26,6 +26,8 @@ from backend.debug.api import router as debug_router
 from backend.errors import MoneyJSONResponse, register_exception_handlers, request_id_of
 from backend.funds.api import router as funds_router
 from backend.investment.api import router as investment_router
+from backend.investment.radar_api import router as opportunity_router
+from backend.investment.decision_api import router as decision_router
 from backend.chat.api import router as chat_router
 from backend.identity.api import router as identity_router
 from backend.identity.platform_api import router as platform_identity_router
@@ -160,6 +162,8 @@ def create_app() -> FastAPI:
     app.include_router(watchlist_router, prefix=prefix)
     app.include_router(funds_router, prefix=prefix)
     app.include_router(investment_router, prefix=prefix)
+    app.include_router(opportunity_router, prefix=prefix)
+    app.include_router(decision_router, prefix=prefix)
     app.include_router(debug_router, prefix=prefix)
 
     @app.get("/healthz", tags=["system"])

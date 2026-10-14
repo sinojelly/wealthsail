@@ -486,6 +486,7 @@ async def decision_context(
     instrument_id,
     fund_code=None,
     fund_market=None,
+    evaluated_index_id=None,
     market_evidence=None,
     direction_model=None,
     now=None,
@@ -501,7 +502,11 @@ async def decision_context(
         conn, tenant_id, user_id, now
     )
     portfolio = portfolio_summary(
-        accounts, positions, policy, instrument_id=identity, index_id=index_id
+        accounts,
+        positions,
+        policy,
+        instrument_id=identity,
+        index_id=evaluated_index_id or index_id,
     )
     if policy and policy.get("policy_status") == "CONFIRMED":
         portfolio.update(

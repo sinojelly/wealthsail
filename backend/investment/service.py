@@ -49,8 +49,8 @@ def _macro_number(value):
         return None
 
 
-def macro_dto(row):
-    now = now_shanghai()
+def macro_dto(row, *, now=None):
+    now = now or now_shanghai()
     verified = (
         row.get("published_at") is not None and row.get("quality_status") == "FRESH"
     )
@@ -96,10 +96,10 @@ def macro_dto(row):
     }
 
 
-async def market_context(conn, months=36):
+async def market_context(conn, months=36, *, now=None):
     if type(months) is not int or not 1 <= months <= 120:
         raise ValueError("macro history months must be between 1 and 120")
-    now = now_shanghai()
+    now = now or now_shanghai()
     month_number = now.year * 12 + now.month - months
     start = date(month_number // 12, month_number % 12 + 1, 1)
     research_month = now.year * 12 + now.month - 60
@@ -135,7 +135,7 @@ async def market_context(conn, months=36):
             # Latest available revision governs the current fact even if it is
             # unusable. Removing its historical point must not restore old data.
             latest_period, latest_row = period, row
-            dto = macro_dto({**catalog_row, **row})
+            dto = macro_dto({**catalog_row, **row}, now=now)
             if dto["value"] is None:
                 continue
             points.append(
@@ -151,7 +151,7 @@ async def market_context(conn, months=36):
                     "revision": dto["revision"],
                 }
             )
-        item = macro_dto(catalog_row)
+        item = macro_dto(catalog_row, now=now)
         if latest_row is not None:
             catalogue_key = None
             if catalog_row.get("as_of") is not None and _macro_available(
@@ -168,7 +168,7 @@ async def market_context(conn, months=36):
                 catalogue_key is None
                 or (latest_period, latest_row.get("revision") or 0) >= catalogue_key
             ):
-                item = macro_dto({**catalog_row, **latest_row})
+                item = macro_dto({**catalog_row, **latest_row}, now=now)
         item = enrich_item(
             item,
             [p for p in points if p["asOf"] >= research_start.isoformat()],

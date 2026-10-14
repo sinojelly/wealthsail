@@ -1,0 +1,212 @@
+"""The closed summary prioritizes scoped evidence without certifying trades."""
+
+from importlib import import_module, util
+import pytest
+
+
+def radar():
+    assert util.find_spec("backend.macro.opportunity"), (
+        "direction-scoped opportunity radar is missing"
+    )
+    return import_module("backend.macro.opportunity")
+
+
+def series(code, value=3, delta=25, state="READY"):
+    return {
+        "code": code,
+        "label": code,
+        "value": value,
+        "state": state,
+        "frequency": "DAILY",
+        "asOf": "2026-10-13",
+        "unit": "%",
+        "changes": {
+            "change5Samples": delta,
+            "change20Samples": None,
+            "changeUnit": "bp",
+        },
+        "sourceUri": "https://home.treasury.gov/",
+        "methodVersion": "v1",
+    }
+
+
+def build(direction="gold:physical", data=None, decision=None, portfolio=None):
+    return radar().build_radar(
+        {"items": [], "research": {"changes": [], "dimensions": []}, "events": []},
+        data or [],
+        [],
+        {"id": direction, "market_id": direction.split(":")[0], "label": direction},
+        decision or {"state": "WAIT", "summary": "研究条件不足", "gates": []},
+        portfolio
+        or {"state": "UNKNOWN", "summary": "持仓未核查", "heldSelected": None},
+    )
+
+
+def test_collapsed_brief_answers_four_questions_without_eligible_trade_claim():
+    result = build()
+    assert [q["id"] for q in result["questions"]] == [
+        "CHANGE",
+        "IMPACT",
+        "QUALIFICATION",
+        "PERSONAL",
+    ]
+    assert "条件" in result["questions"][2]["summary"]
+    assert result["methodVersion"] == "opportunity-radar-v1"
+
+
+def test_real_rate_rise_flags_gold_impact_but_not_unrelated_ashare_critical():
+    gold = build(data=[series("US_T10_REAL", delta=45)])
+    assert gold["headline"]["priority"] == "CRITICAL"
+    assert gold["headline"]["kind"] == "RISK"
+    assert "黄金" in gold["headline"]["impact"]
+    ashare = build("a-share:broad", [series("US_T10_REAL", delta=45)])
+    assert all(c["id"] != gold["headline"]["id"] for c in ashare["changes"])
+
+
+def test_missing_data_is_a_gap_not_claimed_risk_increase():
+    result = build("a-share:broad", [series("CN_T10", state="PERMISSION_REQUIRED")])
+    assert result["headline"]["kind"] == "GAP"
+    assert "风险上升" not in result["headline"]["impact"]
+
+
+def test_stale_rate_cannot_produce_confirmed_current_impact():
+    result = build(data=[series("US_T10_REAL", delta=45, state="STALE")])
+    assert not any(c["kind"] == "RISK" for c in result["changes"])
+
+
+def test_known_personal_budget_breach_outranks_market_changes():
+    result = build(
+        data=[series("US_T10_REAL", delta=45)],
+        decision={"state": "POSITION_REVIEW", "summary": "同指数敞口超限", "gates": []},
+        portfolio={"state": "READY", "summary": "同指数敞口超限", "heldSelected": True},
+    )
+    assert result["headline"]["id"] == "personal-budget"
+    assert result["questions"][3]["critical"] is True
+
+
+def test_unknown_consensus_does_not_generate_surprise_language():
+    result = build(data=[series("US_T10_REAL")])
+    assert "超预期" not in str(result) and "低于预期" not in str(result)
+
+
+def test_direction_models_use_local_evidence_and_keep_required_gaps():
+    model = import_module("backend.macro.direction_models")
+    gold = model.direction_model(
+        {"id": "gold:physical", "market_id": "gold"}, {}, [series("US_T10_REAL")], []
+    )
+    assert "US_T10_REAL" in gold["requiredEvidence"]
+    assert "美元/汇率" in gold["missingEvidence"]
+    usa = model.direction_model({"id": "us:broad", "market_id": "us"}, {}, [], [])
+    assert "PMI" not in usa["requiredEvidence"]
+    assert usa["state"] != "READY"
+
+
+@pytest.mark.parametrize("value", [None, True, float("nan"), float("inf"), "bad"])
+def test_ready_flag_cannot_make_a_bad_scalar_a_critical_rate_impact(value):
+    result = build(data=[series("US_T10_REAL", value=value, delta=45)])
+    assert not any(change["id"] == "rate:US_T10_REAL" for change in result["changes"])
+
+
+def test_non_bp_rate_change_cannot_be_reported_as_basis_points():
+    item = series("US_T10_REAL", delta=45)
+    item["changes"]["changeUnit"] = "pp"
+    result = build(data=[item])
+    assert not any(change["id"] == "rate:US_T10_REAL" for change in result["changes"])
+
+
+def test_unchanged_rate_is_neither_lower_rate_support_nor_higher_rate_pressure():
+    model = import_module("backend.macro.direction_models")
+    result = model.direction_model(
+        {"id": "gold:physical", "market_id": "gold"},
+        {},
+        [series("US_T10_REAL", delta=0)],
+        [],
+    )
+    assert result["supports"] == []
+    assert result["counterFactors"] == []
+
+
+def test_pmi_numeric_string_uses_validated_scalar_instead_of_raw_comparison():
+    model = import_module("backend.macro.direction_models")
+    result = model.direction_model(
+        {"id": "a-share:broad", "market_id": "a-share"},
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "label": "PMI",
+                    "value": "51",
+                    "state": "READY",
+                    "unit": "",
+                }
+            ]
+        },
+        [],
+        [],
+    )
+    assert any(channel["label"] == "制造业景气" for channel in result["supports"])
+
+
+def test_ready_trend_without_finite_parameters_remains_missing_evidence():
+    model = import_module("backend.macro.direction_models")
+    evidence = [
+        {
+            "indexId": "idx",
+            "trend": {
+                "state": "READY",
+                "ma200": None,
+                "distanceMA200": None,
+                "momentum63": None,
+            },
+        }
+    ]
+    result = model.direction_model(
+        {"id": "us:broad", "market_id": "us"}, {}, [], evidence
+    )
+    assert "当前指数趋势" in result["missingEvidence"]
+    assert not any(
+        channel["label"] == "指数长期趋势"
+        for channel in result["counterFactors"] + result["supports"]
+    )
+
+
+def test_above_ma200_but_negative_momentum_does_not_claim_satisfied_trend_conditions():
+    model = import_module("backend.macro.direction_models")
+    evidence = [
+        {
+            "indexId": "idx",
+            "trend": {
+                "state": "READY",
+                "ma200": 100,
+                "distanceMA200": 0.1,
+                "momentum63": -0.1,
+            },
+        }
+    ]
+    result = model.direction_model(
+        {"id": "us:broad", "market_id": "us"}, {}, [], evidence
+    )
+    assert not any(channel["label"] == "指数长期趋势" for channel in result["supports"])
+
+
+def test_verified_trend_and_valuation_are_not_still_reported_missing():
+    model = import_module("backend.macro.direction_models")
+    evidence = [
+        {
+            "indexId": "hs300",
+            "trend": {
+                "state": "READY",
+                "ma200": 100,
+                "distanceMA200": 0.1,
+                "momentum63": 0.2,
+            },
+            "valuation": {"state": "READY"},
+            "earnings": {"state": "UNKNOWN"},
+        }
+    ]
+    result = model.direction_model(
+        {"id": "a-share:broad", "market_id": "a-share"}, {}, [], evidence
+    )
+    assert "指数估值与趋势" not in result["missingEvidence"]
+    assert "企业盈利证据" in result["missingEvidence"]
+    assert result["state"] == "PARTIAL"
