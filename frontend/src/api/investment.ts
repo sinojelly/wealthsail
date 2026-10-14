@@ -6,6 +6,20 @@ export interface Direction {
   styleId: string;
   label: string;
   framework: string;
+  macroResearch?: {
+    summary: string;
+    channels: Array<{
+      label: string;
+      evidenceCodes: string[];
+      observation: string;
+      impact: string;
+      counterCase: string;
+      watchFor: string[];
+    }>;
+    missingEvidence: string[];
+    methodVersion: string;
+  } | null;
+  relatedEvents?: MacroEvent[];
 }
 export interface ResearchIndex {
   id: string;
@@ -48,11 +62,39 @@ export interface SearchResult extends Partial<ResearchFund> {
   indexId: string | null;
   directionId: string | null;
 }
+export interface MacroEvent {
+  id: string;
+  title: string;
+  category: string;
+  sourceType: string;
+  publisher: string;
+  sourceUri: string | null;
+  publishedAt: string | null;
+  retrievedAt: string | null;
+  summary: string;
+  directionIds: string[];
+}
 export interface MacroContext {
   state: string;
   months?: number;
   windowStart?: string;
   windowEnd?: string;
+  research?: {
+    methodVersion: string;
+    summary: string;
+    dimensions: Array<{
+      id: string;
+      label: string;
+      state: string;
+      summary: string;
+      evidenceCodes: string[];
+      missingEvidence: string[];
+    }>;
+    changes: Array<{ code: string; summary: string }>;
+    limitations: string[];
+  } | null;
+  events?: MacroEvent[];
+  eventState?: string;
   items: Array<{
     code: string;
     label: string;
@@ -67,6 +109,41 @@ export interface MacroContext {
     sampleCount?: number;
     periodChange?: number | null;
     trendState?: string;
+    referencePeriod?: string | null;
+    valueVerification?: "VERIFIED" | "PENDING" | "CONFLICT" | "UNAVAILABLE";
+    publicationStatus?: "CONFIRMED" | "UNKNOWN";
+    officialEvidence?: {
+      publisher: string;
+      sourceUri: string | null;
+      value: number | null;
+      publishedAt: string | null;
+      retrievedAt: string | null;
+    } | null;
+    nextRelease?: {
+      status: "SCHEDULED" | "OVERDUE" | "UNKNOWN";
+      scheduledAt: string | null;
+      referencePeriod: string | null;
+      sourceUri: string | null;
+    } | null;
+    benchmark?: { value: number; label: string } | null;
+    statistics?: {
+      previousValue: number | null;
+      change3Months: number | null;
+      change6Months: number | null;
+      percentile: number | null;
+      median: number | null;
+      sampleCount: number;
+      firstPeriod: string | null;
+      lastPeriod: string | null;
+      missingPeriods: string[];
+    } | null;
+    interpretation?: {
+      level: string;
+      momentum: string;
+      summary: string;
+      limitations: string[];
+      methodVersion: string;
+    } | null;
     history?: Array<{
       asOf: string;
       value: number;

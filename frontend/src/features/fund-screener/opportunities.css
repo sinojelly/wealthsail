@@ -181,6 +181,131 @@
   color: var(--op-muted);
   margin-top: 8px;
 }
+.op-macro-overview {
+  padding: 0 20px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.op-macro-latest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding-top: 8px;
+  color: var(--op-muted);
+  font-size: 12px;
+}
+.op-macro-window {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--op-line);
+  font-size: 12px;
+}
+.op-macro-window select {
+  margin-left: 10px;
+  border: 1px solid var(--op-line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: white;
+}
+.op-macro-window > span {
+  color: var(--op-muted);
+}
+.op-macro-dimensions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 0 18px 16px;
+}
+.op-macro-dimensions article {
+  padding: 12px;
+  border-left: 3px solid #94a3b8;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.op-macro-dimensions .op-badge {
+  margin-left: 8px;
+}
+.op-macro-chart {
+  margin: 12px 0;
+}
+.op-macro-chart svg {
+  display: block;
+  overflow: visible;
+}
+.op-macro-chart svg text {
+  fill: #475569;
+  font-size: 12px;
+}
+.op-macro-chart circle:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 3px;
+}
+.op-macro-chart figcaption {
+  color: var(--op-muted);
+  font-size: 11px;
+}
+.op-macro-point {
+  min-height: 38px;
+}
+.op-macro-card .op-macro-interpretation {
+  color: #334155;
+  line-height: 1.6;
+}
+.op-macro-card .op-macro-state-CONFLICT {
+  color: #9f1239;
+}
+.op-macro-card .op-macro-state-VERIFIED {
+  color: #0f766e;
+}
+.op-macro-card .op-macro-state-PENDING,
+.op-macro-card .op-macro-state-STALE {
+  color: #92400e;
+}
+.op-macro-evidence-toggle {
+  margin-top: 12px;
+  color: #0f766e;
+  font-size: 12px;
+}
+.op-macro-evidence {
+  margin-top: 10px;
+  border-top: 1px solid var(--op-line);
+  padding-top: 8px;
+}
+.op-macro-research a,
+.op-macro-related-events a {
+  color: #0f766e;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.op-macro-changes,
+.op-macro-events,
+.op-macro-directions {
+  padding: 16px 18px;
+  border-top: 1px solid var(--op-line);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.op-macro-events article,
+.op-macro-channel,
+.op-macro-related-events article {
+  padding: 10px 0;
+}
+.op-macro-directions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.op-macro-directions button {
+  padding: 6px 10px;
+  border: 1px solid var(--op-line);
+  border-radius: 6px;
+  background: white;
+}
 .op-direction-nav {
   display: flex;
   gap: 24px;

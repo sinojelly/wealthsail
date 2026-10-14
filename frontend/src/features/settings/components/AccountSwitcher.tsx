@@ -37,6 +37,7 @@ export default function AccountSwitcher() {
         tokenType: "Bearer",
         expiresIn: Math.max(
           60,
+          // eslint-disable-next-line react-hooks/purity -- Read the clock only when the user clicks to switch accounts.
           Math.round((account.expiresAt - Date.now()) / 1000),
         ),
         user: {

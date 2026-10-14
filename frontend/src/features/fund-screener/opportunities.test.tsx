@@ -8,8 +8,12 @@ it("filters evidence candidates through the server independently of technical sc
   renderWithSession(<FundScreenerPage />);
   await user.click(await screen.findByRole("button", { name: "高级筛选" }));
   await user.selectOptions(screen.getByLabelText("研究资格"), "true");
-  await waitFor(() => expect(api.funds).toHaveBeenLastCalledWith(
-    expect.objectContaining({ valueCandidateOnly: "true" }), expect.anything()));
+  await waitFor(() =>
+    expect(api.funds).toHaveBeenLastCalledWith(
+      expect.objectContaining({ valueCandidateOnly: "true" }),
+      expect.anything(),
+    ),
+  );
 });
 
 it("queries and preserves the selected macro history window", async () => {
@@ -17,7 +21,65 @@ it("queries and preserves the selected macro history window", async () => {
   renderWithSession(<FundScreenerPage />);
   await user.click(await screen.findByRole("button", { name: /市场环境概览/ }));
   await user.selectOptions(screen.getByLabelText("宏观观察窗口"), "60");
-  await waitFor(() => expect(api.context).toHaveBeenLastCalledWith(expect.anything(), 60));
+  await waitFor(() =>
+    expect(api.context).toHaveBeenLastCalledWith(expect.anything(), 60),
+  );
+});
+
+it("opens a macro direction through existing selection and clears the previous fund and page", async () => {
+  const user = userEvent.setup();
+  api.directions.mockResolvedValue([
+    {
+      id: "a-share:broad",
+      marketId: "a-share",
+      marketLabel: "A股",
+      styleId: "broad",
+      label: "宽基",
+      framework: "盈利研究",
+    },
+    {
+      id: "a-share:cyclical",
+      marketId: "a-share",
+      marketLabel: "A股",
+      styleId: "cyclical",
+      label: "周期",
+      framework: "供需研究",
+      macroResearch: {
+        summary: "价格与成本渠道值得核查。",
+        channels: [],
+        missingEvidence: ["利润"],
+        methodVersion: "macro-research-v1",
+      },
+    },
+  ]);
+  api.indices.mockImplementation(async (id) =>
+    id === "a-share:cyclical"
+      ? [{ id: "cyclical-index", name: "周期指数", code: "000901" }]
+      : [{ id: "hs300", name: "沪深300", code: "000300" }],
+  );
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&page=2&macroMonths=60",
+  );
+  await user.click(await screen.findByRole("button", { name: /市场环境概览/ }));
+  await user.click(
+    await screen.findByRole("button", { name: "研究 A股 · 周期" }),
+  );
+  await waitFor(() =>
+    expect(api.funds).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        directionId: "a-share:cyclical",
+        indexId: "cyclical-index",
+        page: 1,
+      }),
+      expect.anything(),
+    ),
+  );
+  expect(screen.getByLabelText("研究路径")).toHaveTextContent(
+    "A股 / 周期 / 周期指数",
+  );
+  expect(screen.getByRole("button", { name: "关注指数" })).toBeDisabled();
+  expect(screen.getByLabelText("宏观观察窗口")).toHaveValue("60");
 });
 
 it("refreshes the candidate list when research data is updated", async () => {
@@ -30,7 +92,9 @@ it("refreshes the candidate list when research data is updated", async () => {
   await waitFor(() => expect(button).toBeEnabled());
   const before = api.funds.mock.calls.length;
   await user.click(button);
-  await waitFor(() => expect(api.funds.mock.calls.length).toBeGreaterThan(before));
+  await waitFor(() =>
+    expect(api.funds.mock.calls.length).toBeGreaterThan(before),
+  );
 });
 
 it("polls a second refresh even when the backend reuses the completed run ID", async () => {

@@ -39,7 +39,9 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const [timedOut, setTimedOut] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const requestedMonths = Number(params.get("macroMonths"));
-  const macroMonths = [12, 36, 60].includes(requestedMonths) ? requestedMonths : 36;
+  const macroMonths = [12, 36, 60].includes(requestedMonths)
+    ? requestedMonths
+    : 36;
   const directions = useQuery({
     queryKey: [subject, "directions"],
     queryFn: ({ signal }) => api.getDirections(signal),
@@ -164,20 +166,31 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     return () => clearTimeout(t);
   }, [activeRun]);
   useEffect(() => {
-    if (status.data?.status === "COMPLETED" && activeRun &&
-        completedAttempt.current !== activeRun.attempt) {
+    if (
+      status.data?.status === "COMPLETED" &&
+      activeRun &&
+      completedAttempt.current !== activeRun.attempt
+    ) {
       completedAttempt.current = activeRun.attempt;
       void client.invalidateQueries({
-        predicate: (q) => q.queryKey[0] === subject &&
-          ["analysis", "research-funds", "restore-fund", "research-search"].some(
-            (key) => q.queryKey.includes(key)),
+        predicate: (q) =>
+          q.queryKey[0] === subject &&
+          [
+            "analysis",
+            "research-funds",
+            "restore-fund",
+            "research-search",
+          ].some((key) => q.queryKey.includes(key)),
       });
-      setParams((current) => {
-        const next = new URLSearchParams(current);
-        next.delete("analysisAsOf");
-        next.delete("page");
-        return next;
-      }, { replace: true });
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.delete("analysisAsOf");
+          next.delete("page");
+          return next;
+        },
+        { replace: true },
+      );
     }
   }, [status.data?.status, activeRun, client, subject, setParams]);
   function updateSelection(next: Selection) {
@@ -271,12 +284,28 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         subject={subject}
         onSelect={searchSelect}
       />
-      <MacroContextStrip data={context.data} error={context.isError}
-        months={macroMonths} onMonthsChange={(months) => {
+      <MacroContextStrip
+        data={context.data}
+        error={context.isError}
+        loading={context.isPending}
+        directions={directions.data ?? []}
+        onDirectionSelect={(id) => {
+          setDirect(null);
+          updateSelection({
+            directionId: id,
+            indexId: null,
+            fundId: null,
+            fundCode: null,
+            fundMarket: null,
+          });
+        }}
+        months={macroMonths}
+        onMonthsChange={(months) => {
           const next = new URLSearchParams(params);
           next.set("macroMonths", String(months));
           setParams(next);
-        }} />
+        }}
+      />
       {directions.isError && (
         <p role="alert">方向读取失败，仍可直接搜索基金。</p>
       )}
@@ -366,16 +395,20 @@ function ResearchWorkspace({ subject }: { subject: string }) {
               </label>
               <label>
                 研究资格
-                <select value={params.get("valueCandidateOnly") ?? "false"}
-                  onChange={(e) => filter("valueCandidateOnly", e.target.value)}>
+                <select
+                  value={params.get("valueCandidateOnly") ?? "false"}
+                  onChange={(e) => filter("valueCandidateOnly", e.target.value)}
+                >
                   <option value="false">全部候选</option>
                   <option value="true">估值、成本与风险证据候选</option>
                 </select>
               </label>
               <label>
                 收益风险覆盖
-                <select value={params.get("performanceOnly") ?? "false"}
-                  onChange={(e) => filter("performanceOnly", e.target.value)}>
+                <select
+                  value={params.get("performanceOnly") ?? "false"}
+                  onChange={(e) => filter("performanceOnly", e.target.value)}
+                >
                   <option value="false">全部历史状态</option>
                   <option value="true">可比收益与风险数据齐备</option>
                 </select>

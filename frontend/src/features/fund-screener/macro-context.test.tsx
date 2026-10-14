@@ -42,7 +42,7 @@ it("shows actual historical coverage, reported units and adjacent-month change",
   expect(
     screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/2026-08-01 至 2026-09-01/)).toBeInTheDocument();
+  expect(screen.getByText(/2026年8月 至 2026年9月/)).toBeInTheDocument();
 });
 
 it("lets the parent request a 12, 36 or 60 month observation window", async () => {
