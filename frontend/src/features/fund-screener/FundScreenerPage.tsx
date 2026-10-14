@@ -20,6 +20,19 @@ import FundResultsTable from "./components/FundResultsTable";
 import ResearchDiagnosis from "./components/ResearchDiagnosis";
 import "./opportunities.css";
 
+const monitorScopeFields = [
+  "directionId",
+  "indexId",
+  "instrumentId",
+  "fundCode",
+  "fundMarket",
+] as const;
+function sameMonitorScope(a: api.OpportunityScope, b: api.OpportunityScope) {
+  return monitorScopeFields.every(
+    (key) => (a[key] ?? null) === (b[key] ?? null),
+  );
+}
+
 export default function FundScreenerPage() {
   const subject = getSessionSubject(useAuthSession());
   return <ResearchWorkspace key={subject} subject={subject} />;
@@ -106,6 +119,78 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       ...(restore.data?.filter((f) => f.kind === "fund") ?? []),
     ],
   );
+  const opportunityScope: api.OpportunityScope = {
+    directionId: directionId ?? undefined,
+    indexId: indexId ?? undefined,
+    instrumentId: selectedFund?.instrumentId ?? selection.fundId ?? undefined,
+    fundCode: fundCode ?? undefined,
+    fundMarket: selectedFund?.market ?? selection.fundMarket ?? undefined,
+  };
+  const opportunityKey = [
+    subject,
+    "opportunity-context",
+    directionId,
+    indexId,
+    opportunityScope.instrumentId ?? null,
+    fundCode,
+    opportunityScope.fundMarket ?? null,
+    macroMonths,
+  ] as const;
+  const opportunity = useQuery({
+    queryKey: opportunityKey,
+    queryFn: ({ signal }) =>
+      api.getOpportunityContext(
+        { ...opportunityScope, months: macroMonths },
+        signal,
+      ),
+    enabled:
+      directions.isSuccess && (unlinked || !directionId || indices.isSuccess),
+  });
+  const monitors = useQuery({
+    queryKey: [subject, "condition-monitors"],
+    queryFn: ({ signal }) => api.getConditionMonitors(signal),
+  });
+  const currentMonitor = monitors.data?.find((m) =>
+    sameMonitorScope(m, opportunityScope),
+  );
+  const monitor = useMutation({
+    mutationFn: (scope: api.OpportunityScope & { enabled: boolean }) =>
+      api.setConditionMonitor(scope),
+    onSuccess: (result, variables) => {
+      client.setQueryData<api.ConditionMonitor[]>(
+        [subject, "condition-monitors"],
+        (previous) => [
+          ...(previous ?? []).filter((m) => !sameMonitorScope(m, variables)),
+          { ...variables, id: result.id, enabled: result.enabled },
+        ],
+      );
+    },
+  });
+  const ack = useMutation({
+    mutationFn: ({ id }: { id: string; key: typeof opportunityKey }) =>
+      api.ackConditionNotice(id),
+    onSuccess: (result, variables) => {
+      client.setQueryData<api.OpportunityContext>(variables.key, (previous) =>
+        previous
+          ? {
+              ...previous,
+              notices: previous.notices?.map((n) =>
+                n.id === result.id ? { ...n, readAt: result.readAt } : n,
+              ),
+            }
+          : previous,
+      );
+    },
+  });
+  const monitoringCurrent =
+    !!monitor.variables &&
+    sameMonitorScope(monitor.variables, opportunityScope);
+  const acknowledgingCurrent =
+    !!ack.variables &&
+    JSON.stringify(ack.variables.key) === JSON.stringify(opportunityKey);
+  const radarData = opportunity.data?.radar
+    ? opportunity.data
+    : (context.data ?? opportunity.data);
   const mode = fundCode ? "fund" : "index";
   const objectId =
     mode === "fund"
@@ -180,6 +265,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
             "research-funds",
             "restore-fund",
             "research-search",
+            "opportunity-context",
+            "market-context",
           ].some((key) => q.queryKey.includes(key)),
       });
       setParams(
@@ -285,9 +372,32 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         onSelect={searchSelect}
       />
       <MacroContextStrip
-        data={context.data}
-        error={context.isError}
-        loading={context.isPending}
+        data={radarData}
+        error={!radarData && (opportunity.isError || context.isError)}
+        loading={!radarData && (opportunity.isPending || context.isPending)}
+        selectedDirection={direction}
+        monitorEnabled={currentMonitor?.enabled ?? false}
+        monitorLoading={monitors.isPending || monitors.isError}
+        monitorPending={monitor.isPending && monitoringCurrent}
+        monitorError={
+          monitors.isError
+            ? "跟踪状态读取失败，请稍后重试。"
+            : monitor.isError && monitoringCurrent
+              ? "跟踪条件保存失败，原状态保留。"
+              : undefined
+        }
+        onMonitor={(enabled) =>
+          monitor.mutate({ ...opportunityScope, enabled })
+        }
+        onNoticeAck={(id) => ack.mutate({ id, key: opportunityKey })}
+        ackPending={
+          ack.isPending && acknowledgingCurrent ? ack.variables.id : null
+        }
+        ackError={
+          ack.isError && acknowledgingCurrent
+            ? "已读状态保存失败，可重试。"
+            : undefined
+        }
         directions={directions.data ?? []}
         onDirectionSelect={(id) => {
           setDirect(null);
@@ -306,6 +416,13 @@ function ResearchWorkspace({ subject }: { subject: string }) {
           setParams(next);
         }}
       />
+      {!opportunity.data?.radar && radarData && (
+        <p className="op-muted">
+          {opportunity.isError
+            ? "机会雷达读取失败，当前仅显示原宏观事实与有条件研究。"
+            : "机会雷达尚未齐备，当前仅显示原宏观事实与有条件研究。"}
+        </p>
+      )}
       {directions.isError && (
         <p role="alert">方向读取失败，仍可直接搜索基金。</p>
       )}

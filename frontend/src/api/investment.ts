@@ -169,6 +169,188 @@ export interface PerformanceEvidence {
   sampleCount: number;
   reasons: string[];
 }
+export interface OpportunityScope {
+  directionId?: string;
+  indexId?: string;
+  instrumentId?: string;
+  fundCode?: string;
+  fundMarket?: string;
+}
+export interface OpportunityQuery extends OpportunityScope {
+  months: number;
+}
+export interface RadarChange {
+  id: string;
+  priority: "CRITICAL" | "ATTENTION" | "INFO";
+  kind: "RISK" | "SUPPORT" | "GAP" | "OBSERVATION";
+  summary: string;
+  impact: string;
+  evidenceIds: string[];
+  timeScale: string;
+  relatedDirectionIds: string[];
+}
+export interface OpportunitySeries {
+  code: string;
+  label: string;
+  frequency: "DAILY" | "MONTHLY" | "YTD";
+  unit: string | null;
+  value: number | null;
+  asOf: string | null;
+  sourceUri: string | null;
+  sourceName: string | null;
+  publishedAt: string | null;
+  retrievedAt: string | null;
+  availableAt: string | null;
+  timeBasis: string | null;
+  methodVersion: string | null;
+  state:
+    "READY" | "STALE" | "CONFLICT" | "NOT_COLLECTED" | "PERMISSION_REQUIRED";
+  changes: {
+    previousValue: number | null;
+    change5Samples: number | null;
+    change20Samples: number | null;
+    changeUnit: "bp" | "pp" | null;
+    periodChange?: number | null;
+    change3Months?: number | null;
+    change6Months?: number | null;
+    median: number | null;
+    percentile: number | null;
+    sampleCount: number;
+  };
+  history: Array<{
+    date: string;
+    value: number | null;
+    state: string;
+    unit?: string | null;
+    sourceUri?: string | null;
+    sourceName?: string | null;
+    publishedAt?: string | null;
+    retrievedAt?: string | null;
+    availableAt?: string | null;
+    timeBasis?: string;
+    revision?: number;
+    definitionKey?: string | null;
+    definitionVersion?: string | null;
+    metadata?: { definitionKey?: string; definitionVersion?: string };
+  }>;
+}
+export interface MarketEvidence {
+  indexId: string;
+  label: string;
+  state: string;
+  valuation: {
+    state: string;
+    pe?: ValuationEvidence | null;
+    pb?: ValuationEvidence | null;
+    summary?: string;
+  };
+  trend: {
+    state: string;
+    ma200?: number | null;
+    momentum63?: number | null;
+    distanceMA200?: number | null;
+  };
+  risk: {
+    state: string;
+    volatility20?: number | null;
+    maxDrawdown?: number | null;
+  };
+  earnings: { state: string; summary?: string };
+  missingEvidence: string[];
+  sourceUri: string | null;
+  asOf: string | null;
+}
+export interface OpportunityContext extends MacroContext {
+  series?: OpportunitySeries[];
+  marketEvidence?: MarketEvidence[];
+  radar?: {
+    methodVersion: string;
+    asOf: string | null;
+    headline: RadarChange;
+    questions: Array<{
+      id: "CHANGE" | "IMPACT" | "QUALIFICATION" | "PERSONAL";
+      label: string;
+      state: string;
+      summary: string;
+      critical: boolean;
+    }>;
+    changes: RadarChange[];
+    sections: Array<{
+      id: "MACRO" | "INTEREST_CREDIT" | "MARKET" | "GLOBAL";
+      label: string;
+      state: string;
+      summary: string;
+      criticalImpact: string | null;
+      missingEvidence: string[];
+    }>;
+  } | null;
+  directionModel?: {
+    methodVersion: string;
+    state: string;
+    supports: Array<{
+      label: string;
+      summary: string;
+      evidenceIds: string[];
+      state: string;
+    }>;
+    counterFactors: Array<{
+      label: string;
+      summary: string;
+      evidenceIds: string[];
+      state: string;
+    }>;
+    watchFor: string[];
+    requiredEvidence: string[];
+    missingEvidence: string[];
+  } | null;
+  decision?: {
+    state: "WAIT" | "ENTRY_CANDIDATE" | "HOLD_REVIEW" | "POSITION_REVIEW";
+    marketState: string;
+    personalState: string;
+    summary: string;
+    gates: Array<{
+      id: string;
+      label: string;
+      state: "PASS" | "BLOCKED" | "UNKNOWN";
+      reason: string;
+    }>;
+    validation: {
+      state: string;
+      summary: string;
+      methodVersion: string;
+      netReturn?: number | null;
+      benchmarkReturn?: number | null;
+      maxDrawdown?: number | null;
+      sampleCount?: number;
+      inputHash?: string;
+      limitations?: string[];
+    };
+    nextChecks: string[];
+  } | null;
+  portfolio?: {
+    state: string;
+    heldSelected: boolean | null;
+    selectedWeight: number | null;
+    sameIndexWeight: number | null;
+    cashRatio: number | null;
+    asOf: string | null;
+    summary: string;
+    missingEvidence: string[];
+  } | null;
+  notices?: ConditionNotice[];
+}
+export interface ConditionNotice {
+  id: string;
+  title: string;
+  summary: string;
+  severity: string;
+  createdAt: string;
+  readAt: string | null;
+}
+export interface ConditionMonitor extends OpportunityScope {
+  id: string;
+  enabled: boolean;
+}
 export interface OperatingCosts {
   state: string;
   managementRate?: number | null;
@@ -273,6 +455,39 @@ export const getIndices = (id: string, signal?: AbortSignal) =>
   );
 export const getMarketContext = (signal?: AbortSignal, months = 36) =>
   read<MacroContext>(`/investment/market-context?months=${months}`, signal);
+export function getOpportunityContext(
+  query: OpportunityQuery,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  });
+  return read<OpportunityContext>(
+    `/investment/opportunity-context?${params}`,
+    signal,
+  );
+}
+export const getConditionMonitors = (signal?: AbortSignal) =>
+  read<ConditionMonitor[]>("/investment/condition-monitors", signal);
+export async function setConditionMonitor(
+  scope: OpportunityScope & { enabled: boolean },
+) {
+  return (
+    await request<{ id: string; enabled: boolean }>(
+      "/v1/investment/condition-monitors",
+      { method: "POST", body: JSON.stringify(scope) },
+    )
+  ).data;
+}
+export async function ackConditionNotice(id: string) {
+  return (
+    await request<{ id: string; readAt: string }>(
+      `/v1/investment/condition-notices/${encodeURIComponent(id)}/ack`,
+      { method: "POST" },
+    )
+  ).data;
+}
 export const searchResearch = (keyword: string, signal?: AbortSignal) =>
   read<SearchResult[]>(
     `/investment/search?keyword=${encodeURIComponent(keyword)}`,

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
@@ -205,6 +205,10 @@ const api = vi.hoisted(() => ({
   directions: vi.fn(),
   indices: vi.fn(),
   context: vi.fn(),
+  opportunity: vi.fn(),
+  monitors: vi.fn(),
+  setMonitor: vi.fn(),
+  ack: vi.fn(),
   funds: vi.fn(),
   search: vi.fn(),
   analysis: vi.fn(),
@@ -217,6 +221,10 @@ vi.mock("../../api/investment", () => ({
   getDirections: api.directions,
   getIndices: api.indices,
   getMarketContext: api.context,
+  getOpportunityContext: api.opportunity,
+  getConditionMonitors: api.monitors,
+  setConditionMonitor: api.setMonitor,
+  ackConditionNotice: api.ack,
   screenFunds: api.funds,
   searchResearch: api.search,
   getAnalysis: api.analysis,
@@ -267,6 +275,13 @@ beforeEach(() => {
         ],
   );
   api.context.mockResolvedValue({ state: "UNVERIFIED", items: [] });
+  api.opportunity.mockResolvedValue({ state: "UNVERIFIED", items: [] });
+  api.monitors.mockResolvedValue([]);
+  api.setMonitor.mockImplementation(async (scope) => ({
+    id: "monitor-1",
+    enabled: scope.enabled,
+  }));
+  api.ack.mockResolvedValue({ id: "notice-1", readAt: "2026-10-14T04:00:00Z" });
   api.funds.mockResolvedValue({
     items: [fund],
     page: 1,
@@ -293,6 +308,184 @@ beforeEach(() => {
       directionId: "hk:broad",
     },
   ]);
+});
+
+it("queries the full private opportunity scope including fund market", async () => {
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&macroMonths=60",
+  );
+  await waitFor(() =>
+    expect(api.opportunity).toHaveBeenLastCalledWith(
+      {
+        directionId: "a-share:broad",
+        indexId: "hs300",
+        instrumentId: "fund-id",
+        fundCode: "510330",
+        fundMarket: "SSE",
+        months: 60,
+      },
+      expect.anything(),
+    ),
+  );
+});
+
+it("restores only the matching condition monitor and mutates it on an explicit click", async () => {
+  const user = userEvent.setup();
+  const scope = {
+    directionId: "a-share:broad",
+    indexId: "hs300",
+    instrumentId: "fund-id",
+    fundCode: "510330",
+    fundMarket: "SSE",
+  };
+  api.monitors.mockResolvedValue([
+    { ...scope, id: "wrong-market", fundMarket: "FUND_CN", enabled: true },
+    { ...scope, id: "monitor-1", enabled: true },
+  ]);
+  api.opportunity.mockResolvedValue({
+    state: "UNVERIFIED",
+    items: [],
+    radar: {
+      methodVersion: "opportunity-radar-v1",
+      asOf: null,
+      headline: {
+        id: "gap",
+        priority: "INFO",
+        kind: "GAP",
+        summary: "等待证据",
+        impact: "先核查证据",
+        evidenceIds: [],
+        timeScale: "月度",
+        relatedDirectionIds: [],
+      },
+      questions: [],
+      changes: [],
+      sections: [],
+    },
+    notices: [
+      {
+        id: "notice-1",
+        title: "研究条件变化",
+        summary: "证据变化",
+        severity: "INFO",
+        createdAt: "2026-10-14T04:00:00Z",
+        readAt: null,
+      },
+    ],
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: /市场环境概览/ }));
+  expect(api.setMonitor).not.toHaveBeenCalled();
+  expect(api.ack).not.toHaveBeenCalled();
+  await user.click(
+    await screen.findByRole("button", { name: "停止跟踪研究条件" }),
+  );
+  await waitFor(() =>
+    expect(api.setMonitor).toHaveBeenCalledWith({ ...scope, enabled: false }),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "标记研究条件变化为已读" }),
+  );
+  await waitFor(() => expect(api.ack).toHaveBeenCalledWith("notice-1"));
+  expect(await screen.findByText("已读")).toBeInTheDocument();
+});
+
+function radarResponse(summary: string) {
+  return {
+    state: "UNVERIFIED",
+    items: [],
+    radar: {
+      methodVersion: "opportunity-radar-v1",
+      asOf: null,
+      headline: {
+        id: summary,
+        priority: "CRITICAL",
+        kind: "GAP",
+        summary,
+        impact: summary + "的关键影响",
+        evidenceIds: [],
+        timeScale: "每日盘后",
+        relatedDirectionIds: [],
+      },
+      questions: [],
+      changes: [],
+      sections: [],
+    },
+  };
+}
+
+it("isolates a late opportunity response after changing the selected index", async () => {
+  const user = userEvent.setup();
+  let completeOld!: (data: unknown) => void;
+  api.opportunity.mockImplementation((query) =>
+    query.indexId === "hs300"
+      ? new Promise((resolve) => {
+          completeOld = resolve;
+        })
+      : Promise.resolve(radarResponse("A500当前证据")),
+  );
+  renderWithSession(<FundScreenerPage />);
+  await waitFor(() => expect(api.opportunity).toHaveBeenCalled());
+  await user.click(await screen.findByRole("button", { name: /中证A500/ }));
+  await screen.findByText("A500当前证据的关键影响");
+  await act(async () => {
+    completeOld(radarResponse("沪深300旧证据"));
+  });
+  expect(screen.queryByText("沪深300旧证据的关键影响")).not.toBeInTheDocument();
+  expect(api.opportunity).toHaveBeenLastCalledWith(
+    expect.objectContaining({ indexId: "a500" }),
+    expect.anything(),
+  );
+});
+
+it("retains enabled tracking and unread notices when the server rejects either mutation", async () => {
+  const user = userEvent.setup();
+  api.monitors.mockResolvedValue([
+    {
+      id: "monitor-1",
+      directionId: "a-share:broad",
+      indexId: "hs300",
+      enabled: true,
+    },
+  ]);
+  api.opportunity.mockResolvedValue({
+    ...radarResponse("当前研究"),
+    notices: [
+      {
+        id: "notice-1",
+        title: "新研究条件",
+        summary: "证据覆盖变化",
+        severity: "INFO",
+        createdAt: "2026-10-14T04:00:00Z",
+        readAt: null,
+      },
+    ],
+  });
+  api.setMonitor.mockRejectedValue(new Error("rejected"));
+  api.ack.mockRejectedValue(new Error("rejected"));
+  renderWithSession(<FundScreenerPage />);
+  await screen.findByText("当前研究的关键影响");
+  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
+  await user.click(
+    await screen.findByRole("button", { name: "停止跟踪研究条件" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "跟踪条件保存失败",
+  );
+  expect(
+    screen.getByRole("button", { name: "停止跟踪研究条件" }),
+  ).toBeEnabled();
+  await user.click(
+    screen.getByRole("button", { name: "标记新研究条件为已读" }),
+  );
+  expect(
+    await screen.findByText("已读状态保存失败，可重试。"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("未读")).toBeInTheDocument();
 });
 
 it("uses the v3.3 workspace and keeps parent selection when diagnosing a fund", async () => {

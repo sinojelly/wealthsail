@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Globe2, ChevronDown } from "lucide-react";
 import type {
   Direction,
-  MacroContext,
+  OpportunityContext,
   MacroEvent,
 } from "../../../api/investment";
 import {
@@ -14,6 +14,11 @@ import {
   valueVerificationLabels,
   type MacroItem,
 } from "../macro-display";
+import {
+  RadarOverview,
+  RadarDetails,
+  ResearchDirections,
+} from "./OpportunityRadar";
 
 function HistoricalTrend({ item }: { item: MacroItem }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -370,14 +375,32 @@ export default function MacroContextStrip({
   onMonthsChange,
   directions = [],
   onDirectionSelect,
+  selectedDirection,
+  onMonitor,
+  monitorEnabled,
+  monitorPending,
+  monitorLoading,
+  monitorError,
+  onNoticeAck,
+  ackPending,
+  ackError,
 }: {
-  data?: MacroContext;
+  data?: OpportunityContext;
   error: boolean;
   loading?: boolean;
   months?: number;
   onMonthsChange?: (months: number) => void;
   directions?: Direction[];
   onDirectionSelect?: (directionId: string) => void;
+  selectedDirection?: Direction;
+  onMonitor?: (enabled: boolean) => void;
+  monitorEnabled?: boolean;
+  monitorPending?: boolean;
+  monitorLoading?: boolean;
+  monitorError?: string;
+  onNoticeAck?: (id: string) => void;
+  ackPending?: string | null;
+  ackError?: string;
 }) {
   const [open, setOpen] = useState(false);
   const research = !error && !loading ? data?.research : null;
@@ -412,6 +435,11 @@ export default function MacroContextStrip({
           <p role="alert">宏观数据读取失败，请稍后重试。</p>
         ) : loading ? (
           <p role="status">宏观数据加载中…</p>
+        ) : readyData?.radar ? (
+          <RadarOverview
+            data={readyData}
+            selectedDirection={selectedDirection}
+          />
         ) : (
           <>
             <p>
@@ -437,6 +465,17 @@ export default function MacroContextStrip({
       </div>
       {open && readyData && (
         <>
+          <RadarDetails
+            data={readyData}
+            onMonitor={onMonitor}
+            monitorEnabled={monitorEnabled}
+            monitorPending={monitorPending}
+            monitorLoading={monitorLoading}
+            monitorError={monitorError}
+            onNoticeAck={onNoticeAck}
+            ackPending={ackPending}
+            ackError={ackError}
+          />
           <div className="op-macro-window">
             <label>
               宏观观察窗口{" "}
@@ -506,27 +545,12 @@ export default function MacroContextStrip({
             events={readyData.events ?? []}
             state={readyData.eventState}
           />
-          {!!directions.some((d) => d.macroResearch) && (
-            <section className="op-macro-directions" aria-label="宏观方向研究">
-              <h3>沿影响渠道继续研究</h3>
-              <div>
-                {directions
-                  .filter((d) => d.macroResearch)
-                  .map((direction) => (
-                    <button
-                      key={direction.id}
-                      disabled={!onDirectionSelect}
-                      onClick={() => onDirectionSelect?.(direction.id)}
-                    >
-                      研究 {direction.marketLabel} · {direction.label}
-                    </button>
-                  ))}
-              </div>
-              <p>
-                继续核对指数估值、盈利与基金质量，宏观变化不会自动改变基金排名。
-              </p>
-            </section>
-          )}
+          <ResearchDirections
+            data={readyData}
+            directions={directions}
+            selectedDirection={selectedDirection}
+            onSelect={onDirectionSelect}
+          />
         </>
       )}
     </section>
