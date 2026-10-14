@@ -168,6 +168,15 @@ async def _bootstrap_macro_history(pool) -> None:
         logger.exception("investment_macro_bootstrap_failed")
 
 
+async def _macro_evidence_loop(pool) -> None:
+    try:
+        from backend.jobs.macro_evidence import run_macro_evidence_service
+
+        await run_macro_evidence_service(pool)
+    except Exception as exc:  # noqa: BLE001 -- keep existing report and history loops alive
+        logger.warning("macro_official_service_failed error_class=%s", type(exc).__name__)
+
+
 async def main() -> None:
     settings = validate_runtime_settings(get_settings(), process="worker")
     logging.basicConfig(
@@ -241,6 +250,9 @@ async def main() -> None:
     macro_startup_task = asyncio.create_task(
         _bootstrap_macro_history(pool), name="wealthsail-macro-bootstrap"
     )
+    macro_evidence_task = asyncio.create_task(
+        _macro_evidence_loop(pool), name="wealthsail-macro-official"
+    )
 
     stop_event = asyncio.Event()
 
@@ -260,11 +272,12 @@ async def main() -> None:
     finally:
         logger.info("shutting down worker…")
         macro_startup_task.cancel()
+        macro_evidence_task.cancel()
         recovery_task.cancel()
         await scheduler.stop()
         await consumer.stop()
         await data_tasks.stop()
-        for task in (macro_startup_task, recovery_task):
+        for task in (macro_startup_task, macro_evidence_task, recovery_task):
             try:
                 await task
             except asyncio.CancelledError:

@@ -22,6 +22,7 @@ from backend.jobs.investment_macro_refresh import (
     ensure_macro_history,
     refresh_macro_history,
 )
+from backend.jobs.macro_evidence import run_macro_evidence_service, sync_macro_evidence
 
 logger = logging.getLogger("wealthsail.macro_worker")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -190,6 +191,16 @@ async def _serve(pool):
     service = asyncio.create_task(
         run_macro_service(pool, stop_event=stop_event), name="wealthsail-macro-only"
     )
+
+    async def _official():
+        try:
+            await run_macro_evidence_service(pool, stop_event=stop_event)
+        except Exception as exc:  # noqa: BLE001 -- evidence cannot stop historical collection
+            logger.warning(
+                "macro_official_service_failed error_class=%s", type(exc).__name__
+            )
+
+    official = asyncio.create_task(_official(), name="wealthsail-macro-official")
     stopping = asyncio.create_task(stop_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -198,10 +209,10 @@ async def _serve(pool):
         if service in done:
             await service
     finally:
-        for task in (service, stopping):
+        for task in (service, official, stopping):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(service, stopping, return_exceptions=True)
+        await asyncio.gather(service, official, stopping, return_exceptions=True)
         for sig in installed:
             loop.remove_signal_handler(sig)
 
@@ -224,6 +235,15 @@ async def main(argv=None) -> int:
         await verify_runtime_login_boundary(pool, process="worker")
         if args.once:
             result = await _collect(refresh_macro_history, pool, _now_shanghai())
+            try:
+                result["officialEvidence"] = await sync_macro_evidence(
+                    pool, _now_shanghai(), force=True
+                )
+            except Exception as exc:  # noqa: BLE001 -- keep existing history status and exit contract
+                result["officialEvidence"] = {
+                    "status": "UNAVAILABLE",
+                    "errorClass": type(exc).__name__,
+                }
             print(json.dumps(result, ensure_ascii=False, default=str))
             return 0 if result["status"] == "COMPLETED" else 1
         logger.info(
