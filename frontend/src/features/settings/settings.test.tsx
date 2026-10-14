@@ -137,9 +137,12 @@ afterEach(() => {
 
 it.each(["OWNER", "VIEWER"] as const)(
   "shows all report subscriptions to a %s",
-  (role) => {
+  async (role) => {
     meFixture.activeRole = role;
+    const user = userEvent.setup();
     renderWithSession(<SettingsPage />);
+
+    await user.click(screen.getByRole("button", { name: /^通知订阅/ }));
 
     expect(screen.getByRole("switch", { name: "盘前简报" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "盘中跟踪" })).toBeChecked();
@@ -157,6 +160,7 @@ it("updates only the changed report subscription", async () => {
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^通知订阅/ }));
   await user.click(screen.getByRole("switch", { name: "盘中跟踪" }));
 
   expect(updateReportSubscriptions).toHaveBeenCalledWith({ INTRADAY: false });
@@ -168,6 +172,7 @@ it("rolls a report subscription back when the server rejects it", async () => {
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^通知订阅/ }));
   const toggle = screen.getByRole("switch", { name: "盘中跟踪" });
   await user.click(toggle);
 
@@ -179,6 +184,7 @@ it("lets an owner create a one-time administrator invitation", async () => {
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
   await user.type(screen.getByLabelText("受邀邮箱"), "new.admin@example.com");
   await user.selectOptions(screen.getByLabelText("成员角色"), "ADMIN");
   await user.click(screen.getByRole("button", { name: "生成邀请码" }));
@@ -193,9 +199,12 @@ it("lets an owner create a one-time administrator invitation", async () => {
   expect(screen.getByText("邀请码只显示一次")).toBeInTheDocument();
 });
 
-it("does not render invitation controls for a viewer", () => {
+it("does not render invitation controls for a viewer", async () => {
   meFixture.activeRole = "VIEWER";
+  const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
+
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
 
   expect(
     screen.queryByRole("heading", { name: "邀请成员" }),
@@ -212,6 +221,7 @@ it("lets the active tenant owner rename the tenant", async () => {
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
   const input = screen.getByLabelText("租户名称");
   const saveButton = screen.getByRole("button", { name: "保存租户名称" });
   const controls = input.closest(".tenant-name-controls");
@@ -230,6 +240,7 @@ it("lets an owner optionally set historical cumulative PnL without changing the 
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
   const input = screen.getByLabelText("跟踪前历史累计收益（天天基金账户）");
   expect(input).toHaveValue(0);
   expect(screen.getByText("从 2026-08-30 起自动跟踪")).toBeInTheDocument();
@@ -250,6 +261,7 @@ it("lets a platform administrator create an independent personal-tenant invitati
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
   await user.type(
     screen.getByLabelText("独立租户受邀邮箱"),
     "personal@example.com",
@@ -266,8 +278,11 @@ it("lets a platform administrator create an independent personal-tenant invitati
   ).toBeInTheDocument();
 });
 
-it("does not expose platform governance controls to a tenant owner", () => {
+it("does not expose platform governance controls to a tenant owner", async () => {
+  const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
+
+  await user.click(screen.getByRole("button", { name: /^租户与成员/ }));
 
   expect(
     screen.queryByRole("heading", { name: "创建独立租户" }),
@@ -278,6 +293,7 @@ it("waits for a verified WeCom callback instead of simulating an external identi
   const user = userEvent.setup();
   renderWithSession(<SettingsPage />);
 
+  await user.click(screen.getByRole("button", { name: /^消息通知/ }));
   await user.click(screen.getByRole("button", { name: "生成一次性绑定凭证" }));
   expect(await screen.findByText("等待企业微信回调确认")).toBeInTheDocument();
   expect(
