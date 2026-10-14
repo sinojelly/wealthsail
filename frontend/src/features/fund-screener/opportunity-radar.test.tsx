@@ -1,7 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MacroContextStrip from "./components/MacroContextStrip";
-import type { Direction, OpportunityContext } from "../../api/investment";
+import type {
+  Direction,
+  OpportunityContext,
+  OpportunitySeries,
+} from "../../api/investment";
 
 const directions = [
   {
@@ -680,3 +684,87 @@ it("keeps YTD credit cumulative and does not connect observations across years",
     0,
   );
 });
+
+function officialYtd(metadata: OpportunitySeries["metadata"]) {
+  return {
+    ...context.series![0],
+    code: "CORP_MEDLONG_LOANS_YTD",
+    label: "企业中长期贷款累计新增",
+    frequency: "YTD" as const,
+    unit: "万亿元",
+    value: 6.53,
+    asOf: "2026-09-01",
+    sourceName: "中国人民银行",
+    sourceUri:
+      "https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html",
+    methodVersion: "opportunity-official-v1",
+    metadata,
+    history: [],
+    changes: {
+      ...context.series![0].changes,
+      previousValue: null,
+      change5Samples: null,
+      change20Samples: null,
+      changeUnit: null,
+      median: null,
+      percentile: null,
+      sampleCount: 1,
+    },
+  };
+}
+
+it("shows the official YTD accumulation interval instead of the reference month's first day", async () => {
+  const ytd = officialYtd({
+    definitionKey: "PBOC_CORPORATE_MEDLONG_LOANS_NET_INCREASE_YTD",
+    definitionVersion: "PBOC_FINANCIAL_STATISTICS_2023",
+    accumulationStart: "2026-01-01",
+    accumulationEnd: "2026-09-30",
+  });
+  render(
+    <MacroContextStrip data={{ ...context, series: [ytd] }} error={false} />,
+  );
+  await expand();
+  const credit = screen.getByRole("region", { name: "关键变量证据" });
+  expect(
+    within(credit).getByText(/累计区间：2026年1月1日—2026年9月30日/),
+  ).toBeInTheDocument();
+  expect(
+    within(credit).queryByText(/观察期：2026年9月1日/),
+  ).not.toBeInTheDocument();
+  expect(within(credit).getByText("6.53 万亿元")).toBeInTheDocument();
+  expect(
+    within(credit).getByText(
+      "年内累计值，未经核实不计算单月差，也不跨年比较。",
+    ),
+  ).toBeInTheDocument();
+});
+
+it.each([
+  undefined,
+  { accumulationStart: "2026-01-01" },
+  { accumulationEnd: "2026-09-30" },
+  { accumulationStart: "2026-10-01", accumulationEnd: "2026-09-30" },
+  { accumulationStart: "2025-01-01", accumulationEnd: "2026-09-30" },
+  { accumulationStart: "2026-01-01", accumulationEnd: "2026-08-31" },
+  { accumulationStart: "2026-01-01", accumulationEnd: "2026-09-31" },
+  { accumulationStart: "2026-01-01", accumulationEnd: null },
+])(
+  "keeps missing or contradictory official YTD intervals unknown without inventing dates (%j)",
+  async (metadata) => {
+    render(
+      <MacroContextStrip
+        data={{ ...context, series: [officialYtd(metadata)] }}
+        error={false}
+      />,
+    );
+    await expand();
+    const credit = screen.getByRole("region", { name: "关键变量证据" });
+    expect(within(credit).getByText(/累计区间：待核查/)).toBeInTheDocument();
+    expect(
+      within(credit).queryByText(/观察期：2026年9月1日/),
+    ).not.toBeInTheDocument();
+    expect(
+      within(credit).queryByText(/2026年1月1日—2026年9月30日/),
+    ).not.toBeInTheDocument();
+  },
+);

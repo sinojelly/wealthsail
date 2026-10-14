@@ -507,8 +507,29 @@ async def test_service_checks_immediately_then_every_15_minutes_and_survives_fai
         object(), now_provider=lambda: NOW, wait=wait, stop_event=stop
     )
     assert delays == [900, 900]
-    assert sync.await_args_list[0].kwargs["force"] is True
+    assert sync.await_args_list[0].kwargs["force"] is False
     assert sync.await_args_list[1].kwargs["force"] is False
+
+
+@pytest.mark.asyncio
+async def test_restart_honors_recent_durable_attempt_instead_of_forcing_http(
+    monkeypatch,
+):
+    previous = {
+        "recorded_at": NOW - timedelta(minutes=5),
+        "result": {"status": "COMPLETED"},
+    }
+    store = Store(previous=previous)
+    module, _, _, fetch = patch_job(monkeypatch, store)
+    stop = asyncio.Event()
+
+    async def wait(event, seconds):
+        event.set()
+
+    await module.run_opportunity_market_service(
+        object(), now_provider=lambda: NOW, wait=wait, stop_event=stop
+    )
+    fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

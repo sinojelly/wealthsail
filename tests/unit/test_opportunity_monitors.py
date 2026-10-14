@@ -4,6 +4,7 @@ from importlib import import_module, util
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from unittest.mock import AsyncMock
+import json
 
 import pytest
 
@@ -222,3 +223,171 @@ async def test_notice_summary_uses_user_visible_chinese_state_labels():
     ][0]
     summary = call.args[8]
     assert "等待" in summary and "持仓观察" in summary and "HOLD_REVIEW" not in summary
+
+
+def research_result(priority="ATTENTION", delta=20, missing=None):
+    return {
+        **result(),
+        "radar": {
+            "asOf": "old",
+            "changes": [
+                {
+                    "id": "rate-change:US_T10_REAL",
+                    "priority": priority,
+                    "kind": "RISK",
+                    "evidenceIds": ["US_T10_REAL"],
+                    "delta": delta,
+                    "retrievedAt": "old",
+                    "summary": f"利率变化{delta}bp",
+                },
+                {
+                    "id": "ordinary",
+                    "priority": "INFO",
+                    "kind": "OBSERVATION",
+                    "evidenceIds": ["PMI"],
+                    "delta": 1,
+                },
+            ],
+        },
+        "directionModel": {"missingEvidence": missing or ["企业盈利", "美元汇率"]},
+    }
+
+
+def test_waiting_state_tracks_important_evidence_semantics_and_stable_gaps():
+    repo = repository()
+    attention = research_result()
+    critical = research_result("CRITICAL", 45)
+    assert repo.condition_fingerprint(attention) != repo.condition_fingerprint(critical)
+    assert repo.condition_fingerprint(attention) != repo.condition_fingerprint(
+        research_result(missing=["企业盈利"])
+    )
+    quiet = research_result(delta=21, missing=["美元汇率", "企业盈利", "企业盈利"])
+    quiet["radar"]["asOf"] = "new"
+    quiet["radar"]["changes"][0]["retrievedAt"] = "new"
+    quiet["radar"]["changes"].reverse()
+    assert repo.condition_fingerprint(attention) == repo.condition_fingerprint(quiet)
+    for field, value in (
+        ("kind", "GAP"),
+        ("id", "rate-change:US_T10_NOMINAL"),
+        ("evidenceIds", ["US_T10_NOMINAL"]),
+    ):
+        different = research_result()
+        different["radar"]["changes"][0][field] = value
+        assert repo.condition_fingerprint(attention) != repo.condition_fingerprint(
+            different
+        )
+
+
+@pytest.mark.asyncio
+async def test_important_wait_to_wait_notice_persists_only_semantic_summary_and_recovers():
+    repo = repository()
+    old = research_result()
+    changed = research_result("CRITICAL", 45)
+    changed["series"] = [{"privateHistory": "must not persist"}]
+    conn = AsyncMock()
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    prior = {
+        "id": "prior",
+        "condition_fingerprint": repo.condition_fingerprint(old),
+        "result": old,
+        "as_of": NOW - timedelta(minutes=15),
+    }
+    conn.fetchrow.side_effect = [
+        monitor,
+        prior,
+        {"notice_count": 0, "last_notice": None},
+    ]
+    conn.fetchval.side_effect = ["snapshot", "notice"]
+    assert (await repo.record_monitor_result(conn, monitor, changed, NOW))[
+        "notice"
+    ] is True
+    snapshot_call = [
+        call
+        for call in conn.fetchval.await_args_list
+        if "INSERT INTO risk.opportunity_decision_snapshots" in call.args[0]
+    ][0]
+    saved = json.loads(snapshot_call.args[-1])
+    assert set(saved) == {"decision", "portfolio", "researchConditions"}
+    assert repo.condition_fingerprint(saved) == repo.condition_fingerprint(changed)
+    assert "privateHistory" not in snapshot_call.args[
+        -1
+    ] and "retrievedAt" not in json.dumps(saved["researchConditions"])
+    assert saved["researchConditions"]["importantChanges"][0] == {
+        "id": "rate-change:US_T10_REAL",
+        "priority": "CRITICAL",
+        "kind": "RISK",
+        "evidenceIds": ["US_T10_REAL"],
+    }
+    notice_call = [
+        call
+        for call in conn.fetchval.await_args_list
+        if "INSERT INTO risk.opportunity_condition_notices" in call.args[0]
+    ][0]
+    assert (
+        "研究证据" in notice_call.args[8]
+        and "当前仍等待" in notice_call.args[8]
+        and "等待 → 等待" not in notice_call.args[8]
+    )
+    recovered = {
+        "id": "persisted",
+        "condition_fingerprint": repo.condition_fingerprint(saved),
+        "result": saved,
+        "as_of": NOW,
+    }
+    resumed = AsyncMock()
+    resumed.fetchrow.side_effect = [monitor, recovered]
+    assert not (
+        await repo.record_monitor_result(
+            resumed,
+            monitor,
+            research_result("CRITICAL", 46),
+            NOW + timedelta(minutes=15),
+        )
+    )["notice"]
+    resumed.fetchval.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ["budget", "silence"])
+async def test_important_research_change_still_requires_confirmed_budget_and_silence(
+    blocked,
+):
+    repo = repository()
+    changed = research_result("CRITICAL", 45)
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    prior = {
+        "id": "prior",
+        "condition_fingerprint": repo.condition_fingerprint(research_result()),
+        "result": research_result(),
+        "as_of": NOW - timedelta(minutes=15),
+    }
+    conn = AsyncMock()
+    conn.fetchval.return_value = "snapshot"
+    conn.fetchrow.side_effect = [
+        monitor,
+        prior,
+        {"notice_count": 0, "last_notice": NOW - timedelta(minutes=1)},
+    ]
+    if blocked == "budget":
+        changed["portfolio"].pop("noticeBudget")
+    output = await repo.record_monitor_result(conn, monitor, changed, NOW)
+    assert not output["notice"]
+    assert output["reason"] == (
+        "CONFIRMED_NOTICE_BUDGET_REQUIRED"
+        if blocked == "budget"
+        else "BUDGET_OR_SILENCE"
+    )
+    assert not any(
+        "INSERT INTO risk.opportunity_condition_notices" in call.args[0]
+        for call in conn.fetchval.await_args_list
+    )

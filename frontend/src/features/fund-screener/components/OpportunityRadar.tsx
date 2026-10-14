@@ -67,6 +67,28 @@ const dateLabel = (raw: string | null | undefined) => {
     ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日`
     : timeLabel(raw);
 };
+function calendarDate(raw: unknown): raw is string {
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const value = Date.parse(`${raw}T00:00:00Z`);
+  return (
+    Number.isFinite(value) && new Date(value).toISOString().slice(0, 10) === raw
+  );
+}
+function accumulationRange(series: OpportunitySeries) {
+  const start = series.metadata?.accumulationStart;
+  const end = series.metadata?.accumulationEnd;
+  const reference = series.asOf;
+  if (
+    !calendarDate(start) ||
+    !calendarDate(end) ||
+    !calendarDate(reference) ||
+    start > end ||
+    start !== `${reference.slice(0, 4)}-01-01` ||
+    end.slice(0, 7) !== reference.slice(0, 7)
+  )
+    return "待核查";
+  return `${dateLabel(start)}—${dateLabel(end)}`;
+}
 const kindText: Record<RadarChange["kind"], string> = {
   RISK: "风险复核",
   SUPPORT: "支持线索",
@@ -289,10 +311,9 @@ function SeriesCard({ series }: { series: OpportunitySeries }) {
           : "—"}
       </p>
       <p>
-        观察期：
-        {series.frequency === "MONTHLY"
-          ? monthLabel(series.asOf)
-          : dateLabel(series.asOf)}{" "}
+        {series.frequency === "YTD"
+          ? `累计区间：${accumulationRange(series)}`
+          : `观察期：${series.frequency === "MONTHLY" ? monthLabel(series.asOf) : dateLabel(series.asOf)}`}{" "}
         ·{" "}
         {series.frequency === "DAILY"
           ? "日度"

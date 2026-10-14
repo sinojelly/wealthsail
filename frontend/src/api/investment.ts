@@ -203,6 +203,12 @@ export interface OpportunitySeries {
   availableAt: string | null;
   timeBasis: string | null;
   methodVersion: string | null;
+  metadata?: {
+    definitionKey?: string | null;
+    definitionVersion?: string | null;
+    accumulationStart?: string | null;
+    accumulationEnd?: string | null;
+  };
   state:
     "READY" | "STALE" | "CONFLICT" | "NOT_COLLECTED" | "PERMISSION_REQUIRED";
   changes: {

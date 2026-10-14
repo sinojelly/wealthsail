@@ -439,14 +439,13 @@ async def run_opportunity_market_service(
     pool, *, now_provider=None, wait=None, stop_event=None
 ):
     now_provider, wait = now_provider or now_shanghai, wait or _wait
-    stop_event, first = stop_event or asyncio.Event(), True
+    stop_event = stop_event or asyncio.Event()
     while not stop_event.is_set():
         try:
             await sync_opportunity_market(
-                pool, now_provider(), force=first, now_provider=now_provider
+                pool, now_provider(), force=False, now_provider=now_provider
             )
         except Exception as exc:  # noqa: BLE001 -- a collection failure cannot stop the service
             logger.warning("opportunity_tick_failed error_class=%s", type(exc).__name__)
-        first = False
         if not stop_event.is_set():
             await wait(stop_event, 900)

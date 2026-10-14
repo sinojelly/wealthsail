@@ -399,14 +399,62 @@ async def ack_notice(conn, tenant_id, user_id, notice_id, now):
     return {"id": str(row["id"]), "readAt": row["read_at"]}
 
 
+def research_conditions(result):
+    persisted = result.get("researchConditions")
+    source = persisted if isinstance(persisted, dict) else None
+    changes = (
+        source.get("importantChanges", [])
+        if source is not None
+        else (result.get("radar") or {}).get("changes", [])
+    )
+    missing = (
+        source.get("missingEvidence", [])
+        if source is not None
+        else (result.get("directionModel") or {}).get("missingEvidence", [])
+    )
+    important = set()
+    for row in changes or []:
+        if (
+            not isinstance(row, dict)
+            or row.get("priority") not in {"CRITICAL", "ATTENTION"}
+            or not isinstance(row.get("id"), str)
+            or not isinstance(row.get("kind"), str)
+        ):
+            continue
+        ids = tuple(
+            sorted(
+                {
+                    value
+                    for value in row.get("evidenceIds") or []
+                    if isinstance(value, str)
+                }
+            )
+        )
+        important.add((row["id"], row["priority"], row["kind"], ids))
+    return {
+        "importantChanges": [
+            {"id": key, "priority": priority, "kind": kind, "evidenceIds": list(ids)}
+            for key, priority, kind, ids in sorted(important)
+        ],
+        "missingEvidence": sorted(
+            {value for value in missing or [] if isinstance(value, str)}
+        ),
+    }
+
+
 def conditions(result):
     item = result["decision"]
-    return {
+    output = {
         "state": item["state"],
         "marketState": item["marketState"],
         "personalState": item["personalState"],
         "gates": sorted((row["id"], row["state"]) for row in item.get("gates", [])),
     }
+    research = research_conditions(result)
+    # Preserve legacy fingerprints when no new semantic research exists.
+    if research["importantChanges"] or research["missingEvidence"]:
+        output["researchConditions"] = research
+    return output
 
 
 def condition_fingerprint(result):
@@ -452,7 +500,11 @@ async def record_monitor_result(conn, monitor, result, now):
     fingerprint = condition_fingerprint(result)
     if prior and prior["condition_fingerprint"] == fingerprint:
         return {"baseline": False, "notice": False}
-    safe = {"decision": result["decision"], "portfolio": result["portfolio"]}
+    safe = {
+        "decision": result["decision"],
+        "portfolio": result["portfolio"],
+        "researchConditions": research_conditions(result),
+    }
     snapshot = await conn.fetchval(
         """INSERT INTO risk.opportunity_decision_snapshots(tenant_id,user_id,monitor_id,enabled_at,as_of,method_version,input_hash,condition_fingerprint,result)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT DO NOTHING RETURNING id""",
@@ -513,6 +565,13 @@ async def record_monitor_result(conn, monitor, result, now):
         "HOLD_REVIEW": "持仓观察",
         "POSITION_REVIEW": "持仓风险复核",
     }
+    before_label = state_labels.get(before["state"], "证据待核查")
+    after_label = state_labels.get(after["state"], "证据待核查")
+    summary = (
+        f"研究证据/影响条件发生变化，当前仍{after_label}；请查看更新证据与缺口。"
+        if before["state"] == after["state"]
+        else f"{before_label} → {after_label}；请查看更新证据与缺口。"
+    )
     notice = await conn.fetchval(
         """INSERT INTO risk.opportunity_condition_notices(tenant_id,user_id,monitor_id,snapshot_id,enabled_at,fingerprint,title,summary,severity,created_at,before_conditions,after_conditions)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb) ON CONFLICT DO NOTHING RETURNING id""",
@@ -523,7 +582,7 @@ async def record_monitor_result(conn, monitor, result, now):
         owner[3],
         transition_fingerprint(dict(prior), result),
         "研究条件发生变化",
-        f"{state_labels.get(before['state'], '证据待核查')} → {state_labels.get(after['state'], '证据待核查')}；请查看更新证据与缺口。",
+        summary,
         "CRITICAL" if after["state"] == "POSITION_REVIEW" else "WATCH",
         now,
         json.dumps(before, ensure_ascii=False),

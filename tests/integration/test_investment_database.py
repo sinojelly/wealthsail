@@ -51,6 +51,9 @@ async def test_expired_score_is_excluded_from_real_database_ranking():
     try:
         today=await conn.fetchval("SELECT (now() AT TIME ZONE 'Asia/Shanghai')::date")
         await conn.execute("INSERT INTO reference.trading_calendars(market,calendar_date,is_trading_day) VALUES('SSE',$1,true) ON CONFLICT(market,calendar_date) DO UPDATE SET is_trading_day=true",today)
+        # Freshness requires calendar coverage from the snapshot through cutoff.
+        # This fixture must not depend on another test having seeded yesterday.
+        await conn.execute("INSERT INTO reference.trading_calendars(market,calendar_date,is_trading_day) VALUES('SSE',$1,true) ON CONFLICT(market,calendar_date) DO UPDATE SET is_trading_day=true",today-timedelta(days=1))
         key="00000000-0000-0000-0000-00000000c499"
         await conn.execute("INSERT INTO reference.instruments(id,asset_type,primary_market,canonical_name) VALUES($1,'EXCHANGE_FUND','SSE','review-identity') ON CONFLICT(id) DO NOTHING",key)
         await conn.execute("INSERT INTO reference.instrument_aliases(instrument_id,alias_type,alias_value,market) VALUES($1,'TICKER','999999','SSE') ON CONFLICT DO NOTHING",key)
