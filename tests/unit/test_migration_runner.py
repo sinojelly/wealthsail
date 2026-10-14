@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 78
-    assert migrations[-1].path.name == "078_macro_official_evidence.sql"
+    assert versions[-1] == 79
+    assert migrations[-1].path.name == "079_opportunity_decisions.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:

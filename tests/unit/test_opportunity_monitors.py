@@ -1,0 +1,224 @@
+"""Personal opt-in monitoring records baseline and semantic condition changes."""
+
+from importlib import import_module, util
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from unittest.mock import AsyncMock
+
+import pytest
+
+NOW = datetime(2026, 10, 14, 18, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+def repository():
+    assert util.find_spec("backend.investment.decision_repository"), (
+        "private monitoring repository missing"
+    )
+    return import_module("backend.investment.decision_repository")
+
+
+def result(state="WAIT", retrieved_at="old"):
+    return {
+        "decision": {
+            "state": state,
+            "marketState": state,
+            "personalState": "NOT_HELD",
+            "gates": [{"id": "validation", "state": "UNKNOWN"}],
+            "validation": {"retrievedAt": retrieved_at},
+        },
+        "portfolio": {
+            "state": "READY",
+            "asOf": "2026-10-14",
+            "noticeBudget": 5,
+            "silenceMinutes": 5,
+        },
+        "notices": [],
+    }
+
+
+def test_refresh_timestamps_do_not_change_monitor_condition_fingerprint():
+    repo = repository()
+    assert repo.condition_fingerprint(
+        result(retrieved_at="old")
+    ) == repo.condition_fingerprint(result(retrieved_at="new"))
+    assert repo.condition_fingerprint(result("WAIT")) != repo.condition_fingerprint(
+        result("ENTRY_CANDIDATE")
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_code_in_two_markets_is_not_inferred_as_a_personal_holding():
+    repo = repository()
+    conn = AsyncMock()
+    conn.fetch.return_value = [{"instrument_id": "one"}, {"instrument_id": "two"}]
+    assert await repo.resolve_instrument(conn, None, "510300", None) is None
+    conn.fetch.return_value = [{"instrument_id": "one"}]
+    assert await repo.resolve_instrument(conn, None, "510300", "SSE") == "one"
+
+
+@pytest.mark.asyncio
+async def test_explicit_identity_cannot_ignore_contradictory_code_or_market():
+    repo = repository()
+    conn = AsyncMock()
+    conn.fetchval.return_value = None
+    assert await repo.resolve_instrument(conn, "instrument", "510300", "SZSE") is None
+    call = conn.fetchval.await_args
+    assert "510300" in call.args and "SZSE" in call.args
+    assert "primary_market" in call.args[0] and "research_fund_catalog" in call.args[0]
+
+
+@pytest.mark.asyncio
+async def test_first_monitor_snapshot_is_baseline_and_has_no_notice():
+    repo = repository()
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None
+    conn.fetchval.return_value = "snapshot"
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW,
+    }
+    conn.fetchrow.side_effect = [monitor, None]
+    output = await repo.record_monitor_result(conn, monitor, result(), NOW)
+    assert output["baseline"] is True and output["notice"] is False
+    queries = " ".join(
+        call.args[0]
+        for call in conn.execute.await_args_list + conn.fetchval.await_args_list
+    )
+    assert "INSERT INTO risk.opportunity_condition_notices" not in queries
+    assert "outbox" not in queries
+
+
+@pytest.mark.asyncio
+async def test_changed_conditions_write_only_actor_notice_with_before_after():
+    repo = repository()
+    conn = AsyncMock()
+    prior = result()
+    conn.fetchrow.return_value = {
+        "condition_fingerprint": repo.condition_fingerprint(prior),
+        "result": prior,
+        "as_of": NOW,
+    }
+    conn.fetchval.side_effect = ["snapshot", "notice"]
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(hours=1),
+    }
+    conn.fetchrow.side_effect = [
+        monitor,
+        {
+            "condition_fingerprint": repo.condition_fingerprint(prior),
+            "result": prior,
+            "as_of": NOW,
+        },
+        {"notice_count": 0, "last_notice": None},
+    ]
+    output = await repo.record_monitor_result(
+        conn, monitor, result("POSITION_REVIEW"), NOW + timedelta(minutes=15)
+    )
+    assert output["notice"] is True
+    notice_call = [
+        call
+        for call in conn.fetchval.await_args_list
+        if "INSERT INTO risk.opportunity_condition_notices" in call.args[0]
+    ][0]
+    assert "tenant" in notice_call.args and "actor" in notice_call.args
+    assert "CRITICAL" in notice_call.args
+
+
+@pytest.mark.asyncio
+async def test_disabled_or_other_actors_notice_cannot_be_acknowledged():
+    repo = repository()
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None
+    from backend.errors import NotFoundError
+
+    with pytest.raises(NotFoundError):
+        await repo.ack_notice(conn, "tenant", "actor", "notice", NOW)
+    sql = conn.fetchrow.await_args.args[0]
+    assert "tenant_id=$1" in sql and "user_id=$2" in sql
+
+
+def test_same_transition_after_recovery_is_a_distinct_episode():
+    repo = repository()
+    prior_a = {"id": "episode-one", "result": result("WAIT")}
+    prior_b = {"id": "episode-two", "result": result("WAIT")}
+    assert repo.transition_fingerprint(
+        prior_a, result("ENTRY_CANDIDATE")
+    ) != repo.transition_fingerprint(prior_b, result("ENTRY_CANDIDATE"))
+    assert repo.transition_fingerprint(
+        prior_a, result("ENTRY_CANDIDATE")
+    ) == repo.transition_fingerprint(prior_a, result("ENTRY_CANDIDATE"))
+
+
+@pytest.mark.asyncio
+async def test_silence_uses_previous_notice_time_not_last_poll():
+    repo = repository()
+    conn = AsyncMock()
+    prior = {
+        "id": "prior",
+        "condition_fingerprint": repo.condition_fingerprint(result()),
+        "result": result(),
+        "as_of": NOW - timedelta(minutes=1),
+    }
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    conn.fetchrow.side_effect = [
+        monitor,
+        prior,
+        {"notice_count": 0, "last_notice": NOW - timedelta(hours=2)},
+    ]
+    conn.fetchval.side_effect = ["snapshot", "notice"]
+    assert (
+        await repo.record_monitor_result(conn, monitor, result("POSITION_REVIEW"), NOW)
+    )["notice"] is True
+
+
+@pytest.mark.asyncio
+async def test_scoped_notice_lookup_matches_null_identity_and_market_exactly():
+    repo = repository()
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    await repo.list_notices(conn, "tenant", "actor", index_id="hs300", exact_scope=True)
+    sql = conn.fetch.await_args.args[0]
+    assert "IS NOT DISTINCT FROM" in sql and "IS NULL OR m." not in sql
+    assert conn.fetch.await_args.args[-2:] == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_notice_summary_uses_user_visible_chinese_state_labels():
+    repo = repository()
+    conn = AsyncMock()
+    prior = {
+        "id": "prior",
+        "condition_fingerprint": repo.condition_fingerprint(result()),
+        "result": result(),
+        "as_of": NOW,
+    }
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW,
+    }
+    conn.fetchrow.side_effect = [
+        monitor,
+        prior,
+        {"notice_count": 0, "last_notice": None},
+    ]
+    conn.fetchval.side_effect = ["snapshot", "notice"]
+    await repo.record_monitor_result(conn, monitor, result("HOLD_REVIEW"), NOW)
+    call = [
+        item
+        for item in conn.fetchval.await_args_list
+        if "INSERT INTO risk.opportunity_condition_notices" in item.args[0]
+    ][0]
+    summary = call.args[8]
+    assert "等待" in summary and "持仓观察" in summary and "HOLD_REVIEW" not in summary
