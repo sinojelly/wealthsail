@@ -108,6 +108,24 @@ async def _wait_or_stop(stop_event, seconds):
         pass
 
 
+async def sync_opportunity_market(pool, now, *, force=False):
+    from backend.jobs.opportunity_market import sync_opportunity_market as sync
+
+    return await sync(pool, now, force=force)
+
+
+async def run_opportunity_market_service(pool, *, stop_event):
+    from backend.jobs.opportunity_market import run_opportunity_market_service as run
+
+    await run(pool, stop_event=stop_event)
+
+
+async def run_opportunity_monitor_service(pool, *, stop_event):
+    from backend.jobs.opportunity_monitors import run_opportunity_monitor_service as run
+
+    await run(pool, stop_event=stop_event)
+
+
 async def _collect(function, pool, now):
     try:
         result = await function(pool, now)
@@ -201,6 +219,23 @@ async def _serve(pool):
             )
 
     official = asyncio.create_task(_official(), name="wealthsail-macro-official")
+
+    async def independent(run):
+        try:
+            await run(pool, stop_event=stop_event)
+        except Exception as exc:  # noqa: BLE001 -- independent evidence/monitor failures
+            logger.warning(
+                "opportunity_service_failed error_class=%s", type(exc).__name__
+            )
+
+    market = asyncio.create_task(
+        independent(run_opportunity_market_service),
+        name="wealthsail-opportunity-market",
+    )
+    monitor = asyncio.create_task(
+        independent(run_opportunity_monitor_service),
+        name="wealthsail-opportunity-monitor",
+    )
     stopping = asyncio.create_task(stop_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -209,10 +244,12 @@ async def _serve(pool):
         if service in done:
             await service
     finally:
-        for task in (service, official, stopping):
+        for task in (service, official, market, monitor, stopping):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(service, official, stopping, return_exceptions=True)
+        await asyncio.gather(
+            service, official, market, monitor, stopping, return_exceptions=True
+        )
         for sig in installed:
             loop.remove_signal_handler(sig)
 
@@ -241,6 +278,15 @@ async def main(argv=None) -> int:
                 )
             except Exception as exc:  # noqa: BLE001 -- keep existing history status and exit contract
                 result["officialEvidence"] = {
+                    "status": "UNAVAILABLE",
+                    "errorClass": type(exc).__name__,
+                }
+            try:
+                result["marketEvidence"] = await sync_opportunity_market(
+                    pool, _now_shanghai(), force=True
+                )
+            except Exception as exc:  # noqa: BLE001 -- public market collection owns its status
+                result["marketEvidence"] = {
                     "status": "UNAVAILABLE",
                     "errorClass": type(exc).__name__,
                 }

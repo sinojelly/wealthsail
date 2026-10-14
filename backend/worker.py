@@ -41,6 +41,7 @@ logger = logging.getLogger("wealthsail.worker")
 async def _execute_session(pool, settings, session: str, now: datetime) -> None:
     if session == "INVESTMENT_RESEARCH_REFRESH":
         from backend.jobs.investment_research import sync_research
+
         stats = await sync_research(pool, settings, now)
         logger.info("investment_research_refresh %s", stats)
         return
@@ -174,7 +175,31 @@ async def _macro_evidence_loop(pool) -> None:
 
         await run_macro_evidence_service(pool)
     except Exception as exc:  # noqa: BLE001 -- keep existing report and history loops alive
-        logger.warning("macro_official_service_failed error_class=%s", type(exc).__name__)
+        logger.warning(
+            "macro_official_service_failed error_class=%s", type(exc).__name__
+        )
+
+
+async def _opportunity_market_loop(pool) -> None:
+    try:
+        from backend.jobs.opportunity_market import run_opportunity_market_service
+
+        await run_opportunity_market_service(pool)
+    except Exception as exc:  # noqa: BLE001 -- isolate public evidence failures
+        logger.warning(
+            "opportunity_market_service_failed error_class=%s", type(exc).__name__
+        )
+
+
+async def _opportunity_monitor_loop(pool) -> None:
+    try:
+        from backend.jobs.opportunity_monitors import run_opportunity_monitor_service
+
+        await run_opportunity_monitor_service(pool)
+    except Exception as exc:  # noqa: BLE001 -- opt-in private notices own their lifecycle
+        logger.warning(
+            "opportunity_monitor_service_failed error_class=%s", type(exc).__name__
+        )
 
 
 async def main() -> None:
@@ -253,6 +278,12 @@ async def main() -> None:
     macro_evidence_task = asyncio.create_task(
         _macro_evidence_loop(pool), name="wealthsail-macro-official"
     )
+    opportunity_market_task = asyncio.create_task(
+        _opportunity_market_loop(pool), name="wealthsail-opportunity-market"
+    )
+    opportunity_monitor_task = asyncio.create_task(
+        _opportunity_monitor_loop(pool), name="wealthsail-opportunity-monitor"
+    )
 
     stop_event = asyncio.Event()
 
@@ -273,11 +304,19 @@ async def main() -> None:
         logger.info("shutting down worker…")
         macro_startup_task.cancel()
         macro_evidence_task.cancel()
+        opportunity_market_task.cancel()
+        opportunity_monitor_task.cancel()
         recovery_task.cancel()
         await scheduler.stop()
         await consumer.stop()
         await data_tasks.stop()
-        for task in (macro_startup_task, macro_evidence_task, recovery_task):
+        for task in (
+            macro_startup_task,
+            macro_evidence_task,
+            opportunity_market_task,
+            opportunity_monitor_task,
+            recovery_task,
+        ):
             try:
                 await task
             except asyncio.CancelledError:
