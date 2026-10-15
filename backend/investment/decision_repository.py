@@ -586,17 +586,57 @@ def condition_fingerprint(result):
     return semantic_hash(conditions(result))
 
 
+def _business_family(item):
+    identity = item["id"]
+    for direction in ("_UP", "_DOWN"):
+        if identity.endswith(":BENCHMARK_CROSSING" + direction):
+            return identity[: -len(direction)]
+    return identity
+
+
+def _verified_business_memory(result, version):
+    current = research_conditions(result)
+    if current["methodVersion"] != version:
+        return {}
+    saved = result.get("verifiedBusinessBaseline")
+    items = (
+        saved.get("items", [])
+        if isinstance(saved, dict) and saved.get("methodVersion") == version
+        else current.get("importantItems", [])
+    )
+    # Apply the same compact whitelist to durable memory as current facts.
+    sanitized = research_conditions(
+        {"researchConditions": {"methodVersion": version, "importantItems": items}}
+    )
+    return {
+        _business_family(item): item
+        for item in sanitized.get("importantItems", [])
+        if item.get("factVerification") == "VERIFIED"
+    }
+
+
+def _next_verified_business_baseline(before, after):
+    current = research_conditions(after)
+    version = current["methodVersion"]
+    memory = _verified_business_memory(before, version)
+    for item in current.get("importantItems", []):
+        if item.get("factVerification") == "VERIFIED":
+            memory[_business_family(item)] = item
+    return {
+        "methodVersion": version,
+        "items": [memory[key] for key in sorted(memory)],
+    }
+
+
 def has_verified_business_change(before, after):
     """Coverage loss or recovery alone cannot certify a new investment event."""
     current = research_conditions(after)
     if current["methodVersion"] != "research-board-v2":
         return True  # Preserve pre-v2 compatibility until its silent upgrade.
-    previous = {
-        item["id"]: item
-        for item in research_conditions(before).get("importantItems", [])
-    }
+    previous = _verified_business_memory(before, current["methodVersion"])
     return any(
-        item.get("factVerification") == "VERIFIED" and item != previous.get(item["id"])
+        item.get("factVerification") == "VERIFIED"
+        and item != previous.get(_business_family(item))
         for item in current.get("importantItems", [])
     )
 
@@ -645,6 +685,10 @@ async def record_monitor_result(conn, monitor, result, now):
         "portfolio": result["portfolio"],
         "researchConditions": research_conditions(result),
     }
+    if safe["researchConditions"]["methodVersion"] == "research-board-v2":
+        safe["verifiedBusinessBaseline"] = _next_verified_business_baseline(
+            decode(prior["result"]) if prior else {}, result
+        )
     snapshot = await conn.fetchval(
         """INSERT INTO risk.opportunity_decision_snapshots(tenant_id,user_id,monitor_id,enabled_at,as_of,method_version,input_hash,condition_fingerprint,result)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT DO NOTHING RETURNING id""",
