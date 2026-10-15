@@ -380,3 +380,152 @@ async def test_controlled_validation_writer_rejects_inputs_not_yet_available():
         await repo.save_validation(
             AsyncMock(), "fund", data, report, data["points"][300]["decisionAt"]
         )
+
+
+@pytest.mark.parametrize(
+    "held,portfolio,expected",
+    [
+        (None, {}, ("UNKNOWN", "UNKNOWN")),
+        (True, {"state": "UNKNOWN", "budgetViolation": False}, ("HELD", "UNKNOWN")),
+        (
+            True,
+            {"state": "READY", "budgetState": "UNKNOWN", "budgetViolation": False},
+            ("HELD", "UNKNOWN"),
+        ),
+        (
+            True,
+            {"state": "READY", "budgetState": "PASS", "budgetViolation": False},
+            ("HELD", "CHECKED"),
+        ),
+        (
+            False,
+            {"state": "READY", "budgetState": "PASS", "budgetViolation": False},
+            ("NOT_HELD", "CHECKED"),
+        ),
+        (
+            True,
+            {"state": "READY", "budgetState": "BLOCKED", "budgetViolation": True},
+            ("HELD", "BREACH"),
+        ),
+        (
+            True,
+            {"state": "UNKNOWN", "budgetState": "BLOCKED", "budgetViolation": True},
+            ("HELD", "UNKNOWN"),
+        ),
+        (True, {"state": "READY", "budgetState": "PASS"}, ("HELD", "UNKNOWN")),
+    ],
+)
+def test_assessment_keeps_known_holding_separate_from_unknown_risk(
+    held, portfolio, expected
+):
+    result = engine().evaluate(
+        gates(),
+        held=held,
+        portfolio=portfolio,
+        direction_model={"researchState": "PRIORITY_RESEARCH"},
+    )
+    assert result["assessment"] == {
+        "holdingState": expected[0],
+        "riskState": expected[1],
+        "marketResearchState": "PRIORITY_RESEARCH",
+    }
+
+
+def test_legacy_budget_default_and_research_clue_cannot_certify_personal_risk_or_entry():
+    changed = gates()
+    changed["validation"]["state"] = "UNKNOWN"
+    result = engine().evaluate(
+        changed, held=True, direction_model={"researchState": "PRIORITY_RESEARCH"}
+    )
+    assert result["state"] == "HOLD_REVIEW"
+    assert result["marketState"] == "WAIT"
+    assert result["assessment"]["riskState"] == "UNKNOWN"
+
+
+def test_personal_actions_only_navigate_to_real_existing_pages():
+    result = engine().evaluate(gates(), held=None)
+    actions = result["actions"]
+    assert {a["type"]: a["href"] for a in actions} == {
+        "VIEW_HOLDINGS": "/dashboard?scope=MINE",
+        "UPDATE_HOLDINGS": "/onboarding",
+        "VIEW_POLICY": "/risk-policy",
+    }
+    assert all(
+        set(a) == {"type", "label", "target", "href", "enabled", "disabledReason"}
+        for a in actions
+    )
+    assert all(a["enabled"] is True and a["disabledReason"] is None for a in actions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        (
+            {
+                "state": "PARTIAL",
+                "qualificationState": "READY",
+                "missingRequiredEvidence": [],
+                "counterFactors": [],
+                "failedConditions": [],
+            },
+            "PASS",
+        ),
+        ({"state": "READY", "missingEvidence": [], "counterFactors": []}, "UNKNOWN"),
+        (
+            {
+                "qualificationState": "READY",
+                "missingRequiredEvidence": ["INDEX_EARNINGS"],
+                "counterFactors": [],
+            },
+            "UNKNOWN",
+        ),
+        (
+            {
+                "qualificationState": "READY",
+                "missingRequiredEvidence": [],
+                "counterFactors": [{"label": "counter"}],
+            },
+            "UNKNOWN",
+        ),
+        (
+            {
+                "qualificationState": "INCOMPLETE",
+                "missingRequiredEvidence": [],
+                "researchState": "PRIORITY_RESEARCH",
+            },
+            "UNKNOWN",
+        ),
+        (
+            {
+                "qualificationState": "BLOCKED",
+                "missingRequiredEvidence": [],
+                "failedConditions": [{"id": "INDEX_TREND"}],
+            },
+            "BLOCKED",
+        ),
+    ],
+)
+async def test_macro_gate_uses_full_qualification_not_limited_research_state(
+    monkeypatch, model, expected
+):
+    from unittest.mock import AsyncMock
+    from backend.investment import decision_repository as repo
+
+    monkeypatch.setattr(repo, "resolve_instrument", AsyncMock(return_value=None))
+    monkeypatch.setattr(repo, "mine_portfolio", AsyncMock(return_value=([], [], None)))
+    monkeypatch.setattr(repo, "list_notices", AsyncMock(return_value=[]))
+    output = await engine().decision_context(
+        object(),
+        "tenant",
+        "actor",
+        direction_id=None,
+        index_id=None,
+        instrument_id=None,
+        direction_model=model,
+    )
+    assert (
+        next(g["state"] for g in output["decision"]["gates"] if g["id"] == "macro")
+        == expected
+    )
+    assert output["decision"]["state"] == "WAIT"

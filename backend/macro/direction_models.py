@@ -2,7 +2,18 @@
 
 from backend.macro.market_repository import CATALOG, _number
 
-VERSION = "opportunity-radar-v1"
+VERSION = "opportunity-radar-v2"
+EVIDENCE_LABELS = {
+    **{code: row[0] for code, row in CATALOG.items()},
+    "PMI": "制造业PMI",
+    "INDEX_TREND": "当前指数趋势",
+    "INDEX_VALUATION": "当前指数估值",
+    "INDEX_EARNINGS": "企业盈利证据",
+    "USD_FX": "美元/汇率事实",
+    "YIELD_CURVE_DURATION": "收益率曲线/久期",
+    "CREDIT_SPREAD_DEFAULT": "信用利差/违约事实",
+    "LOCAL_ASSET_EVIDENCE": "当地资产基本面/价格/风险",
+}
 PROFILES = {
     "a-share": (
         [
@@ -14,7 +25,7 @@ PROFILES = {
             "INDEX_VALUATION",
             "INDEX_EARNINGS",
         ],
-        ["人民币融资条件", "企业盈利/订单", "指数估值与趋势"],
+        ["融资结构与需求", "企业订单", "价格反应"],
         "A股",
     ),
     "hk": (
@@ -26,7 +37,7 @@ PROFILES = {
             "INDEX_VALUATION",
             "INDEX_EARNINGS",
         ],
-        ["美元/汇率", "当地企业盈利", "跨境资金与估值"],
+        ["美元/汇率", "跨境资金", "价格反应"],
         "港股",
     ),
     "us": (
@@ -37,11 +48,15 @@ PROFILES = {
             "INDEX_VALUATION",
             "INDEX_EARNINGS",
         ],
-        ["美国本地增长/通胀", "企业盈利", "美元/汇率"],
+        ["美国本地增长/通胀", "美元/汇率", "价格反应"],
         "美股",
     ),
-    "bond": (["CN_T10", "DR007"], ["收益率曲线/久期", "信用利差/违约风险"], "债券"),
-    "gold": (["US_T10_REAL"], ["美元/汇率", "全球事件/黄金估值"], "黄金"),
+    "bond": (
+        ["CN_T10", "DR007", "YIELD_CURVE_DURATION"],
+        ["通胀预期", "价格反应"],
+        "债券",
+    ),
+    "gold": (["US_T10_REAL", "USD_FX"], ["全球事件/黄金估值", "价格反应"], "黄金"),
 }
 
 
@@ -50,9 +65,14 @@ def profile(direction):
         direction.get("market_id", direction.get("marketId"))
         or direction.get("id", "").split(":")[0]
     )
-    return PROFILES.get(
-        market, ([], ["当地资产基本面/价格/风险"], direction.get("label", "当前方向"))
+    required, checks, label = PROFILES.get(
+        market,
+        (["LOCAL_ASSET_EVIDENCE"], ["价格反应"], direction.get("label", "当前方向")),
     )
+    required = list(required)
+    if direction.get("id") == "bond:credit":
+        required.append("CREDIT_SPREAD_DEFAULT")
+    return required, list(checks), label
 
 
 def _usable(item):
@@ -85,13 +105,15 @@ def _trend_usable(evidence):
 def direction_model(direction, context, series, market_evidence):
     required, checks, market_label = profile(direction)
     items = {i["code"]: i for i in context.get("items", []) + series}
-    supports, counters, missing = [], [], list(checks)
+    supports, counters, failed = [], [], []
     present = set()
     for code in required:
+        # These judgments have no verified adapter yet; an arbitrary READY scalar
+        # cannot stand in for a curve, currency exposure or local fundamentals.
+        if code not in CATALOG and code != "PMI":
+            continue
         item = items.get(code)
         if not item or not _usable(item):
-            if not code.startswith("INDEX_"):
-                missing.append((item or {}).get("label") or code)
             continue
         present.add(code)
         changes = item.get("changes", {})
@@ -151,49 +173,84 @@ def direction_model(direction, context, series, market_evidence):
         ("INDEX_VALUATION", "valuation"),
         ("INDEX_EARNINGS", "earnings"),
     ):
-        if code not in required:
+        if code not in required and field != "trend":
             continue
-        if market_evidence and all(
-            _trend_usable(e)
-            if field == "trend"
-            else e.get(field, {}).get("state") == "READY"
+        available = [
+            e
             for e in market_evidence
-        ):
+            if (
+                _trend_usable(e)
+                if field == "trend"
+                else e.get(field, {}).get("state") == "READY"
+            )
+        ]
+        if market_evidence and len(available) == len(market_evidence):
             present.add(code)
-            if field == "trend":
-                above = all(
-                    _number(e["trend"]["distanceMA200"]) > 0
-                    and _number(e["trend"]["momentum63"]) > 0
-                    for e in market_evidence
-                )
-                (supports if above else counters).append(
+        if field == "trend" and available:
+            positive, unmet = [], []
+            for evidence in available:
+                (
+                    positive
+                    if _number(evidence["trend"]["distanceMA200"]) > 0
+                    and _number(evidence["trend"]["momentum63"]) > 0
+                    else unmet
+                ).append(evidence["indexId"])
+            if positive:
+                supports.append(
                     {
                         "label": "指数长期趋势",
-                        "summary": "当前已核查指数均高于MA200且63期动量为正；估值和产品质量仍需分别核验。"
-                        if above
-                        else "当前已核查指数尚未全部同时满足高于MA200和63期正动量，需继续核查趋势条件。",
-                        "evidenceIds": [e["indexId"] for e in market_evidence],
+                        "summary": "当前以下已核查指数高于MA200且63期动量为正；估值和产品质量仍需分别核验。",
+                        "evidenceIds": positive,
                         "state": "OBSERVED",
                     }
                 )
-        else:
-            missing.append(
-                {
-                    "trend": "当前指数趋势",
-                    "valuation": "当前指数估值",
-                    "earnings": "企业盈利证据",
-                }[field]
-            )
-    missing = list(dict.fromkeys(missing))
-    if "INDEX_TREND" in present and "INDEX_VALUATION" in present:
-        missing = [gap for gap in missing if gap != "指数估值与趋势"]
+            if unmet:
+                reason = "当前尚未同时满足高于MA200和63期正动量。"
+                failed.append(
+                    {
+                        "id": "INDEX_TREND",
+                        "label": EVIDENCE_LABELS["INDEX_TREND"],
+                        "reason": reason,
+                        "evidenceIds": unmet,
+                    }
+                )
+                counters.append(
+                    {
+                        "label": "指数长期趋势",
+                        "summary": reason,
+                        "evidenceIds": unmet,
+                        "state": "OBSERVED",
+                    }
+                )
+    missing = [code for code in required if code not in present]
+    qualification = (
+        "INCOMPLETE" if missing else "BLOCKED" if counters or failed else "READY"
+    )
+    research = (
+        "RISK_OBSERVATION"
+        if any(row["label"] != "指数长期趋势" for row in counters)
+        else "PRIORITY_RESEARCH"
+        if any(row["label"] == "指数长期趋势" for row in supports)
+        else "WAIT_CONDITIONS"
+        if present or failed
+        else "INSUFFICIENT"
+    )
     return {
         "methodVersion": VERSION,
-        "state": "PARTIAL" if present else "UNKNOWN",
+        "state": "READY"
+        if not missing
+        else "PARTIAL"
+        if present or supports or counters
+        else "UNKNOWN",
         "supports": supports,
         "counterFactors": counters,
         "watchFor": checks,
+        "recommendedChecks": checks,
         "requiredEvidence": required,
-        "missingEvidence": missing,
+        "missingRequiredEvidence": missing,
+        "missingEvidence": [EVIDENCE_LABELS[code] for code in missing],
+        "failedConditions": failed,
+        "researchState": research,
+        "qualificationState": qualification,
         "label": market_label,
     }

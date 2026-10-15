@@ -60,7 +60,9 @@ def semantic_hash(value):
     ).hexdigest()
 
 
-def evaluate(gates, *, held, budget_violation=False):
+def evaluate(
+    gates, *, held, budget_violation=False, portfolio=None, direction_model=None
+):
     rows = []
     for key, label in LABELS.items():
         gate = dict(gates.get(key) or {})
@@ -113,6 +115,28 @@ def evaluate(gates, *, held, budget_violation=False):
         "HOLD_REVIEW": "已持有该标的，继续观察并核查条件；这不是自动持有指令。",
         "POSITION_REVIEW": "已确认个人预算超限，优先复核持仓风险；这不是自动减仓指令。",
     }[state]
+    portfolio = portfolio or {}
+    research_state = (direction_model or {}).get("researchState")
+    if research_state not in {
+        "PRIORITY_RESEARCH",
+        "WAIT_CONDITIONS",
+        "RISK_OBSERVATION",
+        "INSUFFICIENT",
+    }:
+        research_state = "INSUFFICIENT"
+    risk_state = "UNKNOWN"
+    if portfolio.get("state") == "READY" and held is not None:
+        if (
+            held is True
+            and portfolio.get("budgetState") == "BLOCKED"
+            and portfolio.get("budgetViolation") is True
+        ):
+            risk_state = "BREACH"
+        elif (
+            portfolio.get("budgetState") == "PASS"
+            and portfolio.get("budgetViolation") is False
+        ):
+            risk_state = "CHECKED"
     return {
         "state": state,
         "marketState": market_state,
@@ -125,6 +149,30 @@ def evaluate(gates, *, held, budget_violation=False):
             if row["state"] != "PASS"
         ],
         "methodVersion": VERSION,
+        "assessment": {
+            "holdingState": "HELD"
+            if held is True
+            else "NOT_HELD"
+            if held is False
+            else "UNKNOWN",
+            "riskState": risk_state,
+            "marketResearchState": research_state,
+        },
+        "actions": [
+            {
+                "type": kind,
+                "label": label,
+                "target": target,
+                "href": href,
+                "enabled": True,
+                "disabledReason": None,
+            }
+            for kind, label, target, href in (
+                ("VIEW_HOLDINGS", "查看我的持仓", "HOLDINGS", "/dashboard?scope=MINE"),
+                ("VIEW_POLICY", "查看风险政策", "POLICY", "/risk-policy"),
+                ("UPDATE_HOLDINGS", "补充持仓数据", "HOLDINGS_IMPORT", "/onboarding"),
+            )
+        ],
     }
 
 
@@ -573,9 +621,14 @@ async def decision_context(
         "macro": {
             "state": "PASS"
             if direction_model
-            and direction_model.get("state") == "READY"
-            and not direction_model.get("missingEvidence")
+            and direction_model.get("qualificationState") == "READY"
+            and direction_model.get("missingRequiredEvidence") == []
             and not direction_model.get("counterFactors")
+            and not direction_model.get("failedConditions")
+            else "BLOCKED"
+            if direction_model
+            and direction_model.get("qualificationState") == "BLOCKED"
+            and direction_model.get("missingRequiredEvidence") == []
             else "UNKNOWN",
             "reason": "宏观、事件及方向必要证据需完整核查。",
         },
@@ -603,6 +656,8 @@ async def decision_context(
         gates,
         held=portfolio["heldSelected"],
         budget_violation=portfolio["budgetViolation"],
+        portfolio=portfolio,
+        direction_model=direction_model,
     )
     decision["validation"] = validation
     notices = await repository.list_notices(
