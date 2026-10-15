@@ -496,6 +496,10 @@ async def fetch_opportunity_series(now, permissions=None):
                 results[key] = {"status": "SUCCESS", "observations": len(rows)}
             except Exception as exc:  # noqa: BLE001 -- source failures are independent
                 results[key] = {"status": "FAILED", "errorClass": type(exc).__name__}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    code = exc.response.status_code
+                    if type(code) is int and 100 <= code <= 599:
+                        results[key]["httpStatus"] = code
                 logger.warning(
                     "opportunity_source_failed source=%s error_class=%s",
                     key,

@@ -505,6 +505,12 @@ def research_conditions(result):
             )
             if isinstance(row.get("kind"), str):
                 item["kind"] = row["kind"]
+            if raw.get("methodVersion") == "research-board-v2":
+                item["factVerification"] = (
+                    "VERIFIED"
+                    if row.get("factVerification") == "VERIFIED"
+                    else "UNKNOWN"
+                )
             important[semantic_hash(item)] = item
         return {
             "methodVersion": raw.get("methodVersion")
@@ -580,6 +586,21 @@ def condition_fingerprint(result):
     return semantic_hash(conditions(result))
 
 
+def has_verified_business_change(before, after):
+    """Coverage loss or recovery alone cannot certify a new investment event."""
+    current = research_conditions(after)
+    if current["methodVersion"] != "research-board-v2":
+        return True  # Preserve pre-v2 compatibility until its silent upgrade.
+    previous = {
+        item["id"]: item
+        for item in research_conditions(before).get("importantItems", [])
+    }
+    return any(
+        item.get("factVerification") == "VERIFIED" and item != previous.get(item["id"])
+        for item in current.get("importantItems", [])
+    )
+
+
 def transition_fingerprint(prior, result):
     return semantic_hash(
         {
@@ -648,6 +669,12 @@ async def record_monitor_result(conn, monitor, result, now):
         return {"baseline": True, "notice": False, "reason": "SEMANTIC_VERSION_CHANGED"}
     if prior["condition_fingerprint"] == fingerprint or snapshot is None:
         return {"baseline": False, "notice": False}
+    if not has_verified_business_change(decode(prior["result"]), result):
+        return {
+            "baseline": False,
+            "notice": False,
+            "reason": "NO_VERIFIED_BUSINESS_CHANGE",
+        }
     budget, silence = (
         result["portfolio"].get("noticeBudget"),
         result["portfolio"].get("silenceMinutes"),
