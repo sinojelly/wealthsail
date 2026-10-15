@@ -32,8 +32,8 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 79
-    assert migrations[-1].path.name == "079_opportunity_decisions.sql"
+    assert versions[-1] == 80
+    assert migrations[-1].path.name == "080_index_research_sources.sql"
 
 
 def test_057_extends_corporate_actions_without_widening_runtime_writes() -> None:
@@ -285,9 +285,15 @@ def test_061_limits_worker_to_the_controlled_fund_profile_function() -> None:
         "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON reference.fund_profiles",
     ):
         assert contract in migration
-    assert "GRANT INSERT ON reference.fund_profiles TO wealthsail_worker" not in migration
-    assert "GRANT UPDATE ON reference.fund_profiles TO wealthsail_worker" not in migration
-    assert "GRANT DELETE ON reference.fund_profiles TO wealthsail_worker" not in migration
+    assert (
+        "GRANT INSERT ON reference.fund_profiles TO wealthsail_worker" not in migration
+    )
+    assert (
+        "GRANT UPDATE ON reference.fund_profiles TO wealthsail_worker" not in migration
+    )
+    assert (
+        "GRANT DELETE ON reference.fund_profiles TO wealthsail_worker" not in migration
+    )
 
 
 def test_062_registers_akshare_fund_dividends_without_direct_runtime_writes() -> None:
@@ -329,7 +335,10 @@ def test_063_seeds_default_fund_cutoffs_and_preserves_override_boundary() -> Non
         "dailyPurchaseLimit",
     ):
         assert contract in migration
-    assert "GRANT INSERT ON reference.instrument_cutoff_rules TO wealthsail_worker" not in migration
+    assert (
+        "GRANT INSERT ON reference.instrument_cutoff_rules TO wealthsail_worker"
+        not in migration
+    )
 
 
 def test_064_adds_a_least_privilege_fund_nav_range_cache() -> None:
@@ -355,7 +364,10 @@ def test_064_adds_a_least_privilege_fund_nav_range_cache() -> None:
         "GRANT EXECUTE ON FUNCTION reference.upsert_fund_nav_range",
     ):
         assert contract in migration
-    assert "GRANT INSERT ON reference.fund_nav_ranges TO wealthsail_worker" not in migration
+    assert (
+        "GRANT INSERT ON reference.fund_nav_ranges TO wealthsail_worker"
+        not in migration
+    )
 
 
 def test_readback_requires_akshare_fund_dividend_source_and_event_type() -> None:

@@ -429,6 +429,8 @@ async def search(conn, keyword):
 
 
 async def analysis(conn, kind, subject_id):
+    from backend.market import index_policy
+
     row = await conn.fetchrow(
         """
         SELECT result,as_of,input_hash,source_uri,points,retrieved_at,series_kind
@@ -446,11 +448,24 @@ async def analysis(conn, kind, subject_id):
             "indicators": {},
             "reasons": [],
             "points": [],
+            **(
+                {
+                    "indexCollection": await index_policy.read_collection(
+                        conn, subject_id, now_shanghai()
+                    )
+                }
+                if kind == "index"
+                else {}
+            ),
         }
     result = row["result"]
     if isinstance(result, str):
         result = json.loads(result)
     result = deepcopy(result)
+    official = (
+        kind == "index"
+        and (result.get("collectionPolicy") or {}).get("provider") == "CSINDEX"
+    )
     if result.get("score") is not None or result.get("performance"):
         now = now_shanghai()
         cutoff = published_day(now.date(), result.get("publicationHour"), now)
@@ -465,8 +480,15 @@ async def analysis(conn, kind, subject_id):
             if stored_points
             else row["as_of"]
         )
-        expected = await expected_trading_day(
-            conn, result.get("calendarMarket") or result.get("market"), cutoff, start
+        expected = (
+            await index_policy.expected_session(conn, now, start)
+            if official
+            else await expected_trading_day(
+                conn,
+                result.get("calendarMarket") or result.get("market"),
+                cutoff,
+                start,
+            )
         )
         if expected is None or row["as_of"] != expected:
             quality = "STALE" if expected and row["as_of"] < expected else "UNVERIFIED"
@@ -475,6 +497,7 @@ async def analysis(conn, kind, subject_id):
                 "score": None,
                 "state": quality,
                 "dataQuality": quality,
+                **({"trendQuality": quality} if official else {}),
                 **(
                     {
                         "performance": {
@@ -520,7 +543,7 @@ async def analysis(conn, kind, subject_id):
             )
         else:
             governance = await conn.fetchrow(
-                """SELECT verified_at,source_uri,publish_hour
+                """SELECT verified_at,source_uri,publish_hour,code,market,provider_symbol,collection_policy
               FROM reference.research_indices WHERE id=$1""",
                 subject_id,
             )
@@ -530,10 +553,51 @@ async def analysis(conn, kind, subject_id):
                 and governance.get("source_uri") == row["source_uri"]
                 and governance.get("publish_hour") == result.get("publicationHour")
             )
+            if official:
+                trusted = bool(
+                    governance
+                    and index_policy.trusted(governance, now_shanghai())
+                    and index_policy.config_hash(governance)
+                    == result.get("configurationHash")
+                    and governance.get("source_uri") == row["source_uri"]
+                )
         if not trusted and result.get("dataQuality") != "STALE":
             result.update(score=None, state="UNVERIFIED", dataQuality="UNVERIFIED")
             if result.get("performance"):
                 result["performance"].update(eligible=False, state="UNVERIFIED")
+        if official:
+            collection = await index_policy.read_collection(
+                conn, subject_id, now_shanghai()
+            )
+            if (
+                collection
+                and collection.get("lastResultStatus") == "FAILED"
+                and datetime.fromisoformat(collection["lastResultAt"])
+                >= row["retrieved_at"]
+            ):
+                result.update(score=None, state="UNVERIFIED", dataQuality="UNVERIFIED")
+            if result.get("dataQuality") in {"STALE", "UNVERIFIED"}:
+                result["trendQuality"] = result["dataQuality"]
+                for evidence in (
+                    result.get("officialPE"),
+                    (result.get("valuation") or {}).get("pe"),
+                ):
+                    if evidence:
+                        evidence.update(
+                            state=result.get("dataQuality", "UNVERIFIED"),
+                            percentile=None,
+                        )
+            points = row.get("points", [])
+            return {
+                **result,
+                "asOf": _iso(row["as_of"]),
+                "inputHash": row["input_hash"],
+                "source": row["source_uri"],
+                "points": json.loads(points) if isinstance(points, str) else points,
+                "retrievedAt": _iso(row.get("retrieved_at")),
+                "seriesKind": row.get("series_kind"),
+                "indexCollection": collection,
+            }
         facts = result.get("fundamentals") or {}
         costs = deepcopy(facts.get("costs") or {"state": "UNAVAILABLE"})
         valuation = deepcopy(facts.get("valuation") or {"state": "UNAVAILABLE"})
@@ -601,7 +665,7 @@ async def enqueue_refresh(conn, tenant_id, body):
         row = await conn.fetchrow(
             """
           UPDATE workflow.job_runs SET status='PENDING',available_at=now(),next_retry_at=NULL,
-            attempt_count=0,started_at=NULL,finished_at=NULL,error_class=NULL,lease_token=NULL,
+            attempt_count=0,started_at=now(),finished_at=NULL,error_class=NULL,lease_token=NULL,
             lease_owner=NULL,lease_until=NULL
           WHERE tenant_id=$1 AND job_key=$2 AND (status='COMPLETED' OR (status='FAILED' AND next_retry_at IS NULL))
           RETURNING id

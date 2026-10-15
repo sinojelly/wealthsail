@@ -12,6 +12,55 @@ from backend.macro.opportunity import build_radar
 from backend.macro.research_board import build_research_board
 
 
+def _complete_trend_window(result, points):
+    window = result.get("trendWindow") or {}
+    if result.get("trendQuality") != "READY" or result.get("state") not in {
+        "CONFLICT",
+        "PARTIAL",
+        "INSUFFICIENT",
+        "READY",
+        "WEAK",
+        "MIXED",
+        "STRONG",
+        "NEUTRAL",
+    }:
+        return False
+    count = window.get("sampleCount")
+    start, end = (
+        market_repository._day(window.get("start")),
+        market_repository._day(window.get("end")),
+    )
+    if (
+        type(count) is not int
+        or count < 200
+        or start is None
+        or end is None
+        or start > end
+        or end != market_repository._day(result.get("asOf"))
+        or not points
+        or market_repository._day(points[-1].get("date")) != end
+    ):
+        return False
+    selected = [
+        point
+        for point in points
+        if (day := market_repository._day(point.get("date"))) is not None
+        and start <= day <= end
+    ]
+    days = [market_repository._day(point["date"]) for point in selected]
+    return (
+        len(days) == count
+        and days == sorted(set(days))
+        and days[0] == start
+        and days[-1] == end
+        and all(
+            market_repository._number(point.get("close")) is not None
+            and market_repository._number(point["close"]) > 0
+            for point in selected
+        )
+    )
+
+
 def market_evidence(index, result):
     number = market_repository._number
     indicators = result.get("indicators") or {}
@@ -22,8 +71,9 @@ def market_evidence(index, result):
         result.get("state") in {"STRONG", "MIXED", "NEUTRAL", "WEAK", "READY"}
         and result.get("dataQuality", "READY") == "READY"
     )
+    trend_usable = usable or _complete_trend_window(result, points)
     trend_ready = (
-        usable
+        trend_usable
         and ma is not None
         and ma > 0
         and momentum is not None
@@ -37,11 +87,23 @@ def market_evidence(index, result):
         for metric in ("pe", "pb")
     )
     if not usable or not value_ready:
+        pe = valuation.get("pe") or {}
+        partial_pe = (
+            valuation.get("state") == "PARTIAL"
+            and pe.get("state") in {"READY", "INSUFFICIENT"}
+            and bool(pe.get("points"))
+            and all(
+                number(point.get("value")) is not None and number(point["value"]) > 0
+                for point in pe["points"]
+            )
+        )
         valuation = {
             **valuation,
-            "state": "UNKNOWN" if usable else result.get("state", "UNKNOWN"),
+            "state": ("PARTIAL" if partial_pe else "UNKNOWN")
+            if trend_usable
+            else result.get("state", "UNKNOWN"),
         }
-    volatility = number(indicators.get("volatility20")) if usable else None
+    volatility = number(indicators.get("volatility20")) if trend_usable else None
     if volatility is not None and volatility < 0:
         volatility = None
     maximum, drawdown = None, None
@@ -66,6 +128,9 @@ def market_evidence(index, result):
         "state": "READY" if trend_ready else result.get("state", "NOT_COLLECTED"),
         "asOf": result.get("asOf"),
         "sourceUri": result.get("source"),
+        "collection": result.get("indexCollection"),
+        "historyQuality": result.get("dataQuality", "UNKNOWN"),
+        "trendWindow": result.get("trendWindow"),
         "valuation": valuation,
         "trend": {
             "state": "READY" if trend_ready else "UNKNOWN",

@@ -3,7 +3,8 @@
 Startup checks complete recent histories. Every day at 06:30 Asia/Shanghai the
 full five-year window is fetched; incomplete attempts retry an hour after they
 finish. --once always fetches and exits nonzero for PARTIAL/UNAVAILABLE results.
-No report, outbox, model or trading-calendar component is started here.
+Independent index research checks its exchange calendar. No report, outbox or
+model service is started here.
 """
 
 from __future__ import annotations
@@ -126,6 +127,12 @@ async def run_opportunity_monitor_service(pool, *, stop_event):
     await run(pool, stop_event=stop_event)
 
 
+async def run_index_research_service(pool, *, stop_event):
+    from backend.jobs.index_research import run_index_research_service as run
+
+    await run(pool, get_settings(), stop_event=stop_event)
+
+
 async def _collect(function, pool, now):
     try:
         result = await function(pool, now)
@@ -236,6 +243,9 @@ async def _serve(pool):
         independent(run_opportunity_monitor_service),
         name="wealthsail-opportunity-monitor",
     )
+    index = asyncio.create_task(
+        independent(run_index_research_service), name="wealthsail-index-research"
+    )
     stopping = asyncio.create_task(stop_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -244,11 +254,11 @@ async def _serve(pool):
         if service in done:
             await service
     finally:
-        for task in (service, official, market, monitor, stopping):
+        for task in (service, official, market, monitor, index, stopping):
             if not task.done():
                 task.cancel()
         await asyncio.gather(
-            service, official, market, monitor, stopping, return_exceptions=True
+            service, official, market, monitor, index, stopping, return_exceptions=True
         )
         for sig in installed:
             loop.remove_signal_handler(sig)

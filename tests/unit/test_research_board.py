@@ -959,3 +959,39 @@ def test_invalid_http_code_is_not_a_verified_status(status):
         }
     )
     assert "httpStatus" not in board["dataStatus"]["sourceResults"]["PBOC_M1"]
+
+
+def test_actual_index_attempt_applies_to_price_and_pe_but_not_unimplemented_earnings():
+    index = trend()
+    index.update(
+        state="NOT_COLLECTED",
+        trend={"state": "UNKNOWN"},
+        collection={
+            "status": "FAILED",
+            "collectedAt": NOW,
+            "attemptedAt": NOW,
+            "nextCheckAt": NOW + timedelta(hours=1),
+            "errorClass": "HTTPStatusError",
+        },
+    )
+    board = build(
+        evidence=[index],
+        model={
+            "requiredEvidence": ["INDEX_TREND", "INDEX_VALUATION", "INDEX_EARNINGS"],
+            "missingRequiredEvidence": [
+                "INDEX_TREND",
+                "INDEX_VALUATION",
+                "INDEX_EARNINGS",
+            ],
+        },
+    )
+    blockers = {
+        item["blocker"]["code"]: item for item in board["items"] if "blocker" in item
+    }
+    for code in ("INDEX_TREND", "INDEX_VALUATION"):
+        blocker = blockers[code]["blocker"]
+        assert blocker["lastAttemptAt"] == NOW and blocker["state"] == "FAILED"
+        assert blocker["sourceKey"] == "INDEX_RESEARCH:hs300"
+        assert "未检测到执行记录" not in blocker["reason"]
+        assert "hs300" in blockers[code]["evidenceIds"]
+    assert blockers["INDEX_EARNINGS"]["blocker"]["lastAttemptAt"] is None

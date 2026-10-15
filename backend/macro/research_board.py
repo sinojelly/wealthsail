@@ -462,6 +462,25 @@ def build_research_board(
     def add_gap(code, index=None):
         label = LABELS.get(code, code)
         source_key = CATALOG.get(code, (None, None, None, None))[3]
+        index_fact = index is not None and code in {"INDEX_TREND", "INDEX_VALUATION"}
+        index_collection = (index.get("collection") or {}) if index_fact else {}
+        if index_fact:
+            source_key = "INDEX_RESEARCH:" + index["indexId"]
+            if index_collection:
+                sources.update(
+                    _source_results(
+                        {
+                            "sourceResults": {
+                                source_key: {
+                                    **index_collection,
+                                    "status": "SUCCESS"
+                                    if index_collection.get("status") == "COMPLETED"
+                                    else index_collection.get("status", "UNKNOWN"),
+                                }
+                            }
+                        }
+                    )
+                )
         source = sources.get(source_key, {})
         row = evidence_by_code.get(code, {})
         state = row.get("state", "NOT_COLLECTED")
@@ -477,11 +496,15 @@ def build_research_board(
             }.get(code)
             if field:
                 state = index.get(field, {}).get("state", "UNKNOWN")
+        if source.get("status") == "FAILED":
+            state = "FAILED"
         if state == "READY":
             state = "UNVERIFIED"
         owner = (
             "ADMIN"
             if state == "PERMISSION_REQUIRED"
+            else "MARKET_WORKER"
+            if index_fact
             else "MACRO_WORKER"
             if source_key
             else "RESEARCH_DATA"
@@ -492,10 +515,19 @@ def build_research_board(
             "STALE": "已有事实已过期，暂不用于当前条件判断。",
             "CONFLICT": "当前证据存在冲突，需核对来源和口径。",
         }.get(state, "形成此项判断的必要数据或核验条件尚未完整。")
-        attempted = _stamp((collection.get("sourceAttemptAt") or {}).get(source_key))
+        attempted = (
+            _stamp(
+                index_collection.get("attemptedAt")
+                or index_collection.get("collectedAt")
+            )
+            if index_fact
+            else _stamp((collection.get("sourceAttemptAt") or {}).get(source_key))
+        )
         if attempted is not None and attempted > now:
             attempted = None
-        if attempted is None:
+        if state == "PARTIAL" and index_fact and code == "INDEX_VALUATION":
+            reason = "已取得部分指数估值事实，PB等完整估值条件尚未齐备。"
+        if attempted is None and index_collection.get("collectionState") != "CLAIMED":
             reason += "未检测到执行记录。"
         blocker = {
             "code": code,
@@ -505,7 +537,11 @@ def build_research_board(
             "affectedJudgment": "完整价值判断" if code != "INDEX_TREND" else "趋势判断",
             "userFixable": False,
             "lastAttemptAt": attempted,
-            "nextCheckAt": collection.get("nextCheckAt") if source_key else None,
+            "nextCheckAt": index_collection.get("nextCheckAt")
+            if index_fact
+            else collection.get("nextCheckAt")
+            if source_key
+            else None,
             "sourceKey": source_key,
         }
         return add(
@@ -516,7 +552,7 @@ def build_research_board(
             + "研究受限。",
             reason,
             owner=owner,
-            evidence=(code,),
+            evidence=(code, index["indexId"]) if index_fact else (code,),
             blocker=blocker,
             next_action=action("VIEW_DATA", "查看研究限制", target="research-data"),
             index_id=index["indexId"] if index else None,
