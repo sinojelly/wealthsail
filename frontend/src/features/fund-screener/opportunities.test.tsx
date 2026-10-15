@@ -17,6 +17,13 @@ it("filters evidence candidates through the server independently of technical sc
   );
 });
 
+it("preserves the direction explanation entry for the legacy context", async () => {
+  renderWithSession(<FundScreenerPage />);
+  expect(
+    await screen.findByRole("button", { name: "查看驱动与风险⌄" }),
+  ).toBeInTheDocument();
+});
+
 it("queries and preserves the selected macro history window", async () => {
   const user = userEvent.setup();
   renderWithSession(<FundScreenerPage />);
@@ -914,4 +921,84 @@ it("does not display a late watch failure for the newly selected fund", async ()
   await user.click(screen.getByRole("button", { name: "直接导航基金B" }));
   await act(async () => fail(new Error("watch-A-rejected")));
   expect(screen.queryByText("加入自选失败，请重试。")).not.toBeInTheDocument();
+});
+
+it("selects a related index from v2 direction details and clears the previous fund and page", async () => {
+  const user = userEvent.setup();
+  const response = researchBoardResponse();
+  api.opportunity.mockResolvedValue({
+    ...response,
+    marketEvidence: [
+      {
+        indexId: "a500",
+        label: "中证A500",
+        state: "UNKNOWN",
+        asOf: null,
+        valuation: { state: "UNKNOWN" },
+        trend: { state: "UNKNOWN" },
+        risk: { state: "UNKNOWN" },
+        earnings: { state: "UNKNOWN" },
+        sourceUri: null,
+        missingEvidence: [],
+      },
+    ],
+    researchBoard: {
+      ...response.researchBoard,
+      methodVersion: "research-board-v2",
+      direction: {
+        ...response.researchBoard.direction,
+        summary: "方向研究仍需独立核查",
+        nextStep: "核查相关指数",
+        blockerIds: [],
+        relatedIndexIds: ["a500"],
+        failedConditions: [],
+      },
+      dataStatus: {
+        ...response.researchBoard.dataStatus,
+        groups: [],
+        adminAction: null,
+      },
+    },
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&page=2&macroMonths=60",
+  );
+  await screen.findByRole("heading", { name: "市场环境与投资关注" });
+  expect(
+    screen.getByRole("navigation", { name: "市场与方向" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "查看驱动与风险⌄" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/当前研究：/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "查看方向关联事项" }));
+  await user.click(screen.getByRole("button", { name: "研究中证A500" }));
+  await waitFor(() =>
+    expect(api.funds).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        directionId: "a-share:broad",
+        indexId: "a500",
+        page: 1,
+      }),
+      expect.anything(),
+    ),
+  );
+  expect(screen.getByLabelText("研究路径")).toHaveTextContent(
+    "A股 / 宽基 / 中证A500",
+  );
+  expect(screen.getByLabelText("研究路径")).not.toHaveTextContent("510330");
+  expect(screen.getByRole("button", { name: "关注指数" })).toBeDisabled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.opportunity).toHaveBeenLastCalledWith(
+    {
+      directionId: "a-share:broad",
+      indexId: "a500",
+      instrumentId: undefined,
+      fundCode: undefined,
+      fundMarket: undefined,
+      months: 60,
+    },
+    expect.anything(),
+  );
 });

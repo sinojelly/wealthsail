@@ -1,0 +1,608 @@
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import type { OpportunityContext, ResearchAction } from "../../api/investment";
+import MacroContextStrip from "./components/MacroContextStrip";
+
+const action = (
+  type: ResearchAction["type"],
+  label: string,
+  target: string | null = null,
+  href: string | null = null,
+) => ({ type, label, target, href, enabled: true, disabledReason: null });
+const issue = {
+  id: "pmi-change",
+  key: "PMI_CROSS",
+  category: "CHANGE",
+  severity: "MEDIUM",
+  confidence: "PARTIAL",
+  factVerification: "VERIFIED",
+  tone: "BLUE",
+  summary: "PMI当前跨越扩张分界",
+  impact: "仅为制造业观察，仍须核对企业盈利。",
+  evidenceIds: ["PMI"],
+  selectionRelevance: "CURRENT_SELECTION",
+  holdingRelevance: "UNKNOWN",
+  affectedAssets: { directionId: "a-share:broad", indexId: "hs300" },
+  owner: "RESEARCH_SERVICE",
+  actionability: "READ_ONLY",
+  nextAction: action("VIEW_EVIDENCE", "查看PMI证据", "research-macro"),
+  firstSeenAt: null,
+  lastChangedAt: null,
+  status: "OPEN",
+};
+const m1 = {
+  ...issue,
+  id: "m1-gap",
+  key: "M1_YOY",
+  category: "SYSTEM",
+  confidence: "UNKNOWN",
+  factVerification: "UNKNOWN",
+  tone: "GRAY",
+  summary: "M1数据获取失败",
+  impact: "信用研究受限",
+  evidenceIds: ["M1_YOY"],
+  owner: "MACRO_WORKER",
+  nextAction: action("VIEW_DATA", "查看研究限制", "research-data"),
+  blocker: {
+    code: "M1_YOY",
+    state: "FAILED",
+    owner: "MACRO_WORKER",
+    reason: "该指标最近采集失败",
+    affectedJudgment: "信用条件",
+    userFixable: false,
+    lastAttemptAt: "2026-10-15T01:00:00Z",
+    nextCheckAt: "2026-10-15T02:00:00Z",
+    sourceKey: "PBOC_M1",
+  },
+};
+const tsf = {
+  ...m1,
+  id: "tsf-gap",
+  key: "TSF_STOCK_YOY",
+  summary: "社融数据获取失败",
+  evidenceIds: ["TSF_STOCK_YOY"],
+  blocker: {
+    ...m1.blocker,
+    code: "TSF_STOCK_YOY",
+    sourceKey: "PBOC_TSF",
+    lastAttemptAt: null,
+    nextCheckAt: null,
+  },
+};
+const groups = [
+  {
+    id: "MARKET",
+    label: "指数与基金数据",
+    summary: "暂无独立列出的受限项目",
+    impact: "不代表完整资格已认证",
+    owner: "RESEARCH_DATA",
+    itemIds: [],
+  },
+  {
+    id: "MACRO",
+    label: "宏观数据",
+    summary: "两项指标各自获取失败",
+    impact: "国内信用条件尚待核查",
+    owner: "MACRO_WORKER",
+    itemIds: [m1.id, tsf.id],
+  },
+  {
+    id: "PERMISSION",
+    label: "来源许可",
+    summary: "暂无独立列出的受限项目",
+    impact: "依据实际许可状态核查",
+    owner: "ADMIN",
+    itemIds: [],
+  },
+  {
+    id: "PORTFOLIO",
+    label: "个人持仓",
+    summary: "风险尚待评估",
+    impact: "不能认定持仓安全",
+    owner: "PORTFOLIO",
+    itemIds: [],
+  },
+  {
+    id: "STRATEGY",
+    label: "策略验证",
+    summary: "未列出已认证策略",
+    impact: "不能认证建仓条件",
+    owner: "RESEARCH_DATA",
+    itemIds: [],
+  },
+];
+const context = {
+  state: "UNVERIFIED",
+  months: 36,
+  items: [
+    {
+      code: "PMI",
+      label: "制造业 PMI",
+      value: 50.1,
+      state: "UNVERIFIED",
+      unit: "指数点",
+      source: "国家统计局",
+      sourceUri: "https://www.stats.gov.cn/pmi",
+      asOf: "2026-09-01",
+      publishedAt: null,
+      history: [
+        {
+          asOf: "2026-08-01",
+          value: 49.8,
+          source: "国家统计局",
+          unit: "指数点",
+        },
+        {
+          asOf: "2026-09-01",
+          value: 50.1,
+          source: "国家统计局",
+          unit: "指数点",
+        },
+      ],
+    },
+  ],
+  marketEvidence: [
+    {
+      indexId: "hs300",
+      label: "沪深300",
+      state: "PARTIAL",
+      asOf: "2026-10-14",
+      valuation: { state: "UNKNOWN" },
+      trend: {
+        state: "READY",
+        ma200: 3900,
+        momentum63: 0.02,
+        distanceMA200: 0.01,
+      },
+      risk: { state: "READY", volatility20: 0.12, maxDrawdown: -0.2 },
+      earnings: { state: "UNKNOWN" },
+      sourceUri: null,
+      missingEvidence: [],
+    },
+  ],
+  decision: {
+    state: "WAIT",
+    marketState: "UNKNOWN",
+    personalState: "UNKNOWN",
+    summary: "仍待完整研究资格",
+    gates: [],
+    nextChecks: [],
+    validation: {
+      state: "UNAVAILABLE",
+      summary: "尚无真实时点验证",
+      methodVersion: "pit-v1",
+    },
+  },
+  portfolio: {
+    state: "UNKNOWN",
+    heldSelected: null,
+    selectedWeight: null,
+    sameIndexWeight: null,
+    cashRatio: null,
+    asOf: null,
+    summary: "个人持仓未知",
+    missingEvidence: [],
+  },
+  events: [],
+  notices: [],
+  researchBoard: {
+    methodVersion: "research-board-v2",
+    asOf: "2026-10-15T01:00:00Z",
+    items: [issue, m1, tsf],
+    summaries: [
+      {
+        id: "HOLDINGS",
+        label: "持仓风险",
+        state: "UNKNOWN",
+        tone: "GRAY",
+        summary: "个人风险尚未完成评估",
+        itemIds: [],
+        nextAction: action(
+          "VIEW_HOLDINGS",
+          "查看我的持仓",
+          null,
+          "/dashboard?scope=MINE",
+        ),
+      },
+      {
+        id: "OPPORTUNITIES",
+        label: "研究机会",
+        state: "INSUFFICIENT",
+        tone: "GRAY",
+        summary: "完整机会资格暂不能判断",
+        itemIds: [],
+        nextAction: action(
+          "VIEW_CANDIDATES",
+          "查看指数与基金",
+          "op-research-targets",
+        ),
+      },
+      {
+        id: "CHANGES",
+        label: "重要变化",
+        state: "OBSERVED",
+        tone: "BLUE",
+        summary: "一项已核查事实变化",
+        itemIds: [issue.id],
+        nextAction: action("VIEW_ISSUES", "查看重要变化", "CHANGES"),
+      },
+    ],
+    direction: {
+      label: "宽基",
+      summary: "制造业事实可独立观察，当前研究资格不完整。",
+      nextStep: "先完成当前指数的独立研究。",
+      researchState: "WAIT_CONDITIONS",
+      qualificationState: "INCOMPLETE",
+      supports: [
+        {
+          label: "制造业观察",
+          summary: "景气略高于分界，需核查盈利",
+          evidenceIds: ["PMI"],
+          state: "OBSERVED",
+        },
+      ],
+      counterFactors: [
+        {
+          label: "估值反方",
+          summary: "市场可能已经计价",
+          evidenceIds: [],
+          state: "UNKNOWN",
+        },
+      ],
+      recommendedChecks: ["检查企业盈利结构"],
+      failedConditions: [
+        {
+          id: "TREND",
+          label: "趋势规则",
+          reason: "当前尚未满足全部趋势条件",
+          evidenceIds: ["hs300"],
+        },
+      ],
+      relatedIndexIds: ["hs300"],
+      itemIds: [issue.id],
+      blockerIds: [m1.id, tsf.id],
+    },
+    dataStatus: {
+      itemIds: [m1.id, tsf.id],
+      groups,
+      collectedAt: "2026-10-15T01:00:00Z",
+      nextCheckAt: "2026-10-15T02:00:00Z",
+      collectionState: "FINISHED",
+      sourceResults: {
+        PBOC_M1: {
+          status: "FAILED",
+          errorClass: "HTTPStatusError",
+          httpStatus: 403,
+        },
+        PBOC_TSF: {
+          status: "FAILED",
+          errorClass: "HTTPStatusError",
+          httpStatus: 404,
+        },
+      },
+      methodVersions: ["research-board-v2"],
+      adminAction: action(
+        "VIEW_OPERATIONS",
+        "管理员查看运行详情",
+        null,
+        "/operations",
+      ),
+    },
+  },
+} as unknown as OpportunityContext;
+function show(data = context, callbacks = {}, scopeKey = "scope-a") {
+  return render(
+    <MemoryRouter>
+      <MacroContextStrip
+        data={data}
+        error={false}
+        scopeKey={scopeKey}
+        {...callbacks}
+      />
+    </MemoryRouter>,
+  );
+}
+async function click(name: string, root: HTMLElement | typeof screen = screen) {
+  const user = userEvent.setup();
+  await user.click(
+    root instanceof HTMLElement
+      ? within(root).getByRole("button", { name })
+      : root.getByRole("button", { name }),
+  );
+  return user;
+}
+
+it("keeps the homepage compact and sends the main changes action directly to its issue list", async () => {
+  show();
+  expect(
+    screen.getByRole("heading", { name: "市场环境与投资关注" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText("景气略高于分界，需核查盈利"),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await click("查看重要变化");
+  const panel = screen.getByRole("dialog", { name: "重要变化" });
+  expect(within(panel).getByText(issue.summary)).toBeInTheDocument();
+  expect(within(panel).getByText("沪深300")).toBeInTheDocument();
+  expect(
+    within(panel).getByRole("link", { name: "查看制造业 PMI来源" }),
+  ).toHaveAttribute("href", "https://www.stats.gov.cn/pmi");
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
+});
+
+it("opens direction research without opening blockers and chooses related indexes through the existing callback", async () => {
+  const select = vi.fn();
+  show(context, { onIndexSelect: select });
+  await click("查看方向关联事项");
+  const panel = screen.getByRole("dialog", { name: "当前方向研究" });
+  expect(
+    within(panel).getByText("景气略高于分界，需核查盈利"),
+  ).toBeInTheDocument();
+  expect(within(panel).getByText("市场可能已经计价")).toBeInTheDocument();
+  expect(
+    within(panel).getByText("当前尚未满足全部趋势条件"),
+  ).toBeInTheDocument();
+  expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
+  expect(within(panel).queryByRole("table")).not.toBeInTheDocument();
+  await click("研究沪深300", panel);
+  expect(select).toHaveBeenCalledWith("hs300");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("starts research limitations as five compact groups and mounts only the selected children", async () => {
+  show();
+  await click("查看研究限制");
+  const panel = screen.getByRole("dialog", { name: "研究限制" });
+  expect(within(panel).getAllByRole("row")).toHaveLength(6);
+  expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
+  expect(within(panel).queryByText("HTTPStatusError")).not.toBeInTheDocument();
+  await click("展开宏观数据", panel);
+  expect(within(panel).getByText(m1.summary)).toBeInTheDocument();
+  expect(within(panel).getByText(tsf.summary)).toBeInTheDocument();
+  expect(within(panel).getByText(/HTTP 403/)).toBeInTheDocument();
+  expect(within(panel).getByText(/HTTP 404/)).toBeInTheDocument();
+  expect(within(panel).getByText(/未检测到执行记录/)).toBeInTheDocument();
+  expect(
+    within(panel).queryByText(/自动修复|正在采集/),
+  ).not.toBeInTheDocument();
+});
+
+it("keeps operational navigation separate and available only to administrators", async () => {
+  const view = show();
+  await click("查看研究限制");
+  expect(
+    screen.queryByRole("link", { name: "管理员查看运行详情" }),
+  ).not.toBeInTheDocument();
+  view.unmount();
+  show(context, { canViewOperations: true });
+  expect(
+    screen.queryByRole("link", { name: "管理员查看运行详情" }),
+  ).not.toBeInTheDocument();
+  await click("查看研究限制");
+  expect(
+    screen.getByRole("link", { name: "管理员查看运行详情" }),
+  ).toHaveAttribute("href", "/operations");
+  expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
+});
+
+it.each([
+  ["FAILED", "采集失败"],
+  ["RUNNING", "已登记执行租约"],
+])(
+  "identifies persisted index collection provenance for %s without implying a live worker",
+  async (status, label) => {
+    show({
+      ...context,
+      researchBoard: {
+        ...context.researchBoard!,
+        items: [
+          {
+            ...m1,
+            blocker: { ...m1.blocker, sourceKey: "INDEX_RESEARCH:hs300" },
+          },
+        ],
+        dataStatus: {
+          ...context.researchBoard!.dataStatus,
+          sourceResults: {
+            "INDEX_RESEARCH:hs300": {
+              status,
+              errorClass: "HTTPStatusError",
+              httpStatus: 403,
+            },
+          },
+        },
+      },
+    } as unknown as OpportunityContext);
+    await click("查看研究限制");
+    await click("展开宏观数据");
+    expect(screen.getByText(/指数研究采集/)).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(`指数研究采集 · ${label}`)),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 403/)).toBeInTheDocument();
+    expect(screen.queryByText(/未登记来源/)).not.toBeInTheDocument();
+  },
+);
+
+it("uses one evidence dialog and mounts a chart only after its topic is selected", async () => {
+  show();
+  await click("查看研究依据");
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await click("宏观与流动性");
+  expect(
+    screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
+  ).toBeInTheDocument();
+  const user = await click("关闭研究依据");
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "查看研究依据" })).toHaveFocus();
+  await click("查看方向关联事项");
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "查看方向关联事项" }),
+  ).toHaveFocus();
+});
+
+it("keeps focus inside the single dialog when an issue switches into evidence", async () => {
+  show();
+  await click("查看重要变化");
+  await click("查看PMI证据");
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "关闭研究依据" })).toHaveFocus();
+});
+
+it("closes old secondary details when the complete research scope changes", async () => {
+  const view = show();
+  await click("查看重要变化");
+  expect(screen.getByRole("dialog", { name: "重要变化" })).toBeInTheDocument();
+  view.rerender(
+    <MemoryRouter>
+      <MacroContextStrip
+        data={{
+          ...context,
+          researchBoard: { ...context.researchBoard!, summaries: [] },
+        }}
+        error={false}
+        scopeKey="scope-b"
+      />
+    </MemoryRouter>,
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.queryByText(issue.summary)).not.toBeInTheDocument();
+});
+
+it("preserves explicit tracking and acknowledgement in secondary details", async () => {
+  const track = vi.fn(),
+    ack = vi.fn();
+  show(
+    {
+      ...context,
+      notices: [
+        {
+          id: "n",
+          title: "研究条件变化",
+          summary: "条件已更新",
+          severity: "INFO",
+          createdAt: "2026-10-15T01:00:00Z",
+          readAt: null,
+        },
+      ],
+    },
+    { onMonitor: track, onNoticeAck: ack },
+  );
+  expect(
+    screen.queryByRole("button", { name: "跟踪研究条件" }),
+  ).not.toBeInTheDocument();
+  await click("研究条件跟踪与通知");
+  expect(
+    screen.getByRole("dialog", { name: "研究条件跟踪与通知" }),
+  ).toBeInTheDocument();
+  expect(track).not.toHaveBeenCalled();
+  expect(ack).not.toHaveBeenCalled();
+  await click("跟踪研究条件");
+  expect(track).toHaveBeenCalledWith(true);
+  await click("标记研究条件变化为已读");
+  expect(ack).toHaveBeenCalledWith("n");
+});
+
+it.each(["VERIFIED", "UNKNOWN"] as const)(
+  "requires verified facts as well as confirmed budget evidence for %s risk emphasis",
+  async (factVerification) => {
+    const risk = {
+      ...issue,
+      id: "budget",
+      category: "RISK",
+      severity: "HIGH",
+      confidence: "VERIFIED",
+      factVerification,
+      tone: "RED",
+      holdingRelevance: "HELD",
+      summary: "已确认持仓预算风险",
+      impact: "复核已确认预算限额。",
+      nextAction: action(
+        "VIEW_HOLDINGS",
+        "查看我的持仓",
+        null,
+        "/dashboard?scope=MINE",
+      ),
+    };
+    show({
+      ...context,
+      researchBoard: {
+        ...context.researchBoard!,
+        items: [risk],
+        summaries: [
+          {
+            ...context.researchBoard!.summaries[0],
+            tone: "RED",
+            itemIds: [risk.id],
+            nextAction: action("VIEW_ISSUES", "查看持仓风险", "HOLDINGS"),
+          },
+        ],
+      },
+      decision: { ...context.decision!, state: "POSITION_REVIEW" },
+      portfolio: {
+        ...context.portfolio!,
+        state: "READY",
+        heldSelected: true,
+        budgetViolation: true,
+        budgetState: "BLOCKED",
+      },
+    } as OpportunityContext);
+    await click("查看持仓风险");
+    if (factVerification === "VERIFIED")
+      expect(screen.getByText(risk.impact)).toHaveClass("op-critical-impact");
+    else
+      expect(
+        document.querySelector(".op-critical-impact"),
+      ).not.toBeInTheDocument();
+  },
+);
+
+it("does not repeat the compact direction summary as an identical support paragraph inside details", async () => {
+  const summary = context.researchBoard!.direction.supports[0].summary;
+  show({
+    ...context,
+    researchBoard: {
+      ...context.researchBoard!,
+      direction: { ...context.researchBoard!.direction, summary },
+    },
+  });
+  await click("查看方向关联事项");
+  expect(
+    within(screen.getByRole("dialog", { name: "当前方向研究" })).getAllByText(
+      summary,
+    ),
+  ).toHaveLength(1);
+});
+
+it("disables an unsupported local destination instead of creating a working-looking action", () => {
+  show({
+    ...context,
+    researchBoard: {
+      ...context.researchBoard!,
+      summaries: [
+        {
+          ...context.researchBoard!.summaries[0],
+          nextAction: action(
+            "VIEW_HOLDINGS",
+            "不支持的账户入口",
+            null,
+            "/settings",
+          ),
+        },
+      ],
+    },
+  });
+  expect(
+    screen.getByRole("button", { name: "不支持的账户入口" }),
+  ).toBeDisabled();
+  expect(
+    screen.queryByRole("link", { name: "不支持的账户入口" }),
+  ).not.toBeInTheDocument();
+});

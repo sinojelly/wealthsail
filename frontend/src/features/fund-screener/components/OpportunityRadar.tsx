@@ -563,6 +563,22 @@ export function RadarDetails({
                   63期动量：{percent(index.trend.momentum63)} · 相对MA200：
                   {percent(index.trend.distanceMA200)}
                 </p>
+                {index.trendWindow && (
+                  <p>
+                    实际趋势窗口：{dateLabel(index.trendWindow.start)} 至{" "}
+                    {dateLabel(index.trendWindow.end)} ·{" "}
+                    {index.trendWindow.sampleCount} 个实际样本
+                  </p>
+                )}
+                {index.historyQuality && index.historyQuality !== "READY" && (
+                  <p>
+                    完整历史质量：{stateText(index.historyQuality)}；
+                    {index.historyQuality === "CONFLICT"
+                      ? "完整历史仍有缺期或冲突；"
+                      : "完整历史尚未就绪，仍需核查缺期或冲突；"}
+                    当前趋势窗口不认证完整历史或历史时点（PIT）验证。
+                  </p>
+                )}
                 <p>
                   风险：{stateText(index.risk.state)} · 20期波动：
                   {percent(index.risk.volatility20)}

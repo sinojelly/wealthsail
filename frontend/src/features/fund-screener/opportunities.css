@@ -947,6 +947,120 @@
   padding: 0;
   border: 0;
 }
+.op-research-board-v2 .dialog-panel,
+.op-research-board-v2 .dialog-header {
+  background: #fff;
+  color: var(--op-ink);
+}
+.op-research-board-v2 .dialog-header h2 {
+  color: var(--op-ink);
+}
+.op-research-board-v2 .op-research-summary {
+  padding: 12px;
+  gap: 7px;
+}
+.op-v2-direction {
+  gap: 8px;
+}
+.op-v2-direction > div:first-child {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.op-v2-direction > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.op-v2-detail-body {
+  padding: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  min-width: 0;
+}
+.op-v2-detail-body > section,
+.op-v2-direction-detail,
+.op-v2-group-children {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+}
+.op-v2-detail-body button,
+.op-v2-detail-body a {
+  color: #0f766e;
+}
+.op-v2-detail-body button {
+  border: 1px solid var(--op-line);
+  padding: 6px 10px;
+}
+.op-v2-detail-body .op-radar-details {
+  padding: 0;
+  border: 0;
+}
+.op-v2-issue {
+  border-left: 3px solid currentColor;
+  padding: 10px 12px;
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.op-v2-issue h3 {
+  color: var(--op-ink);
+}
+.op-v2-provenance,
+.op-v2-topic-nav {
+  display: flex;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+}
+.op-v2-topic-nav button[aria-pressed="true"] {
+  background: #f0fdfa;
+  border-color: #0f766e;
+}
+.op-v2-table-scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+.op-v2-limitations {
+  width: 100%;
+  min-width: 650px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.op-v2-limitations th,
+.op-v2-limitations td {
+  text-align: left;
+  vertical-align: top;
+  padding: 10px;
+  border-bottom: 1px solid var(--op-line);
+}
+.op-v2-limitations thead th {
+  background: #f8fafc;
+  color: var(--op-muted);
+}
+.op-v2-limitations tbody th {
+  min-width: 110px;
+}
+.op-v2-admin-action {
+  padding-top: 12px;
+  margin-top: 10px;
+  border-top: 1px solid var(--op-line);
+}
+@media (max-width: 600px) {
+  .op-v2-detail-body {
+    padding: 12px;
+  }
+  .op-research-board-v2 .dialog-backdrop {
+    padding: 10px;
+  }
+  .op-research-board-v2 .dialog-panel {
+    max-height: calc(100dvh - 20px);
+  }
+}
 @media (max-width: 760px) {
   .op-research-summaries {
     grid-template-columns: minmax(0, 1fr);

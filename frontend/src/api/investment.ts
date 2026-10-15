@@ -189,7 +189,9 @@ export interface ResearchAction {
     | "VIEW_EVIDENCE"
     | "VIEW_DATA"
     | "TRACK"
-    | "VIEW_OPERATIONS";
+    | "VIEW_OPERATIONS"
+    | "VIEW_ISSUES"
+    | "VIEW_DIRECTION";
   label: string;
   target: string | null;
   href: string | null;
@@ -208,6 +210,7 @@ export interface ResearchIssue {
   category: "RISK" | "OPPORTUNITY" | "CHANGE" | "DATA_GAP" | "SYSTEM";
   severity: "HIGH" | "MEDIUM" | "LOW";
   confidence: "VERIFIED" | "PARTIAL" | "UNKNOWN";
+  factVerification?: "VERIFIED" | "UNKNOWN";
   tone: ResearchTone;
   summary: string;
   impact: string;
@@ -254,9 +257,29 @@ export interface ResearchBoardData {
     counterFactors: DirectionEvidence[];
     recommendedChecks: string[];
     itemIds: string[];
+    blockerIds?: string[];
+    relatedIndexIds?: string[];
+    failedConditions?: Array<{
+      id: string;
+      label: string;
+      reason: string;
+      evidenceIds: string[];
+    }>;
+    summary?: string;
+    nextStep?: string;
+    nextAction?: ResearchAction;
   };
   dataStatus: {
     itemIds: string[];
+    groups?: Array<{
+      id: "MARKET" | "MACRO" | "PERMISSION" | "PORTFOLIO" | "STRATEGY";
+      label: string;
+      summary: string;
+      impact: string;
+      owner: string;
+      itemIds: string[];
+    }>;
+    adminAction?: ResearchAction | null;
     collectedAt: string | null;
     nextCheckAt: string | null;
     collectionState?: "FINISHED" | "CANCELLED" | "CLAIMED" | "NOT_COLLECTED";
@@ -267,6 +290,7 @@ export interface ResearchBoardData {
         reason?: string;
         errorClass?: string;
         observations?: number;
+        httpStatus?: number;
       }
     >;
     methodVersions: string[];
@@ -337,6 +361,8 @@ export interface MarketEvidence {
   indexId: string;
   label: string;
   state: string;
+  historyQuality?: string;
+  trendWindow?: { start: string; end: string; sampleCount: number } | null;
   valuation: {
     state: string;
     pe?: ValuationEvidence | null;

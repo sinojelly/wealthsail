@@ -455,6 +455,44 @@ it("renders independent index evidence without treating trend readiness as earni
   expect(within(market).getByText(/盈利与估值覆盖/)).toBeInTheDocument();
 });
 
+it("distinguishes a complete current trend window from unresolved full-history gaps and PIT validation", async () => {
+  render(
+    <MacroContextStrip
+      data={{
+        ...context,
+        marketEvidence: [
+          {
+            ...context.marketEvidence![0],
+            label: "中证A500",
+            historyQuality: "CONFLICT",
+            trendWindow: {
+              start: "2025-12-19",
+              end: "2026-10-14",
+              sampleCount: 200,
+            },
+            risk: { state: "PARTIAL", volatility20: 0.12, maxDrawdown: null },
+          },
+        ],
+      }}
+      error={false}
+    />,
+  );
+  await expand();
+  const market = screen.getByRole("region", { name: "当前指数证据" });
+  expect(
+    within(market).getByText(
+      /实际趋势窗口：2025年12月19日 至 2026年10月14日 · 200 个实际样本/,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(market).getByText(/完整历史仍有缺期或冲突/),
+  ).toBeInTheDocument();
+  expect(
+    within(market).getByText(/当前趋势窗口不认证完整历史或历史时点（PIT）验证/),
+  ).toBeInTheDocument();
+  expect(within(market).getByText(/最大回撤：—/)).toBeInTheDocument();
+});
+
 it("tracks research and acknowledges notices only after explicit button clicks", async () => {
   const monitor = vi.fn(),
     ack = vi.fn();

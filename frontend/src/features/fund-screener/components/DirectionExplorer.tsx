@@ -5,10 +5,12 @@ export default function DirectionExplorer({
   directions,
   selected,
   onSelect,
+  compact = false,
 }: {
   directions: Direction[];
   selected?: Direction;
   onSelect: (id: string) => void;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const markets = [
@@ -48,21 +50,24 @@ export default function DirectionExplorer({
             ))}
         </div>
       </nav>
-      <div className="op-direction-caption">
-        <strong>
-          当前研究：
-          {selected
-            ? `${selected.marketLabel} · ${selected.label}`
-            : "未确认方向"}
-        </strong>
-        <span>
-          {selected?.framework ?? "可以直接搜索任意基金，未知归属不自动推断。"}
-        </span>
-        <button aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? "收起依据" : "查看驱动与风险"}⌄
-        </button>
-      </div>
-      {open && (
+      {!compact && (
+        <div className="op-direction-caption">
+          <strong>
+            当前研究：
+            {selected
+              ? `${selected.marketLabel} · ${selected.label}`
+              : "未确认方向"}
+          </strong>
+          <span>
+            {selected?.framework ??
+              "可以直接搜索任意基金，未知归属不自动推断。"}
+          </span>
+          <button aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "收起依据" : "查看驱动与风险"}⌄
+          </button>
+        </div>
+      )}
+      {!compact && open && (
         <section className="op-evidence" aria-label="方向宏观证据">
           {selected?.macroResearch ? (
             <>

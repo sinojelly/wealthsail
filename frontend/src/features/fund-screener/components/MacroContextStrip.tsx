@@ -386,6 +386,8 @@ export default function MacroContextStrip({
   ackPending,
   ackError,
   canViewOperations = false,
+  scopeKey,
+  onIndexSelect,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -404,6 +406,8 @@ export default function MacroContextStrip({
   ackPending?: string | null;
   ackError?: string;
   canViewOperations?: boolean;
+  scopeKey?: string;
+  onIndexSelect?: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const research = !error && !loading ? data?.research : null;
@@ -454,6 +458,8 @@ export default function MacroContextStrip({
     return (
       <ResearchBoard
         data={readyData}
+        scopeKey={scopeKey}
+        onIndexSelect={onIndexSelect}
         canViewOperations={canViewOperations}
         directionLabel={
           selectedDirection

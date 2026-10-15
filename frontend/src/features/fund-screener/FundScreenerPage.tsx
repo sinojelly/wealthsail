@@ -401,6 +401,11 @@ function ResearchWorkspace({
       />
       <MacroContextStrip
         data={radarData}
+        scopeKey={JSON.stringify(opportunityKey.slice(0, -1))}
+        onIndexSelect={(id) => {
+          setDirect(null);
+          updateSelection(chooseIndex(selection, id));
+        }}
         canViewOperations={operationsAllowed}
         error={!radarData && (opportunity.isError || context.isError)}
         loading={!radarData && (opportunity.isPending || context.isPending)}
@@ -460,6 +465,9 @@ function ResearchWorkspace({
       <DirectionExplorer
         directions={directions.data ?? []}
         selected={direction}
+        compact={
+          opportunity.data?.researchBoard?.methodVersion === "research-board-v2"
+        }
         onSelect={(id) => {
           setDirect(null);
           updateSelection({
