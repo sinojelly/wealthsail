@@ -19,6 +19,7 @@ import {
   RadarDetails,
   ResearchDirections,
 } from "./OpportunityRadar";
+import ResearchBoard from "./ResearchBoard";
 
 function HistoricalTrend({ item }: { item: MacroItem }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -384,6 +385,7 @@ export default function MacroContextStrip({
   onNoticeAck,
   ackPending,
   ackError,
+  canViewOperations = false,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -401,10 +403,146 @@ export default function MacroContextStrip({
   onNoticeAck?: (id: string) => void;
   ackPending?: string | null;
   ackError?: string;
+  canViewOperations?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const research = !error && !loading ? data?.research : null;
   const readyData = !error && !loading ? data : undefined;
+  if (readyData?.researchBoard) {
+    const domestic = new Set([
+      "CN_T10",
+      "DR007",
+      "M1_YOY",
+      "TSF_STOCK_YOY",
+      "CORP_MEDLONG_LOANS_YTD",
+    ]);
+    const foreign = new Set([
+      "US_T10_NOMINAL",
+      "US_T10_REAL",
+      "DXY",
+      "USD_CNY",
+    ]);
+    const core = (readyData.series ?? []).filter((series) =>
+      ["us", "gold"].includes(selectedDirection?.marketId ?? "")
+        ? foreign.has(series.code)
+        : selectedDirection
+          ? domestic.has(series.code)
+          : false,
+    );
+    const global = (readyData.series ?? []).filter(
+      (series) => !core.includes(series),
+    );
+    const windowSelector = (
+      <div className="op-macro-window">
+        <label>
+          宏观观察窗口{" "}
+          <select
+            aria-label="宏观观察窗口"
+            value={months}
+            onChange={(event) => onMonthsChange?.(Number(event.target.value))}
+          >
+            {[12, 36, 60].map((window) => (
+              <option key={window} value={window}>
+                {window} 个月
+              </option>
+            ))}
+          </select>
+        </label>
+        <span>图表窗口；研究统计采用固定历史样本。</span>
+      </div>
+    );
+    return (
+      <ResearchBoard
+        data={readyData}
+        canViewOperations={canViewOperations}
+        directionLabel={
+          selectedDirection
+            ? `${selectedDirection.marketLabel} · ${selectedDirection.label}`
+            : undefined
+        }
+        trackingEnabled={monitorEnabled}
+        onTrack={
+          onMonitor && !monitorEnabled && !monitorPending && !monitorLoading
+            ? () => onMonitor(true)
+            : undefined
+        }
+        topics={[
+          {
+            id: "research-macro",
+            label: "宏观与流动性",
+            render: () => (
+              <>
+                {windowSelector}
+                <div className="op-macro-grid">
+                  {readyData.items.map((item) => (
+                    <EvidenceCard
+                      key={item.code}
+                      item={{
+                        ...item,
+                        historyMonths:
+                          item.historyMonths ?? readyData.months ?? months,
+                      }}
+                    />
+                  ))}
+                </div>
+                <RadarDetails
+                  data={{ ...readyData, series: core }}
+                  section="series"
+                />
+              </>
+            ),
+          },
+          {
+            id: "research-market",
+            label: "指数与基金",
+            render: () => (
+              <>
+                <RadarDetails data={readyData} section="market" />
+                <p className="op-muted">
+                  基金费用、跟踪质量及产品证据可在下方选择基金后查看研究诊断。
+                </p>
+              </>
+            ),
+          },
+          {
+            id: "research-global",
+            label: "全球市场与事件",
+            render: () => (
+              <>
+                <RadarDetails
+                  data={{ ...readyData, series: global }}
+                  section="series"
+                />
+                <MacroEvents
+                  events={readyData.events ?? []}
+                  state={readyData.eventState}
+                />
+              </>
+            ),
+          },
+          {
+            id: "research-strategy",
+            label: "策略与持仓",
+            render: () => <RadarDetails data={readyData} section="strategy" />,
+          },
+        ]}
+        renderTracking={() => (
+          <RadarDetails
+            data={readyData}
+            section="monitor"
+            onMonitor={onMonitor}
+            monitorEnabled={monitorEnabled}
+            monitorPending={monitorPending}
+            monitorLoading={monitorLoading}
+            monitorError={monitorError}
+            onNoticeAck={onNoticeAck}
+            ackPending={ackPending}
+            ackError={ackError}
+          />
+        )}
+      />
+    );
+  }
   return (
     <section className="op-panel op-macro-research">
       <button

@@ -2,7 +2,11 @@ import { useEffect, useState, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Sparkles, ListPlus } from "lucide-react";
-import { useAuthSession, getSessionSubject } from "../../app/auth-session";
+import {
+  useAuthSession,
+  getSessionSubject,
+  canViewOperations,
+} from "../../app/auth-session";
 import * as api from "../../api/investment";
 import * as watchlist from "../../api/watchlist";
 import {
@@ -34,11 +38,24 @@ function sameMonitorScope(a: api.OpportunityScope, b: api.OpportunityScope) {
 }
 
 export default function FundScreenerPage() {
-  const subject = getSessionSubject(useAuthSession());
-  return <ResearchWorkspace key={subject} subject={subject} />;
+  const session = useAuthSession();
+  const subject = getSessionSubject(session);
+  return (
+    <ResearchWorkspace
+      key={subject}
+      subject={subject}
+      operationsAllowed={canViewOperations(session)}
+    />
+  );
 }
 
-function ResearchWorkspace({ subject }: { subject: string }) {
+function ResearchWorkspace({
+  subject,
+  operationsAllowed,
+}: {
+  subject: string;
+  operationsAllowed: boolean;
+}) {
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const [direct, setDirect] = useState<api.SearchResult | null>(null);
@@ -188,9 +205,10 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const acknowledgingCurrent =
     !!ack.variables &&
     JSON.stringify(ack.variables.key) === JSON.stringify(opportunityKey);
-  const radarData = opportunity.data?.radar
-    ? opportunity.data
-    : (context.data ?? opportunity.data);
+  const radarData =
+    opportunity.data?.researchBoard || opportunity.data?.radar
+      ? opportunity.data
+      : (context.data ?? opportunity.data);
   const mode = fundCode ? "fund" : "index";
   const objectId =
     mode === "fund"
@@ -373,6 +391,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       />
       <MacroContextStrip
         data={radarData}
+        canViewOperations={operationsAllowed}
         error={!radarData && (opportunity.isError || context.isError)}
         loading={!radarData && (opportunity.isPending || context.isPending)}
         selectedDirection={direction}
@@ -416,13 +435,15 @@ function ResearchWorkspace({ subject }: { subject: string }) {
           setParams(next);
         }}
       />
-      {!opportunity.data?.radar && radarData && (
-        <p className="op-muted">
-          {opportunity.isError
-            ? "机会雷达读取失败，当前仅显示原宏观事实与有条件研究。"
-            : "机会雷达尚未齐备，当前仅显示原宏观事实与有条件研究。"}
-        </p>
-      )}
+      {!opportunity.data?.researchBoard &&
+        !opportunity.data?.radar &&
+        radarData && (
+          <p className="op-muted">
+            {opportunity.isError
+              ? "机会雷达读取失败，当前仅显示原宏观事实与有条件研究。"
+              : "机会雷达尚未齐备，当前仅显示原宏观事实与有条件研究。"}
+          </p>
+        )}
       {directions.isError && (
         <p role="alert">方向读取失败，仍可直接搜索基金。</p>
       )}
@@ -440,7 +461,11 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         }}
       />
       <div className="op-workspace">
-        <section className="op-panel op-candidates">
+        <section
+          className="op-panel op-candidates"
+          id="op-research-targets"
+          tabIndex={-1}
+        >
           <header>
             <div>
               <h2>候选选择</h2>

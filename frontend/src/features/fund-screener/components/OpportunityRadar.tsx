@@ -31,6 +31,12 @@ const states: Record<string, string> = {
   SUPPORT: "支持线索",
   RISK: "风险复核",
   GAP: "证据缺口",
+  HELD: "已持有",
+  BREACH: "已确认预算超限",
+  CHECKED: "已完成预算核查",
+  PRIORITY_RESEARCH: "值得优先研究",
+  WAIT_CONDITIONS: "等待条件",
+  RISK_OBSERVATION: "风险观察",
 };
 const stateText = (state?: string) => states[state ?? ""] ?? "待核查";
 function evidenceLabel(id: string, data: OpportunityContext) {
@@ -115,19 +121,15 @@ export function RadarOverview({
       )}
       <div className="op-radar-headline">
         <span className="op-badge">
-          {headline.priority === "CRITICAL"
-            ? "优先复核"
+          {headline.priority === "CRITICAL" && headline.kind !== "GAP"
+            ? "值得复核"
             : headline.priority === "ATTENTION"
               ? "值得关注"
               : "研究观察"}{" "}
           · {kindText[headline.kind]}
         </span>
         <p>{headline.summary}</p>
-        <p
-          className={
-            headline.priority === "CRITICAL" ? "op-critical-impact" : undefined
-          }
-        >
+        <p className={headline.kind === "GAP" ? "op-tone-gray" : undefined}>
           {headline.impact}
         </p>
         <small>
@@ -141,9 +143,7 @@ export function RadarOverview({
               {q.label}
               <span className="op-badge">{stateText(q.state)}</span>
             </dt>
-            <dd className={q.critical ? "op-critical-impact" : undefined}>
-              {q.summary}
-            </dd>
+            <dd>{q.summary}</dd>
           </div>
         ))}
       </dl>
@@ -403,6 +403,7 @@ export function RadarDetails({
   onNoticeAck,
   ackPending,
   ackError,
+  section,
 }: {
   data: OpportunityContext;
   monitorEnabled?: boolean;
@@ -413,11 +414,14 @@ export function RadarDetails({
   onNoticeAck?: (id: string) => void;
   ackPending?: string | null;
   ackError?: string;
+  section?: "series" | "market" | "strategy" | "monitor";
 }) {
   const { radar, decision, portfolio, directionModel } = data;
+  const show = (name: NonNullable<typeof section>) =>
+    !section || section === name;
   return (
     <div className="op-radar-details">
-      {!!radar?.changes.length && (
+      {!section && !!radar?.changes.length && (
         <section aria-label="重要条件变化">
           <h3>按重要性排列的研究变化</h3>
           <ol className="op-radar-change-list">
@@ -448,16 +452,14 @@ export function RadarDetails({
           </small>
         </section>
       )}
-      {!!radar?.sections.length && (
+      {!section && !!radar?.sections.length && (
         <section className="op-radar-sections" aria-label="机会与风险专题">
           {radar.sections.map((s) => (
             <article key={s.id}>
               <h3>{s.label}</h3>
               <span className="op-badge">{stateText(s.state)}</span>
               <p>{s.summary}</p>
-              {s.criticalImpact && (
-                <p className="op-critical-impact">{s.criticalImpact}</p>
-              )}
+              {s.criticalImpact && <p>{s.criticalImpact}</p>}
               {!!s.missingEvidence.length && (
                 <p>证据缺口：{s.missingEvidence.join("、")}</p>
               )}
@@ -465,9 +467,11 @@ export function RadarDetails({
           ))}
         </section>
       )}
-      {!!data.series?.length && (
+      {show("series") && !!data.series?.length && (
         <section aria-label="关键变量证据">
-          <h3>利率与信用的实际证据</h3>
+          <h3>
+            {data.researchBoard ? "相关变量的实际证据" : "利率与信用的实际证据"}
+          </h3>
           <div className="op-series-grid">
             {data.series.map((s) => (
               <SeriesCard key={s.code} series={s} />
@@ -475,7 +479,7 @@ export function RadarDetails({
           </div>
         </section>
       )}
-      {!!data.marketEvidence?.length && (
+      {show("market") && !!data.marketEvidence?.length && (
         <section aria-label="当前指数证据">
           <h3>当前方向的指数与市场</h3>
           <div className="op-radar-market-grid">
@@ -516,7 +520,7 @@ export function RadarDetails({
                 <p>最大回撤：{percent(index.risk.maxDrawdown)}</p>
                 <p>盈利：{stateText(index.earnings.state)}</p>
                 {index.earnings.summary && <p>{index.earnings.summary}</p>}
-                {!!index.missingEvidence.length && (
+                {!data.researchBoard && !!index.missingEvidence.length && (
                   <p>证据缺口：{index.missingEvidence.join("、")}</p>
                 )}
                 {sourceHref(index.sourceUri) && (
@@ -533,7 +537,7 @@ export function RadarDetails({
           </div>
         </section>
       )}
-      {directionModel && (
+      {!section && directionModel && (
         <section aria-label="当前方向证据模型">
           <h3>方向支持与逆风</h3>
           <span className="op-badge">{stateText(directionModel.state)}</span>
@@ -563,18 +567,29 @@ export function RadarDetails({
           <small>方法：{directionModel.methodVersion}</small>
         </section>
       )}
-      {(decision || portfolio) && (
+      {show("strategy") && (decision || portfolio) && (
         <section aria-label="策略与个人持仓">
           <h3>策略与持仓</h3>
           <p>按每日盘后研究与持仓变更分别复核。</p>
           {decision && (
             <>
               <span className="op-badge">{stateText(decision.state)}</span>
-              <p>{decision.summary}</p>
+              {!data.researchBoard && <p>{decision.summary}</p>}
               <p>
                 市场条件：{stateText(decision.marketState)} · 个人条件：
                 {stateText(decision.personalState)}
               </p>
+              {decision.assessment && (
+                <p>
+                  持仓识别：{stateText(decision.assessment.holdingState)} ·
+                  风险评估：
+                  {decision.assessment.riskState === "UNKNOWN"
+                    ? "尚未评估"
+                    : stateText(decision.assessment.riskState)}{" "}
+                  · 市场研究：
+                  {stateText(decision.assessment.marketResearchState)}
+                </p>
+              )}
               <dl className="op-radar-gates">
                 {decision.gates.map((g) => (
                   <div key={g.id}>
@@ -582,7 +597,7 @@ export function RadarDetails({
                       {g.label}
                       <span className="op-badge">{stateText(g.state)}</span>
                     </dt>
-                    <dd>{g.reason}</dd>
+                    {!data.researchBoard && <dd>{g.reason}</dd>}
                   </div>
                 ))}
               </dl>
@@ -592,15 +607,14 @@ export function RadarDetails({
               {decision.validation.limitations?.map((reason) => (
                 <p key={reason}>{reason}</p>
               ))}
-              <h3>下一步核查</h3>
-              {decision.nextChecks.map((check) => (
-                <p key={check}>{check}</p>
-              ))}
+              {!data.researchBoard && <h3>下一步核查</h3>}
+              {!data.researchBoard &&
+                decision.nextChecks.map((check) => <p key={check}>{check}</p>)}
             </>
           )}
           {portfolio && (
             <div className="op-radar-portfolio">
-              <p>{portfolio.summary}</p>
+              {!data.researchBoard && <p>{portfolio.summary}</p>}
               <p>
                 持仓状态：
                 {portfolio.heldSelected == null
@@ -615,14 +629,14 @@ export function RadarDetails({
                 {percent(portfolio.cashRatio)}
               </p>
               <p>持仓快照：{timeLabel(portfolio.asOf)}</p>
-              {!!portfolio.missingEvidence.length && (
+              {!data.researchBoard && !!portfolio.missingEvidence.length && (
                 <p>证据缺口：{portfolio.missingEvidence.join("、")}</p>
               )}
             </div>
           )}
         </section>
       )}
-      {radar && (
+      {show("monitor") && (radar || data.researchBoard) && (
         <section className="op-radar-monitor" aria-label="站内研究条件跟踪">
           <h3>站内条件跟踪</h3>
           <p>显式启用后跟踪当前研究范围；首次建立基线，条件变化在站内显示。</p>

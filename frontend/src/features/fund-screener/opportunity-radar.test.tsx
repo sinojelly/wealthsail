@@ -302,7 +302,7 @@ async function expand() {
   return user;
 }
 
-it("shows the four decision questions while collapsed and highlights only backend critical impact", () => {
+it("keeps legacy questions compatible without certifying risk from raw priority", () => {
   render(
     <MacroContextStrip
       data={context}
@@ -312,10 +312,10 @@ it("shows the four decision questions while collapsed and highlights only backen
   );
   for (const question of context.radar!.questions)
     expect(screen.getByText(question.label)).toBeInTheDocument();
-  expect(screen.getByText(context.radar!.headline.impact)).toHaveClass(
+  expect(screen.getByText(context.radar!.headline.impact)).not.toHaveClass(
     "op-critical-impact",
   );
-  expect(screen.getByText(context.radar!.questions[0].summary)).toHaveClass(
+  expect(screen.getByText(context.radar!.questions[0].summary)).not.toHaveClass(
     "op-critical-impact",
   );
   expect(screen.getByText(context.radar!.questions[1].summary)).not.toHaveClass(
@@ -583,6 +583,7 @@ it("does not promote a stale critical cross-market association or turn gaps into
   ).not.toBeInTheDocument();
   expect(screen.getByText("关键证据不足")).toBeInTheDocument();
   expect(screen.queryByText("风险已经上升")).not.toBeInTheDocument();
+  expect(document.querySelector(".op-critical-impact")).not.toBeInTheDocument();
 });
 
 it("displays actual portfolio ratios and keeps unknown weights empty", async () => {

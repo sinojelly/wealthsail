@@ -179,6 +179,99 @@ export interface OpportunityScope {
 export interface OpportunityQuery extends OpportunityScope {
   months: number;
 }
+export type ResearchTone = "RED" | "ORANGE" | "GREEN" | "BLUE" | "GRAY";
+export interface ResearchAction {
+  type:
+    | "VIEW_HOLDINGS"
+    | "VIEW_POLICY"
+    | "UPDATE_HOLDINGS"
+    | "VIEW_CANDIDATES"
+    | "VIEW_EVIDENCE"
+    | "VIEW_DATA"
+    | "TRACK"
+    | "VIEW_OPERATIONS";
+  label: string;
+  target: string | null;
+  href: string | null;
+  enabled: boolean;
+  disabledReason: string | null;
+}
+export interface DirectionEvidence {
+  label: string;
+  summary: string;
+  evidenceIds: string[];
+  state: string;
+}
+export interface ResearchIssue {
+  id: string;
+  key: string;
+  category: "RISK" | "OPPORTUNITY" | "CHANGE" | "DATA_GAP" | "SYSTEM";
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  confidence: "VERIFIED" | "PARTIAL" | "UNKNOWN";
+  tone: ResearchTone;
+  summary: string;
+  impact: string;
+  evidenceIds: string[];
+  selectionRelevance: "CURRENT_SELECTION";
+  holdingRelevance: "HELD" | "NOT_HELD" | "UNKNOWN";
+  affectedAssets: { [Key in keyof OpportunityScope]?: string | null };
+  owner: string;
+  actionability: "USER" | "SYSTEM" | "ADMIN" | "READ_ONLY";
+  nextAction: ResearchAction;
+  firstSeenAt: string | null;
+  lastChangedAt: string | null;
+  status: "OPEN";
+  blocker?: {
+    code: string;
+    state: string;
+    owner: string;
+    reason: string;
+    affectedJudgment: string;
+    userFixable: boolean;
+    lastAttemptAt: string | null;
+    nextCheckAt: string | null;
+    sourceKey: string | null;
+  } | null;
+}
+export interface ResearchBoardData {
+  methodVersion: string;
+  asOf: string | null;
+  items: ResearchIssue[];
+  summaries: Array<{
+    id: "HOLDINGS" | "OPPORTUNITIES" | "CHANGES";
+    label: string;
+    state: string;
+    summary: string;
+    tone: ResearchTone;
+    itemIds: string[];
+    nextAction: ResearchAction;
+  }>;
+  direction: {
+    label: string;
+    researchState: string;
+    qualificationState: string;
+    supports: DirectionEvidence[];
+    counterFactors: DirectionEvidence[];
+    recommendedChecks: string[];
+    itemIds: string[];
+  };
+  dataStatus: {
+    itemIds: string[];
+    collectedAt: string | null;
+    nextCheckAt: string | null;
+    collectionState?: "FINISHED" | "CANCELLED" | "CLAIMED" | "NOT_COLLECTED";
+    sourceResults: Record<
+      string,
+      {
+        status: string;
+        reason?: string;
+        errorClass?: string;
+        observations?: number;
+      }
+    >;
+    methodVersions: string[];
+  };
+}
 export interface RadarChange {
   id: string;
   priority: "CRITICAL" | "ATTENTION" | "INFO";
@@ -267,6 +360,7 @@ export interface MarketEvidence {
   asOf: string | null;
 }
 export interface OpportunityContext extends MacroContext {
+  researchBoard?: ResearchBoardData | null;
   series?: OpportunitySeries[];
   marketEvidence?: MarketEvidence[];
   radar?: {
@@ -308,6 +402,16 @@ export interface OpportunityContext extends MacroContext {
     watchFor: string[];
     requiredEvidence: string[];
     missingEvidence: string[];
+    missingRequiredEvidence?: string[];
+    recommendedChecks?: string[];
+    failedConditions?: Array<{
+      id: string;
+      label: string;
+      reason: string;
+      evidenceIds: string[];
+    }>;
+    researchState?: string;
+    qualificationState?: string;
   } | null;
   decision?: {
     state: "WAIT" | "ENTRY_CANDIDATE" | "HOLD_REVIEW" | "POSITION_REVIEW";
@@ -332,6 +436,12 @@ export interface OpportunityContext extends MacroContext {
       limitations?: string[];
     };
     nextChecks: string[];
+    assessment?: {
+      holdingState: string;
+      riskState: string;
+      marketResearchState: string;
+    };
+    actions?: ResearchAction[];
   } | null;
   portfolio?: {
     state: string;
@@ -342,6 +452,8 @@ export interface OpportunityContext extends MacroContext {
     asOf: string | null;
     summary: string;
     missingEvidence: string[];
+    budgetViolation?: boolean;
+    budgetState?: string;
   } | null;
   notices?: ConditionNotice[];
 }

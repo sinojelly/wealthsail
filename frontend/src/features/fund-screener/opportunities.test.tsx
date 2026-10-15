@@ -625,3 +625,138 @@ it("pins analysis cutoff when paging and resets it when changing direction", asy
     ),
   );
 });
+
+function researchBoardResponse() {
+  const candidates = {
+    type: "VIEW_CANDIDATES",
+    label: "查看当前指数和基金",
+    target: "op-research-targets",
+    href: null,
+    enabled: true,
+    disabledReason: null,
+  };
+  return {
+    state: "UNVERIFIED",
+    items: [],
+    researchBoard: {
+      methodVersion: "research-board-v1",
+      asOf: null,
+      items: [],
+      summaries: [
+        {
+          id: "HOLDINGS",
+          label: "我的持仓风险",
+          state: "UNKNOWN",
+          summary: "个人风险尚未评估",
+          tone: "GRAY",
+          itemIds: [],
+          nextAction: {
+            type: "VIEW_HOLDINGS",
+            label: "查看持仓",
+            target: null,
+            href: "/dashboard?scope=MINE",
+            enabled: true,
+            disabledReason: null,
+          },
+        },
+        {
+          id: "OPPORTUNITIES",
+          label: "机会候选",
+          state: "INSUFFICIENT",
+          summary: "当前研究范围等待证据",
+          tone: "GRAY",
+          itemIds: [],
+          nextAction: candidates,
+        },
+        {
+          id: "CHANGES",
+          label: "重要新变化",
+          state: "UNKNOWN",
+          summary: "等待可靠的条件变化",
+          tone: "GRAY",
+          itemIds: [],
+          nextAction: {
+            type: "TRACK",
+            label: "跟踪当前研究条件",
+            target: null,
+            href: null,
+            enabled: true,
+            disabledReason: null,
+          },
+        },
+      ],
+      direction: {
+        label: "A股 · 宽基",
+        researchState: "INSUFFICIENT",
+        qualificationState: "INCOMPLETE",
+        supports: [],
+        counterFactors: [],
+        recommendedChecks: [],
+        itemIds: [],
+      },
+      dataStatus: {
+        itemIds: [],
+        collectedAt: null,
+        nextCheckAt: null,
+        sourceResults: {},
+        methodVersions: [],
+      },
+    },
+  };
+}
+
+it("prefers a board without legacy radar and focuses the existing candidates without changing selection", async () => {
+  const user = userEvent.setup();
+  api.context.mockResolvedValue({
+    state: "UNVERIFIED",
+    items: [],
+    research: { summary: "旧版宏观摘要不应覆盖研究板" },
+  });
+  api.opportunity.mockResolvedValue(researchBoardResponse());
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await screen.findByRole("heading", { name: "市场环境与研究重点" });
+  expect(
+    screen.queryByText("旧版宏观摘要不应覆盖研究板"),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "查看当前指数和基金" }));
+  expect(document.activeElement).toHaveAttribute("id", "op-research-targets");
+  expect(screen.getByLabelText("研究路径")).toHaveTextContent(
+    "A股 / 宽基 / 沪深300 / 510330",
+  );
+  expect(api.setMonitor).not.toHaveBeenCalled();
+});
+
+it("starts board tracking only on a click with the full selected identity", async () => {
+  const user = userEvent.setup();
+  api.opportunity.mockResolvedValue(researchBoardResponse());
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&macroMonths=60",
+  );
+  await screen.findByRole("heading", { name: "市场环境与研究重点" });
+  expect(api.setMonitor).not.toHaveBeenCalled();
+  await user.click(
+    await screen.findByRole("button", { name: "跟踪当前研究条件" }),
+  );
+  await waitFor(() =>
+    expect(api.setMonitor).toHaveBeenCalledWith({
+      directionId: "a-share:broad",
+      indexId: "hs300",
+      instrumentId: "fund-id",
+      fundCode: "510330",
+      fundMarket: "SSE",
+      enabled: true,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "跟踪当前研究条件" }),
+    ).toBeDisabled(),
+  );
+  expect(
+    screen.getByRole("button", { name: "停止跟踪研究条件" }),
+  ).toBeInTheDocument();
+});
