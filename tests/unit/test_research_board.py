@@ -26,9 +26,10 @@ def build(
     scope=None,
     collection=None,
     manage=False,
+    context=None,
 ):
     return engine().build_research_board(
-        {"items": [], "events": []},
+        context or {"items": [], "events": []},
         series or [],
         evidence or [],
         {"id": "a-share:broad", "market_id": "a-share", "label": "A股宽基"},
@@ -113,9 +114,7 @@ def test_unknown_holdings_are_not_assessed_as_no_risk_or_not_held():
 @pytest.mark.parametrize(
     "code,target", [("PMI", "research-macro"), ("US_T10_REAL", "research-global")]
 )
-def test_important_changes_summary_opens_the_topic_containing_its_evidence(
-    code, target
-):
+def test_important_changes_summary_opens_issues_before_the_evidence_topic(code, target):
     board = build(
         series=[{"code": code, "state": "READY", "value": 50.1}],
         radar={
@@ -131,7 +130,8 @@ def test_important_changes_summary_opens_the_topic_containing_its_evidence(
         },
     )
     card = summary(board, "CHANGES")
-    assert card["nextAction"]["target"] == target
+    assert card["nextAction"]["type"] == "VIEW_ISSUES"
+    assert card["nextAction"]["target"] == "CHANGES"
     issue = next(i for i in board["items"] if i["id"] in card["itemIds"])
     assert issue["nextAction"]["target"] == target
 
@@ -382,7 +382,12 @@ def test_ops_links_are_not_exposed_to_viewers_or_point_to_fake_source_settings()
     viewer = build(series=source)
     admin = build(series=source, manage=True)
     assert "/operations" not in str(viewer) and "/settings" not in str(admin)
-    assert any(i["nextAction"]["href"] == "/operations" for i in admin["items"])
+    assert admin["dataStatus"]["adminAction"]["href"] == "/operations"
+    assert all(
+        i["nextAction"]["type"] == "VIEW_DATA"
+        for i in admin["items"]
+        if i.get("blocker")
+    )
 
 
 def test_acknowledged_notice_cannot_remove_active_risk_issue():
@@ -529,7 +534,7 @@ def test_product_and_pit_unknown_gates_have_one_responsible_blocker_and_real_nex
             i for i in result["items"] if i.get("blocker", {}).get("code") == code
         )
         assert issue["owner"] == "RESEARCH_DATA" and issue["tone"] == "GRAY"
-        assert issue["nextAction"]["target"] == "research-strategy"
+        assert issue["nextAction"]["target"] == "research-data"
 
 
 def test_ordinary_updates_do_not_count_as_important_changes_in_the_home_summary():
@@ -559,3 +564,398 @@ def test_data_status_exposes_only_the_persisted_collection_phase():
         ]
         == "FINISHED"
     )
+
+
+def test_direction_references_real_research_items_and_separates_actual_blockers():
+    result = build(evidence=[trend(), trend("zz500")])
+    by_id = {i["id"]: i for i in result["items"]}
+    direction = result["direction"]
+    assert result["methodVersion"] == "research-board-v2"
+    assert direction["itemIds"]
+    assert all(
+        by_id[key]["category"] in {"RISK", "OPPORTUNITY", "CHANGE"}
+        for key in direction["itemIds"]
+    )
+    assert direction["blockerIds"] == result["dataStatus"]["itemIds"]
+    assert not set(direction["itemIds"]) & set(direction["blockerIds"])
+    assert direction["relatedIndexIds"] == ["hs300", "zz500"]
+    assert direction["summary"] and direction["nextStep"]
+    assert direction["nextAction"]["type"] == "VIEW_DIRECTION"
+    assert direction["nextAction"]["target"] == "current-direction"
+
+
+def test_direction_preserves_support_counter_and_known_failed_rule_without_making_a_gap():
+    supports = [{"label": "支持", "summary": "已知制造业景气", "evidenceIds": ["PMI"]}]
+    counters = [{"label": "逆风", "summary": "已知融资变化", "evidenceIds": ["CN_T10"]}]
+    failed = [
+        {
+            "id": "INDEX_TREND",
+            "label": "趋势",
+            "reason": "当前未满足规则",
+            "evidenceIds": ["hs300"],
+        }
+    ]
+    result = build(
+        evidence=[trend(positive=False)],
+        model={
+            "requiredEvidence": ["INDEX_TREND"],
+            "missingRequiredEvidence": [],
+            "supports": supports,
+            "counterFactors": counters,
+            "failedConditions": failed,
+            "qualificationState": "BLOCKED",
+            "researchState": "WAIT_CONDITIONS",
+        },
+    )
+    assert result["direction"]["supports"] == supports
+    assert result["direction"]["counterFactors"] == counters
+    assert result["direction"]["failedConditions"] == failed
+    assert result["direction"]["blockerIds"] == []
+
+
+def test_known_failed_trend_is_a_verified_current_change_with_the_same_index_key():
+    good = next(
+        i for i in build(evidence=[trend()])["items"] if i["key"] == "trend:hs300"
+    )
+    bad = next(
+        i
+        for i in build(evidence=[trend(positive=False)])["items"]
+        if i["key"] == "trend:hs300"
+    )
+    assert good["id"] == bad["id"]
+    assert (good["category"], good["condition"]) == ("OPPORTUNITY", "PASSED")
+    assert (bad["category"], bad["condition"]) == ("CHANGE", "FAILED")
+    assert good["factVerification"] == bad["factVerification"] == "VERIFIED"
+    assert bad["severity"] == "MEDIUM" and bad["tone"] != "RED"
+    assert "当前" in bad["summary"]
+    assert all(word not in bad["summary"] for word in ("刚", "转弱", "卖出"))
+    stale = trend(positive=False)
+    stale["state"] = "STALE"
+    assert not any(i["key"] == "trend:hs300" for i in build(evidence=[stale])["items"])
+
+
+def test_five_groups_classify_without_merging_independent_source_states_or_times():
+    result = build(
+        model={
+            "requiredEvidence": ["INDEX_TREND", "M1_YOY", "TSF_STOCK_YOY", "CN_T10"],
+            "missingRequiredEvidence": [
+                "INDEX_TREND",
+                "M1_YOY",
+                "TSF_STOCK_YOY",
+                "CN_T10",
+            ],
+        },
+        series=[{"code": "CN_T10", "state": "PERMISSION_REQUIRED"}],
+        decision={
+            "state": "WAIT",
+            "gates": [
+                {"id": key, "label": key, "state": "UNKNOWN"}
+                for key in ("product", "validation", "portfolio")
+            ],
+        },
+        collection={
+            "sourceResults": {
+                "PBOC_M1": {"status": "FAILED", "errorClass": "HTTPStatusError"},
+                "PBOC_TSF": {"status": "FAILED", "errorClass": "HTTPStatusError"},
+            },
+            "sourceAttemptAt": {
+                "PBOC_M1": NOW - timedelta(hours=1),
+                "PBOC_TSF": NOW - timedelta(days=2),
+            },
+        },
+    )
+    groups = result["dataStatus"]["groups"]
+    assert [g["id"] for g in groups] == [
+        "MARKET",
+        "MACRO",
+        "PERMISSION",
+        "PORTFOLIO",
+        "STRATEGY",
+    ]
+    assert all(
+        set(g) == {"id", "label", "summary", "impact", "owner", "itemIds"}
+        for g in groups
+    )
+    assert all(g["itemIds"] for g in groups)
+    grouped = [key for group in groups for key in group["itemIds"]]
+    assert len(grouped) == len(set(grouped)) == len(result["dataStatus"]["itemIds"])
+    items = {i["id"]: i for i in result["items"]}
+    macro = next(g for g in groups if g["id"] == "MACRO")
+    children = {
+        items[key]["blocker"]["code"]: items[key]["blocker"] for key in macro["itemIds"]
+    }
+    assert children["M1_YOY"]["sourceKey"] == "PBOC_M1"
+    assert children["TSF_STOCK_YOY"]["sourceKey"] == "PBOC_TSF"
+    assert children["M1_YOY"]["lastAttemptAt"] == NOW - timedelta(hours=1)
+    assert children["TSF_STOCK_YOY"]["lastAttemptAt"] == NOW - timedelta(days=2)
+    assert all(child["state"] == "FAILED" for child in children.values())
+
+
+def test_business_gap_actions_are_the_same_for_admin_and_viewer_and_no_task_is_invented():
+    viewer, admin = build(), build(manage=True)
+    assert viewer["dataStatus"]["adminAction"] is None
+    assert admin["dataStatus"]["adminAction"]["type"] == "VIEW_OPERATIONS"
+    for board in (viewer, admin):
+        issue = next(i for i in board["items"] if i.get("blocker"))
+        assert issue["nextAction"]["type"] == "VIEW_DATA"
+        assert issue["nextAction"]["target"] == "research-data"
+        assert issue["blocker"]["lastAttemptAt"] is None
+        assert "未检测到执行记录" in issue["impact"]
+        assert "等待" not in issue["impact"] and "正在处理" not in issue["impact"]
+
+
+def test_valid_rate_fact_is_verified_while_its_impact_remains_conditional():
+    result = build(
+        series=[
+            {
+                "code": "US_T10_REAL",
+                "state": "READY",
+                "value": 2,
+                "frequency": "DAILY",
+                "unit": "%",
+            }
+        ],
+        radar={
+            "changes": [
+                {
+                    "id": "rate:real",
+                    "kind": "RISK",
+                    "priority": "ATTENTION",
+                    "severity": "HIGH",
+                    "summary": "已知利率变化",
+                    "evidenceIds": ["US_T10_REAL"],
+                }
+            ]
+        },
+    )
+    item = next(i for i in result["items"] if i["key"] == "rate:real")
+    assert item["factVerification"] == "VERIFIED"
+    assert item["confidence"] == "PARTIAL" and item["tone"] == "ORANGE"
+    assert all(
+        i["factVerification"] == "UNKNOWN" for i in result["items"] if i.get("blocker")
+    )
+
+
+@pytest.mark.parametrize(
+    "verification,expected",
+    [("VERIFIED", "VERIFIED"), ("UNVERIFIED", "UNKNOWN"), (None, "UNKNOWN")],
+)
+def test_macro_fact_verification_requires_actual_value_verification(
+    verification, expected
+):
+    item = {
+        "code": "PMI",
+        "state": "READY",
+        "value": 51,
+        "valueVerification": verification,
+    }
+    result = build(
+        context={"items": [item]},
+        radar={
+            "changes": [
+                {
+                    "id": "macro:PMI:BENCHMARK_CROSSING_UP",
+                    "kind": "OBSERVATION",
+                    "priority": "ATTENTION",
+                    "summary": "已知月度事实",
+                    "evidenceIds": ["PMI"],
+                }
+            ]
+        },
+    )
+    assert (
+        next(i for i in result["items"] if i["key"].startswith("macro:PMI:"))[
+            "factVerification"
+        ]
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "published", [NOW + timedelta(seconds=1), "invalid", datetime(2026, 10, 15, 11)]
+)
+def test_unavailable_official_event_timestamp_cannot_become_a_verified_business_fact(
+    published,
+):
+    result = build(
+        context={
+            "events": [
+                {
+                    "id": "event",
+                    "sourceType": "OFFICIAL_FACT",
+                    "publishedAt": published,
+                    "sourceUri": "https://www.pbc.gov.cn/event",
+                }
+            ]
+        },
+        radar={
+            "changes": [
+                {
+                    "id": "event:event",
+                    "kind": "OBSERVATION",
+                    "priority": "ATTENTION",
+                    "summary": "公告",
+                    "evidenceIds": ["event"],
+                }
+            ]
+        },
+    )
+    assert not any(i["key"] == "event:event" for i in result["items"])
+
+
+def entry_inputs():
+    return {
+        "decision": {
+            "state": "ENTRY_CANDIDATE",
+            "gates": [
+                {"id": key, "state": "PASS"}
+                for key in (
+                    "value",
+                    "trend",
+                    "macro",
+                    "product",
+                    "validation",
+                    "portfolio",
+                    "tradability",
+                )
+            ],
+            "validation": {
+                "state": "PASS",
+                "sourceMode": "REAL_PIT",
+                "pointInTimeVerified": True,
+            },
+        },
+        "portfolio": {
+            "state": "READY",
+            "heldSelected": False,
+            "budgetState": "PASS",
+            "budgetViolation": False,
+        },
+        "model": {
+            "qualificationState": "READY",
+            "missingRequiredEvidence": [],
+            "counterFactors": [],
+            "failedConditions": [],
+        },
+    }
+
+
+def test_complete_entry_has_its_own_verified_qualification_item_for_monitoring():
+    board = build(**entry_inputs())
+    issue = next(i for i in board["items"] if i["key"] == "qualification:entry")
+    assert (
+        issue["category"] == "OPPORTUNITY" and issue["factVerification"] == "VERIFIED"
+    )
+    assert "人工复核" in issue["impact"]
+    assert issue["id"] in summary(board, "OPPORTUNITIES")["itemIds"]
+
+
+def test_empty_groups_do_not_invent_new_unavailable_judgments_or_processing():
+    board = build(**entry_inputs())
+    assert not board["dataStatus"]["itemIds"]
+    for group in board["dataStatus"]["groups"]:
+        assert group["itemIds"] == []
+        assert all(
+            word not in group["impact"] for word in ("受限", "尚不能", "等待", "处理中")
+        )
+
+
+def test_verified_official_event_fact_does_not_certify_its_unknown_market_impact():
+    result = build(
+        context={
+            "events": [
+                {
+                    "id": "event",
+                    "sourceType": "OFFICIAL_FACT",
+                    "publishedAt": NOW - timedelta(hours=1),
+                    "retrievedAt": NOW - timedelta(minutes=1),
+                    "sourceUri": "https://www.pbc.gov.cn/event",
+                }
+            ]
+        },
+        radar={
+            "changes": [
+                {
+                    "id": "event:event",
+                    "kind": "OBSERVATION",
+                    "priority": "INFO",
+                    "summary": "官方公告已发布",
+                    "evidenceIds": ["event"],
+                }
+            ]
+        },
+    )
+    item = next(i for i in result["items"] if i["key"] == "event:event")
+    assert item["factVerification"] == "VERIFIED"
+    assert item["confidence"] == "PARTIAL"
+    assert item["severity"] == "LOW" and item["category"] == "CHANGE"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing_gate",
+        "unknown_gate",
+        "synthetic",
+        "unknown_portfolio",
+        "held_unknown",
+        "budget_unknown",
+        "model_incomplete",
+    ],
+)
+def test_entry_label_without_all_actual_proof_cannot_create_a_qualification_item(
+    change,
+):
+    inputs = entry_inputs()
+    if change == "missing_gate":
+        inputs["decision"]["gates"].pop()
+    elif change == "unknown_gate":
+        inputs["decision"]["gates"][0]["state"] = "UNKNOWN"
+    elif change == "synthetic":
+        inputs["decision"]["validation"]["sourceMode"] = "SYNTHETIC"
+    elif change == "unknown_portfolio":
+        inputs["portfolio"]["state"] = "UNKNOWN"
+    elif change == "held_unknown":
+        inputs["portfolio"]["heldSelected"] = None
+    elif change == "budget_unknown":
+        inputs["portfolio"]["budgetState"] = "UNKNOWN"
+    else:
+        inputs["model"]["qualificationState"] = "INCOMPLETE"
+    board = build(**inputs)
+    assert not any(i["key"] == "qualification:entry" for i in board["items"])
+    assert summary(board, "OPPORTUNITIES")["state"] != "ENTRY_CANDIDATE"
+
+
+@pytest.mark.parametrize("positive", [True, False])
+def test_homepage_names_the_known_index_condition_instead_of_only_a_count(positive):
+    board = build(evidence=[trend(positive=positive)])
+    assert "沪深300" in summary(board, "OPPORTUNITIES")["summary"]
+    assert "沪深300" in board["direction"]["summary"]
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_actual_http_code_is_preserved_without_raw_error_text(status):
+    board = build(
+        collection={
+            "sourceResults": {
+                "PBOC_M1": {
+                    "status": "FAILED",
+                    "errorClass": "HTTPStatusError",
+                    "httpStatus": status,
+                    "error": "private secret",
+                }
+            }
+        }
+    )
+    assert board["dataStatus"]["sourceResults"]["PBOC_M1"]["httpStatus"] == status
+    assert "secret" not in str(board)
+
+
+@pytest.mark.parametrize("status", [True, "403", 99, 600])
+def test_invalid_http_code_is_not_a_verified_status(status):
+    board = build(
+        collection={
+            "sourceResults": {"PBOC_M1": {"status": "FAILED", "httpStatus": status}}
+        }
+    )
+    assert "httpStatus" not in board["dataStatus"]["sourceResults"]["PBOC_M1"]
