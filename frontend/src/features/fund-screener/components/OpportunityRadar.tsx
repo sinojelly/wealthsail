@@ -417,6 +417,56 @@ export function RadarDetails({
   section?: "series" | "market" | "strategy" | "monitor";
 }) {
   const { radar, decision, portfolio, directionModel } = data;
+  const [expandedReasons, setExpandedReasons] = useState<string[]>([]);
+  const canonicalItems = data.researchBoard?.items ?? [];
+  const canonicalTexts = new Set(
+    canonicalItems.flatMap((item) =>
+      [item.impact, item.blocker?.reason]
+        .filter((text): text is string => !!text?.trim())
+        .flatMap((text) => [
+          text.trim(),
+          ...text.split(/[；;\n]/).map((part) => part.trim()),
+        ]),
+    ),
+  );
+  const canonicalGateCodes: Record<string, string> = {
+    product: "PRODUCT_QUALITY",
+    tradability: "TRADABILITY",
+    validation: "PIT_VALIDATION",
+    portfolio: "PERSONAL_PORTFOLIO",
+  };
+  const covered = (text: string) => canonicalTexts.has(text.trim());
+  const gateCovered = (gate: NonNullable<typeof decision>["gates"][number]) =>
+    covered(gate.reason) ||
+    (gate.state === "UNKNOWN" &&
+      !!canonicalGateCodes[gate.id] &&
+      canonicalItems.some(
+        (item) => item.blocker?.code === canonicalGateCodes[gate.id],
+      ));
+  const remainingGateReasons = (decision?.gates ?? [])
+    .filter((gate) => !gateCovered(gate))
+    .map((gate) => gate.reason);
+  const personalCovered = (text: string) =>
+    covered(text) ||
+    remainingGateReasons.some((reason) =>
+      [
+        reason.trim(),
+        ...reason.split(/[；;\n]/).map((part) => part.trim()),
+      ].includes(text.trim()),
+    );
+  const personalSummary =
+    portfolio?.summary && !personalCovered(portfolio.summary)
+      ? portfolio.summary
+      : null;
+  const personalMissing = [...new Set(portfolio?.missingEvidence ?? [])].filter(
+    (reason) => !personalCovered(reason),
+  );
+  const toggleReason = (id: string) =>
+    setExpandedReasons((previous) =>
+      previous.includes(id)
+        ? previous.filter((key) => key !== id)
+        : [...previous, id],
+    );
   const show = (name: NonNullable<typeof section>) =>
     !section || section === name;
   return (
@@ -597,12 +647,30 @@ export function RadarDetails({
                       {g.label}
                       <span className="op-badge">{stateText(g.state)}</span>
                     </dt>
-                    {!data.researchBoard && <dd>{g.reason}</dd>}
+                    {!data.researchBoard ? (
+                      <dd>{g.reason}</dd>
+                    ) : (
+                      !gateCovered(g) && (
+                        <dd>
+                          <button
+                            type="button"
+                            aria-expanded={expandedReasons.includes(g.id)}
+                            onClick={() => toggleReason(g.id)}
+                          >
+                            查看{g.label}判断依据
+                          </button>
+                          {expandedReasons.includes(g.id) && <p>{g.reason}</p>}
+                        </dd>
+                      )
+                    )}
                   </div>
                 ))}
               </dl>
               <p>策略验证：{stateText(decision.validation.state)}</p>
-              <p>{decision.validation.summary}</p>
+              {(!data.researchBoard ||
+                !covered(decision.validation.summary)) && (
+                <p>{decision.validation.summary}</p>
+              )}
               <small>验证方法：{decision.validation.methodVersion}</small>
               {decision.validation.limitations?.map((reason) => (
                 <p key={reason}>{reason}</p>
@@ -632,6 +700,28 @@ export function RadarDetails({
               {!data.researchBoard && !!portfolio.missingEvidence.length && (
                 <p>证据缺口：{portfolio.missingEvidence.join("、")}</p>
               )}
+              {data.researchBoard &&
+                (personalSummary || personalMissing.length > 0) && (
+                  <div>
+                    <button
+                      type="button"
+                      aria-expanded={expandedReasons.includes(
+                        "personal-details",
+                      )}
+                      onClick={() => toggleReason("personal-details")}
+                    >
+                      查看个人持仓判断依据
+                    </button>
+                    {expandedReasons.includes("personal-details") && (
+                      <>
+                        {personalSummary && <p>{personalSummary}</p>}
+                        {personalMissing.map((reason) => (
+                          <p key={reason}>{reason}</p>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
             </div>
           )}
         </section>

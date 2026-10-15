@@ -230,7 +230,8 @@ function ResearchWorkspace({
     mutationFn: (input: watchlist.AddWatchlistInput) => watchlist.add(input),
     onSuccess: () =>
       client.invalidateQueries({
-        predicate: (q) => q.queryKey.includes("watchlist"),
+        queryKey: [subject, "watchlist"],
+        exact: true,
       }),
   });
   const refresh = useMutation({
@@ -356,7 +357,16 @@ function ResearchWorkspace({
   ]
     .filter(Boolean)
     .join(" / ");
-  const watching = watched.data?.some((f) => f.symbol === fundCode);
+  const watchAssetType = selectedFund?.tradeForm === "ETF" ? "ETF" : "FUND";
+  const watchedCode = watched.data?.some(
+    (f) => f.symbol === fundCode && f.assetType === watchAssetType,
+  );
+  const watchActionCurrent =
+    !!selectedFund?.market &&
+    add.variables?.symbol === fundCode &&
+    add.variables.market === selectedFund.market &&
+    add.variables.assetType === watchAssetType;
+  const watchAdded = add.isSuccess && watchActionCurrent;
   const busy =
     !!activeRun &&
     !timedOut &&
@@ -623,12 +633,16 @@ function ResearchWorkspace({
               disabled={
                 mode === "index" ||
                 !selectedFund?.market ||
-                add.isPending ||
-                watching ||
-                add.isSuccess
+                (add.isPending && watchActionCurrent) ||
+                watchedCode ||
+                watchAdded
               }
               title={
-                mode === "index" ? "指数关注服务尚未接入" : "加入现有基金自选"
+                mode === "index"
+                  ? "指数关注服务尚未接入"
+                  : watchedCode && !watchAdded
+                    ? "该代码和类型已有自选，现有服务未提供精确市场归属。"
+                    : "加入现有基金自选"
               }
               onClick={() => {
                 if (selectedFund?.market && fundCode)
@@ -645,14 +659,18 @@ function ResearchWorkspace({
               <ListPlus size={16} />
               {mode === "index"
                 ? "关注指数"
-                : watching || add.isSuccess
+                : watchAdded
                   ? "已加入自选"
-                  : "加入自选基金"}
+                  : watchedCode
+                    ? "代码已有自选 · 市场待核验"
+                    : "加入自选基金"}
             </button>
           }
         />
       </div>
-      {add.isError && <p role="alert">加入自选失败，请重试。</p>}
+      {add.isError && watchActionCurrent && (
+        <p role="alert">加入自选失败，请重试。</p>
+      )}
     </div>
   );
 }

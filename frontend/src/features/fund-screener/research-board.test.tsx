@@ -682,3 +682,114 @@ it("identifies the selected market when the backend direction label is only a st
     ),
   ).toBeInTheDocument();
 });
+
+it("keeps uncovered blocked and passed gate explanations available on demand", async () => {
+  show({
+    ...data,
+    decision: {
+      ...data.decision!,
+      gates: [
+        {
+          id: "trend",
+          label: "基金趋势条件",
+          state: "BLOCKED",
+          reason: "已核实动量为负，规则暂未满足。",
+        },
+        {
+          id: "value",
+          label: "基金价值条件",
+          state: "PASS",
+          reason: "估值与成本条件均已逐项核对。",
+        },
+      ],
+    },
+  });
+  await open("查看研究依据");
+  await open("策略与持仓");
+  expect(
+    screen.queryByText("已核实动量为负，规则暂未满足。"),
+  ).not.toBeInTheDocument();
+  await open("查看基金趋势条件判断依据");
+  expect(
+    screen.getByText("已核实动量为负，规则暂未满足。"),
+  ).toBeInTheDocument();
+  await open("查看基金价值条件判断依据");
+  expect(screen.getByText("估值与成本条件均已逐项核对。")).toBeInTheDocument();
+});
+
+it("does not hide an unknown value reason behind an unrelated issue without a blocker", async () => {
+  show({
+    ...data,
+    decision: {
+      ...data.decision!,
+      gates: [
+        {
+          id: "value",
+          label: "基金价值条件",
+          state: "UNKNOWN",
+          reason: "基金估值模型尚未形成独立结论。",
+        },
+      ],
+    },
+  });
+  await open("查看研究依据");
+  await open("策略与持仓");
+  await open("查看基金价值条件判断依据");
+  expect(
+    screen.getByText("基金估值模型尚未形成独立结论。"),
+  ).toBeInTheDocument();
+});
+
+it("deduplicates canonical blockers while preserving unique portfolio explanations", async () => {
+  const canonical = {
+    ...gap,
+    id: "portfolio-gap",
+    impact: "部分资产尚无可靠估值；现金余额尚未核实",
+    blocker: {
+      ...gap.blocker,
+      code: "PERSONAL_PORTFOLIO",
+      reason: "部分资产尚无可靠估值；现金余额尚未核实",
+    },
+  };
+  show({
+    ...data,
+    researchBoard: { ...board, items: [canonical] },
+    decision: {
+      ...data.decision!,
+      gates: [
+        {
+          id: "portfolio",
+          label: "个人风险预算",
+          state: "UNKNOWN",
+          reason: canonical.impact,
+        },
+      ],
+    },
+    portfolio: {
+      ...data.portfolio!,
+      summary: "尚需选择核查的资产范围",
+      missingEvidence: [
+        "部分资产尚无可靠估值",
+        "现金余额尚未核实",
+        "持仓开始日期仍需确认",
+      ],
+    },
+  } as OpportunityContext);
+  await open("数据与运行状态");
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "研究依据" })).getByRole(
+      "button",
+      { name: "查看研究依据" },
+    ),
+  );
+  await open("策略与持仓");
+  expect(
+    screen.queryByRole("button", { name: "查看个人风险预算判断依据" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getAllByText(canonical.impact)).toHaveLength(1);
+  await open("查看个人持仓判断依据");
+  expect(screen.getByText("尚需选择核查的资产范围")).toBeInTheDocument();
+  expect(screen.getByText("持仓开始日期仍需确认")).toBeInTheDocument();
+  expect(screen.queryByText("部分资产尚无可靠估值")).not.toBeInTheDocument();
+  expect(screen.queryByText("现金余额尚未核实")).not.toBeInTheDocument();
+});

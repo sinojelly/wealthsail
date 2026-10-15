@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useNavigate } from "react-router-dom";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
 
@@ -759,4 +760,158 @@ it("starts board tracking only on a click with the full selected identity", asyn
   expect(
     screen.getByRole("button", { name: "停止跟踪研究条件" }),
   ).toBeInTheDocument();
+});
+
+function twoFundCandidates(
+  second = {
+    ...fund,
+    instrumentId: "fund-b",
+    fundCode: "510500",
+    fundName: "待研究基金B",
+  },
+) {
+  api.funds.mockResolvedValue({
+    items: [fund, second],
+    total: 2,
+    page: 1,
+    pageSize: 20,
+  });
+}
+
+function WatchHistoryNavigation() {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() =>
+        navigate(
+          "/fund-screener?direction=a-share:broad&index=hs300&fund=510500&instrument=fund-b&fundMarket=SSE",
+        )
+      }
+    >
+      直接导航基金B
+    </button>
+  );
+}
+
+it("scopes successful watch state when browser navigation bypasses selection handlers", async () => {
+  const user = userEvent.setup();
+  twoFundCandidates();
+  renderWithSession(
+    <>
+      <FundScreenerPage />
+      <WatchHistoryNavigation />
+    </>,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: "加入自选基金" }));
+  await screen.findByText("已加入自选");
+  await user.click(screen.getByRole("button", { name: "直接导航基金B" }));
+  expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
+  expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();
+});
+
+it("does not carry a successful watch action into a different fund", async () => {
+  const user = userEvent.setup();
+  twoFundCandidates();
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: "加入自选基金" }));
+  await screen.findByText("已加入自选");
+  await user.click(screen.getByRole("button", { name: /待研究基金B/ }));
+  expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
+  expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();
+});
+
+it("does not mistake an ETF watch code for an OTC fund with the same code", async () => {
+  const user = userEvent.setup();
+  twoFundCandidates({
+    ...fund,
+    instrumentId: "otc-same-code",
+    market: "FUND_CN",
+    tradeForm: "FUND",
+    fundName: "同码场外基金",
+  });
+  api.list.mockResolvedValue([
+    {
+      symbol: "510330",
+      assetType: "ETF",
+      assetName: fund.fundName,
+      addedAt: "2026-10-15T01:00:00Z",
+    },
+  ]);
+  renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByRole("button", { name: /同码场外基金/ }));
+  expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
+  expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();
+});
+
+it("describes a legacy code-only watch without inventing a verified market identity", async () => {
+  api.list.mockResolvedValue([
+    {
+      symbol: "510330",
+      assetType: "ETF",
+      assetName: fund.fundName,
+      addedAt: "2026-10-15T01:00:00Z",
+    },
+  ]);
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  expect(
+    await screen.findByText(/代码已有自选.*市场.*核验/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();
+});
+
+it("keeps a pending and late successful watch scoped to its original fund", async () => {
+  let complete!: (value: unknown) => void;
+  api.add.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+  );
+  const user = userEvent.setup();
+  twoFundCandidates();
+  renderWithSession(
+    <>
+      <FundScreenerPage />
+      <WatchHistoryNavigation />
+    </>,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: "加入自选基金" }));
+  await waitFor(() => expect(api.add).toHaveBeenCalled());
+  await user.click(screen.getByRole("button", { name: "直接导航基金B" }));
+  expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
+  await act(async () => complete({ symbol: "510330", assetType: "ETF" }));
+  expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
+  expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();
+});
+
+it("does not display a late watch failure for the newly selected fund", async () => {
+  let fail!: (reason: Error) => void;
+  api.add.mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
+  const user = userEvent.setup();
+  twoFundCandidates();
+  renderWithSession(
+    <>
+      <FundScreenerPage />
+      <WatchHistoryNavigation />
+    </>,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: "加入自选基金" }));
+  await waitFor(() => expect(api.add).toHaveBeenCalled());
+  await user.click(screen.getByRole("button", { name: "直接导航基金B" }));
+  await act(async () => fail(new Error("watch-A-rejected")));
+  expect(screen.queryByText("加入自选失败，请重试。")).not.toBeInTheDocument();
 });
