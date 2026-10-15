@@ -308,3 +308,46 @@ def test_crossing_words_without_an_actual_boundary_crossing_cannot_raise_importa
     item = macro_changes([{"code": "PMI", "summary": "跨越文字不构成真实跨线证据"}])[0]
     assert item["priority"] == "INFO"
     assert "跨越" not in item["summary"]
+
+
+def test_opposite_real_benchmark_crossings_have_distinct_fact_identities():
+    changes = [{"code": "PMI", "summary": "相同的可修改摘要"}]
+    up = macro_changes(changes, value=51, previous=49, delta=2)[0]
+    down = macro_changes(changes, value=49, previous=51, delta=-2)[0]
+    assert up["id"] != down["id"]
+    assert up["priority"] == down["priority"] == "ATTENTION"
+
+
+@pytest.mark.parametrize(
+    "value,previous,delta,kind",
+    [
+        (51, 49, 2, "BENCHMARK_CROSSING_UP"),
+        (49, 51, -2, "BENCHMARK_CROSSING_DOWN"),
+        (50, 49, 1, "BENCHMARK_CROSSING_UP"),
+        (49, 50, -1, "BENCHMARK_CROSSING_DOWN"),
+        (51, 50, 1, "PERIOD_CHANGE"),
+        (50, 51, -1, "PERIOD_CHANGE"),
+    ],
+)
+def test_same_direction_crossing_remains_stable_when_unrelated_rows_or_wording_change(
+    value, previous, delta, kind
+):
+    original = macro_changes(
+        [{"code": "PMI", "summary": "原始摘要"}],
+        value=value,
+        previous=previous,
+        delta=delta,
+    )
+    refreshed = macro_changes(
+        [
+            {"code": "CPI_YOY", "summary": "其他指标更新"},
+            {"code": "PMI", "summary": "修订后的月度说明"},
+            {"code": "PMI", "summary": "修订后的参考线说明"},
+        ],
+        value=value,
+        previous=previous,
+        delta=delta,
+    )
+    assert len(original) == len(refreshed) == 1
+    assert original[0]["id"] == refreshed[0]["id"]
+    assert original[0]["id"] == "macro:PMI:" + kind

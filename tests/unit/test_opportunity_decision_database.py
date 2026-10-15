@@ -11,6 +11,7 @@ from backend.common.database import create_pool, tenant_transaction
 from backend.errors import NotFoundError
 from backend.investment import decision_repository as repo
 from test_opportunity_monitors import NOW, result
+from test_opportunity_monitors import board_result, research_result
 
 DSN = os.environ.get("INVESTMENT_TEST_DATABASE_URL")
 pytestmark = [
@@ -322,4 +323,181 @@ async def test_concurrent_monitor_scopes_share_one_actor_daily_notice_budget():
         assert sum(row.get("reason") == "BUDGET_OR_SILENCE" for row in outputs) == 1
     finally:
         await worker.close()
+        await pool.close()
+
+
+async def test_real_board_version_upgrade_is_baseline_and_ack_does_not_change_canonical_conditions():
+    pool = await create_pool(DSN, min_size=1, max_size=2)
+    worker = await create_pool(
+        DSN, min_size=1, max_size=2, runtime_role="wealthsail_worker"
+    )
+    try:
+        tenant, actor, other = await seed(pool)
+        scope = {"direction_id": "gold:physical", "index_id": "au9999"}
+        async with tenant_transaction(pool, actor, tenant) as conn:
+            saved = await repo.set_monitor(
+                conn, tenant, actor, scope, True, NOW - timedelta(days=1)
+            )
+        async with worker.acquire() as conn:
+            monitor = dict(
+                await conn.fetchrow(
+                    "SELECT * FROM risk.opportunity_condition_monitors WHERE id::text=$1",
+                    saved["id"],
+                )
+            )
+            async with conn.transaction():
+                assert (
+                    await repo.record_monitor_result(
+                        conn, monitor, research_result(), NOW - timedelta(minutes=30)
+                    )
+                )["baseline"]
+            async with conn.transaction():
+                upgrade = await repo.record_monitor_result(
+                    conn, monitor, board_result(), NOW
+                )
+                assert upgrade["baseline"] and not upgrade["notice"]
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM risk.opportunity_condition_notices WHERE monitor_id=$1",
+                    monitor["id"],
+                )
+                == 0
+            )
+            current = board_result("HIGH")
+            async with conn.transaction():
+                assert (
+                    await repo.record_monitor_result(
+                        conn, monitor, current, NOW + timedelta(minutes=15)
+                    )
+                )["notice"]
+            before = await conn.fetch(
+                "SELECT condition_fingerprint,result FROM risk.opportunity_decision_snapshots WHERE monitor_id=$1 ORDER BY as_of",
+                monitor["id"],
+            )
+            assert len(before) == 3
+        async with tenant_transaction(pool, actor, tenant) as conn:
+            notices = await repo.list_notices(
+                conn, tenant, actor, **scope, exact_scope=True
+            )
+            assert len(notices) == 1 and notices[0]["severity"] == "WATCH"
+            await repo.ack_notice(
+                conn, tenant, actor, UUID(notices[0]["id"]), NOW + timedelta(minutes=16)
+            )
+        async with tenant_transaction(pool, other, tenant) as conn:
+            assert (
+                await repo.list_notices(conn, tenant, other, **scope, exact_scope=True)
+                == []
+            )
+        async with worker.acquire() as conn:
+            after = await conn.fetch(
+                "SELECT condition_fingerprint,result FROM risk.opportunity_decision_snapshots WHERE monitor_id=$1 ORDER BY as_of",
+                monitor["id"],
+            )
+            assert before == after
+            current["researchBoard"]["items"][0].update(
+                readAt="just read", summary="copy-only update"
+            )
+            async with conn.transaction():
+                assert not (
+                    await repo.record_monitor_result(
+                        conn, monitor, current, NOW + timedelta(minutes=30)
+                    )
+                )["notice"]
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM risk.opportunity_condition_notices WHERE monitor_id=$1",
+                    monitor["id"],
+                )
+                == 1
+            )
+    finally:
+        await worker.close()
+        await pool.close()
+
+
+async def test_real_current_calendar_proof_rejects_old_fresh_projection_but_keeps_holding_identity():
+    from datetime import date
+    from backend.investment.decision import portfolio_summary, evaluate
+    from backend.macro.research_board import confirmed_breach
+
+    pool = await create_pool(DSN, min_size=1, max_size=2)
+    try:
+        tenant, actor, _ = await seed(pool)
+        account, fund = uuid4(), uuid4()
+        policy = {
+            "policy_status": "CONFIRMED",
+            "single_position_limit": 40,
+            "cash_target_pct": 10,
+            "max_drawdown_limit": 35,
+        }
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO identity.accounts(id,tenant_id,account_type,name) VALUES($1,$2,'MANUAL','currentness fixture')",
+                account,
+                tenant,
+            )
+            await conn.execute(
+                "INSERT INTO identity.account_members(tenant_id,account_id,user_id,relationship,permission_role,created_by,effective_from) VALUES($1,$2,$3,'BENEFICIAL_OWNER','OWNER',$3,'2019-01-01')",
+                tenant,
+                account,
+                actor,
+            )
+            await conn.execute(
+                "INSERT INTO reference.instruments(id,asset_type,primary_market,canonical_name) VALUES($1,'EXCHANGE_FUND','SSE','currentness fixture')",
+                fund,
+            )
+            await conn.execute(
+                "INSERT INTO reference.trading_calendars(market,calendar_date,is_trading_day) VALUES('SSE',$1,TRUE) ON CONFLICT DO NOTHING",
+                NOW.date(),
+            )
+
+        async def snapshot(day):
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO ledger.account_nav_snapshots(tenant_id,account_id,as_of,cash_balance,positions_market_value,total_nav,data_quality_status,valuation_coverage_pct,unpriced_position_count,created_at) VALUES($1,$2,$3,10,90,100,'FRESH',100,0,$4)",
+                    tenant,
+                    account,
+                    day,
+                    NOW - timedelta(minutes=1),
+                )
+                await conn.execute(
+                    "INSERT INTO ledger.position_snapshots(tenant_id,account_id,instrument_id,as_of,quantity,avg_cost,market_price,market_value,data_quality_status,created_at) VALUES($1,$2,$3,$4,1,90,90,90,'FRESH',$5)",
+                    tenant,
+                    account,
+                    fund,
+                    day,
+                    NOW - timedelta(minutes=1),
+                )
+
+        await snapshot(date(2020, 1, 2))
+        async with tenant_transaction(pool, actor, tenant) as conn:
+            navs, positions, _ = await repo.mine_portfolio(conn, tenant, actor, NOW)
+            assert navs[0]["valuation_current"] is False
+            old = portfolio_summary(navs, positions, policy, instrument_id=fund)
+            decision = evaluate(
+                {},
+                held=old["heldSelected"],
+                budget_violation=old["budgetViolation"],
+                portfolio=old,
+            )
+            assert old["heldSelected"] is True and old["asOf"] == "2020-01-02"
+            assert (
+                old["state"] == old["budgetState"] == "UNKNOWN"
+                and decision["assessment"]["riskState"] == "UNKNOWN"
+            )
+            assert not confirmed_breach(decision, old)
+        await snapshot(NOW.date())
+        async with tenant_transaction(pool, actor, tenant) as conn:
+            navs, positions, _ = await repo.mine_portfolio(conn, tenant, actor, NOW)
+            assert navs[0]["valuation_current"] is True
+            current = portfolio_summary(navs, positions, policy, instrument_id=fund)
+            decision = evaluate(
+                {},
+                held=current["heldSelected"],
+                budget_violation=current["budgetViolation"],
+                portfolio=current,
+            )
+            assert current["state"] == "READY" and current["budgetState"] == "BLOCKED"
+            assert confirmed_breach(decision, current)
+    finally:
         await pool.close()

@@ -111,8 +111,10 @@ def build_radar(
             and (previous < boundary <= value or value < boundary <= previous)
         )
         if crossing:
-            kind = "BENCHMARK_CROSSING"
-            summary = f"{item.get('label', code)}跨越{boundary}参考线，需后续月份及其他证据确认。"
+            upward = previous < boundary <= value
+            kind = "BENCHMARK_CROSSING_UP" if upward else "BENCHMARK_CROSSING_DOWN"
+            direction_text = "向上" if upward else "向下"
+            summary = f"{item.get('label', code)}{direction_text}跨越{boundary}参考线，需后续月份及其他证据确认。"
         elif delta is not None and delta != 0:
             kind = "PERIOD_CHANGE"
             unit = "个百分点" if item.get("unit") == "%" else "指数点"

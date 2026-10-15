@@ -32,6 +32,9 @@ def result(state="WAIT", retrieved_at="old"):
             "asOf": "2026-10-14",
             "noticeBudget": 5,
             "silenceMinutes": 5,
+            "heldSelected": state == "POSITION_REVIEW",
+            "budgetViolation": state == "POSITION_REVIEW",
+            "budgetState": "BLOCKED" if state == "POSITION_REVIEW" else "UNKNOWN",
         },
         "notices": [],
     }
@@ -390,4 +393,237 @@ async def test_important_research_change_still_requires_confirmed_budget_and_sil
     assert not any(
         "INSERT INTO risk.opportunity_condition_notices" in call.args[0]
         for call in conn.fetchval.await_args_list
+    )
+
+
+def board_result(severity="MEDIUM", *, state="WAIT"):
+    return {
+        **research_result(),
+        "decision": result(state)["decision"],
+        "portfolio": result(state)["portfolio"],
+        "researchBoard": {
+            "methodVersion": "research-board-v1",
+            "asOf": "old",
+            "items": [
+                {
+                    "id": "rate:real",
+                    "key": "rate:US_T10_REAL",
+                    "category": "RISK",
+                    "severity": severity,
+                    "confidence": "PARTIAL",
+                    "tone": "ORANGE",
+                    "evidenceIds": ["US_T10_REAL"],
+                    "summary": "利率变化20bp",
+                    "readAt": None,
+                },
+                {
+                    "id": "missing-m1",
+                    "key": "missing:M1",
+                    "category": "DATA_GAP",
+                    "severity": "HIGH",
+                    "confidence": "UNKNOWN",
+                    "evidenceIds": ["M1_YOY"],
+                },
+                {
+                    "id": "source-failure",
+                    "key": "source:PBOC",
+                    "category": "SYSTEM",
+                    "severity": "HIGH",
+                    "confidence": "UNKNOWN",
+                    "evidenceIds": ["PBOC_M1"],
+                },
+                {
+                    "id": "ordinary",
+                    "key": "ordinary",
+                    "category": "CHANGE",
+                    "severity": "LOW",
+                    "confidence": "VERIFIED",
+                    "evidenceIds": ["PMI"],
+                },
+            ],
+            "dataStatus": {"itemIds": ["missing-m1", "source-failure"]},
+        },
+        "directionModel": {
+            "missingRequiredEvidence": ["FX_USD"],
+            "missingEvidence": ["美元汇率"],
+        },
+    }
+
+
+def test_new_board_semantics_ignore_legacy_labels_data_status_copy_sort_and_ack():
+    repo = repository()
+    current = board_result()
+    semantic = repo.research_conditions(current)
+    assert semantic["methodVersion"] == "research-board-v1"
+    assert [row["id"] for row in semantic["importantItems"]] == ["rate:real"]
+    assert semantic["missingRequiredEvidence"] == ["FX_USD"]
+    quiet = board_result()
+    quiet["researchBoard"]["items"][0].update(
+        summary="利率变化21bp", readAt="now", status="READ", firstSeenAt="now"
+    )
+    quiet["researchBoard"]["items"][1]["summary"] = "来源仍未接入"
+    quiet["researchBoard"]["items"].reverse()
+    quiet["researchBoard"]["asOf"] = "new"
+    quiet["directionModel"]["missingEvidence"] = ["新中文文案"]
+    quiet["directionModel"]["missingRequiredEvidence"] = ["FX_USD", "FX_USD"]
+    quiet["radar"]["changes"][0]["priority"] = "CRITICAL"
+    assert repo.condition_fingerprint(quiet) == repo.condition_fingerprint(current)
+    for field, value in (
+        ("severity", "HIGH"),
+        ("confidence", "VERIFIED"),
+        ("category", "OPPORTUNITY"),
+        ("evidenceIds", ["US_T10_NOMINAL"]),
+    ):
+        changed = board_result()
+        changed["researchBoard"]["items"][0][field] = value
+        assert repo.condition_fingerprint(changed) != repo.condition_fingerprint(
+            current
+        )
+    changed = board_result()
+    changed["directionModel"]["missingRequiredEvidence"] = ["INDEX_EARNINGS"]
+    assert repo.condition_fingerprint(changed) != repo.condition_fingerprint(current)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "old_kind",
+    ["legacy-radar", "unversioned-snapshot", "unversioned-board", "empty-old"],
+)
+async def test_semantic_upgrade_persists_baseline_without_notice_then_same_version_changes_notify(
+    old_kind,
+):
+    repo = repository()
+    old = research_result() if old_kind == "legacy-radar" else result()
+    if old_kind == "unversioned-snapshot":
+        old["researchConditions"] = {
+            "importantChanges": [
+                {"id": "old", "priority": "CRITICAL", "kind": "RISK", "evidenceIds": []}
+            ],
+            "missingEvidence": [],
+        }
+    if old_kind == "unversioned-board":
+        old["researchConditions"] = {
+            "importantItems": [],
+            "missingRequiredEvidence": [],
+        }
+    prior = {
+        "id": "old-snapshot",
+        "condition_fingerprint": repo.condition_fingerprint(old),
+        "result": old,
+        "as_of": NOW - timedelta(minutes=15),
+    }
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [monitor, prior]
+    conn.fetchval.return_value = "new-baseline"
+    current = board_result()
+    output = await repo.record_monitor_result(conn, monitor, current, NOW)
+    assert output["baseline"] and not output["notice"]
+    assert conn.fetchrow.await_count == 2  # no budget consumption for a model upgrade
+    saved = json.loads(conn.fetchval.await_args.args[-1])
+    assert (
+        saved["researchConditions"]["methodVersion"] == "research-board-v1"
+        and "researchBoard" not in saved
+    )
+    assert repo.condition_fingerprint(saved) == repo.condition_fingerprint(current)
+    resumed = AsyncMock()
+    resumed.fetchrow.side_effect = [
+        monitor,
+        {
+            "id": "new-baseline",
+            "condition_fingerprint": repo.condition_fingerprint(saved),
+            "result": saved,
+            "as_of": NOW,
+        },
+        {"notice_count": 0, "last_notice": None},
+    ]
+    resumed.fetchval.side_effect = ["new-snapshot", "notice"]
+    assert (
+        await repo.record_monitor_result(
+            resumed, monitor, board_result("HIGH"), NOW + timedelta(minutes=15)
+        )
+    )["notice"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_board_notice_is_critical_only_for_confirmed_high_holding_budget_breach(
+    confirmed,
+):
+    repo = repository()
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    old = board_result()
+    current = board_result("HIGH", state="POSITION_REVIEW")
+    if not confirmed:
+        current["portfolio"].update(
+            heldSelected=None,
+            budgetViolation=False,
+            budgetState="UNKNOWN",
+            state="UNKNOWN",
+        )
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [
+        monitor,
+        {
+            "id": "old",
+            "condition_fingerprint": repo.condition_fingerprint(old),
+            "result": old,
+            "as_of": NOW - timedelta(minutes=15),
+        },
+        {"notice_count": 0, "last_notice": None},
+    ]
+    conn.fetchval.side_effect = ["snapshot", "notice"]
+    assert (await repo.record_monitor_result(conn, monitor, current, NOW))["notice"]
+    call = [
+        call
+        for call in conn.fetchval.await_args_list
+        if "INSERT INTO risk.opportunity_condition_notices" in call.args[0]
+    ][0]
+    assert call.args[9] == ("CRITICAL" if confirmed else "WATCH")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ["budget", "silence"])
+async def test_board_semantic_change_still_respects_confirmed_budget_and_silence(
+    blocked,
+):
+    repo = repository()
+    monitor = {
+        "id": "monitor",
+        "tenant_id": "tenant",
+        "user_id": "actor",
+        "enabled_at": NOW - timedelta(days=1),
+    }
+    prior = board_result()
+    current = board_result("HIGH")
+    if blocked == "budget":
+        current["portfolio"].pop("noticeBudget")
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [
+        monitor,
+        {
+            "id": "old",
+            "condition_fingerprint": repo.condition_fingerprint(prior),
+            "result": prior,
+            "as_of": NOW - timedelta(minutes=15),
+        },
+        {"notice_count": 0, "last_notice": NOW - timedelta(minutes=1)},
+    ]
+    conn.fetchval.return_value = "snapshot"
+    output = await repo.record_monitor_result(conn, monitor, current, NOW)
+    assert not output["notice"] and not output["baseline"]
+    assert output["reason"] == (
+        "CONFIRMED_NOTICE_BUDGET_REQUIRED"
+        if blocked == "budget"
+        else "BUDGET_OR_SILENCE"
     )

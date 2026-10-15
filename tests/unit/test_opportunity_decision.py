@@ -152,6 +152,7 @@ def test_mine_portfolio_aggregates_same_instrument_and_index_across_accounts():
             "total_nav": 100,
             "cash_balance": 50,
             "valuation_coverage_pct": 100,
+            "valuation_current": True,
         },
         {
             "account_id": "b",
@@ -160,6 +161,7 @@ def test_mine_portfolio_aggregates_same_instrument_and_index_across_accounts():
             "total_nav": 100,
             "cash_balance": 50,
             "valuation_coverage_pct": 100,
+            "valuation_current": True,
         },
     ]
     positions = [
@@ -234,6 +236,123 @@ def test_missing_position_projection_cannot_claim_target_is_not_held():
     }
     output = engine().portfolio_summary([account], [], None, instrument_id="fund")
     assert output["heldSelected"] is None and output["state"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("proof", [None, False])
+def test_historical_fresh_flag_cannot_certify_current_risk_without_proof(proof):
+    account = {
+        "account_id": "a",
+        "base_currency": "CNY",
+        "as_of": "2020-01-02",
+        "total_nav": 100,
+        "cash_balance": 10,
+        "positions_market_value": 90,
+        "valuation_coverage_pct": 100,
+        "data_quality_status": "FRESH",
+    }
+    if proof is not None:
+        account["valuation_current"] = proof
+    position = {
+        "account_id": "a",
+        "instrument_id": "fund",
+        "as_of": "2020-01-02",
+        "quantity": 1,
+        "market_value": 90,
+        "currency": "CNY",
+        "index_ids": ["hs300"],
+        "data_quality_status": "FRESH",
+    }
+    policy = {
+        "policy_status": "CONFIRMED",
+        "single_position_limit": 40,
+        "cash_target_pct": 10,
+        "max_drawdown_limit": 35,
+    }
+    output = engine().portfolio_summary(
+        [account], [position], policy, instrument_id="fund", index_id="hs300"
+    )
+    assert output["heldSelected"] is True and output["asOf"] == "2020-01-02"
+    assert (
+        output["state"] == "UNKNOWN"
+        and output["budgetState"] == "UNKNOWN"
+        and output["budgetViolation"] is False
+    )
+    assert "历史快照" in output["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expected,verified,weekday",
+    [
+        ("2026-10-14", True, True),
+        ("2026-10-15", False, True),
+        (None, True, True),
+        ("2026-10-16", True, False),
+    ],
+)
+async def test_current_snapshot_proof_reuses_calendar_and_verified_publication_hour(
+    monkeypatch, expected, verified, weekday
+):
+    from datetime import date
+    from unittest.mock import AsyncMock
+    from backend.investment import decision_repository as repo
+
+    now = datetime(2026, 10, 15 if weekday else 18, 10, tzinfo=TZ)
+    snapshot = date(2026, 10, 14 if weekday else 16)
+    calendar = AsyncMock(
+        return_value=date.fromisoformat(expected) if expected else None
+    )
+    monkeypatch.setattr(repo, "expected_trading_day", calendar, raising=False)
+    navs = [{"account_id": "a", "as_of": snapshot, "positions_market_value": 90}]
+    positions = [
+        {
+            "account_id": "a",
+            "instrument_id": "fund",
+            "as_of": snapshot,
+            "quantity": 1,
+            "primary_market": "FUND_CN",
+            "instrument_metadata": {
+                "research": {
+                    "sourceVerified": verified,
+                    "sourceUri": "https://official.test",
+                    "publishHour": 23,
+                }
+            },
+        }
+    ]
+    await repo.mark_current_valuations(object(), navs, positions, now)
+    assert navs[0]["valuation_current"] is (
+        expected is not None and date.fromisoformat(expected) <= snapshot
+    )
+    cutoff = date(2026, 10, 14 if verified else 15) if weekday else date(2026, 10, 17)
+    assert calendar.await_args.args[2] == cutoff
+    assert calendar.await_args.kwargs["history_start"] == snapshot
+
+
+@pytest.mark.asyncio
+async def test_non_trading_projection_date_cannot_fall_back_to_a_sparse_calendar_tail(
+    monkeypatch,
+):
+    from datetime import date
+    from unittest.mock import AsyncMock
+    from backend.investment import decision_repository as repo
+
+    calendar = AsyncMock(side_effect=[date(2020, 1, 2), None])
+    monkeypatch.setattr(repo, "expected_trading_day", calendar)
+    now = datetime(2026, 10, 18, 10, tzinfo=TZ)
+    navs = [{"account_id": "a", "as_of": now.date(), "positions_market_value": 90}]
+    positions = [
+        {
+            "account_id": "a",
+            "instrument_id": "fund",
+            "as_of": now.date(),
+            "quantity": 1,
+            "primary_market": "SSE",
+        }
+    ]
+    await repo.mark_current_valuations(object(), navs, positions, now)
+    assert navs[0]["valuation_current"] is False
+    assert calendar.await_args.kwargs["history_start"] == date(2020, 1, 2)
 
 
 def test_current_source_or_config_change_revokes_prior_validation():

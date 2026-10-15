@@ -1,9 +1,11 @@
 """MINE-scoped research, opt-in monitors, and private product-only notices."""
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 from backend.errors import NotFoundError, ValidationError_
+from backend.market.research_history import expected_trading_day, published_day
 from backend.investment.decision import (
     PIT_VERSION,
     VERSION,
@@ -63,6 +65,74 @@ _MINE = """SELECT DISTINCT a.id AS account_id,a.base_currency FROM identity.acco
  AND (m.effective_to IS NULL OR m.effective_to>=($3 AT TIME ZONE 'Asia/Shanghai')::date)"""
 
 
+async def mark_current_valuations(conn, navs, positions, now):
+    """Prove projection dates against complete calendars, never a guessed age TTL."""
+    today = now.astimezone(ZoneInfo("Asia/Shanghai")).date()
+    calendar_cache = {}
+    current = {}
+    for row in positions:
+        if number(row.get("quantity")) is None or number(row["quantity"]) <= 0:
+            continue
+        key = str(row["account_id"]), str(row["instrument_id"])
+        current[key] = False
+        try:
+            day = date.fromisoformat(str(row["as_of"])[:10])
+        except (KeyError, TypeError, ValueError):
+            continue
+        market = row.get("primary_market")
+        if not market or day > today:
+            continue
+        meta = decode(row.get("instrument_metadata")) or {}
+        config = meta.get("research") or {} if isinstance(meta, dict) else {}
+        cutoff = today
+        if (
+            isinstance(config, dict)
+            and config.get("sourceVerified") is True
+            and config.get("sourceUri")
+        ):
+            disclosed = published_day(today, config.get("publishHour"), now)
+            if disclosed is not None:
+                cutoff = disclosed
+        start = min(day, cutoff)
+        cache_key = market, cutoff, start
+        if cache_key not in calendar_cache:
+            calendar_cache[cache_key] = await expected_trading_day(
+                conn, market, cutoff, history_start=start
+            )
+        expected = calendar_cache[cache_key]
+        if expected is not None and expected < start:
+            # A weekend row alone cannot certify an arbitrarily old trading-day tail.
+            guard_key = market, cutoff, expected
+            if guard_key not in calendar_cache:
+                calendar_cache[guard_key] = await expected_trading_day(
+                    conn, market, cutoff, history_start=expected
+                )
+            expected = calendar_cache[guard_key]
+        current[key] = expected is not None and expected <= day <= today
+    for nav in navs:
+        nav["valuation_current"] = False
+        try:
+            day = date.fromisoformat(str(nav["as_of"])[:10])
+        except (KeyError, TypeError, ValueError):
+            continue
+        held = [
+            row
+            for row in positions
+            if str(row["account_id"]) == str(nav["account_id"])
+            and number(row.get("quantity")) is not None
+            and number(row["quantity"]) > 0
+        ]
+        if held:
+            nav["valuation_current"] = all(
+                current.get((str(row["account_id"]), str(row["instrument_id"]))) is True
+                and str(row["as_of"])[:10] == day.isoformat()
+                for row in held
+            )
+        elif number(nav.get("positions_market_value")) == 0:
+            # Cash can change outside exchange sessions; no market clock proves an older balance.
+            nav["valuation_current"] = day == today
+
+
 async def mine_portfolio(conn, tenant_id, user_id, now):
     args = (tenant_id, user_id, now)
     navs = await conn.fetch(
@@ -78,7 +148,7 @@ async def mine_portfolio(conn, tenant_id, user_id, now):
       SELECT DISTINCT ON(p.account_id,p.instrument_id) p.* FROM ledger.position_snapshots p JOIN mine ON mine.account_id=p.account_id
       WHERE p.tenant_id=$1 AND p.as_of<=($3 AT TIME ZONE 'Asia/Shanghai')::date AND p.created_at<=$3
       ORDER BY p.account_id,p.instrument_id,p.as_of DESC,p.created_at DESC)
-      SELECT p.*,i.trading_currency AS currency,ARRAY(SELECT DISTINCT f.index_id FROM reference.fund_index_links f
+      SELECT p.*,i.trading_currency AS currency,i.primary_market,i.metadata AS instrument_metadata,ARRAY(SELECT DISTINCT f.index_id FROM reference.fund_index_links f
         JOIN reference.research_indices idx ON idx.id=f.index_id AND idx.verified_at<=$3
         WHERE f.instrument_id=p.instrument_id AND f.verified_at<=$3
           AND f.effective_from<=($3 AT TIME ZONE 'Asia/Shanghai')::date
@@ -93,11 +163,9 @@ async def mine_portfolio(conn, tenant_id, user_id, now):
         tenant_id,
         now,
     )
-    return (
-        [dict(row) for row in navs],
-        [dict(row) for row in positions],
-        dict(policy) if policy else None,
-    )
+    navs, positions = [dict(row) for row in navs], [dict(row) for row in positions]
+    await mark_current_valuations(conn, navs, positions, now)
+    return navs, positions, dict(policy) if policy else None
 
 
 async def latest_validation(conn, instrument_id, now):
@@ -402,6 +470,52 @@ async def ack_notice(conn, tenant_id, user_id, notice_id, now):
 def research_conditions(result):
     persisted = result.get("researchConditions")
     source = persisted if isinstance(persisted, dict) else None
+    board = result.get("researchBoard")
+    if isinstance(board, dict) or source is not None and "importantItems" in source:
+        raw = board if isinstance(board, dict) else source
+        changes = (
+            raw.get("items", [])
+            if isinstance(board, dict)
+            else raw.get("importantItems", [])
+        )
+        missing = (
+            (result.get("directionModel") or {}).get("missingRequiredEvidence", [])
+            if isinstance(board, dict)
+            else raw.get("missingRequiredEvidence", [])
+        )
+        important = {}
+        for row in changes or []:
+            if (
+                not isinstance(row, dict)
+                or row.get("category") not in {"RISK", "OPPORTUNITY", "CHANGE"}
+                or row.get("severity") not in {"HIGH", "MEDIUM"}
+                or not isinstance(row.get("id"), str)
+            ):
+                continue
+            item = {
+                key: row.get(key)
+                for key in ("id", "key", "category", "severity", "confidence")
+            }
+            item["evidenceIds"] = sorted(
+                {
+                    value
+                    for value in row.get("evidenceIds") or []
+                    if isinstance(value, str)
+                }
+            )
+            if isinstance(row.get("kind"), str):
+                item["kind"] = row["kind"]
+            important[semantic_hash(item)] = item
+        return {
+            "methodVersion": raw.get("methodVersion")
+            or ("research-board-v1" if isinstance(board, dict) else "legacy-radar-v1"),
+            "importantItems": sorted(
+                important.values(), key=lambda item: (item["id"], semantic_hash(item))
+            ),
+            "missingRequiredEvidence": sorted(
+                {value for value in missing or [] if isinstance(value, str)}
+            ),
+        }
     changes = (
         source.get("importantChanges", [])
         if source is not None
@@ -432,6 +546,7 @@ def research_conditions(result):
         )
         important.add((row["id"], row["priority"], row["kind"], ids))
     return {
+        "methodVersion": "legacy-radar-v1",
         "importantChanges": [
             {"id": key, "priority": priority, "kind": kind, "evidenceIds": list(ids)}
             for key, priority, kind, ids in sorted(important)
@@ -451,9 +566,13 @@ def conditions(result):
         "gates": sorted((row["id"], row["state"]) for row in item.get("gates", [])),
     }
     research = research_conditions(result)
-    # Preserve legacy fingerprints when no new semantic research exists.
-    if research["importantChanges"] or research["missingEvidence"]:
+    if "importantItems" in research:
         output["researchConditions"] = research
+    # Legacy fingerprints predate the semantic version field.
+    elif research["importantChanges"] or research["missingEvidence"]:
+        output["researchConditions"] = {
+            key: value for key, value in research.items() if key != "methodVersion"
+        }
     return output
 
 
@@ -522,6 +641,11 @@ async def record_monitor_result(conn, monitor, result, now):
     )
     if not prior:
         return {"baseline": True, "notice": False}
+    if (
+        research_conditions(decode(prior["result"]))["methodVersion"]
+        != safe["researchConditions"]["methodVersion"]
+    ):
+        return {"baseline": True, "notice": False, "reason": "SEMANTIC_VERSION_CHANGED"}
     if prior["condition_fingerprint"] == fingerprint or snapshot is None:
         return {"baseline": False, "notice": False}
     budget, silence = (
@@ -572,6 +696,19 @@ async def record_monitor_result(conn, monitor, result, now):
         if before["state"] == after["state"]
         else f"{before_label} → {after_label}；请查看更新证据与缺口。"
     )
+    portfolio = result["portfolio"]
+    confirmed = (
+        after["state"] == "POSITION_REVIEW"
+        and portfolio.get("state") == "READY"
+        and portfolio.get("heldSelected") is True
+        and portfolio.get("budgetViolation") is True
+        and portfolio.get("budgetState") == "BLOCKED"
+    )
+    if "importantItems" in safe["researchConditions"]:
+        confirmed = confirmed and any(
+            item["category"] == "RISK" and item["severity"] == "HIGH"
+            for item in safe["researchConditions"]["importantItems"]
+        )
     notice = await conn.fetchval(
         """INSERT INTO risk.opportunity_condition_notices(tenant_id,user_id,monitor_id,snapshot_id,enabled_at,fingerprint,title,summary,severity,created_at,before_conditions,after_conditions)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb) ON CONFLICT DO NOTHING RETURNING id""",
@@ -583,7 +720,7 @@ async def record_monitor_result(conn, monitor, result, now):
         transition_fingerprint(dict(prior), result),
         "研究条件发生变化",
         summary,
-        "CRITICAL" if after["state"] == "POSITION_REVIEW" else "WATCH",
+        "CRITICAL" if confirmed else "WATCH",
         now,
         json.dumps(before, ensure_ascii=False),
         json.dumps(after, ensure_ascii=False),

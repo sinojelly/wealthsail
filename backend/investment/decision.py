@@ -414,6 +414,11 @@ def portfolio_summary(
         str(row["instrument_id"]) == str(instrument_id) and number(row["quantity"]) > 0
         for row in valid_positions
     )
+    known_dates = {
+        str(row["as_of"]) for row in accounts if row.get("as_of") is not None
+    }
+    if len(known_dates) == 1 and all(row.get("as_of") is not None for row in accounts):
+        result["asOf"] = next(iter(known_dates))
     for account in accounts:
         current_positions = [
             row
@@ -457,6 +462,12 @@ def portfolio_summary(
     cash = sum(number(row["cash_balance"]) for row in accounts)
     if total <= 0 or cash > total:
         result["missingEvidence"] = ["有效资产总额与现金"]
+        return result
+    if any(row.get("valuation_current") is not True for row in accounts):
+        result["missingEvidence"] = ["当前可得估值日的完整个人估值"]
+        result["summary"] = (
+            "保留已识别持仓与最近历史快照；当前估值日尚未完整核验，个人风险未知。"
+        )
         return result
     selected = sum(
         number(row["market_value"])
