@@ -9,6 +9,7 @@ from backend.investment.service import analysis, market_context
 from backend.macro import market_repository
 from backend.macro.direction_models import direction_model
 from backend.macro.opportunity import build_radar
+from backend.macro.research_board import build_research_board
 
 
 def market_evidence(index, result):
@@ -99,6 +100,7 @@ async def get_context(
     fund_market=None,
     months=36,
     now=None,
+    can_manage_operations=False,
 ):
     now = now or now_shanghai()
     direction = {
@@ -206,6 +208,9 @@ async def get_context(
     model = direction_model(direction, base, series, evidence)
     if selection_state == "UNKNOWN":
         model["state"] = "PARTIAL"
+        model["qualificationState"] = "INCOMPLETE"
+        model.setdefault("requiredEvidence", []).append("FUND_MAPPING")
+        model.setdefault("missingRequiredEvidence", []).insert(0, "FUND_MAPPING")
         model["missingEvidence"].insert(0, "基金指数/方向归属尚待唯一核查")
     personal = await decision_context(
         conn,
@@ -231,6 +236,26 @@ async def get_context(
         now=now,
         model=model,
     )
+    board = build_research_board(
+        base,
+        series,
+        evidence,
+        direction,
+        personal["decision"],
+        personal["portfolio"],
+        model=model,
+        radar=radar,
+        scope={
+            "direction_id": direction_id,
+            "index_id": index_id,
+            "instrument_id": instrument_id,
+            "fund_code": fund_code,
+            "fund_market": fund_market,
+        },
+        collection=collected,
+        can_manage_operations=can_manage_operations,
+        now=now,
+    )
     return {
         **base,
         **personal,
@@ -245,4 +270,5 @@ async def get_context(
         "radar": radar,
         "marketCollection": collected,
         "selectionState": selection_state,
+        "researchBoard": board,
     }

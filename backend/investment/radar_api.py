@@ -46,5 +46,6 @@ async def opportunity_context(
             fund_code=fund_code,
             fund_market=fund_market,
             months=months,
+            can_manage_operations=ctx.is_owner_or_admin,
         )
     return ok(data, request_id=request_id, as_of=now_shanghai())

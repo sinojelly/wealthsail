@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from backend.macro.direction_models import direction_model, profile, VERSION, _usable
 from backend.macro.market_repository import _number
+from backend.macro.research_board import confirmed_breach
 
 
 def _change(
@@ -59,7 +60,7 @@ def build_radar(
                 else "债券价格与久期敏感度"
             )
             kind = "RISK" if delta > 0 else "SUPPORT"
-            priority = "CRITICAL" if abs(delta) >= 40 else "ATTENTION"
+            priority = "ATTENTION"
             changes.append(
                 _change(
                     "rate:" + code,
@@ -72,6 +73,7 @@ def build_radar(
                     "每日发布后",
                 )
             )
+            changes[-1]["severity"] = "HIGH" if abs(delta) >= 40 else "MEDIUM"
         elif code in {"M1_YOY", "TSF_STOCK_YOY"}:
             delta = _number(item.get("changes", {}).get("periodChange"))
             if (
@@ -91,18 +93,38 @@ def build_radar(
                         "月度公布后",
                     )
                 )
-    for index, change in enumerate(context.get("research", {}).get("changes", [])):
-        code = change["code"]
+    # One indicator's crossing and monthly delta describe the same current fact.
+    # Derive its kind from numeric evidence, never its array position or wording.
+    for code in sorted(
+        {change["code"] for change in context.get("research", {}).get("changes", [])}
+    ):
         item = next((i for i in context.get("items", []) if i["code"] == code), None)
         if code not in required or not item or not _usable(item):
             continue
-        crossing = "跨越" in change["summary"]
+        previous = _number((item.get("statistics") or {}).get("previousValue"))
+        boundary = _number((item.get("benchmark") or {}).get("value"))
+        value, delta = _number(item.get("value")), _number(item.get("periodChange"))
+        crossing = (
+            code != "M2_YOY"
+            and previous is not None
+            and boundary is not None
+            and (previous < boundary <= value or value < boundary <= previous)
+        )
+        if crossing:
+            kind = "BENCHMARK_CROSSING"
+            summary = f"{item.get('label', code)}跨越{boundary}参考线，需后续月份及其他证据确认。"
+        elif delta is not None and delta != 0:
+            kind = "PERIOD_CHANGE"
+            unit = "个百分点" if item.get("unit") == "%" else "指数点"
+            summary = f"{item.get('label', code)}较前月{delta:+.2f}{unit}。"
+        else:
+            continue
         changes.append(
             _change(
-                f"macro:{code}:{index}",
+                f"macro:{code}:{kind}",
                 "ATTENTION" if crossing else "INFO",
                 "OBSERVATION",
-                change["summary"],
+                summary,
                 f"{market_label}需要后续经营、估值与风险证据确认，月度观察不单独决定盘中行动。",
                 [code],
                 [direction_id],
@@ -127,18 +149,17 @@ def build_radar(
         changes.append(
             _change(
                 "required-evidence",
-                "CRITICAL",
+                "INFO",
                 "GAP",
-                "当前方向仍有关键证据缺口。",
-                f"{market_label}尚待核查："
-                + "、".join(model["missingEvidence"][:4])
-                + "；不能据此认证建仓条件。",
+                "当前方向的完整研究受限。",
+                "必要证据尚未齐备，处理状态集中列在数据与运行状态。",
                 [],
                 [direction_id],
                 "当前研究",
             )
         )
-    if decision.get("state") == "POSITION_REVIEW":
+    breach = confirmed_breach(decision, portfolio)
+    if breach:
         changes.append(
             _change(
                 "personal-budget",
@@ -152,7 +173,7 @@ def build_radar(
             )
         )
     rank = {"CRITICAL": 3, "ATTENTION": 2, "INFO": 1}
-    kind_rank = {"RISK": 4, "SUPPORT": 3, "GAP": 2, "OBSERVATION": 1}
+    kind_rank = {"RISK": 4, "SUPPORT": 3, "GAP": 0, "OBSERVATION": 1}
     changes.sort(
         key=lambda c: (
             c["id"] == "personal-budget",
@@ -209,7 +230,7 @@ def build_radar(
             "label": "结合持仓下一步看什么",
             "state": portfolio.get("state", "UNKNOWN"),
             "summary": portfolio.get("summary", "个人持仓未核查，不能推断仓位动作。"),
-            "critical": decision.get("state") == "POSITION_REVIEW",
+            "critical": breach,
         },
     ]
     rates = [i for i in series if i["code"] in required]

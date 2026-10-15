@@ -88,7 +88,10 @@ async def test_context_keeps_actor_and_original_unresolved_fund_scope(monkeypatc
     assert call.kwargs["fund_market"] == "HK" and call.kwargs["fund_code"] == "000001"
     assert result["decision"]["state"] == "WAIT"
     assert len(result["radar"]["questions"]) == 4
-    assert "基金指数/方向归属尚待唯一核查" in result["radar"]["headline"]["impact"]
+    assert any(
+        i.get("blocker", {}).get("code") == "FUND_MAPPING"
+        for i in result["researchBoard"]["items"]
+    )
 
 
 def test_new_opportunity_route_is_authenticated_and_passes_full_selection(monkeypatch):
@@ -116,6 +119,7 @@ def test_new_opportunity_route_is_authenticated_and_passes_full_selection(monkey
     assert call.args[1:3] == ("tenant-a", "user-a")
     assert str(call.kwargs["instrument_id"]) == ident
     assert call.kwargs["fund_market"] == "SGE" and call.kwargs["months"] == 12
+    assert call.kwargs["can_manage_operations"] is False
 
 
 @pytest.mark.parametrize(

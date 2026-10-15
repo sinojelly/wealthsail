@@ -358,12 +358,98 @@ async def read_series(conn, now):
 
 async def read_collection(conn, now):
     row = await conn.fetchrow(
-        """SELECT result FROM market.macro_evidence_attempts WHERE job_key='OPPORTUNITY_MARKET_EVIDENCE'
-      AND phase IN ('FINISHED','CANCELLED') AND recorded_at<=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1""",
+        """SELECT a.result,a.recorded_at,a.phase,a.lease_until FROM market.macro_evidence_attempts a
+      WHERE a.job_key='OPPORTUNITY_MARKET_EVIDENCE' AND a.recorded_at<=$1
+      AND (a.phase IN ('FINISHED','CANCELLED') OR (a.phase='CLAIMED' AND a.lease_until>$1
+        AND NOT EXISTS(SELECT 1 FROM market.macro_evidence_attempts t WHERE t.run_id=a.run_id AND t.phase IN ('FINISHED','CANCELLED') AND t.recorded_at<=$1)))
+      ORDER BY a.recorded_at DESC,a.id DESC LIMIT 1""",
         now,
     )
-    value = row["result"] if row else {}
-    return json.loads(value) if isinstance(value, str) else value
+    if not row:
+        return {
+            "collectedAt": None,
+            "nextCheckAt": None,
+            "collectionState": "NOT_COLLECTED",
+            "sourceResults": {},
+            "sourceAttemptAt": {},
+        }
+    terminal = row
+    if row.get("phase") == "CLAIMED":
+        terminal = await conn.fetchrow(
+            """SELECT result,recorded_at,phase FROM market.macro_evidence_attempts
+            WHERE job_key='OPPORTUNITY_MARKET_EVIDENCE' AND phase IN ('FINISHED','CANCELLED') AND recorded_at<=$1
+            ORDER BY recorded_at DESC,id DESC LIMIT 1""",
+            now,
+        )
+    raw = terminal["result"] if terminal else {}
+    value = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    # Empty cancellation outcomes do not prove that an earlier failed source
+    # recovered. Read each source's last terminal result without a history cap.
+    outcomes = value.get("sourceResults") or {}
+    sources = {
+        key: result
+        for key, result in outcomes.items()
+        if key != "PUBLIC_SOURCES" and isinstance(result, dict)
+    }
+    source_attempts = {key: None for key in sources}
+    source_rows = await conn.fetch(
+        """WITH attempts AS (
+            SELECT id,recorded_at,
+              CASE WHEN jsonb_typeof(result->'sourceResults')='object'
+                THEN result->'sourceResults' ELSE '{}'::jsonb END AS outcomes
+            FROM market.macro_evidence_attempts
+            WHERE job_key='OPPORTUNITY_MARKET_EVIDENCE'
+              AND phase IN ('FINISHED','CANCELLED') AND recorded_at<=$1
+          ), candidates AS (
+            SELECT a.id,a.recorded_at,s.key AS source_key,s.value AS outcome,0 AS precedence
+            FROM attempts a CROSS JOIN LATERAL jsonb_each(a.outcomes) s
+            WHERE s.key<>'PUBLIC_SOURCES' AND jsonb_typeof(s.value)='object'
+            UNION ALL
+            SELECT a.id,a.recorded_at,s.source_key,
+              a.outcomes->'PUBLIC_SOURCES' AS outcome,1 AS precedence
+            FROM attempts a CROSS JOIN unnest(ARRAY[
+              'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_LOANS'
+            ]) AS s(source_key)
+            WHERE a.outcomes->'PUBLIC_SOURCES'->>'status'='FAILED'
+          )
+          SELECT DISTINCT ON(source_key) source_key,outcome AS result,recorded_at
+          FROM candidates
+          ORDER BY source_key,recorded_at DESC,id DESC,precedence DESC""",
+        now,
+    )
+    for source in source_rows:
+        result = source["result"]
+        sources[source["source_key"]] = (
+            json.loads(result) if isinstance(result, str) else dict(result)
+        )
+        attempted = _stamp(source.get("recorded_at"))
+        source_attempts[source["source_key"]] = (
+            attempted if attempted is not None and attempted <= now else None
+        )
+    collected = terminal.get("recorded_at") if terminal else None
+    deadline = _stamp(value.get("retryUntil"))
+    next_check = row.get("lease_until") if row.get("phase") == "CLAIMED" else None
+    if next_check is None and collected:
+        next_check = collected + timedelta(hours=24)
+        if deadline:
+            next_check = (
+                deadline
+                if now >= deadline
+                else min(
+                    collected + timedelta(hours=1)
+                    if value.get("status") not in {"COMPLETED", "SKIPPED"}
+                    else next_check,
+                    deadline,
+                )
+            )
+    return {
+        **value,
+        "sourceResults": sources,
+        "sourceAttemptAt": source_attempts,
+        "collectedAt": collected,
+        "nextCheckAt": next_check,
+        "collectionState": row.get("phase", "UNKNOWN"),
+    }
 
 
 def normalize_series(record, now, *, permissions=None):

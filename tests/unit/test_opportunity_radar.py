@@ -51,12 +51,12 @@ def test_collapsed_brief_answers_four_questions_without_eligible_trade_claim():
         "PERSONAL",
     ]
     assert "条件" in result["questions"][2]["summary"]
-    assert result["methodVersion"] == "opportunity-radar-v1"
+    assert result["methodVersion"] == "opportunity-radar-v2"
 
 
 def test_real_rate_rise_flags_gold_impact_but_not_unrelated_ashare_critical():
     gold = build(data=[series("US_T10_REAL", delta=45)])
-    assert gold["headline"]["priority"] == "CRITICAL"
+    assert gold["headline"]["priority"] == "ATTENTION"
     assert gold["headline"]["kind"] == "RISK"
     assert "黄金" in gold["headline"]["impact"]
     ashare = build("a-share:broad", [series("US_T10_REAL", delta=45)])
@@ -67,6 +67,9 @@ def test_missing_data_is_a_gap_not_claimed_risk_increase():
     result = build("a-share:broad", [series("CN_T10", state="PERMISSION_REQUIRED")])
     assert result["headline"]["kind"] == "GAP"
     assert "风险上升" not in result["headline"]["impact"]
+    assert not any(c["priority"] == "CRITICAL" for c in result["changes"])
+    assert not any(q["critical"] for q in result["questions"])
+    assert not any(s["criticalImpact"] for s in result["sections"])
 
 
 def test_stale_rate_cannot_produce_confirmed_current_impact():
@@ -78,7 +81,13 @@ def test_known_personal_budget_breach_outranks_market_changes():
     result = build(
         data=[series("US_T10_REAL", delta=45)],
         decision={"state": "POSITION_REVIEW", "summary": "同指数敞口超限", "gates": []},
-        portfolio={"state": "READY", "summary": "同指数敞口超限", "heldSelected": True},
+        portfolio={
+            "state": "READY",
+            "summary": "同指数敞口超限",
+            "heldSelected": True,
+            "budgetViolation": True,
+            "budgetState": "BLOCKED",
+        },
     )
     assert result["headline"]["id"] == "personal-budget"
     assert result["questions"][3]["critical"] is True
@@ -95,7 +104,7 @@ def test_direction_models_use_local_evidence_and_keep_required_gaps():
         {"id": "gold:physical", "market_id": "gold"}, {}, [series("US_T10_REAL")], []
     )
     assert "US_T10_REAL" in gold["requiredEvidence"]
-    assert "美元/汇率" in gold["missingEvidence"]
+    assert "美元/汇率事实" in gold["missingEvidence"]
     usa = model.direction_model({"id": "us:broad", "market_id": "us"}, {}, [], [])
     assert "PMI" not in usa["requiredEvidence"]
     assert usa["state"] != "READY"
@@ -210,3 +219,92 @@ def test_verified_trend_and_valuation_are_not_still_reported_missing():
     assert "指数估值与趋势" not in result["missingEvidence"]
     assert "企业盈利证据" in result["missingEvidence"]
     assert result["state"] == "PARTIAL"
+
+
+def test_position_review_label_without_confirmed_budget_cannot_create_critical_risk():
+    result = build(
+        decision={"state": "POSITION_REVIEW"},
+        portfolio={"state": "UNKNOWN", "heldSelected": None, "budgetViolation": False},
+    )
+    assert not any(c["priority"] == "CRITICAL" for c in result["changes"])
+    assert not any(q["critical"] for q in result["questions"])
+
+
+def test_larger_rate_review_changes_importance_without_claiming_confirmed_risk():
+    smaller = next(
+        c
+        for c in build(data=[series("US_T10_REAL", delta=25)])["changes"]
+        if c["id"].startswith("rate:")
+    )
+    larger = next(
+        c
+        for c in build(data=[series("US_T10_REAL", delta=45)])["changes"]
+        if c["id"].startswith("rate:")
+    )
+    assert smaller["severity"] == "MEDIUM" and larger["severity"] == "HIGH"
+    assert larger["priority"] == "ATTENTION"
+
+
+def macro_changes(changes, *, value=49.5, previous=49, delta=0.5):
+    result = radar().build_radar(
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "label": "制造业PMI",
+                    "state": "READY",
+                    "value": value,
+                    "unit": "",
+                    "periodChange": delta,
+                    "statistics": {"previousValue": previous},
+                    "benchmark": {"value": 50},
+                }
+            ],
+            "research": {"changes": changes},
+        },
+        [],
+        [],
+        {"id": "a-share:broad", "market_id": "a-share"},
+        {"state": "WAIT"},
+        {"state": "UNKNOWN"},
+    )
+    return [row for row in result["changes"] if row["id"].startswith("macro:PMI:")]
+
+
+def test_pmi_identity_survives_unrelated_cpi_insert_and_reordered_changes():
+    pmi = {"code": "PMI", "summary": "制造业PMI较前月+0.50指数点。"}
+    original = macro_changes([pmi])
+    inserted = macro_changes([{"code": "CPI_YOY", "summary": "CPI更新"}, pmi])
+    assert len(original) == len(inserted) == 1
+    assert original[0]["id"] == inserted[0]["id"]
+
+
+def test_pmi_crossing_and_month_change_share_one_fact_identity_without_summary_matching():
+    before = macro_changes(
+        [
+            {"code": "PMI", "summary": "跨越50参考线"},
+            {"code": "PMI", "summary": "较前月+2指数点"},
+        ],
+        value=51,
+        previous=49,
+        delta=2,
+    )
+    reordered = macro_changes(
+        [
+            {"code": "PMI", "summary": "月度观察文字修订"},
+            {"code": "CPI_YOY", "summary": "其他更新"},
+            {"code": "PMI", "summary": "制造业参考线变化文字修订"},
+        ],
+        value=51,
+        previous=49,
+        delta=2,
+    )
+    assert len(before) == len(reordered) == 1
+    assert before[0]["id"] == reordered[0]["id"]
+    assert before[0]["priority"] == reordered[0]["priority"] == "ATTENTION"
+
+
+def test_crossing_words_without_an_actual_boundary_crossing_cannot_raise_importance():
+    item = macro_changes([{"code": "PMI", "summary": "跨越文字不构成真实跨线证据"}])[0]
+    assert item["priority"] == "INFO"
+    assert "跨越" not in item["summary"]
