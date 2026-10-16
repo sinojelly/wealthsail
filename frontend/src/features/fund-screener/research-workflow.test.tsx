@@ -394,7 +394,7 @@ it("keeps collapsed business observations concise, translates event phases and o
   );
 });
 
-it("retains complete confirmed personal-risk text while compacting ordinary overview items", () => {
+it("retains complete confirmed personal-risk text while compacting ordinary overview items", async () => {
   const risk = {
     id: "budget",
     key: "budget",
@@ -455,4 +455,52 @@ it("retains complete confirmed personal-risk text while compacting ordinary over
   expect(screen.getByText(highlight.summary)).not.toHaveClass(
     "op-observation-summary",
   );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
+  await user.click(screen.getByRole("tab", { name: "跟踪与复盘" }));
+  expect(
+    screen.queryByRole("region", { name: "重要风险" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText(risk.impact)).toHaveClass("op-critical-impact");
+});
+
+it("shows expanded categories immediately without collapsed groups or compatibility highlights", () => {
+  const path =
+    "/fund-screener?researchOpen=1&researchTab=tracking&studyTrack=track-1";
+  function content(value: OpportunityContext) {
+    return (
+      <MemoryRouter initialEntries={[path]}>
+        <MacroContextStrip data={value} error={false} />
+      </MemoryRouter>
+    );
+  }
+  const view = render(content(data));
+  expect(screen.getByRole("tab", { name: "跟踪与复盘" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.queryByRole("region", { name: "重要风险" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("具体事项global-1")).not.toBeInTheDocument();
+  expect(screen.getByText(data.researchOverview!.summary!)).toBeInTheDocument();
+  expect(screen.getByText(/最近有效研究/)).toBeInTheDocument();
+  view.rerender(
+    content({
+      ...data,
+      researchOverview: {
+        ...data.researchOverview!,
+        groups: undefined,
+        highlights: [item("legacy")],
+      },
+    }),
+  );
+  expect(
+    screen.queryByRole("list", { name: "今日投资重点" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("具体事项legacy")).not.toBeInTheDocument();
+  view.rerender(content({ ...data, researchOverview: undefined }));
+  expect(
+    screen.queryByText(/当前暂无足够证据列出投资重点/),
+  ).not.toBeInTheDocument();
 });
