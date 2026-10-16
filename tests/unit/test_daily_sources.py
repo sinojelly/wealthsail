@@ -1,5 +1,7 @@
 """Public daily evidence: explicit identity, bounded HTTP and honest units."""
 
+import asyncio
+from collections import Counter
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -243,3 +245,273 @@ async def test_license_expiry_in_body_cannot_become_the_publication_day():
         )
     assert checked["x"]["verification"] == "UNVERIFIED"
     assert checked["x"]["publishedDate"] is None
+
+
+def rss(links):
+    return (
+        "<rss><channel>"
+        + "".join(
+            f"<item><title>September observation</title><link>{link.replace('&', '&amp;')}</link>"
+            "<pubDate>Thu, 15 Oct 2026 09:00:00 EST</pubDate></item>"
+            for link in links
+        )
+        + "</channel></rss>"
+    )
+
+
+def page(title, day="2026-10-15"):
+    return f'<title>{title}</title><meta name="pubdate" content="{day}"><main><p>{title} reports public original observations with the published statistical definitions.</p></main>'
+
+
+def test_bls_and_eia_registry_uses_their_official_published_feeds():
+    assert sources.INDEXES["BLS"] == "https://www.bls.gov/feed/bls_latest.rss"
+    assert sources.INDEXES["EIA"] == "https://www.eia.gov/rss/todayinenergy.xml"
+    assert "BEA" not in sources.INDEXES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key,feed,article",
+    [
+        (
+            "BLS",
+            "https://www.bls.gov/feed/bls_latest.rss",
+            "https://www.bls.gov/news.release/cpi.nr0.htm",
+        ),
+        (
+            "EIA",
+            "https://www.eia.gov/rss/todayinenergy.xml",
+            "https://www.eia.gov/todayinenergy/detail.php?id=123",
+        ),
+    ],
+)
+async def test_official_rss_collects_bounded_original_quotes_and_real_page_day(
+    monkeypatch, key, feed, article
+):
+    monkeypatch.setattr(sources, "INDEXES", {key: feed})
+    monkeypatch.setattr(sources, "ENERGY", {})
+
+    def route(request):
+        return httpx.Response(
+            200,
+            text=rss([article])
+            if str(request.url) == feed
+            else page("September reference period"),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await sources.collect_daily_sources(
+            NOW, client=client, clock=lambda: NOW
+        )
+    doc = result["documents"][0]
+    assert doc["sourceKey"] == key and doc["url"] == article
+    assert doc["publishedDate"] == "2026-10-15" and doc["publishedAt"] is None
+    assert len(doc["quote"]) <= 300 and "<main>" not in str(result)
+    assert result["sourceResults"][key] == {"status": "SUCCESS"}
+    assert "quote" not in result["candidateIndex"][0]
+
+
+@pytest.mark.asyncio
+async def test_five_publishers_get_fair_documents_and_larger_metadata_only_index():
+    def route(request):
+        uri = str(request.url)
+        if "fredgraph" in uri:
+            code = request.url.params["id"]
+            return httpx.Response(
+                200, text=f"observation_date,{code}\n2026-10-14,100\n"
+            )
+        for key, feed in sources.INDEXES.items():
+            if uri != feed:
+                continue
+            if key == "OFAC":
+                links = [
+                    f"https://ofac.treasury.gov/recent-actions/20261015_{n}"
+                    for n in range(8)
+                ]
+            elif key == "NBS":
+                links = [
+                    f"https://www.stats.gov.cn/sj/zxfb/202610/t20261015_{n}.html"
+                    for n in range(8)
+                ]
+            else:
+                host = {
+                    "BLS": "www.bls.gov",
+                    "EIA": "www.eia.gov",
+                    "FED": "www.federalreserve.gov",
+                }[key]
+                links = [f"https://{host}/story/{n}" for n in range(8)]
+            raw = (
+                "".join(
+                    f'<a href="{link}">Official release {n}</a>'
+                    for n, link in enumerate(links)
+                )
+                if key in {"OFAC", "NBS"}
+                else rss(links)
+            )
+            return httpx.Response(200, text=raw)
+        return httpx.Response(200, text=page(uri))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await sources.collect_daily_sources(
+            NOW, client=client, clock=lambda: NOW
+        )
+    counts = Counter(row["sourceKey"] for row in result["documents"])
+    assert counts == {"OFAC": 2, "FED": 2, "NBS": 2, "BLS": 2, "EIA": 2}
+    assert len(result["documents"]) <= 12 and len(result["candidateIndex"]) == 40
+    assert all(
+        set(row)
+        <= {
+            "id",
+            "url",
+            "title",
+            "publishedDate",
+            "retrievedAt",
+            "contentHash",
+            "sourceKey",
+        }
+        for row in result["candidateIndex"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_normalized_url_and_exact_content_hash_remove_duplicate_candidates(
+    monkeypatch,
+):
+    feed = "https://www.eia.gov/rss/todayinenergy.xml"
+    monkeypatch.setattr(sources, "INDEXES", {"EIA": feed})
+    monkeypatch.setattr(sources, "ENERGY", {})
+    links = [
+        "https://www.eia.gov/story?id=1&utm_source=feed#top",
+        "https://www.eia.gov/story?id=1",
+        "https://www.eia.gov/mirror?id=1",
+        "https://www.eia.gov/story?id=2",
+    ]
+    requests = []
+
+    def route(request):
+        uri = str(request.url)
+        requests.append(uri)
+        return httpx.Response(
+            200,
+            text=rss(links)
+            if uri == feed
+            else page("Unique second" if uri.endswith("id=2") else "Same original"),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await sources.collect_daily_sources(
+            NOW, client=client, clock=lambda: NOW
+        )
+    assert requests.count("https://www.eia.gov/story?id=1") == 1
+    assert len(result["candidateIndex"]) == len(result["documents"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_source_total_timeout_preserves_already_collected_documents(monkeypatch):
+    feed = "https://www.eia.gov/rss/todayinenergy.xml"
+    monkeypatch.setattr(sources, "INDEXES", {"EIA": feed})
+    monkeypatch.setattr(sources, "ENERGY", {})
+    monkeypatch.setattr(sources, "SOURCE_TIMEOUT_SECONDS", 0.02, raising=False)
+
+    async def route(request):
+        uri = str(request.url)
+        if uri == feed:
+            return httpx.Response(
+                200, text=rss(["https://www.eia.gov/fast", "https://www.eia.gov/slow"])
+            )
+        if uri.endswith("slow"):
+            await asyncio.Event().wait()
+        return httpx.Response(200, text=page("Already collected official fact"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await asyncio.wait_for(
+            sources.collect_daily_sources(NOW, client=client, clock=lambda: NOW), 0.5
+        )
+    assert len(result["documents"]) == len(result["candidateIndex"]) == 1
+    assert result["sourceResults"]["EIA"] == {
+        "status": "FAILED",
+        "errorClass": "TimeoutError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_future_feed_publication_hour_is_not_fetched_even_when_same_local_day(
+    monkeypatch,
+):
+    feed = "https://www.eia.gov/rss/todayinenergy.xml"
+    monkeypatch.setattr(sources, "INDEXES", {"EIA": feed})
+    monkeypatch.setattr(sources, "ENERGY", {})
+    requested = []
+
+    def route(request):
+        requested.append(str(request.url))
+        return httpx.Response(
+            200,
+            text=rss(["https://www.eia.gov/future"]).replace(
+                "Thu, 15 Oct 2026 09:00:00 EST", "Fri, 16 Oct 2026 09:00:00 EST"
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await sources.collect_daily_sources(
+            NOW, client=client, clock=lambda: NOW
+        )
+    assert requested == [feed]
+    assert not result["documents"] and not result["candidateIndex"]
+    assert result["sourceResults"]["EIA"]["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_partial_article_http_failure_keeps_other_originals_with_safe_source_failure(
+    monkeypatch,
+):
+    feed = "https://www.eia.gov/rss/todayinenergy.xml"
+    monkeypatch.setattr(sources, "INDEXES", {"EIA": feed})
+    monkeypatch.setattr(sources, "ENERGY", {})
+
+    def route(request):
+        uri = str(request.url)
+        if uri == feed:
+            return httpx.Response(
+                200, text=rss(["https://www.eia.gov/ok", "https://www.eia.gov/denied"])
+            )
+        return (
+            httpx.Response(403, text="SECRET provider error")
+            if uri.endswith("denied")
+            else httpx.Response(200, text=page("Legitimate original"))
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result = await sources.collect_daily_sources(
+            NOW, client=client, clock=lambda: NOW
+        )
+    assert len(result["documents"]) == 1 and "SECRET" not in str(result)
+    assert result["sourceResults"]["EIA"] == {
+        "status": "FAILED",
+        "errorClass": "HTTP_403",
+    }
+
+
+@pytest.mark.asyncio
+async def test_same_day_future_publication_metadata_cannot_certify_original_quote(
+    monkeypatch,
+):
+    original = page("Published energy statistics").replace(
+        '<meta name="pubdate" content="2026-10-15">',
+        '<meta property="article:published_time" content="2026-10-16T20:00:00+00:00">',
+    )
+    source = {
+        "id": "eia",
+        "url": "https://www.eia.gov/story",
+        "quote": "Published energy statistics reports public original observations",
+        "publishedDate": None,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text=original)
+        )
+    ) as client:
+        proof = await sources.verify_research_sources(
+            [source], now=NOW, client=client, clock=lambda: NOW
+        )
+    assert proof["eia"]["verification"] == "UNVERIFIED"

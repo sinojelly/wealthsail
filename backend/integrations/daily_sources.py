@@ -14,6 +14,7 @@ import math
 import re
 import unicodedata
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from bs4 import BeautifulSoup
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 MAX_BYTES = 2 * 1024 * 1024
+SOURCE_TIMEOUT_SECONDS = 45
 OFFICIAL_HOSTS = frozenset(
     {
         "ofac.treasury.gov",
@@ -68,7 +70,21 @@ INDEXES = {
     "OFAC": "https://ofac.treasury.gov/recent-actions",
     "FED": "https://www.federalreserve.gov/feeds/press_monetary.xml",
     "NBS": "https://www.stats.gov.cn/sj/zxfb/",
+    # Publisher-declared subscriptions; see BLS help/hlp_rss.htm and
+    # EIA todayinenergy/about.php and tools/rssfeeds/.
+    "BLS": "https://www.bls.gov/feed/bls_latest.rss",
+    "EIA": "https://www.eia.gov/rss/todayinenergy.xml",
 }
+PUBLICATION_META = frozenset(
+    {
+        "pubdate",
+        "publishdate",
+        "article:published_time",
+        "dcterms.date",
+        "dc.date",
+        "date",
+    }
+)
 
 
 def _aware(value):
@@ -90,7 +106,7 @@ def official_url(uri):
     query = urlencode(
         [
             (k, v)
-            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            for k, v in sorted(parse_qsl(parts.query, keep_blank_values=True))
             if not k.lower().startswith("utm_")
         ]
     )
@@ -165,6 +181,23 @@ def _date_in_text(text, value):
     return any(_compact(value).casefold() in compact for value in variants)
 
 
+def _publication_visible(text, now):
+    # A known future instant cannot become current evidence by dropping its
+    # hour. Naive/date-only metadata never acquires an invented timezone.
+    for node in _soup(text).find_all("meta"):
+        if (
+            node.get("name") or node.get("property") or ""
+        ).lower() not in PUBLICATION_META:
+            continue
+        try:
+            stamp = datetime.fromisoformat(node.get("content", "").strip())
+        except ValueError:
+            continue
+        if stamp.tzinfo is not None and stamp.utcoffset() is not None and stamp > now:
+            return False
+    return True
+
+
 def _document(text, uri, retrieved):
     soup = _soup(text)
     title = next(
@@ -187,14 +220,7 @@ def _document(text, uri, retrieved):
     # Only publication-bearing metadata or a page date; never infer from URL.
     for node in soup.find_all("meta"):
         name = (node.get("name") or node.get("property") or "").lower()
-        if name in {
-            "pubdate",
-            "publishdate",
-            "article:published_time",
-            "dcterms.date",
-            "dc.date",
-            "date",
-        }:
+        if name in PUBLICATION_META:
             match = re.search(r"(\d{4})[-/](\d{2})[-/](\d{2})", node.get("content", ""))
             if match:
                 day = "-".join(match.groups())
@@ -277,7 +303,7 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
                     not doc["publishedDate"]
                     or date.fromisoformat(doc["publishedDate"]) <= retrieved.date()
                 )
-            if not matched or not day_ok:
+            if not matched or not day_ok or not _publication_visible(raw, retrieved):
                 return source.get("id"), {
                     **base,
                     "title": doc["title"],
@@ -354,64 +380,121 @@ def _safe_error(error):
     return type(error).__name__
 
 
+def _document_links(key, raw, uri, now):
+    links = []
+    if key in {"FED", "BLS", "EIA"}:
+        root = ElementTree.fromstring(raw)
+        candidates = []
+        for item in root.findall(".//item"):
+            published = item.findtext("pubDate")
+            if published:
+                try:
+                    stamp = parsedate_to_datetime(published.strip())
+                    if stamp.tzinfo is None or stamp.utcoffset() is None or stamp > now:
+                        continue
+                except (ValueError, TypeError, OverflowError):
+                    continue
+            candidates.append(item.findtext("link"))
+    else:
+        pattern = (
+            r"/recent-actions/\d{8}" if key == "OFAC" else r"/sj/zxfb/\d{6}/t\d{8}_"
+        )
+        candidates = [
+            urljoin(uri, node["href"])
+            for node in _soup(raw).find_all("a", href=True)
+            if re.search(pattern, urljoin(uri, node["href"]))
+        ]
+    for candidate in candidates:
+        try:
+            link = official_url(urljoin(uri, candidate))
+        except (TypeError, ValueError):
+            continue
+        if link not in links:
+            links.append(link)
+        if len(links) == 8:
+            break
+    return links
+
+
+def _select_documents(records):
+    """Exact duplicates only: a metadata audit pool and a small fair model pool."""
+    unique, seen_urls, seen_hashes = [], set(), set()
+    for row in records:
+        if row["url"] in seen_urls or row["contentHash"] in seen_hashes:
+            continue
+        seen_urls.add(row["url"])
+        seen_hashes.add(row["contentHash"])
+        unique.append(row)
+    by_source = {}
+    for row in unique:
+        by_source.setdefault(row["sourceKey"], []).append(row)
+    for rows in by_source.values():
+        rows.sort(key=lambda row: row.get("publishedDate") or "", reverse=True)
+    documents = []
+    for offset in range(2):
+        for rows in by_source.values():
+            if len(rows) > offset and len(documents) < 12:
+                documents.append(rows[offset])
+    fields = (
+        "id",
+        "url",
+        "title",
+        "publishedDate",
+        "retrievedAt",
+        "contentHash",
+        "sourceKey",
+    )
+    return documents, [{field: row[field] for field in fields} for row in unique[:40]]
+
+
 async def collect_daily_sources(now, *, client=None, clock=None):
     now = _aware(now)
     clock = clock or (lambda: datetime.now(SHANGHAI))
     if client is None:
         async with httpx.AsyncClient() as owned:
             return await collect_daily_sources(now, client=owned, clock=clock)
-    result = {"documents": [], "energy": [], "sourceResults": {}}
+    result = {"documents": [], "candidateIndex": [], "energy": [], "sourceResults": {}}
     semaphore = asyncio.Semaphore(3)
 
     async def collect(key, uri):
+        # Keep successfully retrieved originals even if the remaining source
+        # work exhausts its total budget. Cancellation itself still propagates.
+        records, error_class = [], None
         try:
-            async with semaphore, asyncio.timeout(40):
+            async with semaphore, asyncio.timeout(SOURCE_TIMEOUT_SECONDS):
                 raw = await fetch_text(client, uri)
                 if key in ENERGY:
                     record = parse_energy_csv(raw, key, _aware(clock()))
                     return key, [record], None
-                links = []
-                if key == "FED":
-                    root = ElementTree.fromstring(raw)
-                    links = [
-                        node.text for node in root.findall(".//item/link") if node.text
-                    ][:3]
-                else:
-                    for node in _soup(raw).find_all("a", href=True):
-                        href = urljoin(uri, node["href"])
-                        pattern = (
-                            r"/recent-actions/\d{8}"
-                            if key == "OFAC"
-                            else r"/sj/zxfb/\d{6}/t\d{8}_"
-                        )
-                        if re.search(pattern, href) and href not in links:
-                            links.append(href)
-                    links = links[: 8 if key == "OFAC" else 3]
-                records = []
+                links = _document_links(key, raw, uri, now)
                 for link in links:
                     try:
                         text = await fetch_text(client, link)
-                        doc = _document(text, link, clock())
+                        retrieved = _aware(clock())
+                        if not _publication_visible(text, retrieved):
+                            raise ValueError("future publication metadata")
+                        doc = _document(text, link, retrieved)
                         published = doc["publishedDate"]
                         if published and not (
                             now.date() - timedelta(days=14)
                             <= date.fromisoformat(published)
-                            <= _aware(clock()).date()
+                            <= retrieved.date()
                         ):
                             continue
-                        records.append(doc)
-                    except (httpx.HTTPError, ValueError, TimeoutError):
+                        records.append({**doc, "sourceKey": key})
+                    except (httpx.HTTPError, ValueError, TimeoutError) as error:
+                        error_class = _safe_error(error)
                         continue
                 if not records:
                     raise ValueError("no confirmed recent official documents")
-                return key, records, None
+                return key, records, error_class
         except (
             httpx.HTTPError,
             ValueError,
             TimeoutError,
             ElementTree.ParseError,
         ) as error:
-            return key, [], _safe_error(error)
+            return key, records, _safe_error(error)
 
     energy_uris = {
         code: "https://fred.stlouisfed.org/graph/fredgraph.csv?"
@@ -426,11 +509,16 @@ async def collect_daily_sources(now, *, client=None, clock=None):
     outputs = await asyncio.gather(
         *(collect(key, uri) for key, uri in {**INDEXES, **energy_uris}.items())
     )
+    candidates = []
     for key, records, error in outputs:
         result["sourceResults"][key] = (
             {"status": "FAILED", "errorClass": error}
             if error
             else {"status": "SUCCESS"}
         )
-        result["energy" if key in ENERGY else "documents"].extend(records)
+        if key in ENERGY:
+            result["energy"].extend(records)
+        else:
+            candidates.extend(records)
+    result["documents"], result["candidateIndex"] = _select_documents(candidates)
     return result
