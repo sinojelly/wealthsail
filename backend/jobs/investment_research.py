@@ -362,9 +362,33 @@ async def _refresh_official_index(pool, subject_id, subject, as_of, now):
     )
     if observations - sessions:
         state = "CONFLICT"
-    pe = {**raw["pe"], **_valuation_evidence(raw["pe"], end, "PE_TTM")}
-    if state in {"STALE", "UNVERIFIED"}:
-        pe["state"] = state
+    calendar_days = {
+        str(row["calendar_date"]): row["is_trading_day"] for row in calendar
+    }
+    source_pe = raw["pe"]
+    raw_pe_points = source_pe.get("points") or []
+    pe_points = [
+        point for point in raw_pe_points if calendar_days.get(point["date"]) is True
+    ]
+    excluded_pe = [
+        {
+            **point,
+            "reason": "NON_TRADING_DAY"
+            if point["date"] in calendar_days
+            else "CALENDAR_UNKNOWN",
+        }
+        for point in raw_pe_points
+        if calendar_days.get(point["date"]) is not True
+    ]
+    sampled_pe = {**source_pe, "points": pe_points}
+    pe = {
+        **sampled_pe,
+        **_valuation_evidence(sampled_pe, end, "PE_TTM"),
+        "sampling": "verified_trading_sessions",
+        "excludedObservations": excluded_pe,
+    }
+    if expected is None or state in {"STALE", "UNVERIFIED"}:
+        pe["state"] = "UNVERIFIED" if expected is None else state
         pe["percentile"] = None
     valuation = {
         "state": "PARTIAL",
@@ -385,14 +409,16 @@ async def _refresh_official_index(pool, subject_id, subject, as_of, now):
         "reasons": ["官方滚动市盈率独立可查；尚无同口径PB和企业盈利证据。"],
     }
     configuration = index_policy.config_hash(subject)
-    missing = sessions - observations
-    last_gap = max(missing) if missing else None
+    # An anomalous non-session row is a historical discontinuity, not a session
+    # to fill or a reason to erase a later, independently complete price window.
+    discontinuities = (sessions - observations) | (observations - sessions)
+    last_gap = max(discontinuities) if discontinuities else None
     tail = [point for point in rows if last_gap is None or point["date"] > last_gap]
     trend_quality = state
     if (
         expected
         and rows[-1]["date"] == expected.isoformat()
-        and not observations - sessions
+        and not {point["date"] for point in tail} - sessions
     ):
         trend_quality = "READY" if len(tail) >= 200 else "INSUFFICIENT"
     window = {

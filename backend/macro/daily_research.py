@@ -619,10 +619,8 @@ _UNSUPPORTED_NARRATIVE = re.compile(
             r"可能(?:为|是|约|大约|达到|有|超过|低于|高于|至少|最多|在)\s*"
             + _PERCENTAGE,
             _PERCENTAGE + r"[^。！？\n]{0,8}(?:概率|几率|可能性)",
-            r"\b(?:probability|likelihood|chance|odds)\b[^\n.!?;]{0,80}"
-            + _PERCENTAGE,
-            _PERCENTAGE
-            + r"[^\n.!?;]{0,30}\b(?:probability|likelihood|chance|odds)\b",
+            r"\b(?:probability|likelihood|chance|odds)\b[^\n.!?;]{0,80}" + _PERCENTAGE,
+            _PERCENTAGE + r"[^\n.!?;]{0,30}\b(?:probability|likelihood|chance|odds)\b",
             r"(?:建议|应当|应该|宜|可以考虑|可考虑|请|立即|必须|现在|马上)"
             r"[^。！？\n]{0,12}(?:买入|卖出|加仓|减仓|清仓|建仓)",
             r"\b(?:recommend(?:s|ed|ing)?|advis(?:e|es|ed|ing)|urge(?:s|d)?|should|must)"
@@ -763,15 +761,39 @@ def build_research_overview(
             "MEDIUM",
             "HIGH",
         }:
+            references = list(dict.fromkeys(item.get("evidenceIds") or []))
+            dates = {code: set() for code in references}
+            for row in context.get("items", []) + series:
+                code = row.get("code")
+                if code not in dates or not _visible(row, now):
+                    continue
+                period = row.get("referencePeriod")
+                observed = period or (
+                    str(_day(row["asOf"])) if _day(row.get("asOf")) else None
+                )
+                if observed:
+                    dates[code].add(observed)
+            matched = {
+                code: next(iter(values)) if len(values) == 1 else None
+                for code, values in dates.items()
+            }
+            basis = (
+                "；".join(
+                    f"{code}：{matched[code] or '日期未知'}" for code in references
+                )
+                or "日期未知"
+            )
+            unique_dates = set(matched.values())
             add(
                 1,
                 item["id"],
                 "MACRO_CHANGE",
                 "已观察的条件变化",
-                item["summary"],
+                item["summary"] + f"依据日期：{basis}。",
                 item["impact"],
                 tone="ORANGE" if item.get("category") == "RISK" else "BLUE",
                 tab="macro",
+                as_of=next(iter(unique_dates)) if len(unique_dates) == 1 else None,
             )
     report = (daily_record or {}).get("report") or {}
     report_at = _stamp(report.get("asOf") or (daily_record or {}).get("asOf"))

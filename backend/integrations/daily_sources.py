@@ -238,9 +238,7 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
     now = _aware(now)
     clock = clock or (lambda: datetime.now(SHANGHAI))
     if client is None:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": "WealthSail-public-research/1.0"}
-        ) as owned:
+        async with httpx.AsyncClient() as owned:
             return await verify_research_sources(
                 sources, now=now, client=owned, clock=clock
             )
@@ -269,11 +267,16 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
             matched = len(quote) >= 16 and quote in plain
             requested_day = source.get("publishedDate")
             if requested_day:
-                day_ok = date.fromisoformat(
-                    requested_day
-                ) <= retrieved.date() and _date_in_text(raw, requested_day)
+                day_ok = (
+                    date.fromisoformat(requested_day) <= retrieved.date()
+                    and requested_day == doc["publishedDate"]
+                    and _date_in_text(raw, requested_day)
+                )
             else:
-                day_ok = True
+                day_ok = (
+                    not doc["publishedDate"]
+                    or date.fromisoformat(doc["publishedDate"]) <= retrieved.date()
+                )
             if not matched or not day_ok:
                 return source.get("id"), {
                     **base,
@@ -355,9 +358,7 @@ async def collect_daily_sources(now, *, client=None, clock=None):
     now = _aware(now)
     clock = clock or (lambda: datetime.now(SHANGHAI))
     if client is None:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": "WealthSail-public-research/1.0"}
-        ) as owned:
+        async with httpx.AsyncClient() as owned:
             return await collect_daily_sources(now, client=owned, clock=clock)
     result = {"documents": [], "energy": [], "sourceResults": {}}
     semaphore = asyncio.Semaphore(3)

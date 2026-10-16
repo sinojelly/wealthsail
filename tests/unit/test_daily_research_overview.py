@@ -246,3 +246,80 @@ def test_daily_future_plan_with_checked_source_can_be_a_limited_highlight():
     fact = result["highlights"][0]
     assert fact["kind"] == "UPCOMING" and fact["targetTab"] == "events"
     assert "计划" in fact["summary"] and "模型" in fact["impact"]
+
+
+def macro_change(*refs):
+    return {
+        "items": [
+            {
+                "id": "scope:macro:PMI:BENCHMARK_CROSSING_UP",
+                "key": "macro:PMI:BENCHMARK_CROSSING_UP",
+                "category": "CHANGE",
+                "severity": "MEDIUM",
+                "factVerification": "VERIFIED",
+                "summary": "制造业PMI向上跨越50参考线。",
+                "impact": "需后续事实确认。",
+                "evidenceIds": list(refs),
+            }
+        ]
+    }
+
+
+def test_macro_change_highlight_uses_matched_reference_month_not_generation_time():
+    result = overview(
+        evidence=[],
+        board=macro_change("PMI"),
+        context={
+            "items": [
+                {"code": "CPI_YOY", "referencePeriod": "2026-08"},
+                {"code": "PMI", "referencePeriod": "2026-09", "asOf": "2026-10-01"},
+            ]
+        },
+    )
+    highlight = result["highlights"][0]
+    assert "2026-09" in highlight["summary"]
+    assert (
+        "2026-08" not in highlight["summary"]
+        and "2026-10-01" not in highlight["summary"]
+    )
+    assert NOW.date().isoformat() not in highlight["summary"]
+    assert highlight["asOf"] == "2026-09"
+
+
+def test_macro_change_matches_series_observation_date_and_preserves_multiple_periods():
+    result = engine().build_research_overview(
+        {"items": [{"code": "PMI", "referencePeriod": "2026-09"}]},
+        [{"code": "US_T10_REAL", "asOf": "2026-10-15"}],
+        [],
+        {},
+        macro_change("PMI", "US_T10_REAL"),
+        {"report": None},
+        now=NOW,
+    )
+    highlight = result["highlights"][0]
+    assert "PMI：2026-09" in highlight["summary"]
+    assert "US_T10_REAL：2026-10-15" in highlight["summary"]
+    assert (
+        highlight["asOf"] is None
+    )  # one timestamp cannot stand for two actual periods
+
+
+@pytest.mark.parametrize(
+    "matched", [None, {"code": "PMI"}, {"code": "PMI", "referencePeriod": "2026-11"}]
+)
+def test_macro_change_missing_or_future_evidence_date_remains_unknown(matched):
+    context = {
+        "items": [
+            {"code": "CPI_YOY", "referencePeriod": "2026-08"},
+            *([matched] if matched else []),
+        ]
+    }
+    highlight = overview(evidence=[], board=macro_change("PMI"), context=context)[
+        "highlights"
+    ][0]
+    assert "日期未知" in highlight["summary"]
+    assert (
+        NOW.date().isoformat() not in highlight["summary"]
+        and "2026-08" not in highlight["summary"]
+    )
+    assert highlight["asOf"] is None

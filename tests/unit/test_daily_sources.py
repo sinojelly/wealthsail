@@ -221,3 +221,25 @@ def test_official_title_and_publication_day_use_page_metadata_and_explicit_date(
     assert nbs["title"] == "2026年9月经济运行"
     assert fed["publishedDate"] == "2026-10-07"
     assert nbs["publishedAt"] is None and fed["publishedAt"] is None
+
+
+@pytest.mark.asyncio
+async def test_license_expiry_in_body_cannot_become_the_publication_day():
+    original = "<h1>Policy license</h1><time>10/09/2026</time><p>Authorizing public transactions until 10/16/2026 under the license.</p>"
+    source = {
+        "id": "x",
+        "url": "https://ofac.treasury.gov/policy",
+        "title": "Policy license",
+        "quote": "Authorizing public transactions until 10/16/2026 under the license.",
+        "publishedDate": "2026-10-16",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text=original)
+        )
+    ) as client:
+        checked = await sources.verify_research_sources(
+            [source], now=NOW, client=client, clock=lambda: NOW
+        )
+    assert checked["x"]["verification"] == "UNVERIFIED"
+    assert checked["x"]["publishedDate"] is None
