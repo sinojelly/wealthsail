@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 VERSION = "daily-research-v1"
 PROMPT_VERSION = "daily-research-prompt-v1"
+OVERVIEW_VERSION = "research-overview-v2"
 
 
 class _Strict(BaseModel):
@@ -229,6 +230,133 @@ def _provenance(row):
     return result
 
 
+def _texts(value, limit=8, width=300):
+    return list(
+        dict.fromkeys(
+            text[:width]
+            for text in (value if isinstance(value, list) else [])
+            if isinstance(text, str) and text.strip()
+        )
+    )[:limit]
+
+
+def _public_continuation(previous, now):
+    """Retain public report facts and original questions, never private lifecycle."""
+    history = (previous or {}).get("history") or []
+    valid = []
+    for row in history[:14]:
+        stamp = _stamp(row.get("completedAt"))
+        report = row.get("report")
+        if (
+            row.get("status") == "READY"
+            and row.get("runId")
+            and stamp
+            and now - timedelta(days=14) <= stamp <= now
+            and isinstance(report, dict)
+            and _visible(report, now)
+        ):
+            valid.append((stamp, row, report))
+    events, plans, seen, seen_plans = [], [], set(), set()
+    for stamp, record, report in sorted(valid, key=lambda item: item[0], reverse=True):
+        sources = {}
+        for source in report.get("sources", [])[:16]:
+            if not isinstance(source, dict) or not _visible(source, now):
+                continue
+            try:
+                uri = _url(source.get("url"))
+            except ValueError:
+                continue
+            sources[source.get("id")] = {
+                **_pick(
+                    source,
+                    (
+                        "id",
+                        "title",
+                        "quote",
+                        "publishedDate",
+                        "publishedAt",
+                        "retrievedAt",
+                        "verification",
+                        "contentHash",
+                    ),
+                ),
+                "url": uri,
+            }
+        common = {
+            "reportRunId": str(record["runId"]),
+            "researchedAt": stamp.isoformat(),
+            "methodVersion": str(report.get("methodVersion") or VERSION)[:80],
+        }
+        for event in report.get("events", [])[:12]:
+            refs = _texts(event.get("sourceIds"))
+            key = event.get("id")
+            questions = _texts(event.get("watchFor"))
+            unknowns = _texts(event.get("unknowns"))
+            if (
+                not event.get("id")
+                or key in seen
+                or not refs
+                or any(ref not in sources for ref in refs)
+                or event.get("status") in {"CLOSED", "ENDED", "INVALIDATED"}
+                or stamp < now - timedelta(days=7)
+                and not (questions or unknowns)
+            ):
+                continue
+            seen.add(key)
+            events.append(
+                {
+                    **common,
+                    "eventId": str(event["id"])[:100],
+                    **_pick(event, ("title", "summary", "phase", "importance")),
+                    "affectedDirectionIds": _texts(
+                        event.get("affectedDirectionIds"), 16, 80
+                    ),
+                    "channels": _texts(event.get("channels"), 6),
+                    "scenarios": [
+                        _pick(s, ("condition", "impact", "counter"))
+                        for s in event.get("scenarios", [])[:3]
+                        if isinstance(s, dict)
+                    ],
+                    "watchFor": questions,
+                    "unknowns": unknowns,
+                    "sources": [sources[ref] for ref in refs],
+                    "reasoningType": "MODEL_CONDITIONAL",
+                    "marketReaction": "UNVERIFIED",
+                }
+            )
+        for plan in report.get("upcoming", [])[:12]:
+            refs = _texts(plan.get("sourceIds"))
+            at = _stamp(plan.get("scheduledAt"))
+            day = _day(plan.get("scheduledDate"))
+            scheduled = at.astimezone(_TZ).date() if at else day
+            key = plan.get("id")
+            if (
+                not plan.get("id")
+                or key in seen_plans
+                or plan.get("phase") != "PLANNED"
+                or not refs
+                or any(ref not in sources for ref in refs)
+                or scheduled is None
+                or not now.astimezone(_TZ).date()
+                <= scheduled
+                <= (now + timedelta(days=7)).astimezone(_TZ).date()
+                or at is not None
+                and at <= now
+            ):
+                continue
+            seen_plans.add(key)
+            plans.append(
+                {
+                    **common,
+                    "eventId": str(plan["id"])[:100],
+                    **_pick(plan, ("title", "phase", "scheduledDate", "scheduledAt")),
+                    "watchFor": _texts(plan.get("watchFor")),
+                    "sources": [sources[ref] for ref in refs],
+                }
+            )
+    return events[:12], plans[:12]
+
+
 def make_research_packet(
     context, series, evidence, directions, *, now, previous=None, external=None
 ):
@@ -361,8 +489,8 @@ def make_research_packet(
             },
         }
         indices.append(item)
-    documents, energy = [], []
-    for row in (external or {}).get("documents", [])[:24]:
+    documents, energy, candidate_index = [], [], []
+    for row in (external or {}).get("documents", [])[:12]:
         if not _visible(row, now):
             continue
         try:
@@ -382,6 +510,30 @@ def make_research_packet(
                         "retrievedAt",
                         "verification",
                         "contentHash",
+                        "sourceKey",
+                    ),
+                ),
+                "url": uri,
+            }
+        )
+    for row in (external or {}).get("candidateIndex", [])[:40]:
+        if not isinstance(row, dict) or not _visible(row, now):
+            continue
+        try:
+            uri = _url(row.get("url"))
+        except ValueError:
+            continue
+        candidate_index.append(
+            {
+                **_pick(
+                    row,
+                    (
+                        "id",
+                        "title",
+                        "publishedDate",
+                        "retrievedAt",
+                        "contentHash",
+                        "sourceKey",
                     ),
                 ),
                 "url": uri,
@@ -417,6 +569,16 @@ def make_research_packet(
         for text in (event.get("watchFor") or []) + (event.get("unknowns") or []):
             if isinstance(text, str) and text.strip() and text[:300] not in questions:
                 questions.append(text[:300])
+    previous_research, previous_upcoming = _public_continuation(previous, now)
+    if "history" in (previous or {}):
+        questions = _texts(
+            [
+                text
+                for event in previous_research
+                for text in event["watchFor"] + event["unknowns"]
+            ],
+            24,
+        )
     source_results = {}
     for key, row in (external or {}).get("sourceResults", {}).items():
         if (
@@ -449,6 +611,9 @@ def make_research_packet(
         "documents": documents,
         "energy": energy,
         "previousQuestions": questions[:24],
+        "previousResearch": previous_research,
+        "previousUpcoming": previous_upcoming,
+        "candidateIndex": candidate_index,
         "sourceResults": source_results,
     }
 
@@ -465,7 +630,12 @@ def build_prompt(packet):
         "复用已有MA200/动量/独立PE及实际窗口，不因完整历史/PIT缺口丢弃当前观察，也不放宽基金资格。\n"
         "不使用中债/CFETS受限来源，不绕过403；无实际价格前后证据时marketReaction保持UNVERIFIED。\n"
         "energy仅选择包中真实可用的序列code，不生成能源数值；保留布伦特与柴油单位/频率差异。\n"
-        + json.dumps(packet, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        + json.dumps(
+            {key: value for key, value in packet.items() if key != "candidateIndex"},
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+        )
     )
 
 
@@ -701,10 +871,60 @@ def build_research_overview(
         directions=None,
         sources=None,
         as_of=None,
+        group=None,
+        scope="SELECTION",
+        stage=None,
+        phase=None,
+        refs=None,
+        next_action=None,
+        held=False,
+        quality=0,
     ):
+        group = group or (
+            "RISKS"
+            if kind == "PERSONAL_RISK"
+            else "UPCOMING"
+            if kind == "UPCOMING"
+            else "OPPORTUNITIES"
+        )
+        stage = stage or (
+            "EVENT_LEAD"
+            if kind in {"EVENT", "UPCOMING"}
+            else "EXECUTION_CONDITION"
+            if kind == "PERSONAL_RISK"
+            else "INDEX_CONDITION"
+            if kind in {"INDEX_TREND", "INDEX_PE"}
+            else "DIRECTION_LEAD"
+        )
+        action = next_action or {
+            "type": "VIEW_EVIDENCE",
+            "label": "查看研究依据",
+            "target": "research-global"
+            if tab == "events"
+            else "research-macro"
+            if tab == "macro"
+            else "op-research-targets",
+            "href": None,
+            "enabled": True,
+            "disabledReason": None,
+        }
+        observed = _stamp(as_of)
+        if observed is None:
+            day = _day(
+                str(as_of) + "-01"
+                if isinstance(as_of, str) and len(as_of) == 7
+                else as_of
+            )
+            if day:
+                observed = datetime.combine(day, datetime.min.time(), _TZ)
+        chronology = (
+            observed.timestamp() * (1 if group == "UPCOMING" else -1)
+            if observed
+            else float("inf")
+        )
         candidates.append(
             (
-                priority,
+                (0 if held else 1, priority, quality, chronology, identity),
                 {
                     "id": identity,
                     "kind": kind,
@@ -717,6 +937,12 @@ def build_research_overview(
                     "directionIds": direction_ids if directions is None else directions,
                     "sourceIds": sources or [],
                     "asOf": _public_value(as_of),
+                    "scope": scope,
+                    "stage": stage,
+                    "phase": phase,
+                    "evidenceIds": sorted(set(refs or [])),
+                    "nextAction": action,
+                    "_group": group,
                 },
             )
         )
@@ -741,7 +967,23 @@ def build_research_overview(
                 item["summary"],
                 item["impact"],
                 tone="RED",
-                as_of=board.get("asOf"),
+                scope="HOLDINGS",
+                refs=item.get("evidenceIds"),
+                next_action=item.get("nextAction"),
+                held=True,
+            )
+        elif key == "qualification:entry" and item.get("category") == "OPPORTUNITY":
+            add(
+                1,
+                item["id"],
+                "QUALIFICATION",
+                "完整研究资格待人工复核",
+                item["summary"],
+                item["impact"],
+                tone="GREEN",
+                stage="EXECUTION_CONDITION",
+                refs=item.get("evidenceIds"),
+                next_action=item.get("nextAction"),
             )
         elif key.startswith("trend:"):
             index = current.get(key.removeprefix("trend:"))
@@ -756,6 +998,9 @@ def build_research_overview(
                     tone="GREEN" if item.get("condition") == "PASSED" else "BLUE",
                     index=index["indexId"],
                     as_of=index.get("asOf"),
+                    refs=item.get("evidenceIds"),
+                    next_action=item.get("nextAction"),
+                    held=item.get("holdingRelevance") == "HELD",
                 )
         elif item.get("category") in {"RISK", "CHANGE"} and item.get("severity") in {
             "MEDIUM",
@@ -785,7 +1030,7 @@ def build_research_overview(
             )
             unique_dates = set(matched.values())
             add(
-                1,
+                3,
                 item["id"],
                 "MACRO_CHANGE",
                 "已观察的条件变化",
@@ -794,6 +1039,10 @@ def build_research_overview(
                 tone="ORANGE" if item.get("category") == "RISK" else "BLUE",
                 tab="macro",
                 as_of=next(iter(unique_dates)) if len(unique_dates) == 1 else None,
+                group="RISKS" if item.get("category") == "RISK" else "OPPORTUNITIES",
+                refs=references,
+                next_action=item.get("nextAction"),
+                held=item.get("holdingRelevance") == "HELD",
             )
     report = (daily_record or {}).get("report") or {}
     report_at = _stamp(report.get("asOf") or (daily_record or {}).get("asOf"))
@@ -805,7 +1054,9 @@ def build_research_overview(
             report.get("events", []), key=lambda row: row.get("importance") != "HIGH"
         ):
             related = event.get("affectedDirectionIds") or []
-            if direction_id and related and direction_id not in related:
+            selected = not direction_id or not related or direction_id in related
+            global_lead = event.get("importance") == "HIGH"
+            if not selected and not global_lead:
                 continue
             refs = event.get("sourceIds") or []
             if (
@@ -821,19 +1072,45 @@ def build_research_overview(
             date_label = report_at.astimezone(_TZ).date().isoformat() + (
                 "旧日报" if old else "研究"
             )
+            actual_dates = {
+                sources[ref].get("publishedDate")
+                or (
+                    _stamp(sources[ref].get("publishedAt"))
+                    .astimezone(_TZ)
+                    .date()
+                    .isoformat()
+                    if _stamp(sources[ref].get("publishedAt"))
+                    else None
+                )
+                for ref in refs
+            }
+            source_date = (
+                next(iter(actual_dates)) if checked and len(actual_dates) == 1 else None
+            )
+            date_basis = (
+                "来源日期：" + "、".join(sorted(actual_dates)) + "。"
+                if checked and None not in actual_dates
+                else "来源日期未完整核对。"
+            )
             add(
-                1,
+                1 if event.get("importance") == "HIGH" else 2,
                 event["id"],
                 "EVENT",
                 event["title"],
                 f"{date_label}：{event['summary']}"
+                + date_basis
                 + ("报道仍待核对。" if not checked else ""),
                 "模型条件研究，原文核对不代表影响已证实。"
                 + "；".join(event.get("channels", [])[:2]),
                 tab="events",
                 directions=related,
                 sources=refs,
-                as_of=report_at,
+                as_of=source_date,
+                group="RISKS" if global_lead else "OPPORTUNITIES",
+                scope="GLOBAL" if global_lead else "SELECTION",
+                phase=event.get("phase"),
+                refs=refs,
+                quality=0 if checked else 1,
             )
         for plan in report.get("upcoming", []):
             refs = plan.get("sourceIds") or []
@@ -848,9 +1125,6 @@ def build_research_overview(
                     or sources[ref].get("verification") != "SOURCE_CHECKED"
                     for ref in refs
                 )
-                or direction_id
-                and related
-                and direction_id not in related
                 or stamp is not None
                 and stamp <= now
                 or stamp is None
@@ -867,7 +1141,12 @@ def build_research_overview(
                 tab="events",
                 directions=related,
                 sources=refs,
-                as_of=report_at,
+                as_of=plan.get("scheduledAt") or plan.get("scheduledDate"),
+                scope="SELECTION"
+                if direction_id and direction_id in related
+                else "GLOBAL",
+                phase="PLANNED",
+                refs=refs,
             )
     for index in current.values():
         if index.get("state") in {
@@ -901,24 +1180,9 @@ def build_research_overview(
             "只描述独立估值事实，PB、盈利及完整研究资格仍需分别核查。",
             index=index["indexId"],
             as_of=index.get("asOf"),
+            refs=[index["indexId"]],
         )
     for row in context.get("items", []):
-        if (
-            row.get("valueVerification") == "VERIFIED"
-            and row.get("state") == "READY"
-            and _visible(row, now)
-            and _finite(row.get("value")) is not None
-        ):
-            add(
-                4,
-                "macro-current:" + row["code"],
-                "MACRO",
-                row.get("label", row["code"]) + "当前观察",
-                f"{row.get('referencePeriod') or row.get('asOf') or '观察期未提供'}：{row['value']}{row.get('unit', '')}。",
-                "当前水平与边际变化需分别研究，事前预期及资产价格因果尚未核实。",
-                tab="macro",
-                as_of=row.get("referencePeriod") or row.get("asOf"),
-            )
         plan = row.get("nextRelease") or {}
         stamp = _stamp(plan.get("scheduledAt"))
         if (
@@ -940,14 +1204,126 @@ def build_research_overview(
             f"计划于{stamp.astimezone(_TZ).isoformat()}发布，日程可能调整。",
             "实际公布后核对数值和所属期；计划不是已发生事实，预期差仍未知。",
             tab="macro",
+            scope="GLOBAL",
+            phase="PLANNED",
+            as_of=stamp,
+            refs=[row.get("code")],
         )
-    highlights = []
+    grouped = {key: [] for key in ("RISKS", "OPPORTUNITIES", "HOLDINGS", "UPCOMING")}
+    seen = set()
     for _, row in sorted(candidates, key=lambda pair: pair[0]):
-        if row["id"] not in {item["id"] for item in highlights}:
-            highlights.append(row)
-        if len(highlights) == 3:
+        key = row.pop("_group")
+        if row["id"] not in seen and len(grouped[key]) < 2:
+            seen.add(row["id"])
+            grouped[key].append(row)
+    holding = next(
+        (s for s in board.get("summaries", []) if s.get("id") == "HOLDINGS"), {}
+    )
+    holding_known = holding.get("state") in {"CHECKED", "BREACH"}
+    group_labels = {
+        "RISKS": "重要风险",
+        "OPPORTUNITIES": "研究机会",
+        "HOLDINGS": "我的持仓",
+        "UPCOMING": "未来事件",
+    }
+    groups = []
+    for key, rows in grouped.items():
+        unknown = key == "HOLDINGS" and not holding_known
+        groups.append(
+            {
+                "id": key,
+                "label": group_labels[key],
+                "state": "UNKNOWN"
+                if unknown
+                else "READY"
+                if rows or key == "HOLDINGS" and holding_known
+                else "EMPTY",
+                "summary": "持仓与个人风险评估未知，请先核对资产。"
+                if unknown
+                else holding.get("summary", "")
+                if key == "HOLDINGS"
+                else f"有{len(rows)}项有限研究观察，需结合原始证据核查。"
+                if rows
+                else "当前没有可展示事项，不代表已完成该类判断。",
+                "nextAction": {
+                    "type": "VIEW_HOLDINGS",
+                    "label": "核对我的持仓",
+                    "target": None,
+                    "href": "/dashboard?scope=MINE",
+                    "enabled": True,
+                    "disabledReason": None,
+                }
+                if key == "HOLDINGS"
+                else None,
+                "items": rows,
+            }
+        )
+    highlights = [row for group in groups for row in group["items"]]
+    summary, summary_refs = _overview_summary(highlights)
+    return {
+        "methodVersion": OVERVIEW_VERSION,
+        "asOf": now.isoformat(),
+        "summary": summary,
+        "evidenceIds": summary_refs,
+        "groups": groups,
+        "highlights": highlights,
+    }
+
+
+def _overview_summary(items):
+    parts, refs = [], set()
+    for kind in (
+        "PERSONAL_RISK",
+        "EVENT",
+        "QUALIFICATION",
+        "INDEX_TREND",
+        "INDEX_PE",
+        "MACRO_CHANGE",
+        "UPCOMING",
+    ):
+        row = next((item for item in items if item["kind"] == kind), None)
+        if not row:
+            continue
+        if kind == "PERSONAL_RISK":
+            text = "已确认个人预算超限，先核对持仓敞口和风险限额"
+        elif kind == "EVENT":
+            text = (
+                ("全球" if row["scope"] == "GLOBAL" else "当前方向")
+                + "事件线索“"
+                + row["title"][:60]
+                + "”需核对后续正式进展及资产传导"
+            )
+        elif kind == "QUALIFICATION":
+            text = "当前已满足规定的完整研究资格，仍需人工复核"
+        elif kind == "INDEX_TREND":
+            passed = row["tone"] == "GREEN"
+            text = row["title"] + (
+                "已满足当前MA200与63期正动量，下一步核查估值、产品及个人条件"
+                if passed
+                else "尚未满足MA200与63期正动量，继续观察两项条件能否同时成立"
+            )
+        elif kind == "INDEX_PE":
+            if any(item["kind"] == "INDEX_TREND" for item in items):
+                continue
+            text = row["title"] + "仅支持当前估值观察，下一步核对可比历史及盈利证据"
+        elif kind == "MACRO_CHANGE":
+            if len(parts) >= 2:
+                continue
+            text = row["summary"].rstrip("。") + "，需后续事实验证其研究影响"
+        else:
+            if len(parts) >= 2:
+                continue
+            text = "下一关键计划“" + row["title"][:60] + "”仍待实际公布"
+        parts.append(text)
+        refs.update(row.get("evidenceIds") or [])
+        if len(parts) == 3:
             break
-    return {"methodVersion": VERSION, "asOf": now.isoformat(), "highlights": highlights}
+    return (
+        ("；".join(parts) + "；有限线索不构成基金建仓结论。")
+        if parts
+        else "当前尚无足够事项形成研究摘要，请查看已有证据及下一实际计划。",
+        sorted(refs),
+    )
 
 
 def _finite(value):

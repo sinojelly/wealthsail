@@ -122,7 +122,33 @@ async def read_daily_research(conn, now, *, enabled=True):
         "startedAt": latest["dispatched_at"] if latest else None,
         "completedAt": latest.get("recorded_at") if latest else None,
         "asOf": report_row.get("recorded_at") if report_row else None,
+        "reportRunId": str(report_row["run_id"]) if report_row else None,
+        "reportCompletedAt": report_row.get("recorded_at") if report_row else None,
+        "reportSlotDate": report_row.get("slot_date") if report_row else None,
         "nextRunAt": next_run(stamp),
         "errorClass": latest.get("error_class") if latest else None,
         "report": _object(report_row.get("payload")) if report_row else None,
     }
+
+
+async def read_recent_public_research(conn, now):
+    """Bounded READY public reports only; never query actor study records."""
+    stamp = local(now)
+    rows = await conn.fetch(
+        _READ
+        + " AND t.status='READY' AND t.recorded_at>=$3"
+        + " ORDER BY t.recorded_at DESC,r.run_id LIMIT 14",
+        stamp.date(),
+        stamp,
+        stamp - timedelta(days=14),
+    )
+    return [
+        {
+            "status": "READY",
+            "runId": str(row["run_id"]),
+            "completedAt": row["recorded_at"],
+            "slotDate": row["slot_date"],
+            "report": _object(row.get("payload")),
+        }
+        for row in rows
+    ]

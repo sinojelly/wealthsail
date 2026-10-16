@@ -26,6 +26,7 @@ from backend.macro.daily_repository import (
     local,
     next_run,
     read_daily_research,
+    read_recent_public_research,
     scheduled_for,
 )
 from backend.macro.daily_research import (
@@ -75,6 +76,7 @@ async def load_public_packet(conn, now, external):
         evidence.append(market_evidence(index, result))
     directions = [dict(row) for row in await repository.directions(conn)]
     previous = await read_daily_research(conn, now)
+    previous["history"] = await read_recent_public_research(conn, now)
     return make_research_packet(
         context,
         series,

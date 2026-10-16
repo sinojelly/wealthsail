@@ -14,6 +14,7 @@ from backend.macro.daily_repository import (
     claim_daily_run,
     finish_daily_run,
     read_daily_research,
+    read_recent_public_research,
 )
 
 DSN = os.environ.get("INVESTMENT_TEST_DATABASE_URL")
@@ -184,6 +185,9 @@ async def test_real_public_packet_uses_api_read_only_connection_without_actor_or
             "energy",
             "sourceResults",
             "previousQuestions",
+            "previousResearch",
+            "previousUpcoming",
+            "candidateIndex",
         }
         assert {row["indexId"] for row in packet["indices"]} == {
             "hs300",
@@ -192,4 +196,48 @@ async def test_real_public_packet_uses_api_read_only_connection_without_actor_or
         }
         assert not {"portfolio", "holdings", "tenantId", "userId"}.intersection(packet)
     finally:
+        await conn.close()
+
+
+async def test_ready_report_identity_and_recent_history_follow_actual_selected_success():
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        now = stamp()
+        old = await claim(conn, now - timedelta(days=2))
+        await finish_daily_run(
+            conn,
+            old["run_id"],
+            now - timedelta(days=2),
+            status="READY",
+            payload={"summary": "old public report", "events": []},
+        )
+        failed = await claim(conn, now - timedelta(days=1))
+        await finish_daily_run(
+            conn,
+            failed["run_id"],
+            now - timedelta(days=1),
+            status="FAILED",
+            error_class="TimeoutError",
+        )
+        current = await claim(conn, now)
+        await finish_daily_run(
+            conn,
+            current["run_id"],
+            now + timedelta(minutes=1),
+            status="READY",
+            payload={"summary": "future public report"},
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_api")
+        result = await read_daily_research(conn, now)
+        assert result["state"] == "RUNNING"
+        assert result["runId"] == str(current["run_id"])
+        assert result["reportRunId"] == str(old["run_id"])
+        assert result["reportCompletedAt"] == now - timedelta(days=2)
+        assert result["reportSlotDate"] == old["slot_date"]
+        rows = await read_recent_public_research(conn, now)
+        assert [row["runId"] for row in rows] == [str(old["run_id"])]
+    finally:
+        await transaction.rollback()
         await conn.close()

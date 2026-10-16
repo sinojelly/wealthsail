@@ -74,6 +74,33 @@ async def test_current_failure_preserves_previous_success_with_its_actual_asof()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["FAILED", "UNCERTAIN", "STALE"])
+async def test_effective_report_identity_never_uses_latest_failed_or_pending_run(state):
+    yesterday = NOW - timedelta(days=1)
+    old = run(
+        run_id="old-ready",
+        slot_date=yesterday.date(),
+        status="READY",
+        recorded_at=yesterday,
+        payload={"summary": "old"},
+    )
+    latest = run(status=state if state != "STALE" else "READY", recorded_at=NOW)
+    stamp = NOW
+    if state == "STALE":
+        latest = old
+        stamp = NOW.replace(hour=7)
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [latest, old]
+    result = await repository().read_daily_research(conn, stamp)
+    assert result["reportRunId"] == "old-ready"
+    assert result["reportCompletedAt"] == yesterday
+    assert result["reportSlotDate"] == yesterday.date()
+    if state != "STALE":
+        assert result["runId"] != result["reportRunId"]
+        assert result["completedAt"] == NOW
+
+
+@pytest.mark.asyncio
 async def test_utc_input_uses_shanghai_calendar_and_disabled_does_not_hide_report():
     stamp = datetime(2026, 10, 15, 23, tzinfo=timezone.utc)
     conn = AsyncMock()

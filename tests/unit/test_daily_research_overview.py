@@ -155,7 +155,7 @@ def test_future_old_or_other_direction_daily_report_cannot_mask_current_index_fa
                     "id": "e",
                     "title": "错范围事件",
                     "summary": "other",
-                    "importance": "HIGH",
+                    "importance": "MEDIUM" if bad == "foreign" else "HIGH",
                     "sourceIds": ["s"],
                     "affectedDirectionIds": ["us:broad"]
                     if bad == "foreign"
