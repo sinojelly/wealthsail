@@ -390,19 +390,17 @@ export interface OpportunityContext extends MacroContext {
   researchOverview?: {
     methodVersion: string;
     asOf: string | null;
-    highlights: Array<{
-      id: string;
-      kind: string;
-      title: string;
+    summary?: string;
+    evidenceIds?: string[];
+    groups?: Array<{
+      id: "RISKS" | "OPPORTUNITIES" | "HOLDINGS" | "UPCOMING";
+      label: string;
+      state: "READY" | "EMPTY" | "UNKNOWN";
       summary: string;
-      impact: string;
-      tone: ResearchTone;
-      targetTab: ResearchTab;
-      indexId: string | null;
-      directionIds: string[];
-      sourceIds: string[];
-      asOf?: string | null;
+      nextAction: ResearchAction | null;
+      items: OverviewItem[];
     }>;
+    highlights: OverviewItem[];
   } | null;
   researchBoard?: ResearchBoardData | null;
   series?: OpportunitySeries[];
@@ -501,7 +499,31 @@ export interface OpportunityContext extends MacroContext {
   } | null;
   notices?: ConditionNotice[];
 }
-export type ResearchTab = "events" | "macro" | "direction" | "quality";
+export type ResearchTab =
+  "events" | "macro" | "direction" | "tracking" | "quality";
+export interface OverviewItem {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  impact: string;
+  tone: ResearchTone;
+  targetTab: ResearchTab;
+  indexId: string | null;
+  directionIds: string[];
+  sourceIds: string[];
+  asOf?: string | null;
+  scope?: "GLOBAL" | "SELECTION" | "HOLDINGS";
+  stage?:
+    | "EVENT_LEAD"
+    | "DIRECTION_LEAD"
+    | "INDEX_CONDITION"
+    | "FUND_TOOL"
+    | "EXECUTION_CONDITION";
+  phase?: string | null;
+  evidenceIds?: string[];
+  nextAction?: ResearchAction;
+}
 export interface DailyResearch {
   methodVersion: string;
   state:
@@ -513,6 +535,9 @@ export interface DailyResearch {
     | "UNCERTAIN"
     | "DISABLED";
   runId: string | null;
+  reportRunId?: string | null;
+  reportCompletedAt?: string | null;
+  reportSlotDate?: string | null;
   scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;

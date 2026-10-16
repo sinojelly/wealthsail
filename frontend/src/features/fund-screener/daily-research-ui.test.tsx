@@ -145,18 +145,23 @@ it("opens the four direct categories and mounts only the selected evidence while
   const user = await open();
   expect(screen.getAllByRole("tab")).toHaveLength(4);
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "宏观指标" }));
+  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: "查看制造业PMI完整证据" }),
+  );
   expect(
     screen.getByRole("img", { name: "制造业PMI 历史走势" }),
   ).toBeInTheDocument();
   expect(screen.queryByText("制造业景气待盈利验证")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "当前方向" }));
+  await user.click(screen.getByRole("tab", { name: "投资方向与基金" }));
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   expect(screen.getByText("制造业景气待盈利验证")).toBeInTheDocument();
   expect(screen.getByText(/MA200：4000.00/)).toBeInTheDocument();
   expect(screen.getByText(/PE：12.87/)).toBeInTheDocument();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "数据质量" }));
+  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await user.click(screen.getByRole("button", { name: "数据状态" }));
   expect(screen.getAllByRole("row")).toHaveLength(6);
   expect(screen.queryByText("制造业景气待盈利验证")).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -166,12 +171,12 @@ it("restores a query deep link and preserves the full fund identity, filters and
     data,
     "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&macroMonths=60&keyword=沪深&page=2&researchOpen=1&researchTab=direction",
   );
-  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   const user = userEvent.setup();
-  await user.click(screen.getByRole("tab", { name: "宏观指标" }));
+  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
   const query = new URLSearchParams(
     screen.getByLabelText("研究URL").textContent!,
   );
@@ -182,7 +187,7 @@ it("restores a query deep link and preserves the full fund identity, filters and
   expect(query.get("page")).toBe("2");
   expect(query.get("researchTab")).toBe("macro");
   await user.click(screen.getByRole("button", { name: "研究后退" }));
-  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -193,10 +198,10 @@ it("does not fill empty modules or describe unknown holdings as safe when the da
   expect(screen.queryByText("持仓风险")).not.toBeInTheDocument();
   expect(screen.queryByText(/无风险|可以买入/)).not.toBeInTheDocument();
   await open();
-  await userEvent.click(screen.getByRole("tab", { name: "宏观指标" }));
-  expect(
-    screen.getByRole("heading", { name: "50.1 指数点" }),
-  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  expect(screen.getByRole("region", { name: "核心指标" })).toHaveTextContent(
+    "50.1 指数点",
+  );
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
@@ -341,7 +346,8 @@ it("keeps weekly diesel distinct from daily oil and rounds supplied changes with
   expect(
     within(energy).getByText(/观察日期不代表已核实的公布时刻/),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("tab", { name: "宏观指标" }));
+  await userEvent.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await userEvent.click(screen.getByRole("button", { name: "全球市场与能源" }));
   expect(screen.getAllByRole("region", { name: "能源事实" })).toHaveLength(1);
   expect(
     screen.queryByRole("region", { name: "每日事件研究" }),
@@ -362,9 +368,7 @@ it("labels projection time separately from each observation and rejects unsubsta
       ],
     },
   });
-  expect(
-    screen.getByText(/概览生成时间：2026年10月16日 08:30/),
-  ).toBeInTheDocument();
+  expect(screen.getByText(/最近有效研究：未确认/)).toBeInTheDocument();
   expect(screen.getByText("依据期：2026年9月")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "具体观察1" })).not.toHaveClass(
     "op-tone-red",

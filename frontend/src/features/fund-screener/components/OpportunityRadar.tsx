@@ -5,7 +5,12 @@ import type {
   OpportunitySeries,
   RadarChange,
 } from "../../../api/investment";
-import { monthLabel, sourceHref, timeLabel } from "../macro-display";
+import {
+  metricValue,
+  monthLabel,
+  sourceHref,
+  timeLabel,
+} from "../macro-display";
 
 const states: Record<string, string> = {
   READY: "事实可用",
@@ -289,7 +294,7 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
   );
 }
 
-function SeriesCard({ series }: { series: OpportunitySeries }) {
+export function SeriesCard({ series }: { series: OpportunitySeries }) {
   const href = sourceHref(series.sourceUri),
     changeUnit =
       series.changes.changeUnit === "bp"
@@ -307,7 +312,7 @@ function SeriesCard({ series }: { series: OpportunitySeries }) {
       <span className="op-badge">{stateText(series.state)}</span>
       <p className="op-series-value">
         {finite(series.value)
-          ? `${series.value} ${series.unit ?? "单位待确认"}`
+          ? `${metricValue(series.value)} ${series.unit ?? "单位待确认"}`
           : "—"}
       </p>
       <p>
@@ -658,32 +663,52 @@ export function RadarDetails({
                   {stateText(decision.assessment.marketResearchState)}
                 </p>
               )}
-              <dl className="op-radar-gates">
-                {decision.gates.map((g) => (
-                  <div key={g.id}>
-                    <dt>
-                      {g.label}
-                      <span className="op-badge">{stateText(g.state)}</span>
-                    </dt>
-                    {!data.researchBoard ? (
-                      <dd>{g.reason}</dd>
-                    ) : (
-                      !gateCovered(g) && (
-                        <dd>
-                          <button
-                            type="button"
-                            aria-expanded={expandedReasons.includes(g.id)}
-                            onClick={() => toggleReason(g.id)}
-                          >
-                            查看{g.label}判断依据
-                          </button>
-                          {expandedReasons.includes(g.id) && <p>{g.reason}</p>}
-                        </dd>
-                      )
-                    )}
-                  </div>
-                ))}
-              </dl>
+              {(
+                [
+                  ["PASS", "已满足的条件"],
+                  ["BLOCKED", "确实未满足的条件"],
+                  ["UNKNOWN", "无法核验的条件"],
+                ] as const
+              ).map(([state, label]) => (
+                <section key={state} aria-label={label}>
+                  <h4>{label}</h4>
+                  <dl className="op-radar-gates">
+                    {decision.gates
+                      .filter((g) => g.state === state)
+                      .map((g) => (
+                        <div key={g.id}>
+                          <dt>
+                            {g.label}
+                            <span className="op-badge">
+                              {stateText(g.state)}
+                            </span>
+                          </dt>
+                          {!data.researchBoard ? (
+                            <dd>{g.reason}</dd>
+                          ) : (
+                            !gateCovered(g) && (
+                              <dd>
+                                <button
+                                  type="button"
+                                  aria-expanded={expandedReasons.includes(g.id)}
+                                  onClick={() => toggleReason(g.id)}
+                                >
+                                  查看{g.label}判断依据
+                                </button>
+                                {expandedReasons.includes(g.id) && (
+                                  <p>{g.reason}</p>
+                                )}
+                              </dd>
+                            )
+                          )}
+                        </div>
+                      ))}
+                  </dl>
+                  {!decision.gates.some((g) => g.state === state) && (
+                    <p>未列出此类条件，不等同于全部资格已通过。</p>
+                  )}
+                </section>
+              ))}
               <p>策略验证：{stateText(decision.validation.state)}</p>
               {(!data.researchBoard ||
                 !covered(decision.validation.summary)) && (

@@ -1288,7 +1288,7 @@ def _overview_summary(items):
             text = "已确认个人预算超限，先核对持仓敞口和风险限额"
         elif kind == "EVENT":
             text = (
-                ("全球" if row["scope"] == "GLOBAL" else "当前方向")
+                ("全局" if row["scope"] == "GLOBAL" else "当前方向")
                 + "事件线索“"
                 + row["title"][:60]
                 + "”需核对后续正式进展及资产传导"

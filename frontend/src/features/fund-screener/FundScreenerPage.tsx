@@ -9,6 +9,8 @@ import {
 } from "../../app/auth-session";
 import * as api from "../../api/investment";
 import * as watchlist from "../../api/watchlist";
+import type { CreateStudy } from "../../api/study-api";
+import { createStudyTrack } from "../../api/study-api";
 import {
   chooseFund,
   chooseIndex,
@@ -23,6 +25,7 @@ import IndexComparison from "./components/IndexComparison";
 import FundResultsTable from "./components/FundResultsTable";
 import ResearchDiagnosis from "./components/ResearchDiagnosis";
 import { RadarDetails } from "./components/OpportunityRadar";
+import StudyTracking from "./components/StudyTracking";
 import "./opportunities.css";
 
 const monitorScopeFields = [
@@ -154,6 +157,45 @@ function ResearchWorkspace({
     opportunityScope.fundMarket ?? null,
     macroMonths,
   ] as const;
+  const studyScopeKey = JSON.stringify(opportunityKey.slice(0, -1));
+  const activeStudyScope = useRef<string | null>(studyScopeKey);
+  useEffect(() => {
+    activeStudyScope.current = studyScopeKey;
+    return () => {
+      activeStudyScope.current = null;
+    };
+  }, [studyScopeKey]);
+  const studyCreate = useMutation({
+    mutationFn: ({ origin }: { origin: CreateStudy; scopeKey: string }) =>
+      createStudyTrack({ ...origin, horizonDays: 30 }),
+    onSuccess: (result, variables) => {
+      client.setQueryData(
+        ["study", subject, "detail", result.track.id, 0],
+        result,
+      );
+      void client.invalidateQueries({ queryKey: ["study", subject, "list"] });
+      if (activeStudyScope.current !== variables.scopeKey) return;
+      setParams((current) => {
+        const next = new URLSearchParams(current);
+        next.set("researchOpen", "1");
+        next.set("researchTab", "tracking");
+        next.set("studyTrack", result.track.id);
+        next.delete("researchData");
+        return next;
+      });
+      document
+        .querySelector('[aria-label="今日投资观察"]')
+        ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    },
+  });
+  const studyCreatingCurrent =
+    studyCreate.variables?.scopeKey === studyScopeKey;
+  const studyCreateError =
+    studyCreate.isError && studyCreatingCurrent
+      ? studyCreate.error instanceof Error
+        ? studyCreate.error.message
+        : "研究保存失败，请点击加入跟踪重试。"
+      : undefined;
   const opportunity = useQuery({
     queryKey: opportunityKey,
     queryFn: ({ signal }) =>
@@ -318,6 +360,8 @@ function ResearchWorkspace({
     p.delete("analysisAsOf");
     p.delete("researchOpen");
     p.delete("researchTab");
+    p.delete("researchData");
+    p.delete("studyTrack");
     setParams(p);
     setRun(null);
     setTimedOut(false);
@@ -404,6 +448,21 @@ function ResearchWorkspace({
       />
       <MacroContextStrip
         data={radarData}
+        renderStudyTracking={() => (
+          <StudyTracking actor={subject} scope={opportunityScope} />
+        )}
+        studyPending={studyCreate.isPending && studyCreatingCurrent}
+        studyError={
+          studyCreate.variables?.origin.originType === "DAILY_EVENT"
+            ? studyCreateError
+            : undefined
+        }
+        onStudyEvent={(reportRunId, eventId) =>
+          studyCreate.mutate({
+            origin: { originType: "DAILY_EVENT", reportRunId, eventId },
+            scopeKey: studyScopeKey,
+          })
+        }
         hideTracking
         scopeKey={JSON.stringify(opportunityKey.slice(0, -1))}
         onIndexSelect={(id) => {
@@ -639,38 +698,65 @@ function ResearchWorkspace({
           canRefresh={!!analysisId}
           message={message}
           trackingControls={
-            <RadarDetails
-              key={JSON.stringify(opportunityKey.slice(0, -1))}
-              data={
-                opportunity.data ?? radarData ?? { state: "UNKNOWN", items: [] }
-              }
-              section="monitor"
-              monitorEnabled={currentMonitor?.enabled ?? false}
-              monitorLoading={monitors.isPending || monitors.isError}
-              monitorPending={monitor.isPending && monitoringCurrent}
-              monitorError={
-                monitors.isError
-                  ? "跟踪状态读取失败，请稍后重试。"
-                  : monitor.isError && monitoringCurrent
-                    ? "跟踪条件保存失败，原状态保留。"
+            <>
+              {opportunity.data?.researchBoard?.methodVersion ===
+                "research-board-v2" && (
+                <button
+                  type="button"
+                  disabled={studyCreate.isPending && studyCreatingCurrent}
+                  onClick={() =>
+                    studyCreate.mutate({
+                      origin: {
+                        originType: "SELECTION",
+                        scope: opportunityScope,
+                      },
+                      scopeKey: studyScopeKey,
+                    })
+                  }
+                >
+                  跟踪当前标的研究
+                </button>
+              )}
+              {studyCreateError &&
+                studyCreate.variables?.origin.originType === "SELECTION" && (
+                  <p role="alert">{studyCreateError}</p>
+                )}
+              <RadarDetails
+                key={JSON.stringify(opportunityKey.slice(0, -1))}
+                data={
+                  opportunity.data ??
+                  radarData ?? { state: "UNKNOWN", items: [] }
+                }
+                section="monitor"
+                monitorEnabled={currentMonitor?.enabled ?? false}
+                monitorLoading={monitors.isPending || monitors.isError}
+                monitorPending={monitor.isPending && monitoringCurrent}
+                monitorError={
+                  monitors.isError
+                    ? "跟踪状态读取失败，请稍后重试。"
+                    : monitor.isError && monitoringCurrent
+                      ? "跟踪条件保存失败，原状态保留。"
+                      : undefined
+                }
+                onMonitor={
+                  indexId || fundCode
+                    ? (enabled) =>
+                        monitor.mutate({ ...opportunityScope, enabled })
                     : undefined
-              }
-              onMonitor={
-                indexId || fundCode
-                  ? (enabled) =>
-                      monitor.mutate({ ...opportunityScope, enabled })
-                  : undefined
-              }
-              onNoticeAck={(id) => ack.mutate({ id, key: opportunityKey })}
-              ackPending={
-                ack.isPending && acknowledgingCurrent ? ack.variables.id : null
-              }
-              ackError={
-                ack.isError && acknowledgingCurrent
-                  ? "已读状态保存失败，可重试。"
-                  : undefined
-              }
-            />
+                }
+                onNoticeAck={(id) => ack.mutate({ id, key: opportunityKey })}
+                ackPending={
+                  ack.isPending && acknowledgingCurrent
+                    ? ack.variables.id
+                    : null
+                }
+                ackError={
+                  ack.isError && acknowledgingCurrent
+                    ? "已读状态保存失败，可重试。"
+                    : undefined
+                }
+              />
+            </>
           }
           watchButton={
             <button

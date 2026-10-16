@@ -3,6 +3,59 @@ import userEvent from "@testing-library/user-event";
 import { useNavigate } from "react-router-dom";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
+import * as study from "../../api/study-api";
+
+vi.mock("../../api/study-api", () => ({
+  getStudyTracks: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+  getStudyDetail: vi.fn(),
+  createStudyTrack: vi.fn(),
+  updateStudyVersion: vi.fn(),
+  setStudyStatus: vi.fn(),
+  checkStudy: vi.fn(),
+  addStudyNote: vi.fn(),
+  getEligibleStudyTrades: vi.fn(),
+  linkStudyTrade: vi.fn(),
+}));
+
+it("opens current-target frozen study tracking with full identity while keeping the old monitor separate", async () => {
+  vi.mocked(study.createStudyTrack).mockResolvedValue({
+    track: { id: "saved" },
+  } as never);
+  vi.mocked(study.getStudyDetail).mockResolvedValue({
+    track: { id: "saved" },
+  } as never);
+  const response = researchBoardResponse();
+  api.opportunity.mockResolvedValue({
+    ...response,
+    researchBoard: {
+      ...response.researchBoard,
+      methodVersion: "research-board-v2",
+    },
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&instrument=fund-id&fund=510330&fundMarket=SSE&macroMonths=60&keyword=沪深",
+  );
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", { name: "跟踪当前标的研究" }),
+  );
+  expect(
+    await screen.findByRole("tab", { name: "跟踪与复盘" }),
+  ).toHaveAttribute("aria-selected", "true");
+  expect(api.setMonitor).not.toHaveBeenCalled();
+  expect(study.createStudyTrack).toHaveBeenCalledWith({
+    originType: "SELECTION",
+    scope: {
+      directionId: "a-share:broad",
+      indexId: "hs300",
+      instrumentId: "fund-id",
+      fundCode: "510330",
+      fundMarket: "SSE",
+    },
+    horizonDays: 30,
+  });
+});
 
 it("filters evidence candidates through the server independently of technical score", async () => {
   const user = userEvent.setup();
@@ -22,6 +75,9 @@ it("preserves the direction explanation entry for the legacy context", async () 
   expect(
     await screen.findByRole("button", { name: "查看驱动与风险⌄" }),
   ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "跟踪当前标的研究" }),
+  ).not.toBeInTheDocument();
 });
 
 it("queries and preserves the selected macro history window", async () => {
@@ -995,7 +1051,7 @@ it("selects a related index from v2 direction details and clears the previous fu
   ).not.toBeInTheDocument();
   expect(screen.queryByText(/当前研究：/)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
-  await user.click(screen.getByRole("tab", { name: "当前方向" }));
+  await user.click(screen.getByRole("tab", { name: "投资方向与基金" }));
   await user.click(screen.getByRole("button", { name: "研究中证A500" }));
   await waitFor(() =>
     expect(api.funds).toHaveBeenLastCalledWith(

@@ -6,6 +6,7 @@ import type {
   ResearchAction,
   ResearchIssue,
   ResearchTab,
+  OverviewItem,
 } from "../../../api/investment";
 import DailyResearchReport, {
   DailyResearchStatus,
@@ -48,6 +49,10 @@ export default function ResearchBoardV2({
   onIndexSelect,
   directions,
   onDirectionSelect,
+  renderStudyTracking,
+  onStudyEvent,
+  studyPending,
+  studyError,
 }: ResearchBoardProps) {
   const board = data.researchBoard!;
   const [params, setParams] = useSearchParams();
@@ -55,13 +60,18 @@ export default function ResearchBoardV2({
   const focusCategory = useRef(false);
   const expanded = params.get("researchOpen") === "1";
   const tabs = [
-    ["events", "新闻与推理"],
-    ["macro", "宏观指标"],
-    ["direction", "当前方向"],
-    ["quality", "数据质量"],
+    ["events", "重大事件与情景"],
+    ["macro", "宏观与市场证据"],
+    ["direction", "投资方向与基金"],
+    ["tracking", "跟踪与复盘"],
   ] as const;
   const tab =
-    tabs.find(([id]) => id === params.get("researchTab"))?.[0] ?? "events";
+    (params.get("researchTab") === "quality"
+      ? "macro"
+      : tabs.find(([id]) => id === params.get("researchTab"))?.[0]) ?? "events";
+  const qualityOpen =
+    params.get("researchTab") === "quality" ||
+    params.get("researchData") === "1";
   useEffect(() => {
     if (expanded && focusCategory.current) {
       focusCategory.current = false;
@@ -111,7 +121,9 @@ export default function ResearchBoardV2({
       const next = new URLSearchParams(current);
       if (expanded) next.set("researchOpen", "1");
       else next.delete("researchOpen");
-      next.set("researchTab", target);
+      next.set("researchTab", target === "quality" ? "macro" : target);
+      if (target === "quality") next.set("researchData", "1");
+      else next.delete("researchData");
       return next;
     });
   }
@@ -293,7 +305,7 @@ export default function ResearchBoardV2({
     0,
     3,
   );
-  function highlightTone(highlight: (typeof highlights)[number]) {
+  function highlightTone(highlight: OverviewItem) {
     return highlight.tone === "RED" &&
       !items.some(
         (item) => item.id === highlight.id && confirmedRisk(item, data),
@@ -324,54 +336,148 @@ export default function ResearchBoardV2({
         </span>
       </button>
       <small className="op-daily-asof">
-        概览生成时间：{timeLabel(data.researchOverview?.asOf ?? board.asOf)}
+        最近有效研究：
+        {timeLabel(
+          data.dailyResearch?.reportCompletedAt ??
+            data.dailyResearch?.asOf ??
+            data.dailyResearch?.report?.asOf,
+        )}{" "}
+        · 下次计划：{timeLabel(data.dailyResearch?.nextRunAt)}
       </small>
-      {highlights.length ? (
-        <ul className="op-daily-highlights" aria-label="今日投资重点">
-          {highlights.map((highlight) => (
-            <li key={highlight.id}>
-              <button
-                type="button"
-                onClick={() =>
-                  open(
-                    tabs.some(([id]) => id === highlight.targetTab)
-                      ? highlight.targetTab
-                      : "events",
-                  )
-                }
-                className={toneClass(highlightTone(highlight))}
-              >
-                {highlight.title}
-              </button>
-              {highlight.summary && highlight.summary !== highlight.title && (
-                <p>{highlight.summary}</p>
+      {data.researchOverview?.summary && (
+        <p className="op-daily-summary">{data.researchOverview.summary}</p>
+      )}
+      {data.researchOverview?.groups ? (
+        <div className="op-observation-groups">
+          {data.researchOverview.groups.map((group) => (
+            <section key={group.id} aria-label={group.label}>
+              <h3>{group.label}</h3>
+              {!group.items.length && <p>{group.summary}</p>}
+              {!!group.items.length && (
+                <ul>
+                  {group.items.slice(0, 2).map((highlight) => (
+                    <li key={highlight.id}>
+                      <button
+                        type="button"
+                        className={toneClass(highlightTone(highlight))}
+                        onClick={() => open(highlight.targetTab)}
+                      >
+                        {highlight.title}
+                      </button>
+                      <p
+                        className={
+                          highlightTone(highlight) === "RED"
+                            ? undefined
+                            : "op-observation-summary"
+                        }
+                      >
+                        {highlight.summary}
+                      </p>
+                      {highlightTone(highlight) === "RED" &&
+                        highlight.impact &&
+                        highlight.impact !== highlight.summary && (
+                          <p
+                            className={
+                              highlightTone(highlight) === "RED"
+                                ? "op-critical-impact"
+                                : undefined
+                            }
+                          >
+                            {highlight.impact}
+                          </p>
+                        )}
+                      <small>
+                        {highlight.scope === "GLOBAL"
+                          ? "全局事项"
+                          : highlight.scope === "HOLDINGS"
+                            ? "个人持仓"
+                            : "当前选择"}{" "}
+                        ·{" "}
+                        {(
+                          {
+                            EVENT_LEAD: "事件线索",
+                            DIRECTION_LEAD: "方向线索",
+                            INDEX_CONDITION: "指数条件",
+                            FUND_TOOL: "基金工具",
+                            EXECUTION_CONDITION: "执行条件",
+                          } as Record<string, string>
+                        )[highlight.stage ?? ""] ?? "研究线索"}
+                        {highlight.phase
+                          ? ` · ${({ PLANNED: "计划中", ANNOUNCED: "已宣布", IMPLEMENTED: "已实施", REPORTED: "报道线索", OPINION: "观点", OBSERVING: "观察中", CONFIRMED: "已确认" } as Record<string, string>)[highlight.phase] ?? "阶段待核查"}`
+                          : ""}
+                        {highlight.asOf
+                          ? ` · 依据期：${/^\d{4}-\d{2}$/.test(highlight.asOf) ? monthLabel(highlight.asOf) : timeLabel(highlight.asOf)}`
+                          : ""}
+                      </small>
+                      {highlight.nextAction && (
+                        <div className="op-research-actions">
+                          {renderAction(highlight.nextAction)}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
-              {highlight.impact && highlight.impact !== highlight.summary && (
-                <p
-                  className={
-                    highlightTone(highlight) === "RED"
-                      ? "op-critical-impact"
-                      : undefined
-                  }
-                >
-                  {highlight.impact}
-                </p>
+              {group.nextAction && (
+                <div className="op-research-actions">
+                  {renderAction(group.nextAction)}
+                </div>
               )}
-              {highlight.asOf && (
-                <small>
-                  依据期：
-                  {/^\d{4}-\d{2}$/.test(highlight.asOf)
-                    ? monthLabel(highlight.asOf)
-                    : timeLabel(highlight.asOf)}
-                </small>
-              )}
-            </li>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : (
-        <p className="op-muted op-daily-empty">
-          当前暂无足够证据列出投资重点；可展开查看已采集事实，个人风险仍需独立核查。
-        </p>
+        <>
+          {highlights.length ? (
+            <ul className="op-daily-highlights" aria-label="今日投资重点">
+              {highlights.map((highlight) => (
+                <li key={highlight.id}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      open(
+                        tabs.some(([id]) => id === highlight.targetTab)
+                          ? highlight.targetTab
+                          : "events",
+                      )
+                    }
+                    className={toneClass(highlightTone(highlight))}
+                  >
+                    {highlight.title}
+                  </button>
+                  {highlight.summary &&
+                    highlight.summary !== highlight.title && (
+                      <p>{highlight.summary}</p>
+                    )}
+                  {highlight.impact &&
+                    highlight.impact !== highlight.summary && (
+                      <p
+                        className={
+                          highlightTone(highlight) === "RED"
+                            ? "op-critical-impact"
+                            : undefined
+                        }
+                      >
+                        {highlight.impact}
+                      </p>
+                    )}
+                  {highlight.asOf && (
+                    <small>
+                      依据期：
+                      {/^\d{4}-\d{2}$/.test(highlight.asOf)
+                        ? monthLabel(highlight.asOf)
+                        : timeLabel(highlight.asOf)}
+                    </small>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="op-muted op-daily-empty">
+              当前暂无足够证据列出投资重点；可展开查看已采集事实，个人风险仍需独立核查。
+            </p>
+          )}
+        </>
       )}
       {expanded && (
         <div id={panelId} className="op-daily-expanded">
@@ -430,15 +536,39 @@ export default function ResearchBoardV2({
                   data={data.dailyResearch}
                   directions={directions}
                   onDirectionSelect={onDirectionSelect}
+                  onTrack={onStudyEvent}
+                  trackingPending={studyPending}
                 />
+                {studyError && <p role="alert">{studyError}</p>}
                 {topics
                   .find((topic) => topic.id === "research-global")
                   ?.render()}
                 {items.filter((item) => !dataIssue(item)).map(renderIssue)}
               </>
             )}
-            {tab === "macro" &&
-              topics.find((topic) => topic.id === "research-macro")?.render()}
+            {tab === "macro" && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={qualityOpen}
+                  onClick={() =>
+                    qualityOpen ? open("macro") : open("quality")
+                  }
+                >
+                  数据状态
+                </button>
+                {!qualityOpen &&
+                  topics
+                    .find((topic) => topic.id === "research-macro")
+                    ?.render()}
+              </>
+            )}
+            {tab === "tracking" &&
+              (renderStudyTracking?.() ?? (
+                <p>
+                  从事件或当前标的保存初始研究，后续核对已存证据；旧标的条件监控保持独立。
+                </p>
+              ))}
             {tab === "direction" && (
               <>
                 <section
@@ -537,7 +667,7 @@ export default function ResearchBoardV2({
                 )}
               </>
             )}
-            {tab === "quality" && (
+            {tab === "macro" && qualityOpen && (
               <>
                 <section aria-label="研究限制分组">
                   <div className="op-v2-table-scroll">

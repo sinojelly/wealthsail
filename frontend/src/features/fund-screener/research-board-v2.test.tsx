@@ -312,7 +312,13 @@ async function tab(name: string) {
   const user = userEvent.setup();
   const toggle = screen.getByRole("button", { name: /今日投资观察/ });
   if (toggle.getAttribute("aria-expanded") !== "true") await user.click(toggle);
-  await user.click(screen.getByRole("tab", { name }));
+  await user.click(
+    screen.getByRole("tab", {
+      name: name === "数据质量" ? "宏观与市场证据" : name,
+    }),
+  );
+  if (name === "数据质量")
+    await user.click(screen.getByRole("button", { name: "数据状态" }));
   return screen.getByRole("tabpanel");
 }
 it("shows concrete legacy facts in a collapsed strip and opens the same container without a dialog", async () => {
@@ -340,7 +346,7 @@ it("shows concrete legacy facts in a collapsed strip and opens the same containe
 it("opens direction research inline without blockers and chooses indexes through the existing callback", async () => {
   const select = vi.fn();
   show(context, { onIndexSelect: select });
-  const panel = await tab("当前方向");
+  const panel = await tab("投资方向与基金");
   expect(
     within(panel).getByText("景气略高于分界，需核查盈利"),
   ).toBeInTheDocument();
@@ -427,17 +433,19 @@ it.each([
 );
 it("mounts history only in macro, unmounts it on collapse and supports keyboard category navigation", async () => {
   show();
-  await tab("新闻与推理");
+  await tab("重大事件与情景");
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await tab("宏观指标");
+  await tab("宏观与市场证据");
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await click("查看制造业 PMI完整证据");
   expect(
     screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
   ).toBeInTheDocument();
   const user = userEvent.setup();
-  screen.getByRole("tab", { name: "宏观指标" }).focus();
+  screen.getByRole("tab", { name: "宏观与市场证据" }).focus();
   await user.keyboard("{ArrowRight}");
-  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveFocus();
-  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -448,13 +456,15 @@ it("mounts history only in macro, unmounts it on collapse and supports keyboard 
 });
 it("opens an issue's actual evidence category directly without any intermediate dialog", async () => {
   show();
-  await tab("新闻与推理");
+  await tab("重大事件与情景");
   await click("查看PMI证据");
-  expect(screen.getByRole("tab", { name: "宏观指标" })).toHaveFocus();
-  expect(screen.getByRole("tab", { name: "宏观指标" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "宏观与市场证据" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "宏观与市场证据" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await click("查看制造业 PMI完整证据");
   expect(
     screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
   ).toBeInTheDocument();
@@ -501,7 +511,12 @@ it("never exposes or activates tracking and acknowledgement from the observation
     },
     { onMonitor: track, onNoticeAck: ack },
   );
-  for (const name of ["新闻与推理", "宏观指标", "当前方向", "数据质量"])
+  for (const name of [
+    "重大事件与情景",
+    "宏观与市场证据",
+    "投资方向与基金",
+    "数据质量",
+  ])
     await tab(name);
   expect(
     screen.queryByRole("button", { name: /跟踪|标记.*已读/ }),
@@ -546,7 +561,7 @@ it.each(["VERIFIED", "UNKNOWN"] as const)(
         budgetState: "BLOCKED",
       },
     } as OpportunityContext);
-    const panel = await tab("新闻与推理");
+    const panel = await tab("重大事件与情景");
     if (factVerification === "VERIFIED")
       expect(within(panel).getByText(risk.impact)).toHaveClass(
         "op-critical-impact",
@@ -566,7 +581,7 @@ it("avoids repeating the direction summary when it is already one of the support
       direction: { ...context.researchBoard!.direction, summary },
     },
   });
-  const panel = await tab("当前方向");
+  const panel = await tab("投资方向与基金");
   expect(within(panel).getAllByText(summary)).toHaveLength(1);
 });
 it("disables unsupported destinations without creating fake links", async () => {
@@ -587,7 +602,7 @@ it("disables unsupported destinations without creating fake links", async () => 
       ],
     },
   } as OpportunityContext);
-  await tab("新闻与推理");
+  await tab("重大事件与情景");
   expect(
     screen.getByRole("button", { name: "不支持的账户入口" }),
   ).toBeDisabled();

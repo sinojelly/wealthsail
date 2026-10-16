@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Globe2, ChevronDown } from "lucide-react";
 import type {
   Direction,
@@ -8,6 +8,7 @@ import type {
 import {
   changeLabel,
   macroUnit,
+  metricValue,
   monthLabel,
   sourceHref,
   timeLabel,
@@ -20,6 +21,7 @@ import {
   ResearchDirections,
 } from "./OpportunityRadar";
 import ResearchBoard from "./ResearchBoard";
+import MacroEvidencePanel from "./MacroEvidencePanel";
 import { EnergyObservations } from "./DailyResearchReport";
 
 function HistoricalTrend({ item }: { item: MacroItem }) {
@@ -156,7 +158,8 @@ function HistoricalTrend({ item }: { item: MacroItem }) {
       >
         {active ? (
           <>
-            {monthLabel(active.asOf)}：{active.value} {macroUnit(item)} · 来源：
+            {monthLabel(active.asOf)}：{metricValue(active.value)}{" "}
+            {macroUnit(item)} · 来源：
             {active.source ?? item.source ?? "未确认"}
             {active.revision != null && ` · 修订 ${active.revision}`}
             {active.publishedAt && ` · 公布：${timeLabel(active.publishedAt)}`}
@@ -185,12 +188,13 @@ function EvidenceCard({ item }: { item: MacroItem }) {
       <h3>
         {item.value == null || !Number.isFinite(item.value)
           ? "—"
-          : `${item.value} ${unit}`.trim()}
+          : `${metricValue(item.value)} ${unit}`.trim()}
       </h3>
       <p>连续月变化：{changeLabel(item.periodChange, item)}</p>
       {item.benchmark && item.value != null && Number.isFinite(item.value) && (
         <p>
-          {item.benchmark.label}：{item.benchmark.value} {unit} · 相差：
+          {item.benchmark.label}：{metricValue(item.benchmark.value)} {unit} ·
+          相差：
           {changeLabel(item.value - item.benchmark.value, item)}
         </p>
       )}
@@ -289,7 +293,7 @@ function EvidenceCard({ item }: { item: MacroItem }) {
             <>
               <p>
                 官方核验：{item.officialEvidence.publisher} · 数值：
-                {item.officialEvidence.value ?? "—"} {unit}
+                {metricValue(item.officialEvidence.value)} {unit}
               </p>
               {officialUrl && (
                 <a href={officialUrl} target="_blank" rel="noreferrer">
@@ -390,6 +394,10 @@ export default function MacroContextStrip({
   scopeKey,
   onIndexSelect,
   hideTracking = false,
+  renderStudyTracking,
+  onStudyEvent,
+  studyPending,
+  studyError,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -411,6 +419,10 @@ export default function MacroContextStrip({
   scopeKey?: string;
   onIndexSelect?: (id: string) => void;
   hideTracking?: boolean;
+  renderStudyTracking?: () => ReactNode;
+  onStudyEvent?: (reportRunId: string, eventId: string) => void;
+  studyPending?: boolean;
+  studyError?: string;
 }) {
   const [open, setOpen] = useState(false);
   const research = !error && !loading ? data?.research : null;
@@ -461,6 +473,10 @@ export default function MacroContextStrip({
     return (
       <ResearchBoard
         data={readyData}
+        renderStudyTracking={renderStudyTracking}
+        onStudyEvent={onStudyEvent}
+        studyPending={studyPending}
+        studyError={studyError}
         scopeKey={scopeKey}
         onIndexSelect={onIndexSelect}
         directions={directions}
@@ -489,32 +505,44 @@ export default function MacroContextStrip({
             render: () => (
               <>
                 {windowSelector}
-                <EnergyObservations
-                  rows={readyData.dailyResearch?.report?.energy}
-                />
-                <div className="op-macro-grid">
-                  {readyData.items.map((item) => (
-                    <EvidenceCard
-                      key={item.code}
-                      item={{
-                        ...item,
-                        historyMonths:
-                          item.historyMonths ?? readyData.months ?? months,
-                      }}
+                {readyData.researchBoard?.methodVersion ===
+                "research-board-v2" ? (
+                  <MacroEvidencePanel
+                    data={readyData}
+                    marketId={selectedDirection?.marketId}
+                    renderMacro={(item) => (
+                      <EvidenceCard
+                        item={{
+                          ...item,
+                          historyMonths:
+                            item.historyMonths ?? readyData.months ?? months,
+                        }}
+                      />
+                    )}
+                  />
+                ) : (
+                  <>
+                    <EnergyObservations
+                      rows={readyData.dailyResearch?.report?.energy}
                     />
-                  ))}
-                </div>
-                <RadarDetails
-                  data={{
-                    ...readyData,
-                    series:
-                      readyData.researchBoard?.methodVersion ===
-                      "research-board-v2"
-                        ? readyData.series
-                        : core,
-                  }}
-                  section="series"
-                />
+                    <div className="op-macro-grid">
+                      {readyData.items.map((item) => (
+                        <EvidenceCard
+                          key={item.code}
+                          item={{
+                            ...item,
+                            historyMonths:
+                              item.historyMonths ?? readyData.months ?? months,
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <RadarDetails
+                      data={{ ...readyData, series: core }}
+                      section="series"
+                    />
+                  </>
+                )}
               </>
             ),
           },

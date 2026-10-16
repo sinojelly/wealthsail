@@ -82,10 +82,14 @@ export default function DailyResearchReport({
   data,
   directions = [],
   onDirectionSelect,
+  onTrack,
+  trackingPending = false,
 }: {
   data?: DailyResearch | null;
   directions?: Direction[];
   onDirectionSelect?: (id: string) => void;
+  onTrack?: (reportRunId: string, eventId: string) => void;
+  trackingPending?: boolean;
 }) {
   const report = data?.report;
   function related(ids: string[]) {
@@ -157,6 +161,16 @@ export default function DailyResearchReport({
                 </span>
               </header>
               <p>{event.summary}</p>
+              {data?.reportRunId && onTrack && (
+                <button
+                  type="button"
+                  disabled={trackingPending}
+                  aria-label={`跟踪${event.title}`}
+                  onClick={() => onTrack(data.reportRunId!, event.id)}
+                >
+                  跟踪此研究
+                </button>
+              )}
               <small>事件事实尚未独立核验；影响为模型条件推演。</small>
               {refs(event.sourceIds)}
               {!!event.channels.length && (

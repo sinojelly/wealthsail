@@ -440,6 +440,10 @@ export interface ResearchBoardProps {
   directions?: Direction[];
   onDirectionSelect?: (id: string) => void;
   hideTracking?: boolean;
+  renderStudyTracking?: () => ReactNode;
+  onStudyEvent?: (reportRunId: string, eventId: string) => void;
+  studyPending?: boolean;
+  studyError?: string;
 }
 
 export default function ResearchBoard(props: ResearchBoardProps) {

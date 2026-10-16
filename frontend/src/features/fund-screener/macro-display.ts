@@ -2,6 +2,12 @@ import type { MacroContext } from "../../api/investment";
 
 export type MacroItem = MacroContext["items"][number];
 
+export function metricValue(value?: number | null, maximumFractionDigits = 2) {
+  return value == null || !Number.isFinite(value)
+    ? "—"
+    : new Intl.NumberFormat("zh-CN", { maximumFractionDigits }).format(value);
+}
+
 const monthFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
