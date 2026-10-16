@@ -1,0 +1,561 @@
+"""Public daily research never delegates fact authority to model output."""
+
+from copy import deepcopy
+from datetime import datetime, timedelta
+from decimal import Decimal
+from importlib import import_module, util
+from zoneinfo import ZoneInfo
+
+import pytest
+
+NOW = datetime(2026, 10, 16, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+def engine():
+    assert util.find_spec("backend.macro.daily_research"), (
+        "daily research contract missing"
+    )
+    return import_module("backend.macro.daily_research")
+
+
+def report():
+    return {
+        "summary": "本次公开研究保留条件与反方。",
+        "coverage": [
+            {
+                "topic": "ENERGY_SHIPPING",
+                "status": "UNVERIFIED",
+                "summary": "实际交付仍待核查。",
+            }
+        ],
+        "sources": [
+            {
+                "id": "s1",
+                "url": "https://ofac.treasury.gov/recent-actions/example",
+                "title": "政策公告",
+                "quote": "Transactions are authorized.",
+                "publishedDate": "2026-10-15",
+                "publishedAt": None,
+            }
+        ],
+        "events": [
+            {
+                "title": "政策许可已公布",
+                "summary": "许可不等于已交付。",
+                "phase": "ANNOUNCED",
+                "importance": "HIGH",
+                "sourceIds": ["s1"],
+                "channels": ["供应与运输成本可能变化。"],
+                "affectedDirectionIds": ["a-share:broad"],
+                "scenarios": [
+                    {
+                        "condition": "实际供给增加",
+                        "impact": "成本压力可能缓解。",
+                        "counter": "运输瓶颈可能抵消。",
+                    }
+                ],
+                "watchFor": ["实际交付"],
+                "unknowns": ["实际数量"],
+                "marketReaction": "UNVERIFIED",
+            }
+        ],
+        "upcoming": [],
+        "energy": [],
+    }
+
+
+def test_strict_report_contract_rejects_probability_and_trade_fields():
+    module = engine()
+    assert module.REPORT_SCHEMA["type"] == "object"
+    for key in ("probability", "tradeInstruction"):
+        raw = deepcopy(report())
+        raw["events"][0][key] = "buy"
+        with pytest.raises(ValueError):
+            module.validate_report(
+                raw,
+                {"asOf": NOW.isoformat(), "directions": [{"id": "a-share:broad"}]},
+                {},
+                completed_at=NOW,
+            )
+
+
+def packet():
+    return engine().make_research_packet(
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "label": "制造业PMI",
+                    "state": "READY",
+                    "value": Decimal("50.2"),
+                    "unit": "",
+                    "referencePeriod": "2026-09",
+                    "sourceUri": "https://www.stats.gov.cn/release",
+                    "retrievedAt": NOW.isoformat(),
+                    "valueVerification": "VERIFIED",
+                    "tenantId": "PRIVATE",
+                    "nextRelease": {
+                        "status": "SCHEDULED",
+                        "referencePeriod": "2026-10",
+                        "scheduledAt": (NOW + timedelta(days=15)).isoformat(),
+                        "sourceUri": "https://www.stats.gov.cn/calendar",
+                    },
+                }
+            ],
+            "portfolio": {"secret": "PRIVATE"},
+        },
+        [
+            {
+                "code": "US_T10_REAL",
+                "state": "READY",
+                "value": 1.7,
+                "frequency": "DAILY",
+                "unit": "%",
+                "asOf": "2026-10-15",
+                "retrievedAt": NOW.isoformat(),
+                "metadata": {"password": "PRIVATE"},
+            }
+        ],
+        [
+            {
+                "indexId": "a500",
+                "label": "中证A500",
+                "state": "READY",
+                "asOf": "2026-10-15",
+                "retrievedAt": NOW.isoformat(),
+                "sourceUri": "https://www.csindex.com.cn/index",
+                "historyQuality": "CONFLICT",
+                "trend": {
+                    "state": "READY",
+                    "ma200": 100,
+                    "distanceMA200": -0.05,
+                    "momentum63": -0.02,
+                },
+                "trendWindow": {
+                    "start": "2025-10-01",
+                    "end": "2026-10-15",
+                    "sampleCount": 250,
+                },
+                "valuation": {
+                    "state": "PARTIAL",
+                    "pe": {
+                        "state": "INSUFFICIENT",
+                        "latest": 12.8,
+                        "percentile": None,
+                        "sampleCount": 500,
+                        "private": "PRIVATE",
+                    },
+                },
+                "risk": {"state": "PARTIAL", "maxDrawdown": None},
+                "instrumentId": "PRIVATE",
+            }
+        ],
+        [
+            {
+                "id": "a-share:broad",
+                "label": "A股宽基",
+                "market_id": "a-share",
+                "userId": "PRIVATE",
+            }
+        ],
+        now=NOW,
+        previous={
+            "report": {
+                "events": [
+                    {
+                        "watchFor": ["后续订单"],
+                        "unknowns": ["盈利变化"],
+                        "private": "PRIVATE",
+                    }
+                ]
+            }
+        },
+        external={
+            "documents": [
+                {
+                    "id": "official:1",
+                    "url": "https://www.stats.gov.cn/facts",
+                    "title": "公开公告",
+                    "quote": "short",
+                    "retrievedAt": NOW.isoformat(),
+                    "publishedDate": "2026-10-15",
+                    "verification": "SOURCE_CHECKED",
+                    "private": "PRIVATE",
+                }
+            ],
+            "energy": [],
+            "sourceResults": {
+                "x": {
+                    "status": "FAILED",
+                    "errorClass": "HTTPStatusError",
+                    "error": "PRIVATE",
+                }
+            },
+        },
+    )
+
+
+def test_packet_whitelists_public_facts_without_discarding_current_partial_research():
+    result = packet()
+    import json
+
+    assert "PRIVATE" not in json.dumps(result)
+    assert result["macros"][0]["value"] == 50.2
+    assert result["indices"][0]["trend"]["ma200"] == 100
+    assert result["indices"][0]["historyQuality"] == "CONFLICT"
+    assert result["indices"][0]["valuation"]["pe"]["latest"] == 12.8
+    assert result["schedules"][0]["status"] == "SCHEDULED"
+    assert result["previousQuestions"] == ["后续订单", "盈利变化"]
+    prompt = engine().build_prompt(result)
+    assert "PRIVATE" not in prompt
+    assert "最近24小时" in prompt and "14天" in prompt
+    assert "SOURCE_CHECKED" in prompt and "08:30" not in prompt
+
+
+@pytest.mark.parametrize("field", ["retrievedAt", "availableAt", "publishedAt"])
+def test_packet_cannot_present_future_collected_facts_as_current(field):
+    future = {
+        "code": "PMI",
+        "value": 55,
+        "state": "READY",
+        "unit": "",
+        "referencePeriod": "2026-09",
+        field: (NOW + timedelta(seconds=1)).isoformat(),
+    }
+    result = engine().make_research_packet({"items": [future]}, [], [], [], now=NOW)
+    assert result["macros"] == []
+
+
+def test_packet_does_not_forward_raw_prior_report_or_unknown_source_payload():
+    result = engine().make_research_packet(
+        {},
+        [],
+        [],
+        [],
+        now=NOW,
+        previous={
+            "report": {
+                "events": [{"unknowns": ["short question"], "summary": "secret"}]
+            }
+        },
+        external={
+            "documents": [
+                {
+                    "id": "bad",
+                    "url": "http://127.0.0.1/secrets",
+                    "retrievedAt": NOW.isoformat(),
+                }
+            ]
+        },
+    )
+    assert result["documents"] == []
+    assert result["previousQuestions"] == ["short question"]
+
+
+def checks():
+    return {
+        "s1": {
+            "verification": "SOURCE_CHECKED",
+            "quoteMatched": True,
+            "url": report()["sources"][0]["url"],
+            "title": "政策公告",
+            "publishedDate": "2026-10-15",
+            "publishedAt": None,
+            "retrievedAt": NOW.isoformat(),
+            "contentHash": "a" * 64,
+        }
+    }
+
+
+def validate(raw=None, source_checks=None, public_packet=None):
+    return engine().validate_report(
+        raw or report(),
+        public_packet or packet(),
+        checks() if source_checks is None else source_checks,
+        completed_at=NOW,
+    )
+
+
+def test_source_check_certifies_quote_only_and_never_implementation_or_market_causality():
+    result = validate()
+    assert result["sources"][0]["verification"] == "SOURCE_CHECKED"
+    assert result["sources"][0]["retrievedAt"] == NOW.isoformat()
+    event = result["events"][0]
+    assert event["phase"] == "ANNOUNCED"
+    assert event["factVerification"] == "UNVERIFIED"
+    assert event["reasoningType"] == "MODEL_CONDITIONAL"
+    assert event["marketReaction"] == "UNVERIFIED"
+    assert event["id"].startswith("event:")
+    assert result["asOf"] == NOW.isoformat()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "unknown_source",
+        "unknown_direction",
+        "future_pubdate",
+        "future_pubtime",
+        "private_url",
+        "unsafe_html",
+        "probability_text",
+        "trade_text",
+        "verified_reaction",
+    ],
+)
+def test_invalid_or_overclaimed_reports_are_rejected(change):
+    raw = report()
+    if change == "unknown_source":
+        raw["events"][0]["sourceIds"] = ["absent"]
+    elif change == "unknown_direction":
+        raw["events"][0]["affectedDirectionIds"] = ["made-up:energy"]
+    elif change == "future_pubdate":
+        raw["sources"][0]["publishedDate"] = "2026-10-17"
+    elif change == "future_pubtime":
+        raw["sources"][0]["publishedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    elif change == "private_url":
+        raw["sources"][0]["url"] = "https://127.0.0.1/secrets"
+    elif change == "unsafe_html":
+        raw["events"][0]["summary"] = "<script>alert(1)</script>"
+    elif change == "probability_text":
+        raw["events"][0]["summary"] = "战争发生概率为70%。"
+    elif change == "trade_text":
+        raw["events"][0]["summary"] = "建议立即买入能源基金。"
+    else:
+        raw["events"][0]["marketReaction"] = "VERIFIED"
+    with pytest.raises(ValueError):
+        validate(raw)
+
+
+@pytest.mark.parametrize(
+    "change", ["missing", "unmatched", "future", "url_mismatch", "date_mismatch"]
+)
+def test_bad_or_missing_source_check_cannot_create_source_checked(change):
+    evidence = checks()
+    if change == "missing":
+        evidence = {}
+    elif change == "unmatched":
+        evidence["s1"]["quoteMatched"] = False
+    elif change == "future":
+        evidence["s1"]["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    elif change == "url_mismatch":
+        evidence["s1"]["url"] = "https://www.stats.gov.cn/different"
+    else:
+        evidence["s1"]["publishedDate"] = "2026-10-14"
+    result = validate(source_checks=evidence)
+    assert result["sources"][0]["verification"] != "SOURCE_CHECKED"
+    assert result["events"][0]["factVerification"] == "UNVERIFIED"
+
+
+def test_source_and_phase_dedup_and_event_identity_ignore_titles_source_aliases_and_order():
+    raw = report()
+    raw["sources"].append({**raw["sources"][0], "id": "duplicate"})
+    raw["events"].append(
+        {
+            **deepcopy(raw["events"][0]),
+            "title": "同一公告的改写",
+            "sourceIds": ["duplicate"],
+        }
+    )
+    first = validate(raw)
+    assert len(first["sources"]) == len(first["events"]) == 1
+    raw["sources"].reverse()
+    raw["events"].reverse()
+    second = validate(raw, {**checks(), "duplicate": checks()["s1"]})
+    assert first["events"][0]["id"] == second["events"][0]["id"]
+
+
+def test_energy_values_are_program_observations_not_model_authored_numbers():
+    public = packet()
+    public["energy"] = [
+        {
+            "code": "GASDESW",
+            "state": "READY",
+            "value": 3.7,
+            "unit": "美元/加仑",
+            "frequency": "WEEKLY",
+            "asOf": "2026-10-12",
+            "timeBasis": "OBSERVATION_ONLY",
+        }
+    ]
+    raw = report()
+    raw["energy"] = ["GASDESW"]
+    assert validate(raw, public_packet=public)["energy"] == public["energy"]
+    raw["energy"] = ["DCOILBRENTEU"]
+    with pytest.raises(ValueError):
+        validate(raw, public_packet=public)
+
+
+def test_planned_event_keeps_future_schedule_separate_from_source_publication():
+    raw = report()
+    raw["upcoming"] = [
+        {
+            "title": "官方未来发布计划",
+            "phase": "PLANNED",
+            "scheduledDate": "2026-10-20",
+            "scheduledAt": "2026-10-20T10:00:00+08:00",
+            "sourceIds": ["s1"],
+            "affectedDirectionIds": ["a-share:broad"],
+            "watchFor": ["实际公布后核对"],
+        }
+    ]
+    result = validate(raw)
+    assert result["upcoming"][0]["phase"] == "PLANNED"
+    assert result["upcoming"][0]["scheduledAt"] == "2026-10-20T10:00:00+08:00"
+
+
+def test_future_reference_period_and_private_nested_provenance_are_not_public_facts():
+    result = engine().make_research_packet(
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "state": "READY",
+                    "value": 55,
+                    "referencePeriod": "2026-11",
+                }
+            ]
+        },
+        [],
+        [
+            {
+                "indexId": "hs300",
+                "asOf": "2026-10-15",
+                "valuation": {
+                    "pe": {
+                        "latest": 12,
+                        "sourceUri": "postgresql://user:PRIVATE@127.0.0.1/private",
+                    }
+                },
+            }
+        ],
+        [],
+        now=NOW,
+    )
+    assert result["macros"] == []
+    assert "PRIVATE" not in str(result)
+
+
+def test_boolean_measurement_and_nonfinite_numbers_are_never_presented_as_values():
+    result = engine().make_research_packet(
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "state": "READY",
+                    "value": True,
+                    "statistics": {"previousValue": float("inf")},
+                }
+            ]
+        },
+        [],
+        [],
+        [],
+        now=NOW,
+    )
+    assert result["macros"][0]["value"] is None
+    assert result["macros"][0]["statistics"]["previousValue"] is None
+
+
+def test_duplicate_json_keys_and_naive_or_backdated_completion_are_rejected():
+    with pytest.raises(ValueError):
+        engine().validate_report(
+            '{"summary":"a","summary":"b"}', packet(), {}, completed_at=NOW
+        )
+    for stamp in (NOW.replace(tzinfo=None), NOW - timedelta(seconds=1)):
+        with pytest.raises(ValueError):
+            engine().validate_report(report(), packet(), checks(), completed_at=stamp)
+
+
+def test_first_not_run_dto_with_null_report_can_build_public_packet():
+    result = engine().make_research_packet(
+        {},
+        [],
+        [],
+        [],
+        now=NOW,
+        previous={
+            "methodVersion": "daily-research-v1",
+            "state": "NOT_RUN",
+            "report": None,
+        },
+    )
+    assert result["previousQuestions"] == []
+
+
+def test_checked_source_title_comes_from_document_not_model_and_does_not_certify_event():
+    raw = report()
+    raw["sources"][0]["title"] = "模型把标题改写为已实际交付"
+    result = validate(raw)
+    assert result["sources"][0]["title"] == "政策公告"
+    assert result["events"][0]["factVerification"] == "UNVERIFIED"
+
+
+def test_external_failed_sources_keep_only_public_status_not_raw_error():
+    result = engine().make_research_packet(
+        {},
+        [],
+        [],
+        [],
+        now=NOW,
+        external={
+            "sourceResults": {
+                "OFAC": {
+                    "status": "FAILED",
+                    "errorClass": "HTTPStatusError",
+                    "error": "PRIVATE",
+                }
+            }
+        },
+    )
+    assert result["sourceResults"] == {
+        "OFAC": {"status": "FAILED", "errorClass": "HTTPStatusError"}
+    }
+    assert "PRIVATE" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "day,stamp", [("2026-10-15", None), ("2026-10-16", "2026-10-16T08:34:00+08:00")]
+)
+def test_past_plans_cannot_be_returned_as_upcoming(day, stamp):
+    raw = report()
+    raw["upcoming"] = [
+        {
+            "title": "旧发布计划",
+            "phase": "PLANNED",
+            "scheduledDate": day,
+            "scheduledAt": stamp,
+            "sourceIds": ["s1"],
+            "affectedDirectionIds": [],
+            "watchFor": [],
+        }
+    ]
+    with pytest.raises(ValueError):
+        validate(raw)
+
+
+def test_future_reference_month_is_allowed_for_known_schedule_not_for_observation():
+    result = engine().make_research_packet(
+        {
+            "items": [
+                {
+                    "code": "PMI",
+                    "state": "READY",
+                    "value": 50.2,
+                    "referencePeriod": "2026-09",
+                    "nextRelease": {
+                        "status": "SCHEDULED",
+                        "referencePeriod": "2026-11",
+                        "scheduledAt": "2026-11-30T09:30:00+08:00",
+                        "sourceUri": "https://www.stats.gov.cn/calendar",
+                        "retrievedAt": NOW.isoformat(),
+                    },
+                }
+            ]
+        },
+        [],
+        [],
+        [],
+        now=NOW,
+    )
+    assert result["schedules"][0]["referencePeriod"] == "2026-11"

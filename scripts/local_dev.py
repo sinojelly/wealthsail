@@ -48,7 +48,7 @@ def child_environment(source: dict[str, str], directory: Path) -> dict[str, str]
         "path", "systemroot", "windir", "comspec", "pathext", "userprofile",
         "appdata", "localappdata", "programfiles", "programfiles(x86)",
         "programdata", "homedrive", "homepath", "number_of_processors",
-        "processor_architecture",
+        "processor_architecture", "codex_home",
         "http_proxy", "https_proxy", "no_proxy", "ssl_cert_file", "ssl_cert_dir",
     }
     env = {k: v for k, v in source.items() if k.lower() in allowed}
@@ -115,6 +115,7 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
         "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "4",
         "WEB_BASE_URL": url, "CORS_ORIGINS": json.dumps([url]),
         "TIANTIAN_IMPORT_ENABLED": "true",
+        "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "true"),
     }
     (LOCAL / "api.env").write_text(
         "\n".join(f"{key}={value}" for key, value in api_settings.items()) + "\n",
@@ -127,13 +128,20 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
     if "worker_password" not in settings:
         settings["worker_password"] = secrets.token_hex(32)
         (LOCAL / "secrets.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    from backend.integrations.codex_research import resolve_codex_executable
+    executable = resolve_codex_executable(os.environ.get("DAILY_RESEARCH_CODEX_PATH"))
     macro_settings = {
         "APP_ENV": "development",
         "WORKER_DATABASE_URL": f"postgresql://wealthsail_worker_login:{settings['worker_password']}"
                                f"@127.0.0.1:{db_port}/wealthsail_local?sslmode=disable",
         "WORKER_DATABASE_POOL_MODE": "direct",
         "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "2",
+        "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "true"),
+        "DAILY_RESEARCH_CATCH_UP": "true",
+        "DAILY_RESEARCH_CODEX_PATH": json.dumps(Path(executable).as_posix() if executable else ""),
     }
+    if os.environ.get("DAILY_RESEARCH_MODEL"):
+        macro_settings["DAILY_RESEARCH_MODEL"] = json.dumps(os.environ["DAILY_RESEARCH_MODEL"])
     (LOCAL / "macro.env").write_text(
         "\n".join(f"{key}={value}" for key, value in macro_settings.items()) + "\n", encoding="utf-8")
 

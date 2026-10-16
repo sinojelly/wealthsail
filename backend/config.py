@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     model_name: str = Field(default="deepseek-chat")
     model_timeout_seconds: float = Field(default=45.0)
 
+    # Separate, opt-in daily public research using the user's local Codex login.
+    daily_research_enabled: bool = Field(default=False)
+    daily_research_codex_path: str | None = Field(default=None)
+    daily_research_model: str | None = Field(default=None)
+    daily_research_catch_up: bool = Field(default=True)
+    daily_research_timeout_seconds: float = Field(default=900, ge=30, le=1200)
+
     # --- Market instrument master -------------------------------------------
     # AkShare downloads whole-market symbol tables on a cold cache. Production
     # cloud egress can take slightly more than 15 seconds, so keep this timeout

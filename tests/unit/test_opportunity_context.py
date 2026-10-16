@@ -22,6 +22,17 @@ def service():
 
 def dependencies(monkeypatch):
     module = service()
+    monkeypatch.setattr(
+        module,
+        "read_daily_research",
+        AsyncMock(
+            return_value={
+                "methodVersion": "daily-research-v1",
+                "state": "NOT_RUN",
+                "report": None,
+            }
+        ),
+    )
     monkeypatch.setattr(module, "now_shanghai", lambda: NOW)
     monkeypatch.setattr(
         module,

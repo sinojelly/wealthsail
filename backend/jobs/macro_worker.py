@@ -3,8 +3,8 @@
 Startup checks complete recent histories. Every day at 06:30 Asia/Shanghai the
 full five-year window is fetched; incomplete attempts retry an hour after they
 finish. --once always fetches and exits nonzero for PARTIAL/UNAVAILABLE results.
-Independent index research checks its exchange calendar. No report, outbox or
-model service is started here.
+Independent index research checks its exchange calendar. Opt-in public Codex
+research runs once at 08:30; no report delivery, outbox or trading loop starts.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from backend.jobs.investment_macro_refresh import (
     refresh_macro_history,
 )
 from backend.jobs.macro_evidence import run_macro_evidence_service, sync_macro_evidence
+from backend.jobs.daily_research import run_daily_research_service
 
 logger = logging.getLogger("wealthsail.macro_worker")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -201,7 +202,8 @@ async def run_macro_service(pool, *, now_provider=None, wait=None, stop_event=No
         )
 
 
-async def _serve(pool):
+async def _serve(pool, settings=None):
+    settings = settings or get_settings()
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     installed = []
@@ -246,6 +248,11 @@ async def _serve(pool):
     index = asyncio.create_task(
         independent(run_index_research_service), name="wealthsail-index-research"
     )
+    daily = asyncio.create_task(
+        independent(lambda pool, *, stop_event: run_daily_research_service(
+            pool, settings, stop_event=stop_event
+        )), name="wealthsail-daily-research"
+    )
     stopping = asyncio.create_task(stop_event.wait())
     try:
         done, _ = await asyncio.wait(
@@ -254,11 +261,11 @@ async def _serve(pool):
         if service in done:
             await service
     finally:
-        for task in (service, official, market, monitor, index, stopping):
+        for task in (service, official, market, monitor, index, daily, stopping):
             if not task.done():
                 task.cancel()
         await asyncio.gather(
-            service, official, market, monitor, index, stopping, return_exceptions=True
+            service, official, market, monitor, index, daily, stopping, return_exceptions=True
         )
         for sig in installed:
             loop.remove_signal_handler(sig)
@@ -305,7 +312,7 @@ async def main(argv=None) -> int:
         logger.info(
             "macro-only service running (06:30 Asia/Shanghai; hourly failure retry)"
         )
-        await _serve(pool)
+        await _serve(pool, settings)
         return 0
     finally:
         await pool.close()

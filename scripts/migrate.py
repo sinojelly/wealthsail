@@ -2536,6 +2536,32 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if missing:
         raise RuntimeError(f"runtime role privileges missing: {', '.join(missing)}")
 
+    daily_tables = ("research.daily_research_runs", "research.daily_research_results")
+    for table in daily_tables:
+        if not await conn.fetchval("SELECT to_regclass($1)", table):
+            raise RuntimeError("daily research boundary is missing or unsafe")
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                expected = privilege == "SELECT" and role != "authenticated" or (
+                    role == "wealthsail_worker" and privilege == "INSERT"
+                )
+                actual = await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege)
+                if actual != expected:
+                    raise RuntimeError("daily research boundary is missing or unsafe")
+        if await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table
+        ):
+            raise RuntimeError("daily research boundary is missing or unsafe")
+    for table, constraint in (
+        ("research.daily_research_runs", "daily_research_runs_slot_date_key"),
+        ("research.daily_research_results", "daily_research_results_pkey"),
+    ):
+        if not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=$1::regclass AND conname=$2 AND contype IN ('p','u'))",
+            table, constraint,
+        ):
+            raise RuntimeError("daily research boundary is missing or unsafe")
+
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
     )

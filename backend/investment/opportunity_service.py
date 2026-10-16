@@ -10,6 +10,9 @@ from backend.macro import market_repository
 from backend.macro.direction_models import direction_model
 from backend.macro.opportunity import build_radar
 from backend.macro.research_board import build_research_board
+from backend.macro.daily_repository import read_daily_research
+from backend.macro.daily_research import build_research_overview
+from backend.config import get_settings
 
 
 def _complete_trend_window(result, points):
@@ -128,6 +131,9 @@ def market_evidence(index, result):
         "state": "READY" if trend_ready else result.get("state", "NOT_COLLECTED"),
         "asOf": result.get("asOf"),
         "sourceUri": result.get("source"),
+        "retrievedAt": result.get("retrievedAt"),
+        "publishedAt": result.get("publishedAt"),
+        "timeBasis": result.get("timeBasis"),
         "collection": result.get("indexCollection"),
         "historyQuality": result.get("dataQuality", "UNKNOWN"),
         "trendWindow": result.get("trendWindow"),
@@ -321,6 +327,18 @@ async def get_context(
         can_manage_operations=can_manage_operations,
         now=now,
     )
+    daily = await read_daily_research(
+        conn, now, enabled=get_settings().daily_research_enabled
+    )
+    overview = build_research_overview(
+        {**base, "directionId": direction["id"]},
+        series,
+        evidence,
+        model,
+        board,
+        daily,
+        now=now,
+    )
     return {
         **base,
         **personal,
@@ -336,4 +354,6 @@ async def get_context(
         "marketCollection": collected,
         "selectionState": selection_state,
         "researchBoard": board,
+        "dailyResearch": daily,
+        "researchOverview": overview,
     }

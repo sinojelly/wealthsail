@@ -1,0 +1,228 @@
+"""Daily public Codex research: python -m backend.jobs.daily_research --once."""
+
+import argparse
+import asyncio
+from datetime import timedelta
+import hashlib
+import json
+import logging
+
+from backend.common.database import (
+    create_pool,
+    system_connection,
+    verify_runtime_login_boundary,
+)
+from backend.config import get_settings
+from backend.dependencies import now_shanghai
+from backend.integrations.codex_research import preflight_codex, run_codex_research
+from backend.integrations.daily_sources import (
+    collect_daily_sources,
+    verify_research_sources,
+)
+from backend.macro.daily_repository import (
+    claim_daily_run,
+    consumed,
+    finish_daily_run,
+    local,
+    next_run,
+    read_daily_research,
+    scheduled_for,
+)
+from backend.macro.daily_research import (
+    PROMPT_VERSION,
+    REPORT_SCHEMA,
+    build_prompt,
+    make_research_packet,
+    validate_report,
+)
+
+logger = logging.getLogger("wealthsail.daily_research")
+
+
+async def load_public_packet(conn, now, external):
+    """Only shared research queries; never assemble an actor/portfolio context."""
+    from backend.investment import repository
+    from backend.investment.opportunity_service import market_evidence
+    from backend.investment.service import analysis, market_context
+    from backend.macro import market_repository
+
+    context = await market_context(conn, now=now)
+    permissions = await market_repository.read_permissions(conn)
+    collected = await market_repository.read_collection(conn, now)
+    series = market_repository.series_context(
+        await market_repository.read_series(conn, now),
+        now,
+        permissions=permissions,
+        source_results=collected.get("sourceResults", {}),
+    )
+    indices = await conn.fetch(
+        "SELECT * FROM reference.research_indices WHERE id IN ('hs300','a500','zz500') ORDER BY sort_order,id"
+    )
+    evidence = []
+    for index in indices:
+        result = await analysis(conn, "index", index["id"])
+        retrieved = market_repository._stamp(result.get("retrievedAt"))
+        if (
+            retrieved
+            and retrieved > now
+            or any(
+                market_repository._day(point.get("date")) is None
+                or market_repository._day(point["date"]) > now.date()
+                for point in result.get("points", [])
+            )
+        ):
+            result = {"state": "UNVERIFIED"}
+        evidence.append(market_evidence(index, result))
+    directions = [dict(row) for row in await repository.directions(conn)]
+    previous = await read_daily_research(conn, now)
+    return make_research_packet(
+        context,
+        series,
+        evidence,
+        directions,
+        now=now,
+        previous=previous,
+        external=external,
+    )
+
+
+async def sync_daily_research(pool, settings, now):
+    stamp = local(now)
+    if not settings.daily_research_enabled:
+        return {"status": "DISABLED"}
+    if stamp < scheduled_for(stamp):
+        return {"status": "NOT_DUE"}
+    async with system_connection(pool) as conn:
+        if await consumed(conn, stamp):
+            return {"status": "SKIPPED"}
+    external = await collect_daily_sources(stamp)
+    # HTTP finishes first: its observations are never backdated to 08:30.
+    async with system_connection(pool) as conn:
+        packet = await load_public_packet(conn, local(now_shanghai()), external)
+    prompt = build_prompt(packet)
+    unavailable, cli = None, {}
+    try:
+        cli = await preflight_codex(settings.daily_research_codex_path)
+    except Exception as exc:  # noqa: BLE001 -- safe preflight failure, no gateway fallback
+        unavailable = type(exc).__name__
+    dispatched = local(now_shanghai())
+    if dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp):
+        return {"status": "SKIPPED"}
+    async with system_connection(pool) as conn:
+        claim = await claim_daily_run(
+            conn,
+            dispatched,
+            packet,
+            input_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            prompt_version=PROMPT_VERSION,
+            cli_version=cli.get("version"),
+        )
+    if claim is None:
+        return {"status": "SKIPPED"}
+    # The unique slot has committed and the connection is released before exec.
+    run_id = claim["run_id"]
+    result = {"status": "FAILED", "runId": str(run_id)}
+    payload, error = None, unavailable
+    try:
+        if unavailable:
+            return result
+        raw = await run_codex_research(
+            cli["executable"],
+            prompt,
+            REPORT_SCHEMA,
+            timeout=settings.daily_research_timeout_seconds,
+            model=settings.daily_research_model or cli.get("selectedModel"),
+        )
+        checks = await verify_research_sources(
+            raw.get("sources", []), now=local(now_shanghai())
+        )
+        payload = validate_report(
+            raw, packet, checks, completed_at=local(now_shanghai())
+        )
+        result["status"], error = "READY", None
+    except asyncio.CancelledError:
+        result["status"], error = "UNCERTAIN", "CancelledError"
+        raise
+    except TimeoutError:
+        result["status"], error = "UNCERTAIN", "TimeoutError"
+    except Exception as exc:  # noqa: BLE001 -- never persist stderr, prompts or exception messages
+        error = type(exc).__name__
+        logger.warning("daily_research_failed error_class=%s", error)
+    finally:
+        async with system_connection(pool) as conn:
+            await finish_daily_run(
+                conn,
+                run_id,
+                local(now_shanghai()),
+                status=result["status"],
+                payload=payload,
+                error_class=error,
+            )
+    return result
+
+
+async def _wait(stop_event, seconds):
+    try:
+        await asyncio.wait_for(stop_event.wait(), seconds)
+    except TimeoutError:
+        pass
+
+
+async def run_daily_research_service(
+    pool, settings, *, stop_event=None, now_provider=now_shanghai, wait=_wait
+):
+    if not settings.daily_research_enabled:
+        return
+    stop_event = stop_event or asyncio.Event()
+    current = local(now_provider())
+    due = scheduled_for(current)
+    if current > due and not settings.daily_research_catch_up:
+        due += timedelta(days=1)
+    while not stop_event.is_set():
+        current = local(now_provider())
+        delay = (due - current).total_seconds()
+        if delay > 0:
+            await wait(stop_event, delay)
+            continue
+        try:
+            await sync_daily_research(pool, settings, current)
+        except Exception as exc:  # noqa: BLE001 -- daily failures do not stop other services
+            logger.warning(
+                "daily_research_service_failed error_class=%s", type(exc).__name__
+            )
+        due = next_run(local(now_provider()))
+
+
+async def main(argv=None):
+    from backend.jobs.macro_worker import validate_macro_settings
+
+    parser = argparse.ArgumentParser(description="One daily public Codex research slot")
+    parser.add_argument("--once", action="store_true", required=True)
+    parser.parse_args(argv)
+    settings = validate_macro_settings(get_settings())
+    pool = await create_pool(
+        settings.worker_database_url,
+        min_size=1,
+        max_size=settings.db_pool_max_size,
+        statement_cache_size=settings.db_statement_cache_size,
+        runtime_role="wealthsail_worker",
+    )
+    try:
+        await verify_runtime_login_boundary(pool, process="worker")
+        result = await sync_daily_research(pool, settings, now_shanghai())
+        print(json.dumps(result, ensure_ascii=False))
+        return (
+            0 if result["status"] in {"READY", "SKIPPED", "NOT_DUE", "DISABLED"} else 1
+        )
+    finally:
+        await pool.close()
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        raise SystemExit(0) from None
+    except Exception as exc:  # noqa: BLE001 -- runtime error messages can contain credentials
+        logger.error("daily_research_failed error_class=%s", type(exc).__name__)
+        raise SystemExit(1) from None
