@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import tomllib
 from importlib import import_module, util
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -122,6 +123,38 @@ async def test_one_exec_stdin_read_only_public_scratch_and_validated_json(
     assert not Path(kwargs["cwd"]).exists(), (
         "public scratch must be removed after completion"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["project_doc_max_bytes", "developer_instructions"])
+async def test_model_session_disables_project_docs_and_pins_public_research_scope(
+    monkeypatch, tmp_path, setting
+):
+    mod = adapter()
+    executable = tmp_path / "codex.exe"
+    executable.touch()
+    captured = {}
+
+    async def execute(args, **kwargs):
+        for index, value in enumerate(args[:-1]):
+            if value == "-c":
+                captured.update(tomllib.loads(args[index + 1]))
+        Path(args[args.index("--output-last-message") + 1]).write_text(
+            '{"summary":"public"}', encoding="utf-8"
+        )
+        return 0, b"", b""
+
+    monkeypatch.setattr(mod, "_run", execute)
+    await mod.run_codex_research(
+        str(executable), "one public prompt", {"type": "object"}, environment={}
+    )
+    assert setting in captured
+    if setting == "project_doc_max_bytes":
+        assert captured[setting] == 0
+    else:
+        assert "public research packet" in captured[setting]
+        assert "private files" in captured[setting]
+        assert "untrusted" in captured[setting]
 
 
 @pytest.mark.asyncio
