@@ -86,4 +86,12 @@ async def run_opportunity_monitor_service(
             logger.warning(
                 "opportunity_monitors_tick_failed error_class=%s", type(exc).__name__
             )
+        try:
+            from backend.jobs.study_tracking import sync_study_tracking
+
+            await sync_study_tracking(pool, now_provider())
+        except Exception as exc:  # noqa: BLE001 -- study failures do not stop existing monitors
+            logger.warning(
+                "study_tracking_tick_failed error_class=%s", type(exc).__name__
+            )
         await wait(stop_event, 900)

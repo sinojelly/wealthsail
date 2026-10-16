@@ -119,6 +119,15 @@ def test_index_condition_uses_percentage_points_without_guessing_units():
     assert condition.model_dump(by_alias=True)["threshold"] == 3
 
 
+def test_explicitly_cleared_counter_factors_do_not_reappear_from_old_scenarios():
+    original = engine().freeze_hypothesis(
+        {"event": {"scenarios": [{"counter": "原反方条件"}]}}, now=NOW
+    )
+    assert original["counterFactors"] == ["原反方条件"]
+    revised = engine().freeze_hypothesis({**original, "counterFactors": []}, now=NOW)
+    assert revised["counterFactors"] == []
+
+
 def test_first_observation_records_a_baseline_instead_of_a_newly_triggered_claim():
     result = engine().evaluate_conditions(version(), None, [observation()], now=NOW)
     assert result["baseline"] is True and result["state"] == "OBSERVING"

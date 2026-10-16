@@ -154,8 +154,9 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
         ),
         "supports": _strings(origin.get("supports") or []),
         "counterFactors": _strings(
-            origin.get("counterFactors")
-            or [
+            origin["counterFactors"]
+            if "counterFactors" in origin
+            else [
                 row.get("counter")
                 for row in event.get("scenarios", [])
                 if isinstance(row, dict)

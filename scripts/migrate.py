@@ -2541,15 +2541,28 @@ async def _readback(conn: asyncpg.Connection) -> None:
         if not await conn.fetchval("SELECT to_regclass($1)", table):
             raise RuntimeError("daily research boundary is missing or unsafe")
         for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
-            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
-                expected = privilege == "SELECT" and role != "authenticated" or (
-                    role == "wealthsail_worker" and privilege == "INSERT"
+            for privilege in (
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "TRUNCATE",
+                "REFERENCES",
+                "TRIGGER",
+            ):
+                expected = (
+                    privilege == "SELECT"
+                    and role != "authenticated"
+                    or (role == "wealthsail_worker" and privilege == "INSERT")
                 )
-                actual = await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege)
+                actual = await conn.fetchval(
+                    "SELECT has_table_privilege($1,$2,$3)", role, table, privilege
+                )
                 if actual != expected:
                     raise RuntimeError("daily research boundary is missing or unsafe")
         if await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table
+            "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)",
+            table,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
     for table, constraint in (
@@ -2558,9 +2571,76 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         if not await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=$1::regclass AND conname=$2 AND contype IN ('p','u'))",
-            table, constraint,
+            table,
+            constraint,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
+
+    for name in (
+        "study_tracks",
+        "study_versions",
+        "study_checks",
+        "study_notes",
+        "study_trade_links",
+    ):
+        table = f"research.{name}"
+        safe = await conn.fetchval(
+            """SELECT c.relrowsecurity AND c.relforcerowsecurity AND
+            EXISTS(SELECT 1 FROM pg_policies p WHERE p.schemaname='research' AND p.tablename=$1
+                AND p.cmd='SELECT' AND p.qual LIKE '%uid()%')
+            FROM pg_class c WHERE c.oid=to_regclass($2)""",
+            name,
+            table,
+        )
+        if not safe:
+            raise RuntimeError("study actor boundary is missing or unsafe")
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            for privilege in (
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "TRUNCATE",
+                "REFERENCES",
+                "TRIGGER",
+            ):
+                expected = (
+                    role != "authenticated"
+                    and privilege == "SELECT"
+                    or (
+                        privilege == "INSERT"
+                        and (
+                            role == "wealthsail_api"
+                            or role == "wealthsail_worker"
+                            and name == "study_checks"
+                        )
+                    )
+                )
+                if (
+                    await conn.fetchval(
+                        "SELECT has_table_privilege($1,$2,$3)", role, table, privilege
+                    )
+                    != expected
+                ):
+                    raise RuntimeError("study actor boundary is missing or unsafe")
+        if name != "study_tracks" and not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::regclass AND tgname='study_immutable' AND NOT tgisinternal)",
+            table,
+        ):
+            raise RuntimeError("study immutable history boundary is missing or unsafe")
+    for column in (
+        "enabled",
+        "generation",
+        "updated_at",
+        "title",
+        "scope",
+        "origin_key",
+    ):
+        if await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_api','research.study_tracks',$1,'UPDATE')",
+            column,
+        ) != (column in {"enabled", "generation", "updated_at"}):
+            raise RuntimeError("study head boundary is missing or unsafe")
 
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
