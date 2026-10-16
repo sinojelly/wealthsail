@@ -140,6 +140,9 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
     snapshot = {
         "methodVersion": VERSION,
         "phase": event.get("phase"),
+        "importance": event.get("importance"),
+        "affectedDirectionIds": _strings(event.get("affectedDirectionIds") or [], 16),
+        "unknowns": _strings(event.get("unknowns") or []),
         "title": str(event.get("title") or origin.get("title") or "当前方向研究")[:200],
         "thesis": str(
             event.get("summary")
@@ -310,6 +313,22 @@ def _one(rows):
     return rows[0] if len(signatures) == 1 else None
 
 
+def _regressed(old, row):
+    if not old or not row or _day(old.get("asOf")) is None:
+        return False
+    old_day, current_day = _day(old["asOf"]), _day(row.get("asOf"))
+    if current_day is None or current_day < old_day:
+        return True
+    if current_day != old_day:
+        return False
+    for field in ("retrievedAt", "availableAt"):
+        before = _stamp(old.get(field) or old.get("retrievedAt"))
+        current = _stamp(row.get(field) or row.get("retrievedAt"))
+        if before and current and current < before:
+            return True
+    return False
+
+
 def evaluate_conditions(version, previous, current, *, now):
     now = _now(now)
     conditions = [
@@ -338,15 +357,7 @@ def evaluate_conditions(version, previous, current, *, now):
         row = _one(facts.get(key))
         old = prior_row.get("lastKnownObservation") or _one(previous_facts.get(key))
         value = _fact(row, now) if row else None
-        regressed = (
-            old is not None
-            and row is not None
-            and _day(old.get("asOf")) is not None
-            and (
-                _day(row.get("asOf")) is None
-                or _day(row.get("asOf")) < _day(old["asOf"])
-            )
-        )
+        regressed = _regressed(old, row)
         result = (
             "NOT_DUE"
             if expired
@@ -475,7 +486,7 @@ def review_evidence(version, baseline, current, trades, *, now):
             if old and old_clock and frozen_at and old_clock <= frozen_at <= now
             else None
         )
-        latest = _fact(row, now) if row else None
+        latest = _fact(row, now) if row and not _regressed(old, row) else None
         comparable = (
             initial is not None
             and latest is not None

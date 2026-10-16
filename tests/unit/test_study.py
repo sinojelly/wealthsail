@@ -58,6 +58,9 @@ def test_following_freezes_the_original_public_source_and_does_not_copy_private_
             "title": "供应政策宣布",
             "summary": "许可调整仍需实际供应证明",
             "phase": "ANNOUNCED",
+            "importance": "HIGH",
+            "affectedDirectionIds": ["us:broad"],
+            "unknowns": ["实际交付尚未核实"],
             "channels": ["供应→价格"],
             "watchFor": ["实际到货"],
             "scenarios": [
@@ -85,6 +88,9 @@ def test_following_freezes_the_original_public_source_and_does_not_copy_private_
     assert "secret" not in str(result) and "private" not in str(result)
     assert result["invalidationConditions"] == []
     assert result["phase"] == "ANNOUNCED"
+    assert result["importance"] == "HIGH"
+    assert result["affectedDirectionIds"] == ["us:broad"]
+    assert result["unknowns"] == ["实际交付尚未核实"]
 
 
 @pytest.mark.parametrize(
@@ -117,6 +123,44 @@ def test_first_observation_records_a_baseline_instead_of_a_newly_triggered_claim
     result = engine().evaluate_conditions(version(), None, [observation()], now=NOW)
     assert result["baseline"] is True and result["state"] == "OBSERVING"
     assert result["conditionResults"][0]["result"] == "TRUE"
+
+
+@pytest.mark.parametrize("field", ["retrievedAt", "availableAt"])
+def test_older_revision_of_same_period_cannot_be_a_new_condition_trigger(field):
+    old = observation(
+        49,
+        retrievedAt=(NOW - timedelta(hours=1)).isoformat(),
+        availableAt=(NOW - timedelta(hours=2)).isoformat(),
+    )
+    baseline = engine().evaluate_conditions(version(), None, [old], now=NOW)
+    older_revision = {
+        **old,
+        "value": "51",
+        field: (NOW - timedelta(hours=3)).isoformat(),
+    }
+    result = engine().evaluate_conditions(
+        version(), baseline, [older_revision], now=NOW
+    )
+    assert result["state"] == "OBSERVING"
+    condition = result["conditionResults"][0]
+    assert condition["result"] == "UNKNOWN"
+    assert condition["lastKnownResult"] == "FALSE"
+    assert condition["lastKnownObservation"]["value"] == "49"
+
+
+def test_review_does_not_call_an_older_revision_the_latest_comparable_fact():
+    initial = observation(49, retrievedAt=(NOW - timedelta(hours=1)).isoformat())
+    old_revision = {
+        **initial,
+        "value": "51",
+        "retrievedAt": (NOW - timedelta(hours=2)).isoformat(),
+    }
+    result = engine().review_evidence(
+        version(createdAt=NOW.isoformat()), [initial], [old_revision], [], now=NOW
+    )
+    assert result["observations"][0]["state"] == "UNKNOWN"
+    assert result["observations"][0]["change"] is None
+    assert result["observations"][0]["currentValue"] is None
 
 
 def test_new_verified_condition_can_strengthen_then_weaken_without_rewriting_previous_check():
