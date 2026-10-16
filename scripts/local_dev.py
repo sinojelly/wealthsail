@@ -90,7 +90,8 @@ def check_ports(ports: list[int]) -> None:
             try:
                 sock.bind(("127.0.0.1", port))
             except OSError as exc:
-                raise RuntimeError(f"Port {port} occupied; change -ApiPort/-WebPort") from exc
+                raise RuntimeError(f"Port {port} occupied; port alone does not prove managed ownership. "
+                                   "Use -Action Status/-Action Stop for recorded services, or change -ApiPort/-WebPort") from exc
 
 
 def configure(args: argparse.Namespace) -> dict[str, str]:
@@ -172,11 +173,41 @@ def select_python(env: dict[str, str], *, skip_install: bool) -> Path:
 
 def process_info(pid: int, env: dict[str, str]) -> dict | None:
     # Read creation time to distinguish a live supervisor from a recycled PID.
-    code = (f"Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}' | "
-            "Select-Object ProcessId,Name,@{Name='created';Expression={"
+    code = (f"$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}' -ErrorAction Stop | "
+            "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='created';Expression={"
             "$_.CreationDate.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress")
     output = run(["powershell.exe", "-NoProfile", "-Command", code], env, capture=True)
     return json.loads(output) if output and output != "null" else None
+
+
+def service_process_inventory(pids: list[int], env: dict[str, str]) -> list[dict]:
+    ids = ",".join(str(int(pid)) for pid in pids)
+    code = ("$ErrorActionPreference='Stop'; $all=@(Get-CimInstance Win32_Process -ErrorAction Stop); "
+            f"$ids=@({ids}); do {{ $old=$ids.Count; $ids=@($ids + @($all | Where-Object {{$_.ParentProcessId -in $ids}} | "
+            "Select-Object -ExpandProperty ProcessId) | Select-Object -Unique) } while ($ids.Count -gt $old); "
+            "$all | Where-Object {$_.ProcessId -in $ids} | "
+            "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='created';Expression={"
+            "$_.CreationDate.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress")
+    output = run(["powershell.exe", "-NoProfile", "-Command", code], env, capture=True)
+    data = json.loads(output) if output and output != "null" else []
+    return data if isinstance(data, list) else [data]
+
+
+def terminate_service_process(pid: int, env: dict[str, str]) -> None:
+    subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"], env=env,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   creationflags=subprocess.CREATE_NO_WINDOW, timeout=10, check=False)
+
+
+def remaining_service_records(env):
+    from scripts.local_processes import remaining_services
+    return remaining_services(LOCAL / "services.json", ROOT, lambda pid: process_info(pid, env))
+
+
+def cleanup_service_records(env):
+    from scripts.local_processes import cleanup_services
+    return cleanup_services(LOCAL / "services.json", ROOT, lambda pid: process_info(pid, env),
+                            lambda pid: terminate_service_process(pid, env))
 
 
 def read_state() -> dict | None:
@@ -235,7 +266,9 @@ def runtime_action(action: str, env: dict[str, str], supplied_bin: Path | None) 
         if alive:
             print(f"{state['phase']}: http://127.0.0.1:{state['web_port']} (PID {state['pid']})")
         else:
-            print("Not running")
+            remaining = remaining_service_records(env)
+            print("Supervisor not running; managed services remain. Use -Action Stop."
+                  if remaining else "Not running; no live recorded API/frontend services.")
         return
     if alive:
         (LOCAL / "stop-request").write_text(state["run_id"], encoding="utf-8")
@@ -246,10 +279,26 @@ def runtime_action(action: str, env: dict[str, str], supplied_bin: Path | None) 
                 return
             time.sleep(0.5)
         raise RuntimeError("Stop requested; startup or shutdown still in progress. Check -Action Status/logs")
-    binary_dir = supplied_bin or (Path(state["postgres_bin"]) if state else LOCAL / "postgres/pgsql/bin")
-    if (binary_dir / "pg_ctl.exe").exists():
-        stop_database(binary_dir, LOCAL, env)
-    print("Not running; any remaining managed PostgreSQL has been stopped.")
+    # Recovery is serialized with Start; never infer ownership from a port.
+    with launcher_lock(LOCAL / "launcher.lock"):
+        state = read_state()
+        if state and state_alive(state, env):
+            raise RuntimeError("Launcher started concurrently; retry -Action Stop")
+        manifest_exists = (LOCAL / "services.json").exists()
+        try:
+            remaining = cleanup_service_records(env)
+        finally:
+            binary_dir = supplied_bin or (Path(state["postgres_bin"]) if state else LOCAL / "postgres/pgsql/bin")
+            if (binary_dir / "pg_ctl.exe").exists():
+                stop_database(binary_dir, LOCAL, env)
+        if remaining:
+            raise RuntimeError("Some managed services could not be stopped; ownership records retained. Retry -Action Stop")
+        if state:
+            current = read_state()
+            if current and current.get("run_id") == state.get("run_id"):
+                (LOCAL / "run.json").unlink(missing_ok=True)
+        print("Stopped recorded API/frontend/macro services and managed PostgreSQL; data retained."
+              if manifest_exists else "Supervisor not running; no API/frontend ownership records. Unrecorded processes were not stopped.")
 
 
 async def initialize_database(dsn: str, api_password: str, worker_password: str | None = None) -> None:
@@ -392,12 +441,24 @@ def service_environment(name: str, env: dict[str, str]) -> dict[str, str]:
 
 
 def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
+    from scripts.local_processes import read_manifest, record_services
     env.update({"WEALTHSAIL_ENV_FILE": str(LOCAL / "api.env"),
                 "WS_LOCAL_API_TARGET": f"http://127.0.0.1:{args.api_port}",
                 "VITE_API_BASE_URL": "/api"})
     commands = service_commands(args)
     processes: list[subprocess.Popen] = []
+    roots = {}
     handles = []
+    state = read_state()
+    if not state:
+        raise RuntimeError("Launcher ownership state is missing")
+    run_id = state["run_id"]
+
+    def record_children():
+        previous = read_manifest(LOCAL / "services.json", ROOT)
+        candidates = set(roots) | {row["ProcessId"] for row in (previous or {}).get("children", [])}
+        record_services(LOCAL / "services.json", ROOT, run_id, roots,
+                        service_process_inventory(sorted(candidates), env))
     try:
         for name, command, directory in commands:
             stdout = (LOCAL / f"logs/{name}.stdout.log").open("w", encoding="utf-8")
@@ -406,9 +467,12 @@ def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
             processes.append(subprocess.Popen(command, cwd=directory, env=service_environment(name, env),
                                                stdout=stdout, stderr=stderr,
                                                creationflags=subprocess.CREATE_NO_WINDOW))
+            roots[processes[-1].pid] = name
+            record_children()
         web = f"http://127.0.0.1:{args.web_port}"
         wait_ready(f"http://127.0.0.1:{args.api_port}/healthz", processes, api=True)
         wait_ready(web, processes)
+        record_children()
         # Exercise the compiled frontend's proxy and the actual login/portfolio API.
         # The initial password can be changed by the user, so later runs do not
         # require it. Seed correctness is verified on the first launch only.
@@ -426,22 +490,35 @@ def serve(args: argparse.Namespace, env: dict[str, str]) -> None:
               "\nPress Ctrl+C to stop local services/database; local data is retained.", flush=True)
         if not args.no_browser:
             webbrowser.open(web)
+        next_record = time.monotonic() + 10
         while all(process.poll() is None for process in processes):
             if stop_requested():
                 return
+            if time.monotonic() >= next_record:
+                record_children()
+                next_record = time.monotonic() + 10
             time.sleep(1)
         raise RuntimeError("Service stopped unexpectedly; see .local/logs")
     finally:
-        for process in reversed(processes):
-            if process.poll() is None:
-                # Windows venv python.exe is a redirector with a child process.
-                # Stop our Popen-owned tree so the actual API cannot be orphaned.
-                subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
-                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=subprocess.CREATE_NO_WINDOW, check=False)
-                process.wait(timeout=10)
-        for handle in handles:
-            handle.close()
+        try:
+            try:
+                remaining = cleanup_service_records(env)
+            finally:
+                # Manifest I/O failure cannot skip the Popen-owned fallback.
+                for process in reversed(processes):
+                    try:
+                        if process.poll() is None:
+                            terminate_service_process(process.pid, env)
+                        process.wait(timeout=10)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+            if remaining:
+                remaining = cleanup_service_records(env)
+            if remaining:
+                raise RuntimeError("Managed service cleanup incomplete; records retained. Use -Action Stop")
+        finally:
+            for handle in handles:
+                handle.close()
 
 
 def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict[str, str], Path]:
@@ -510,6 +587,10 @@ def main() -> None:
 
     # One supervisor per checkout; releasing this OS lock also handles crashes.
     with launcher_lock(LOCAL / "launcher.lock"):
+        # Keep recovery proof intact until every recorded identity is gone.
+        if remaining_service_records(env):
+            raise RuntimeError("Managed child services remain; use -Action Stop before Start")
+        (LOCAL / "services.json").unlink(missing_ok=True)
         binary_dir = args.postgres_bin.resolve() if args.postgres_bin else LOCAL / "postgres/pgsql/bin"
         run_id = secrets.token_hex(16)
         database_started = False
@@ -535,7 +616,11 @@ def main() -> None:
             finally:
                 current = read_state()
                 if current and current.get("run_id") == run_id:
-                    (LOCAL / "run.json").unlink(missing_ok=True)
+                    if (LOCAL / "services.json").exists():
+                        current["phase"] = "cleanup_failed"
+                        write_state(current)
+                    else:
+                        (LOCAL / "run.json").unlink(missing_ok=True)
                 flag = LOCAL / "stop-request"
                 if flag.exists() and flag.read_text("utf-8") == run_id:
                     flag.unlink()
