@@ -51,6 +51,7 @@ export default function ResearchDiagnosis({
   canRefresh,
   message,
   watchButton,
+  trackingControls,
 }: {
   title: string;
   code?: string;
@@ -64,6 +65,7 @@ export default function ResearchDiagnosis({
   canRefresh: boolean;
   message: string;
   watchButton: ReactNode;
+  trackingControls?: ReactNode;
 }) {
   const [tab, setTab] = useState("decision");
   const [window, setWindow] = useState("1y");
@@ -90,6 +92,7 @@ export default function ResearchDiagnosis({
           {code ?? "—"} · {mode === "fund" ? "基金" : "指数"}
         </p>
       </header>
+      {trackingControls}
       <div role="tablist" aria-label="诊断内容" className="op-tabs">
         {[
           ["decision", "综合判断"],
@@ -186,19 +189,6 @@ export default function ResearchDiagnosis({
                 <p key={reason}>{reason}</p>
               ))}
             </section>
-            <dl className="op-conclusions">
-              {[
-                ["标的价值", "长期配置研究结论"],
-                ["产品质量", "成本、跟踪与执行效率"],
-                ["组合适配", "仓位、相关性与风险预算"],
-              ].map(([a, b]) => (
-                <div key={a}>
-                  <dt>{a}</dt>
-                  <dd>{b}</dd>
-                  <span>尚未评估</span>
-                </div>
-              ))}
-            </dl>
             <div className="op-next">
               <strong>下一步观察</strong>
               <p>

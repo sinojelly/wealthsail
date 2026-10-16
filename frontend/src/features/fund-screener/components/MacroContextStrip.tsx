@@ -20,6 +20,7 @@ import {
   ResearchDirections,
 } from "./OpportunityRadar";
 import ResearchBoard from "./ResearchBoard";
+import { EnergyObservations } from "./DailyResearchReport";
 
 function HistoricalTrend({ item }: { item: MacroItem }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -388,6 +389,7 @@ export default function MacroContextStrip({
   canViewOperations = false,
   scopeKey,
   onIndexSelect,
+  hideTracking = false,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -408,6 +410,7 @@ export default function MacroContextStrip({
   canViewOperations?: boolean;
   scopeKey?: string;
   onIndexSelect?: (id: string) => void;
+  hideTracking?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const research = !error && !loading ? data?.research : null;
@@ -460,6 +463,9 @@ export default function MacroContextStrip({
         data={readyData}
         scopeKey={scopeKey}
         onIndexSelect={onIndexSelect}
+        directions={directions}
+        onDirectionSelect={onDirectionSelect}
+        hideTracking={hideTracking}
         canViewOperations={canViewOperations}
         directionLabel={
           selectedDirection
@@ -468,7 +474,11 @@ export default function MacroContextStrip({
         }
         trackingEnabled={monitorEnabled}
         onTrack={
-          onMonitor && !monitorEnabled && !monitorPending && !monitorLoading
+          !hideTracking &&
+          onMonitor &&
+          !monitorEnabled &&
+          !monitorPending &&
+          !monitorLoading
             ? () => onMonitor(true)
             : undefined
         }
@@ -479,6 +489,9 @@ export default function MacroContextStrip({
             render: () => (
               <>
                 {windowSelector}
+                <EnergyObservations
+                  rows={readyData.dailyResearch?.report?.energy}
+                />
                 <div className="op-macro-grid">
                   {readyData.items.map((item) => (
                     <EvidenceCard
@@ -492,7 +505,14 @@ export default function MacroContextStrip({
                   ))}
                 </div>
                 <RadarDetails
-                  data={{ ...readyData, series: core }}
+                  data={{
+                    ...readyData,
+                    series:
+                      readyData.researchBoard?.methodVersion ===
+                      "research-board-v2"
+                        ? readyData.series
+                        : core,
+                  }}
                   section="series"
                 />
               </>
@@ -515,10 +535,13 @@ export default function MacroContextStrip({
             label: "全球市场与事件",
             render: () => (
               <>
-                <RadarDetails
-                  data={{ ...readyData, series: global }}
-                  section="series"
-                />
+                {readyData.researchBoard?.methodVersion !==
+                  "research-board-v2" && (
+                  <RadarDetails
+                    data={{ ...readyData, series: global }}
+                    section="series"
+                  />
+                )}
                 <MacroEvents
                   events={readyData.events ?? []}
                   state={readyData.eventState}
@@ -536,6 +559,7 @@ export default function MacroContextStrip({
           <RadarDetails
             data={readyData}
             section="monitor"
+            hideTracking={hideTracking}
             onMonitor={onMonitor}
             monitorEnabled={monitorEnabled}
             monitorPending={monitorPending}
@@ -611,6 +635,7 @@ export default function MacroContextStrip({
         <>
           <RadarDetails
             data={readyData}
+            hideTracking={hideTracking}
             onMonitor={onMonitor}
             monitorEnabled={monitorEnabled}
             monitorPending={monitorPending}

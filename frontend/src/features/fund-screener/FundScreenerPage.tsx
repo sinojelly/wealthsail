@@ -22,6 +22,7 @@ import GlobalResearchSearch from "./components/GlobalResearchSearch";
 import IndexComparison from "./components/IndexComparison";
 import FundResultsTable from "./components/FundResultsTable";
 import ResearchDiagnosis from "./components/ResearchDiagnosis";
+import { RadarDetails } from "./components/OpportunityRadar";
 import "./opportunities.css";
 
 const monitorScopeFields = [
@@ -315,6 +316,8 @@ function ResearchWorkspace({
     else p.set("unlinked", "1");
     p.delete("page");
     p.delete("analysisAsOf");
+    p.delete("researchOpen");
+    p.delete("researchTab");
     setParams(p);
     setRun(null);
     setTimedOut(false);
@@ -401,6 +404,7 @@ function ResearchWorkspace({
       />
       <MacroContextStrip
         data={radarData}
+        hideTracking
         scopeKey={JSON.stringify(opportunityKey.slice(0, -1))}
         onIndexSelect={(id) => {
           setDirect(null);
@@ -634,6 +638,40 @@ function ResearchWorkspace({
           refreshing={busy || refresh.isPending}
           canRefresh={!!analysisId}
           message={message}
+          trackingControls={
+            <RadarDetails
+              key={JSON.stringify(opportunityKey.slice(0, -1))}
+              data={
+                opportunity.data ?? radarData ?? { state: "UNKNOWN", items: [] }
+              }
+              section="monitor"
+              monitorEnabled={currentMonitor?.enabled ?? false}
+              monitorLoading={monitors.isPending || monitors.isError}
+              monitorPending={monitor.isPending && monitoringCurrent}
+              monitorError={
+                monitors.isError
+                  ? "跟踪状态读取失败，请稍后重试。"
+                  : monitor.isError && monitoringCurrent
+                    ? "跟踪条件保存失败，原状态保留。"
+                    : undefined
+              }
+              onMonitor={
+                indexId || fundCode
+                  ? (enabled) =>
+                      monitor.mutate({ ...opportunityScope, enabled })
+                  : undefined
+              }
+              onNoticeAck={(id) => ack.mutate({ id, key: opportunityKey })}
+              ackPending={
+                ack.isPending && acknowledgingCurrent ? ack.variables.id : null
+              }
+              ackError={
+                ack.isError && acknowledgingCurrent
+                  ? "已读状态保存失败，可重试。"
+                  : undefined
+              }
+            />
+          }
           watchButton={
             <button
               className="op-watch"

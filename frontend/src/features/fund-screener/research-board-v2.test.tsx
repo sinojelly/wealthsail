@@ -303,42 +303,44 @@ function show(data = context, callbacks = {}, scopeKey = "scope-a") {
     </MemoryRouter>,
   );
 }
-async function click(name: string, root: HTMLElement | typeof screen = screen) {
+async function click(name: string) {
   const user = userEvent.setup();
-  await user.click(
-    root instanceof HTMLElement
-      ? within(root).getByRole("button", { name })
-      : root.getByRole("button", { name }),
-  );
+  await user.click(screen.getByRole("button", { name }));
   return user;
 }
-
-it("keeps the homepage compact and sends the main changes action directly to its issue list", async () => {
+async function tab(name: string) {
+  const user = userEvent.setup();
+  const toggle = screen.getByRole("button", { name: /今日投资观察/ });
+  if (toggle.getAttribute("aria-expanded") !== "true") await user.click(toggle);
+  await user.click(screen.getByRole("tab", { name }));
+  return screen.getByRole("tabpanel");
+}
+it("shows concrete legacy facts in a collapsed strip and opens the same container without a dialog", async () => {
   show();
-  expect(
-    screen.getByRole("heading", { name: "市场环境与投资关注" }),
-  ).toBeInTheDocument();
-  expect(
-    screen.queryByText("景气略高于分界，需核查盈利"),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  expect(screen.getByRole("list", { name: "今日投资重点" })).toHaveTextContent(
+    issue.summary,
+  );
   expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  await click("查看重要变化");
-  const panel = screen.getByRole("dialog", { name: "重要变化" });
-  expect(within(panel).getByText(issue.summary)).toBeInTheDocument();
+  await click(issue.summary);
+  const panel = screen.getByRole("tabpanel");
+  expect(
+    within(panel).getByRole("heading", { name: issue.summary }),
+  ).toBeInTheDocument();
   expect(within(panel).getByText("沪深300")).toBeInTheDocument();
   expect(
     within(panel).getByRole("link", { name: "查看制造业 PMI来源" }),
   ).toHaveAttribute("href", "https://www.stats.gov.cn/pmi");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
 });
-
-it("opens direction research without opening blockers and chooses related indexes through the existing callback", async () => {
+it("opens direction research inline without blockers and chooses indexes through the existing callback", async () => {
   const select = vi.fn();
   show(context, { onIndexSelect: select });
-  await click("查看方向关联事项");
-  const panel = screen.getByRole("dialog", { name: "当前方向研究" });
+  const panel = await tab("当前方向");
   expect(
     within(panel).getByText("景气略高于分界，需核查盈利"),
   ).toBeInTheDocument();
@@ -347,20 +349,20 @@ it("opens direction research without opening blockers and chooses related indexe
     within(panel).getByText("当前尚未满足全部趋势条件"),
   ).toBeInTheDocument();
   expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
-  expect(within(panel).queryByRole("table")).not.toBeInTheDocument();
-  await click("研究沪深300", panel);
+  expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  await click("研究沪深300");
   expect(select).toHaveBeenCalledWith("hs300");
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
 });
-
-it("starts research limitations as five compact groups and mounts only the selected children", async () => {
+it("keeps five compact quality groups and mounts only selected children with actual times and HTTP status", async () => {
   show();
-  await click("查看研究限制");
-  const panel = screen.getByRole("dialog", { name: "研究限制" });
+  const panel = await tab("数据质量");
   expect(within(panel).getAllByRole("row")).toHaveLength(6);
   expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
-  expect(within(panel).queryByText("HTTPStatusError")).not.toBeInTheDocument();
-  await click("展开宏观数据", panel);
+  await click("展开宏观数据");
   expect(within(panel).getByText(m1.summary)).toBeInTheDocument();
   expect(within(panel).getByText(tsf.summary)).toBeInTheDocument();
   expect(within(panel).getByText(/HTTP 403/)).toBeInTheDocument();
@@ -370,10 +372,9 @@ it("starts research limitations as five compact groups and mounts only the selec
     within(panel).queryByText(/自动修复|正在采集/),
   ).not.toBeInTheDocument();
 });
-
-it("keeps operational navigation separate and available only to administrators", async () => {
+it("keeps operations navigation separate and available only to administrators in quality", async () => {
   const view = show();
-  await click("查看研究限制");
+  await tab("数据质量");
   expect(
     screen.queryByRole("link", { name: "管理员查看运行详情" }),
   ).not.toBeInTheDocument();
@@ -382,18 +383,17 @@ it("keeps operational navigation separate and available only to administrators",
   expect(
     screen.queryByRole("link", { name: "管理员查看运行详情" }),
   ).not.toBeInTheDocument();
-  await click("查看研究限制");
+  await tab("数据质量");
   expect(
     screen.getByRole("link", { name: "管理员查看运行详情" }),
   ).toHaveAttribute("href", "/operations");
   expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
 });
-
 it.each([
   ["FAILED", "采集失败"],
   ["RUNNING", "已登记执行租约"],
 ])(
-  "identifies persisted index collection provenance for %s without implying a live worker",
+  "identifies persisted index collection provenance for %s without claiming a live worker",
   async (status, label) => {
     show({
       ...context,
@@ -417,66 +417,72 @@ it.each([
         },
       },
     } as unknown as OpportunityContext);
-    await click("查看研究限制");
+    await tab("数据质量");
     await click("展开宏观数据");
-    expect(screen.getByText(/指数研究采集/)).toBeInTheDocument();
     expect(
-      screen.getByText(new RegExp(`指数研究采集 · ${label}`)),
+      screen.getByText(new RegExp("指数研究采集 · " + label)),
     ).toBeInTheDocument();
     expect(screen.getByText(/HTTP 403/)).toBeInTheDocument();
-    expect(screen.queryByText(/未登记来源/)).not.toBeInTheDocument();
   },
 );
-
-it("uses one evidence dialog and mounts a chart only after its topic is selected", async () => {
+it("mounts history only in macro, unmounts it on collapse and supports keyboard category navigation", async () => {
   show();
-  await click("查看研究依据");
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  await tab("新闻与推理");
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await click("宏观与流动性");
+  await tab("宏观指标");
   expect(
     screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
   ).toBeInTheDocument();
-  const user = await click("关闭研究依据");
+  const user = userEvent.setup();
+  screen.getByRole("tab", { name: "宏观指标" }).focus();
+  await user.keyboard("{ArrowRight}");
+  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "当前方向" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "查看研究依据" })).toHaveFocus();
-  await click("查看方向关联事项");
-  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
+  expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "查看方向关联事项" }),
-  ).toHaveFocus();
 });
-
-it("keeps focus inside the single dialog when an issue switches into evidence", async () => {
+it("opens an issue's actual evidence category directly without any intermediate dialog", async () => {
   show();
-  await click("查看重要变化");
+  await tab("新闻与推理");
   await click("查看PMI证据");
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
-  expect(screen.getByRole("button", { name: "关闭研究依据" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "宏观指标" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "宏观指标" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
-
-it("closes old secondary details when the complete research scope changes", async () => {
+it("discards selected quality children and old issue contents when the complete scope changes", async () => {
   const view = show();
-  await click("查看重要变化");
-  expect(screen.getByRole("dialog", { name: "重要变化" })).toBeInTheDocument();
+  await tab("数据质量");
+  await click("展开宏观数据");
+  expect(screen.getByText(m1.summary)).toBeInTheDocument();
   view.rerender(
     <MemoryRouter>
       <MacroContextStrip
         data={{
           ...context,
-          researchBoard: { ...context.researchBoard!, summaries: [] },
+          researchBoard: { ...context.researchBoard!, items: [] },
         }}
         error={false}
         scopeKey="scope-b"
       />
     </MemoryRouter>,
   );
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(screen.queryByText(issue.summary)).not.toBeInTheDocument();
+  expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("region", { name: "宏观数据受限项目" }),
+  ).not.toBeInTheDocument();
 });
-
-it("preserves explicit tracking and acknowledgement in secondary details", async () => {
+it("never exposes or activates tracking and acknowledgement from the observation strip", async () => {
   const track = vi.fn(),
     ack = vi.fn();
   show(
@@ -495,23 +501,16 @@ it("preserves explicit tracking and acknowledgement in secondary details", async
     },
     { onMonitor: track, onNoticeAck: ack },
   );
+  for (const name of ["新闻与推理", "宏观指标", "当前方向", "数据质量"])
+    await tab(name);
   expect(
-    screen.queryByRole("button", { name: "跟踪研究条件" }),
+    screen.queryByRole("button", { name: /跟踪|标记.*已读/ }),
   ).not.toBeInTheDocument();
-  await click("研究条件跟踪与通知");
-  expect(
-    screen.getByRole("dialog", { name: "研究条件跟踪与通知" }),
-  ).toBeInTheDocument();
   expect(track).not.toHaveBeenCalled();
   expect(ack).not.toHaveBeenCalled();
-  await click("跟踪研究条件");
-  expect(track).toHaveBeenCalledWith(true);
-  await click("标记研究条件变化为已读");
-  expect(ack).toHaveBeenCalledWith("n");
 });
-
 it.each(["VERIFIED", "UNKNOWN"] as const)(
-  "requires verified facts as well as confirmed budget evidence for %s risk emphasis",
+  "requires verified facts plus confirmed budgets for %s risk emphasis",
   async (factVerification) => {
     const risk = {
       ...issue,
@@ -536,14 +535,7 @@ it.each(["VERIFIED", "UNKNOWN"] as const)(
       researchBoard: {
         ...context.researchBoard!,
         items: [risk],
-        summaries: [
-          {
-            ...context.researchBoard!.summaries[0],
-            tone: "RED",
-            itemIds: [risk.id],
-            nextAction: action("VIEW_ISSUES", "查看持仓风险", "HOLDINGS"),
-          },
-        ],
+        summaries: [],
       },
       decision: { ...context.decision!, state: "POSITION_REVIEW" },
       portfolio: {
@@ -554,17 +546,18 @@ it.each(["VERIFIED", "UNKNOWN"] as const)(
         budgetState: "BLOCKED",
       },
     } as OpportunityContext);
-    await click("查看持仓风险");
+    const panel = await tab("新闻与推理");
     if (factVerification === "VERIFIED")
-      expect(screen.getByText(risk.impact)).toHaveClass("op-critical-impact");
+      expect(within(panel).getByText(risk.impact)).toHaveClass(
+        "op-critical-impact",
+      );
     else
       expect(
         document.querySelector(".op-critical-impact"),
       ).not.toBeInTheDocument();
   },
 );
-
-it("does not repeat the compact direction summary as an identical support paragraph inside details", async () => {
+it("avoids repeating the direction summary when it is already one of the support observations", async () => {
   const summary = context.researchBoard!.direction.supports[0].summary;
   show({
     ...context,
@@ -573,22 +566,17 @@ it("does not repeat the compact direction summary as an identical support paragr
       direction: { ...context.researchBoard!.direction, summary },
     },
   });
-  await click("查看方向关联事项");
-  expect(
-    within(screen.getByRole("dialog", { name: "当前方向研究" })).getAllByText(
-      summary,
-    ),
-  ).toHaveLength(1);
+  const panel = await tab("当前方向");
+  expect(within(panel).getAllByText(summary)).toHaveLength(1);
 });
-
-it("disables an unsupported local destination instead of creating a working-looking action", () => {
+it("disables unsupported destinations without creating fake links", async () => {
   show({
     ...context,
     researchBoard: {
       ...context.researchBoard!,
-      summaries: [
+      items: [
         {
-          ...context.researchBoard!.summaries[0],
+          ...issue,
           nextAction: action(
             "VIEW_HOLDINGS",
             "不支持的账户入口",
@@ -598,7 +586,8 @@ it("disables an unsupported local destination instead of creating a working-look
         },
       ],
     },
-  });
+  } as OpportunityContext);
+  await tab("新闻与推理");
   expect(
     screen.getByRole("button", { name: "不支持的账户入口" }),
   ).toBeDisabled();

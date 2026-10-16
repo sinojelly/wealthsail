@@ -105,6 +105,8 @@ function diagnosis(data: Analysis) {
 
 it("shows independent historical risk and research eligibility without claiming investment value", () => {
   render(diagnosis(analysis));
+  expect(screen.queryByText("长期配置研究结论")).not.toBeInTheDocument();
+  expect(screen.queryByText("成本、跟踪与执行效率")).not.toBeInTheDocument();
   const risk = screen.getByRole("region", { name: "历史收益与风险" });
   expect(within(risk).getByText("10.00%")).toBeInTheDocument();
   expect(within(risk).getByText("20.00%")).toBeInTheDocument();

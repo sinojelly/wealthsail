@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ChevronDown, Globe2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { ResearchAction, ResearchIssue } from "../../../api/investment";
-import Dialog from "../../../components/accessibility/Dialog";
-import { sourceHref, timeLabel } from "../macro-display";
+import type {
+  ResearchAction,
+  ResearchIssue,
+  ResearchTab,
+} from "../../../api/investment";
+import DailyResearchReport, {
+  DailyResearchStatus,
+} from "./DailyResearchReport";
+import { monthLabel, sourceHref, timeLabel } from "../macro-display";
 import type { ResearchBoardProps } from "./ResearchBoard";
 import {
   stateLabel,
@@ -15,13 +23,8 @@ import {
   issueTone,
   toneClass,
   localRoutes,
-  topicTargets,
 } from "./research-board-display";
 
-type Detail =
-  | { mode: "ISSUES"; target: string }
-  | { mode: "DIRECTION" | "DATA" | "EVIDENCE" | "TRACKING" }
-  | null;
 const groupDefaults = [
   ["MARKET", "指数与基金数据"],
   ["MACRO", "宏观数据"],
@@ -41,15 +44,30 @@ export default function ResearchBoardV2({
   data,
   topics,
   canViewOperations = false,
-  renderTracking,
-  onTrack,
-  trackingEnabled = false,
   directionLabel,
   onIndexSelect,
+  directions,
+  onDirectionSelect,
 }: ResearchBoardProps) {
   const board = data.researchBoard!;
-  const [detail, setDetail] = useState<Detail>(null);
-  const [topicId, setTopicId] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const panelId = useId();
+  const focusCategory = useRef(false);
+  const expanded = params.get("researchOpen") === "1";
+  const tabs = [
+    ["events", "新闻与推理"],
+    ["macro", "宏观指标"],
+    ["direction", "当前方向"],
+    ["quality", "数据质量"],
+  ] as const;
+  const tab =
+    tabs.find(([id]) => id === params.get("researchTab"))?.[0] ?? "events";
+  useEffect(() => {
+    if (expanded && focusCategory.current) {
+      focusCategory.current = false;
+      document.getElementById(`${panelId}-${tab}`)?.focus();
+    }
+  }, [expanded, tab, panelId]);
   const [groupId, setGroupId] = useState<string | null>(null);
   const items = [
     ...new Map(board.items.map((item) => [item.id, item])).values(),
@@ -65,22 +83,7 @@ export default function ResearchBoardV2({
         itemIds: [],
       },
   );
-  const activeSummary =
-    detail?.mode === "ISSUES"
-      ? board.summaries.find((summary) => summary.id === detail.target)
-      : undefined;
-  const title =
-    detail?.mode === "ISSUES"
-      ? (activeSummary?.label ?? "研究事项")
-      : detail?.mode === "DIRECTION"
-        ? "当前方向研究"
-        : detail?.mode === "DATA"
-          ? "研究限制"
-          : detail?.mode === "TRACKING"
-            ? "研究条件跟踪与通知"
-            : "研究依据";
   const activeGroup = groups.find((group) => group.id === groupId);
-  const activeTopic = topics.find((topic) => topic.id === topicId);
   function evidence(id: string) {
     const macro = data.items.find((item) => item.code === id);
     const series = data.series?.find((item) => item.code === id);
@@ -102,33 +105,35 @@ export default function ResearchBoardV2({
       ),
     };
   }
-  function open(next: Detail) {
-    setDetail(next);
-    setTopicId(null);
+  function open(target: ResearchTab, expanded = true) {
     setGroupId(null);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (expanded) next.set("researchOpen", "1");
+      else next.delete("researchOpen");
+      next.set("researchTab", target);
+      return next;
+    });
   }
   function perform(action: ResearchAction) {
-    if (action.type === "VIEW_ISSUES")
-      open({ mode: "ISSUES", target: action.target ?? "CHANGES" });
-    if (action.type === "VIEW_DIRECTION") open({ mode: "DIRECTION" });
-    if (action.type === "VIEW_DATA") open({ mode: "DATA" });
-    if (action.type === "VIEW_EVIDENCE") {
-      if (action.target === "research-data") open({ mode: "DATA" });
-      else {
-        open({ mode: "EVIDENCE" });
-        if (action.target && topicTargets.includes(action.target))
-          setTopicId(action.target);
-      }
-    }
+    focusCategory.current = true;
+    if (action.type === "VIEW_DIRECTION") open("direction");
+    if (action.type === "VIEW_ISSUES") open("events");
+    if (action.type === "VIEW_DATA") open("quality");
+    if (action.type === "VIEW_EVIDENCE")
+      open(
+        action.target === "research-data"
+          ? "quality"
+          : action.target === "research-macro"
+            ? "macro"
+            : action.target === "research-global"
+              ? "events"
+              : "direction",
+      );
     if (action.type === "VIEW_CANDIDATES") {
-      setDetail(null);
       const target = document.getElementById("op-research-targets");
       target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
       target?.focus({ preventScroll: true });
-    }
-    if (action.type === "TRACK") {
-      open({ mode: "TRACKING" });
-      onTrack?.();
     }
   }
   function renderAction(action: ResearchAction, admin = false) {
@@ -149,10 +154,8 @@ export default function ResearchBoardV2({
       "VIEW_DATA",
       "VIEW_EVIDENCE",
       "VIEW_CANDIDATES",
-      "TRACK",
     ].includes(action.type);
-    const disabled =
-      !action.enabled || !validLocal || (action.type === "TRACK" && !onTrack);
+    const disabled = !action.enabled || !validLocal;
     return (
       <>
         <button
@@ -163,11 +166,7 @@ export default function ResearchBoardV2({
           {action.label}
         </button>
         {disabled && (
-          <small>
-            {action.type === "TRACK" && trackingEnabled
-              ? "当前研究范围已启用跟踪。"
-              : (action.disabledReason ?? "当前操作暂不可用。")}
-          </small>
+          <small>{action.disabledReason ?? "当前操作暂不可用。"}</small>
         )}
       </>
     );
@@ -272,302 +271,364 @@ export default function ResearchBoardV2({
       </article>
     );
   }
+  const fallback = items
+    .filter((item) => !dataIssue(item))
+    .map((item) => ({
+      id: item.id,
+      kind: item.category,
+      title: item.summary,
+      summary: "",
+      impact: item.impact,
+      tone: issueTone(item, data),
+      targetTab: "events" as ResearchTab,
+      indexId: item.affectedAssets.indexId ?? null,
+      directionIds: [],
+      sourceIds: [],
+      asOf:
+        data.marketEvidence?.find(
+          (row) => row.indexId === item.affectedAssets.indexId,
+        )?.asOf ?? null,
+    }));
+  const highlights = (data.researchOverview?.highlights ?? fallback).slice(
+    0,
+    3,
+  );
+  function highlightTone(highlight: (typeof highlights)[number]) {
+    return highlight.tone === "RED" &&
+      !items.some(
+        (item) => item.id === highlight.id && confirmedRisk(item, data),
+      )
+      ? "GRAY"
+      : highlight.tone;
+  }
   return (
     <section
-      className="op-panel op-research-board op-research-board-v2"
-      aria-label="市场环境与投资关注"
+      className={`op-panel op-research-board op-research-board-v2 op-daily-observation ${expanded ? "is-expanded" : "is-collapsed"}`}
+      aria-label="今日投资观察"
     >
-      <header>
-        <h2>市场环境与投资关注</h2>
-        <span className="op-muted">
-          当前研究范围 · {board.asOf ? timeLabel(board.asOf) : "研究时点待确认"}
+      <button
+        className="op-macro-toggle"
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={() => open(tab, !expanded)}
+      >
+        <span>
+          <Globe2 size={19} />
+          <strong>今日投资观察</strong>
         </span>
-      </header>
-      <div className="op-research-summaries">
-        {board.summaries.map((summary) => {
-          const related = items.filter(
-            (item) => summary.itemIds.includes(item.id) && !dataIssue(item),
-          );
-          const tone =
-            summary.tone === "RED"
-              ? related.some((item) => confirmedRisk(item, data))
-                ? "RED"
-                : "GRAY"
-              : summary.tone;
-          return (
-            <section
-              key={summary.id}
-              aria-label={summary.label}
-              className={`op-research-summary ${toneClass(tone)}`}
-            >
-              <h3>{summary.label}</h3>
-              <p className={toneClass(tone)}>{summary.summary}</p>
-              <span className="op-muted">{stateLabel(summary.state)}</span>
-              <div className="op-research-actions">
-                {renderAction(summary.nextAction)}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-      <section
-        className="op-research-direction op-v2-direction"
-        aria-label="当前研究方向"
-      >
-        <div>
-          <h3>{directionLabel ?? board.direction.label}</h3>
+        <span>
           <span className="op-badge">
-            {stateLabel(board.direction.researchState)} ·{" "}
-            {stateLabel(board.direction.qualificationState)}
+            <DailyResearchStatus state={data.dailyResearch?.state} />
           </span>
-        </div>
-        <p>{board.direction.summary ?? "已知事实与完整研究资格需分别核查。"}</p>
-        {board.direction.nextStep && (
-          <p className="op-muted">下一步：{board.direction.nextStep}</p>
-        )}
-        <div className="op-research-actions">
-          <button type="button" onClick={() => open({ mode: "DIRECTION" })}>
-            查看方向关联事项
-          </button>
-          <button type="button" onClick={() => open({ mode: "EVIDENCE" })}>
-            查看研究依据
-          </button>
-          <button type="button" onClick={() => open({ mode: "DATA" })}>
-            查看研究限制
-          </button>
-          <button
-            type="button"
-            aria-label="研究条件跟踪与通知"
-            onClick={() => open({ mode: "TRACKING" })}
-          >
-            研究条件跟踪与通知
-            {data.notices?.some((notice) => !notice.readAt)
-              ? `（${data.notices.filter((notice) => !notice.readAt).length}条未读）`
-              : ""}
-          </button>
-        </div>
-      </section>
-      <Dialog
-        key={title}
-        open={detail !== null}
-        title={title}
-        onClose={() => setDetail(null)}
-        size="xl"
-      >
-        <div className="op-v2-detail-body">
-          {detail?.mode === "ISSUES" && (
-            <section aria-label="研究事项详情">
-              {items
-                .filter(
-                  (item) =>
-                    !dataIssue(item) &&
-                    activeSummary?.itemIds.includes(item.id),
-                )
-                .map(renderIssue)}
-              {!activeSummary?.itemIds.length && (
-                <p>当前范围暂无已确认事项，仍可继续查看研究依据。</p>
+          <ChevronDown size={16} />
+        </span>
+      </button>
+      <small className="op-daily-asof">
+        概览生成时间：{timeLabel(data.researchOverview?.asOf ?? board.asOf)}
+      </small>
+      {highlights.length ? (
+        <ul className="op-daily-highlights" aria-label="今日投资重点">
+          {highlights.map((highlight) => (
+            <li key={highlight.id}>
+              <button
+                type="button"
+                onClick={() =>
+                  open(
+                    tabs.some(([id]) => id === highlight.targetTab)
+                      ? highlight.targetTab
+                      : "events",
+                  )
+                }
+                className={toneClass(highlightTone(highlight))}
+              >
+                {highlight.title}
+              </button>
+              {highlight.summary && highlight.summary !== highlight.title && (
+                <p>{highlight.summary}</p>
               )}
-            </section>
-          )}
-          {detail?.mode === "DIRECTION" && (
-            <section
-              className="op-v2-direction-detail"
-              aria-label="方向研究详情"
-            >
-              <h3>{directionLabel ?? board.direction.label}</h3>
-              {![
-                ...board.direction.supports,
-                ...board.direction.counterFactors,
-              ].some((row) => row.summary === board.direction.summary) && (
-                <p>{board.direction.summary}</p>
-              )}
-              <h3>支持依据</h3>
-              {board.direction.supports.length ? (
-                board.direction.supports.map((row, index) => (
-                  <div key={index}>
-                    <p>{row.summary}</p>
-                    <small>
-                      {stateLabel(row.state)} ·{" "}
-                      {row.evidenceIds
-                        .map((id) => evidence(id).label)
-                        .join("、")}
-                    </small>
-                  </div>
-                ))
-              ) : (
-                <p>尚无足够证据列出支持因素。</p>
-              )}
-              <h3>逆风与反方条件</h3>
-              {board.direction.counterFactors.length ? (
-                board.direction.counterFactors.map((row, index) => (
-                  <div key={index}>
-                    <p>{row.summary}</p>
-                    <small>{stateLabel(row.state)}</small>
-                  </div>
-                ))
-              ) : (
-                <p>尚未形成独立反方结论。</p>
-              )}
-              <h3>当前规则条件</h3>
-              {board.direction.failedConditions?.length ? (
-                board.direction.failedConditions.map((condition) => (
-                  <div key={condition.id}>
-                    <strong>{condition.label}</strong>
-                    <p>{condition.reason}</p>
-                  </div>
-                ))
-              ) : (
-                <p>未列出已核实但尚未满足的规则；不代表完整建仓资格已通过。</p>
-              )}
-              <h3>相关指数</h3>
-              {(board.direction.relatedIndexIds ?? []).map((id) => {
-                const index = data.marketEvidence?.find(
-                  (index) => index.indexId === id,
-                );
-                return index ? (
-                  <button
-                    type="button"
-                    key={id}
-                    disabled={!onIndexSelect}
-                    onClick={() => {
-                      setDetail(null);
-                      onIndexSelect?.(id);
-                    }}
-                  >
-                    研究{index.label}
-                  </button>
-                ) : null;
-              })}
-              <h3>进一步研究</h3>
-              {board.direction.recommendedChecks.map((check) => (
-                <p key={check}>{check}</p>
-              ))}
-              <p>{board.direction.nextStep}</p>
-              {!!board.direction.blockerIds?.length && (
-                <button type="button" onClick={() => open({ mode: "DATA" })}>
-                  查看研究限制
-                </button>
-              )}
-            </section>
-          )}
-          {detail?.mode === "DATA" && (
-            <section aria-label="研究限制分组">
-              <div className="op-v2-table-scroll">
-                <table className="op-v2-limitations">
-                  <thead>
-                    <tr>
-                      <th>受限类型</th>
-                      <th>具体项目</th>
-                      <th>影响</th>
-                      <th>处理责任</th>
-                      <th>详情</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groups.map((group) => (
-                      <tr key={group.id}>
-                        <th scope="row">{group.label}</th>
-                        <td>{group.summary}</td>
-                        <td>{group.impact}</td>
-                        <td>{ownerLabels[group.owner] ?? "相关数据服务"}</td>
-                        <td>
-                          <button
-                            type="button"
-                            aria-label={`${groupId === group.id ? "收起" : "展开"}${group.label}`}
-                            aria-expanded={groupId === group.id}
-                            onClick={() =>
-                              setGroupId(groupId === group.id ? null : group.id)
-                            }
-                          >
-                            查看
-                            {group.itemIds.length
-                              ? `（${group.itemIds.length}）`
-                              : ""}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {activeGroup && (
-                <section
-                  className="op-v2-group-children"
-                  aria-label={`${activeGroup.label}受限项目`}
+              {highlight.impact && highlight.impact !== highlight.summary && (
+                <p
+                  className={
+                    highlightTone(highlight) === "RED"
+                      ? "op-critical-impact"
+                      : undefined
+                  }
                 >
-                  <h3>{activeGroup.label}</h3>
-                  {items
-                    .filter(
-                      (item) =>
-                        dataIssue(item) &&
-                        activeGroup.itemIds.includes(item.id),
-                    )
-                    .map(renderIssue)}
-                  {!activeGroup.itemIds.length && (
-                    <p>未列出独立受限事项，不代表当前证据已完整评估。</p>
+                  {highlight.impact}
+                </p>
+              )}
+              {highlight.asOf && (
+                <small>
+                  依据期：
+                  {/^\d{4}-\d{2}$/.test(highlight.asOf)
+                    ? monthLabel(highlight.asOf)
+                    : timeLabel(highlight.asOf)}
+                </small>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="op-muted op-daily-empty">
+          当前暂无足够证据列出投资重点；可展开查看已采集事实，个人风险仍需独立核查。
+        </p>
+      )}
+      {expanded && (
+        <div id={panelId} className="op-daily-expanded">
+          <nav
+            role="tablist"
+            aria-label="投资观察分类"
+            className="op-v2-topic-nav"
+          >
+            {tabs.map(([id, label], i) => (
+              <button
+                key={id}
+                id={`${panelId}-${id}`}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                aria-controls={`${panelId}-content`}
+                tabIndex={tab === id ? 0 : -1}
+                onClick={() => open(id)}
+                onKeyDown={(event) => {
+                  const offset =
+                    event.key === "ArrowRight"
+                      ? 1
+                      : event.key === "ArrowLeft"
+                        ? -1
+                        : 0;
+                  if (!offset && event.key !== "Home" && event.key !== "End")
+                    return;
+                  event.preventDefault();
+                  const next =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? tabs.length - 1
+                        : (i + offset + tabs.length) % tabs.length;
+                  open(tabs[next][0]);
+                  (
+                    event.currentTarget.parentElement?.querySelectorAll(
+                      "button",
+                    )[next] as HTMLButtonElement | undefined
+                  )?.focus();
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          <div
+            role="tabpanel"
+            id={`${panelId}-content`}
+            aria-labelledby={`${panelId}-${tab}`}
+            className="op-research-topic-body"
+          >
+            {tab === "events" && (
+              <>
+                <DailyResearchReport
+                  data={data.dailyResearch}
+                  directions={directions}
+                  onDirectionSelect={onDirectionSelect}
+                />
+                {topics
+                  .find((topic) => topic.id === "research-global")
+                  ?.render()}
+                {items.filter((item) => !dataIssue(item)).map(renderIssue)}
+              </>
+            )}
+            {tab === "macro" &&
+              topics.find((topic) => topic.id === "research-macro")?.render()}
+            {tab === "direction" && (
+              <>
+                <section
+                  className="op-v2-direction-detail"
+                  aria-label="方向研究详情"
+                >
+                  <h3>{directionLabel ?? board.direction.label}</h3>
+                  {![
+                    ...board.direction.supports,
+                    ...board.direction.counterFactors,
+                  ].some((row) => row.summary === board.direction.summary) && (
+                    <p>{board.direction.summary}</p>
+                  )}
+                  <h3>支持依据</h3>
+                  {board.direction.supports.length ? (
+                    board.direction.supports.map((row, index) => (
+                      <div key={index}>
+                        <p>{row.summary}</p>
+                        <small>
+                          {stateLabel(row.state)} ·{" "}
+                          {row.evidenceIds
+                            .map((id) => evidence(id).label)
+                            .join("、")}
+                        </small>
+                      </div>
+                    ))
+                  ) : (
+                    <p>尚无足够证据列出支持因素。</p>
+                  )}
+                  <h3>逆风与反方条件</h3>
+                  {board.direction.counterFactors.length ? (
+                    board.direction.counterFactors.map((row, index) => (
+                      <div key={index}>
+                        <p>{row.summary}</p>
+                        <small>{stateLabel(row.state)}</small>
+                      </div>
+                    ))
+                  ) : (
+                    <p>尚未形成独立反方结论。</p>
+                  )}
+                  <h3>当前规则条件</h3>
+                  {board.direction.failedConditions?.length ? (
+                    board.direction.failedConditions.map((condition) => (
+                      <div key={condition.id}>
+                        <strong>{condition.label}</strong>
+                        <p>{condition.reason}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <p>
+                      未列出已核实但尚未满足的规则；不代表完整建仓资格已通过。
+                    </p>
+                  )}
+                  <h3>相关指数</h3>
+                  {(board.direction.relatedIndexIds ?? []).map((id) => {
+                    const index = data.marketEvidence?.find(
+                      (index) => index.indexId === id,
+                    );
+                    return index ? (
+                      <button
+                        type="button"
+                        key={id}
+                        disabled={!onIndexSelect}
+                        onClick={() => {
+                          open("direction", false);
+                          onIndexSelect?.(id);
+                        }}
+                      >
+                        研究{index.label}
+                      </button>
+                    ) : null;
+                  })}
+                  <h3>进一步研究</h3>
+                  {board.direction.recommendedChecks.map((check) => (
+                    <p key={check}>{check}</p>
+                  ))}
+                  <p>{board.direction.nextStep}</p>
+                  {!!board.direction.blockerIds?.length && (
+                    <button type="button" onClick={() => open("quality")}>
+                      查看研究限制
+                    </button>
                   )}
                 </section>
-              )}
-              <footer className="op-research-collection">
-                <p>
-                  最近采集记录：
-                  {board.dataStatus.collectedAt
-                    ? timeLabel(board.dataStatus.collectedAt)
-                    : "未检测到执行记录"}{" "}
-                  · 下次计划：
-                  {board.dataStatus.nextCheckAt
-                    ? timeLabel(board.dataStatus.nextCheckAt)
-                    : "待确认"}
-                </p>
-                <small>
-                  实际记录与计划不代表采集任务此刻在线；分组不代表同一故障根因。
-                </small>
-                <small>
-                  研究版本：{board.dataStatus.methodVersions.join(" · ")}
-                </small>
-                {board.dataStatus.adminAction && (
-                  <div className="op-v2-admin-action">
-                    {renderAction(board.dataStatus.adminAction, true)}
+                {topics
+                  .find((topic) => topic.id === "research-market")
+                  ?.render()}
+                {topics
+                  .find((topic) => topic.id === "research-strategy")
+                  ?.render()}
+                {!!data.decision?.actions?.length && (
+                  <div className="op-research-actions">
+                    {data.decision.actions.map((action) => (
+                      <span key={action.type}>{renderAction(action)}</span>
+                    ))}
                   </div>
                 )}
-              </footer>
-            </section>
-          )}
-          {detail?.mode === "EVIDENCE" && (
-            <section aria-label="研究依据">
-              <nav className="op-v2-topic-nav" aria-label="研究专题">
-                {topics.map((topic) => (
-                  <button
-                    type="button"
-                    key={topic.id}
-                    aria-pressed={topicId === topic.id}
-                    onClick={() =>
-                      setTopicId(topicId === topic.id ? null : topic.id)
-                    }
-                  >
-                    {topic.label}
-                  </button>
-                ))}
-              </nav>
-              {activeTopic ? (
-                <div className="op-research-topic-body">
-                  {activeTopic.render()}
-                  {activeTopic.id === "research-strategy" && (
-                    <div className="op-research-actions">
-                      {data.decision?.actions?.map((action) => (
-                        <span key={action.type}>{renderAction(action)}</span>
-                      ))}
-                    </div>
+              </>
+            )}
+            {tab === "quality" && (
+              <>
+                <section aria-label="研究限制分组">
+                  <div className="op-v2-table-scroll">
+                    <table className="op-v2-limitations">
+                      <thead>
+                        <tr>
+                          <th>受限类型</th>
+                          <th>具体项目</th>
+                          <th>影响</th>
+                          <th>处理责任</th>
+                          <th>详情</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groups.map((group) => (
+                          <tr key={group.id}>
+                            <th scope="row">{group.label}</th>
+                            <td>{group.summary}</td>
+                            <td>{group.impact}</td>
+                            <td>
+                              {ownerLabels[group.owner] ?? "相关数据服务"}
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                aria-label={`${groupId === group.id ? "收起" : "展开"}${group.label}`}
+                                aria-expanded={groupId === group.id}
+                                onClick={() =>
+                                  setGroupId(
+                                    groupId === group.id ? null : group.id,
+                                  )
+                                }
+                              >
+                                查看
+                                {group.itemIds.length
+                                  ? `（${group.itemIds.length}）`
+                                  : ""}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {activeGroup && (
+                    <section
+                      className="op-v2-group-children"
+                      aria-label={`${activeGroup.label}受限项目`}
+                    >
+                      <h3>{activeGroup.label}</h3>
+                      {items
+                        .filter(
+                          (item) =>
+                            dataIssue(item) &&
+                            activeGroup.itemIds.includes(item.id),
+                        )
+                        .map(renderIssue)}
+                      {!activeGroup.itemIds.length && (
+                        <p>未列出独立受限事项，不代表当前证据已完整评估。</p>
+                      )}
+                    </section>
                   )}
-                </div>
-              ) : (
-                <p>选择一个研究专题查看实际证据、历史与来源。</p>
-              )}
-            </section>
-          )}
-          {detail?.mode === "TRACKING" && renderTracking()}
+                  <footer className="op-research-collection">
+                    <p>
+                      最近采集记录：
+                      {board.dataStatus.collectedAt
+                        ? timeLabel(board.dataStatus.collectedAt)
+                        : "未检测到执行记录"}{" "}
+                      · 下次计划：
+                      {board.dataStatus.nextCheckAt
+                        ? timeLabel(board.dataStatus.nextCheckAt)
+                        : "待确认"}
+                    </p>
+                    <small>
+                      实际记录与计划不代表采集任务此刻在线；分组不代表同一故障根因。
+                    </small>
+                    <small>
+                      研究版本：{board.dataStatus.methodVersions.join(" · ")}
+                    </small>
+                    {board.dataStatus.adminAction && (
+                      <div className="op-v2-admin-action">
+                        {renderAction(board.dataStatus.adminAction, true)}
+                      </div>
+                    )}
+                  </footer>
+                </section>
+              </>
+            )}
+          </div>
         </div>
-      </Dialog>
+      )}
     </section>
   );
 }

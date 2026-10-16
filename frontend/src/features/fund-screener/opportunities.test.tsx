@@ -746,9 +746,7 @@ it("starts board tracking only on a click with the full selected identity", asyn
   );
   await screen.findByRole("heading", { name: "市场环境与研究重点" });
   expect(api.setMonitor).not.toHaveBeenCalled();
-  await user.click(
-    await screen.findByRole("button", { name: "跟踪当前研究条件" }),
-  );
+  await user.click(await screen.findByRole("button", { name: "跟踪研究条件" }));
   await waitFor(() =>
     expect(api.setMonitor).toHaveBeenCalledWith({
       directionId: "a-share:broad",
@@ -761,12 +759,36 @@ it("starts board tracking only on a click with the full selected identity", asyn
   );
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "跟踪当前研究条件" }),
-    ).toBeDisabled(),
+      screen.getByRole("button", { name: "停止跟踪研究条件" }),
+    ).toBeEnabled(),
   );
   expect(
     screen.getByRole("button", { name: "停止跟踪研究条件" }),
   ).toBeInTheDocument();
+});
+
+it("offers tracking and notices directly beside the current target without opening the overview", async () => {
+  const response = researchBoardResponse();
+  api.opportunity.mockResolvedValue({
+    ...response,
+    researchBoard: {
+      ...response.researchBoard,
+      methodVersion: "research-board-v2",
+    },
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  const target = await screen.findByRole("complementary", { name: "研究诊断" });
+  expect(
+    await within(target).findByRole("button", { name: "跟踪研究条件" }),
+  ).toBeInTheDocument();
+  const overview = await screen.findByRole("region", { name: "今日投资观察" });
+  expect(
+    within(overview).queryByRole("button", { name: /跟踪/ }),
+  ).not.toBeInTheDocument();
+  expect(api.setMonitor).not.toHaveBeenCalled();
 });
 
 function twoFundCandidates(
@@ -964,7 +986,7 @@ it("selects a related index from v2 direction details and clears the previous fu
     <FundScreenerPage />,
     "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&page=2&macroMonths=60",
   );
-  await screen.findByRole("heading", { name: "市场环境与投资关注" });
+  await screen.findByRole("button", { name: /今日投资观察/ });
   expect(
     screen.getByRole("navigation", { name: "市场与方向" }),
   ).toBeInTheDocument();
@@ -972,7 +994,8 @@ it("selects a related index from v2 direction details and clears the previous fu
     screen.queryByRole("button", { name: "查看驱动与风险⌄" }),
   ).not.toBeInTheDocument();
   expect(screen.queryByText(/当前研究：/)).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "查看方向关联事项" }));
+  await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
+  await user.click(screen.getByRole("tab", { name: "当前方向" }));
   await user.click(screen.getByRole("button", { name: "研究中证A500" }));
   await waitFor(() =>
     expect(api.funds).toHaveBeenLastCalledWith(
@@ -990,6 +1013,10 @@ it("selects a related index from v2 direction details and clears the previous fu
   expect(screen.getByLabelText("研究路径")).not.toHaveTextContent("510330");
   expect(screen.getByRole("button", { name: "关注指数" })).toBeDisabled();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
   expect(api.opportunity).toHaveBeenLastCalledWith(
     {
       directionId: "a-share:broad",
@@ -1001,4 +1028,66 @@ it("selects a related index from v2 direction details and clears the previous fu
     },
     expect.anything(),
   );
+});
+
+it("does not apply late tracking or acknowledgement results to a newly selected fund", async () => {
+  let finishMonitor!: (value: { id: string; enabled: boolean }) => void;
+  let finishAck!: (value: { id: string; readAt: string }) => void;
+  api.setMonitor.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishMonitor = resolve;
+      }),
+  );
+  api.ack.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishAck = resolve;
+      }),
+  );
+  const response = researchBoardResponse();
+  api.opportunity.mockImplementation(async (scope) => ({
+    ...response,
+    researchBoard: {
+      ...response.researchBoard,
+      methodVersion: "research-board-v2",
+    },
+    notices: [
+      {
+        id: scope.fundCode === "510330" ? "notice-A" : "notice-B",
+        title: scope.fundCode === "510330" ? "基金A条件" : "基金B条件",
+        summary: "真实条件变化",
+        severity: "INFO",
+        createdAt: "2026-10-16T00:30:00Z",
+        readAt: null,
+      },
+    ],
+  }));
+  twoFundCandidates();
+  const user = userEvent.setup();
+  renderWithSession(
+    <>
+      <FundScreenerPage />
+      <WatchHistoryNavigation />
+    </>,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE",
+  );
+  await user.click(await screen.findByRole("button", { name: "跟踪研究条件" }));
+  await user.click(
+    await screen.findByRole("button", { name: "标记基金A条件为已读" }),
+  );
+  await user.click(screen.getByRole("button", { name: "直接导航基金B" }));
+  expect(
+    await screen.findByRole("button", { name: "标记基金B条件为已读" }),
+  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "跟踪研究条件" })).toBeEnabled();
+  await act(async () => {
+    finishMonitor({ id: "scope-A", enabled: true });
+    finishAck({ id: "notice-A", readAt: "2026-10-16T00:35:00Z" });
+  });
+  expect(
+    screen.getByRole("button", { name: "标记基金B条件为已读" }),
+  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "跟踪研究条件" })).toBeEnabled();
+  expect(screen.queryByText("基金A条件")).not.toBeInTheDocument();
 });

@@ -404,6 +404,7 @@ export function RadarDetails({
   ackPending,
   ackError,
   section,
+  hideTracking = false,
 }: {
   data: OpportunityContext;
   monitorEnabled?: boolean;
@@ -415,6 +416,7 @@ export function RadarDetails({
   ackPending?: string | null;
   ackError?: string;
   section?: "series" | "market" | "strategy" | "monitor";
+  hideTracking?: boolean;
 }) {
   const { radar, decision, portfolio, directionModel } = data;
   const [expandedReasons, setExpandedReasons] = useState<string[]>([]);
@@ -742,47 +744,51 @@ export function RadarDetails({
           )}
         </section>
       )}
-      {show("monitor") && (radar || data.researchBoard) && (
-        <section className="op-radar-monitor" aria-label="站内研究条件跟踪">
-          <h3>站内条件跟踪</h3>
-          <p>显式启用后跟踪当前研究范围；首次建立基线，条件变化在站内显示。</p>
-          <button
-            disabled={!onMonitor || monitorPending || monitorLoading}
-            onClick={() => onMonitor?.(!monitorEnabled)}
-          >
-            {monitorPending
-              ? "保存中…"
-              : monitorEnabled
-                ? "停止跟踪研究条件"
-                : "跟踪研究条件"}
-          </button>
-          {monitorError && <p role="alert">{monitorError}</p>}
-          {!!data.notices?.length && (
-            <div className="op-radar-notices">
-              {data.notices.map((notice) => (
-                <article key={notice.id}>
-                  <strong>{notice.title}</strong>
-                  <p>{notice.summary}</p>
-                  <small>
-                    {timeLabel(notice.createdAt)} ·{" "}
-                    <span>{notice.readAt ? "已读" : "未读"}</span>
-                  </small>
-                  {!notice.readAt && (
-                    <button
-                      aria-label={`标记${notice.title}为已读`}
-                      disabled={!onNoticeAck || ackPending === notice.id}
-                      onClick={() => onNoticeAck?.(notice.id)}
-                    >
-                      {ackPending === notice.id ? "保存中…" : "标记已读"}
-                    </button>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-          {ackError && <p role="alert">{ackError}</p>}
-        </section>
-      )}
+      {!hideTracking &&
+        show("monitor") &&
+        (radar || data.researchBoard || section === "monitor") && (
+          <section className="op-radar-monitor" aria-label="站内研究条件跟踪">
+            <h3>站内条件跟踪</h3>
+            <p>
+              显式启用后跟踪当前研究范围；首次建立基线，条件变化在站内显示。
+            </p>
+            <button
+              disabled={!onMonitor || monitorPending || monitorLoading}
+              onClick={() => onMonitor?.(!monitorEnabled)}
+            >
+              {monitorPending
+                ? "保存中…"
+                : monitorEnabled
+                  ? "停止跟踪研究条件"
+                  : "跟踪研究条件"}
+            </button>
+            {monitorError && <p role="alert">{monitorError}</p>}
+            {!!data.notices?.length && (
+              <div className="op-radar-notices">
+                {data.notices.map((notice) => (
+                  <article key={notice.id}>
+                    <strong>{notice.title}</strong>
+                    <p>{notice.summary}</p>
+                    <small>
+                      {timeLabel(notice.createdAt)} ·{" "}
+                      <span>{notice.readAt ? "已读" : "未读"}</span>
+                    </small>
+                    {!notice.readAt && (
+                      <button
+                        aria-label={`标记${notice.title}为已读`}
+                        disabled={!onNoticeAck || ackPending === notice.id}
+                        onClick={() => onNoticeAck?.(notice.id)}
+                      >
+                        {ackPending === notice.id ? "保存中…" : "标记已读"}
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+            {ackError && <p role="alert">{ackError}</p>}
+          </section>
+        )}
     </div>
   );
 }

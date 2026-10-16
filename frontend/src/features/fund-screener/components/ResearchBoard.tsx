@@ -4,6 +4,7 @@ import type {
   OpportunityContext,
   ResearchAction,
   ResearchIssue,
+  Direction,
 } from "../../../api/investment";
 import { timeLabel } from "../macro-display";
 
@@ -36,6 +37,7 @@ function LegacyResearchBoard({
   onTrack,
   trackingEnabled = false,
   directionLabel,
+  hideTracking = false,
 }: {
   data: OpportunityContext;
   topics: EvidenceTopic[];
@@ -44,6 +46,7 @@ function LegacyResearchBoard({
   onTrack?: () => void;
   trackingEnabled?: boolean;
   directionLabel?: string;
+  hideTracking?: boolean;
 }) {
   const board = data.researchBoard!;
   const [evidenceOpen, setEvidenceOpen] = useState(false);
@@ -92,6 +95,7 @@ function LegacyResearchBoard({
     }
   }
   function renderAction(action: ResearchAction) {
+    if (hideTracking && action.type === "TRACK") return null;
     if (action.type === "VIEW_OPERATIONS" && !canViewOperations)
       return <small>仅管理员可查看运行情况。</small>;
     const route = localRoutes[action.type];
@@ -402,21 +406,23 @@ function LegacyResearchBoard({
           </div>
         )}
       </section>
-      <section className="op-research-tracking">
-        <button
-          type="button"
-          className="op-research-toggle"
-          aria-label="研究条件跟踪与通知"
-          aria-expanded={trackingOpen}
-          onClick={() => setTrackingOpen(!trackingOpen)}
-        >
-          研究条件跟踪与通知
-          {data.notices?.some((n) => !n.readAt)
-            ? `（${data.notices.filter((n) => !n.readAt).length}条未读）`
-            : ""}
-        </button>
-        {trackingOpen && renderTracking()}
-      </section>
+      {!hideTracking && (
+        <section className="op-research-tracking">
+          <button
+            type="button"
+            className="op-research-toggle"
+            aria-label="研究条件跟踪与通知"
+            aria-expanded={trackingOpen}
+            onClick={() => setTrackingOpen(!trackingOpen)}
+          >
+            研究条件跟踪与通知
+            {data.notices?.some((n) => !n.readAt)
+              ? `（${data.notices.filter((n) => !n.readAt).length}条未读）`
+              : ""}
+          </button>
+          {trackingOpen && renderTracking()}
+        </section>
+      )}
     </section>
   );
 }
@@ -431,6 +437,9 @@ export interface ResearchBoardProps {
   directionLabel?: string;
   scopeKey?: string;
   onIndexSelect?: (id: string) => void;
+  directions?: Direction[];
+  onDirectionSelect?: (id: string) => void;
+  hideTracking?: boolean;
 }
 
 export default function ResearchBoard(props: ResearchBoardProps) {

@@ -386,6 +386,24 @@ export interface MarketEvidence {
   asOf: string | null;
 }
 export interface OpportunityContext extends MacroContext {
+  dailyResearch?: DailyResearch | null;
+  researchOverview?: {
+    methodVersion: string;
+    asOf: string | null;
+    highlights: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      summary: string;
+      impact: string;
+      tone: ResearchTone;
+      targetTab: ResearchTab;
+      indexId: string | null;
+      directionIds: string[];
+      sourceIds: string[];
+      asOf?: string | null;
+    }>;
+  } | null;
   researchBoard?: ResearchBoardData | null;
   series?: OpportunitySeries[];
   marketEvidence?: MarketEvidence[];
@@ -482,6 +500,87 @@ export interface OpportunityContext extends MacroContext {
     budgetState?: string;
   } | null;
   notices?: ConditionNotice[];
+}
+export type ResearchTab = "events" | "macro" | "direction" | "quality";
+export interface DailyResearch {
+  methodVersion: string;
+  state:
+    | "NOT_RUN"
+    | "RUNNING"
+    | "READY"
+    | "STALE"
+    | "FAILED"
+    | "UNCERTAIN"
+    | "DISABLED";
+  runId: string | null;
+  scheduledFor: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  asOf: string | null;
+  nextRunAt: string | null;
+  errorClass?: string | null;
+  report: {
+    methodVersion?: string;
+    asOf?: string;
+    summary: string;
+    coverage: Array<{ topic: string; status: string; summary: string }>;
+    sources: Array<{
+      id: string;
+      url: string;
+      title: string;
+      quote: string;
+      publishedDate: string | null;
+      publishedAt: string | null;
+      retrievedAt: string | null;
+      verification: string;
+      contentHash?: string | null;
+    }>;
+    events: Array<{
+      id: string;
+      title: string;
+      summary: string;
+      phase: "PLANNED" | "ANNOUNCED" | "IMPLEMENTED" | "REPORTED" | "OPINION";
+      importance: string;
+      sourceIds: string[];
+      channels: string[];
+      affectedDirectionIds: string[];
+      scenarios: Array<{ condition: string; impact: string; counter: string }>;
+      watchFor: string[];
+      unknowns: string[];
+      marketReaction: "UNVERIFIED";
+      reasoningType: "MODEL_CONDITIONAL";
+      factVerification?: "UNVERIFIED";
+    }>;
+    upcoming: Array<{
+      id: string;
+      title: string;
+      phase: "PLANNED";
+      scheduledDate: string | null;
+      scheduledAt: string | null;
+      sourceIds: string[];
+      affectedDirectionIds: string[];
+      watchFor: string[];
+    }>;
+    energy: Array<{
+      id: string;
+      code: string;
+      label: string;
+      value: number | null;
+      unit: "USD/barrel" | "USD/gallon";
+      frequency: "DAILY" | "WEEKLY";
+      asOf: string | null;
+      sourceUri: string | null;
+      retrievedAt: string | null;
+      publishedAt: null;
+      timeBasis: "OBSERVATION_ONLY";
+      state: "READY" | "STALE";
+      previousValue: number | null;
+      previousDate: string | null;
+      change: number | null;
+      changePct: number | null;
+      sampleCount: number;
+    }>;
+  } | null;
 }
 export interface ConditionNotice {
   id: string;
