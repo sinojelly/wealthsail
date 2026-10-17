@@ -11,6 +11,7 @@ import {
   sourceHref,
   timeLabel,
 } from "../macro-display";
+import { useEvidenceChart } from "./useEvidenceChart";
 
 const states: Record<string, string> = {
   READY: "事实可用",
@@ -168,6 +169,7 @@ export function RadarOverview({
 
 function SeriesHistory({ series }: { series: OpportunitySeries }) {
   const [selected, setSelected] = useState<number | null>(null);
+  const [plotRef, chart] = useEvidenceChart();
   const history = series.history
     .map((p, index) => ({ ...p, index }))
     .filter(
@@ -177,6 +179,8 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
         ["READY", "STALE", "OBSERVED"].includes(p.state),
     );
   if (history.length < 2) return <p>可用历史样本不足，暂不绘制走势。</p>;
+  if (new Set(history.map((point) => point.unit ?? series.unit)).size > 1)
+    return <p>历史单位发生变化，暂不绘制可比较走势。</p>;
   const values = history.map((p) => p.value as number),
     low = Math.min(...values),
     high = Math.max(...values),
@@ -184,10 +188,15 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
   const first = Date.parse(history[0].date),
     last = Date.parse(history.at(-1)!.date);
   const y = (v: number) =>
-    130 - ((v - low + padding) / (high - low + padding * 2)) * 100;
+    chart.bottom -
+    ((v - low + padding) / (high - low + padding * 2)) *
+      (chart.bottom - chart.top);
   const points = history.map((p) => ({
     ...p,
-    x: 52 + ((Date.parse(p.date) - first) / (last - first || 1)) * 278,
+    x:
+      chart.left +
+      ((Date.parse(p.date) - first) / (last - first || 1)) *
+        (chart.right - chart.left),
     y: y(p.value as number),
     basis:
       (p.definitionKey ?? p.metadata?.definitionKey)
@@ -218,12 +227,15 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
     );
   }
   return (
-    <figure className="op-macro-chart op-series-chart">
+    <figure
+      ref={plotRef}
+      className="op-macro-chart op-series-chart op-evidence-plot"
+    >
       <svg
         role="img"
         aria-label={`${series.label} 历史观察`}
-        viewBox="0 0 360 170"
-        height={170}
+        viewBox={`0 0 ${chart.width} ${chart.height}`}
+        height={chart.height}
         width="100%"
       >
         <title>{series.label} 实际观察样本，冲突及口径改变不连接</title>
@@ -232,10 +244,14 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
         </text>
         {[low - padding, (low + high) / 2, high + padding].map((v) => (
           <g key={v}>
-            <text x={46} y={y(v) + 4} textAnchor="end">
+            <text x={chart.left - 6} y={y(v) + 4} textAnchor="end">
               {v.toFixed(2)}
             </text>
-            <path d={`M52 ${y(v)} H330`} stroke="#e2e8f0" fill="none" />
+            <path
+              d={`M${chart.left} ${y(v)} H${chart.right}`}
+              stroke="#e2e8f0"
+              fill="none"
+            />
           </g>
         ))}
         {points.map((p, i) => (
@@ -270,11 +286,15 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
             />
           </g>
         ))}
-        <text x={52} y={156}>
-          {dateLabel(history[0].date)}
+        <text x={chart.left} y={chart.height - 14}>
+          {chart.width < 420
+            ? dateLabel(history[0].date).replace(/^\d+年/, "")
+            : dateLabel(history[0].date)}
         </text>
-        <text x={330} y={156} textAnchor="end">
-          {dateLabel(history.at(-1)!.date)}
+        <text x={chart.right} y={chart.height - 14} textAnchor="end">
+          {chart.width < 420
+            ? dateLabel(history.at(-1)!.date).replace(/^\d+年/, "")
+            : dateLabel(history.at(-1)!.date)}
         </text>
       </svg>
       <figcaption>
@@ -283,7 +303,8 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
           : series.frequency === "YTD"
             ? "年内累计观察，跨年不连接"
             : "月度实际观察样本"}{" "}
-        · {history.length} 个可绘制样本
+        · {history.length} 个可绘制样本 · {dateLabel(history[0].date)} 至{" "}
+        {dateLabel(history.at(-1)!.date)}
       </figcaption>
       <p role="status" aria-label={`${series.label} 历史明细`}>
         {active
@@ -307,77 +328,90 @@ export function SeriesCard({ series }: { series: OpportunitySeries }) {
       ? `${value > 0 ? "+" : ""}${value.toFixed(2)} ${changeUnit}`
       : "暂不可计算";
   return (
-    <article className="op-series-card">
+    <article className="op-series-card op-evidence-card">
       <h3>{series.label}</h3>
       <span className="op-badge">{stateText(series.state)}</span>
-      <p className="op-series-value">
-        {finite(series.value)
-          ? `${metricValue(series.value)} ${series.unit ?? "单位待确认"}`
-          : "—"}
-      </p>
-      <p>
-        {series.frequency === "YTD"
-          ? `累计区间：${accumulationRange(series)}`
-          : `观察期：${series.frequency === "MONTHLY" ? monthLabel(series.asOf) : dateLabel(series.asOf)}`}{" "}
-        ·{" "}
-        {series.frequency === "DAILY"
-          ? "日度"
-          : series.frequency === "YTD"
-            ? "年内累计"
-            : "月度"}
-      </p>
-      {series.state === "PERMISSION_REQUIRED" ? (
-        <p>需要来源授权，当前未自动采集。</p>
-      ) : (
-        <>
-          <p>
-            前一同口径有效值：{number(series.changes.previousValue)}{" "}
-            {series.unit ?? ""}
-          </p>
-          {series.frequency === "YTD" ? (
-            <p>年内累计值，未经核实不计算单月差，也不跨年比较。</p>
-          ) : series.frequency === "MONTHLY" ? (
-            <>
-              <p>连续月变化：{change(series.changes.periodChange)}</p>
-              <p>近3月变化：{change(series.changes.change3Months)}</p>
-              <p>近6月变化：{change(series.changes.change6Months)}</p>
-            </>
-          ) : (
-            <>
-              <p>
-                近5个可比较观察样本：{change(series.changes.change5Samples)}
-              </p>
-              <p>
-                近20个可比较观察样本：{change(series.changes.change20Samples)}
-              </p>
-            </>
-          )}
-          <p>
-            历史中位数：{number(series.changes.median)} · 分位：
-            {finite(series.changes.percentile)
-              ? `${series.changes.percentile.toFixed(2)}%`
-              : "暂不可计算"}
-          </p>
-          <p>
-            统计基于 {series.changes.sampleCount} 个实际
-            {series.frequency === "DAILY" ? "日" : "月"}样本
-          </p>
-          {series.publishedAt ? (
-            <p>实际公布：{timeLabel(series.publishedAt)}</p>
-          ) : (
-            <p>实际公布时刻未确认。</p>
-          )}
-          <p>
-            {series.timeBasis === "RETRIEVAL_ONLY"
-              ? "获取时点可得"
-              : "证据可得时点"}
-            ：{timeLabel(series.availableAt)}；不将观察日午夜视作已公开。
-          </p>
+      <div className="op-evidence-layout">
+        {series.state === "PERMISSION_REQUIRED" ? (
+          <p>暂无获得授权的历史序列。</p>
+        ) : (
           <SeriesHistory series={series} />
-        </>
-      )}
-      <details>
+        )}
+        <div className="op-evidence-facts">
+          <p className="op-series-value">
+            {finite(series.value)
+              ? `${metricValue(series.value)} ${series.unit ?? "单位待确认"}`
+              : "—"}
+          </p>
+          <p>
+            {series.frequency === "YTD"
+              ? `累计区间：${accumulationRange(series)}`
+              : `观察期：${series.frequency === "MONTHLY" ? monthLabel(series.asOf) : dateLabel(series.asOf)}`}{" "}
+            ·{" "}
+            {series.frequency === "DAILY"
+              ? "日度"
+              : series.frequency === "YTD"
+                ? "年内累计"
+                : "月度"}
+          </p>
+          {series.state === "PERMISSION_REQUIRED" ? (
+            <p>需要来源授权，当前未自动采集。</p>
+          ) : (
+            <>
+              <p>
+                前一同口径有效值：{number(series.changes.previousValue)}{" "}
+                {series.unit ?? ""}
+              </p>
+              {series.frequency === "YTD" ? (
+                <p>年内累计值，未经核实不计算单月差，也不跨年比较。</p>
+              ) : series.frequency === "MONTHLY" ? (
+                <>
+                  <p>连续月变化：{change(series.changes.periodChange)}</p>
+                  <p>近3月变化：{change(series.changes.change3Months)}</p>
+                  <p>近6月变化：{change(series.changes.change6Months)}</p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    近5个可比较观察样本：{change(series.changes.change5Samples)}
+                  </p>
+                  <p>
+                    近20个可比较观察样本：
+                    {change(series.changes.change20Samples)}
+                  </p>
+                </>
+              )}
+              <p>
+                历史中位数：{number(series.changes.median)} · 分位：
+                {finite(series.changes.percentile)
+                  ? `${series.changes.percentile.toFixed(2)}%`
+                  : "暂不可计算"}
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+      <details className="op-evidence-metadata">
         <summary>查看{series.label}数据依据</summary>
+        {series.state !== "PERMISSION_REQUIRED" && (
+          <>
+            <p>
+              统计基于 {series.changes.sampleCount} 个实际
+              {series.frequency === "DAILY" ? "日" : "月"}样本
+            </p>
+            {series.publishedAt ? (
+              <p>实际公布：{timeLabel(series.publishedAt)}</p>
+            ) : (
+              <p>实际公布时刻未确认。</p>
+            )}
+            <p>
+              {series.timeBasis === "RETRIEVAL_ONLY"
+                ? "获取时点可得"
+                : "证据可得时点"}
+              ：{timeLabel(series.availableAt)}；不将观察日午夜视作已公开。
+            </p>
+          </>
+        )}
         <p>
           来源：{series.sourceName ?? "待确认"} · 获取：
           {timeLabel(series.retrievedAt)}

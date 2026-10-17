@@ -1,0 +1,127 @@
+.op-evidence-panel,
+.op-evidence-panel > section,
+.op-evidence-detail,
+.op-evidence-card,
+.op-evidence-layout,
+.op-evidence-facts {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.op-evidence-panel {
+  display: grid;
+  gap: 18px;
+}
+.op-evidence-panel .op-compact-metrics {
+  align-items: start;
+}
+.op-evidence-panel .op-compact-metric {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.op-evidence-panel .op-compact-metric > p {
+  margin: 0;
+}
+.op-evidence-panel .op-compact-metric > button {
+  text-align: left;
+  margin-top: 4px;
+}
+.op-evidence-groups {
+  display: grid;
+  gap: 10px;
+}
+.op-evidence-groups > div > button {
+  width: 100%;
+  text-align: left;
+}
+.op-evidence-detail {
+  padding: 16px;
+  border: 1px solid var(--op-line, #dce5ee);
+  border-radius: 10px;
+  background: #fff;
+}
+.op-evidence-detail > .op-series-card {
+  padding: 0;
+  border: 0;
+}
+.op-evidence-card {
+  display: grid;
+  gap: 14px;
+}
+.op-evidence-card > .op-badge {
+  justify-self: start;
+}
+.op-evidence-card .op-evidence-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.op-evidence-card .op-evidence-facts {
+  display: grid;
+  gap: 9px;
+  align-content: start;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.op-evidence-card .op-evidence-facts > h3,
+.op-evidence-card .op-evidence-facts > .op-series-value {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.op-evidence-card .op-evidence-facts > p {
+  margin: 0;
+}
+.op-evidence-card .op-evidence-plot {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+.op-evidence-card .op-evidence-plot svg {
+  width: 100%;
+  height: 280px;
+  display: block;
+  overflow: hidden;
+}
+.op-evidence-card .op-evidence-plot svg text {
+  font-size: 12px;
+  fill: #475569;
+}
+.op-evidence-card .op-evidence-plot figcaption,
+.op-evidence-card .op-evidence-plot > p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--op-muted, #64748b);
+}
+.op-evidence-card .op-evidence-metadata {
+  border-top: 1px solid var(--op-line, #dce5ee);
+  padding-top: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--op-muted, #64748b);
+}
+.op-evidence-card .op-evidence-metadata > summary {
+  cursor: pointer;
+  color: #0f766e;
+}
+.op-evidence-card .op-evidence-metadata[open] {
+  display: block;
+}
+.op-evidence-card .op-evidence-metadata > p,
+.op-evidence-card .op-evidence-metadata > div {
+  margin-top: 8px;
+}
+.op-evidence-card .op-evidence-metadata a {
+  color: #0f766e;
+}
+@media (min-width: 900px) {
+  .op-evidence-detail .op-evidence-layout {
+    grid-template-columns: minmax(0, 60%) minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .op-evidence-detail {
+    padding: 12px;
+  }
+}

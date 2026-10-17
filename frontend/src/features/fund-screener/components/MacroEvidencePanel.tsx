@@ -9,6 +9,29 @@ import {
 import type { MacroItem } from "../macro-display";
 import { SeriesCard } from "./OpportunityRadar";
 import { EnergyObservations } from "./DailyResearchReport";
+import "../macro-evidence.css";
+
+const categories = [
+  { id: "growth", label: "经济增长", codes: ["PMI"] },
+  { id: "inflation", label: "通胀与成本", codes: ["CPI_YOY", "PPI_YOY"] },
+  {
+    id: "credit",
+    label: "利率与信用",
+    codes: [
+      "M2_YOY",
+      "CN_T10",
+      "DR007",
+      "M1_YOY",
+      "TSF_STOCK_YOY",
+      "CORP_MEDLONG_LOANS_YTD",
+    ],
+  },
+  { id: "global", label: "全球风险与市场", codes: [] },
+] as const;
+const categoryFor = (code: string) =>
+  categories.find((category) =>
+    (category.codes as readonly string[]).includes(code),
+  ) ?? categories[3];
 
 export default function MacroEvidencePanel({
   data,
@@ -64,42 +87,8 @@ export default function MacroEvidencePanel({
     })
     .slice(0, 6);
   const remaining = rows.filter((item) => !core.includes(item));
-  const categories = [
-    {
-      id: "growth",
-      label: "增长与通胀",
-      includes: (code: string) => ["PMI", "CPI_YOY", "PPI_YOY"].includes(code),
-    },
-    {
-      id: "credit",
-      label: "利率与信用",
-      includes: (code: string) =>
-        [
-          "M2_YOY",
-          "CN_T10",
-          "DR007",
-          "M1_YOY",
-          "TSF_STOCK_YOY",
-          "CORP_MEDLONG_LOANS_YTD",
-        ].includes(code),
-    },
-    {
-      id: "global",
-      label: "全球市场与能源",
-      includes: (code: string) =>
-        ![
-          "PMI",
-          "CPI_YOY",
-          "PPI_YOY",
-          "M2_YOY",
-          "CN_T10",
-          "DR007",
-          "M1_YOY",
-          "TSF_STOCK_YOY",
-          "CORP_MEDLONG_LOANS_YTD",
-        ].includes(code),
-    },
-  ];
+  const active = rows.find((row) => row.code === selected);
+  const energy = data.dailyResearch?.report?.energy ?? [];
   function compact(row: (typeof rows)[number]) {
     return (
       <article
@@ -110,10 +99,10 @@ export default function MacroEvidencePanel({
         <strong>{row.label}</strong>
         <p>
           {metricValue(row.value, row.code === "PMI" ? 1 : 2)}{" "}
-          {row.value == null ? "" : row.unit}
+          {row.value == null || !Number.isFinite(row.value) ? "" : row.unit}
         </p>
         <small>
-          {row.date} ·{" "}
+          {categoryFor(row.code).label} · {row.date} ·{" "}
           {row.state === "READY" || row.state === "VERIFIED"
             ? "已采集观察"
             : row.state === "STALE"
@@ -130,45 +119,59 @@ export default function MacroEvidencePanel({
           {selected === row.code ? "收起" : "查看"}
           {row.label}完整证据
         </button>
-        {selected === row.code && row.detail()}
       </article>
     );
   }
   return (
-    <>
+    <div className="op-evidence-panel">
       <section aria-label="核心指标">
         <h3>核心指标</h3>
         <div className="op-compact-metrics">{core.map(compact)}</div>
         {!core.length && <p>尚无已采集的核心指标；未知数值不作为零。</p>}
       </section>
-      <section aria-label="其余证据分组">
+      <section className="op-evidence-groups" aria-label="其余证据分组">
         <h3>其余证据</h3>
-        {categories.map((category) => (
-          <div key={category.id}>
-            <button
-              type="button"
-              aria-expanded={group === category.id}
-              onClick={() =>
-                setGroup(group === category.id ? null : category.id)
-              }
-            >
-              {category.label}
-            </button>
-            {group === category.id && (
-              <div className="op-compact-metrics">
-                {remaining
-                  .filter((row) => category.includes(row.code))
-                  .map(compact)}
-                {category.id === "global" && (
-                  <EnergyObservations
-                    rows={data.dailyResearch?.report?.energy}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+        {categories
+          .filter(
+            (category) =>
+              remaining.some(
+                (row) => categoryFor(row.code).id === category.id,
+              ) ||
+              (category.id === "inflation" && energy.length > 0),
+          )
+          .map((category) => (
+            <div key={category.id}>
+              <button
+                type="button"
+                aria-expanded={group === category.id}
+                onClick={() =>
+                  setGroup(group === category.id ? null : category.id)
+                }
+              >
+                {category.label}
+              </button>
+              {group === category.id && (
+                <div className="op-compact-metrics">
+                  {remaining
+                    .filter((row) => categoryFor(row.code).id === category.id)
+                    .map(compact)}
+                  {category.id === "inflation" && (
+                    <EnergyObservations rows={energy} />
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
       </section>
-    </>
+      {active && (
+        <section
+          key={active.code}
+          className="op-evidence-detail"
+          aria-label={`${active.label}证据详情`}
+        >
+          {active.detail()}
+        </section>
+      )}
+    </div>
   );
 }

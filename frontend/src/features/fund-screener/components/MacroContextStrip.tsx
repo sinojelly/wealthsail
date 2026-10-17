@@ -23,9 +23,11 @@ import {
 import ResearchBoard from "./ResearchBoard";
 import MacroEvidencePanel from "./MacroEvidencePanel";
 import { EnergyObservations } from "./DailyResearchReport";
+import { useEvidenceChart } from "./useEvidenceChart";
 
 function HistoricalTrend({ item }: { item: MacroItem }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [plotRef, chart] = useEvidenceChart();
   const history = (item.history ?? []).filter(
     (p) =>
       Number.isFinite(p.value) &&
@@ -57,23 +59,28 @@ function HistoricalTrend({ item }: { item: MacroItem }) {
     yHigh = high + padding;
   const first = Date.parse(history[0].asOf),
     last = Date.parse(history.at(-1)!.asOf);
-  const y = (value: number) => 140 - ((value - yLow) / (yHigh - yLow)) * 110;
+  const y = (value: number) =>
+    chart.bottom -
+    ((value - yLow) / (yHigh - yLow)) * (chart.bottom - chart.top);
   const points = history.map((p) => ({
     ...p,
-    x: 48 + ((Date.parse(p.asOf) - first) / (last - first || 1)) * 292,
+    x:
+      chart.left +
+      ((Date.parse(p.asOf) - first) / (last - first || 1)) *
+        (chart.right - chart.left),
     y: y(p.value),
     month: Number(p.asOf.slice(0, 4)) * 12 + Number(p.asOf.slice(5, 7)),
     sourceKey: p.sourceUri ?? p.source ?? item.sourceUri ?? item.source,
   }));
   const active = points.find((p) => p.asOf === selected);
   return (
-    <figure className="op-macro-chart">
+    <figure ref={plotRef} className="op-macro-chart op-evidence-plot">
       <svg
         role="img"
         aria-label={`${item.label} 历史走势`}
-        viewBox="0 0 360 180"
+        viewBox={`0 0 ${chart.width} ${chart.height}`}
         width="100%"
-        height={180}
+        height={chart.height}
       >
         <title>{item.label} 实际历史样本，缺失月份不连接</title>
         <text x={4} y={15}>
@@ -81,24 +88,28 @@ function HistoricalTrend({ item }: { item: MacroItem }) {
         </text>
         {[yLow, (yLow + yHigh) / 2, yHigh].map((tick) => (
           <g key={tick}>
-            <text x={42} y={y(tick) + 4} textAnchor="end">
+            <text x={chart.left - 6} y={y(tick) + 4} textAnchor="end">
               {tick.toFixed(1)}
             </text>
-            <path d={`M48 ${y(tick)} H340`} stroke="#e2e8f0" fill="none" />
+            <path
+              d={`M${chart.left} ${y(tick)} H${chart.right}`}
+              stroke="#e2e8f0"
+              fill="none"
+            />
           </g>
         ))}
         {benchmark && (
           <>
             <line
               aria-label={`${benchmark.label}：${benchmark.value} ${macroUnit(item)}`}
-              x1={48}
-              x2={340}
+              x1={chart.left}
+              x2={chart.right}
               y1={y(benchmark.value)}
               y2={y(benchmark.value)}
               stroke="#64748b"
               strokeDasharray="4 3"
             />
-            <text x={340} y={y(benchmark.value) - 5} textAnchor="end">
+            <text x={chart.right} y={y(benchmark.value) - 5} textAnchor="end">
               {benchmark.label} {benchmark.value}
             </text>
           </>
@@ -137,10 +148,10 @@ function HistoricalTrend({ item }: { item: MacroItem }) {
             />
           </g>
         ))}
-        <text x={48} y={166}>
+        <text x={chart.left} y={chart.height - 14}>
           {monthLabel(history[0].asOf)}
         </text>
-        <text x={340} y={166} textAnchor="end">
+        <text x={chart.right} y={chart.height - 14} textAnchor="end">
           {monthLabel(history.at(-1)!.asOf)}
         </text>
       </svg>
@@ -183,99 +194,113 @@ function EvidenceCard({ item }: { item: MacroItem }) {
     item.publicationStatus === "CONFIRMED" ||
     (!item.publicationStatus && !!item.publishedAt);
   return (
-    <article className="op-macro-card">
+    <article className="op-macro-card op-evidence-card">
       <strong>{item.label}</strong>
-      <h3>
-        {item.value == null || !Number.isFinite(item.value)
-          ? "—"
-          : `${metricValue(item.value)} ${unit}`.trim()}
-      </h3>
-      <p>连续月变化：{changeLabel(item.periodChange, item)}</p>
-      {item.benchmark && item.value != null && Number.isFinite(item.value) && (
-        <p>
-          {item.benchmark.label}：{metricValue(item.benchmark.value)} {unit} ·
-          相差：
-          {changeLabel(item.value - item.benchmark.value, item)}
-        </p>
-      )}
-      <p className="op-macro-interpretation">
-        {item.interpretation?.summary ?? "已采集事实，经济含义仍需核查。"}
-      </p>
-      <p>数据所属月份：{monthLabel(item.referencePeriod ?? item.asOf)}</p>
-      <p
-        className={`op-macro-state op-macro-state-${item.valueVerification ?? item.state}`}
-      >
-        {valueVerificationLabels[item.valueVerification ?? item.state] ??
-          "数值来源待核对"}
-      </p>
-      {item.state === "STALE" && item.valueVerification && (
-        <p>旧期证据，需更新</p>
-      )}
-      <p>
-        {publicationConfirmed
-          ? `官方实际公布：${timeLabel(item.officialEvidence?.publishedAt ?? item.publishedAt)}`
-          : "发布时间待确认：公布时间未核实，仅展示观察期事实。"}
-      </p>
-      {item.nextRelease?.scheduledAt &&
-      item.nextRelease.status !== "UNKNOWN" ? (
-        <p>
-          下期{monthLabel(item.nextRelease.referencePeriod)}：
-          {timeLabel(item.nextRelease.scheduledAt)} ·{" "}
-          {item.nextRelease.status === "OVERDUE"
-            ? "已过计划，待公告"
-            : "计划，可能调整"}
-          {scheduleUrl && (
-            <>
-              {" "}
-              ·{" "}
-              <a href={scheduleUrl} target="_blank" rel="noreferrer">
-                发布日程来源
-              </a>
-            </>
+      <div className="op-evidence-layout">
+        <HistoricalTrend item={item} />
+        <div className="op-evidence-facts">
+          <h3>
+            {item.value == null || !Number.isFinite(item.value)
+              ? "—"
+              : `${metricValue(item.value, item.code === "PMI" ? 1 : 2)} ${unit}`.trim()}
+          </h3>
+          <p>连续月变化：{changeLabel(item.periodChange, item)}</p>
+          {item.benchmark &&
+            Number.isFinite(item.benchmark.value) &&
+            item.value != null &&
+            Number.isFinite(item.value) && (
+              <p>
+                {item.benchmark.label}：{metricValue(item.benchmark.value)}{" "}
+                {unit} · 相差：
+                {changeLabel(item.value - item.benchmark.value, item)}
+              </p>
+            )}
+          <p className="op-macro-interpretation">
+            {item.interpretation?.summary ?? "已采集事实，经济含义仍需核查。"}
+          </p>
+          <p>数据所属月份：{monthLabel(item.referencePeriod ?? item.asOf)}</p>
+          <p
+            className={`op-macro-state op-macro-state-${item.valueVerification ?? item.state}`}
+          >
+            {valueVerificationLabels[item.valueVerification ?? item.state] ??
+              "数值来源待核对"}
+          </p>
+          {item.state === "STALE" && item.valueVerification && (
+            <p>旧期证据，需更新</p>
           )}
-        </p>
-      ) : (
-        <p>暂无已核实的下期发布日程。</p>
-      )}
-      <HistoricalTrend item={item} />
-      <p>
-        已采集 {item.sampleCount ?? item.history?.length ?? 0} 个历史样本 ·{" "}
-        {item.historyMonths ?? 36} 个月窗口
-      </p>
-      {item.trendState === "GAP" && (
-        <p>历史月份有缺口或口径变化，仅展示实际样本。</p>
-      )}
-      {item.trendState === "INSUFFICIENT" && (
-        <p>历史样本不足，暂不计算变化。</p>
-      )}
-      {stats && (
-        <div className="op-macro-statistics">
-          <p>近3月变化：{changeLabel(stats.change3Months, item)}</p>
-          <p>近6月变化：{changeLabel(stats.change6Months, item)}</p>
-          <p>
-            历史分位：
-            {stats.percentile == null || !Number.isFinite(stats.percentile)
-              ? "暂不可计算"
-              : `${stats.percentile.toFixed(2)}%`}
-          </p>
-          <p>
-            统计基于 {stats.sampleCount} 个实际月样本 ·{" "}
-            {monthLabel(stats.firstPeriod)} 至 {monthLabel(stats.lastPeriod)}
-          </p>
-          {!!stats.missingPeriods.length && (
-            <p>月份间隔：{stats.missingPeriods.map(monthLabel).join("、")}</p>
+          {stats && (
+            <div className="op-macro-statistics">
+              <p>近3月变化：{changeLabel(stats.change3Months, item)}</p>
+              <p>近6月变化：{changeLabel(stats.change6Months, item)}</p>
+              <p>
+                历史分位：
+                {stats.percentile == null || !Number.isFinite(stats.percentile)
+                  ? "暂不可计算"
+                  : `${stats.percentile.toFixed(2)}%`}
+              </p>
+            </div>
+          )}
+          {item.trendState === "GAP" && (
+            <p>历史月份有缺口或口径变化，仅展示实际样本。</p>
+          )}
+          {item.trendState === "INSUFFICIENT" && (
+            <p>历史样本不足，暂不计算变化。</p>
           )}
         </div>
-      )}
-      <button
-        className="op-macro-evidence-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        {open ? "收起" : "查看"}
-        {item.label} 数据依据
-      </button>
-      {open && (
+      </div>
+      <details className="op-evidence-metadata" open={open}>
+        <summary
+          role="button"
+          aria-expanded={open}
+          onClick={(event) => {
+            event.preventDefault();
+            setOpen(!open);
+          }}
+        >
+          {open ? "收起" : "查看"}
+          {item.label} 数据依据
+        </summary>
+        <p>
+          {publicationConfirmed
+            ? `官方实际公布：${timeLabel(item.officialEvidence?.publishedAt ?? item.publishedAt)}`
+            : "发布时间待确认：公布时间未核实，仅展示观察期事实。"}
+        </p>
+        {item.nextRelease?.scheduledAt &&
+        item.nextRelease.status !== "UNKNOWN" ? (
+          <p>
+            下期{monthLabel(item.nextRelease.referencePeriod)}：
+            {timeLabel(item.nextRelease.scheduledAt)} ·{" "}
+            {item.nextRelease.status === "OVERDUE"
+              ? "已过计划，待公告"
+              : "计划，可能调整"}
+            {scheduleUrl && (
+              <>
+                {" "}
+                ·{" "}
+                <a href={scheduleUrl} target="_blank" rel="noreferrer">
+                  发布日程来源
+                </a>
+              </>
+            )}
+          </p>
+        ) : (
+          <p>暂无已核实的下期发布日程。</p>
+        )}
+        <p>
+          已采集 {item.sampleCount ?? item.history?.length ?? 0} 个历史样本 ·{" "}
+          {item.historyMonths ?? 36} 个月窗口
+        </p>
+        {stats && (
+          <div className="op-macro-statistics">
+            <p>
+              统计基于 {stats.sampleCount} 个实际月样本 ·{" "}
+              {monthLabel(stats.firstPeriod)} 至 {monthLabel(stats.lastPeriod)}
+            </p>
+            {!!stats.missingPeriods.length && (
+              <p>月份间隔：{stats.missingPeriods.map(monthLabel).join("、")}</p>
+            )}
+          </div>
+        )}
         <div className="op-macro-evidence">
           <p>
             基础来源：{item.source ?? "未确认"}
@@ -312,7 +337,7 @@ function EvidenceCard({ item }: { item: MacroItem }) {
             <p key={reason}>{reason}</p>
           ))}
         </div>
-      )}
+      </details>
     </article>
   );
 }
@@ -428,6 +453,12 @@ export default function MacroContextStrip({
   const research = !error && !loading ? data?.research : null;
   const readyData = !error && !loading ? data : undefined;
   if (readyData?.researchBoard) {
+    const reportEventIds = new Set(
+      readyData.researchBoard.methodVersion === "research-board-v2"
+        ? (readyData.dailyResearch?.report?.events.map((event) => event.id) ??
+            [])
+        : [],
+    );
     const domestic = new Set([
       "CN_T10",
       "DR007",
@@ -571,7 +602,9 @@ export default function MacroContextStrip({
                   />
                 )}
                 <MacroEvents
-                  events={readyData.events ?? []}
+                  events={(readyData.events ?? []).filter(
+                    (event) => !reportEventIds.has(event.id),
+                  )}
                   state={readyData.eventState}
                 />
               </>
