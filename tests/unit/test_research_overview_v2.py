@@ -121,7 +121,7 @@ def test_useful_summary_identifies_real_condition_and_next_step_with_references(
     assert "尚未满足" in result["summary"]
     assert "MA200" in result["summary"] and "63" in result["summary"]
     assert "hs300" in result["evidenceIds"]
-    item = group(result, "OPPORTUNITIES")["items"][0]
+    item = group(result, "RISKS")["items"][0]
     assert item["stage"] == "INDEX_CONDITION" and item["scope"] == "SELECTION"
     assert "建仓" in result["summary"]
 
@@ -255,3 +255,111 @@ def test_personal_budget_assessment_does_not_use_board_projection_as_observation
     item = overview(board=board)["highlights"][0]
     assert item["scope"] == "HOLDINGS" and item["tone"] == "RED"
     assert item["asOf"] is None  # portfolio observation date is absent from this DTO
+
+
+def test_failed_trend_is_headwind_with_conditions_and_never_an_opportunity():
+    result = overview(evidence=[trend(positive=False)])
+    item = group(result, "RISKS")["items"][0]
+    assert item["kind"] == "INDEX_TREND" and item["tone"] == "ORANGE"
+    assert item["condition"] == "FAILED" and item["resultType"] == "INCONCLUSIVE"
+    assert item["nextValidation"] and item["counterConditions"]
+    assert not group(result, "OPPORTUNITIES")["items"]
+    assert "不预测" in item["impact"] or "不代表" in item["impact"]
+
+
+@pytest.mark.parametrize("state", ["UNKNOWN", "STALE", "UNVERIFIED"])
+def test_unknown_trend_is_gray_and_cannot_retain_a_positive_conclusion(state):
+    evidence = trend()
+    evidence["state"] = state
+    evidence["trend"]["state"] = state
+    evidence["trend"]["distanceMA200"] = None
+    evidence["trend"]["momentum63"] = None
+    result = overview(evidence=[evidence])
+    item = next(row for row in result["highlights"] if row["kind"] == "INDEX_TREND")
+    assert item["tone"] == "GRAY" and item["condition"] == "UNKNOWN"
+    assert item["resultType"] == "INCONCLUSIVE" and item["nextValidation"]
+    assert "无法核验" in result["summary"] and "已满足" not in result["summary"]
+
+
+def test_independent_pe_is_an_observation_not_a_qualified_strategy_candidate():
+    evidence = trend()
+    evidence["valuation"] = {
+        "state": "PARTIAL",
+        "pe": {"state": "READY", "latest": 14.2, "percentile": 60.11},
+    }
+    result = overview(evidence=[evidence])
+    pe = next(row for row in result["highlights"] if row["kind"] == "INDEX_PE")
+    assert pe["resultType"] == "INCONCLUSIVE" and pe["nextValidation"]
+    assert "便宜" not in pe["summary"] and "建仓" not in pe["summary"]
+    assert all(
+        row["resultType"] != "STRATEGY_CANDIDATE" for row in result["highlights"]
+    )
+
+
+def test_high_event_is_a_neutral_clue_with_original_verification_and_counter_scenario():
+    report = daily()
+    report["report"]["events"][0]["watchFor"] = ["核对下一次正式公告"]
+    report["report"]["events"][0]["scenarios"] = [
+        {
+            "condition": "运输恢复",
+            "impact": "成本压力可能减弱",
+            "counter": "库存尚未改善",
+        }
+    ]
+    result = overview(report=report)
+    event = next(row for row in result["highlights"] if row["kind"] == "EVENT")
+    assert event["resultType"] == "LIMITED_CLUE" and event["tone"] == "BLUE"
+    assert event["nextValidation"] == ["核对下一次正式公告"]
+    assert "库存尚未改善" in event["counterConditions"]
+    assert event["scope"] == "GLOBAL" and event["phase"] == "ANNOUNCED"
+    assert event["sourceIds"] == ["source:a"]
+
+
+def test_only_complete_qualification_is_a_strategy_candidate():
+    board = {
+        "items": [
+            {
+                "id": "scope:qualification:entry",
+                "key": "qualification:entry",
+                "category": "OPPORTUNITY",
+                "factVerification": "VERIFIED",
+                "confidence": "VERIFIED",
+                "summary": "完整资格通过。",
+                "impact": "仍需人工复核。",
+                "evidenceIds": ["value", "trend", "portfolio"],
+            }
+        ]
+    }
+    item = overview(board=board)["highlights"][0]
+    assert item["resultType"] == "STRATEGY_CANDIDATE"
+    assert item["nextValidation"] and item["counterConditions"]
+
+
+def test_summary_prioritizes_confirmed_risk_and_headwind_without_losing_global_event():
+    evidence = [trend(positive=False)]
+    board = build(
+        evidence=evidence,
+        decision={"state": "POSITION_REVIEW", "gates": []},
+        portfolio={
+            "state": "READY",
+            "heldSelected": True,
+            "budgetViolation": True,
+            "budgetState": "BLOCKED",
+        },
+    )
+    result = overview(evidence=evidence, board=board, report=daily(count=3))
+    assert result["summary"].startswith("已确认个人预算超限")
+    assert "尚未满足MA200" in result["summary"]
+    assert "全局事件线索" not in result["summary"]
+    assert any(row["kind"] == "EVENT" for row in result["highlights"])
+    assert any(row["kind"] == "INDEX_TREND" for row in result["highlights"])
+    assert all(len(row["items"]) <= 2 for row in result["groups"])
+
+
+def test_explicit_selected_index_controls_summary_instead_of_first_board_trend():
+    result = overview(
+        context={"directionId": "a-share:broad", "indexId": "zz500"},
+        evidence=[trend(positive=False), {**trend("zz500"), "label": "中证500"}],
+    )
+    assert result["summary"].startswith("中证500")
+    assert "沪深300" not in result["summary"]

@@ -105,6 +105,16 @@ async def read_daily_research(conn, now, *, enabled=True):
     )
     report_row = latest if latest and latest.get("status") == "READY" else previous
     today = latest and latest["slot_date"] == stamp.date()
+    today_slot = scheduled_for(stamp)
+    schedule_state = (
+        "DISABLED"
+        if not enabled
+        else "DISPATCHED"
+        if today
+        else "NOT_DUE"
+        if stamp < today_slot
+        else "DUE_NOT_DISPATCHED"
+    )
     state = "STALE" if latest else "NOT_RUN"
     if today:
         state = latest.get("status") or (
@@ -117,6 +127,8 @@ async def read_daily_research(conn, now, *, enabled=True):
     return {
         "methodVersion": METHOD,
         "state": state,
+        "scheduleState": schedule_state,
+        "todayScheduledFor": today_slot,
         "runId": str(latest["run_id"]) if latest else None,
         "scheduledFor": latest["scheduled_for"] if latest else scheduled_for(stamp),
         "startedAt": latest["dispatched_at"] if latest else None,

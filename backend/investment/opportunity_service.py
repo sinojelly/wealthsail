@@ -331,7 +331,7 @@ async def get_context(
         conn, now, enabled=get_settings().daily_research_enabled
     )
     overview = build_research_overview(
-        {**base, "directionId": direction["id"]},
+        {**base, "directionId": direction["id"], "indexId": evaluated_index_id},
         series,
         evidence,
         model,

@@ -390,3 +390,38 @@ async def test_direction_only_fund_uses_its_verified_index_and_retains_notice_sc
     assert [e["indexId"] for e in result["marketEvidence"]] == ["hs300"]
     assert module.decision_context.await_args.kwargs["evaluated_index_id"] == "hs300"
     assert module.decision_context.await_args.kwargs["index_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_overview_receives_actual_selected_index_and_names_its_trend(monkeypatch):
+    module = dependencies(monkeypatch)
+    monkeypatch.setattr(module, "resolve_instrument", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        module,
+        "analysis",
+        AsyncMock(
+            return_value={
+                "state": "STRONG",
+                "asOf": NOW.date().isoformat(),
+                "points": [{"date": NOW.date().isoformat(), "close": 110}],
+                "indicators": {"ma200": 100, "momentum63": 0.05},
+            }
+        ),
+    )
+    actual_overview = module.build_research_overview
+    contexts = []
+
+    def build_overview(context, *args, **kwargs):
+        contexts.append(context)
+        return actual_overview(context, *args, **kwargs)
+
+    monkeypatch.setattr(module, "build_research_overview", build_overview)
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"id": "a500", "name": "中证A500"}
+    conn.fetch.return_value = []
+    result = await module.get_context(
+        conn, "tenant-a", "user-a", index_id="a500", now=NOW
+    )
+    assert contexts[0]["indexId"] == "a500"
+    assert "中证A500" in result["researchOverview"]["summary"]
+    assert "沪深300" not in result["researchOverview"]["summary"]

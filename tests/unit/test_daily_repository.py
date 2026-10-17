@@ -128,3 +128,71 @@ def test_daily_settings_default_off_and_migration_has_unique_dispatch_and_no_run
     assert "TO wealthsail_api,wealthsail_worker" in sql
     assert "GRANT INSERT" in sql
     assert "GRANT UPDATE" not in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hour,minute,latest,enabled,want",
+    [
+        (8, 29, None, True, "NOT_DUE"),
+        (8, 30, None, True, "DUE_NOT_DISPATCHED"),
+        (9, 0, None, True, "DUE_NOT_DISPATCHED"),
+        (9, 0, run(), True, "DISPATCHED"),
+        (9, 0, run(status="FAILED", recorded_at=NOW), True, "DISPATCHED"),
+        (9, 0, run(status="UNCERTAIN", recorded_at=NOW), True, "DISPATCHED"),
+        (9, 0, None, False, "DISABLED"),
+    ],
+)
+async def test_today_schedule_distinguishes_due_time_dispatch_and_disabled(
+    hour, minute, latest, enabled, want
+):
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [latest, None]
+    result = await repository().read_daily_research(
+        conn, NOW.replace(hour=hour, minute=minute), enabled=enabled
+    )
+    assert result["scheduleState"] == want
+    assert result["todayScheduledFor"] == NOW.replace(hour=8, minute=30)
+    assert result["report"] is None
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hour,want", [(7, "NOT_DUE"), (9, "DUE_NOT_DISPATCHED")])
+async def test_old_success_does_not_hide_missing_today_dispatch(hour, want):
+    yesterday = NOW - timedelta(days=1)
+    old = run(
+        slot_date=yesterday.date(),
+        scheduled_for=yesterday.replace(hour=8, minute=30),
+        dispatched_at=yesterday,
+        recorded_at=yesterday,
+        status="READY",
+        payload={"summary": "previous"},
+    )
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [old, old]
+    result = await repository().read_daily_research(conn, NOW.replace(hour=hour))
+    assert result["state"] == "STALE" and result["scheduleState"] == want
+    assert result["todayScheduledFor"] == NOW.replace(hour=8, minute=30)
+    assert result["scheduledFor"] == yesterday.replace(hour=8, minute=30)
+    assert result["reportCompletedAt"] == yesterday
+    assert result["reportSlotDate"] == yesterday.date()
+
+
+@pytest.mark.asyncio
+async def test_schedule_uses_shanghai_day_after_utc_midnight_and_preserves_failed_run():
+    stamp = datetime(2026, 10, 16, 0, 30, tzinfo=timezone.utc)
+    failed = run(
+        scheduled_for=stamp,
+        dispatched_at=stamp,
+        status="FAILED",
+        recorded_at=stamp,
+        error_class="ValueError",
+    )
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [failed, None]
+    result = await repository().read_daily_research(conn, stamp)
+    assert result["scheduleState"] == "DISPATCHED"
+    assert result["todayScheduledFor"] == stamp
+    assert result["state"] == "FAILED" and result["errorClass"] == "ValueError"
+    assert result["reportRunId"] is None and result["reportCompletedAt"] is None

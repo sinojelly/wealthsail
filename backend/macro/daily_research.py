@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.macro.research_board import _current_trend
+
 VERSION = "daily-research-v1"
 PROMPT_VERSION = "daily-research-prompt-v1"
 OVERVIEW_VERSION = "research-overview-v2"
@@ -879,6 +881,10 @@ def build_research_overview(
         next_action=None,
         held=False,
         quality=0,
+        result_type="INCONCLUSIVE",
+        validation=None,
+        counters=None,
+        condition=None,
     ):
         group = group or (
             "RISKS"
@@ -942,6 +948,22 @@ def build_research_overview(
                     "phase": phase,
                     "evidenceIds": sorted(set(refs or [])),
                     "nextAction": action,
+                    "resultType": result_type,
+                    "nextValidation": list(
+                        dict.fromkeys(
+                            text.strip()[:2000]
+                            for text in (validation or [])
+                            if isinstance(text, str) and text.strip()
+                        )
+                    )[:8],
+                    "counterConditions": list(
+                        dict.fromkeys(
+                            text.strip()[:2000]
+                            for text in (counters or [])
+                            if isinstance(text, str) and text.strip()
+                        )
+                    )[:8],
+                    **({"condition": condition} if condition else {}),
                     "_group": group,
                 },
             )
@@ -971,6 +993,9 @@ def build_research_overview(
                 refs=item.get("evidenceIds"),
                 next_action=item.get("nextAction"),
                 held=True,
+                result_type="CONFIRMED_RISK",
+                validation=["核对真实持仓敞口和风险限额。"],
+                counters=["预算核查恢复有效且未超限后，重新评估风险状态。"],
             )
         elif key == "qualification:entry" and item.get("category") == "OPPORTUNITY":
             add(
@@ -984,23 +1009,38 @@ def build_research_overview(
                 stage="EXECUTION_CONDITION",
                 refs=item.get("evidenceIds"),
                 next_action=item.get("nextAction"),
+                result_type="STRATEGY_CANDIDATE",
+                validation=["人工复核完整研究依据、产品适用性和个人风险。"],
+                counters=["任何必要资格失效或个人预算变化时重新核查。"],
             )
         elif key.startswith("trend:"):
             index = current.get(key.removeprefix("trend:"))
-            if index:
+            if index and _current_trend(index):
+                condition = item.get("condition", "UNKNOWN")
                 add(
-                    2,
+                    1 if condition == "FAILED" else 2,
                     item["id"],
                     "INDEX_TREND",
                     index.get("label", index["indexId"]) + "趋势条件",
                     item["summary"] + f"观察日期：{index.get('asOf') or '未提供'}。",
-                    item["impact"],
-                    tone="GREEN" if item.get("condition") == "PASSED" else "BLUE",
+                    item["impact"] + "条件不满足不代表未来必然下跌。",
+                    tone="GREEN"
+                    if condition == "PASSED"
+                    else "ORANGE"
+                    if condition == "FAILED"
+                    else "GRAY",
                     index=index["indexId"],
                     as_of=index.get("asOf"),
                     refs=item.get("evidenceIds"),
                     next_action=item.get("nextAction"),
                     held=item.get("holdingRelevance") == "HELD",
+                    group="RISKS" if condition == "FAILED" else "OPPORTUNITIES",
+                    result_type="LIMITED_CLUE"
+                    if condition == "PASSED"
+                    else "INCONCLUSIVE",
+                    condition=condition,
+                    validation=["核对MA200偏离与63期动量能否同时为正。"],
+                    counters=["趋势条件改善仍需核对估值、盈利、基金质量和个人风险。"],
                 )
         elif item.get("category") in {"RISK", "CHANGE"} and item.get("severity") in {
             "MEDIUM",
@@ -1043,6 +1083,9 @@ def build_research_overview(
                 refs=references,
                 next_action=item.get("nextAction"),
                 held=item.get("holdingRelevance") == "HELD",
+                result_type="LIMITED_CLUE",
+                validation=["用后续同口径事实核对条件变化及其研究影响。"],
+                counters=["单期变化不能证明持续改善或资产价格因果。"],
             )
     report = (daily_record or {}).get("report") or {}
     report_at = _stamp(report.get("asOf") or (daily_record or {}).get("asOf"))
@@ -1093,7 +1136,7 @@ def build_research_overview(
                 else "来源日期未完整核对。"
             )
             add(
-                1 if event.get("importance") == "HIGH" else 2,
+                2 if event.get("importance") == "HIGH" else 3,
                 event["id"],
                 "EVENT",
                 event["title"],
@@ -1111,6 +1154,14 @@ def build_research_overview(
                 phase=event.get("phase"),
                 refs=refs,
                 quality=0 if checked else 1,
+                result_type="LIMITED_CLUE",
+                validation=event.get("watchFor") or ["核对后续正式进展及资产传导。"],
+                counters=[
+                    scenario.get("counter")
+                    for scenario in event.get("scenarios", [])
+                    if isinstance(scenario, dict)
+                ]
+                or ["原文核对不能证明资产影响或市场因果。"],
             )
         for plan in report.get("upcoming", []):
             refs = plan.get("sourceIds") or []
@@ -1147,8 +1198,27 @@ def build_research_overview(
                 else "GLOBAL",
                 phase="PLANNED",
                 refs=refs,
+                result_type="LIMITED_CLUE",
+                validation=["核对实际公布、时间调整及与事前预期的可比性。"],
+                counters=["日程可能调整，计划不能作为已发生事实。"],
             )
     for index in current.values():
+        if not _current_trend(index):
+            add(
+                3,
+                _identity("trend-unknown", index["indexId"]),
+                "INDEX_TREND",
+                index.get("label", index["indexId"]) + "趋势条件",
+                "当前趋势证据无法核验，不能判断MA200与63期动量条件是否满足。",
+                "缺失、陈旧或未核验的趋势不构成风险解除或策略通过。",
+                tone="GRAY",
+                index=index["indexId"],
+                as_of=index.get("asOf"),
+                refs=[index["indexId"]],
+                condition="UNKNOWN",
+                validation=["补齐当前有效且同口径的MA200与63期动量证据。"],
+                counters=["证据尚不可用，不能沿用过去的正趋势结论。"],
+            )
         if index.get("state") in {
             "STALE",
             "UNVERIFIED",
@@ -1181,6 +1251,8 @@ def build_research_overview(
             index=index["indexId"],
             as_of=index.get("asOf"),
             refs=[index["indexId"]],
+            validation=["核对可比估值历史、PB、盈利及完整研究资格。"],
+            counters=["独立PE或历史分位不能单独证明完整估值优势或建仓价值。"],
         )
     for row in context.get("items", []):
         plan = row.get("nextRelease") or {}
@@ -1208,10 +1280,14 @@ def build_research_overview(
             phase="PLANNED",
             as_of=stamp,
             refs=[row.get("code")],
+            result_type="LIMITED_CLUE",
+            validation=["实际公布后核对数值、所属期及与事前预期的可比性。"],
+            counters=["发布日程可能调整，预期差和市场因果仍未知。"],
         )
     grouped = {key: [] for key in ("RISKS", "OPPORTUNITIES", "HOLDINGS", "UPCOMING")}
     seen = set()
-    for _, row in sorted(candidates, key=lambda pair: pair[0]):
+    ordered = [row for _, row in sorted(candidates, key=lambda pair: pair[0])]
+    for row in ordered:
         key = row.pop("_group")
         if row["id"] not in seen and len(grouped[key]) < 2:
             seen.add(row["id"])
@@ -1259,7 +1335,17 @@ def build_research_overview(
             }
         )
     highlights = [row for group in groups for row in group["items"]]
-    summary, summary_refs = _overview_summary(highlights)
+    # The legacy four group quotas must not remove a global event from the
+    # primary stream when confirmed personal risk and a headwind occupy RISKS.
+    for row in ordered:
+        if row["kind"] == "EVENT" and row["scope"] == "GLOBAL":
+            if row["id"] not in seen:
+                highlights.append(row)
+                seen.add(row["id"])
+            break
+    summary, summary_refs = _overview_summary(
+        highlights, index_id=context.get("indexId")
+    )
     return {
         "methodVersion": OVERVIEW_VERSION,
         "asOf": now.isoformat(),
@@ -1270,13 +1356,27 @@ def build_research_overview(
     }
 
 
-def _overview_summary(items):
+def _overview_summary(items, *, index_id=None):
     parts, refs = [], set()
+    items = [
+        row
+        for row in items
+        if not index_id
+        or row["kind"] not in {"INDEX_TREND", "INDEX_PE"}
+        or row["indexId"] == index_id
+    ]
+    items = sorted(
+        items,
+        key=lambda row: (
+            row.get("condition") != "FAILED",
+            row.get("condition") != "PASSED",
+        ),
+    )
     for kind in (
         "PERSONAL_RISK",
-        "EVENT",
         "QUALIFICATION",
         "INDEX_TREND",
+        "EVENT",
         "INDEX_PE",
         "MACRO_CHANGE",
         "UPCOMING",
@@ -1296,10 +1396,12 @@ def _overview_summary(items):
         elif kind == "QUALIFICATION":
             text = "当前已满足规定的完整研究资格，仍需人工复核"
         elif kind == "INDEX_TREND":
-            passed = row["tone"] == "GREEN"
+            passed = row.get("condition") == "PASSED"
             text = row["title"] + (
                 "已满足当前MA200与63期正动量，下一步核查估值、产品及个人条件"
                 if passed
+                else "无法核验MA200与63期动量，需补齐当前有效证据"
+                if row.get("condition") == "UNKNOWN"
                 else "尚未满足MA200与63期正动量，继续观察两项条件能否同时成立"
             )
         elif kind == "INDEX_PE":
@@ -1316,7 +1418,7 @@ def _overview_summary(items):
             text = "下一关键计划“" + row["title"][:60] + "”仍待实际公布"
         parts.append(text)
         refs.update(row.get("evidenceIds") or [])
-        if len(parts) == 3:
+        if len(parts) == 2:
             break
     return (
         ("；".join(parts) + "；有限线索不构成基金建仓结论。")

@@ -31,7 +31,7 @@ def test_positive_or_unmet_trend_points_to_same_actual_condition_not_empty_oppor
         assert fact["targetTab"] == "direction" and fact["indexId"] == "hs300"
         assert fact["id"].endswith(":trend:hs300")
         assert fact["asOf"] == "2026-10-14"
-        assert fact["tone"] == ("GREEN" if positive else "BLUE")
+        assert fact["tone"] == ("GREEN" if positive else "ORANGE")
         assert ("尚未满足" in fact["summary"]) is (not positive)
 
 
