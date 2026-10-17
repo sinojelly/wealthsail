@@ -12,6 +12,36 @@ def module(name):
     return import_module(name)
 
 
+def test_selection_accepts_a_plan_track_but_no_caller_prices():
+    schemas = module("backend.investment.study_schemas")
+    request = schemas.CreateStudyRequest.model_validate(
+        {
+            "originType": "SELECTION",
+            "scope": {"indexId": "hs300"},
+            "planTrack": "LEFT_VALUE",
+        }
+    )
+    assert request.model_dump(by_alias=True)["planTrack"] == "LEFT_VALUE"
+    with pytest.raises(ValidationError):
+        schemas.CreateStudyRequest.model_validate(
+            {
+                "originType": "SELECTION",
+                "scope": {"indexId": "hs300"},
+                "planTrack": "LEFT_VALUE",
+                "entryZoneMin": "1.00",
+            }
+        )
+    with pytest.raises(ValidationError):
+        schemas.CreateStudyRequest.model_validate(
+            {
+                "originType": "DAILY_EVENT",
+                "reportRunId": "00000000-0000-0000-0000-000000000001",
+                "eventId": "public",
+                "planTrack": "LEFT_VALUE",
+            }
+        )
+
+
 def test_study_requests_require_an_actual_origin_and_reject_forged_snapshots():
     schemas = module("backend.investment.study_schemas")
     with pytest.raises(ValidationError):

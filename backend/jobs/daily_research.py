@@ -73,7 +73,9 @@ async def load_public_packet(conn, now, external):
             )
         ):
             result = {"state": "UNVERIFIED"}
-        evidence.append(market_evidence(index, result))
+        row = market_evidence(index, result)
+        row["actionableZones"] = result.get("actionableZones")
+        evidence.append(row)
     directions = [dict(row) for row in await repository.directions(conn)]
     previous = await read_daily_research(conn, now)
     previous["history"] = await read_recent_public_research(conn, now)

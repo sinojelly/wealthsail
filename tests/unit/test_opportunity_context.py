@@ -98,11 +98,9 @@ async def test_context_keeps_actor_and_original_unresolved_fund_scope(monkeypatc
     assert call.args[1:3] == ("tenant-a", "user-a")
     assert call.kwargs["fund_market"] == "HK" and call.kwargs["fund_code"] == "000001"
     assert result["decision"]["state"] == "WAIT"
-    assert len(result["radar"]["questions"]) == 4
-    assert any(
-        i.get("blocker", {}).get("code") == "FUND_MAPPING"
-        for i in result["researchBoard"]["items"]
-    )
+    assert result["selectionState"] == "UNKNOWN"
+    assert result["actionableZones"] == []
+    assert "researchBoard" not in result and "radar" not in result
 
 
 def test_new_opportunity_route_is_authenticated_and_passes_full_selection(monkeypatch):
@@ -269,7 +267,8 @@ async def test_missing_verified_mapping_keeps_radar_and_blocks_fund_qualificatio
     assert (
         "基金指数/方向归属尚待唯一核查" in result["directionModel"]["missingEvidence"]
     )
-    assert len(result["radar"]["questions"]) == 4
+    assert result["actionableZones"][0]["subjectId"] == "hs300"
+    assert result["actionableZones"][0]["orderPriceAvailable"] is False
 
 
 @pytest.mark.asyncio
@@ -393,7 +392,11 @@ async def test_direction_only_fund_uses_its_verified_index_and_retains_notice_sc
 
 
 @pytest.mark.asyncio
-async def test_overview_receives_actual_selected_index_and_names_its_trend(monkeypatch):
+async def test_context_exposes_actual_selected_index_plan_without_legacy_board(
+    monkeypatch,
+):
+    from datetime import timedelta
+
     module = dependencies(monkeypatch)
     monkeypatch.setattr(module, "resolve_instrument", AsyncMock(return_value=None))
     monkeypatch.setattr(
@@ -403,25 +406,32 @@ async def test_overview_receives_actual_selected_index_and_names_its_trend(monke
             return_value={
                 "state": "STRONG",
                 "asOf": NOW.date().isoformat(),
-                "points": [{"date": NOW.date().isoformat(), "close": 110}],
+                "dataQuality": "READY",
+                "retrievedAt": NOW.isoformat(),
+                "source": "https://quotes.test/a500",
+                "points": [
+                    {
+                        "date": (NOW.date() - timedelta(days=29 - i)).isoformat(),
+                        "close": 100 + i % 2,
+                    }
+                    for i in range(30)
+                ],
                 "indicators": {"ma200": 100, "momentum63": 0.05},
             }
         ),
     )
-    actual_overview = module.build_research_overview
-    contexts = []
-
-    def build_overview(context, *args, **kwargs):
-        contexts.append(context)
-        return actual_overview(context, *args, **kwargs)
-
-    monkeypatch.setattr(module, "build_research_overview", build_overview)
     conn = AsyncMock()
     conn.fetchrow.return_value = {"id": "a500", "name": "中证A500"}
     conn.fetch.return_value = []
     result = await module.get_context(
         conn, "tenant-a", "user-a", index_id="a500", now=NOW
     )
-    assert contexts[0]["indexId"] == "a500"
-    assert "中证A500" in result["researchOverview"]["summary"]
-    assert "沪深300" not in result["researchOverview"]["summary"]
+    assert len(result["actionableZones"]) == 1
+    assert result["actionableZones"][0]["subjectId"] == "a500"
+    assert result["actionableZones"][0]["label"] == "中证A500"
+    assert result["actionableZones"][0]["currentPrice"] == "101"
+    assert (
+        "researchOverview" not in result
+        and "researchBoard" not in result
+        and "radar" not in result
+    )

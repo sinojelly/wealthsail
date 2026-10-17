@@ -59,32 +59,52 @@ def gates():
     }
 
 
-def test_candidate_needs_every_gate_and_personal_ownership():
+def test_candidate_tracks_are_independent_of_legacy_gates_and_personal_ownership():
     decision = engine()
-    assert decision.evaluate(gates(), held=False)["state"] == "ENTRY_CANDIDATE"
+    plan = {
+        "tracks": [
+            {"track": "LEFT_VALUE", "state": "CANDIDATE"},
+            {"track": "RIGHT_TREND", "state": "WATCH"},
+        ]
+    }
     for key in gates():
         changed = gates()
         changed[key]["state"] = "UNKNOWN"
-        result = decision.evaluate(changed, held=False)
-        assert result["state"] == "WAIT"
-        assert result["gates"]
-    assert decision.evaluate(gates(), held=None)["state"] == "WAIT"
+        result = decision.evaluate(changed, held=None, actionable_zones=plan)
+        assert result["state"] == "LEFT_VALUE_CANDIDATE"
+        assert result["assessment"]["holdingState"] == "UNKNOWN"
 
 
-def test_unvalidated_synthetic_report_cannot_authorize_candidate():
+def test_missing_real_pit_stays_reference_without_suppressing_market_candidate():
     changed = gates()
     changed["validation"]["sourceMode"] = "SYNTHETIC"
-    assert engine().evaluate(changed, held=False)["state"] == "WAIT"
+    plan = {
+        "tracks": [
+            {"track": "LEFT_VALUE", "state": "WATCH"},
+            {"track": "RIGHT_TREND", "state": "CANDIDATE"},
+        ]
+    }
+    assert (
+        engine().evaluate(changed, held=False, actionable_zones=plan)["state"]
+        == "RIGHT_TREND_CANDIDATE"
+    )
 
 
-def test_confirmed_holding_risk_has_priority_without_implying_trade():
+def test_confirmed_holding_risk_is_separate_from_parallel_market_tracks():
     changed = gates()
     changed["value"]["state"] = "UNKNOWN"
-    assert (
-        engine().evaluate(changed, held=True, budget_violation=True)["state"]
-        == "POSITION_REVIEW"
+    plan = {
+        "tracks": [
+            {"track": "LEFT_VALUE", "state": "CANDIDATE"},
+            {"track": "RIGHT_TREND", "state": "CANDIDATE"},
+        ]
+    }
+    result = engine().evaluate(
+        changed, held=True, budget_violation=True, actionable_zones=plan
     )
-    assert engine().evaluate(changed, held=True)["state"] == "HOLD_REVIEW"
+    assert result["state"] == "BOTH_CANDIDATE"
+    assert result["personalState"] == "POSITION_REVIEW"
+    assert result["assessment"]["holdingState"] == "HELD"
 
 
 @pytest.mark.parametrize(
@@ -412,7 +432,7 @@ async def test_context_preserves_confirmed_notice_budget_without_enabling_candid
     )
     assert result["portfolio"]["noticeBudget"] == 3
     assert result["portfolio"]["silenceMinutes"] == 60
-    assert result["decision"]["state"] == "WAIT"
+    assert result["decision"]["state"] == "INSUFFICIENT"
 
 
 def test_known_revision_changes_proof_hash_but_never_rewrites_earlier_decisions():
@@ -466,8 +486,53 @@ async def test_context_rejects_research_snapshot_retrieved_after_requested_time(
         instrument_id="fund",
         now=now,
     )
-    states = {row["id"]: row["state"] for row in output["decision"]["gates"]}
-    assert states["value"] == states["trend"] == "UNKNOWN"
+    assert output["decision"]["state"] == "INSUFFICIENT"
+    assert all(
+        row["state"] == "INSUFFICIENT"
+        for row in output["decision"]["actionableZones"]["tracks"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_fund_candidate_uses_own_history_without_pb_pit_or_macro_qualification(
+    monkeypatch,
+):
+    from unittest.mock import AsyncMock
+    from backend.investment import decision_repository as repo, service
+    from test_actionable_plan_integration import snapshot, NOW as at
+
+    monkeypatch.setattr(repo, "resolve_instrument", AsyncMock(return_value="fund"))
+    monkeypatch.setattr(repo, "mine_portfolio", AsyncMock(return_value=([], [], None)))
+    monkeypatch.setattr(repo, "latest_validation", AsyncMock(return_value=None))
+    monkeypatch.setattr(repo, "list_notices", AsyncMock(return_value=[]))
+    monkeypatch.setattr(repo, "product_quality", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        service, "analysis", AsyncMock(return_value=snapshot(basis="ETF_HFQ"))
+    )
+    output = await engine().decision_context(
+        object(),
+        "tenant",
+        "actor",
+        direction_id=None,
+        index_id="hs300",
+        instrument_id="fund",
+        market_evidence=[
+            {
+                "indexId": "hs300",
+                "actionableZones": {"subjectId": "hs300", "currentPrice": "4000"},
+            }
+        ],
+        direction_model={
+            "qualificationState": "INCOMPLETE",
+            "missingRequiredEvidence": ["INDEX_EARNINGS"],
+        },
+        now=at,
+    )
+    assert output["decision"]["state"] == "LEFT_VALUE_CANDIDATE"
+    assert output["decision"]["validation"]["state"] == "UNAVAILABLE"
+    assert output["decision"]["actionableZones"]["subjectId"] == "fund"
+    assert output["decision"]["actionableZones"]["currentPrice"] == "101"
+    assert output["decision"]["assessment"]["riskState"] == "UNKNOWN"
 
 
 def test_fixed_rule_can_pass_only_with_executed_switches_and_same_cost_benchmark():
@@ -550,14 +615,14 @@ def test_assessment_keeps_known_holding_separate_from_unknown_risk(
     }
 
 
-def test_legacy_budget_default_and_research_clue_cannot_certify_personal_risk_or_entry():
+def test_research_clue_cannot_certify_personal_risk_or_invent_missing_price_history():
     changed = gates()
     changed["validation"]["state"] = "UNKNOWN"
     result = engine().evaluate(
         changed, held=True, direction_model={"researchState": "PRIORITY_RESEARCH"}
     )
-    assert result["state"] == "HOLD_REVIEW"
-    assert result["marketState"] == "WAIT"
+    assert result["personalState"] == "HOLD_REVIEW"
+    assert result["marketState"] == result["state"] == "INSUFFICIENT"
     assert result["assessment"]["riskState"] == "UNKNOWN"
 
 
@@ -578,55 +643,40 @@ def test_personal_actions_only_navigate_to_real_existing_pages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model,expected",
+    "model",
     [
-        (
-            {
-                "state": "PARTIAL",
-                "qualificationState": "READY",
-                "missingRequiredEvidence": [],
-                "counterFactors": [],
-                "failedConditions": [],
-            },
-            "PASS",
-        ),
-        ({"state": "READY", "missingEvidence": [], "counterFactors": []}, "UNKNOWN"),
-        (
-            {
-                "qualificationState": "READY",
-                "missingRequiredEvidence": ["INDEX_EARNINGS"],
-                "counterFactors": [],
-            },
-            "UNKNOWN",
-        ),
-        (
-            {
-                "qualificationState": "READY",
-                "missingRequiredEvidence": [],
-                "counterFactors": [{"label": "counter"}],
-            },
-            "UNKNOWN",
-        ),
-        (
-            {
-                "qualificationState": "INCOMPLETE",
-                "missingRequiredEvidence": [],
-                "researchState": "PRIORITY_RESEARCH",
-            },
-            "UNKNOWN",
-        ),
-        (
-            {
-                "qualificationState": "BLOCKED",
-                "missingRequiredEvidence": [],
-                "failedConditions": [{"id": "INDEX_TREND"}],
-            },
-            "BLOCKED",
-        ),
+        {
+            "state": "PARTIAL",
+            "qualificationState": "READY",
+            "missingRequiredEvidence": [],
+            "counterFactors": [],
+            "failedConditions": [],
+        },
+        {"state": "READY", "missingEvidence": [], "counterFactors": []},
+        {
+            "qualificationState": "READY",
+            "missingRequiredEvidence": ["INDEX_EARNINGS"],
+            "counterFactors": [],
+        },
+        {
+            "qualificationState": "READY",
+            "missingRequiredEvidence": [],
+            "counterFactors": [{"label": "counter"}],
+        },
+        {
+            "qualificationState": "INCOMPLETE",
+            "missingRequiredEvidence": [],
+            "researchState": "PRIORITY_RESEARCH",
+        },
+        {
+            "qualificationState": "BLOCKED",
+            "missingRequiredEvidence": [],
+            "failedConditions": [{"id": "INDEX_TREND"}],
+        },
     ],
 )
-async def test_macro_gate_uses_full_qualification_not_limited_research_state(
-    monkeypatch, model, expected
+async def test_macro_qualification_is_independent_of_current_price_candidate(
+    monkeypatch, model
 ):
     from unittest.mock import AsyncMock
     from backend.investment import decision_repository as repo
@@ -642,9 +692,13 @@ async def test_macro_gate_uses_full_qualification_not_limited_research_state(
         index_id=None,
         instrument_id=None,
         direction_model=model,
+        market_evidence=[
+            {
+                "indexId": "hs300",
+                "actionableZones": {
+                    "tracks": [{"track": "LEFT_VALUE", "state": "CANDIDATE"}]
+                },
+            }
+        ],
     )
-    assert (
-        next(g["state"] for g in output["decision"]["gates"] if g["id"] == "macro")
-        == expected
-    )
-    assert output["decision"]["state"] == "WAIT"
+    assert output["decision"]["state"] == "LEFT_VALUE_CANDIDATE"

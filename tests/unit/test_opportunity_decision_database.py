@@ -418,7 +418,6 @@ async def test_real_board_version_upgrade_is_baseline_and_ack_does_not_change_ca
 async def test_real_current_calendar_proof_rejects_old_fresh_projection_but_keeps_holding_identity():
     from datetime import date
     from backend.investment.decision import portfolio_summary, evaluate
-    from backend.macro.research_board import confirmed_breach
 
     pool = await create_pool(DSN, min_size=1, max_size=2)
     try:
@@ -485,7 +484,7 @@ async def test_real_current_calendar_proof_rejects_old_fresh_projection_but_keep
                 old["state"] == old["budgetState"] == "UNKNOWN"
                 and decision["assessment"]["riskState"] == "UNKNOWN"
             )
-            assert not confirmed_breach(decision, old)
+            assert decision["assessment"]["riskState"] != "BREACH"
         await snapshot(NOW.date())
         async with tenant_transaction(pool, actor, tenant) as conn:
             navs, positions, _ = await repo.mine_portfolio(conn, tenant, actor, NOW)
@@ -498,6 +497,6 @@ async def test_real_current_calendar_proof_rejects_old_fresh_projection_but_keep
                 portfolio=current,
             )
             assert current["state"] == "READY" and current["budgetState"] == "BLOCKED"
-            assert confirmed_breach(decision, current)
+            assert decision["assessment"]["riskState"] == "BREACH"
     finally:
         await pool.close()

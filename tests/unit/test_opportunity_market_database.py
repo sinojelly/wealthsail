@@ -218,7 +218,7 @@ async def test_actual_actor_context_keeps_two_markets_and_private_notices_withou
             assert len(gold["notices"]) == 1 and ashare["notices"] == []
             assert (
                 gold["portfolio"]["heldSelected"] is None
-                and gold["decision"]["state"] == "WAIT"
+                and gold["decision"]["state"] == "INSUFFICIENT"
             )
             assert (
                 gold["directionModel"]["requiredEvidence"]

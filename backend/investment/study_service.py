@@ -291,6 +291,30 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
             now=now,
         )
         model = context.get("directionModel") or {}
+        selected_plan = None
+        if data.get("planTrack"):
+            selected_plan = (context.get("decision") or {}).get("actionableZones")
+            if not isinstance(selected_plan, dict) or not any(
+                row.get("track") == data["planTrack"]
+                for row in selected_plan.get("tracks", [])
+            ):
+                raise ValidationError_("当前标的没有所选轨道的实际研究计划")
+            fund_scope = bool(scope.get("instrumentId") or scope.get("fundCode"))
+            expected_id = (
+                (scope.get("instrumentId") or scope.get("fundCode"))
+                if fund_scope
+                else scope.get("indexId")
+            )
+            expected_kinds = {"fund", "nav"} if fund_scope else {"index"}
+            if (
+                selected_plan.get("subjectId") != str(expected_id)
+                or selected_plan.get("subjectKind") not in expected_kinds
+            ):
+                raise ValidationError_("研究计划与当前标的不匹配")
+            selected_plan = {
+                **deepcopy(selected_plan),
+                "selectedTrack": data["planTrack"],
+            }
         origin = {
             "originType": "SELECTION",
             "selection": scope,
@@ -300,8 +324,15 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
             "counterFactors": explanation_texts(model.get("counterFactors") or []),
             "watchFor": model.get("missingEvidence") or [],
             "reportAsOf": now.isoformat(),
+            **({"actionablePlan": selected_plan} if selected_plan else {}),
         }
-        origin_key = semantic_hash({"originType": "SELECTION", "scope": scope})
+        origin_key = semantic_hash(
+            {
+                "originType": "SELECTION",
+                "scope": scope,
+                **({"planTrack": data["planTrack"]} if data.get("planTrack") else {}),
+            }
+        )
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtext($1))",
         f"study-create:{tenant_id}:{user_id}:{origin_key}",

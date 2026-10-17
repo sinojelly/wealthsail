@@ -28,7 +28,7 @@ $documentFiles = @(Get-ChildItem -LiteralPath $docsRoot -Filter '*.md' -File)
 $forbiddenPatterns = [ordered]@{
     'unsupported PASS table status' = '\|\s*PASS\s*\|'
     'unsafe shell interpolation example' = 'shell=True'
-    'unsupported 100 percent completion claim' = '100%\s*\S{0,4}'
+    'unsupported 100 percent completion claim' = '(?i)(?<![\d.])100%[ \t]*(?:\u5b8c\u6210|\u901a\u8fc7|\u8986\u76d6|(?:complete(?:d)?|completion|pass(?:ed)?|coverage)\b)|(?:\u5b8c\u6210|\u901a\u8fc7|\u8986\u76d6)(?:\u7387|\u5ea6)?[ \t]*(?:\u4e3a|\u8fbe\u5230|\u5df2\u8fbe)?[ \t]*[:=\uFF1A]?[ \t]*100%|\b(?:complete(?:d)?|completion|pass(?:ed)?|coverage)\b(?:[ \t]+(?:rate|is|was|at|of))*[ \t]*[:=]?[ \t]*100%'
     'hard-coded Brent production value' = 'brent_price\s*='
     'hard-coded WTI production value' = 'wti\s*='
     'hard-coded gold production value' = 'gold_spot\s*='

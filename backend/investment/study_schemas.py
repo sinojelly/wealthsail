@@ -44,10 +44,15 @@ class CreateStudyRequest(_Request):
     )
     scope: StudyScope | None = None
     horizon_days: int = Field(default=30, alias="horizonDays", ge=1, le=365)
+    plan_track: Literal["LEFT_VALUE", "RIGHT_TREND"] | None = Field(
+        default=None, alias="planTrack"
+    )
 
     @model_validator(mode="after")
     def origin(self):
         if self.origin_type == "DAILY_EVENT":
+            if self.plan_track is not None:
+                raise ValueError("a quantitative track requires its own selection")
             if self.report_run_id is None or self.event_id is None:
                 raise ValueError("a READY report and its event are required")
         elif (

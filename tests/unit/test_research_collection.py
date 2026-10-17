@@ -11,7 +11,6 @@ import pytest
 
 from backend.common.database import create_pool
 from backend.macro.market_repository import read_collection, series_context
-from backend.macro.opportunity import build_radar
 
 NOW = datetime(2026, 10, 15, 12, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
 PUBLIC = {"UST_NOMINAL", "UST_REAL", "PBOC_M1", "PBOC_TSF", "PBOC_LOANS"}
@@ -50,16 +49,6 @@ async def test_empty_cancelled_attempt_retains_last_failure_and_does_not_revive_
     ]
     series = series_context(points, NOW, source_results=collection["sourceResults"])
     assert next(i for i in series if i["code"] == "US_T10_REAL")["state"] == "STALE"
-    radar = build_radar(
-        {},
-        series,
-        [],
-        {"id": "gold:physical", "market_id": "gold"},
-        {"state": "WAIT"},
-        {},
-        now=NOW,
-    )
-    assert not any(i["id"] == "rate:US_T10_REAL" for i in radar["changes"])
 
 
 @pytest.mark.asyncio

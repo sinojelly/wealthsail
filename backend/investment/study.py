@@ -216,6 +216,8 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
             public_observation(row) for row in origin.get("observations", [])[:32]
         ],
     }
+    if isinstance(origin.get("actionablePlan"), dict):
+        snapshot["actionablePlan"] = deepcopy(origin["actionablePlan"])
     snapshot["benchmarkIndexId"] = (
         snapshot["scope"].get("indexId")
         if snapshot["scope"].get("indexId") in INDICES

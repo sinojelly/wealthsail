@@ -93,6 +93,30 @@ def test_following_freezes_the_original_public_source_and_does_not_copy_private_
     assert result["unknowns"] == ["实际交付尚未核实"]
 
 
+def test_server_plan_is_frozen_and_survives_later_condition_only_revision():
+    plan = {
+        "subjectKind": "index",
+        "subjectId": "hs300",
+        "priceBasis": "INDEX_POINTS",
+        "selectedTrack": "LEFT_VALUE",
+        "currentPrice": "4000.125",
+        "tracks": [
+            {
+                "track": "LEFT_VALUE",
+                "entryZoneMin": "3900.000",
+                "entryZoneMax": "4000.000",
+                "stopLossPrice": "3800.000",
+            }
+        ],
+    }
+    origin = {"title": "左侧研究", "actionablePlan": plan}
+    result = engine().freeze_hypothesis(origin, now=NOW)
+    plan["tracks"][0]["entryZoneMin"] = "9999"
+    assert result["actionablePlan"]["tracks"][0]["entryZoneMin"] == "3900.000"
+    revised = engine().freeze_hypothesis({**result, "summary": "修改假设"}, now=NOW)
+    assert revised["actionablePlan"] == result["actionablePlan"]
+
+
 @pytest.mark.parametrize(
     "changes",
     [

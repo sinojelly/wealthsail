@@ -428,6 +428,144 @@ async def search(conn, keyword):
     return result[:20]
 
 
+def actionable_plan_for_analysis(result, kind, subject_id, *, label=None, now=None):
+    """Use the snapshot's proven current window, independently of old scores."""
+    from backend.indicators.actionable_zones import compute_actionable_price_plan
+
+    now = now or now_shanghai()
+    points = result.get("points") or []
+    quality = result.get("dataQuality", "UNVERIFIED")
+    usable = quality == "READY"
+    window = result.get("trendWindow") or {}
+    if window and result.get("trendQuality") in {"READY", "INSUFFICIENT"}:
+        try:
+            start, end = (
+                date.fromisoformat(str(window[key])) for key in ("start", "end")
+            )
+            tail = [
+                point
+                for point in points
+                if start <= date.fromisoformat(str(point["date"])[:10]) <= end
+            ]
+            days = [date.fromisoformat(str(point["date"])[:10]) for point in tail]
+            proven = (
+                type(window.get("sampleCount")) is int
+                and window["sampleCount"] == len(tail) > 0
+                and days == sorted(set(days))
+                and days[0] == start
+                and days[-1] == end
+                and end == date.fromisoformat(str(result.get("asOf"))[:10])
+            )
+            if proven and quality not in {"STALE", "UNVERIFIED", "UNAVAILABLE"}:
+                points, usable = tail, True
+        except (ValueError, KeyError, TypeError):
+            usable = False
+    try:
+        observed = date.fromisoformat(str(result.get("asOf"))[:10])
+        retrieved = result.get("retrievedAt")
+        retrieved = (
+            datetime.fromisoformat(retrieved)
+            if isinstance(retrieved, str)
+            else retrieved
+        )
+        usable = bool(
+            usable
+            and result.get("source")
+            and isinstance(retrieved, datetime)
+            and retrieved.tzinfo is not None
+            and retrieved.utcoffset() is not None
+            and retrieved <= now
+            and observed <= now.date()
+            and points
+            and date.fromisoformat(str(points[-1]["date"])[:10]) == observed
+            and all(
+                date.fromisoformat(str(point["date"])[:10]) <= observed
+                for point in points
+            )
+        )
+    except (ValueError, TypeError, KeyError):
+        usable = False
+    valuation = result.get("valuation") or {}
+    pe = (
+        ((result.get("valueEvidence") or {}).get("evidence") or {}).get("pe")
+        or valuation.get("pe")
+        or {}
+    )
+    valuation_config = (result.get("fundamentals") or {}).get("valuationConfig") or {}
+    valuation_source = str(valuation.get("sourceUri") or "").strip()
+    parent_valuation_usable = valuation.get("state") in {"READY", "PARTIAL"} or (
+        valuation.get("state") == "STALE"
+        and (valuation.get("pb") or {}).get("state") == "STALE"
+        and result.get("valuationRequestVerified") is True
+        and pe.get("historyEnd") == result.get("asOf")
+    )
+    pe_current = (
+        parent_valuation_usable
+        and valuation.get("requestedEnd") == result.get("asOf")
+        and pe.get("state") == "READY"
+        and bool(valuation_source)
+        and pe.get("sourceUri") == valuation_source
+        and (
+            valuation_config.get("verified") is True
+            and valuation_config.get("sourceUri") == valuation_source
+            or kind == "index"
+            and valuation.get("provider") == "CSINDEX"
+            and result.get("source") == valuation_source
+        )
+        and (kind != "fund" or result.get("valuationMappingVerified") is True)
+    )
+    plan = compute_actionable_price_plan(
+        points,
+        subject_kind=kind,
+        subject_id=subject_id,
+        label=label,
+        price_basis="INDEX_POINTS"
+        if kind == "index"
+        else result.get("seriesKind") or "UNKNOWN",
+        unit="points"
+        if kind == "index"
+        else result.get("currency") or result.get("unit"),
+        as_of=result.get("asOf"),
+        pe_percentile=pe.get("percentile") if pe_current else None,
+        source_uri=result.get("source"),
+        market=result.get("market"),
+    )
+    plan.update(
+        retrievedAt=_iso(result.get("retrievedAt")),
+        publishedAt=_iso(result.get("publishedAt")),
+        timeBasis=result.get("timeBasis"),
+        inputHash=result.get("inputHash"),
+        historyQuality=quality,
+    )
+    if not usable:
+        reason = "来源、当前观察日或抓取时点尚未核验，未生成当前候选和入场坐标。"
+        for item in plan["tracks"]:
+            item.update(
+                state="INSUFFICIENT",
+                priceState=quality
+                if quality in {"STALE", "CONFLICT", "UNVERIFIED"}
+                else "UNVERIFIED",
+            )
+            for key in (
+                "entryZoneMin",
+                "entryZoneMax",
+                "stopLossPrice",
+                "takeProfitT1",
+                "takeProfitT2",
+            ):
+                item[key] = None
+            item["reasons"].append(reason)
+        plan["orderPriceAvailable"] = False
+    return plan
+
+
+def _analysis_with_plan(result, kind, subject_id):
+    return {
+        **result,
+        "actionableZones": actionable_plan_for_analysis(result, kind, subject_id),
+    }
+
+
 async def analysis(conn, kind, subject_id):
     from backend.market import index_policy
 
@@ -442,22 +580,26 @@ async def analysis(conn, kind, subject_id):
         subject_id,
     )
     if row is None:
-        return {
-            "state": "NOT_COLLECTED",
-            "score": None,
-            "indicators": {},
-            "reasons": [],
-            "points": [],
-            **(
-                {
-                    "indexCollection": await index_policy.read_collection(
-                        conn, subject_id, now_shanghai()
-                    )
-                }
-                if kind == "index"
-                else {}
-            ),
-        }
+        return _analysis_with_plan(
+            {
+                "state": "NOT_COLLECTED",
+                "score": None,
+                "indicators": {},
+                "reasons": [],
+                "points": [],
+                **(
+                    {
+                        "indexCollection": await index_policy.read_collection(
+                            conn, subject_id, now_shanghai()
+                        )
+                    }
+                    if kind == "index"
+                    else {}
+                ),
+            },
+            kind,
+            subject_id,
+        )
     result = row["result"]
     if isinstance(result, str):
         result = json.loads(result)
@@ -466,7 +608,13 @@ async def analysis(conn, kind, subject_id):
         kind == "index"
         and (result.get("collectionPolicy") or {}).get("provider") == "CSINDEX"
     )
-    if result.get("score") is not None or result.get("performance"):
+    has_research_prices = (
+        result.get("score") is not None
+        or bool(result.get("performance"))
+        or result.get("dataQuality") == "READY"
+        or result.get("trendQuality") in {"READY", "INSUFFICIENT"}
+    )
+    if has_research_prices:
         now = now_shanghai()
         cutoff = published_day(now.date(), result.get("publicationHour"), now)
         stored_points = row.get("points") or []
@@ -510,7 +658,7 @@ async def analysis(conn, kind, subject_id):
                     else {}
                 ),
             }
-    if result.get("score") is not None or result.get("performance"):
+    if has_research_prices:
         if kind == "fund":
             governance = await conn.fetchrow(
                 """SELECT i.metadata,
@@ -588,19 +736,24 @@ async def analysis(conn, kind, subject_id):
                             percentile=None,
                         )
             points = row.get("points", [])
-            return {
-                **result,
-                "asOf": _iso(row["as_of"]),
-                "inputHash": row["input_hash"],
-                "source": row["source_uri"],
-                "points": json.loads(points) if isinstance(points, str) else points,
-                "retrievedAt": _iso(row.get("retrieved_at")),
-                "seriesKind": row.get("series_kind"),
-                "indexCollection": collection,
-            }
+            return _analysis_with_plan(
+                {
+                    **result,
+                    "asOf": _iso(row["as_of"]),
+                    "inputHash": row["input_hash"],
+                    "source": row["source_uri"],
+                    "points": json.loads(points) if isinstance(points, str) else points,
+                    "retrievedAt": _iso(row.get("retrieved_at")),
+                    "seriesKind": row.get("series_kind"),
+                    "indexCollection": collection,
+                },
+                kind,
+                subject_id,
+            )
         facts = result.get("fundamentals") or {}
         costs = deepcopy(facts.get("costs") or {"state": "UNAVAILABLE"})
         valuation = deepcopy(facts.get("valuation") or {"state": "UNAVAILABLE"})
+        valuation_request_verified = False
         if costs.get("retrievedAt"):
             retrieved = _macro_timestamp(costs["retrievedAt"], now_shanghai())
             if not now_shanghai() - timedelta(days=45) <= retrieved <= now_shanghai():
@@ -616,29 +769,43 @@ async def analysis(conn, kind, subject_id):
                     now.date(), facts["valuationConfig"].get("publishHour"), now
                 ),
             )
+            valuation_request_verified = (
+                end is not None and valuation.get("requestedEnd") == end.isoformat()
+            )
             if end is None or valuation.get("requestedEnd") != end.isoformat():
                 valuation["state"] = "STALE" if end else "UNVERIFIED"
         if not trusted:
             valuation["state"] = "UNVERIFIED"
             costs["state"] = "UNVERIFIED"
-        result.update(costs=costs, valuation=valuation)
+        result.update(
+            costs=costs,
+            valuation=valuation,
+            valuationRequestVerified=valuation_request_verified,
+        )
         if kind == "fund":
+            result["valuationMappingVerified"] = bool(
+                governance and governance.get("mapping_valid")
+            )
             result["valueEvidence"] = evaluate(
                 valuation,
                 costs,
                 result.get("performance"),
-                mapped=bool(governance and governance.get("mapping_valid")),
+                mapped=result["valuationMappingVerified"],
             )
     points = row.get("points", [])
-    return {
-        **result,
-        "asOf": _iso(row["as_of"]),
-        "inputHash": row["input_hash"],
-        "source": row["source_uri"],
-        "points": json.loads(points) if isinstance(points, str) else points,
-        "retrievedAt": _iso(row.get("retrieved_at")),
-        "seriesKind": row.get("series_kind"),
-    }
+    return _analysis_with_plan(
+        {
+            **result,
+            "asOf": _iso(row["as_of"]),
+            "inputHash": row["input_hash"],
+            "source": row["source_uri"],
+            "points": json.loads(points) if isinstance(points, str) else points,
+            "retrievedAt": _iso(row.get("retrieved_at")),
+            "seriesKind": row.get("series_kind"),
+        },
+        kind,
+        subject_id,
+    )
 
 
 async def enqueue_refresh(conn, tenant_id, body):

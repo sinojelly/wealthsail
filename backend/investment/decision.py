@@ -1,4 +1,4 @@
-"""Fixed research gates and historical point-in-time validation; no orders."""
+"""Independent market tracks, personal risk and historical PIT reference."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 
 from backend.dependencies import now_shanghai
 
-VERSION = "opportunity-decision-v1"
+VERSION = "opportunity-decision-v2"
 PIT_VERSION = "trend-pit-v1"
 PARAMETERS = {
     "minimumSamples": 505,
@@ -21,15 +21,6 @@ PARAMETERS = {
     "maximumDrawdown": 0.35,
     "ma": 200,
     "momentum": 63,
-}
-LABELS = {
-    "value": "价值证据",
-    "trend": "趋势条件",
-    "macro": "宏观与事件",
-    "product": "基金产品质量",
-    "validation": "真实时点样本外验证",
-    "portfolio": "个人风险预算",
-    "tradability": "交易机制",
 }
 
 
@@ -61,38 +52,28 @@ def semantic_hash(value):
 
 
 def evaluate(
-    gates, *, held, budget_violation=False, portfolio=None, direction_model=None
+    gates=None,
+    *,
+    held,
+    budget_violation=False,
+    portfolio=None,
+    direction_model=None,
+    actionable_zones=None,
 ):
-    rows = []
-    for key, label in LABELS.items():
-        gate = dict(gates.get(key) or {})
-        state = gate.get("state", "UNKNOWN")
-        if key == "validation" and (
-            gate.get("sourceMode") != "REAL_PIT"
-            or gate.get("pointInTimeVerified") is not True
-        ):
-            state = "UNKNOWN"
-        if key == "portfolio" and held is None:
-            state = "UNKNOWN"
-        rows.append(
-            {
-                "id": key,
-                "label": label,
-                "state": state
-                if state in {"PASS", "BLOCKED", "UNKNOWN"}
-                else "UNKNOWN",
-                "reason": gate.get("reason")
-                or (
-                    "证据与条件已核查"
-                    if state == "PASS"
-                    else "证据或已确认配置尚不完整"
-                ),
-            }
-        )
-    market_pass = all(
-        row["state"] == "PASS" for row in rows if row["id"] != "portfolio"
+    """Legacy evidence cannot veto a current track or certify personal risk."""
+    tracks = (actionable_zones or {}).get("tracks") or []
+    candidates = {row.get("track") for row in tracks if row.get("state") == "CANDIDATE"}
+    market_state = (
+        "BOTH_CANDIDATE"
+        if {"LEFT_VALUE", "RIGHT_TREND"} <= candidates
+        else "LEFT_VALUE_CANDIDATE"
+        if "LEFT_VALUE" in candidates
+        else "RIGHT_TREND_CANDIDATE"
+        if "RIGHT_TREND" in candidates
+        else "WATCH"
+        if any(row.get("state") == "WATCH" for row in tracks)
+        else "INSUFFICIENT"
     )
-    market_state = "ENTRY_CANDIDATE" if market_pass else "WAIT"
     personal_state = (
         "UNKNOWN"
         if held is None
@@ -102,19 +83,13 @@ def evaluate(
         if held
         else "NOT_HELD"
     )
-    state = (
-        personal_state
-        if personal_state in {"POSITION_REVIEW", "HOLD_REVIEW"}
-        else "ENTRY_CANDIDATE"
-        if personal_state == "NOT_HELD" and all(row["state"] == "PASS" for row in rows)
-        else "WAIT"
-    )
     summary = {
-        "WAIT": "条件尚未完整核查，等待补齐证据。",
-        "ENTRY_CANDIDATE": "规定研究条件均满足，列为建仓研究候选。",
-        "HOLD_REVIEW": "已持有该标的，继续观察并核查条件；这不是自动持有指令。",
-        "POSITION_REVIEW": "已确认个人预算超限，优先复核持仓风险；这不是自动减仓指令。",
-    }[state]
+        "LEFT_VALUE_CANDIDATE": "左侧价值/超跌条件触发，查看同口径研究区间。",
+        "RIGHT_TREND_CANDIDATE": "右侧趋势条件触发，查看同口径研究区间。",
+        "BOTH_CANDIDATE": "左侧与右侧条件同时触发，两条轨道分别保留。",
+        "WATCH": "当前可核验条件尚未触发，继续观察。",
+        "INSUFFICIENT": "当前可用价格或指标不足，等待补齐实际输入。",
+    }[market_state]
     portfolio = portfolio or {}
     research_state = (direction_model or {}).get("researchState")
     if research_state not in {
@@ -138,16 +113,17 @@ def evaluate(
         ):
             risk_state = "CHECKED"
     return {
-        "state": state,
+        "state": market_state,
         "marketState": market_state,
         "personalState": personal_state,
         "summary": summary,
-        "gates": rows,
-        "nextChecks": [
-            row["label"] + "：" + row["reason"]
-            for row in rows
-            if row["state"] != "PASS"
-        ],
+        "gates": [],
+        "nextChecks": list(
+            dict.fromkeys(
+                text for row in tracks for text in row.get("missingEvidence", [])
+            )
+        ),
+        "actionableZones": actionable_zones,
         "methodVersion": VERSION,
         "assessment": {
             "holdingState": "HELD"
@@ -551,7 +527,7 @@ async def decision_context(
     now=None,
 ):
     from backend.investment import decision_repository as repository
-    from backend.investment.service import analysis
+    from backend.investment.service import analysis, actionable_plan_for_analysis
 
     now = now or now_shanghai()
     identity = await repository.resolve_instrument(
@@ -595,17 +571,6 @@ async def decision_context(
                 facts = {}
         except (TypeError, ValueError):
             facts = {}
-    value = facts.get("valueEvidence") or {}
-    indicators = facts.get("indicators") or {}
-    last = (facts.get("points") or [{}])[-1]
-    close, ma, momentum = (
-        number(last.get("close")),
-        number(indicators.get("ma200")),
-        number(indicators.get("momentum63")),
-    )
-    trend_ready = facts.get("dataQuality") == "READY" and all(
-        v is not None for v in (close, ma, momentum)
-    )
     product = await repository.product_quality(conn, identity, now) if identity else {}
     if validation.get("state") == "PASS" and not repository.validation_matches(
         validation, facts, product.get("configVersion")
@@ -614,63 +579,28 @@ async def decision_context(
             state="UNAVAILABLE",
             summary="验证报告与当前来源、收益口径或已确认配置不一致，需重新核验。",
         )
-    gates = {
-        "value": {
-            "state": "PASS"
-            if value.get("eligible") is True
-            else "BLOCKED"
-            if value.get("state") == "NOT_CANDIDATE"
-            else "UNKNOWN"
-        },
-        "trend": {
-            "state": "PASS"
-            if trend_ready and close > ma and momentum > 0
-            else "BLOCKED"
-            if trend_ready
-            else "UNKNOWN"
-        },
-        "macro": {
-            "state": "PASS"
-            if direction_model
-            and direction_model.get("qualificationState") == "READY"
-            and direction_model.get("missingRequiredEvidence") == []
-            and not direction_model.get("counterFactors")
-            and not direction_model.get("failedConditions")
-            else "BLOCKED"
-            if direction_model
-            and direction_model.get("qualificationState") == "BLOCKED"
-            and direction_model.get("missingRequiredEvidence") == []
-            else "UNKNOWN",
-            "reason": "宏观、事件及方向必要证据需完整核查。",
-        },
-        "product": product.get(
-            "productGate",
-            {
-                "state": "UNKNOWN",
-                "reason": "费用、跟踪误差、流动性、折溢价和已确认质量配置尚不完整。",
-            },
-        ),
-        "tradability": product.get(
-            "tradabilityGate",
-            {"state": "UNKNOWN", "reason": "交易机制与当前可交易性未核验。"},
-        ),
-        "validation": {
-            **validation,
-            "state": "PASS" if validation.get("state") == "PASS" else "UNKNOWN",
-        },
-        "portfolio": {
-            "state": portfolio["budgetState"],
-            "reason": "；".join(portfolio["missingEvidence"]) or "个人预算已核查",
-        },
-    }
+    plan = None
+    if identity:
+        plan = actionable_plan_for_analysis(facts, "fund", identity, now=now)
+    elif not (instrument_id or fund_code):
+        selected_index = evaluated_index_id or index_id
+        possible = [
+            row.get("actionableZones")
+            for row in market_evidence or []
+            if (not selected_index or row.get("indexId") == selected_index)
+            and isinstance(row.get("actionableZones"), dict)
+        ]
+        if len(possible) == 1:
+            plan = possible[0]
     decision = evaluate(
-        gates,
         held=portfolio["heldSelected"],
         budget_violation=portfolio["budgetViolation"],
         portfolio=portfolio,
         direction_model=direction_model,
+        actionable_zones=plan,
     )
     decision["validation"] = validation
+    decision["valueEvidence"] = facts.get("valueEvidence") or {"state": "INCOMPLETE"}
     notices = await repository.list_notices(
         conn,
         tenant_id,

@@ -64,10 +64,10 @@ def report():
     }
 
 
-def test_strict_report_contract_rejects_probability_and_trade_fields():
+def test_strict_report_contract_rejects_unrecognized_execution_and_private_fields():
     module = engine()
     assert module.REPORT_SCHEMA["type"] == "object"
-    for key in ("probability", "tradeInstruction"):
+    for key in ("executionOrder", "tenantId"):
         raw = deepcopy(report())
         raw["events"][0][key] = "buy"
         with pytest.raises(ValueError):
@@ -298,8 +298,6 @@ def test_source_check_certifies_quote_only_and_never_implementation_or_market_ca
         "future_pubtime",
         "private_url",
         "unsafe_html",
-        "probability_text",
-        "trade_text",
         "verified_reaction",
     ],
 )
@@ -317,10 +315,6 @@ def test_invalid_or_overclaimed_reports_are_rejected(change):
         raw["sources"][0]["url"] = "https://127.0.0.1/secrets"
     elif change == "unsafe_html":
         raw["events"][0]["summary"] = "<script>alert(1)</script>"
-    elif change == "probability_text":
-        raw["events"][0]["summary"] = "战争发生概率为70%。"
-    elif change == "trade_text":
-        raw["events"][0]["summary"] = "建议立即买入能源基金。"
     else:
         raw["events"][0]["marketReaction"] = "VERIFIED"
     with pytest.raises(ValueError):

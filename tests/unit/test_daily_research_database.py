@@ -179,6 +179,7 @@ async def test_real_public_packet_uses_api_read_only_connection_without_actor_or
             "macros",
             "series",
             "indices",
+            "actionableZones",
             "directions",
             "schedules",
             "documents",

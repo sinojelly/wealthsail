@@ -1,4 +1,4 @@
-"""Reject common unsupported research claims without rejecting observed changes."""
+"""Alpha research permits forecasts and trade ideas without lexical vetoes."""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -43,9 +43,8 @@ def validate(summary):
         "We advise investors to sell these funds.",
     ],
 )
-def test_daily_report_rejects_common_probability_or_trading_language(summary):
-    with pytest.raises(ValueError, match="unsupported research instruction or claim"):
-        validate(summary)
+def test_daily_report_preserves_probability_and_trading_language_as_model_text(summary):
+    assert validate(summary)["summary"] == summary
 
 
 @pytest.mark.parametrize(

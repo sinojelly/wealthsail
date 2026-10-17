@@ -2,7 +2,7 @@
 
 Apply migrations first, set INVESTMENT_TEST_DATABASE_URL, then run:
 python -m scripts.prepare_investment_evidence_smoke
-The accompanying browser test is frontend/scripts/investment-evidence-smoke.cjs.
+This command only prepares fixtures; browser checks must target the current UI.
 No runtime login roles, real holdings or production sources are changed.
 """
 

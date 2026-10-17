@@ -12,6 +12,7 @@ import pytest
 
 from backend.common.database import create_pool, tenant_transaction
 from backend.errors import NotFoundError, VersionConflictError
+from backend.errors import ValidationError_
 from backend.investment import study_repository as repo, study_service as service
 from backend.investment.study_schemas import (
     CreateStudyRequest,
@@ -27,6 +28,95 @@ pytestmark = [
     pytest.mark.skipif(not DSN, reason="isolated study database required"),
 ]
 TZ = ZoneInfo("Asia/Shanghai")
+
+
+async def test_quantitative_tracks_freeze_server_prices_and_keep_separate_origins(
+    monkeypatch,
+):
+    from backend.investment import opportunity_service
+
+    pool = await create_pool(DSN, min_size=1, max_size=2)
+    try:
+        tenant, actor, _, _, now = await seed(pool)
+        plan = {
+            "methodVersion": "alpha-test",
+            "subjectKind": "index",
+            "subjectId": "hs300",
+            "priceBasis": "INDEX_POINTS",
+            "unit": "指数点",
+            "currentPrice": "4000.125",
+            "tracks": [
+                {
+                    "track": "LEFT_VALUE",
+                    "state": "CANDIDATE",
+                    "entryZoneMin": "3900.000",
+                    "entryZoneMax": "4000.000",
+                    "stopLossPrice": "3800.000",
+                },
+                {
+                    "track": "RIGHT_TREND",
+                    "state": "WATCH",
+                    "entryZoneMin": "4100.000",
+                    "entryZoneMax": "4200.000",
+                },
+            ],
+        }
+
+        async def context(*args, **kwargs):
+            return {
+                "decision": {"actionableZones": plan},
+                "directionModel": {"label": "宽基", "summary": "原始双轨研究"},
+            }
+
+        async def facts(*args):
+            return []
+
+        monkeypatch.setattr(opportunity_service, "get_context", context)
+        monkeypatch.setattr(service, "load_observations", facts)
+
+        def request(track):
+            return CreateStudyRequest.model_validate(
+                {
+                    "originType": "SELECTION",
+                    "scope": {"indexId": "hs300"},
+                    "planTrack": track,
+                }
+            )
+
+        async with tenant_transaction(pool, actor, tenant) as conn:
+            left = await service.create_study(
+                conn, tenant, actor, request("LEFT_VALUE"), now
+            )
+            assert (
+                left["version"]["snapshot"]["actionablePlan"]["selectedTrack"]
+                == "LEFT_VALUE"
+            )
+            plan["tracks"][0]["entryZoneMin"] = "3999.000"
+            same = await service.create_study(
+                conn, tenant, actor, request("LEFT_VALUE"), now
+            )
+            assert same["track"]["id"] == left["track"]["id"]
+            assert (
+                same["version"]["snapshot"]["actionablePlan"]["tracks"][0][
+                    "entryZoneMin"
+                ]
+                == "3900.000"
+            )
+            right = await service.create_study(
+                conn, tenant, actor, request("RIGHT_TREND"), now
+            )
+            assert right["track"]["id"] != left["track"]["id"]
+            assert (
+                right["version"]["snapshot"]["actionablePlan"]["selectedTrack"]
+                == "RIGHT_TREND"
+            )
+            plan["subjectKind"] = "fund"
+            with pytest.raises(ValidationError_):
+                await service.create_study(
+                    conn, tenant, actor, request("LEFT_VALUE"), now
+                )
+    finally:
+        await pool.close()
 
 
 async def test_real_concurrent_create_version_and_check_are_serialized(monkeypatch):

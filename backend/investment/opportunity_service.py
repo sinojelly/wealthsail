@@ -5,13 +5,14 @@ from backend.errors import NotFoundError, ValidationError_
 from backend.investment import repository
 from backend.investment.decision import decision_context
 from backend.investment.decision_repository import resolve_instrument
-from backend.investment.service import analysis, market_context
+from backend.investment.service import (
+    analysis,
+    market_context,
+    actionable_plan_for_analysis,
+)
 from backend.macro import market_repository
 from backend.macro.direction_models import direction_model
-from backend.macro.opportunity import build_radar
-from backend.macro.research_board import build_research_board
 from backend.macro.daily_repository import read_daily_research
-from backend.macro.daily_research import build_research_overview
 from backend.config import get_settings
 
 
@@ -64,7 +65,7 @@ def _complete_trend_window(result, points):
     )
 
 
-def market_evidence(index, result):
+def market_evidence(index, result, *, now=None):
     number = market_repository._number
     indicators = result.get("indicators") or {}
     points = result.get("points") or []
@@ -156,6 +157,9 @@ def market_evidence(index, result):
         },
         "earnings": {"state": "UNKNOWN", "summary": "尚无经核实的企业盈利证据。"},
         "missingEvidence": missing,
+        "actionableZones": actionable_plan_for_analysis(
+            result, "index", index["id"], label=index.get("name"), now=now
+        ),
     }
 
 
@@ -275,7 +279,7 @@ async def get_context(
             )
         ):
             result = {"state": "NOT_COLLECTED"}
-        evidence.append(market_evidence(index, result))
+        evidence.append(market_evidence(index, result, now=now))
     model = direction_model(direction, base, series, evidence)
     if selection_state == "UNKNOWN":
         model["state"] = "PARTIAL"
@@ -297,48 +301,17 @@ async def get_context(
         direction_model=model,
         now=now,
     )
-    radar = build_radar(
-        base,
-        series,
-        evidence,
-        direction,
-        personal["decision"],
-        personal["portfolio"],
-        now=now,
-        model=model,
-    )
-    board = build_research_board(
-        base,
-        series,
-        evidence,
-        direction,
-        personal["decision"],
-        personal["portfolio"],
-        model=model,
-        radar=radar,
-        scope={
-            "direction_id": direction_id,
-            "index_id": index_id,
-            "instrument_id": instrument_id,
-            "fund_code": fund_code,
-            "fund_market": fund_market,
-        },
-        collection=collected,
-        can_manage_operations=can_manage_operations,
-        now=now,
-    )
     daily = await read_daily_research(
         conn, now, enabled=get_settings().daily_research_enabled
     )
-    overview = build_research_overview(
-        {**base, "directionId": direction["id"], "indexId": evaluated_index_id},
-        series,
-        evidence,
-        model,
-        board,
-        daily,
-        now=now,
-    )
+    plans = [row["actionableZones"] for row in evidence]
+    selected_plan = (personal.get("decision") or {}).get("actionableZones")
+    if selected_plan and not any(
+        plan["subjectKind"] == selected_plan.get("subjectKind")
+        and plan["subjectId"] == selected_plan.get("subjectId")
+        for plan in plans
+    ):
+        plans.append(selected_plan)
     return {
         **base,
         **personal,
@@ -350,10 +323,8 @@ async def get_context(
         "series": series,
         "marketEvidence": evidence,
         "directionModel": model,
-        "radar": radar,
         "marketCollection": collected,
         "selectionState": selection_state,
-        "researchBoard": board,
         "dailyResearch": daily,
-        "researchOverview": overview,
+        "actionableZones": plans,
     }
