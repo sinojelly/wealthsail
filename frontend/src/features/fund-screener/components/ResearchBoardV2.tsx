@@ -12,6 +12,7 @@ import DailyResearchReport, {
 } from "./DailyResearchReport";
 import { sourceHref, timeLabel } from "../macro-display";
 import ResearchFocus from "./ResearchFocus";
+import { readingText } from "../research-reading";
 import type { ResearchBoardProps } from "./ResearchBoard";
 import {
   stateLabel,
@@ -343,8 +344,11 @@ export default function ResearchBoardV2({
           </small>
         </div>
         <p className="op-daily-summary">
-          {data.researchOverview?.summary ??
-            "尚无足够证据形成可靠研究判断，可展开核查已存事实与下一条件。"}
+          {readingText(
+            data.researchOverview?.summary ??
+              "尚无足够证据形成可靠研究判断，可展开核查已存事实与下一条件。",
+            220,
+          )}
         </p>
       </header>
       {!!critical.length && (
@@ -407,15 +411,16 @@ export default function ResearchBoardV2({
                 <p className="op-section-guide">
                   先看变化和下一条件，再到下方工作台研究具体指数与基金；值得持续观察的判断可加入跟踪。
                 </p>
-                <ResearchFocus data={data} onResearchIndex={researchIndex} />
                 <DailyResearchReport
                   data={data.dailyResearch}
                   directions={directions}
                   onDirectionSelect={onDirectionSelect}
                   onTrack={onStudyEvent}
                   trackingPending={studyPending}
-                />
-                {studyError && <p role="alert">{studyError}</p>}
+                  trackingError={studyError}
+                >
+                  <ResearchFocus data={data} onResearchIndex={researchIndex} />
+                </DailyResearchReport>
                 <details className="op-official-observations">
                   <summary>官方发布与其他观察</summary>
                   {topics

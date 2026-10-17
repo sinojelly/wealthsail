@@ -113,7 +113,7 @@ beforeEach(() => {
     },
   });
 });
-it("freezes a current selection in one click with all identity fields and opens the saved topic", async () => {
+it("confirms a current selection before saving its full identity and chosen horizon", async () => {
   vi.mocked(study.createStudyTrack).mockResolvedValue({
     track: { id: "saved" },
   } as never);
@@ -124,6 +124,12 @@ it("freezes a current selection in one click with all identity fields and opens 
   await userEvent.click(
     await screen.findByRole("button", { name: "跟踪当前标的研究" }),
   );
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  const horizon = screen.getByLabelText("观察天数");
+  expect(horizon).toHaveValue(30);
+  await userEvent.clear(horizon);
+  await userEvent.type(horizon, "90");
+  await userEvent.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
   await waitFor(() =>
     expect(study.createStudyTrack).toHaveBeenCalledWith({
       originType: "SELECTION",
@@ -134,14 +140,14 @@ it("freezes a current selection in one click with all identity fields and opens 
         fundCode: "510330",
         fundMarket: "SSE",
       },
-      horizonDays: 30,
+      horizonDays: 90,
     }),
   );
   expect(
     await screen.findByRole("tab", { name: "我的跟踪与复盘" }),
   ).toHaveAttribute("aria-selected", "true");
 });
-it("freezes the displayed READY event in one click without binding it to an unrelated selected fund", async () => {
+it("confirms the displayed READY event without binding it to an unrelated selected fund", async () => {
   vi.mocked(study.createStudyTrack).mockRejectedValue(
     new Error("保存失败可重试"),
   );
@@ -149,10 +155,14 @@ it("freezes the displayed READY event in one click without binding it to an unre
     <FundScreenerPage />,
     "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-1&fundMarket=SSE&researchOpen=1&researchTab=events",
   );
-  await userEvent.click(await screen.findByText("查看事件依据与情景"));
   await userEvent.click(
-    await screen.findByRole("button", { name: "跟踪全球能源事件" }),
+    await screen.findByRole("button", { name: "持续跟踪全球能源事件" }),
   );
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("region", { name: "确认研究假设" }),
+  ).toHaveTextContent("全球线索");
+  await userEvent.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
   await waitFor(() =>
     expect(study.createStudyTrack).toHaveBeenCalledWith({
       originType: "DAILY_EVENT",
@@ -200,6 +210,7 @@ it("does not navigate a different scope after a late successful create", async (
   await user.click(
     await screen.findByRole("button", { name: "跟踪当前标的研究" }),
   );
+  await user.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
   await user.click(screen.getByRole("button", { name: "更换标的" }));
   await act(async () => {
     finish({ track: { id: "old-saved" } } as never);
@@ -210,5 +221,81 @@ it("does not navigate a different scope after a late successful create", async (
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",
     "false",
+  );
+});
+
+it("cancels a source confirmation without persistence or research refresh", async () => {
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300",
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "跟踪当前标的研究" }),
+  );
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "取消跟踪确认" }));
+  expect(
+    screen.queryByRole("region", { name: "确认研究假设" }),
+  ).not.toBeInTheDocument();
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+});
+
+it("clears an unsaved confirmation when the exact fund scope changes", async () => {
+  renderWithSession(
+    <>
+      <FundScreenerPage />
+      <Navigate />
+    </>,
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-1&fundMarket=SSE",
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "跟踪当前标的研究" }),
+  );
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "更换标的" }));
+  expect(
+    screen.queryByRole("region", { name: "确认研究假设" }),
+  ).not.toBeInTheDocument();
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+});
+
+it("previews the server direction hypothesis verbatim when provided and does not send rewritten text", async () => {
+  const context = await opportunity();
+  opportunity.mockResolvedValue({
+    ...context,
+    directionModel: {
+      summary: "明确的原始标的假设：先验证盈利改善。",
+      supports: [],
+      counterFactors: [],
+      missingEvidence: ["盈利证据"],
+    },
+  });
+  vi.mocked(study.createStudyTrack).mockRejectedValue(
+    new Error("保存失败可重试"),
+  );
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300",
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "跟踪当前标的研究" }),
+  );
+  expect(
+    screen.getByRole("region", { name: "确认研究假设" }),
+  ).toHaveTextContent("明确的原始标的假设：先验证盈利改善。");
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
+  await waitFor(() =>
+    expect(study.createStudyTrack).toHaveBeenCalledWith({
+      originType: "SELECTION",
+      scope: {
+        directionId: "a-share:broad",
+        indexId: "hs300",
+        instrumentId: undefined,
+        fundCode: undefined,
+        fundMarket: undefined,
+      },
+      horizonDays: 30,
+    }),
   );
 });

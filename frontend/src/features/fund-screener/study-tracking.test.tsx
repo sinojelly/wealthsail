@@ -136,6 +136,7 @@ it("only freezes the explicit READY report origin after a user action, with the 
   });
   const user = userEvent.setup();
   expect(api.createStudyTrack).not.toHaveBeenCalled();
+  await user.click(screen.getByText("新建研究"));
   await user.click(screen.getByRole("button", { name: "冻结研究并跟踪" }));
   expect(api.createStudyTrack).toHaveBeenCalledWith({
     originType: "DAILY_EVENT",
@@ -153,6 +154,116 @@ it("shows frozen version and UNKNOWN without calling it falsified; checking is e
   await userEvent.click(screen.getByRole("button", { name: "核对已存证据" }));
   expect(api.checkStudy).toHaveBeenCalledWith("track-1", 3);
   expect(screen.getByText(/净收益：—/)).toBeInTheDocument();
+});
+it("starts with state, frozen evidence and history while deferring the long record and trade forms", async () => {
+  show("/fund-screener?studyTrack=track-1");
+  expect(await screen.findByText("油价冲击仍需条件核验")).toBeVisible();
+  expect(screen.getByRole("region", { name: "研究时间线" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "证据复盘" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "核对已存证据" })).toBeVisible();
+  const disclosure = screen.getByText("记录与复盘操作").closest("details")!;
+  expect(disclosure).not.toHaveAttribute("open");
+  expect(
+    screen
+      .getByRole("region", { name: "证据复盘" })
+      .compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(screen.getByLabelText("决策原因")).not.toBeVisible();
+  expect(screen.getByLabelText("复盘原因")).not.toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "关联真实成交" }),
+  ).not.toBeVisible();
+  expect(api.getEligibleStudyTrades).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByText("记录与复盘操作"));
+  expect(screen.getByLabelText("决策原因")).toBeVisible();
+  expect(screen.getByLabelText("复盘原因")).toBeVisible();
+  expect(screen.getByRole("button", { name: "关联真实成交" })).toBeVisible();
+});
+
+it("reads condition operators, effects and subjects in Chinese and keeps unknown codes neutral without rewriting the frozen source", async () => {
+  const frozen = {
+    ...snapshot,
+    benchmarkIndexId: "hs300",
+    conditions: [
+      {
+        metric: "INDEX_MA200_GAP",
+        subjectKey: "hs300",
+        operator: "GT",
+        threshold: "3",
+        unit: "%",
+        effect: "STRENGTHEN",
+      },
+      {
+        metric: "INDEX_MOMENTUM63",
+        subjectKey: "a500",
+        operator: "GTE",
+        threshold: 0,
+        unit: "%",
+        effect: "WEAKEN",
+      },
+      {
+        metric: "INDEX_PE",
+        subjectKey: "zz500",
+        operator: "LT",
+        threshold: 20,
+        unit: "倍",
+        effect: "TRIGGER",
+      },
+      {
+        metric: "PMI",
+        operator: "LTE",
+        threshold: 50,
+        unit: "指数点",
+        effect: "INVALIDATE",
+      },
+      {
+        metric: "FUTURE_METRIC",
+        subjectKey: "future-index",
+        operator: "FUTURE_OPERATOR",
+        threshold: 1,
+        unit: "%",
+        effect: "FUTURE_EFFECT",
+      },
+    ],
+  };
+  const original = JSON.stringify(frozen);
+  vi.mocked(api.getStudyDetail).mockResolvedValue({
+    ...detail,
+    version: { ...detail.version, snapshot: frozen },
+  } as api.StudyDetail);
+  show("/fund-screener?studyTrack=track-1");
+  const conditions = await screen.findByRole("region", {
+    name: "研究验证条件",
+  });
+  expect(conditions).toHaveTextContent(
+    "指数偏离MA200 沪深300 大于 3 % · 研究依据增强",
+  );
+  expect(conditions).toHaveTextContent(
+    "指数63期动量 中证A500 不低于 0 % · 研究依据减弱",
+  );
+  expect(conditions).toHaveTextContent(
+    "指数滚动PE 中证500 小于 20 倍 · 预设条件触发",
+  );
+  expect(conditions).toHaveTextContent(
+    "制造业PMI 不高于 50 指数点 · 预设失效条件触发",
+  );
+  expect(conditions).toHaveTextContent(
+    "其他待核查指标 关联标的待核查 比较方式待核查 1 % · 条件影响待核查",
+  );
+  expect(conditions).not.toHaveTextContent(
+    /STRENGTHEN|WEAKEN|TRIGGER|INVALIDATE|hs300|a500|zz500|FUTURE_/,
+  );
+  expect(screen.getByText(/基准：沪深300/)).toBeVisible();
+  const raw = screen.getByText("原始条件依据").closest("details")!;
+  expect(raw).not.toHaveAttribute("open");
+  expect(
+    within(raw).getByText(/INDEX_MA200_GAP hs300 GT 3 % · STRENGTHEN/),
+  ).not.toBeVisible();
+  await userEvent.click(within(raw).getByText("原始条件依据"));
+  expect(
+    within(raw).getByText(/INDEX_MA200_GAP hs300 GT 3 % · STRENGTHEN/),
+  ).toBeVisible();
+  expect(JSON.stringify(frozen)).toBe(original);
 });
 it("creates a new version with catalog conditions and percentage-point threshold without overwriting the original", async () => {
   show("/fund-screener?studyTrack=track-1");
@@ -187,6 +298,7 @@ it("keeps plans separate from fills and only offers eligible confirmed trades", 
   show("/fund-screener?studyTrack=track-1");
   await screen.findByText("油价冲击仍需条件核验");
   const user = userEvent.setup();
+  await user.click(screen.getByText("记录与复盘操作"));
   await user.selectOptions(screen.getByLabelText("决策记录"), "PLAN_BUY");
   await user.type(screen.getByLabelText("决策原因"), "仅记录计划");
   await user.click(screen.getByRole("button", { name: "保存决策记录" }));
@@ -223,9 +335,14 @@ it("clears private form drafts when selecting another study identity", async () 
   show("/fund-screener?studyTrack=track-1");
   await screen.findByText("油价冲击仍需条件核验");
   const user = userEvent.setup();
+  await user.click(screen.getByText("记录与复盘操作"));
   await user.type(screen.getByLabelText("决策原因"), "当前主题私有草稿");
   await user.click(screen.getByRole("button", { name: /另一研究/ }));
   await screen.findByText("油价冲击仍需条件核验");
+  expect(
+    screen.getByText("记录与复盘操作").closest("details"),
+  ).not.toHaveAttribute("open");
+  await user.click(screen.getByText("记录与复盘操作"));
   expect(screen.getByLabelText("决策原因")).toHaveValue("");
 });
 
@@ -305,6 +422,7 @@ it("does not leak an old actor's late create result into the new actor", async (
     </QueryClientProvider>
   );
   const view = render(<Wrap actor="a" />);
+  await userEvent.click(screen.getByText("新建研究"));
   await userEvent.click(screen.getByRole("button", { name: "冻结研究并跟踪" }));
   view.rerender(<Wrap actor="b" />);
   await import("@testing-library/react").then(({ act }) =>
@@ -340,6 +458,7 @@ it("links only an explicitly selected eligible confirmed fill with its real day 
   show("/fund-screener?studyTrack=track-1");
   await screen.findByText("油价冲击仍需条件核验");
   const user = userEvent.setup();
+  await user.click(screen.getByText("记录与复盘操作"));
   await user.click(screen.getByRole("button", { name: "关联真实成交" }));
   await screen.findByRole("option", {
     name: /2026-10-16.*真实基金.*100.*1.234.*CNY.*0.5.*CNY/,
@@ -380,6 +499,7 @@ it("keeps a selected historical snapshot stable across pagination and binds its 
   await screen.findByText("当前V2假设");
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: /查看版本1/ }));
+  await user.click(screen.getByText("记录与复盘操作"));
   await user.type(screen.getByLabelText("复盘原因"), "核对历史版本");
   await user.click(screen.getByRole("button", { name: "保存人工复盘" }));
   expect(api.addStudyNote).toHaveBeenCalledWith(

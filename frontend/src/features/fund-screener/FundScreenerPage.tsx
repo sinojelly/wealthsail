@@ -26,6 +26,7 @@ import FundResultsTable from "./components/FundResultsTable";
 import ResearchDiagnosis from "./components/ResearchDiagnosis";
 import { RadarDetails } from "./components/OpportunityRadar";
 import StudyTracking from "./components/StudyTracking";
+import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
 import "./opportunities.css";
 
 const monitorScopeFields = [
@@ -158,6 +159,14 @@ function ResearchWorkspace({
     macroMonths,
   ] as const;
   const studyScopeKey = JSON.stringify(opportunityKey.slice(0, -1));
+  const [confirmStudyScope, setConfirmStudyScope] = useState<string | null>(
+    null,
+  );
+  const [confirmationScope, setConfirmationScope] = useState(studyScopeKey);
+  if (confirmationScope !== studyScopeKey) {
+    setConfirmationScope(studyScopeKey);
+    setConfirmStudyScope(null);
+  }
   const activeStudyScope = useRef<string | null>(studyScopeKey);
   useEffect(() => {
     activeStudyScope.current = studyScopeKey;
@@ -167,7 +176,7 @@ function ResearchWorkspace({
   }, [studyScopeKey]);
   const studyCreate = useMutation({
     mutationFn: ({ origin }: { origin: CreateStudy; scopeKey: string }) =>
-      createStudyTrack({ ...origin, horizonDays: 30 }),
+      createStudyTrack(origin),
     onSuccess: (result, variables) => {
       client.setQueryData(
         ["study", subject, "detail", result.track.id, 0],
@@ -175,6 +184,7 @@ function ResearchWorkspace({
       );
       void client.invalidateQueries({ queryKey: ["study", subject, "list"] });
       if (activeStudyScope.current !== variables.scopeKey) return;
+      setConfirmStudyScope(null);
       setParams((current) => {
         const next = new URLSearchParams(current);
         next.set("researchOpen", "1");
@@ -457,9 +467,14 @@ function ResearchWorkspace({
             ? studyCreateError
             : undefined
         }
-        onStudyEvent={(reportRunId, eventId) =>
+        onStudyEvent={(reportRunId, eventId, horizonDays) =>
           studyCreate.mutate({
-            origin: { originType: "DAILY_EVENT", reportRunId, eventId },
+            origin: {
+              originType: "DAILY_EVENT",
+              reportRunId,
+              eventId,
+              horizonDays,
+            },
             scopeKey: studyScopeKey,
           })
         }
@@ -473,6 +488,7 @@ function ResearchWorkspace({
         error={!radarData && (opportunity.isError || context.isError)}
         loading={!radarData && (opportunity.isPending || context.isPending)}
         selectedDirection={direction}
+        selectedIndexId={indexId ?? undefined}
         monitorEnabled={currentMonitor?.enabled ?? false}
         monitorLoading={monitors.isPending || monitors.isError}
         monitorPending={monitor.isPending && monitoringCurrent}
@@ -704,20 +720,51 @@ function ResearchWorkspace({
                 <button
                   type="button"
                   disabled={studyCreate.isPending && studyCreatingCurrent}
-                  onClick={() =>
-                    studyCreate.mutate({
-                      origin: {
-                        originType: "SELECTION",
-                        scope: opportunityScope,
-                      },
-                      scopeKey: studyScopeKey,
-                    })
-                  }
+                  onClick={() => {
+                    studyCreate.reset();
+                    setConfirmStudyScope(studyScopeKey);
+                  }}
                 >
                   跟踪当前标的研究
                 </button>
               )}
+              {confirmStudyScope === studyScopeKey && (
+                <StudyCreateConfirmation
+                  key={`study-confirm:${studyScopeKey}`}
+                  preview={{
+                    title: `${title}研究`,
+                    thesis: (
+                      opportunity.data?.directionModel?.summary ||
+                      "保留当前观察，继续核对研究条件。"
+                    ).slice(0, 2000),
+                    watchFor:
+                      opportunity.data?.directionModel?.missingEvidence ?? [],
+                    counterFactors: (
+                      opportunity.data?.directionModel?.counterFactors ?? []
+                    ).map((row) => row.summary || row.label),
+                    supports: (
+                      opportunity.data?.directionModel?.supports ?? []
+                    ).map((row) => row.summary || row.label),
+                    sources: [],
+                    selection: true,
+                  }}
+                  pending={studyCreate.isPending && studyCreatingCurrent}
+                  error={studyCreateError}
+                  onCancel={() => setConfirmStudyScope(null)}
+                  onSave={(horizonDays) =>
+                    studyCreate.mutate({
+                      origin: {
+                        originType: "SELECTION",
+                        scope: opportunityScope,
+                        horizonDays,
+                      },
+                      scopeKey: studyScopeKey,
+                    })
+                  }
+                />
+              )}
               {studyCreateError &&
+                confirmStudyScope !== studyScopeKey &&
                 studyCreate.variables?.origin.originType === "SELECTION" && (
                   <p role="alert">{studyCreateError}</p>
                 )}

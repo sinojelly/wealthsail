@@ -1,5 +1,6 @@
 import type { OpportunityContext, OverviewItem } from "../../../api/investment";
 import { timeLabel, monthLabel } from "../macro-display";
+import { readingText } from "../research-reading";
 
 const resultLabels: Record<string, string> = {
   CONFIRMED_RISK: "已确认个人风险",
@@ -92,8 +93,8 @@ export default function ResearchFocus({
                   </small>
                 </summary>
                 <div className="op-focus-evidence">
-                  <p>{item.summary}</p>
-                  {item.impact && <p>{item.impact}</p>}
+                  <p>{readingText(item.summary, 400)}</p>
+                  {item.impact && <p>{readingText(item.impact, 240)}</p>}
                   {index?.trend?.state === "READY" && (
                     <dl className="op-focus-metrics">
                       <div>
@@ -117,13 +118,13 @@ export default function ResearchFocus({
                     </dl>
                   )}
                   {related.map((row) => (
-                    <p key={row.id}>{row.summary}</p>
+                    <p key={row.id}>{readingText(row.summary, 240)}</p>
                   ))}
                   {!!item.counterConditions?.length && (
                     <div>
                       <strong>反方与限制</strong>
                       {item.counterConditions.map((text) => (
-                        <p key={text}>{text}</p>
+                        <p key={text}>{readingText(text, 200)}</p>
                       ))}
                     </div>
                   )}
@@ -143,7 +144,7 @@ export default function ResearchFocus({
                   ? item.nextValidation.slice(0, 2)
                   : ["核查相关估值、盈利、趋势及个人条件，证据不足时继续观察。"]
                 ).map((text) => (
-                  <p key={text}>{text}</p>
+                  <p key={text}>{readingText(text, 160)}</p>
                 ))}
               </div>
               {item.indexId && (
@@ -173,12 +174,14 @@ export default function ResearchFocus({
       </p>
       {!!calendar.length && (
         <section className="op-daily-calendar" aria-label="官方发布日历">
-          <h4>官方发布日历</h4>
-          {calendar.map((row) => (
-            <p key={row.id}>
-              {row.title} · {timeLabel(row.asOf)} · 计划尚未发生
-            </p>
-          ))}
+          <details>
+            <summary>接下来关注 · 官方发布日历</summary>
+            {calendar.map((row) => (
+              <p key={row.id}>
+                {row.title} · {timeLabel(row.asOf)} · 计划尚未发生
+              </p>
+            ))}
+          </details>
         </section>
       )}
     </section>

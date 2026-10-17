@@ -10,6 +10,8 @@ import {
   studyVerdicts as verdicts,
   studyErrors as errors,
   studyMetricLabel as metricLabel,
+  studySubjectLabel as subjectLabel,
+  studyConditionLabel as conditionLabel,
 } from "./study-display";
 import StudyVersionEditor from "./StudyVersionEditor";
 export interface StudyTrackingProps {
@@ -107,7 +109,7 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               {id === track.id && value?.track.id === track.id && snapshot
                 ? (snapshot.watchFor[0] ??
                   (snapshot.conditions[0]
-                    ? `${metricLabel(snapshot.conditions[0].metric)} ${({ GT: "大于", GTE: "不低于", LT: "小于", LTE: "不高于" } as const)[snapshot.conditions[0].operator]} ${snapshot.conditions[0].threshold} ${snapshot.conditions[0].unit ?? ""}`
+                    ? conditionLabel(snapshot.conditions[0])
                     : "未声明下一条件，需人工复盘。"))
                 : "选择主题后读取冻结条件；列表未提供条件详情。"}
             </p>
@@ -291,7 +293,10 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
             <small>
               冻结报告：{snapshot.origin.reportRunId ?? "当前选择"} · 研究时间：
               {timeLabel(snapshot.origin.reportAsOf ?? snapshot.createdAt)} ·
-              基准：{snapshot.benchmarkIndexId ?? "未设定可比基准"}
+              基准：
+              {snapshot.benchmarkIndexId
+                ? subjectLabel(snapshot.benchmarkIndexId)
+                : "未设定可比基准"}
             </small>
             {snapshot.sources.map((source) => (
               <div key={source.id}>
@@ -320,7 +325,7 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
                 <summary>冻结时的实际观察与来源</summary>
                 {snapshot.observations.map((row, i) => (
                   <p key={i}>
-                    {metricLabel(row.metric)} {row.subjectKey ?? ""}：
+                    {metricLabel(row.metric)} {subjectLabel(row.subjectKey)}：
                     {row.value == null ? "—" : metricValue(Number(row.value))}{" "}
                     {row.unit} · 观察：{timeLabel(row.asOf)} · 获取：
                     {timeLabel(row.retrievedAt)} ·{" "}
@@ -343,13 +348,26 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
                 未声明可执行数值规则；自然语言假设保留为人工复盘，不能自动判定证伪。
               </p>
             )}
-            {snapshot.conditions.map((condition, i) => (
-              <p key={i}>
-                {metricLabel(condition.metric)} {condition.subjectKey ?? ""}{" "}
-                {condition.operator} {condition.threshold} {condition.unit} ·{" "}
-                {condition.effect}
-              </p>
-            ))}
+            {!!snapshot.conditions.length && (
+              <>
+                <section aria-label="研究验证条件">
+                  <h5>研究验证条件</h5>
+                  {snapshot.conditions.map((condition, i) => (
+                    <p key={i}>{conditionLabel(condition)}</p>
+                  ))}
+                </section>
+                <details>
+                  <summary>原始条件依据</summary>
+                  {snapshot.conditions.map((condition, i) => (
+                    <p key={i}>
+                      {condition.metric} {condition.subjectKey ?? ""}{" "}
+                      {condition.operator} {condition.threshold}{" "}
+                      {condition.unit} · {condition.effect}
+                    </p>
+                  ))}
+                </details>
+              </>
+            )}
           </section>
           {editing && (
             <StudyVersionEditor
@@ -440,232 +458,6 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               <button onClick={() => setOffset(offset + 50)}>更早的记录</button>
             )}
           </section>
-          <section aria-label="决策与人工复盘">
-            <h4>记录决策与复盘</h4>
-            <p>
-              正在复盘版本{version!.version}
-              ；记录关联此冻结版本，保留当前主题的版本保护。
-            </p>
-            {selectedVersion && selectedVersion.id !== current.id && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedVersion(null);
-                  setEditing(false);
-                }}
-              >
-                返回当前版本{current.version}
-              </button>
-            )}
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                run(() =>
-                  api.addStudyNote(value.track.id, {
-                    expectedGeneration: value.track.generation,
-                    kind: "DECISION",
-                    versionId: version!.id,
-                    action: decision,
-                    reason: decisionReason,
-                  }),
-                );
-              }}
-            >
-              <label>
-                决策记录
-                <select
-                  aria-label="决策记录"
-                  value={decision}
-                  onChange={(event) =>
-                    setDecision(event.target.value as keyof typeof actions)
-                  }
-                >
-                  {Object.entries(actions).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                决策原因
-                <textarea
-                  aria-label="决策原因"
-                  required
-                  value={decisionReason}
-                  onChange={(event) => setDecisionReason(event.target.value)}
-                />
-              </label>
-              <button disabled={command.isPending || !decisionReason.trim()}>
-                保存决策记录
-              </button>
-            </form>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                run(() =>
-                  api.addStudyNote(value.track.id, {
-                    expectedGeneration: value.track.generation,
-                    kind: "REVIEW",
-                    versionId: version!.id,
-                    verdict,
-                    reason: reviewReason,
-                    lessons,
-                    errorCategories,
-                  }),
-                );
-              }}
-            >
-              <label>
-                人工结论
-                <select
-                  aria-label="人工结论"
-                  value={verdict}
-                  onChange={(event) =>
-                    setVerdict(event.target.value as keyof typeof verdicts)
-                  }
-                >
-                  {Object.entries(verdicts).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                复盘原因
-                <textarea
-                  aria-label="复盘原因"
-                  required
-                  value={reviewReason}
-                  onChange={(event) => setReviewReason(event.target.value)}
-                />
-              </label>
-              <label>
-                经验与修正
-                <textarea
-                  aria-label="经验与修正"
-                  value={lessons}
-                  onChange={(event) => setLessons(event.target.value)}
-                />
-              </label>
-              <fieldset>
-                <legend>误差归因（可多选）</legend>
-                {Object.entries(errors).map(([key, label]) => (
-                  <label key={key}>
-                    <input
-                      type="checkbox"
-                      checked={errorCategories.includes(key)}
-                      onChange={(event) =>
-                        setErrorCategories(
-                          event.target.checked
-                            ? [...errorCategories, key]
-                            : errorCategories.filter((code) => code !== key),
-                        )
-                      }
-                    />
-                    {label}
-                  </label>
-                ))}
-              </fieldset>
-              <button disabled={command.isPending || !reviewReason.trim()}>
-                保存人工复盘
-              </button>
-            </form>
-          </section>
-          <section aria-label="真实成交关联">
-            <h4>真实成交</h4>
-            <p>
-              计划记录不是成交。仅能关联本人有权限且身份匹配的已确认记录；成交时间精度为日，同日无法判断先后。
-            </p>
-            <button
-              disabled={!value.capabilities.canLinkTrade}
-              onClick={() => setShowTrades(!showTrades)}
-            >
-              关联真实成交
-            </button>
-            {showTrades && (
-              <>
-                {trades.isPending && <p>正在核查可关联成交…</p>}
-                {trades.isError && <p role="alert">成交权限或记录读取失败。</p>}
-                {trades.data && !trades.data.items.length && (
-                  <p>暂无有权限且身份匹配的已确认成交。</p>
-                )}
-                {!!trades.data?.items.length && (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      run(() =>
-                        api.linkStudyTrade(value.track.id, {
-                          expectedGeneration: value.track.generation,
-                          fillId,
-                          versionId: version!.id,
-                          reason: tradeReason,
-                        }),
-                      );
-                    }}
-                  >
-                    <label>
-                      已确认成交
-                      <select
-                        required
-                        aria-label="已确认成交"
-                        value={fillId}
-                        onChange={(event) => setFillId(event.target.value)}
-                      >
-                        <option value="">请选择真实成交</option>
-                        {trades.data.items
-                          .filter((fill) => fill.status === "CONFIRMED")
-                          .map((fill) => (
-                            <option key={fill.fillId} value={fill.fillId}>
-                              {fill.tradeDate} {fill.instrumentName}{" "}
-                              {fill.side === "BUY" ? "买入" : "卖出"}{" "}
-                              {fill.quantity}份 · 单价{fill.unitPrice}{" "}
-                              {fill.currency ?? "币种待核验"} · 费用
-                              {fill.fee} {fill.currency ?? "币种待核验"}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-                    <label>
-                      关联原因
-                      <textarea
-                        aria-label="关联原因"
-                        required
-                        value={tradeReason}
-                        onChange={(event) => setTradeReason(event.target.value)}
-                      />
-                    </label>
-                    <button
-                      disabled={
-                        command.isPending || !fillId || !tradeReason.trim()
-                      }
-                    >
-                      确认关联成交
-                    </button>
-                  </form>
-                )}
-              </>
-            )}
-            {value.tradeLinks.map((link) => (
-              <article key={link.id}>
-                <p>
-                  {link.fill.tradeDate} {link.fill.instrumentName} · 数量{" "}
-                  {link.fill.quantity} · 单价 {link.fill.unitPrice}{" "}
-                  {link.fill.currency ?? "币种待核验"} · 费用 {link.fill.fee}{" "}
-                  {link.fill.currency ?? "币种待核验"}
-                </p>
-                <small>
-                  {link.timingRelation === "BEFORE_TRADE"
-                    ? "研究版本早于成交日"
-                    : link.timingRelation === "POST_HOC"
-                      ? "事后关联：研究晚于成交日"
-                      : "同日或先后未知，不认证事前决策"}{" "}
-                  · 成交仅有日期精度
-                </small>
-              </article>
-            ))}
-          </section>
           {value.review && (
             <section aria-label="证据复盘">
               <h4>初始与最新事实</h4>
@@ -697,6 +489,239 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               <p>研究与价格变化的因果归因尚未核实。</p>
             </section>
           )}
+          <details className="op-study-record-operations">
+            <summary>记录与复盘操作</summary>
+            <section aria-label="决策与人工复盘">
+              <h4>记录决策与复盘</h4>
+              <p>
+                正在复盘版本{version!.version}
+                ；记录关联此冻结版本，保留当前主题的版本保护。
+              </p>
+              {selectedVersion && selectedVersion.id !== current.id && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedVersion(null);
+                    setEditing(false);
+                  }}
+                >
+                  返回当前版本{current.version}
+                </button>
+              )}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  run(() =>
+                    api.addStudyNote(value.track.id, {
+                      expectedGeneration: value.track.generation,
+                      kind: "DECISION",
+                      versionId: version!.id,
+                      action: decision,
+                      reason: decisionReason,
+                    }),
+                  );
+                }}
+              >
+                <label>
+                  决策记录
+                  <select
+                    aria-label="决策记录"
+                    value={decision}
+                    onChange={(event) =>
+                      setDecision(event.target.value as keyof typeof actions)
+                    }
+                  >
+                    {Object.entries(actions).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  决策原因
+                  <textarea
+                    aria-label="决策原因"
+                    required
+                    value={decisionReason}
+                    onChange={(event) => setDecisionReason(event.target.value)}
+                  />
+                </label>
+                <button disabled={command.isPending || !decisionReason.trim()}>
+                  保存决策记录
+                </button>
+              </form>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  run(() =>
+                    api.addStudyNote(value.track.id, {
+                      expectedGeneration: value.track.generation,
+                      kind: "REVIEW",
+                      versionId: version!.id,
+                      verdict,
+                      reason: reviewReason,
+                      lessons,
+                      errorCategories,
+                    }),
+                  );
+                }}
+              >
+                <label>
+                  人工结论
+                  <select
+                    aria-label="人工结论"
+                    value={verdict}
+                    onChange={(event) =>
+                      setVerdict(event.target.value as keyof typeof verdicts)
+                    }
+                  >
+                    {Object.entries(verdicts).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  复盘原因
+                  <textarea
+                    aria-label="复盘原因"
+                    required
+                    value={reviewReason}
+                    onChange={(event) => setReviewReason(event.target.value)}
+                  />
+                </label>
+                <label>
+                  经验与修正
+                  <textarea
+                    aria-label="经验与修正"
+                    value={lessons}
+                    onChange={(event) => setLessons(event.target.value)}
+                  />
+                </label>
+                <fieldset>
+                  <legend>误差归因（可多选）</legend>
+                  {Object.entries(errors).map(([key, label]) => (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        checked={errorCategories.includes(key)}
+                        onChange={(event) =>
+                          setErrorCategories(
+                            event.target.checked
+                              ? [...errorCategories, key]
+                              : errorCategories.filter((code) => code !== key),
+                          )
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </fieldset>
+                <button disabled={command.isPending || !reviewReason.trim()}>
+                  保存人工复盘
+                </button>
+              </form>
+            </section>
+            <section aria-label="真实成交关联">
+              <h4>真实成交</h4>
+              <p>
+                计划记录不是成交。仅能关联本人有权限且身份匹配的已确认记录；成交时间精度为日，同日无法判断先后。
+              </p>
+              <button
+                disabled={!value.capabilities.canLinkTrade}
+                onClick={() => setShowTrades(!showTrades)}
+              >
+                关联真实成交
+              </button>
+              {showTrades && (
+                <>
+                  {trades.isPending && <p>正在核查可关联成交…</p>}
+                  {trades.isError && (
+                    <p role="alert">成交权限或记录读取失败。</p>
+                  )}
+                  {trades.data && !trades.data.items.length && (
+                    <p>暂无有权限且身份匹配的已确认成交。</p>
+                  )}
+                  {!!trades.data?.items.length && (
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        run(() =>
+                          api.linkStudyTrade(value.track.id, {
+                            expectedGeneration: value.track.generation,
+                            fillId,
+                            versionId: version!.id,
+                            reason: tradeReason,
+                          }),
+                        );
+                      }}
+                    >
+                      <label>
+                        已确认成交
+                        <select
+                          required
+                          aria-label="已确认成交"
+                          value={fillId}
+                          onChange={(event) => setFillId(event.target.value)}
+                        >
+                          <option value="">请选择真实成交</option>
+                          {trades.data.items
+                            .filter((fill) => fill.status === "CONFIRMED")
+                            .map((fill) => (
+                              <option key={fill.fillId} value={fill.fillId}>
+                                {fill.tradeDate} {fill.instrumentName}{" "}
+                                {fill.side === "BUY" ? "买入" : "卖出"}{" "}
+                                {fill.quantity}份 · 单价{fill.unitPrice}{" "}
+                                {fill.currency ?? "币种待核验"} · 费用
+                                {fill.fee} {fill.currency ?? "币种待核验"}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label>
+                        关联原因
+                        <textarea
+                          aria-label="关联原因"
+                          required
+                          value={tradeReason}
+                          onChange={(event) =>
+                            setTradeReason(event.target.value)
+                          }
+                        />
+                      </label>
+                      <button
+                        disabled={
+                          command.isPending || !fillId || !tradeReason.trim()
+                        }
+                      >
+                        确认关联成交
+                      </button>
+                    </form>
+                  )}
+                </>
+              )}
+              {value.tradeLinks.map((link) => (
+                <article key={link.id}>
+                  <p>
+                    {link.fill.tradeDate} {link.fill.instrumentName} · 数量{" "}
+                    {link.fill.quantity} · 单价 {link.fill.unitPrice}{" "}
+                    {link.fill.currency ?? "币种待核验"} · 费用 {link.fill.fee}{" "}
+                    {link.fill.currency ?? "币种待核验"}
+                  </p>
+                  <small>
+                    {link.timingRelation === "BEFORE_TRADE"
+                      ? "研究版本早于成交日"
+                      : link.timingRelation === "POST_HOC"
+                        ? "事后关联：研究晚于成交日"
+                        : "同日或先后未知，不认证事前决策"}{" "}
+                    · 成交仅有日期精度
+                  </small>
+                </article>
+              ))}
+            </section>
+          </details>
         </>
       )}
     </section>

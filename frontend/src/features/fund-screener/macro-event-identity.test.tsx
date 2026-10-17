@@ -91,7 +91,12 @@ it("keeps the daily event as the main copy by ID while retaining a separate fact
   expect(within(official).queryByText("宏观重复正文")).not.toBeInTheDocument();
   expect(within(official).getByText("独立事实正文")).toBeInTheDocument();
   expect(screen.getByText("日报主项正文")).toBeInTheDocument();
-  expect(screen.getAllByText("同名官方公告")).toHaveLength(2);
+  expect(
+    within(screen.getByRole("list", { name: "重要事件" })).getAllByText(
+      "同名官方公告",
+    ),
+  ).toHaveLength(1);
+  expect(within(official).getAllByText("同名官方公告")).toHaveLength(1);
 });
 
 it("retains the official fact when no saved daily report contains that ID", () => {

@@ -313,10 +313,14 @@ it("separates failed daily execution, historical evidence, checked quotations an
   ).toBeVisible();
   expect(within(report).getByText(/当前有效报告：ready-old/)).toBeVisible();
   const eventDetails = within(report)
-    .getByText("查看事件依据与情景")
+    .getByText("阅读完整日报")
     .closest("details")!;
   expect(eventDetails).not.toHaveAttribute("open");
-  await user.click(within(eventDetails).getByText("查看事件依据与情景"));
+  await user.click(
+    within(report).getByRole("button", {
+      name: "查看某能源政策已宣布事件依据与情景",
+    }),
+  );
   expect(within(eventDetails).getByText("已宣布")).toBeVisible();
   expect(
     within(report).getByRole("heading", { name: "可能传导 · 模型条件推演" }),
@@ -370,20 +374,46 @@ it("keeps weekly diesel distinct from daily oil and rounds supplied changes with
   });
   await open();
   expect(
-    screen.queryByRole("region", { name: "能源事实" }),
+    screen.queryByRole("region", { name: "美国零售柴油证据详情" }),
   ).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
-  await userEvent.click(screen.getByRole("button", { name: "通胀与成本" }));
-  const energy = screen.getByRole("region", { name: "能源事实" });
+  await userEvent.click(
+    screen.getByRole("button", { name: "查看美国零售柴油完整证据" }),
+  );
+  const energy = screen.getByRole("region", { name: "美国零售柴油证据详情" });
   expect(within(energy).getByText("3.770 美元/加仑")).toBeInTheDocument();
   expect(
-    within(energy).getByText(/相邻变化：0.770 美元\/加仑/),
+    within(energy).getByText(/相邻变化：\+0.770 美元\/加仑/),
   ).toBeInTheDocument();
-  expect(within(energy).getByText(/周度实际观察/)).toBeInTheDocument();
   expect(
-    within(energy).getByText(/观察日期不代表已核实的公布时刻/),
+    within(energy).getByText(/前次观察：2026年10月5日.*3.000 美元\/加仑/),
   ).toBeInTheDocument();
-  expect(screen.getAllByRole("region", { name: "能源事实" })).toHaveLength(1);
+  expect(
+    within(energy).getByText(/当前观察：2026年10月12日.*周度/),
+  ).toBeInTheDocument();
+  expect(
+    within(energy).getByRole("img", { name: "美国零售柴油 两次实际观察" }),
+  ).toBeVisible();
+  expect(
+    within(energy).getByText(/仅展示前次与当前两次实际观察.*不代表完整历史/),
+  ).toBeVisible();
+  const metadata = within(energy)
+    .getByText("查看美国零售柴油数据依据")
+    .closest("details")!;
+  expect(metadata).not.toHaveAttribute("open");
+  expect(
+    within(metadata).getByText(/观察日期不代表已核实的公布时刻/),
+  ).not.toBeVisible();
+  await userEvent.click(within(metadata).getByText("查看美国零售柴油数据依据"));
+  expect(
+    within(metadata).getByText(/观察日期不代表已核实的公布时刻/),
+  ).toBeVisible();
+  expect(
+    within(metadata).getByRole("link", { name: "查看美国零售柴油来源" }),
+  ).toHaveAttribute("href", "https://fred.stlouisfed.org/series/GASDESW");
+  expect(
+    screen.getAllByRole("region", { name: "美国零售柴油证据详情" }),
+  ).toHaveLength(1);
   expect(
     screen.queryByRole("region", { name: "每日事件研究" }),
   ).not.toBeInTheDocument();

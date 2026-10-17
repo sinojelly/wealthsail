@@ -1237,9 +1237,6 @@
   display: block;
   margin-top: 10px;
 }
-.op-compact-metric:has(> button[aria-expanded="true"]) {
-  grid-column: 1 / -1;
-}
 .op-study {
   overflow-wrap: anywhere;
 }
@@ -1300,7 +1297,8 @@
 }
 .op-observation-header .op-macro-toggle {
   gap: 12px;
-  padding-bottom: 12px;
+  padding-top: 10px;
+  padding-bottom: 4px;
 }
 .op-observation-header .op-macro-toggle > span {
   min-width: 0;
@@ -1325,14 +1323,15 @@
 }
 .op-observation-meta .op-badge {
   white-space: normal;
+  padding: 2px 8px;
 }
 .op-observation-meta small {
   overflow-wrap: anywhere;
 }
 .op-observation-header > .op-daily-summary {
   margin: 0;
-  padding: 10px 20px 16px;
-  line-height: 1.65;
+  padding: 4px 20px 12px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -1342,7 +1341,50 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   padding-bottom: 0;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+}
+.op-study-confirmation {
+  min-width: 0;
+  padding: 14px;
+  margin-top: 12px;
+  border: 1px solid var(--op-line);
+  border-left: 3px solid var(--op-teal);
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.op-study-confirmation form,
+.op-study-confirmation label {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.op-study-confirmation input {
+  width: 100px;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--op-line);
+  border-radius: 6px;
+}
+.op-event-reading {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.op-event-reading p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.op-daily-full-report,
+.op-daily-calendar {
+  border-top: 1px solid var(--op-line);
+  padding-top: 14px;
+}
+.op-daily-full-report > summary,
+.op-daily-calendar > summary {
+  cursor: pointer;
+  color: var(--op-teal);
 }
 .op-observation-critical {
   padding: 0 20px 16px;

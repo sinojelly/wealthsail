@@ -110,8 +110,20 @@ const daily: DailyResearch = {
     ],
   },
 };
+it("keeps the existing impact conditional and readable before opening the full report", () => {
+  render(<DailyResearchReport data={daily} />);
+  const list = screen.getByRole("list", { name: "重要事件" });
+  expect(
+    within(list).getByText(/潜在影响：.*条件：供应兑现.*影响：成本可能回落/),
+  ).toBeVisible();
+  expect(event.scenarios[0]).toEqual({
+    condition: "供应兑现",
+    impact: "成本可能回落",
+    counter: "运力仍有限",
+  });
+});
 
-it("keeps one canonical event with its next check visible and contains only referenced evidence in collapsed details", async () => {
+it("shows the canonical event as four short reading lines and opens its complete evidence explicitly", async () => {
   const track = vi.fn();
   const selectDirection = vi.fn();
   render(
@@ -126,22 +138,27 @@ it("keeps one canonical event with its next check visible and contains only refe
   );
   const list = screen.getByRole("list", { name: "重要事件" });
   expect(within(list).getAllByRole("listitem")).toHaveLength(1);
-  expect(within(list).getByText(event.summary)).toBeVisible();
+  expect(within(list).getByText(`事实：${event.summary}`)).toBeVisible();
+  expect(
+    within(list).getByText(/潜在影响：.*供应变化可能传到运输成本/),
+  ).toBeVisible();
+  expect(within(list).getByText(/当前证据：.*1.*原文已核对/)).toBeVisible();
   expect(within(list).getByText(/下一批实际到货量/)).toBeVisible();
   expect(within(list).getByText("受影响方向：A股 · 宽基")).toBeVisible();
-  expect(
-    within(list).getByRole("button", { name: "研究 A股 · 宽基" }),
-  ).not.toBeVisible();
-  const details = within(list)
-    .getByText("供应变化可能传到运输成本")
-    .closest("details")!;
+  const details = screen.getByText("阅读完整日报").closest("details")!;
   expect(details).not.toHaveAttribute("open");
   expect(within(details).getByText("原始短引文")).toBeInTheDocument();
   expect(screen.queryByText("未被事件引用的来源")).not.toBeInTheDocument();
   expect(
     screen.queryByRole("region", { name: "日报原始来源" }),
   ).not.toBeInTheDocument();
-  await userEvent.click(within(details).getByText("查看事件依据与情景"));
+  await userEvent.click(
+    within(list).getByRole("button", {
+      name: "查看能源政策线索事件依据与情景",
+    }),
+  );
+  expect(details).toHaveAttribute("open");
+  expect(within(details).getByText(event.summary)).toBeVisible();
   await userEvent.click(
     within(details).getByRole("button", { name: "研究 A股 · 宽基" }),
   );
@@ -149,16 +166,13 @@ it("keeps one canonical event with its next check visible and contains only refe
   expect(
     within(details).getByRole("link", { name: "政策原文" }),
   ).toHaveAttribute("href", "https://example.org/policy");
-  await userEvent.click(
-    within(details).getByRole("button", { name: "跟踪能源政策线索" }),
-  );
-  expect(track).toHaveBeenCalledWith("ready-yesterday", "energy-policy");
+  expect(track).not.toHaveBeenCalled();
   expect(
     screen.queryByRole("region", { name: "能源事实" }),
   ).not.toBeInTheDocument();
 });
 
-it("keeps every event and its evidence while deferring the full report summary behind an explicit disclosure", async () => {
+it("shows at most three events and retains every original event and quotation in the collapsed full report", async () => {
   render(
     <DailyResearchReport
       data={{
@@ -176,29 +190,32 @@ it("keeps every event and its evidence while deferring the full report summary b
   );
   expect(screen.getByRole("heading", { name: "重要事件" })).toBeVisible();
   const list = screen.getByRole("list", { name: "重要事件" });
-  expect(within(list).getAllByRole("listitem")).toHaveLength(5);
-  expect(within(list).getAllByText(event.summary)).toHaveLength(5);
-  for (const fact of within(list).getAllByText(event.summary))
+  expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+  for (const fact of within(list).getAllByText(`事实：${event.summary}`))
     expect(fact).toBeVisible();
-  expect(within(list).getAllByText("原始短引文")).toHaveLength(5);
   const summary = screen.getByText(daily.report!.summary);
   expect(summary).not.toBeVisible();
   const details = summary.closest("details")!;
   expect(details).not.toHaveAttribute("open");
-  await userEvent.click(within(details).getByText("整体研究摘要"));
+  expect(within(details).getAllByText(event.summary)).toHaveLength(5);
+  expect(within(details).getAllByText("原始短引文")).toHaveLength(5);
+  await userEvent.click(within(details).getByText("阅读完整日报"));
   expect(summary).toBeVisible();
+  expect(
+    within(details).getByRole("heading", { name: "独立事件5" }),
+  ).toBeVisible();
 });
 
-it("keeps only three planned events in the compact calendar and reveals the remaining plans explicitly", async () => {
+it("defers every planned event until the user expands the secondary calendar", async () => {
   render(<DailyResearchReport data={daily} />);
   const calendar = screen.getByRole("region", { name: "未来关键事件" });
-  expect(
-    within(within(calendar).getAllByRole("list")[0]).getAllByRole("listitem"),
-  ).toHaveLength(3);
-  const rest = within(calendar).getByText("计划日程5").closest("details")!;
-  expect(rest).not.toHaveAttribute("open");
-  expect(within(rest).getByText("计划日程5")).not.toBeVisible();
-  await userEvent.click(within(rest).getByText(/查看其余2项日程/));
+  expect(within(calendar).getByText("计划日程1")).not.toBeVisible();
+  expect(within(calendar).getByText("计划日程5")).not.toBeVisible();
+  const disclosure = within(calendar)
+    .getByText(/接下来关注什么/)
+    .closest("details")!;
+  expect(disclosure).not.toHaveAttribute("open");
+  await userEvent.click(within(calendar).getByText(/接下来关注什么/));
   expect(within(calendar).getAllByRole("listitem")).toHaveLength(5);
   expect(within(calendar).getAllByText(/计划，尚未发生/)).toHaveLength(5);
 });
@@ -217,9 +234,188 @@ it("marks unresolved affected directions honestly and never tracks an event usin
       onTrack={vi.fn()}
     />,
   );
-  expect(screen.getByText("受影响方向：待核对")).toBeVisible();
   expect(
-    screen.queryByRole("button", { name: "跟踪能源政策线索" }),
+    within(screen.getByRole("list", { name: "重要事件" })).getByText(
+      "受影响方向：待核对",
+    ),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "持续跟踪能源政策线索" }),
+  ).not.toBeInTheDocument();
+});
+
+it("ranks importance before checked-reference counts, deduplicates identities and keeps tied input order without changing the report", () => {
+  const rows = [
+    { ...event, id: "medium", title: "相关中等事件", importance: "MEDIUM" },
+    {
+      ...event,
+      id: "high-unchecked",
+      title: "待核对高影响事件",
+      sourceIds: ["unrelated"],
+    },
+    { ...event, id: "high-first", title: "先到高影响事件" },
+    { ...event, id: "high-first", title: "重复事件" },
+    { ...event, id: "high-second", title: "后到高影响事件" },
+  ];
+  const original = JSON.stringify(rows);
+  Object.freeze(rows);
+  render(
+    <DailyResearchReport
+      data={{ ...daily, report: { ...daily.report!, events: rows } }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "重要事件" });
+  expect(
+    within(list)
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent),
+  ).toEqual(["先到高影响事件", "后到高影响事件", "待核对高影响事件"]);
+  expect(screen.queryByText("重复事件")).not.toBeInTheDocument();
+  expect(JSON.stringify(rows)).toBe(original);
+});
+
+it("bounds and translates the reading preview while preserving complete original facts and numbers in the full report", async () => {
+  const original = `2026年10月15日同比5.0%，historyQuality=CONFLICT；PIT尚缺；SOURCE_CHECKED、IMPLEMENTED。${"后续影响需要核对。".repeat(35)}`;
+  render(
+    <DailyResearchReport
+      data={{
+        ...daily,
+        report: { ...daily.report!, events: [{ ...event, summary: original }] },
+      }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "重要事件" });
+  const fact = within(list).getByText(/^事实：/);
+  expect(fact.textContent!.length).toBeLessThanOrEqual(145);
+  expect(fact).toHaveTextContent("2026年10月15日同比5.0%");
+  expect(fact).toHaveTextContent("历史数据存在冲突");
+  expect(list).not.toHaveTextContent(
+    /historyQuality|CONFLICT|PIT|SOURCE_CHECKED|IMPLEMENTED/,
+  );
+  const full = screen.getByText("阅读完整日报").closest("details")!;
+  expect(within(full).getByText(original)).not.toBeVisible();
+  await userEvent.click(within(full).getByText("阅读完整日报"));
+  expect(within(full).getByText(original)).toBeVisible();
+});
+
+it("keeps current asset content after the important events and before the collapsed calendar and report", () => {
+  render(
+    <DailyResearchReport data={daily}>
+      <section aria-label="当前资产观察">资产观察</section>
+    </DailyResearchReport>,
+  );
+  const events = screen.getByRole("list", { name: "重要事件" });
+  const assets = screen.getByRole("region", { name: "当前资产观察" });
+  const calendar = screen.getByRole("region", { name: "未来关键事件" });
+  const full = screen.getByText("阅读完整日报").closest("details")!;
+  expect(
+    events.compareDocumentPosition(assets) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    assets.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    calendar.compareDocumentPosition(full) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it("opens a read-only event confirmation before tracking and saves only the effective report identity with the chosen horizon", async () => {
+  const track = vi.fn();
+  render(<DailyResearchReport data={daily} onTrack={track} />);
+  const user = userEvent.setup();
+  await user.click(
+    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
+  );
+  expect(track).not.toHaveBeenCalled();
+  const form = screen.getByRole("form", { name: "确认研究跟踪" });
+  const confirmation = screen.getByRole("region", { name: "确认研究假设" });
+  expect(within(confirmation).getByText(event.summary)).toBeVisible();
+  expect(
+    within(confirmation).getByText(/下一步验证：下一批实际到货量/),
+  ).toBeVisible();
+  expect(within(confirmation).getByText(/反方条件：运力仍有限/)).toBeVisible();
+  expect(within(confirmation).getByText(/失效条件.*未声明/)).toBeVisible();
+  await user.clear(within(form).getByRole("spinbutton", { name: "观察天数" }));
+  await user.type(
+    within(form).getByRole("spinbutton", { name: "观察天数" }),
+    "90",
+  );
+  await user.click(
+    within(form).getByRole("button", { name: "确认并保存跟踪" }),
+  );
+  expect(track).toHaveBeenCalledExactlyOnceWith(
+    "ready-yesterday",
+    "energy-policy",
+    90,
+  );
+});
+
+it("cancels event confirmation without tracking and does not inherit it when the report identity changes", async () => {
+  const track = vi.fn();
+  const view = render(<DailyResearchReport data={daily} onTrack={track} />);
+  const user = userEvent.setup();
+  await user.click(
+    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
+  );
+  await user.click(screen.getByRole("button", { name: "取消跟踪确认" }));
+  expect(
+    screen.queryByRole("form", { name: "确认研究跟踪" }),
+  ).not.toBeInTheDocument();
+  expect(track).not.toHaveBeenCalled();
+  await user.click(
+    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
+  );
+  await user.clear(screen.getByRole("spinbutton", { name: "观察天数" }));
+  await user.type(screen.getByRole("spinbutton", { name: "观察天数" }), "90");
+  view.rerender(
+    <DailyResearchReport
+      data={{ ...daily, reportRunId: "new-ready" }}
+      onTrack={track}
+    />,
+  );
+  expect(
+    screen.queryByRole("form", { name: "确认研究跟踪" }),
+  ).not.toBeInTheDocument();
+  expect(track).not.toHaveBeenCalled();
+  await user.click(
+    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
+  );
+  expect(screen.getByRole("spinbutton", { name: "观察天数" })).toHaveValue(30);
+});
+
+it("does not show a previous event's save error in a new confirmation session", async () => {
+  const track = vi.fn();
+  const report = {
+    ...daily,
+    report: {
+      ...daily.report!,
+      events: [event, { ...event, id: "other-event", title: "另一个事件" }],
+    },
+  };
+  const view = render(<DailyResearchReport data={report} onTrack={track} />);
+  const user = userEvent.setup();
+  await user.click(
+    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
+  );
+  await user.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
+  view.rerender(
+    <DailyResearchReport
+      data={report}
+      onTrack={track}
+      trackingError="A事件保存失败"
+    />,
+  );
+  expect(
+    within(screen.getByRole("region", { name: "确认研究假设" })).getByRole(
+      "alert",
+    ),
+  ).toHaveTextContent("A事件保存失败");
+  await user.click(screen.getByRole("button", { name: "取消跟踪确认" }));
+  await user.click(screen.getByRole("button", { name: "持续跟踪另一个事件" }));
+  expect(
+    within(screen.getByRole("region", { name: "确认研究假设" })).queryByRole(
+      "alert",
+    ),
   ).not.toBeInTheDocument();
 });
 

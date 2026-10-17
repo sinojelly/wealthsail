@@ -121,6 +121,7 @@ const context = {
       label: "制造业 PMI",
       value: 50.1,
       state: "UNVERIFIED",
+      valueVerification: "VERIFIED",
       unit: "指数点",
       source: "国家统计局",
       sourceUri: "https://www.stats.gov.cn/pmi",

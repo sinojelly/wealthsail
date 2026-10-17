@@ -427,6 +427,7 @@ export interface OpportunityContext extends MacroContext {
     }>;
   } | null;
   directionModel?: {
+    summary?: string;
     methodVersion: string;
     state: string;
     supports: Array<{

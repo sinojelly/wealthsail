@@ -12,11 +12,11 @@
   gap: 18px;
 }
 .op-evidence-panel .op-compact-metrics {
-  align-items: start;
+  align-items: stretch;
 }
 .op-evidence-panel .op-compact-metric {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 .op-evidence-panel .op-compact-metric > p {
@@ -24,15 +24,52 @@
 }
 .op-evidence-panel .op-compact-metric > button {
   text-align: left;
-  margin-top: 4px;
+  margin-top: auto;
 }
 .op-evidence-groups {
   display: grid;
   gap: 10px;
 }
-.op-evidence-groups > div > button {
+.op-evidence-group > button {
   width: 100%;
   text-align: left;
+}
+.op-compact-explanation {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--op-muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.op-evidence-group,
+.op-evidence-pending {
+  min-width: 0;
+}
+.op-evidence-pending {
+  border-top: 1px solid var(--op-line, #dce5ee);
+  padding-top: 12px;
+  color: var(--op-muted, #64748b);
+}
+.op-evidence-pending > small {
+  display: block;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+.op-evidence-pending ul {
+  list-style: none;
+  padding: 0;
+}
+.op-evidence-pending li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--op-line, #dce5ee);
+  font-size: 12px;
 }
 .op-evidence-detail {
   padding: 16px;
@@ -56,6 +93,10 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+}
+.op-evidence-card.op-index-evidence .op-evidence-layout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
 }
 .op-evidence-card .op-evidence-facts {
   display: grid;

@@ -441,7 +441,11 @@ export interface ResearchBoardProps {
   onDirectionSelect?: (id: string) => void;
   hideTracking?: boolean;
   renderStudyTracking?: () => ReactNode;
-  onStudyEvent?: (reportRunId: string, eventId: string) => void;
+  onStudyEvent?: (
+    reportRunId: string,
+    eventId: string,
+    horizonDays: number,
+  ) => void;
   studyPending?: boolean;
   studyError?: string;
 }

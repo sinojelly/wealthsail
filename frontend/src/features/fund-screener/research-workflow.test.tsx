@@ -159,6 +159,76 @@ function show(path = "/fund-screener") {
     </MemoryRouter>,
   );
 }
+it("places major events before asset signals and keeps the official calendar secondary", () => {
+  const scoped = {
+    ...data,
+    researchOverview: {
+      ...data.researchOverview!,
+      highlights: [
+        item("signal"),
+        {
+          ...item("calendar"),
+          kind: "UPCOMING",
+          title: "下次官方发布",
+          asOf: "2026-10-20",
+        },
+      ],
+    },
+    dailyResearch: {
+      ...data.dailyResearch!,
+      report: {
+        ...data.dailyResearch!.report!,
+        events: [
+          {
+            id: "event",
+            title: "重要全球事件",
+            summary: "原始报道事实",
+            importance: "HIGH",
+            phase: "REPORTED",
+            channels: [],
+            affectedDirectionIds: [],
+            sourceIds: [],
+            watchFor: [],
+            unknowns: [],
+            scenarios: [],
+          },
+        ],
+      },
+    },
+  } as unknown as OpportunityContext;
+  render(
+    <MemoryRouter
+      initialEntries={["/fund-screener?researchOpen=1&researchTab=events"]}
+    >
+      <MacroContextStrip data={scoped} error={false} />
+    </MemoryRouter>,
+  );
+  const events = screen.getByRole("list", { name: "重要事件" });
+  const assets = screen.getByRole("region", { name: "当前资产观察" });
+  expect(
+    events.compareDocumentPosition(assets) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(screen.getByText(/下次官方发布/)).not.toBeVisible();
+});
+
+it("translates known diagnostics in the collapsed investment reading without changing the input", () => {
+  const original =
+    "PIT缺口，historyQuality=CONFLICT；SOURCE_CHECKED不代表影响已核实。";
+  const scoped = {
+    ...data,
+    researchOverview: { ...data.researchOverview!, summary: original },
+  };
+  render(
+    <MemoryRouter>
+      <MacroContextStrip data={scoped} error={false} />
+    </MemoryRouter>,
+  );
+  const header = screen
+    .getByRole("region", { name: "今日投资观察" })
+    .querySelector("header")!;
+  expect(header.textContent).not.toMatch(/PIT|historyQuality=|SOURCE_CHECKED/);
+  expect(scoped.researchOverview.summary).toBe(original);
+});
 async function openTab(name: string) {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
@@ -306,8 +376,12 @@ it("offers event tracking only for the displayed frozen report identity, never t
       onTrack={onTrack}
     />,
   );
-  await userEvent.click(screen.getByRole("button", { name: "跟踪能源事件" }));
-  expect(onTrack).toHaveBeenCalledWith("ready-yesterday", "event-1");
+  await userEvent.click(
+    screen.getByRole("button", { name: "持续跟踪能源事件" }),
+  );
+  expect(onTrack).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
+  expect(onTrack).toHaveBeenCalledWith("ready-yesterday", "event-1", 30);
   view.rerender(
     <DailyResearchReport
       data={{ ...data.dailyResearch!, report, reportRunId: null } as never}
@@ -315,7 +389,7 @@ it("offers event tracking only for the displayed frozen report identity, never t
     />,
   );
   expect(
-    screen.queryByRole("button", { name: "跟踪能源事件" }),
+    screen.queryByRole("button", { name: "持续跟踪能源事件" }),
   ).not.toBeInTheDocument();
 });
 

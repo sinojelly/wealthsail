@@ -28,14 +28,30 @@ import { useEvidenceChart } from "./useEvidenceChart";
 function HistoricalTrend({ item }: { item: MacroItem }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [plotRef, chart] = useEvidenceChart();
-  const history = (item.history ?? []).filter(
+  const supplied = item.history ?? [];
+  const history = supplied.filter(
     (p) =>
       Number.isFinite(p.value) &&
       Number.isFinite(Date.parse(p.asOf)) &&
       !["CONFLICT", "UNAVAILABLE"].includes(p.state ?? ""),
   );
-  if (!history.length) return <p>历史序列尚未采集，暂不绘制走势。</p>;
-  if (history.length < 2) return <p>历史样本不足，暂不绘制走势。</p>;
+  if (!supplied.length) return <p>历史序列尚未采集，暂不绘制走势。</p>;
+  if (history.length < 2) {
+    const reasons = [
+      supplied.some((point) => !Number.isFinite(point.value)) && "观察数值无效",
+      supplied.some((point) => !Number.isFinite(Date.parse(point.asOf))) &&
+        "观察日期无效",
+      supplied.some((point) =>
+        ["CONFLICT", "UNAVAILABLE"].includes(point.state ?? ""),
+      ) && "已排除冲突或不可用观察",
+    ].filter(Boolean);
+    return (
+      <p>
+        历史样本不足，暂不绘制走势。
+        {reasons.length ? reasons.join("；") : "至少需要两个有效实际样本。"}
+      </p>
+    );
+  }
   if (
     new Set(
       history.map((p) =>
@@ -407,6 +423,7 @@ export default function MacroContextStrip({
   directions = [],
   onDirectionSelect,
   selectedDirection,
+  selectedIndexId,
   onMonitor,
   monitorEnabled,
   monitorPending,
@@ -432,6 +449,7 @@ export default function MacroContextStrip({
   directions?: Direction[];
   onDirectionSelect?: (directionId: string) => void;
   selectedDirection?: Direction;
+  selectedIndexId?: string;
   onMonitor?: (enabled: boolean) => void;
   monitorEnabled?: boolean;
   monitorPending?: boolean;
@@ -445,7 +463,11 @@ export default function MacroContextStrip({
   onIndexSelect?: (id: string) => void;
   hideTracking?: boolean;
   renderStudyTracking?: () => ReactNode;
-  onStudyEvent?: (reportRunId: string, eventId: string) => void;
+  onStudyEvent?: (
+    reportRunId: string,
+    eventId: string,
+    horizonDays: number,
+  ) => void;
   studyPending?: boolean;
   studyError?: string;
 }) {
@@ -541,6 +563,9 @@ export default function MacroContextStrip({
                   <MacroEvidencePanel
                     data={readyData}
                     marketId={selectedDirection?.marketId}
+                    directionId={selectedDirection?.id}
+                    selectedIndexId={selectedIndexId}
+                    months={months}
                     renderMacro={(item) => (
                       <EvidenceCard
                         item={{

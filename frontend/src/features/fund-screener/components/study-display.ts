@@ -48,4 +48,40 @@ export const studyCatalog = [
   ["INDEX_PE", "指数滚动PE", "倍"],
 ] as const;
 export const studyMetricLabel = (code: string) =>
-  studyCatalog.find(([id]) => id === code)?.[1] ?? code;
+  studyCatalog.find(([id]) => id === code)?.[1] ?? "其他待核查指标";
+export const studySubjectLabel = (code?: string | null) =>
+  code
+    ? ((
+        { hs300: "沪深300", a500: "中证A500", zz500: "中证500" } as Record<
+          string,
+          string
+        >
+      )[code] ?? "关联标的待核查")
+    : "";
+export const studyOperatorLabel = (code: string) =>
+  (
+    ({ GT: "大于", GTE: "不低于", LT: "小于", LTE: "不高于" }) as Record<
+      string,
+      string
+    >
+  )[code] ?? "比较方式待核查";
+export const studyEffectLabel = (code: string) =>
+  (
+    ({
+      STRENGTHEN: "研究依据增强",
+      WEAKEN: "研究依据减弱",
+      TRIGGER: "预设条件触发",
+      INVALIDATE: "预设失效条件触发",
+    }) as Record<string, string>
+  )[code] ?? "条件影响待核查";
+export const studyConditionLabel = (condition: StudyCondition) =>
+  [
+    studyMetricLabel(condition.metric),
+    studySubjectLabel(condition.subjectKey),
+    studyOperatorLabel(condition.operator),
+    condition.threshold,
+    condition.unit,
+  ]
+    .filter((part) => part != null && part !== "")
+    .join(" ") + ` · ${studyEffectLabel(condition.effect)}`;
+import type { StudyCondition } from "../../../api/study-api";

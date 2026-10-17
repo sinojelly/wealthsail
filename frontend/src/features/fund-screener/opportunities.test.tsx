@@ -40,6 +40,8 @@ it("opens current-target frozen study tracking with full identity while keeping 
   await user.click(
     await screen.findByRole("button", { name: "跟踪当前标的研究" }),
   );
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
   expect(
     await screen.findByRole("tab", { name: "我的跟踪与复盘" }),
   ).toHaveAttribute("aria-selected", "true");
