@@ -286,6 +286,12 @@ async def main() -> None:
     )
 
     stop_event = asyncio.Event()
+    from backend.jobs.alpha_runtime import run_alpha_runtime
+
+    alpha_task = asyncio.create_task(
+        run_alpha_runtime(pool, settings, stop_event=stop_event),
+        name="wealthsail-alpha-phase2",
+    )
 
     def _request_stop(*_: object) -> None:
         stop_event.set()
@@ -307,6 +313,7 @@ async def main() -> None:
         opportunity_market_task.cancel()
         opportunity_monitor_task.cancel()
         recovery_task.cancel()
+        alpha_task.cancel()
         await scheduler.stop()
         await consumer.stop()
         await data_tasks.stop()
@@ -316,6 +323,7 @@ async def main() -> None:
             opportunity_market_task,
             opportunity_monitor_task,
             recovery_task,
+            alpha_task,
         ):
             try:
                 await task

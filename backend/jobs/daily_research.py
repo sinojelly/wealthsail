@@ -46,6 +46,11 @@ async def load_public_packet(conn, now, external):
     from backend.investment.opportunity_service import market_evidence
     from backend.investment.service import analysis, market_context
     from backend.macro import market_repository
+    from backend.macro.alpha_repository import read_alpha_public, merge_alpha_series
+    from backend.investment.theme_graph import read_themes, theme_plans
+    from backend.investment.strategy_memory import read_strategy_memory, public_memory
+    from backend.macro.alpha_research import extend_public_packet
+    from uuid import UUID
 
     context = await market_context(conn, now=now)
     permissions = await market_repository.read_permissions(conn)
@@ -76,10 +81,28 @@ async def load_public_packet(conn, now, external):
         row = market_evidence(index, result)
         row["actionableZones"] = result.get("actionableZones")
         evidence.append(row)
+    bundle = await read_alpha_public(conn, now)
+    series = merge_alpha_series(series, bundle, now)
+    themes = await read_themes(conn, now)
+    rules = []
+    settings = get_settings()
+    if settings.opportunity_tenant_id and settings.opportunity_user_id:
+        tenant, user = (
+            UUID(settings.opportunity_tenant_id),
+            UUID(settings.opportunity_user_id),
+        )
+        if await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM identity.tenant_members WHERE tenant_id=$1 AND user_id=$2 AND status='ACTIVE')",
+            tenant,
+            user,
+        ):
+            rules = public_memory(
+                await read_strategy_memory(conn, tenant, user, now), now
+            )
     directions = [dict(row) for row in await repository.directions(conn)]
     previous = await read_daily_research(conn, now)
     previous["history"] = await read_recent_public_research(conn, now)
-    return make_research_packet(
+    packet = make_research_packet(
         context,
         series,
         evidence,
@@ -88,6 +111,12 @@ async def load_public_packet(conn, now, external):
         previous=previous,
         external=external,
     )
+    packet.update(
+        extend_public_packet(
+            bundle, themes, theme_plans(themes, bundle, now), rules, previous, now
+        )
+    )
+    return packet
 
 
 async def sync_daily_research(pool, settings, now):
@@ -99,6 +128,22 @@ async def sync_daily_research(pool, settings, now):
     async with system_connection(pool) as conn:
         if await consumed(conn, stamp):
             return {"status": "SKIPPED"}
+    if getattr(settings, "alpha_public_enabled", False):
+        from backend.jobs.alpha_public import sync_alpha_public
+
+        await sync_alpha_public(pool, stamp)
+        async with system_connection(pool) as conn:
+            batch = await conn.fetchrow(
+                "SELECT status,claimed_at FROM market.alpha_public_batches WHERE run_date=$1",
+                stamp.date(),
+            )
+        current = local(now_shanghai())
+        if (
+            batch
+            and batch["status"] == "CLAIMED"
+            and current - batch["claimed_at"] < timedelta(minutes=10)
+        ):
+            return {"status": "WAITING_PUBLIC_DATA"}
     external = await collect_daily_sources(stamp)
     # HTTP finishes first: its observations are never backdated to 08:30.
     async with system_connection(pool) as conn:
@@ -189,7 +234,10 @@ async def run_daily_research_service(
             await wait(stop_event, delay)
             continue
         try:
-            await sync_daily_research(pool, settings, current)
+            outcome = await sync_daily_research(pool, settings, current)
+            if outcome.get("status") == "WAITING_PUBLIC_DATA":
+                due = local(now_provider()) + timedelta(seconds=60)
+                continue
         except Exception as exc:  # noqa: BLE001 -- daily failures do not stop other services
             logger.warning(
                 "daily_research_service_failed error_class=%s", type(exc).__name__

@@ -21,6 +21,16 @@ class _Request(BaseModel):
 
 
 class StudyScope(_Request):
+    theme_code: (
+        Literal[
+            "HAINAN_FTP",
+            "PUDONG_DEV",
+            "GEO_CRUDE_OIL",
+            "AI_MEMORY_HBM",
+            "COMMERCIAL_SPACE",
+        ]
+        | None
+    ) = Field(default=None, alias="themeCode")
     direction_id: str | None = Field(
         default=None, alias="directionId", min_length=1, max_length=100
     )

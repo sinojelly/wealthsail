@@ -89,9 +89,13 @@ async def nav_analysis(
     request_id=Depends(get_request_id),
 ):
     from backend.funds.service import get_range
+    from backend.investment.theme_graph import cached_nav_analysis
 
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        nav = await cached_nav_analysis(conn, fund_code, now_shanghai())
         facts = await get_range(conn, fund_code)
+    if nav:
+        return ok({**nav, "range": facts}, request_id=request_id, as_of=now_shanghai())
     return ok(
         {
             "state": "UNSUPPORTED"

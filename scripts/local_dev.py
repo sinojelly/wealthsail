@@ -142,6 +142,13 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
     }
     if os.environ.get("DAILY_RESEARCH_MODEL"):
         macro_settings["DAILY_RESEARCH_MODEL"] = json.dumps(os.environ["DAILY_RESEARCH_MODEL"])
+    # Keep the operator's scoped Phase2 configuration across generated restarts.
+    from dotenv import dotenv_values
+    previous = dotenv_values(LOCAL / "macro.env")
+    for name in ("ALPHA_PUBLIC_ENABLED", "ALPHA_OPPORTUNITY_ENABLED", "WECOM_OPPORTUNITY_WEBHOOK_URL", "OPPORTUNITY_TENANT_ID", "OPPORTUNITY_USER_ID"):
+        value = os.environ.get(name, previous.get(name))
+        if value is not None:
+            macro_settings[name] = json.dumps(value)
     (LOCAL / "macro.env").write_text(
         "\n".join(f"{key}={value}" for key, value in macro_settings.items()) + "\n", encoding="utf-8")
 
@@ -445,7 +452,7 @@ def service_commands(args: argparse.Namespace) -> list[tuple[str, list[str], Pat
 def service_environment(name: str, env: dict[str, str]) -> dict[str, str]:
     if name == "macro":
         return {**env, "WEALTHSAIL_ENV_FILE": str(LOCAL / "macro.env")}
-    return dict(env)
+    return {key:value for key,value in env.items() if key not in {"WECOM_OPPORTUNITY_WEBHOOK_URL","OPPORTUNITY_TENANT_ID","OPPORTUNITY_USER_ID"}}
 
 
 def serve(args: argparse.Namespace, env: dict[str, str]) -> None:

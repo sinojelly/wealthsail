@@ -170,6 +170,7 @@ async def test_job_loads_only_public_ready_history_and_keeps_latest_attempt_sepa
     )
     conn = AsyncMock()
     conn.fetch.return_value = []
+    conn.fetchrow.return_value = None
     result = await job.load_public_packet(conn, NOW, {})
     assert result["previousResearch"][0]["reportRunId"] == "ready-1"
     job.read_recent_public_research.assert_awaited_once_with(conn, NOW)

@@ -206,7 +206,14 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
                 scope or origin.get("scope") or origin.get("selection") or {}
             ).items()
             if key
-            in {"directionId", "indexId", "instrumentId", "fundCode", "fundMarket"}
+            in {
+                "directionId",
+                "indexId",
+                "instrumentId",
+                "fundCode",
+                "fundMarket",
+                "themeCode",
+            }
             and value is not None
         },
         "createdAt": now.isoformat(),

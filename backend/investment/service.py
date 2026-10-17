@@ -566,7 +566,7 @@ def _analysis_with_plan(result, kind, subject_id):
     }
 
 
-async def analysis(conn, kind, subject_id):
+async def _research_analysis(conn, kind, subject_id):
     from backend.market import index_policy
 
     row = await conn.fetchrow(
@@ -806,6 +806,23 @@ async def analysis(conn, kind, subject_id):
         kind,
         subject_id,
     )
+
+
+async def analysis(conn, kind, subject_id):
+    result = await _research_analysis(conn, kind, subject_id)
+    if kind == "fund":
+        from backend.investment.theme_graph import cached_nav_analysis
+
+        code = await conn.fetchval(
+            "SELECT fund_code FROM reference.research_fund_catalog WHERE instrument_id::text=$1",
+            str(subject_id),
+        )
+        nav = await cached_nav_analysis(
+            conn, code, now_shanghai(), subject_kind="fund", subject_id=str(subject_id)
+        )
+        if nav and nav["dataQuality"] == "READY":
+            result["actionableZones"] = nav["actionableZones"]
+    return result
 
 
 async def enqueue_refresh(conn, tenant_id, body):

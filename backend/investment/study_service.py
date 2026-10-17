@@ -65,7 +65,10 @@ async def validate_scope(conn, scope, now):
         "fundCode": "fund_code",
         "fundMarket": "fund_market",
     }
-    await validate(conn, {names[key]: value for key, value in scope.items()}, now)
+    from backend.investment.theme_graph import THEMES
+    if scope.get("themeCode") is not None and scope["themeCode"] not in THEMES:
+        raise ValidationError_("未知研究主题")
+    await validate(conn, {names[key]: value for key, value in scope.items() if key in names}, now)
     result = dict(scope)
     if result.get("instrumentId") or result.get("fundCode"):
         identity = await resolve_instrument(
@@ -258,6 +261,8 @@ async def get_detail(
     detail["review"] = review_evidence(
         snapshot, snapshot.get("observations") or [], observations, trades, now=now
     )
+    excursion=await conn.fetchrow("SELECT * FROM research.study_excursions WHERE tenant_id=$1 AND user_id=$2 AND track_id=$3 AND version_id=$4 AND updated_at<=$5",tenant_id,user_id,track_id,detail["version"]["id"],now)
+    detail["excursions"]={"mfePct":str(excursion["mfe_pct"]),"maePct":str(excursion["mae_pct"]),"baseAsOf":excursion["base_as_of"].isoformat(),"lastAsOf":excursion["last_as_of"].isoformat(),"sampleCount":excursion["sample_count"],"priceBasis":excursion["price_basis"],"unit":excursion["unit"]} if excursion else None
     return detail
 
 
@@ -289,6 +294,7 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
             fund_code=scope.get("fundCode"),
             fund_market=scope.get("fundMarket"),
             now=now,
+            theme_code=scope.get("themeCode"),
         )
         model = context.get("directionModel") or {}
         selected_plan = None
@@ -548,9 +554,18 @@ async def append_note(
                 throughCheckId=str(row["id"]),
                 throughCheckedAt=row["evaluated_at"].isoformat(),
             )
-    await repository.add_note(
+    saved_note = await repository.add_note(
         conn, track, version["id"], data["kind"], payload, key, digest, now
     )
+    if saved_note is not None and data["kind"] == "REVIEW":
+        from backend.investment.strategy_memory import (
+            refresh_strategy_memory,
+            theme_for_snapshot,
+        )
+
+        await refresh_strategy_memory(
+            conn, tenant_id, user_id, theme_for_snapshot(version["snapshot"]), now
+        )
     return await get_detail(conn, tenant_id, user_id, track_id, now)
 
 
@@ -586,5 +601,21 @@ async def link_trade(conn, tenant_id, user_id, track_id, request, now):
     fill = next((row for row in rows if row["fillId"] == str(data["fillId"])), None)
     if fill is None:
         raise NotFoundError("不存在符合研究标的和本人账户范围的已确认成交")
-    await repository.add_trade_link(conn, track, version, fill, data["reason"], now)
+    saved_link = await repository.add_trade_link(
+        conn, track, version, fill, data["reason"], now
+    )
+    if saved_link is not None:
+        from backend.investment.strategy_memory import (
+            refresh_memory_for_trade,
+            theme_for_snapshot,
+        )
+
+        await refresh_memory_for_trade(
+            conn,
+            tenant_id,
+            user_id,
+            data["fillId"],
+            theme_for_snapshot(version["snapshot"]),
+            now,
+        )
     return await get_detail(conn, tenant_id, user_id, track_id, now)

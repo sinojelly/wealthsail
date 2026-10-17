@@ -22,6 +22,16 @@ def service():
 
 def dependencies(monkeypatch):
     module = service()
+    from backend.macro import alpha_repository
+    from backend.investment import theme_graph
+
+    monkeypatch.setattr(
+        alpha_repository, "read_alpha_public", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(theme_graph, "read_themes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        theme_graph, "cached_nav_analysis", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(
         module,
         "read_daily_research",
@@ -72,6 +82,34 @@ def dependencies(monkeypatch):
         ),
     )
     return module
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market", ["SSE", "HK", None])
+async def test_nav_fallback_cannot_relabel_mainland_code_as_other_or_unknown_market(
+    monkeypatch, market
+):
+    module = dependencies(monkeypatch)
+    from backend.investment import theme_graph
+
+    cached = AsyncMock(
+        return_value={
+            "actionableZones": {
+                "subjectKind": "nav",
+                "subjectId": "008281",
+                "priceBasis": "UNIT_NAV",
+                "market": "FUND_CN",
+                "tracks": [],
+            }
+        }
+    )
+    monkeypatch.setattr(theme_graph, "cached_nav_analysis", cached)
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    result = await module.get_context(
+        conn, "tenant-a", "user-a", fund_code="008281", fund_market=market, now=NOW
+    )
+    assert result["decision"].get("actionableZones") is None
 
 
 @pytest.mark.asyncio

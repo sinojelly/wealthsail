@@ -176,6 +176,7 @@ async def get_context(
     months=36,
     now=None,
     can_manage_operations=False,
+    theme_code=None,
 ):
     now = now or now_shanghai()
     direction = {
@@ -256,6 +257,12 @@ async def get_context(
         permissions=permissions,
         source_results=collected.get("sourceResults", {}),
     )
+    from backend.macro.alpha_repository import read_alpha_public, merge_alpha_series
+    from backend.investment.theme_graph import read_themes, cached_nav_analysis
+
+    alpha_public = await read_alpha_public(conn, now)
+    series = merge_alpha_series(series, alpha_public, now)
+    themes = await read_themes(conn, now, theme_code)
     evidence = []
     for index in selected[:5]:
         result = await analysis(conn, "index", index["id"])
@@ -304,6 +311,27 @@ async def get_context(
     daily = await read_daily_research(
         conn, now, enabled=get_settings().daily_research_enabled
     )
+    if fund_code and (fund_market == "FUND_CN" or identity is not None):
+        from backend.investment.decision import evaluate
+
+        nav = await cached_nav_analysis(
+            conn,
+            fund_code,
+            now,
+            subject_kind="fund" if identity else "nav",
+            subject_id=str(identity) if identity else fund_code,
+        )
+        if nav:
+            portfolio = personal.get("portfolio") or {}
+            personal["decision"] = evaluate(
+                held=portfolio.get("heldSelected"),
+                portfolio=portfolio,
+                budget_violation=portfolio.get("budgetViolation") is True,
+                direction_model=model,
+                actionable_zones=nav["actionableZones"],
+            )
+    if theme_code and (personal.get("decision") or {}).get("actionableZones"):
+        personal["decision"]["actionableZones"]["themeCode"] = theme_code
     plans = [row["actionableZones"] for row in evidence]
     selected_plan = (personal.get("decision") or {}).get("actionableZones")
     if selected_plan and not any(
@@ -327,4 +355,10 @@ async def get_context(
         "selectionState": selection_state,
         "dailyResearch": daily,
         "actionableZones": plans,
+        "alphaPublic": {
+            key: value
+            for key, value in alpha_public.items()
+            if key not in {"fundHistories"}
+        },
+        "themes": themes,
     }

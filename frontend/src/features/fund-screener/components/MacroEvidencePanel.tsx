@@ -32,8 +32,24 @@ const categories = [
       "CN_T10",
       "DR007",
       "M1_YOY",
+      "M1_M2_GAP",
+      "SHIBOR_7D",
       "TSF_STOCK_YOY",
       "CORP_MEDLONG_LOANS_YTD",
+    ],
+  },
+  {
+    id: "housing",
+    label: "四城地产",
+    codes: [
+      "HOUSE_HAIKOU_NEW_MOM",
+      "HOUSE_HAIKOU_SECOND_MOM",
+      "HOUSE_SANYA_NEW_MOM",
+      "HOUSE_SANYA_SECOND_MOM",
+      "HOUSE_SHANGHAI_NEW_MOM",
+      "HOUSE_SHANGHAI_SECOND_MOM",
+      "HOUSE_SHENZHEN_NEW_MOM",
+      "HOUSE_SHENZHEN_SECOND_MOM",
     ],
   },
   { id: "global", label: "全球风险与市场", codes: [] },
@@ -41,7 +57,7 @@ const categories = [
 const categoryFor = (code: string) =>
   categories.find((category) =>
     (category.codes as readonly string[]).includes(code),
-  ) ?? categories[3];
+  ) ?? categories[categories.length - 1];
 type IndicatorId =
   | `macro:${string}`
   | `series:${string}`

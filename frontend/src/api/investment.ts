@@ -175,6 +175,75 @@ export interface OpportunityScope {
   instrumentId?: string;
   fundCode?: string;
   fundMarket?: string;
+  themeCode?: ThemeCode;
+}
+export type ThemeCode =
+  | "HAINAN_FTP"
+  | "PUDONG_DEV"
+  | "GEO_CRUDE_OIL"
+  | "AI_MEMORY_HBM"
+  | "COMMERCIAL_SPACE";
+export interface ThemeGraphRow {
+  themeCode: ThemeCode;
+  themeLabel: string;
+  assetKind: string;
+  assetCode: string;
+  assetName: string;
+  market: string | null;
+  instrumentId?: string | null;
+  relationshipType: string;
+  sourceUri: string | null;
+  metadata?: Record<string, unknown>;
+}
+export interface AlphaObservation {
+  code: string;
+  value: PlanPrice;
+  unit?: string | null;
+  referenceDate?: string | null;
+  asOf?: string | null;
+  retrievedAt?: string | null;
+  publishedAt?: string | null;
+  sourceUri?: string | null;
+  sourceName?: string | null;
+  state?: string;
+}
+export interface AlphaPublic {
+  asOf?: string | null;
+  observations?: AlphaObservation[];
+  catalysts?: Array<{
+    id: string;
+    title: string;
+    content?: string;
+    publishedAt?: string | null;
+    retrievedAt?: string | null;
+    sourceUri?: string | null;
+  }>;
+  odds?: Array<{
+    marketId: string;
+    question: string;
+    outcome: string;
+    impliedProbabilityPct: PlanPrice;
+    observedAt?: string | null;
+    retrievedAt?: string | null;
+    sourceUri?: string | null;
+  }>;
+  launches?: Array<{
+    id: string;
+    name: string;
+    phase: string;
+    scheduledAt?: string | null;
+    retrievedAt?: string | null;
+    sourceUri?: string | null;
+  }>;
+  sourceResults?: Record<
+    string,
+    {
+      status: string;
+      records?: number;
+      retrievedAt?: string | null;
+      limitations?: string[];
+    }
+  >;
 }
 export interface OpportunityQuery extends OpportunityScope {
   months: number;
@@ -287,8 +356,17 @@ export interface ActionableZoneResult {
   selectedTrack?: PlanTrack;
   parameters?: Record<string, number | number[]>;
   orderPriceAvailable?: boolean;
+  themeCode?: ThemeCode | "UNCLASSIFIED" | null;
+  track?: PlanTrack;
+  priceRevisionStatus?:
+    "INITIAL" | "UPGRADED" | "DOWNGRADED" | "TAKE_PROFIT_ALERT";
+  priceRevisionNote?: string | null;
+  calibrationRuleKeys?: string[];
+  calibrationNote?: string | null;
 }
 export interface OpportunityContext extends MacroContext {
+  themes?: ThemeGraphRow[];
+  alphaPublic?: AlphaPublic | null;
   actionableZones?: ActionableZoneResult[];
   dailyResearch?: DailyResearch | null;
   series?: OpportunitySeries[];
@@ -376,6 +454,8 @@ export interface DailyResearch {
     methodVersion?: string;
     asOf?: string;
     summary: string;
+    macroCycle?: string | null;
+    actionablePlans?: ActionableZoneResult[];
     coverage: Array<{ topic: string; status: string; summary: string }>;
     sources: Array<{
       id: string;

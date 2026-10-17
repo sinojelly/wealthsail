@@ -25,6 +25,7 @@ from backend.jobs.investment_macro_refresh import (
 )
 from backend.jobs.macro_evidence import run_macro_evidence_service, sync_macro_evidence
 from backend.jobs.daily_research import run_daily_research_service
+from backend.jobs.alpha_public import sync_alpha_public
 
 logger = logging.getLogger("wealthsail.macro_worker")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -249,9 +250,18 @@ async def _serve(pool, settings=None):
         independent(run_index_research_service), name="wealthsail-index-research"
     )
     daily = asyncio.create_task(
-        independent(lambda pool, *, stop_event: run_daily_research_service(
-            pool, settings, stop_event=stop_event
-        )), name="wealthsail-daily-research"
+        independent(
+            lambda pool, *, stop_event: run_daily_research_service(
+                pool, settings, stop_event=stop_event
+            )
+        ),
+        name="wealthsail-daily-research",
+    )
+    from backend.jobs.alpha_runtime import run_alpha_runtime
+
+    alpha = asyncio.create_task(
+        run_alpha_runtime(pool, settings, stop_event=stop_event, include_daily=False),
+        name="wealthsail-alpha-phase2",
     )
     stopping = asyncio.create_task(stop_event.wait())
     try:
@@ -261,11 +271,19 @@ async def _serve(pool, settings=None):
         if service in done:
             await service
     finally:
-        for task in (service, official, market, monitor, index, daily, stopping):
+        for task in (service, official, market, monitor, index, daily, alpha, stopping):
             if not task.done():
                 task.cancel()
         await asyncio.gather(
-            service, official, market, monitor, index, daily, stopping, return_exceptions=True
+            service,
+            official,
+            market,
+            monitor,
+            index,
+            daily,
+            alpha,
+            stopping,
+            return_exceptions=True,
         )
         for sig in installed:
             loop.remove_signal_handler(sig)
@@ -307,6 +325,18 @@ async def main(argv=None) -> int:
                     "status": "UNAVAILABLE",
                     "errorClass": type(exc).__name__,
                 }
+            if settings.alpha_public_enabled:
+                try:
+                    result["alphaPublic"] = await sync_alpha_public(
+                        pool, _now_shanghai()
+                    )
+                except Exception as exc:  # noqa: BLE001 -- public source failure is independent
+                    result["alphaPublic"] = {
+                        "status": "FAILED",
+                        "errorClass": type(exc).__name__,
+                    }
+            else:
+                result["alphaPublic"] = {"status": "DISABLED"}
             print(json.dumps(result, ensure_ascii=False, default=str))
             return 0 if result["status"] == "COMPLETED" else 1
         logger.info(

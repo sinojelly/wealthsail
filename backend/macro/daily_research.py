@@ -12,9 +12,10 @@ from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
+from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-alpha-v2"
+PROMPT_VERSION = "daily-research-alpha-v2-phase2"
 
 
 class _Strict(BaseModel):
@@ -81,6 +82,8 @@ class _Report(_Strict):
     upcoming: list[_Upcoming] = Field(max_length=12)
     # Only select program-supplied series; the model cannot author energy values.
     energy: list[Literal["DCOILBRENTEU", "GASDESW"]] = Field(max_length=2)
+    macroCycle: str = Field(min_length=1, max_length=1000)
+    actionablePlans: list[ActionableProposal] = Field(max_length=24)
 
 
 REPORT_SCHEMA = _Report.model_json_schema()
@@ -710,6 +713,9 @@ def build_prompt(packet):
         "给出原始来源链接和不超过300字符的原文短引文；SOURCE_CHECKED仅证明原文核对，不认证摘要、传导或预测。\n"
         "结合情景给出预期差、概率估计与买卖思路，写清估计依据、反方和失效条件；预测与实际观察分别表述。\n"
         "使用actionableZones中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
+        "给出macroCycle宏观周期定位及其不确定项；结合alphaPublic的M1-M2、信用、收益率、四城房价、媒体、市场隐含赔率与发射计划分析五大主题传导，计划/市场价格不等于已发生事实。\n"
+        "actionablePlans只选择themeActionableZones中的themeCode/subjectKind/subjectId/track。价格由服务器复制；没有有效锚点时不输出该标的计划。与previousActionablePlans比较，无前次同标的同轨为INITIAL，否则UPGRADED/DOWNGRADED并写priceRevisionNote；达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
+        "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金最新高仓位未核验时只作候选，不能从主题名称制造持仓事实。\n"
         "PB、真实PIT或MA200不足不全局阻止机会发现，分别披露所依赖指标及价格完整度，不虚构未做的历史胜率或经验。\n"
         "不使用中债/CFETS受限来源，不绕过403；无实际价格前后证据时marketReaction保持UNVERIFIED。\n"
         "energy仅选择包中真实可用的序列code，不生成能源数值；保留布伦特与柴油单位/频率差异。\n"
@@ -729,6 +735,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         raise ValueError("completion predates public input")
     if isinstance(raw, str):
         raw = json.loads(raw, object_pairs_hook=_unique_object)
+    if "themeActionableZones" not in packet:
+        # Compatibility for pre-Phase2 packets only, never a new model request.
+        raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
     report = _Report.model_validate(raw).model_dump()
     _safe_narrative(report)
     directions = {row["id"] for row in packet.get("directions", [])}
@@ -849,6 +858,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         "events": sorted(events.values(), key=lambda r: r["id"]),
         "upcoming": sorted(upcoming.values(), key=lambda r: r["id"]),
         "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
+        "actionablePlans": validate_actionable_plans(
+            report["actionablePlans"], packet, completed_at
+        ),
     }
 
 

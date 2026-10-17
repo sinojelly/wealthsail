@@ -226,15 +226,19 @@ async def test_once_forces_refresh_prints_source_coverage_and_closes_pool(
         }
     )
     ensure = AsyncMock()
+    alpha = AsyncMock(return_value={"status": "PARTIAL", "runDate": "2026-10-18"})
     monkeypatch.setattr(worker, "get_settings", lambda: settings)
     monkeypatch.setattr(worker, "create_pool", create)
     monkeypatch.setattr(worker, "verify_runtime_login_boundary", verify)
     monkeypatch.setattr(worker, "refresh_macro_history", forced)
     monkeypatch.setattr(worker, "ensure_macro_history", ensure)
+    monkeypatch.setattr(worker, "sync_alpha_public", alpha, raising=False)
     assert await worker.main(["--once"]) == exit_code
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == status
     assert result["coverage"]["CPI_YOY"]["missingPeriods"] == ["2023-02"]
+    assert result["alphaPublic"]["status"] == "PARTIAL"
+    alpha.assert_awaited_once()
     forced.assert_awaited_once()
     ensure.assert_not_awaited()
     assert create.await_args.args == (settings.worker_database_url,)

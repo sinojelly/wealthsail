@@ -1,6 +1,7 @@
 """Current selected market and the authenticated user's private decision facts."""
 
 from uuid import UUID
+from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from backend.common.database import tenant_transaction
 from backend.dependencies import (
@@ -31,6 +32,10 @@ async def opportunity_context(
         default=None, alias="fundMarket", min_length=1, max_length=30
     ),
     months: int = Query(default=36, ge=1, le=120),
+    theme_code: Literal[
+        "HAINAN_FTP", "PUDONG_DEV", "GEO_CRUDE_OIL", "AI_MEMORY_HBM", "COMMERCIAL_SPACE"
+    ]
+    | None = Query(default=None, alias="themeCode"),
     pool=Depends(get_pool),
     ctx=Depends(get_tenant_context),
     request_id=Depends(get_request_id),
@@ -46,6 +51,7 @@ async def opportunity_context(
             fund_code=fund_code,
             fund_market=fund_market,
             months=months,
+            theme_code=theme_code,
             can_manage_operations=ctx.is_owner_or_admin,
         )
     return ok(data, request_id=request_id, as_of=now_shanghai())

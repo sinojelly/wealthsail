@@ -15,6 +15,13 @@ import {
 } from "./study-display";
 import StudyVersionEditor from "./StudyVersionEditor";
 import ActionablePlan from "./ActionablePlan";
+import Decimal from "decimal.js";
+
+function excursionLabel(value: string | null | undefined) {
+  if (value == null || value.trim() === "" || !Number.isFinite(Number(value)))
+    return "—";
+  return `${new Decimal(value).toFixed(2, Decimal.ROUND_HALF_UP)}%`;
+}
 export interface StudyTrackingProps {
   actor: string;
   scope: api.StudyScope;
@@ -265,8 +272,38 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               </section>
             ))}
             <p>{snapshot.thesis}</p>
+            {value?.excursions &&
+              (!selectedVersion || selectedVersion.id === current?.id) && (
+                <section aria-label="行情研究表现">
+                  <h5>冻结计划后的行情研究表现</h5>
+                  <p>
+                    同口径行情偏移，不是实际盈亏；不含个人仓位、成交费用或现金流。
+                  </p>
+                  <p>
+                    最大有利偏移（MFE）：
+                    {excursionLabel(value.excursions.mfePct)}
+                  </p>
+                  <p>
+                    最大不利偏移（MAE）：
+                    {excursionLabel(value.excursions.maePct)}
+                  </p>
+                  <p>
+                    {value.excursions.sampleCount ?? "未知"}个实际样本 ·{" "}
+                    {timeLabel(value.excursions.baseAsOf)}至
+                    {timeLabel(value.excursions.lastAsOf)} · 口径：
+                    {value.excursions.priceBasis ?? "未确认"}
+                  </p>
+                  {(value.excursions.mfePct == null ||
+                    value.excursions.maePct == null) && (
+                    <p>行情证据尚未齐备，未知偏移不视为零。</p>
+                  )}
+                  {value.excursions.reasons?.map((reason, index) => (
+                    <p key={index}>{reason}</p>
+                  ))}
+                </section>
+              )}
             {snapshot.actionablePlan && (
-              <ActionablePlan result={snapshot.actionablePlan} />
+              <ActionablePlan result={snapshot.actionablePlan} frozen />
             )}
             {!!snapshot.unknowns?.length && (
               <section aria-label="原始研究未知事项">

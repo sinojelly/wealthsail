@@ -144,6 +144,17 @@ export interface StudyTradeLink {
   fill: EligibleStudyTrade;
 }
 export interface StudyDetail {
+  excursions?: {
+    state?: string;
+    mfePct: string | null;
+    maePct: string | null;
+    baseAsOf: string | null;
+    lastAsOf: string | null;
+    sampleCount: number | null;
+    priceBasis: string | null;
+    unit: string | null;
+    reasons?: string[];
+  } | null;
   track: StudyTrack;
   version: StudyVersion;
   versions: StudyVersion[];

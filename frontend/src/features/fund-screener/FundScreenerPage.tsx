@@ -21,6 +21,7 @@ import ActionablePlan from "./components/ActionablePlan";
 import { metricValue, timeLabel } from "./macro-display";
 import StudyTracking from "./components/StudyTracking";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
+import { themeOptions } from "./theme-display";
 import "./opportunities.css";
 
 export default function FundScreenerPage() {
@@ -69,6 +70,9 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     : (params.get("index") ?? indices.data?.[0]?.id ?? null);
   const index = indices.data?.find((i) => i.id === indexId);
   const fundCode = params.get("fund");
+  const themeCode = themeOptions.find(
+    (row) => row.code === params.get("theme"),
+  )?.code;
   const selection: Selection = {
     directionId,
     indexId,
@@ -115,6 +119,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     instrumentId: selectedFund?.instrumentId ?? selection.fundId ?? undefined,
     fundCode: fundCode ?? undefined,
     fundMarket: selectedFund?.market ?? selection.fundMarket ?? undefined,
+    ...(themeCode ? { themeCode } : {}),
   };
   const opportunityKey = [
     subject,
@@ -124,6 +129,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     opportunityScope.instrumentId ?? null,
     fundCode,
     opportunityScope.fundMarket ?? null,
+    themeCode ?? null,
     macroMonths,
   ] as const;
   const studyScopeKey = JSON.stringify(opportunityKey.slice(0, -1));
@@ -319,6 +325,28 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       }),
     );
   }
+  function selectThemeAsset(row: api.ThemeGraphRow) {
+    setDirect({
+      kind: "fund",
+      id: row.instrumentId ?? "",
+      code: row.assetCode,
+      name: row.assetName,
+      fundName: row.assetName,
+      fundCode: row.assetCode,
+      instrumentId: row.instrumentId ?? null,
+      market: row.market ?? undefined,
+      tradeForm: row.assetKind === "ETF" ? "ETF" : "FUND",
+      directionId: null,
+      indexId: null,
+    });
+    updateSelection({
+      directionId: null,
+      indexId: null,
+      fundId: row.instrumentId ?? null,
+      fundCode: row.assetCode,
+      fundMarket: row.market,
+    });
+  }
   function filter(k: string, v: string) {
     const p = new URLSearchParams(params);
     if (v) p.set(k, v);
@@ -391,6 +419,17 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       />
       <MacroContextStrip
         data={radarData}
+        selectedTheme={themeCode}
+        onThemeSelect={(code) =>
+          setParams((current) => {
+            const next = new URLSearchParams(current);
+            if (code) next.set("theme", code);
+            else next.delete("theme");
+            next.delete("studyTrack");
+            return next;
+          })
+        }
+        onThemeAssetSelect={selectThemeAsset}
         renderStudyTracking={() => (
           <StudyTracking actor={subject} scope={opportunityScope} />
         )}

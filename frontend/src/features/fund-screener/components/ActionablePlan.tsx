@@ -22,10 +22,12 @@ export default function ActionablePlan({
   result,
   onTrack,
   pending = false,
+  frozen = false,
 }: {
   result: ActionableZoneResult;
   onTrack?: (track: PlanTrack) => void;
   pending?: boolean;
+  frozen?: boolean;
 }) {
   const basis = result.priceBasis;
   const unit =
@@ -54,12 +56,30 @@ export default function ActionablePlan({
       aria-label={`${result.label}双轨计划`}
     >
       <h3>{result.label} · 双轨计划</h3>
+      {result.priceRevisionStatus && (
+        <p>
+          计划调整：
+          {(
+            {
+              INITIAL: "初始计划",
+              UPGRADED: "上调价格区间",
+              DOWNGRADED: "下调价格区间",
+              TAKE_PROFIT_ALERT: "止盈复核提示",
+            } as Record<string, string>
+          )[result.priceRevisionStatus] ?? "调整状态待核对"}
+        </p>
+      )}
+      {result.priceRevisionNote && <p>{result.priceRevisionNote}</p>}
+      {result.calibrationNote && <p>复盘校准：{result.calibrationNote}</p>}
       <p>
         实际观察：{price(result.currentPrice)} {unit} · {timeLabel(result.asOf)}
       </p>
       <p>{coordinate}</p>
-      {result.selectedTrack && (
-        <p>冻结轨道：{planTrackLabel(result.selectedTrack)}</p>
+      {(result.selectedTrack ?? result.track) && (
+        <p>
+          {frozen ? "冻结轨道" : "研究轨道"}：
+          {planTrackLabel((result.selectedTrack ?? result.track)!)}
+        </p>
       )}
       <div className="op-plan-tracks">
         {result.tracks.map((track) => (
@@ -100,6 +120,9 @@ export default function ActionablePlan({
       </div>
       <details>
         <summary>价格依据与算法</summary>
+        {!!result.calibrationRuleKeys?.length && (
+          <p>结构化复盘规则：{result.calibrationRuleKeys.join("、")}</p>
+        )}
         <p>
           方法：{result.methodVersion} · 价格口径：{result.priceBasis} · 标的：
           {result.subjectId}

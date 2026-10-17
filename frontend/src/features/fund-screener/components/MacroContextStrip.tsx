@@ -4,6 +4,8 @@ import type {
   Direction,
   OpportunityContext,
   MacroEvent,
+  ThemeCode,
+  ThemeGraphRow,
 } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import DailyResearchReport, {
@@ -11,6 +13,7 @@ import DailyResearchReport, {
 } from "./DailyResearchReport";
 import MacroEvidencePanel from "./MacroEvidencePanel";
 import ActionablePlan from "./ActionablePlan";
+import Phase2Evidence, { ThemeResearch } from "./Phase2Evidence";
 function MacroEvents({
   events,
   state,
@@ -81,6 +84,9 @@ export default function MacroContextStrip({
   onStudyEvent,
   studyPending,
   studyError,
+  selectedTheme,
+  onThemeSelect,
+  onThemeAssetSelect,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -100,6 +106,9 @@ export default function MacroContextStrip({
   ) => void;
   studyPending?: boolean;
   studyError?: string;
+  selectedTheme?: ThemeCode;
+  onThemeSelect?: (code: ThemeCode | undefined) => void;
+  onThemeAssetSelect?: (asset: ThemeGraphRow) => void;
 }) {
   const [params, setParams] = useSearchParams();
   const panelId = useId();
@@ -222,6 +231,18 @@ export default function MacroContextStrip({
           >
             {tab === "events" && (
               <>
+                <ThemeResearch
+                  rows={ready?.themes}
+                  selected={selectedTheme}
+                  onSelect={onThemeSelect}
+                  onAssetSelect={onThemeAssetSelect}
+                />
+                {ready?.dailyResearch?.report?.macroCycle && (
+                  <section aria-label="宏观周期研究观点">
+                    <h3>宏观周期 · 模型观点</h3>
+                    <p>{ready.dailyResearch.report.macroCycle}</p>
+                  </section>
+                )}
                 <DailyResearchReport
                   data={ready?.dailyResearch}
                   directions={directions}
@@ -230,6 +251,19 @@ export default function MacroContextStrip({
                   trackingPending={studyPending}
                   trackingError={studyError}
                 />
+                {!!ready?.dailyResearch?.report?.actionablePlans?.length && (
+                  <section aria-label="日报结构化研究计划">
+                    <h3>日报结构化研究计划</h3>
+                    {ready.dailyResearch.report.actionablePlans.map(
+                      (result) => (
+                        <ActionablePlan
+                          key={`${result.themeCode}:${result.subjectKind}:${result.subjectId}:${result.track ?? result.selectedTrack}`}
+                          result={result}
+                        />
+                      ),
+                    )}
+                  </section>
+                )}
                 {(ready?.actionableZones ?? []).map((result) => (
                   <ActionablePlan
                     key={`${result.subjectKind}:${result.subjectId}`}
@@ -274,13 +308,16 @@ export default function MacroContextStrip({
                   </select>
                 </label>
                 {ready && (
-                  <MacroEvidencePanel
-                    data={ready}
-                    marketId={selectedDirection?.marketId}
-                    directionId={selectedDirection?.id}
-                    selectedIndexId={selectedIndexId}
-                    months={months}
-                  />
+                  <>
+                    <MacroEvidencePanel
+                      data={ready}
+                      marketId={selectedDirection?.marketId}
+                      directionId={selectedDirection?.id}
+                      selectedIndexId={selectedIndexId}
+                      months={months}
+                    />
+                    <Phase2Evidence data={ready} />
+                  </>
                 )}
               </>
             )}

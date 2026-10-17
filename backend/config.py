@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     daily_research_model: str | None = Field(default=None)
     daily_research_catch_up: bool = Field(default=True)
     daily_research_timeout_seconds: float = Field(default=900, ge=30, le=1200)
+    alpha_public_enabled: bool = Field(default=True)
+    alpha_opportunity_enabled: bool = Field(default=True)
+    wecom_opportunity_webhook_url: str = Field(default="", repr=False)
+    opportunity_tenant_id: str = Field(default="")
+    opportunity_user_id: str = Field(default="")
 
     # --- Market instrument master -------------------------------------------
     # AkShare downloads whole-market symbol tables on a cold cache. Production
@@ -276,7 +281,8 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
             raise ValueError("SMTP_PASSWORD is required when SMTP_USERNAME is configured")
         if settings.worker_database_url.strip():
             raise ValueError("WORKER_DATABASE_URL must not be provided to the API")
-        if settings.wecom_corp_secret or settings.wecom_bot_secret or settings.model_api_key:
+        if (settings.wecom_corp_secret or settings.wecom_bot_secret or settings.model_api_key
+            or settings.wecom_opportunity_webhook_url):
             raise ValueError("Worker/model sending credentials must not be provided to the API")
         if not settings.web_base_url.lower().startswith("https://"):
             raise ValueError("WEB_BASE_URL must use HTTPS in production")

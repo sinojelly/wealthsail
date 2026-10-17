@@ -23,9 +23,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import uuid
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import websockets
 
 logger = logging.getLogger("wealthsail.wecom_bot")
@@ -259,3 +262,88 @@ async def close_bot_clients() -> None:
     _clients.clear()
     if clients:
         await asyncio.gather(*(client.close() for client in clients))
+
+
+class _OpportunityWebhookLogFilter(logging.Filter):
+    """HTTPX normally logs the full request URL, including webhook keys."""
+
+    def filter(self, record):
+        message = record.getMessage()
+        if "qyapi.weixin.qq.com" in message and "/webhook/send?" in message:
+            record.msg = re.sub(
+                r"(https://qyapi\.weixin\.qq\.com(?::443)?/cgi-bin/webhook/send\?)[^\s\"']+",
+                r"\1[redacted]",
+                message,
+            )
+            record.args = ()
+        return True
+
+
+logging.getLogger("httpx").addFilter(_OpportunityWebhookLogFilter())
+
+
+def _opportunity_webhook_url(settings):
+    from backend.integrations.wecom import DeliveryRejectedError
+
+    value = getattr(settings, "wecom_opportunity_webhook_url", "")
+    try:
+        url = urlsplit(value)
+        query = parse_qs(url.query, strict_parsing=True, keep_blank_values=True)
+        valid = (
+            url.scheme == "https"
+            and url.hostname == "qyapi.weixin.qq.com"
+            and url.port in {None, 443}
+            and url.username is None
+            and url.password is None
+            and url.path == "/cgi-bin/webhook/send"
+            and not url.fragment
+            and set(query) == {"key"}
+            and len(query["key"]) == 1
+            and bool(query["key"][0].strip())
+            and not any(character.isspace() for character in value)
+        )
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise DeliveryRejectedError("opportunity webhook routing is not approved")
+    return value
+
+
+async def send_opportunity_webhook(settings, markdown, *, client=None):
+    """One explicitly configured group-webhook POST; never retry or fall back."""
+    from backend.integrations.wecom import (
+        DeliveryRejectedError,
+        DeliveryUnknownError,
+        get_http_client,
+    )
+
+    url = _opportunity_webhook_url(settings)
+    if not isinstance(markdown, str) or not markdown.strip():
+        raise DeliveryRejectedError("opportunity webhook content is empty")
+    if len(markdown.encode("utf-8")) > _MAX_MARKDOWN_BYTES:
+        raise DeliveryRejectedError("opportunity webhook content exceeds UTF-8 limit")
+    client = client if client is not None else await get_http_client()
+    try:
+        response = await client.post(
+            url,
+            json={"msgtype": "markdown", "markdown": {"content": markdown}},
+            follow_redirects=False,
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+    except (httpx.TimeoutException, httpx.TransportError):
+        raise DeliveryUnknownError("opportunity webhook delivery is unknown") from None
+    if 400 <= response.status_code < 500:
+        raise DeliveryRejectedError("opportunity webhook HTTP rejection")
+    if not 200 <= response.status_code < 300:
+        raise DeliveryUnknownError("opportunity webhook HTTP result is unknown")
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        raise DeliveryUnknownError("opportunity webhook response is invalid") from None
+    code = body.get("errcode") if isinstance(body, dict) else None
+    if type(code) is not int:
+        raise DeliveryUnknownError("opportunity webhook acceptance is unknown")
+    if code != 0:
+        raise DeliveryRejectedError("opportunity webhook provider rejected the message")
+    logger.info("opportunity_webhook_accepted")
+    return "accepted"

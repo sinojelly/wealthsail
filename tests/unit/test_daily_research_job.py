@@ -82,6 +82,34 @@ def isolate(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_daily_waits_for_concurrent_public_batch_before_consuming_model_slot(
+    monkeypatch,
+):
+    from backend.jobs import alpha_public
+
+    mod, state = isolate(monkeypatch)
+
+    class Conn:
+        async def fetchrow(self, *args):
+            return {"status": "CLAIMED", "claimed_at": NOW}
+
+    @asynccontextmanager
+    async def connection(pool):
+        yield Conn()
+
+    monkeypatch.setattr(mod, "system_connection", connection)
+    monkeypatch.setattr(
+        alpha_public, "sync_alpha_public", AsyncMock(return_value={"status": "SKIPPED"})
+    )
+    result = await mod.sync_daily_research(
+        object(), settings(alpha_public_enabled=True), NOW
+    )
+    assert result["status"] == "WAITING_PUBLIC_DATA"
+    assert state["consumed"] is False
+    mod.run_codex_research.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_late_start_catches_up_once_on_weekend_and_restart_does_not_dispatch(
     monkeypatch,
 ):
@@ -207,3 +235,34 @@ async def test_service_catchup_policy_and_next_shanghai_day(
     )
     assert calls[0] == expected
     assert all(seconds > 0 for seconds in delays)
+
+
+@pytest.mark.asyncio
+async def test_service_waits_one_minute_for_inflight_public_cache_then_uses_same_day(
+    monkeypatch,
+):
+    mod = job()
+    stamp = NOW
+    stop = asyncio.Event()
+    sync = AsyncMock(
+        side_effect=[{"status": "WAITING_PUBLIC_DATA"}, {"status": "READY"}]
+    )
+    delays = []
+
+    async def wait(event, seconds):
+        nonlocal stamp
+        delays.append(seconds)
+        stamp += timedelta(seconds=seconds)
+        if len(delays) == 2:
+            event.set()
+
+    monkeypatch.setattr(mod, "sync_daily_research", sync)
+    await mod.run_daily_research_service(
+        object(), settings(), stop_event=stop, now_provider=lambda: stamp, wait=wait
+    )
+    assert [call.args[2] for call in sync.await_args_list] == [
+        NOW,
+        NOW + timedelta(minutes=1),
+    ]
+    assert delays[0] == 60
+    assert delays[1] > 3600

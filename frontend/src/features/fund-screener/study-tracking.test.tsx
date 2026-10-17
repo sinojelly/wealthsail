@@ -171,6 +171,50 @@ it("shows the frozen track prices, date and method from the selected study versi
   expect(frozen).toHaveTextContent("frozen-zones-v1");
   expect(within(frozen).queryByRole("button")).not.toBeInTheDocument();
 });
+it("shows verified market excursions without calling them personal trading returns", async () => {
+  vi.mocked(api.getStudyDetail).mockResolvedValue({
+    ...detail,
+    excursions: {
+      mfePct: "5.25",
+      maePct: "-2.10",
+      baseAsOf: "2026-10-16",
+      lastAsOf: "2026-10-18",
+      sampleCount: 3,
+      priceBasis: "INDEX_POINTS",
+      unit: "points",
+    },
+  } as api.StudyDetail);
+  show("/fund-screener?studyTrack=track-1");
+  const performance = await screen.findByRole("region", {
+    name: "行情研究表现",
+  });
+  expect(performance).toHaveTextContent("最大有利偏移（MFE）：5.25%");
+  expect(performance).toHaveTextContent("最大不利偏移（MAE）：-2.10%");
+  expect(performance).toHaveTextContent("不是实际盈亏");
+  expect(performance).toHaveTextContent("3个实际样本");
+});
+it("keeps missing excursion values unknown instead of turning them into zero returns", async () => {
+  vi.mocked(api.getStudyDetail).mockResolvedValue({
+    ...detail,
+    excursions: {
+      mfePct: null,
+      maePct: null,
+      baseAsOf: null,
+      lastAsOf: null,
+      sampleCount: null,
+      priceBasis: null,
+      unit: null,
+    },
+  });
+  show("/fund-screener?studyTrack=track-1");
+  const performance = await screen.findByRole("region", {
+    name: "行情研究表现",
+  });
+  expect(performance).toHaveTextContent("最大有利偏移（MFE）：—");
+  expect(performance).toHaveTextContent("最大不利偏移（MAE）：—");
+  expect(performance).toHaveTextContent("未知偏移不视为零");
+  expect(performance).not.toHaveTextContent("0.00%");
+});
 it("only freezes the explicit READY report origin after a user action, with the default thirty-day horizon", async () => {
   show("/fund-screener", {
     originType: "DAILY_EVENT",

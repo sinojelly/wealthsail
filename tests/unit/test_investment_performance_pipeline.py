@@ -101,7 +101,7 @@ async def test_stale_nav_performance_is_revoked_even_without_technical_score(mon
     assert result["performance"]["eligible"] is False
     assert result["performance"]["state"] == "STALE"
     assert result["performance"]["return252"] == 0.2
-    assert conn.fetchval.await_args.args[1] == "SSE"
+    assert any(call.args[1]=="SSE" for call in conn.fetchval.await_args_list)
 
 
 def test_fund_list_exposes_historical_risk_with_its_own_state():
