@@ -314,25 +314,25 @@ async function tab(name: string) {
   if (toggle.getAttribute("aria-expanded") !== "true") await user.click(toggle);
   await user.click(
     screen.getByRole("tab", {
-      name: name === "数据质量" ? "宏观与市场证据" : name,
+      name: name === "数据质量" ? "市场证据" : name,
     }),
   );
   if (name === "数据质量")
     await user.click(screen.getByRole("button", { name: "数据状态" }));
   return screen.getByRole("tabpanel");
 }
-it("shows concrete legacy facts in a collapsed strip and opens the same container without a dialog", async () => {
+it("keeps legacy facts inside the expanded container and starts without cards or dialogs", async () => {
   show();
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",
     "false",
   );
-  expect(screen.getByRole("list", { name: "今日投资重点" })).toHaveTextContent(
-    issue.summary,
-  );
+  expect(
+    screen.queryByRole("list", { name: "今日投资重点" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(issue.summary)).not.toBeInTheDocument();
   expect(screen.queryByText(m1.summary)).not.toBeInTheDocument();
-  await click(issue.summary);
-  const panel = screen.getByRole("tabpanel");
+  const panel = await tab("今日重点");
   expect(
     within(panel).getByRole("heading", { name: issue.summary }),
   ).toBeInTheDocument();
@@ -343,25 +343,63 @@ it("shows concrete legacy facts in a collapsed strip and opens the same containe
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
 });
-it("opens direction research inline without blockers and chooses indexes through the existing callback", async () => {
+it("shows limited asset conditions without duplicating the direction workbench and selects its actual index", async () => {
   const select = vi.fn();
-  show(context, { onIndexSelect: select });
-  const panel = await tab("投资方向与基金");
-  expect(
-    within(panel).getByText("景气略高于分界，需核查盈利"),
-  ).toBeInTheDocument();
+  const failed = context.researchBoard!.direction.failedConditions![0].reason;
+  show(
+    {
+      ...context,
+      marketEvidence: context.marketEvidence!.map((row) => ({
+        ...row,
+        trend: { ...row.trend, distanceMA200: -0.01, momentum63: -0.02 },
+      })),
+      researchOverview: {
+        methodVersion: "research-overview-v2",
+        asOf: "2026-10-15T01:00:00Z",
+        summary: "沪深300预设趋势条件尚未通过，继续核查。",
+        highlights: [
+          {
+            id: "trend:hs300",
+            kind: "INDEX_TREND",
+            title: "沪深300趋势条件",
+            summary: failed,
+            impact: "有限条件不构成完整资格。",
+            tone: "ORANGE",
+            targetTab: "direction",
+            indexId: "hs300",
+            directionIds: ["a-share:broad"],
+            sourceIds: [],
+            asOf: "2026-10-14",
+            resultType: "INCONCLUSIVE",
+            condition: "FAILED",
+            counterConditions: ["市场可能已经计价"],
+            nextValidation: ["检查企业盈利结构"],
+          },
+        ],
+      },
+    },
+    { onIndexSelect: select },
+  );
+  const panel = await tab("今日重点");
+  await userEvent.click(screen.getByText("沪深300趋势条件"));
+  expect(within(panel).getByText("检查企业盈利结构")).toBeInTheDocument();
   expect(within(panel).getByText("市场可能已经计价")).toBeInTheDocument();
   expect(
     within(panel).getByText("当前尚未满足全部趋势条件"),
   ).toBeInTheDocument();
+  expect(within(panel).getByText("-1.00%")).toBeVisible();
+  expect(within(panel).getByText("-2.00%")).toBeVisible();
   expect(within(panel).queryByText(m1.summary)).not.toBeInTheDocument();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  await click("研究沪深300");
+  await click("研究沪深300 →");
   expect(select).toHaveBeenCalledWith("hs300");
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",
-    "false",
+    "true",
   );
+  expect(
+    screen.queryByRole("tab", { name: "投资方向与基金" }),
+  ).not.toBeInTheDocument();
 });
 it("keeps five compact quality groups and mounts only selected children with actual times and HTTP status", async () => {
   show();
@@ -433,19 +471,19 @@ it.each([
 );
 it("mounts history only in macro, unmounts it on collapse and supports keyboard category navigation", async () => {
   show();
-  await tab("重大事件与情景");
+  await tab("今日重点");
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await tab("宏观与市场证据");
+  await tab("市场证据");
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   await click("查看制造业 PMI完整证据");
   expect(
     screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
   ).toBeInTheDocument();
   const user = userEvent.setup();
-  screen.getByRole("tab", { name: "宏观与市场证据" }).focus();
+  screen.getByRole("tab", { name: "市场证据" }).focus();
   await user.keyboard("{ArrowRight}");
-  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveFocus();
-  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -456,10 +494,10 @@ it("mounts history only in macro, unmounts it on collapse and supports keyboard 
 });
 it("opens an issue's actual evidence category directly without any intermediate dialog", async () => {
   show();
-  await tab("重大事件与情景");
+  await tab("今日重点");
   await click("查看PMI证据");
-  expect(screen.getByRole("tab", { name: "宏观与市场证据" })).toHaveFocus();
-  expect(screen.getByRole("tab", { name: "宏观与市场证据" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "市场证据" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "市场证据" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -511,12 +549,7 @@ it("never exposes or activates tracking and acknowledgement from the observation
     },
     { onMonitor: track, onNoticeAck: ack },
   );
-  for (const name of [
-    "重大事件与情景",
-    "宏观与市场证据",
-    "投资方向与基金",
-    "数据质量",
-  ])
+  for (const name of ["今日重点", "市场证据", "我的跟踪与复盘", "数据质量"])
     await tab(name);
   expect(
     screen.queryByRole("button", { name: /跟踪|标记.*已读/ }),
@@ -561,18 +594,16 @@ it.each(["VERIFIED", "UNKNOWN"] as const)(
         budgetState: "BLOCKED",
       },
     } as OpportunityContext);
-    const panel = await tab("重大事件与情景");
+    await tab("今日重点");
     if (factVerification === "VERIFIED")
-      expect(within(panel).getByText(risk.impact)).toHaveClass(
-        "op-critical-impact",
-      );
+      expect(screen.getByText(risk.impact)).toHaveClass("op-critical-impact");
     else
       expect(
         document.querySelector(".op-critical-impact"),
       ).not.toBeInTheDocument();
   },
 );
-it("avoids repeating the direction summary when it is already one of the support observations", async () => {
+it("shows the canonical matter once when the board and overview share its identity", async () => {
   const summary = context.researchBoard!.direction.supports[0].summary;
   show({
     ...context,
@@ -580,9 +611,31 @@ it("avoids repeating the direction summary when it is already one of the support
       ...context.researchBoard!,
       direction: { ...context.researchBoard!.direction, summary },
     },
+    researchOverview: {
+      methodVersion: "research-overview-v2",
+      asOf: "2026-10-15T01:00:00Z",
+      highlights: [
+        {
+          id: issue.id,
+          kind: "MACRO_CHANGE",
+          title: issue.summary,
+          summary,
+          impact: issue.impact,
+          tone: "BLUE",
+          targetTab: "macro",
+          indexId: null,
+          directionIds: [],
+          sourceIds: [],
+          asOf: "2026-09",
+          resultType: "LIMITED_CLUE",
+          nextValidation: ["核查企业盈利"],
+        },
+      ],
+    },
   });
-  const panel = await tab("投资方向与基金");
+  const panel = await tab("今日重点");
   expect(within(panel).getAllByText(summary)).toHaveLength(1);
+  expect(within(panel).getAllByText(issue.summary)).toHaveLength(1);
 });
 it("disables unsupported destinations without creating fake links", async () => {
   show({
@@ -602,7 +655,7 @@ it("disables unsupported destinations without creating fake links", async () => 
       ],
     },
   } as OpportunityContext);
-  await tab("重大事件与情景");
+  await tab("今日重点");
   expect(
     screen.getByRole("button", { name: "不支持的账户入口" }),
   ).toBeDisabled();

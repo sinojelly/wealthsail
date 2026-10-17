@@ -39,11 +39,22 @@ const data = {
   researchOverview: {
     methodVersion: "daily-overview-v1",
     asOf: "2026-10-16T00:30:00Z",
+    summary: "趋势条件仍待核验，独立PE只提供估值观察。",
     highlights: Array.from({ length: 4 }, (_, i) => ({
       id: `h${i}`,
-      kind: "OBSERVATION",
-      title: `具体观察${i + 1}`,
-      summary: `核验事实${i + 1}`,
+      kind: i === 0 ? "INDEX_TREND" : i === 1 ? "INDEX_PE" : "OBSERVATION",
+      title:
+        i === 0
+          ? "沪深300趋势观察"
+          : i === 1
+            ? "沪深300独立PE"
+            : `具体观察${i + 1}`,
+      summary:
+        i === 0
+          ? "MA200：4000.00；动量：3.00%；趋势条件待核验。"
+          : i === 1
+            ? "PE：12.87；仅供估值观察，不能认定便宜。"
+            : `核验事实${i + 1}`,
       impact: "仍需独立评估盈利与估值。",
       tone: "BLUE",
       targetTab: "direction",
@@ -124,14 +135,19 @@ async function open() {
   await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
   return user;
 }
-it("starts as one collapsed observation strip with at most three concrete highlights and no research dialogs", () => {
+it("starts with one concise collapsed judgment and defers the observation cards and research controls", () => {
   show();
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",
     "false",
   );
-  const overview = screen.getByRole("list", { name: "今日投资重点" });
-  expect(within(overview).getAllByRole("listitem")).toHaveLength(3);
+  expect(
+    screen.getByText("趋势条件仍待核验，独立PE只提供估值观察。"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("list", { name: "今日投资重点" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("沪深300趋势观察")).not.toBeInTheDocument();
   expect(screen.queryByText("具体观察4")).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
@@ -140,12 +156,12 @@ it("starts as one collapsed observation strip with at most three concrete highli
     screen.queryByRole("button", { name: /跟踪/ }),
   ).not.toBeInTheDocument();
 });
-it("opens the four direct categories and mounts only the selected evidence while retaining current trend and independent PE", async () => {
+it("opens three direct categories and mounts requested evidence while keeping trend and independent PE together in the current observation", async () => {
   show();
   const user = await open();
-  expect(screen.getAllByRole("tab")).toHaveLength(4);
+  expect(screen.getAllByRole("tab")).toHaveLength(3);
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await user.click(screen.getByRole("tab", { name: "市场证据" }));
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   await user.click(
     screen.getByRole("button", { name: "查看制造业PMI完整证据" }),
@@ -154,13 +170,14 @@ it("opens the four direct categories and mounts only the selected evidence while
     screen.getByRole("img", { name: "制造业PMI 历史走势" }),
   ).toBeInTheDocument();
   expect(screen.queryByText("制造业景气待盈利验证")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "投资方向与基金" }));
+  await user.click(screen.getByRole("tab", { name: "今日重点" }));
+  await user.click(screen.getByText("沪深300趋势观察"));
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  expect(screen.getByText("制造业景气待盈利验证")).toBeInTheDocument();
+  expect(screen.queryByText("制造业景气待盈利验证")).not.toBeInTheDocument();
   expect(screen.getByText(/MA200：4000.00/)).toBeInTheDocument();
   expect(screen.getByText(/PE：12.87/)).toBeInTheDocument();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await user.click(screen.getByRole("tab", { name: "市场证据" }));
   await user.click(screen.getByRole("button", { name: "数据状态" }));
   expect(screen.getAllByRole("row")).toHaveLength(6);
   expect(screen.queryByText("制造业景气待盈利验证")).not.toBeInTheDocument();
@@ -171,12 +188,12 @@ it("restores a query deep link and preserves the full fund identity, filters and
     data,
     "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&macroMonths=60&keyword=沪深&page=2&researchOpen=1&researchTab=direction",
   );
-  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   const user = userEvent.setup();
-  await user.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await user.click(screen.getByRole("tab", { name: "市场证据" }));
   const query = new URLSearchParams(
     screen.getByLabelText("研究URL").textContent!,
   );
@@ -187,7 +204,7 @@ it("restores a query deep link and preserves the full fund identity, filters and
   expect(query.get("page")).toBe("2");
   expect(query.get("researchTab")).toBe("macro");
   await user.click(screen.getByRole("button", { name: "研究后退" }));
-  expect(screen.getByRole("tab", { name: "投资方向与基金" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -198,7 +215,7 @@ it("does not fill empty modules or describe unknown holdings as safe when the da
   expect(screen.queryByText("持仓风险")).not.toBeInTheDocument();
   expect(screen.queryByText(/无风险|可以买入/)).not.toBeInTheDocument();
   await open();
-  await userEvent.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
   expect(screen.getByRole("region", { name: "核心指标" })).toHaveTextContent(
     "50.1 指数点",
   );
@@ -209,6 +226,8 @@ const daily: DailyResearch = {
   methodVersion: "daily-research-v1",
   state: "FAILED",
   runId: "today-run",
+  reportRunId: "ready-old",
+  reportCompletedAt: "2026-10-15T01:00:00Z",
   scheduledFor: "2026-10-16T00:30:00Z",
   startedAt: "2026-10-16T00:35:00Z",
   completedAt: "2026-10-16T00:36:00Z",
@@ -278,25 +297,38 @@ it("separates failed daily execution, historical evidence, checked quotations an
   show({ ...data, dailyResearch: daily });
   await open();
   const report = screen.getByRole("region", { name: "每日事件研究" });
-  expect(within(report).getByText(/今日研究失败/)).toBeInTheDocument();
+  expect(
+    within(report).getByRole("heading", { name: "重要事件" }),
+  ).toBeInTheDocument();
   expect(
     within(report).getByText(/报告证据时间：2026年10月15日 09:00/),
   ).toBeInTheDocument();
   expect(
     within(report).getByText(/历史报告.*不代表今日已完成/),
   ).toBeInTheDocument();
-  expect(within(report).getByText("已宣布")).toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.click(within(report).getByText("执行与报告状态"));
+  expect(
+    within(report).getByText(/本次任务：today-run.*今日研究失败/),
+  ).toBeVisible();
+  expect(within(report).getByText(/当前有效报告：ready-old/)).toBeVisible();
+  const eventDetails = within(report)
+    .getByText("查看事件依据与情景")
+    .closest("details")!;
+  expect(eventDetails).not.toHaveAttribute("open");
+  await user.click(within(eventDetails).getByText("查看事件依据与情景"));
+  expect(within(eventDetails).getByText("已宣布")).toBeVisible();
   expect(
     within(report).getByRole("heading", { name: "可能传导 · 模型条件推演" }),
   ).toBeInTheDocument();
   expect(
-    within(report).getByText(/原文已核对.*不代表影响判断已核实/),
+    within(eventDetails).getByText(/原文已核对.*不代表影响判断已核实/),
   ).toBeInTheDocument();
   expect(within(report).getByText("到货规模未确认")).toBeInTheDocument();
   expect(within(report).getByText(/市场反应.*未核验/)).toBeInTheDocument();
   expect(within(report).getByText(/2026年10月19日.*计划/)).toBeInTheDocument();
   expect(
-    within(report).getByRole("link", { name: "来源原文" }),
+    within(eventDetails).getByRole("link", { name: "来源原文" }),
   ).toHaveAttribute("href", "https://ofac.treasury.gov/policy");
   expect(
     within(report).getByText("<img src=x onerror=alert(1)>"),
@@ -337,6 +369,11 @@ it("keeps weekly diesel distinct from daily oil and rounds supplied changes with
     },
   });
   await open();
+  expect(
+    screen.queryByRole("region", { name: "能源事实" }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
+  await userEvent.click(screen.getByRole("button", { name: "通胀与成本" }));
   const energy = screen.getByRole("region", { name: "能源事实" });
   expect(within(energy).getByText("3.770 美元/加仑")).toBeInTheDocument();
   expect(
@@ -346,15 +383,13 @@ it("keeps weekly diesel distinct from daily oil and rounds supplied changes with
   expect(
     within(energy).getByText(/观察日期不代表已核实的公布时刻/),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("tab", { name: "宏观与市场证据" }));
-  await userEvent.click(screen.getByRole("button", { name: "全球市场与能源" }));
   expect(screen.getAllByRole("region", { name: "能源事实" })).toHaveLength(1);
   expect(
     screen.queryByRole("region", { name: "每日事件研究" }),
   ).not.toBeInTheDocument();
 });
 
-it("labels projection time separately from each observation and rejects unsubstantiated red highlights", () => {
+it("labels the effective report separately from each observation and rejects unsubstantiated red highlights", async () => {
   show({
     ...data,
     researchOverview: {
@@ -368,10 +403,10 @@ it("labels projection time separately from each observation and rejects unsubsta
       ],
     },
   });
-  expect(screen.getByText(/最近有效研究：未确认/)).toBeInTheDocument();
+  expect(screen.getByText(/暂无有效日报/)).toBeInTheDocument();
+  await open();
+  await userEvent.click(screen.getByText("沪深300趋势观察"));
   expect(screen.getByText("依据期：2026年9月")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "具体观察1" })).not.toHaveClass(
-    "op-tone-red",
-  );
+  expect(screen.getByText("沪深300趋势观察")).not.toHaveClass("op-tone-red");
   expect(document.querySelector(".op-critical-impact")).toBeNull();
 });

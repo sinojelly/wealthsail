@@ -114,7 +114,15 @@ const data = {
     reportSlotDate: "2026-10-16",
     asOf: "2026-10-16T00:34:00Z",
     nextRunAt: "2026-10-17T00:30:00Z",
-    report: null,
+    report: {
+      asOf: "2026-10-16T00:34:00Z",
+      summary: "昨日有效研究",
+      events: [],
+      upcoming: [],
+      sources: [],
+      coverage: [],
+      energy: [],
+    },
   },
   researchBoard: {
     methodVersion: "research-board-v2",
@@ -157,25 +165,21 @@ async function openTab(name: string) {
   await user.click(screen.getByRole("tab", { name }));
   return user;
 }
-it("shows four business groups, caps each independently and identifies the effective READY report rather than the failed run", () => {
+it("keeps business groups out of the collapsed strip and identifies the effective READY report rather than the failed run", () => {
   show();
   expect(screen.getByText(data.researchOverview!.summary!)).toBeInTheDocument();
   expect(
-    within(screen.getByRole("region", { name: "重要风险" })).getAllByRole(
-      "listitem",
-    ),
-  ).toHaveLength(2);
+    screen.queryByRole("region", { name: "重要风险" }),
+  ).not.toBeInTheDocument();
   expect(screen.queryByText("具体事项global-3")).not.toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "研究机会" })).toHaveTextContent(
-    "具体事项index-1",
-  );
-  expect(screen.getByRole("region", { name: "我的持仓" })).toHaveTextContent(
-    "不能认定安全",
-  );
-  expect(screen.getByRole("link", { name: "核对我的资产" })).toHaveAttribute(
-    "href",
-    "/dashboard?scope=MINE",
-  );
+  expect(
+    screen.queryByRole("region", { name: "研究机会" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("region", { name: "我的持仓" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("具体事项index-1")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
   expect(
     screen.getByText(/最近有效研究：2026年10月16日 08:34/),
   ).toBeInTheDocument();
@@ -188,7 +192,7 @@ it("maps an old quality deep link into evidence with an internal data panel and 
   show(
     "/fund-screener?researchOpen=1&researchTab=quality&fund=510330&instrument=abc&fundMarket=SSE&macroMonths=60",
   );
-  expect(screen.getByRole("tab", { name: "宏观与市场证据" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "市场证据" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -201,10 +205,13 @@ it("maps an old quality deep link into evidence with an internal data panel and 
   );
   expect(screen.getAllByRole("row")).toHaveLength(6);
   expect(screen.getByLabelText("当前URL")).toHaveTextContent("fundMarket=SSE");
+  expect(screen.getByLabelText("当前URL")).toHaveTextContent("fund=510330");
+  expect(screen.getByLabelText("当前URL")).toHaveTextContent("instrument=abc");
+  expect(screen.getByLabelText("当前URL")).toHaveTextContent("macroMonths=60");
 });
 it("starts with four to six compact evidence metrics, opens only a requested chart and formats raw macro precision", async () => {
   show();
-  const user = await openTab("宏观与市场证据");
+  const user = await openTab("市场证据");
   const core = screen.getByRole("region", { name: "核心指标" });
   expect(within(core).getAllByRole("article").length).toBeGreaterThanOrEqual(4);
   expect(within(core).getAllByRole("article").length).toBeLessThanOrEqual(6);
@@ -368,7 +375,7 @@ it("does not conceal an old evidence period behind verified values", () => {
   );
 });
 
-it("keeps collapsed business observations concise, translates event phases and omits repeated noncritical impacts", () => {
+it("keeps collapsed observations concise and reveals translated event phases only in event evidence", async () => {
   const groups = data.researchOverview!.groups!.map((group) => ({
     ...group,
     summary: group.items.length ? "有2项有限观察需核查" : group.summary,
@@ -380,6 +387,29 @@ it("keeps collapsed business observations concise, translates event phases and o
         data={{
           ...data,
           researchOverview: { ...data.researchOverview!, groups },
+          dailyResearch: {
+            ...data.dailyResearch!,
+            report: {
+              ...data.dailyResearch!.report!,
+              events: [
+                {
+                  id: "event-phase",
+                  title: "能源运输观察",
+                  summary: "运输仍需确认",
+                  phase: "REPORTED",
+                  importance: "HIGH",
+                  sourceIds: [],
+                  channels: [],
+                  scenarios: [],
+                  watchFor: ["核对实际运量"],
+                  unknowns: [],
+                  affectedDirectionIds: [],
+                  marketReaction: "UNVERIFIED",
+                  reasoningType: "MODEL_CONDITIONAL",
+                },
+              ],
+            },
+          },
         }}
         error={false}
       />
@@ -387,11 +417,20 @@ it("keeps collapsed business observations concise, translates event phases and o
   );
   expect(screen.queryByText("并未形成买卖资格。")).not.toBeInTheDocument();
   expect(screen.queryByText("有2项有限观察需核查")).not.toBeInTheDocument();
-  expect(screen.getAllByText(/报道线索/).length).toBeGreaterThan(0);
+  expect(screen.queryByText("能源运输观察")).not.toBeInTheDocument();
+  expect(screen.queryByText(/报道线索/)).not.toBeInTheDocument();
   expect(screen.queryByText(/REPORTED/)).not.toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "我的持仓" })).toHaveTextContent(
-    "不能认定安全",
+  const user = await openTab("今日重点");
+  expect(
+    screen.getByText(/个人持仓风险尚未核验，不能认定安全/),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "核对我的持仓" })).toHaveAttribute(
+    "href",
+    "/dashboard?scope=MINE",
   );
+  await user.click(screen.getByText("查看事件依据与情景"));
+  expect(screen.getByText("报道线索")).toBeVisible();
+  expect(screen.queryByText(/REPORTED/)).not.toBeInTheDocument();
 });
 
 it("retains complete confirmed personal-risk text while compacting ordinary overview items", async () => {
@@ -452,12 +491,11 @@ it("retains complete confirmed personal-risk text while compacting ordinary over
     </MemoryRouter>,
   );
   expect(screen.getByText(risk.impact)).toHaveClass("op-critical-impact");
-  expect(screen.getByText(highlight.summary)).not.toHaveClass(
-    "op-observation-summary",
-  );
+  expect(screen.getAllByText(risk.impact)).toHaveLength(1);
+  expect(screen.queryByText(highlight.summary)).not.toBeInTheDocument();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
-  await user.click(screen.getByRole("tab", { name: "跟踪与复盘" }));
+  await user.click(screen.getByRole("tab", { name: "我的跟踪与复盘" }));
   expect(
     screen.queryByRole("region", { name: "重要风险" }),
   ).not.toBeInTheDocument();
@@ -475,7 +513,7 @@ it("shows expanded categories immediately without collapsed groups or compatibil
     );
   }
   const view = render(content(data));
-  expect(screen.getByRole("tab", { name: "跟踪与复盘" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
     "aria-selected",
     "true",
   );

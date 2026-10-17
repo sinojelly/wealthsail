@@ -216,33 +216,29 @@ it("preserves a report deep link when redirecting to login", () => {
   );
 });
 
-it(
-  "navigates between the main workspaces without losing the application shell",
-  async () => {
-    const user = userEvent.setup();
-    renderWithSession(<AppRoutes />);
+// 懒加载路由在慢机器/高负载下接近 vitest 默认 5s 上限，留出余量
+it("navigates between the main workspaces without losing the application shell", async () => {
+  const user = userEvent.setup();
+  renderWithSession(<AppRoutes />);
 
-    expect(
-      await screen.findByRole(
-        "heading",
-        { name: "资产看板" },
-        { timeout: 15_000 },
-      ),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "风控政策" }));
+  expect(
+    await screen.findByRole(
+      "heading",
+      { name: "资产看板" },
+      { timeout: 15_000 },
+    ),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("link", { name: "风控政策" }));
 
-    expect(
-      await screen.findByRole(
-        "heading",
-        { name: "风控政策" },
-        { timeout: 15_000 },
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText("张明")).toBeInTheDocument();
-  },
-  // 懒加载路由在慢机器/高负载下接近 vitest 默认 5s 上限，留出余量
-  15_000,
-);
+  expect(
+    await screen.findByRole(
+      "heading",
+      { name: "风控政策" },
+      { timeout: 15_000 },
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText("张明")).toBeInTheDocument();
+}, 15_000);
 
 it("blocks a viewer who enters the operations URL directly", async () => {
   testSession.role = "VIEWER";

@@ -1,17 +1,17 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ChevronDown, Globe2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Globe2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type {
   ResearchAction,
   ResearchIssue,
   ResearchTab,
-  OverviewItem,
 } from "../../../api/investment";
 import DailyResearchReport, {
   DailyResearchStatus,
 } from "./DailyResearchReport";
-import { monthLabel, sourceHref, timeLabel } from "../macro-display";
+import { sourceHref, timeLabel } from "../macro-display";
+import ResearchFocus from "./ResearchFocus";
 import type { ResearchBoardProps } from "./ResearchBoard";
 import {
   stateLabel,
@@ -45,7 +45,6 @@ export default function ResearchBoardV2({
   data,
   topics,
   canViewOperations = false,
-  directionLabel,
   onIndexSelect,
   directions,
   onDirectionSelect,
@@ -60,13 +59,13 @@ export default function ResearchBoardV2({
   const focusCategory = useRef(false);
   const expanded = params.get("researchOpen") === "1";
   const tabs = [
-    ["events", "重大事件与情景"],
-    ["macro", "宏观与市场证据"],
-    ["direction", "投资方向与基金"],
-    ["tracking", "跟踪与复盘"],
+    ["events", "今日重点"],
+    ["macro", "市场证据"],
+    ["tracking", "我的跟踪与复盘"],
   ] as const;
   const tab =
-    (params.get("researchTab") === "quality"
+    (params.get("researchTab") === "quality" ||
+    params.get("researchData") === "1"
       ? "macro"
       : tabs.find(([id]) => id === params.get("researchTab"))?.[0]) ?? "events";
   const qualityOpen =
@@ -121,7 +120,14 @@ export default function ResearchBoardV2({
       const next = new URLSearchParams(current);
       if (expanded) next.set("researchOpen", "1");
       else next.delete("researchOpen");
-      next.set("researchTab", target === "quality" ? "macro" : target);
+      next.set(
+        "researchTab",
+        target === "quality"
+          ? "macro"
+          : target === "direction"
+            ? "events"
+            : target,
+      );
       if (target === "quality") next.set("researchData", "1");
       else next.delete("researchData");
       return next;
@@ -129,7 +135,7 @@ export default function ResearchBoardV2({
   }
   function perform(action: ResearchAction) {
     focusCategory.current = true;
-    if (action.type === "VIEW_DIRECTION") open("direction");
+    if (action.type === "VIEW_DIRECTION") researchIndex();
     if (action.type === "VIEW_ISSUES") open("events");
     if (action.type === "VIEW_DATA") open("quality");
     if (action.type === "VIEW_EVIDENCE")
@@ -142,11 +148,7 @@ export default function ResearchBoardV2({
               ? "events"
               : "direction",
       );
-    if (action.type === "VIEW_CANDIDATES") {
-      const target = document.getElementById("op-research-targets");
-      target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-      target?.focus({ preventScroll: true });
-    }
+    if (action.type === "VIEW_CANDIDATES") researchIndex();
   }
   function renderAction(action: ResearchAction, admin = false) {
     if (action.type === "VIEW_OPERATIONS") {
@@ -283,205 +285,72 @@ export default function ResearchBoardV2({
       </article>
     );
   }
-  const fallback = items
-    .filter((item) => !dataIssue(item))
-    .map((item) => ({
-      id: item.id,
-      kind: item.category,
-      title: item.summary,
-      summary: "",
-      impact: item.impact,
-      tone: issueTone(item, data),
-      targetTab: "events" as ResearchTab,
-      indexId: item.affectedAssets.indexId ?? null,
-      directionIds: [],
-      sourceIds: [],
-      asOf:
-        data.marketEvidence?.find(
-          (row) => row.indexId === item.affectedAssets.indexId,
-        )?.asOf ?? null,
-    }));
-  const highlights = (data.researchOverview?.highlights ?? fallback).slice(
-    0,
-    3,
-  );
-  function highlightTone(highlight: OverviewItem) {
-    return highlight.tone === "RED" &&
-      !items.some(
-        (item) => item.id === highlight.id && confirmedRisk(item, data),
-      )
-      ? "GRAY"
-      : highlight.tone;
+
+  function researchIndex(id?: string) {
+    if (id) onIndexSelect?.(id);
+    requestAnimationFrame(() => {
+      const target = document.getElementById("op-research-targets");
+      target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      target?.focus({ preventScroll: true });
+    });
   }
+  const reportTime = data.dailyResearch?.report
+    ? (data.dailyResearch.reportCompletedAt ??
+      data.dailyResearch.asOf ??
+      data.dailyResearch.report.asOf)
+    : null;
+  const critical = items.filter((item) => confirmedRisk(item, data));
+  const observationIds = new Set(
+    data.researchOverview?.highlights.map((item) => item.id) ?? [],
+  );
   return (
     <section
       className={`op-panel op-research-board op-research-board-v2 op-daily-observation ${expanded ? "is-expanded" : "is-collapsed"}`}
       aria-label="今日投资观察"
     >
-      <button
-        className="op-macro-toggle"
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        onClick={() => open(tab, !expanded)}
-      >
-        <span>
-          <Globe2 size={19} />
-          <strong>今日投资观察</strong>
-        </span>
-        <span>
-          <span className="op-badge">
-            <DailyResearchStatus state={data.dailyResearch?.state} />
+      <header className="op-observation-header">
+        <button
+          type="button"
+          className="op-macro-toggle"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={() => open(tab, !expanded)}
+        >
+          <span>
+            <Globe2 size={19} />
+            <strong>今日投资观察</strong>
           </span>
-          <ChevronDown size={16} />
-        </span>
-      </button>
-      <small className="op-daily-asof">
-        最近有效研究：
-        {timeLabel(
-          data.dailyResearch?.reportCompletedAt ??
-            data.dailyResearch?.asOf ??
-            data.dailyResearch?.report?.asOf,
-        )}{" "}
-        · 下次计划：{timeLabel(data.dailyResearch?.nextRunAt)}
-      </small>
-      {data.researchOverview?.summary && (
-        <p className="op-daily-summary">{data.researchOverview.summary}</p>
-      )}
-      {!expanded && (
-        <>
-          {data.researchOverview?.groups ? (
-            <div className="op-observation-groups">
-              {data.researchOverview.groups.map((group) => (
-                <section key={group.id} aria-label={group.label}>
-                  <h3>{group.label}</h3>
-                  {!group.items.length && <p>{group.summary}</p>}
-                  {!!group.items.length && (
-                    <ul>
-                      {group.items.slice(0, 2).map((highlight) => (
-                        <li key={highlight.id}>
-                          <button
-                            type="button"
-                            className={toneClass(highlightTone(highlight))}
-                            onClick={() => open(highlight.targetTab)}
-                          >
-                            {highlight.title}
-                          </button>
-                          <p
-                            className={
-                              highlightTone(highlight) === "RED"
-                                ? undefined
-                                : "op-observation-summary"
-                            }
-                          >
-                            {highlight.summary}
-                          </p>
-                          {highlightTone(highlight) === "RED" &&
-                            highlight.impact &&
-                            highlight.impact !== highlight.summary && (
-                              <p
-                                className={
-                                  highlightTone(highlight) === "RED"
-                                    ? "op-critical-impact"
-                                    : undefined
-                                }
-                              >
-                                {highlight.impact}
-                              </p>
-                            )}
-                          <small>
-                            {highlight.scope === "GLOBAL"
-                              ? "全局事项"
-                              : highlight.scope === "HOLDINGS"
-                                ? "个人持仓"
-                                : "当前选择"}{" "}
-                            ·{" "}
-                            {(
-                              {
-                                EVENT_LEAD: "事件线索",
-                                DIRECTION_LEAD: "方向线索",
-                                INDEX_CONDITION: "指数条件",
-                                FUND_TOOL: "基金工具",
-                                EXECUTION_CONDITION: "执行条件",
-                              } as Record<string, string>
-                            )[highlight.stage ?? ""] ?? "研究线索"}
-                            {highlight.phase
-                              ? ` · ${({ PLANNED: "计划中", ANNOUNCED: "已宣布", IMPLEMENTED: "已实施", REPORTED: "报道线索", OPINION: "观点", OBSERVING: "观察中", CONFIRMED: "已确认" } as Record<string, string>)[highlight.phase] ?? "阶段待核查"}`
-                              : ""}
-                            {highlight.asOf
-                              ? ` · 依据期：${/^\d{4}-\d{2}$/.test(highlight.asOf) ? monthLabel(highlight.asOf) : timeLabel(highlight.asOf)}`
-                              : ""}
-                          </small>
-                          {highlight.nextAction && (
-                            <div className="op-research-actions">
-                              {renderAction(highlight.nextAction)}
-                            </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {group.nextAction && (
-                    <div className="op-research-actions">
-                      {renderAction(group.nextAction)}
-                    </div>
-                  )}
-                </section>
-              ))}
-            </div>
-          ) : (
-            <>
-              {highlights.length ? (
-                <ul className="op-daily-highlights" aria-label="今日投资重点">
-                  {highlights.map((highlight) => (
-                    <li key={highlight.id}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          open(
-                            tabs.some(([id]) => id === highlight.targetTab)
-                              ? highlight.targetTab
-                              : "events",
-                          )
-                        }
-                        className={toneClass(highlightTone(highlight))}
-                      >
-                        {highlight.title}
-                      </button>
-                      {highlight.summary &&
-                        highlight.summary !== highlight.title && (
-                          <p>{highlight.summary}</p>
-                        )}
-                      {highlight.impact &&
-                        highlight.impact !== highlight.summary && (
-                          <p
-                            className={
-                              highlightTone(highlight) === "RED"
-                                ? "op-critical-impact"
-                                : undefined
-                            }
-                          >
-                            {highlight.impact}
-                          </p>
-                        )}
-                      {highlight.asOf && (
-                        <small>
-                          依据期：
-                          {/^\d{4}-\d{2}$/.test(highlight.asOf)
-                            ? monthLabel(highlight.asOf)
-                            : timeLabel(highlight.asOf)}
-                        </small>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="op-muted op-daily-empty">
-                  当前暂无足够证据列出投资重点；可展开查看已采集事实，个人风险仍需独立核查。
-                </p>
-              )}
-            </>
-          )}
-        </>
+          <span>
+            <span className="op-observation-control">
+              {expanded ? "收起研究" : "展开研究"}
+            </span>
+            {expanded ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+          </span>
+        </button>
+        <div className="op-observation-meta">
+          <span className="op-badge">
+            <DailyResearchStatus
+              state={data.dailyResearch?.state}
+              scheduleState={data.dailyResearch?.scheduleState}
+              hasReport={!!data.dailyResearch?.report}
+            />
+          </span>
+          <small>
+            {reportTime
+              ? `最近有效研究：${timeLabel(reportTime)}`
+              : "暂无有效日报"}{" "}
+            · 下次计划：{timeLabel(data.dailyResearch?.nextRunAt)}
+          </small>
+        </div>
+        <p className="op-daily-summary">
+          {data.researchOverview?.summary ??
+            "尚无足够证据形成可靠研究判断，可展开核查已存事实与下一条件。"}
+        </p>
+      </header>
+      {!!critical.length && (
+        <div className="op-observation-critical">
+          {critical.map(renderIssue)}
+        </div>
       )}
       {expanded && (
         <div id={panelId} className="op-daily-expanded">
@@ -494,20 +363,19 @@ export default function ResearchBoardV2({
               <button
                 key={id}
                 id={`${panelId}-${id}`}
-                type="button"
                 role="tab"
                 aria-selected={tab === id}
                 aria-controls={`${panelId}-content`}
                 tabIndex={tab === id ? 0 : -1}
                 onClick={() => open(id)}
                 onKeyDown={(event) => {
-                  const offset =
+                  const delta =
                     event.key === "ArrowRight"
                       ? 1
                       : event.key === "ArrowLeft"
                         ? -1
                         : 0;
-                  if (!offset && event.key !== "Home" && event.key !== "End")
+                  if (!delta && event.key !== "Home" && event.key !== "End")
                     return;
                   event.preventDefault();
                   const next =
@@ -515,12 +383,12 @@ export default function ResearchBoardV2({
                       ? 0
                       : event.key === "End"
                         ? tabs.length - 1
-                        : (i + offset + tabs.length) % tabs.length;
+                        : (i + delta + tabs.length) % tabs.length;
                   open(tabs[next][0]);
                   (
                     event.currentTarget.parentElement?.querySelectorAll(
                       "button",
-                    )[next] as HTMLButtonElement | undefined
+                    )[next] as HTMLButtonElement
                   )?.focus();
                 }}
               >
@@ -532,11 +400,14 @@ export default function ResearchBoardV2({
             role="tabpanel"
             id={`${panelId}-content`}
             aria-labelledby={`${panelId}-${tab}`}
-            className="op-research-topic-body"
+            className="op-research-topic-body op-v2-detail-body"
           >
-            {items.filter((item) => confirmedRisk(item, data)).map(renderIssue)}
             {tab === "events" && (
               <>
+                <p className="op-section-guide">
+                  先看变化和下一条件，再到下方工作台研究具体指数与基金；值得持续观察的判断可加入跟踪。
+                </p>
+                <ResearchFocus data={data} onResearchIndex={researchIndex} />
                 <DailyResearchReport
                   data={data.dailyResearch}
                   directions={directions}
@@ -545,20 +416,42 @@ export default function ResearchBoardV2({
                   trackingPending={studyPending}
                 />
                 {studyError && <p role="alert">{studyError}</p>}
-                {topics
-                  .find((topic) => topic.id === "research-global")
-                  ?.render()}
-                {items
-                  .filter(
-                    (item) => !dataIssue(item) && !confirmedRisk(item, data),
+                <details className="op-official-observations">
+                  <summary>官方发布与其他观察</summary>
+                  {topics
+                    .find((topic) => topic.id === "research-global")
+                    ?.render()}
+                  {items
+                    .filter(
+                      (item) =>
+                        !dataIssue(item) &&
+                        !confirmedRisk(item, data) &&
+                        !observationIds.has(item.id) &&
+                        !item.key.startsWith("trend:") &&
+                        !item.key.startsWith("pe:"),
+                    )
+                    .map(renderIssue)}
+                </details>
+                <p className="op-holdings-status">
+                  {board.summaries.some(
+                    (row) =>
+                      row.id === "HOLDINGS" &&
+                      ["CHECKED", "BREACH"].includes(row.state),
                   )
-                  .map(renderIssue)}
+                    ? "持仓风险仍按具体标的和个人预算独立核查。"
+                    : "个人持仓风险尚未核验，不能认定安全。"}{" "}
+                  <Link to="/dashboard?scope=MINE">核对我的持仓</Link>
+                </p>
               </>
             )}
             {tab === "macro" && (
               <>
+                <p className="op-section-guide">
+                  按经济问题核查证据；选择指标看走势与解释，来源及数据缺口按需展开。
+                </p>
                 <button
                   type="button"
+                  className="op-data-toggle"
                   aria-expanded={qualityOpen}
                   onClick={() =>
                     qualityOpen ? open("macro") : open("quality")
@@ -578,104 +471,6 @@ export default function ResearchBoardV2({
                   从事件或当前标的保存初始研究，后续核对已存证据；旧标的条件监控保持独立。
                 </p>
               ))}
-            {tab === "direction" && (
-              <>
-                <section
-                  className="op-v2-direction-detail"
-                  aria-label="方向研究详情"
-                >
-                  <h3>{directionLabel ?? board.direction.label}</h3>
-                  {![
-                    ...board.direction.supports,
-                    ...board.direction.counterFactors,
-                  ].some((row) => row.summary === board.direction.summary) && (
-                    <p>{board.direction.summary}</p>
-                  )}
-                  <h3>支持依据</h3>
-                  {board.direction.supports.length ? (
-                    board.direction.supports.map((row, index) => (
-                      <div key={index}>
-                        <p>{row.summary}</p>
-                        <small>
-                          {stateLabel(row.state)} ·{" "}
-                          {row.evidenceIds
-                            .map((id) => evidence(id).label)
-                            .join("、")}
-                        </small>
-                      </div>
-                    ))
-                  ) : (
-                    <p>尚无足够证据列出支持因素。</p>
-                  )}
-                  <h3>逆风与反方条件</h3>
-                  {board.direction.counterFactors.length ? (
-                    board.direction.counterFactors.map((row, index) => (
-                      <div key={index}>
-                        <p>{row.summary}</p>
-                        <small>{stateLabel(row.state)}</small>
-                      </div>
-                    ))
-                  ) : (
-                    <p>尚未形成独立反方结论。</p>
-                  )}
-                  <h3>当前规则条件</h3>
-                  {board.direction.failedConditions?.length ? (
-                    board.direction.failedConditions.map((condition) => (
-                      <div key={condition.id}>
-                        <strong>{condition.label}</strong>
-                        <p>{condition.reason}</p>
-                      </div>
-                    ))
-                  ) : (
-                    <p>
-                      未列出已核实但尚未满足的规则；不代表完整建仓资格已通过。
-                    </p>
-                  )}
-                  <h3>相关指数</h3>
-                  {(board.direction.relatedIndexIds ?? []).map((id) => {
-                    const index = data.marketEvidence?.find(
-                      (index) => index.indexId === id,
-                    );
-                    return index ? (
-                      <button
-                        type="button"
-                        key={id}
-                        disabled={!onIndexSelect}
-                        onClick={() => {
-                          open("direction", false);
-                          onIndexSelect?.(id);
-                        }}
-                      >
-                        研究{index.label}
-                      </button>
-                    ) : null;
-                  })}
-                  <h3>进一步研究</h3>
-                  {board.direction.recommendedChecks.map((check) => (
-                    <p key={check}>{check}</p>
-                  ))}
-                  <p>{board.direction.nextStep}</p>
-                  {!!board.direction.blockerIds?.length && (
-                    <button type="button" onClick={() => open("quality")}>
-                      查看研究限制
-                    </button>
-                  )}
-                </section>
-                {topics
-                  .find((topic) => topic.id === "research-market")
-                  ?.render()}
-                {topics
-                  .find((topic) => topic.id === "research-strategy")
-                  ?.render()}
-                {!!data.decision?.actions?.length && (
-                  <div className="op-research-actions">
-                    {data.decision.actions.map((action) => (
-                      <span key={action.type}>{renderAction(action)}</span>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
             {tab === "macro" && qualityOpen && (
               <>
                 <section aria-label="研究限制分组">

@@ -79,49 +79,87 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
       <p>
         冻结初始假设与来源，后续仅核对已存证据。研究变化与计划均不代表已成交，也不构成买卖资格。
       </p>
-      <form
-        className="op-study-create"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          const result = await command
-            .mutateAsync(() =>
-              api.createStudyTrack({
-                ...(origin ?? { originType: "SELECTION", scope }),
-                horizonDays: horizon,
-              }),
-            )
-            .catch(() => null);
-          if (result && alive.current) choose(result.track.id);
-        }}
-      >
-        <p>
-          {origin?.originType === "DAILY_EVENT"
-            ? "来源：当前展示的有效日报事件；保存原始报告身份与研究快照。"
-            : "来源：当前方向、指数或基金选择；不自动替换已有研究。"}
+      {list.isPending && <p role="status">正在读取我的研究主题…</p>}
+      {list.isError && (
+        <p role="alert">
+          主题列表读取失败。
+          <button onClick={() => void list.refetch()}>重试主题列表</button>
         </p>
-        <label>
-          观察天数
-          <input
-            aria-label="观察天数"
-            type="number"
-            min={1}
-            max={365}
-            value={horizon}
-            onChange={(event) => setHorizon(Number(event.target.value))}
-          />
-        </label>
-        <button
-          disabled={
-            command.isPending ||
-            !Number.isInteger(horizon) ||
-            horizon < 1 ||
-            horizon > 365 ||
-            (!origin && !Object.values(scope).some(Boolean))
-          }
+      )}
+      {list.data && !list.data.items.length && (
+        <p>
+          暂无我的研究主题；可从今日重点或当前标的保存研究，也可选择新建研究。
+        </p>
+      )}
+      <nav className="op-study-list" aria-label="我的研究主题">
+        {list.data?.items.map((track) => (
+          <div key={track.id}>
+            <button
+              type="button"
+              aria-pressed={id === track.id}
+              onClick={() => choose(track.id)}
+            >
+              {track.title} · {states[track.status] ?? "待核对"}
+              {track.unreadCount ? ` · ${track.unreadCount}项未读变化` : ""}
+            </button>
+            <p className="op-study-next">
+              下一条件：
+              {id === track.id && value?.track.id === track.id && snapshot
+                ? (snapshot.watchFor[0] ??
+                  (snapshot.conditions[0]
+                    ? `${metricLabel(snapshot.conditions[0].metric)} ${({ GT: "大于", GTE: "不低于", LT: "小于", LTE: "不高于" } as const)[snapshot.conditions[0].operator]} ${snapshot.conditions[0].threshold} ${snapshot.conditions[0].unit ?? ""}`
+                    : "未声明下一条件，需人工复盘。"))
+                : "选择主题后读取冻结条件；列表未提供条件详情。"}
+            </p>
+          </div>
+        ))}
+      </nav>
+      <details className="op-study-create-toggle">
+        <summary>新建研究</summary>
+        <form
+          className="op-study-create"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const result = await command
+              .mutateAsync(() =>
+                api.createStudyTrack({
+                  ...(origin ?? { originType: "SELECTION", scope }),
+                  horizonDays: horizon,
+                }),
+              )
+              .catch(() => null);
+            if (result && alive.current) choose(result.track.id);
+          }}
         >
-          冻结研究并跟踪
-        </button>
-      </form>
+          <p>
+            {origin?.originType === "DAILY_EVENT"
+              ? "来源：当前展示的有效日报事件；保存原始报告身份与研究快照。"
+              : "来源：当前方向、指数或基金选择；不自动替换已有研究。"}
+          </p>
+          <label>
+            观察天数
+            <input
+              aria-label="观察天数"
+              type="number"
+              min={1}
+              max={365}
+              value={horizon}
+              onChange={(event) => setHorizon(Number(event.target.value))}
+            />
+          </label>
+          <button
+            disabled={
+              command.isPending ||
+              !Number.isInteger(horizon) ||
+              horizon < 1 ||
+              horizon > 365 ||
+              (!origin && !Object.values(scope).some(Boolean))
+            }
+          >
+            冻结研究并跟踪
+          </button>
+        </form>
+      </details>
       {command.isError && (
         <p role="alert">
           {command.error instanceof Error
@@ -138,26 +176,6 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
           </button>
         </p>
       )}
-      {list.isPending && <p role="status">正在读取我的研究主题…</p>}
-      {list.isError && (
-        <p role="alert">
-          主题列表读取失败。
-          <button onClick={() => void list.refetch()}>重试主题列表</button>
-        </p>
-      )}
-      <nav aria-label="我的研究主题">
-        {list.data?.items.map((track) => (
-          <button
-            key={track.id}
-            type="button"
-            aria-pressed={id === track.id}
-            onClick={() => choose(track.id)}
-          >
-            {track.title} · {states[track.status] ?? "待核对"}
-            {track.unreadCount ? ` · ${track.unreadCount}项未读变化` : ""}
-          </button>
-        ))}
-      </nav>
       {detail.isPending && id && <p role="status">正在读取冻结研究…</p>}
       {detail.isError && (
         <p role="alert">

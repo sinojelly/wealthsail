@@ -41,7 +41,7 @@ it("opens current-target frozen study tracking with full identity while keeping 
     await screen.findByRole("button", { name: "跟踪当前标的研究" }),
   );
   expect(
-    await screen.findByRole("tab", { name: "跟踪与复盘" }),
+    await screen.findByRole("tab", { name: "我的跟踪与复盘" }),
   ).toHaveAttribute("aria-selected", "true");
   expect(api.setMonitor).not.toHaveBeenCalled();
   expect(study.createStudyTrack).toHaveBeenCalledWith({
@@ -1001,11 +1001,31 @@ it("does not display a late watch failure for the newly selected fund", async ()
   expect(screen.queryByText("加入自选失败，请重试。")).not.toBeInTheDocument();
 });
 
-it("selects a related index from v2 direction details and clears the previous fund and page", async () => {
+it("maps a legacy direction link to today's observation and selects its related index in the one existing workbench", async () => {
   const user = userEvent.setup();
   const response = researchBoardResponse();
   api.opportunity.mockResolvedValue({
     ...response,
+    researchOverview: {
+      methodVersion: "daily-overview-v1",
+      asOf: null,
+      summary: "A500趋势仍待核查。",
+      highlights: [
+        {
+          id: "a500-trend",
+          kind: "INDEX_TREND",
+          title: "A500趋势观察",
+          summary: "尚无有效趋势证据。",
+          impact: "无法认证趋势策略条件。",
+          resultType: "INCONCLUSIVE",
+          tone: "GRAY",
+          condition: "UNKNOWN",
+          indexId: "a500",
+          directionIds: ["a-share:broad"],
+          sourceIds: [],
+        },
+      ],
+    },
     marketEvidence: [
       {
         indexId: "a500",
@@ -1040,7 +1060,7 @@ it("selects a related index from v2 direction details and clears the previous fu
   });
   renderWithSession(
     <FundScreenerPage />,
-    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&page=2&macroMonths=60",
+    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-id&fundMarket=SSE&page=2&macroMonths=60&researchOpen=1&researchTab=direction",
   );
   await screen.findByRole("button", { name: /今日投资观察/ });
   expect(
@@ -1050,9 +1070,14 @@ it("selects a related index from v2 direction details and clears the previous fu
     screen.queryByRole("button", { name: "查看驱动与风险⌄" }),
   ).not.toBeInTheDocument();
   expect(screen.queryByText(/当前研究：/)).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /今日投资观察/ }));
-  await user.click(screen.getByRole("tab", { name: "投资方向与基金" }));
-  await user.click(screen.getByRole("button", { name: "研究中证A500" }));
+  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.queryByRole("tab", { name: "投资方向与基金" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /研究中证A500/ }));
   await waitFor(() =>
     expect(api.funds).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -1068,6 +1093,9 @@ it("selects a related index from v2 direction details and clears the previous fu
   );
   expect(screen.getByLabelText("研究路径")).not.toHaveTextContent("510330");
   expect(screen.getByRole("button", { name: "关注指数" })).toBeDisabled();
+  await waitFor(() =>
+    expect(document.activeElement).toHaveAttribute("id", "op-research-targets"),
+  );
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",

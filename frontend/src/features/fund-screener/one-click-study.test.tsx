@@ -138,7 +138,7 @@ it("freezes a current selection in one click with all identity fields and opens 
     }),
   );
   expect(
-    await screen.findByRole("tab", { name: "跟踪与复盘" }),
+    await screen.findByRole("tab", { name: "我的跟踪与复盘" }),
   ).toHaveAttribute("aria-selected", "true");
 });
 it("freezes the displayed READY event in one click without binding it to an unrelated selected fund", async () => {
@@ -149,6 +149,7 @@ it("freezes the displayed READY event in one click without binding it to an unre
     <FundScreenerPage />,
     "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-1&fundMarket=SSE&researchOpen=1&researchTab=events",
   );
+  await userEvent.click(await screen.findByText("查看事件依据与情景"));
   await userEvent.click(
     await screen.findByRole("button", { name: "跟踪全球能源事件" }),
   );
@@ -161,7 +162,7 @@ it("freezes the displayed READY event in one click without binding it to an unre
     }),
   );
   expect(await screen.findByText("保存失败可重试")).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "重大事件与情景" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -204,7 +205,7 @@ it("does not navigate a different scope after a late successful create", async (
     finish({ track: { id: "old-saved" } } as never);
   });
   expect(
-    screen.queryByRole("tab", { name: "跟踪与复盘" }),
+    screen.queryByRole("tab", { name: "我的跟踪与复盘" }),
   ).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",

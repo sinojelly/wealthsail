@@ -504,6 +504,11 @@ export type ResearchTab =
 export interface OverviewItem {
   id: string;
   kind: string;
+  resultType?:
+    "CONFIRMED_RISK" | "LIMITED_CLUE" | "STRATEGY_CANDIDATE" | "INCONCLUSIVE";
+  condition?: "PASSED" | "FAILED" | "UNKNOWN";
+  nextValidation?: string[];
+  counterConditions?: string[];
   title: string;
   summary: string;
   impact: string;
@@ -526,6 +531,8 @@ export interface OverviewItem {
 }
 export interface DailyResearch {
   methodVersion: string;
+  scheduleState?: "NOT_DUE" | "DUE_NOT_DISPATCHED" | "DISPATCHED" | "DISABLED";
+  todayScheduledFor?: string | null;
   state:
     | "NOT_RUN"
     | "RUNNING"

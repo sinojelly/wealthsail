@@ -32,10 +32,33 @@ const energyUnit = (unit: string) =>
     : unit === "USD/gallon"
       ? "美元/加仑"
       : unit;
-const dailyStateLabel = (state?: string) =>
-  stateLabels[state ?? ""] ?? "已有事实观察";
-export function DailyResearchStatus({ state }: { state?: string }) {
-  return <>{dailyStateLabel(state)}</>;
+const dailyStateLabel = (state?: string, hasReport?: boolean) =>
+  state === "STALE" && hasReport === false
+    ? "暂无有效日报"
+    : (stateLabels[state ?? ""] ?? "已有事实观察");
+const scheduleLabels: Record<string, string> = {
+  NOT_DUE: "尚未到今日计划时间",
+  DUE_NOT_DISPATCHED: "今日到期，尚未登记派发",
+  DISPATCHED: "今日已登记派发",
+  DISABLED: "每日研究未启用",
+};
+export function DailyResearchStatus({
+  state,
+  scheduleState,
+  hasReport,
+}: {
+  state?: string;
+  scheduleState?: string;
+  hasReport?: boolean;
+}) {
+  return (
+    <>
+      {dailyStateLabel(state, hasReport)}
+      {scheduleState && scheduleLabels[scheduleState]
+        ? ` · ${scheduleLabels[scheduleState]}`
+        : ""}
+    </>
+  );
 }
 export function EnergyObservations({
   rows = [],
@@ -92,8 +115,22 @@ export default function DailyResearchReport({
   trackingPending?: boolean;
 }) {
   const report = data?.report;
+  const events =
+    report?.events.filter(
+      (event, index, rows) =>
+        rows.findIndex((row) => row.id === event.id) === index,
+    ) ?? [];
+  const upcoming =
+    report?.upcoming.filter(
+      (event, index, rows) =>
+        rows.findIndex((row) => row.id === event.id) === index,
+    ) ?? [];
+  const safeErrorClass =
+    data?.errorClass && /^[A-Za-z][A-Za-z0-9_.]{0,79}$/.test(data.errorClass)
+      ? data.errorClass
+      : "未分类错误";
   function related(ids: string[]) {
-    return ids.flatMap((id) => {
+    return [...new Set(ids)].flatMap((id) => {
       const direction = directions.find((row) => row.id === id);
       return direction
         ? [
@@ -109,38 +146,109 @@ export default function DailyResearchReport({
         : [];
     });
   }
-  function refs(ids: string[]) {
+  function sources(ids: string[]) {
     return (
-      <small>
-        依据：
-        {ids
-          .map(
-            (id) =>
-              report?.sources.find((source) => source.id === id)?.title ??
-              "引用待核查",
-          )
-          .join("、")}
-      </small>
+      <section aria-label="本事项原始来源">
+        <h4>原始来源与核对</h4>
+        {!ids.length && <p>未提供原始来源，仍需人工核查。</p>}
+        {[...new Set(ids)].map((id) => {
+          const source = report?.sources.find((row) => row.id === id);
+          return source ? (
+            <div key={id}>
+              {sourceHref(source.url) ? (
+                <a
+                  href={sourceHref(source.url)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {source.title}
+                </a>
+              ) : (
+                <strong>{source.title}</strong>
+              )}
+              <p>
+                {source.verification === "SOURCE_CHECKED"
+                  ? "原文已核对，仅证明引用匹配，不代表影响判断已核实。"
+                  : source.verification === "REPORTED"
+                    ? "报道线索，原文与事实仍待核查。"
+                    : "来源尚未完成核对。"}
+              </p>
+              <blockquote>{source.quote}</blockquote>
+              <small>
+                公布：{timeLabel(source.publishedAt ?? source.publishedDate)} ·
+                获取：{timeLabel(source.retrievedAt)}
+              </small>
+            </div>
+          ) : (
+            <p key={id}>引用待核查，尚无可展示的原文。</p>
+          );
+        })}
+      </section>
+    );
+  }
+  function calendar(rows: typeof upcoming) {
+    return (
+      <ul>
+        {rows.map((event) => (
+          <li key={event.id}>
+            <strong>{event.title}</strong>
+            <p>
+              {timeLabel(event.scheduledAt ?? event.scheduledDate)} ·
+              计划，尚未发生
+            </p>
+            <p className="op-daily-next">
+              下一核查：{event.watchFor[0] ?? "未声明，待实际公布后核对。"}
+            </p>
+            {!!event.sourceIds.length && (
+              <details>
+                <summary>查看日程依据</summary>
+                {sources(event.sourceIds)}
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
     );
   }
   return (
     <section className="op-daily-report" aria-label="每日事件研究">
-      <h3>{dailyStateLabel(data?.state)}</h3>
+      <h3>{report ? "重要事件" : "暂无有效日报"}</h3>
+      {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
       {data && (
-        <div className="op-daily-run">
-          <p>报告证据时间：{timeLabel(report?.asOf ?? data.asOf)}</p>
+        <details className="op-daily-run">
+          <summary>执行与报告状态</summary>
+          <p>
+            本次任务：{data.runId ?? "未登记"} ·{" "}
+            <DailyResearchStatus
+              state={data.state}
+              scheduleState={data.scheduleState}
+              hasReport={!!report}
+            />
+          </p>
           <p>
             本次计划：{timeLabel(data.scheduledFor)} · 实际开始：
             {timeLabel(data.startedAt)} · 结束：{timeLabel(data.completedAt)}
           </p>
+          {(data.state === "FAILED" || data.state === "UNCERTAIN") && (
+            <p>
+              安全错误类：<span>{safeErrorClass}</span>
+            </p>
+          )}
+          {report && (
+            <p>
+              当前有效报告：{data.reportRunId ?? "身份未记录"} · 完成：
+              {timeLabel(data.reportCompletedAt)} · 证据：
+              {timeLabel(report.asOf ?? data.asOf)}
+            </p>
+          )}
           <small>
             下次计划：{timeLabel(data.nextRunAt)}
             ；计划与执行登记不代表研究服务此刻在线。
           </small>
-        </div>
+        </details>
       )}
       {!report ? (
-        <p>尚无可展示的每日事件研究；可继续核对下方已有事实与宏观指标。</p>
+        <p>有效报告尚未生成，可先核查市场证据。</p>
       ) : (
         <>
           {data?.state !== "READY" && (
@@ -148,133 +256,124 @@ export default function DailyResearchReport({
               当前显示历史报告及原始日期，不代表今日已完成研究。
             </p>
           )}
-          <p>{report.summary}</p>
+          <details className="op-daily-summary-details">
+            <summary>整体研究摘要</summary>
+            <p>{report.summary}</p>
+          </details>
           <p className="op-muted">
             以下影响与情景均为模型条件推演；原文核对不等于投资判断已核实，不生成买卖资格。
           </p>
-          {report.events.map((event) => (
-            <article className="op-daily-event" key={event.id}>
-              <header>
-                <h3>{event.title}</h3>
-                <span className="op-badge">
-                  {phases[event.phase] ?? "阶段待核查"}
-                </span>
-              </header>
-              <p>{event.summary}</p>
-              {data?.reportRunId && onTrack && (
-                <button
-                  type="button"
-                  disabled={trackingPending}
-                  aria-label={`跟踪${event.title}`}
-                  onClick={() => onTrack(data.reportRunId!, event.id)}
-                >
-                  跟踪此研究
-                </button>
-              )}
-              <small>事件事实尚未独立核验；影响为模型条件推演。</small>
-              {refs(event.sourceIds)}
-              {!!event.channels.length && (
-                <section>
-                  <h4>可能传导 · 模型条件推演</h4>
-                  {event.channels.map((channel, i) => (
-                    <p key={i}>{channel}</p>
-                  ))}
-                </section>
-              )}
-              {!!event.scenarios.length && (
-                <section>
-                  <h4>正反情景与验证条件</h4>
-                  {event.scenarios.map((scenario, i) => (
-                    <div key={i}>
-                      <strong>若：{scenario.condition}</strong>
-                      <p>可能影响：{scenario.impact}</p>
-                      <p>反方条件：{scenario.counter}</p>
-                    </div>
-                  ))}
-                </section>
-              )}
-              <p>市场反应：尚未核验；价格同时变化不能直接认定事件因果。</p>
-              {!!event.watchFor.length && (
-                <section>
-                  <h4>接下来核查</h4>
-                  {event.watchFor.map((condition) => (
-                    <p key={condition}>{condition}</p>
-                  ))}
-                </section>
-              )}
-              {!!event.unknowns.length && (
-                <section>
-                  <h4>尚未确认</h4>
-                  {event.unknowns.map((unknown) => (
-                    <p key={unknown}>{unknown}</p>
-                  ))}
-                </section>
-              )}
-              {!!event.affectedDirectionIds.length && (
-                <div className="op-research-actions">
-                  {related(event.affectedDirectionIds)}
-                </div>
-              )}
-            </article>
-          ))}
-          {!!report.upcoming.length && (
-            <section aria-label="未来关键事件">
+          <ul className="op-daily-events" aria-label="重要事件">
+            {events.map((event) => (
+              <li key={event.id}>
+                <article className="op-daily-event">
+                  <header>
+                    <h3>{event.title}</h3>
+                  </header>
+                  <p>{event.summary}</p>
+                  <p className="op-daily-affected">
+                    受影响方向：
+                    {[
+                      ...new Set(
+                        event.affectedDirectionIds.map((id) => {
+                          const direction = directions.find(
+                            (row) => row.id === id,
+                          );
+                          return direction
+                            ? `${direction.marketLabel} · ${direction.label}`
+                            : "待核对";
+                        }),
+                      ),
+                    ].join("、") || "未声明"}
+                  </p>
+                  <p className="op-daily-next">
+                    接下来核查：
+                    {event.watchFor[0] ?? "未声明下一条件，需人工核查。"}
+                  </p>
+                  <details className="op-daily-event-details">
+                    <summary>查看事件依据与情景</summary>
+                    {!!event.affectedDirectionIds.length && (
+                      <div className="op-research-actions">
+                        {related(event.affectedDirectionIds)}
+                      </div>
+                    )}
+                    <p>
+                      实际阶段：
+                      <span className="op-badge">
+                        {phases[event.phase] ?? "阶段待核查"}
+                      </span>
+                    </p>
+                    {data?.reportRunId && onTrack && (
+                      <button
+                        type="button"
+                        disabled={trackingPending}
+                        aria-label={`跟踪${event.title}`}
+                        onClick={() => onTrack(data.reportRunId!, event.id)}
+                      >
+                        跟踪此研究
+                      </button>
+                    )}
+                    <small>事件事实尚未独立核验；影响为模型条件推演。</small>
+                    {!!event.channels.length && (
+                      <section>
+                        <h4>可能传导 · 模型条件推演</h4>
+                        {event.channels.map((channel, i) => (
+                          <p key={i}>{channel}</p>
+                        ))}
+                      </section>
+                    )}
+                    {!!event.scenarios.length && (
+                      <section>
+                        <h4>正反情景与验证条件</h4>
+                        {event.scenarios.map((scenario, i) => (
+                          <div key={i}>
+                            <strong>若：{scenario.condition}</strong>
+                            <p>可能影响：{scenario.impact}</p>
+                            <p>反方条件：{scenario.counter}</p>
+                          </div>
+                        ))}
+                      </section>
+                    )}
+                    <p>
+                      市场反应：尚未核验；价格同时变化不能直接认定事件因果。
+                    </p>
+                    {event.watchFor.length > 1 && (
+                      <section>
+                        <h4>其他核查条件</h4>
+                        {event.watchFor.slice(1).map((condition) => (
+                          <p key={condition}>{condition}</p>
+                        ))}
+                      </section>
+                    )}
+                    {!!event.unknowns.length && (
+                      <section>
+                        <h4>尚未确认</h4>
+                        {event.unknowns.map((unknown) => (
+                          <p key={unknown}>{unknown}</p>
+                        ))}
+                      </section>
+                    )}
+                    {sources(event.sourceIds)}
+                  </details>
+                </article>
+              </li>
+            ))}
+          </ul>
+          {!!upcoming.length && (
+            <section className="op-daily-calendar" aria-label="未来关键事件">
               <h3>未来关键事件</h3>
-              {report.upcoming.map((event) => (
-                <article key={event.id}>
-                  <strong>{event.title}</strong>
-                  <p>
-                    {timeLabel(event.scheduledAt ?? event.scheduledDate)} ·
-                    计划，尚未发生
-                  </p>
-                  {refs(event.sourceIds)}
-                  {event.watchFor.map((condition) => (
-                    <p key={condition}>{condition}</p>
-                  ))}
-                  <div className="op-research-actions">
-                    {related(event.affectedDirectionIds)}
-                  </div>
-                </article>
-              ))}
-            </section>
-          )}
-          <EnergyObservations rows={report.energy} />
-          {!!report.sources.length && (
-            <section aria-label="日报原始来源">
-              <h3>原始来源与核对</h3>
-              {report.sources.map((source) => (
-                <article key={source.id}>
-                  {sourceHref(source.url) ? (
-                    <a
-                      href={sourceHref(source.url)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {source.title}
-                    </a>
-                  ) : (
-                    <strong>{source.title}</strong>
-                  )}
-                  <p>
-                    {source.verification === "SOURCE_CHECKED"
-                      ? "原文已核对，仅证明引用匹配，不代表影响判断已核实。"
-                      : source.verification === "REPORTED"
-                        ? "报道线索，原文与事实仍待核查。"
-                        : "来源尚未完成核对。"}
-                  </p>
-                  <blockquote>{source.quote}</blockquote>
-                  <small>
-                    公布：
-                    {timeLabel(source.publishedAt ?? source.publishedDate)} ·
-                    获取：{timeLabel(source.retrievedAt)}
-                  </small>
-                </article>
-              ))}
+              {calendar(upcoming.slice(0, 3))}
+              {upcoming.length > 3 && (
+                <details>
+                  <summary>查看其余{upcoming.length - 3}项日程</summary>
+                  {calendar(upcoming.slice(3))}
+                </details>
+              )}
             </section>
           )}
           {!!report.coverage.length && (
-            <section aria-label="研究覆盖与未找到主题">
-              <h3>研究覆盖</h3>
+            <details aria-label="研究覆盖与未找到主题">
+              <summary>研究覆盖与未找到主题</summary>
               {report.coverage.map((item) => (
                 <p key={item.topic}>
                   <strong>{topics[item.topic] ?? "其他研究主题"}</strong> ·{" "}
@@ -289,7 +388,7 @@ export default function DailyResearchReport({
               <small>
                 未找到线索不代表不存在重要事件，日报不承诺完整覆盖。
               </small>
-            </section>
+            </details>
           )}
         </>
       )}
