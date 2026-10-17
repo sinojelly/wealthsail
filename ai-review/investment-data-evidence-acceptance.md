@@ -1,5 +1,7 @@
 # 投资机会数据与证据筛选验收
 
+> 历史验收记录：下述旧界面、门槛及数量属于2026-10-14版本。Alpha-V2按[设计28](../docs/28.WealthSail宏观经济研究模块设计.md)及[计划38](38.WealthSail-AlphaV2清理与双轨买卖区间实施计划.md)执行；旧浏览器脚本已移除，本文不能作为当前版本的可执行验收步骤。
+
 日期：2026-10-14。范围：实施计划18的S0–S6；原v3.3布局保留。本文记录实现验证和真实供应商限制，不宣称投资策略已有效。
 
 ## 实现与TDD证据
@@ -29,7 +31,7 @@
 
 桌面1600×1050和手机390×844，真实API及生产构建浏览器流程通过：宏观12月查询/折线、研究证据/风险、服务端候选资格、完整历史切换、费用、URL恢复，无页面横向溢出或应用运行错误。截图在artifacts/investment-evidence/，不入Git。浏览器数据明确为隔离的合成验收数据，不能当成正式市场事实。
 
-可复用的验收代码：scripts/prepare_investment_evidence_smoke.py和frontend/scripts/investment-evidence-smoke.cjs。前者只接受postgres、loopback及wealthsail_investment_check_*库；拒绝真实本地库和远程库。应用生产迁移后，用INVESTMENT_TEST_DATABASE_URL指定测试库并运行 `python -m scripts.prepare_investment_evidence_smoke`；测试API须明确指向同库并以development启动。浏览器用INVESTMENT_SMOKE_BASE_URL指向该API代理的隔离前端，不使用日常工作台端口。
+当时配套的旧浏览器脚本已在Alpha-V2清理。保留的隔离fixture工具scripts/prepare_investment_evidence_smoke.py只接受postgres、loopback及wealthsail_investment_check_*库；拒绝真实本地库和远程库。它只用于准备明确标记的合成测试输入，不代表当前界面验收或真实供应商验证。
 
 最终测试数量与提交见实施计划执行记录。既有jose弃用警告与非本任务需要额外环境的跳过测试单独保留，不宣称没有警告。
 
