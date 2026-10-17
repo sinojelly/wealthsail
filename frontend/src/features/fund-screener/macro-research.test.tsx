@@ -1,9 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import MacroContextStrip from "./components/MacroContextStrip";
-import DirectionExplorer from "./components/DirectionExplorer";
-import type { Direction, MacroContext } from "../../api/investment";
-
+import { EvidenceCard } from "./components/EvidenceCards";
+import type { MacroContext } from "../../api/investment";
 const context: MacroContext = {
   state: "UNVERIFIED",
   months: 36,
@@ -115,28 +113,20 @@ const context: MacroContext = {
   ],
 };
 
-async function expand() {
-  const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
-  return user;
+function EvidenceFixture({ data }: { data: MacroContext; error?: boolean }) {
+  return (
+    <>
+      {data.items.map((item) => (
+        <EvidenceCard key={item.code} item={item} />
+      ))}
+    </>
+  );
 }
-
-it("keeps the latest research summary compact and expands evidence on demand", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
-  expect(screen.getByText(context.research!.summary)).toBeInTheDocument();
-  expect(
-    screen.queryByRole("img", { name: "制造业 PMI 历史走势" }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByText(/制造业 PMI 49.8 指数点/)).toBeInTheDocument();
-  await expand();
-  expect(screen.getByText("经济增长")).toBeInTheDocument();
-  expect(screen.getByText("市场风险")).toBeInTheDocument();
-  expect(screen.getByText(/市场波动与信用利差/)).toBeInTheDocument();
-  expect(screen.getByText("仅覆盖制造业景气。")).toBeInTheDocument();
-});
-
+async function expand() {
+  return userEvent.setup();
+}
 it("separates official value verification, publication precision and scheduled releases", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
+  render(<EvidenceFixture data={context} error={false} />);
   await expand();
   expect(screen.getByText("数据所属月份：2026年9月")).toBeInTheDocument();
   expect(screen.getByText("数值已核对官方数据")).toBeInTheDocument();
@@ -161,7 +151,7 @@ it("separates official value verification, publication precision and scheduled r
 });
 
 it("includes the benchmark in the plot domain and exposes units and month labels", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
+  render(<EvidenceFixture data={context} error={false} />);
   await expand();
   const graph = screen.getByRole("img", { name: "制造业 PMI 历史走势" });
   const baseline = within(graph).getByLabelText("扩张与收缩分界：50 指数点");
@@ -174,7 +164,7 @@ it("includes the benchmark in the plot domain and exposes units and month labels
 });
 
 it("shows the same observed point detail through hover and keyboard focus", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
+  render(<EvidenceFixture data={context} error={false} />);
   const user = await expand();
   const august = screen.getByRole("button", {
     name: "查看制造业 PMI 2026年8月",
@@ -186,7 +176,7 @@ it("shows the same observed point detail through hover and keyboard focus", asyn
   const september = screen.getByRole("button", {
     name: "查看制造业 PMI 2026年9月",
   });
-  september.focus();
+  act(() => september.focus());
   await user.keyboard("{Enter}");
   expect(
     screen.getByRole("status", { name: "制造业 PMI 历史明细" }),
@@ -197,7 +187,7 @@ it("shows the same observed point detail through hover and keyboard focus", asyn
 });
 
 it("reports longer changes using their actual statistics basis", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
+  render(<EvidenceFixture data={context} error={false} />);
   await expand();
   expect(screen.getByText("近3月变化：+0.20 指数点")).toBeInTheDocument();
   expect(screen.getByText("近6月变化：暂不可计算")).toBeInTheDocument();
@@ -206,66 +196,9 @@ it("reports longer changes using their actual statistics basis", async () => {
   expect(screen.queryByText(/2\/36|12\/36/)).not.toBeInTheDocument();
 });
 
-it.each(["SCHEDULED", "OVERDUE", "UNKNOWN"] as const)(
-  "keeps %s release plans separate from actual publication",
-  async (status) => {
-    render(
-      <MacroContextStrip
-        error={false}
-        data={{
-          ...context,
-          items: [
-            {
-              ...context.items[0],
-              nextRelease: {
-                ...context.items[0].nextRelease!,
-                status,
-                scheduledAt:
-                  status === "UNKNOWN" ? null : "2026-10-31T01:30:00Z",
-              },
-            },
-          ],
-        }}
-      />,
-    );
-    await expand();
-    expect(screen.getByText(/发布时间待确认/)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        status === "UNKNOWN"
-          ? /暂无已核实的下期发布日程/
-          : status === "OVERDUE"
-            ? /已过计划，待公告/
-            : /计划，可能调整/,
-      ),
-    ).toBeInTheDocument();
-  },
-);
-
-it("does not retain an old research conclusion while a read fails or is loading", async () => {
-  const { rerender } = render(
-    <MacroContextStrip data={context} error loading={false} />,
-  );
-  expect(screen.queryByText(context.research!.summary)).not.toBeInTheDocument();
-  expect(screen.getByText(/宏观数据读取失败/)).toBeInTheDocument();
-  rerender(<MacroContextStrip data={context} error={false} loading />);
-  expect(screen.queryByText(context.research!.summary)).not.toBeInTheDocument();
-  expect(screen.getByText(/宏观数据加载中/)).toBeInTheDocument();
-});
-
-it("renders only supplied official events with original sources", async () => {
-  render(<MacroContextStrip data={context} error={false} />);
-  await expand();
-  expect(
-    screen.getByRole("link", { name: "官方制造业数据公告" }),
-  ).toHaveAttribute("href", "https://stats.example.org/release");
-  expect(screen.getByText("已核对公告元数据。")).toBeInTheDocument();
-  expect(screen.getByText(/国家统计局 · 官方事实/)).toBeInTheDocument();
-});
-
 it("retains third-party facts during conflict while pausing the current interpretation", async () => {
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         ...context,
@@ -296,7 +229,7 @@ it("retains third-party facts during conflict while pausing the current interpre
 
 it("handles flat negative histories and a zero reference line without invalid coordinates", async () => {
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         ...context,
@@ -339,7 +272,7 @@ it("handles flat negative histories and a zero reference line without invalid co
 
 it("does not connect or expose a conflicted historical observation", async () => {
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         ...context,
@@ -370,45 +303,9 @@ it("does not connect or expose a conflicted historical observation", async () =>
   ).not.toBeInTheDocument();
 });
 
-it("keeps unknown event dates and invalid source links honest", async () => {
-  render(
-    <MacroContextStrip
-      error={false}
-      data={{
-        ...context,
-        events: [
-          {
-            ...context.events![0],
-            publishedAt: null,
-            sourceUri: "javascript:alert(1)",
-          },
-        ],
-      }}
-    />,
-  );
-  await expand();
-  expect(screen.getByText("官方制造业数据公告")).toBeInTheDocument();
-  expect(
-    screen.queryByRole("link", { name: "官方制造业数据公告" }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByText(/实际发布时间待确认/)).toBeInTheDocument();
-});
-
-it("shows unavailable event sources without inventing a current headline", async () => {
-  render(
-    <MacroContextStrip
-      error={false}
-      data={{ ...context, events: [], eventState: "UNAVAILABLE" }}
-    />,
-  );
-  await expand();
-  expect(screen.getByText(/官方事件来源暂不可用/)).toBeInTheDocument();
-  expect(screen.queryByText("官方制造业数据公告")).not.toBeInTheDocument();
-});
-
 it("marks stale reporting periods without treating a recent retrieval as fresh evidence", async () => {
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         ...context,
@@ -432,31 +329,9 @@ it("marks stale reporting periods without treating a recent retrieval as fresh e
   expect(screen.getByText("旧期证据，需更新")).toBeInTheDocument();
 });
 
-it("expands the remaining supplied event list only when requested", async () => {
-  render(
-    <MacroContextStrip
-      error={false}
-      data={{
-        ...context,
-        events: Array.from({ length: 4 }, (_, i) => ({
-          ...context.events![0],
-          id: `event-${i}`,
-          title: `官方公告 ${i + 1}`,
-        })),
-      }}
-    />,
-  );
-  const user = await expand();
-  expect(
-    screen.queryByRole("link", { name: "官方公告 4" }),
-  ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "查看全部 4 条事件" }));
-  expect(screen.getByRole("link", { name: "官方公告 4" })).toBeInTheDocument();
-});
-
 it("does not label non-finite statistics as a real percentile", async () => {
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         ...context,
@@ -475,46 +350,4 @@ it("does not label non-finite statistics as a real percentile", async () => {
   await expand();
   expect(screen.getByText("历史分位：暂不可计算")).toBeInTheDocument();
   expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
-});
-
-it("presents direction transmission, counter-cases and follow-up checks", async () => {
-  const user = userEvent.setup();
-  const direction: Direction = {
-    id: "a-share:broad",
-    marketId: "a-share",
-    marketLabel: "A股",
-    styleId: "broad",
-    label: "宽基",
-    framework: "盈利与估值研究",
-    macroResearch: {
-      methodVersion: "macro-research-v1",
-      summary: "制造业景气是宽基研究的局部证据。",
-      channels: [
-        {
-          label: "盈利渠道",
-          evidenceCodes: ["PMI"],
-          observation: "景气较前月改善。",
-          impact: "盈利修复需要进一步验证。",
-          counterCase: "市场可能已计价。",
-          watchFor: ["企业利润与估值"],
-        },
-      ],
-      missingEvidence: ["实际利润与融资利率"],
-    },
-    relatedEvents: context.events,
-  };
-  render(
-    <DirectionExplorer
-      directions={[direction]}
-      selected={direction}
-      onSelect={() => undefined}
-    />,
-  );
-  await user.click(screen.getByRole("button", { name: /查看驱动与风险/ }));
-  expect(screen.getByText("反方条件：市场可能已计价。")).toBeInTheDocument();
-  expect(screen.getByText(/企业利润与估值/)).toBeInTheDocument();
-  expect(screen.getByText(/实际利润与融资利率/)).toBeInTheDocument();
-  expect(
-    screen.getByRole("link", { name: "官方制造业数据公告" }),
-  ).toBeInTheDocument();
 });

@@ -12,7 +12,7 @@ import {
   timeLabel,
   type MacroItem,
 } from "../macro-display";
-import { SeriesCard } from "./OpportunityRadar";
+import { EvidenceCard, SeriesCard } from "./EvidenceCards";
 import EnergyEvidence from "./EnergyEvidence";
 import { energyUnit } from "../energy-display";
 import "../macro-evidence.css";
@@ -63,7 +63,7 @@ type EvidenceRow = {
 };
 type Props = {
   data: OpportunityContext;
-  renderMacro: (item: MacroItem) => ReactNode;
+  renderMacro?: (item: MacroItem) => ReactNode;
   marketId?: string;
   directionId?: string;
   selectedIndexId?: string;
@@ -132,12 +132,14 @@ function IndexEvidence({
                   当前窗口不代表完整历史已核验；完整历史仍有缺期、冲突或待核查证据。
                 </p>
               )}
-              <p>价格趋势仅为市场观察，不代表策略或基金已符合完整条件。</p>
+              <p>
+                指数价格趋势可作为双轨研究依据，基金价格仍使用对应标的口径。
+              </p>
             </>
           ) : (
             <>
               <p className="op-series-value">{metricValue(pe?.latest)} 倍</p>
-              <p>独立PE仅为估值事实，不能判断便宜或认证基金资格。</p>
+              <p>PE倍数为独立事实；低估分支使用已核验历史分位。</p>
               <p>
                 已采集 {pe?.sampleCount ?? "未知数量"} 个估值样本；
                 {pe?.percentile == null
@@ -155,7 +157,7 @@ function IndexEvidence({
         {!!index.missingEvidence.length && (
           <p>待核查：{index.missingEvidence.join("、")}</p>
         )}
-        <p>历史时点数据是否可得尚需独立核验；本次展示不认证回测。</p>
+        <p>历史时点与回测验证保留各自原始状态。</p>
         {href && (
           <a href={href} target="_blank" rel="noreferrer">
             查看{index.label}证据来源
@@ -193,7 +195,8 @@ function evidenceRows({
           ? `${item.benchmark.label}：${metricValue(item.benchmark.value)} ${macroUnit(item)}`
           : undefined,
       summary: item.interpretation?.summary ?? "已采集事实，经济含义仍需核查。",
-      detail: () => renderMacro(item),
+      detail: () =>
+        renderMacro ? renderMacro(item) : <EvidenceCard item={item} />,
     })),
     ...(data.series ?? []).map((item): EvidenceRow => {
       const change =
@@ -255,7 +258,7 @@ function evidenceRows({
       state: index.trend.state,
       valueLabel: `相对MA200：${percent(index.trend.distanceMA200)}`,
       change: `63期动量：${percent(index.trend.momentum63)}`,
-      summary: "价格趋势仅为市场观察，完整资格需在工作台核查。",
+      summary: "指数趋势观察，双轨区间见下方工作台。",
       detail: () => <IndexEvidence index={index} kind="trend" />,
     });
     const pe = index.valuation.pe;
@@ -273,7 +276,7 @@ function evidenceRows({
         ["READY", "PARTIAL"].includes(index.valuation.state)
           ? "OBSERVED"
           : (pe?.state ?? "UNAVAILABLE"),
-      summary: "独立PE仅为估值事实，不能判断便宜或认证基金资格。",
+      summary: "PE倍数为独立事实；低估分支使用已核验历史分位。",
       detail: () => <IndexEvidence index={index} kind="pe" />,
     });
   }

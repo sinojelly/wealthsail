@@ -52,37 +52,11 @@ vi.mock("../../api/watchlist", () => ({
   list: vi.fn().mockResolvedValue([]),
   add: vi.fn(),
 }));
-vi.mock("./components/ResearchDiagnosis", () => ({
-  default: ({
-    trackingControls,
-  }: {
-    trackingControls: import("react").ReactNode;
-  }) => <aside>{trackingControls}</aside>,
-}));
-const board = {
-  methodVersion: "research-board-v2",
-  items: [],
-  summaries: [],
-  direction: {
-    label: "宽基",
-    supports: [],
-    counterFactors: [],
-    recommendedChecks: [],
-    itemIds: [],
-  },
-  dataStatus: {
-    itemIds: [],
-    groups: [],
-    sourceResults: {},
-    methodVersions: [],
-  },
-};
 beforeEach(() => {
   vi.clearAllMocks();
   opportunity.mockResolvedValue({
     state: "UNKNOWN",
     items: [],
-    researchBoard: board,
     dailyResearch: {
       state: "FAILED",
       runId: "failed-latest",
@@ -215,12 +189,13 @@ it("does not navigate a different scope after a late successful create", async (
   await act(async () => {
     finish({ track: { id: "old-saved" } } as never);
   });
-  expect(
-    screen.queryByRole("tab", { name: "我的跟踪与复盘" }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+    "aria-selected",
+    "false",
+  );
   expect(screen.getByRole("button", { name: /今日投资观察/ })).toHaveAttribute(
     "aria-expanded",
-    "false",
+    "true",
   );
 });
 

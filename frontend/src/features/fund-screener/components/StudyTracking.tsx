@@ -14,6 +14,7 @@ import {
   studyConditionLabel as conditionLabel,
 } from "./study-display";
 import StudyVersionEditor from "./StudyVersionEditor";
+import ActionablePlan from "./ActionablePlan";
 export interface StudyTrackingProps {
   actor: string;
   scope: api.StudyScope;
@@ -79,7 +80,7 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
     <section className="op-study" aria-label="研究主题跟踪与复盘">
       <h3>研究主题跟踪与复盘</h3>
       <p>
-        冻结初始假设与来源，后续仅核对已存证据。研究变化与计划均不代表已成交，也不构成买卖资格。
+        冻结初始假设、价格依据与来源，后续核对条件并复盘。计划与真实成交分别记录。
       </p>
       {list.isPending && <p role="status">正在读取我的研究主题…</p>}
       {list.isError && (
@@ -264,6 +265,9 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               </section>
             ))}
             <p>{snapshot.thesis}</p>
+            {snapshot.actionablePlan && (
+              <ActionablePlan result={snapshot.actionablePlan} />
+            )}
             {!!snapshot.unknowns?.length && (
               <section aria-label="原始研究未知事项">
                 <h5>原始研究中的未知</h5>

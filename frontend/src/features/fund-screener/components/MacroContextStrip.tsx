@@ -1,363 +1,16 @@
-import { useState, type ReactNode } from "react";
-import { Globe2, ChevronDown } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import type {
   Direction,
   OpportunityContext,
   MacroEvent,
 } from "../../../api/investment";
-import {
-  changeLabel,
-  macroUnit,
-  metricValue,
-  monthLabel,
-  sourceHref,
-  timeLabel,
-  valueVerificationLabels,
-  type MacroItem,
-} from "../macro-display";
-import {
-  RadarOverview,
-  RadarDetails,
-  ResearchDirections,
-} from "./OpportunityRadar";
-import ResearchBoard from "./ResearchBoard";
+import { sourceHref, timeLabel } from "../macro-display";
+import DailyResearchReport, {
+  DailyResearchStatus,
+} from "./DailyResearchReport";
 import MacroEvidencePanel from "./MacroEvidencePanel";
-import { EnergyObservations } from "./DailyResearchReport";
-import { useEvidenceChart } from "./useEvidenceChart";
-
-function HistoricalTrend({ item }: { item: MacroItem }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [plotRef, chart] = useEvidenceChart();
-  const supplied = item.history ?? [];
-  const history = supplied.filter(
-    (p) =>
-      Number.isFinite(p.value) &&
-      Number.isFinite(Date.parse(p.asOf)) &&
-      !["CONFLICT", "UNAVAILABLE"].includes(p.state ?? ""),
-  );
-  if (!supplied.length) return <p>历史序列尚未采集，暂不绘制走势。</p>;
-  if (history.length < 2) {
-    const reasons = [
-      supplied.some((point) => !Number.isFinite(point.value)) && "观察数值无效",
-      supplied.some((point) => !Number.isFinite(Date.parse(point.asOf))) &&
-        "观察日期无效",
-      supplied.some((point) =>
-        ["CONFLICT", "UNAVAILABLE"].includes(point.state ?? ""),
-      ) && "已排除冲突或不可用观察",
-    ].filter(Boolean);
-    return (
-      <p>
-        历史样本不足，暂不绘制走势。
-        {reasons.length ? reasons.join("；") : "至少需要两个有效实际样本。"}
-      </p>
-    );
-  }
-  if (
-    new Set(
-      history.map((p) =>
-        macroUnit({ code: item.code, unit: p.unit ?? item.unit }),
-      ),
-    ).size > 1
-  )
-    return <p>历史单位发生变化，暂不绘制可比较走势。</p>;
-  const benchmark =
-    item.benchmark && Number.isFinite(item.benchmark.value)
-      ? item.benchmark
-      : null;
-  const values = [
-    ...history.map((p) => p.value),
-    ...(benchmark ? [benchmark.value] : []),
-  ];
-  const low = Math.min(...values),
-    high = Math.max(...values);
-  const padding = Math.max((high - low) * 0.1, 0.1);
-  const yLow = low - padding,
-    yHigh = high + padding;
-  const first = Date.parse(history[0].asOf),
-    last = Date.parse(history.at(-1)!.asOf);
-  const y = (value: number) =>
-    chart.bottom -
-    ((value - yLow) / (yHigh - yLow)) * (chart.bottom - chart.top);
-  const points = history.map((p) => ({
-    ...p,
-    x:
-      chart.left +
-      ((Date.parse(p.asOf) - first) / (last - first || 1)) *
-        (chart.right - chart.left),
-    y: y(p.value),
-    month: Number(p.asOf.slice(0, 4)) * 12 + Number(p.asOf.slice(5, 7)),
-    sourceKey: p.sourceUri ?? p.source ?? item.sourceUri ?? item.source,
-  }));
-  const active = points.find((p) => p.asOf === selected);
-  return (
-    <figure ref={plotRef} className="op-macro-chart op-evidence-plot">
-      <svg
-        role="img"
-        aria-label={`${item.label} 历史走势`}
-        viewBox={`0 0 ${chart.width} ${chart.height}`}
-        width="100%"
-        height={chart.height}
-      >
-        <title>{item.label} 实际历史样本，缺失月份不连接</title>
-        <text x={4} y={15}>
-          {macroUnit(item)}
-        </text>
-        {[yLow, (yLow + yHigh) / 2, yHigh].map((tick) => (
-          <g key={tick}>
-            <text x={chart.left - 6} y={y(tick) + 4} textAnchor="end">
-              {tick.toFixed(1)}
-            </text>
-            <path
-              d={`M${chart.left} ${y(tick)} H${chart.right}`}
-              stroke="#e2e8f0"
-              fill="none"
-            />
-          </g>
-        ))}
-        {benchmark && (
-          <>
-            <line
-              aria-label={`${benchmark.label}：${benchmark.value} ${macroUnit(item)}`}
-              x1={chart.left}
-              x2={chart.right}
-              y1={y(benchmark.value)}
-              y2={y(benchmark.value)}
-              stroke="#64748b"
-              strokeDasharray="4 3"
-            />
-            <text x={chart.right} y={y(benchmark.value) - 5} textAnchor="end">
-              {benchmark.label} {benchmark.value}
-            </text>
-          </>
-        )}
-        {points.map((point, i) => (
-          <g key={point.asOf}>
-            {i > 0 &&
-              point.month - points[i - 1].month === 1 &&
-              point.sourceKey === points[i - 1].sourceKey && (
-                <line
-                  x1={points[i - 1].x}
-                  y1={points[i - 1].y}
-                  x2={point.x}
-                  y2={point.y}
-                  stroke="#0d9488"
-                  strokeWidth={2}
-                />
-              )}
-            <circle
-              role="button"
-              tabIndex={0}
-              aria-label={`查看${item.label} ${monthLabel(point.asOf)}`}
-              cx={point.x}
-              cy={point.y}
-              r={4}
-              fill="#0d9488"
-              onMouseEnter={() => setSelected(point.asOf)}
-              onFocus={() => setSelected(point.asOf)}
-              onClick={() => setSelected(point.asOf)}
-              onKeyDown={(event) => {
-                if (["Enter", " "].includes(event.key)) {
-                  event.preventDefault();
-                  setSelected(point.asOf);
-                }
-              }}
-            />
-          </g>
-        ))}
-        <text x={chart.left} y={chart.height - 14}>
-          {monthLabel(history[0].asOf)}
-        </text>
-        <text x={chart.right} y={chart.height - 14} textAnchor="end">
-          {monthLabel(history.at(-1)!.asOf)}
-        </text>
-      </svg>
-      <figcaption>
-        {monthLabel(history[0].asOf)} 至 {monthLabel(history.at(-1)!.asOf)} ·
-        取值范围：
-        {Math.min(...history.map((p) => p.value)).toFixed(2)}–
-        {Math.max(...history.map((p) => p.value)).toFixed(2)} {macroUnit(item)}
-      </figcaption>
-      <p
-        className="op-macro-point"
-        role="status"
-        aria-label={`${item.label} 历史明细`}
-        aria-live="polite"
-      >
-        {active ? (
-          <>
-            {monthLabel(active.asOf)}：{metricValue(active.value)}{" "}
-            {macroUnit(item)} · 来源：
-            {active.source ?? item.source ?? "未确认"}
-            {active.revision != null && ` · 修订 ${active.revision}`}
-            {active.publishedAt && ` · 公布：${timeLabel(active.publishedAt)}`}
-          </>
-        ) : (
-          "悬停或键盘聚焦观察值，查看月份、数值与来源。"
-        )}
-      </p>
-    </figure>
-  );
-}
-
-function EvidenceCard({ item }: { item: MacroItem }) {
-  const [open, setOpen] = useState(false);
-  const unit = macroUnit(item),
-    stats = item.statistics;
-  const baseUrl = sourceHref(item.sourceUri),
-    officialUrl = sourceHref(item.officialEvidence?.sourceUri);
-  const scheduleUrl = sourceHref(item.nextRelease?.sourceUri);
-  const publicationConfirmed =
-    item.publicationStatus === "CONFIRMED" ||
-    (!item.publicationStatus && !!item.publishedAt);
-  return (
-    <article className="op-macro-card op-evidence-card">
-      <strong>{item.label}</strong>
-      <div className="op-evidence-layout">
-        <HistoricalTrend item={item} />
-        <div className="op-evidence-facts">
-          <h3>
-            {item.value == null || !Number.isFinite(item.value)
-              ? "—"
-              : `${metricValue(item.value, item.code === "PMI" ? 1 : 2)} ${unit}`.trim()}
-          </h3>
-          <p>连续月变化：{changeLabel(item.periodChange, item)}</p>
-          {item.benchmark &&
-            Number.isFinite(item.benchmark.value) &&
-            item.value != null &&
-            Number.isFinite(item.value) && (
-              <p>
-                {item.benchmark.label}：{metricValue(item.benchmark.value)}{" "}
-                {unit} · 相差：
-                {changeLabel(item.value - item.benchmark.value, item)}
-              </p>
-            )}
-          <p className="op-macro-interpretation">
-            {item.interpretation?.summary ?? "已采集事实，经济含义仍需核查。"}
-          </p>
-          <p>数据所属月份：{monthLabel(item.referencePeriod ?? item.asOf)}</p>
-          <p
-            className={`op-macro-state op-macro-state-${item.valueVerification ?? item.state}`}
-          >
-            {valueVerificationLabels[item.valueVerification ?? item.state] ??
-              "数值来源待核对"}
-          </p>
-          {item.state === "STALE" && item.valueVerification && (
-            <p>旧期证据，需更新</p>
-          )}
-          {stats && (
-            <div className="op-macro-statistics">
-              <p>近3月变化：{changeLabel(stats.change3Months, item)}</p>
-              <p>近6月变化：{changeLabel(stats.change6Months, item)}</p>
-              <p>
-                历史分位：
-                {stats.percentile == null || !Number.isFinite(stats.percentile)
-                  ? "暂不可计算"
-                  : `${stats.percentile.toFixed(2)}%`}
-              </p>
-            </div>
-          )}
-          {item.trendState === "GAP" && (
-            <p>历史月份有缺口或口径变化，仅展示实际样本。</p>
-          )}
-          {item.trendState === "INSUFFICIENT" && (
-            <p>历史样本不足，暂不计算变化。</p>
-          )}
-        </div>
-      </div>
-      <details className="op-evidence-metadata" open={open}>
-        <summary
-          role="button"
-          aria-expanded={open}
-          onClick={(event) => {
-            event.preventDefault();
-            setOpen(!open);
-          }}
-        >
-          {open ? "收起" : "查看"}
-          {item.label} 数据依据
-        </summary>
-        <p>
-          {publicationConfirmed
-            ? `官方实际公布：${timeLabel(item.officialEvidence?.publishedAt ?? item.publishedAt)}`
-            : "发布时间待确认：公布时间未核实，仅展示观察期事实。"}
-        </p>
-        {item.nextRelease?.scheduledAt &&
-        item.nextRelease.status !== "UNKNOWN" ? (
-          <p>
-            下期{monthLabel(item.nextRelease.referencePeriod)}：
-            {timeLabel(item.nextRelease.scheduledAt)} ·{" "}
-            {item.nextRelease.status === "OVERDUE"
-              ? "已过计划，待公告"
-              : "计划，可能调整"}
-            {scheduleUrl && (
-              <>
-                {" "}
-                ·{" "}
-                <a href={scheduleUrl} target="_blank" rel="noreferrer">
-                  发布日程来源
-                </a>
-              </>
-            )}
-          </p>
-        ) : (
-          <p>暂无已核实的下期发布日程。</p>
-        )}
-        <p>
-          已采集 {item.sampleCount ?? item.history?.length ?? 0} 个历史样本 ·{" "}
-          {item.historyMonths ?? 36} 个月窗口
-        </p>
-        {stats && (
-          <div className="op-macro-statistics">
-            <p>
-              统计基于 {stats.sampleCount} 个实际月样本 ·{" "}
-              {monthLabel(stats.firstPeriod)} 至 {monthLabel(stats.lastPeriod)}
-            </p>
-            {!!stats.missingPeriods.length && (
-              <p>月份间隔：{stats.missingPeriods.map(monthLabel).join("、")}</p>
-            )}
-          </div>
-        )}
-        <div className="op-macro-evidence">
-          <p>
-            基础来源：{item.source ?? "未确认"}
-            {baseUrl && (
-              <>
-                {" "}
-                ·{" "}
-                <a href={baseUrl} target="_blank" rel="noreferrer">
-                  基础数据来源
-                </a>
-              </>
-            )}
-          </p>
-          {item.officialEvidence ? (
-            <>
-              <p>
-                官方核验：{item.officialEvidence.publisher} · 数值：
-                {metricValue(item.officialEvidence.value)} {unit}
-              </p>
-              {officialUrl && (
-                <a href={officialUrl} target="_blank" rel="noreferrer">
-                  官方核验来源
-                </a>
-              )}
-              <p>
-                官方证据获取：{timeLabel(item.officialEvidence.retrievedAt)}
-              </p>
-            </>
-          ) : (
-            <p>尚无可核对的同期官方数值证据。</p>
-          )}
-          <p>方法：{item.interpretation?.methodVersion ?? "未提供"}</p>
-          {item.interpretation?.limitations.map((reason) => (
-            <p key={reason}>{reason}</p>
-          ))}
-        </div>
-      </details>
-    </article>
-  );
-}
-
+import ActionablePlan from "./ActionablePlan";
 function MacroEvents({
   events,
   state,
@@ -424,18 +77,6 @@ export default function MacroContextStrip({
   onDirectionSelect,
   selectedDirection,
   selectedIndexId,
-  onMonitor,
-  monitorEnabled,
-  monitorPending,
-  monitorLoading,
-  monitorError,
-  onNoticeAck,
-  ackPending,
-  ackError,
-  canViewOperations = false,
-  scopeKey,
-  onIndexSelect,
-  hideTracking = false,
   renderStudyTracking,
   onStudyEvent,
   studyPending,
@@ -447,21 +88,10 @@ export default function MacroContextStrip({
   months?: number;
   onMonthsChange?: (months: number) => void;
   directions?: Direction[];
-  onDirectionSelect?: (directionId: string) => void;
+  onDirectionSelect?: (id: string) => void;
   selectedDirection?: Direction;
   selectedIndexId?: string;
-  onMonitor?: (enabled: boolean) => void;
-  monitorEnabled?: boolean;
-  monitorPending?: boolean;
-  monitorLoading?: boolean;
-  monitorError?: string;
-  onNoticeAck?: (id: string) => void;
-  ackPending?: string | null;
-  ackError?: string;
-  canViewOperations?: boolean;
   scopeKey?: string;
-  onIndexSelect?: (id: string) => void;
-  hideTracking?: boolean;
   renderStudyTracking?: () => ReactNode;
   onStudyEvent?: (
     reportRunId: string,
@@ -471,342 +101,195 @@ export default function MacroContextStrip({
   studyPending?: boolean;
   studyError?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const research = !error && !loading ? data?.research : null;
-  const readyData = !error && !loading ? data : undefined;
-  if (readyData?.researchBoard) {
-    const reportEventIds = new Set(
-      readyData.researchBoard.methodVersion === "research-board-v2"
-        ? (readyData.dailyResearch?.report?.events.map((event) => event.id) ??
-            [])
-        : [],
-    );
-    const domestic = new Set([
-      "CN_T10",
-      "DR007",
-      "M1_YOY",
-      "TSF_STOCK_YOY",
-      "CORP_MEDLONG_LOANS_YTD",
-    ]);
-    const foreign = new Set([
-      "US_T10_NOMINAL",
-      "US_T10_REAL",
-      "DXY",
-      "USD_CNY",
-    ]);
-    const core = (readyData.series ?? []).filter((series) =>
-      ["us", "gold"].includes(selectedDirection?.marketId ?? "")
-        ? foreign.has(series.code)
-        : selectedDirection
-          ? domestic.has(series.code)
-          : false,
-    );
-    const global = (readyData.series ?? []).filter(
-      (series) => !core.includes(series),
-    );
-    const windowSelector = (
-      <div className="op-macro-window">
-        <label>
-          宏观观察窗口{" "}
-          <select
-            aria-label="宏观观察窗口"
-            value={months}
-            onChange={(event) => onMonthsChange?.(Number(event.target.value))}
+  const [params, setParams] = useSearchParams();
+  const panelId = useId();
+  const tabs = [
+    ["events", "今日重点"],
+    ["macro", "市场证据"],
+    ["tracking", "我的跟踪与复盘"],
+  ] as const;
+  const tab =
+    params.get("researchTab") === "quality" ||
+    params.get("researchData") === "1"
+      ? "macro"
+      : (tabs.find(([id]) => id === params.get("researchTab"))?.[0] ??
+        "events");
+  const expanded = params.get("researchOpen") !== "0";
+  function open(target = tab, visible = true) {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("researchOpen", visible ? "1" : "0");
+      next.set("researchTab", target);
+      next.delete("researchData");
+      return next;
+    });
+  }
+  const ready = !error && !loading ? data : undefined;
+  const reportIds = new Set(
+    ready?.dailyResearch?.report?.events.map((event) => event.id) ?? [],
+  );
+  const portfolio = ready?.portfolio;
+  const confirmedBreach =
+    portfolio?.state === "READY" &&
+    portfolio.heldSelected === true &&
+    portfolio.budgetState === "BLOCKED" &&
+    portfolio.budgetViolation === true &&
+    ready?.decision?.assessment?.riskState === "BREACH";
+  return (
+    <section
+      className="op-panel op-macro-research op-daily-observation"
+      aria-label="今日投资观察"
+    >
+      <header className="op-observation-header">
+        <button
+          type="button"
+          className="op-macro-toggle"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={() => open(tab, !expanded)}
+        >
+          <strong>今日投资观察</strong>
+          <span>{expanded ? "收起研究" : "展开研究"}</span>
+        </button>
+        <p className="op-observation-meta">
+          <DailyResearchStatus
+            state={ready?.dailyResearch?.state}
+            scheduleState={ready?.dailyResearch?.scheduleState}
+            hasReport={!!ready?.dailyResearch?.report}
+          />
+        </p>
+        {ready?.dailyResearch?.nextRunAt && (
+          <small>下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}</small>
+        )}
+      </header>
+      {confirmedBreach && (
+        <p role="alert" className="op-confirmed-risk">
+          已确认持仓风险预算超限。市场双轨计划继续独立展示；请先核对个人持仓与风险预算。{" "}
+          <a href="/dashboard?scope=MINE">核对我的持仓</a>
+        </p>
+      )}
+      {error && <p role="alert">宏观数据读取失败，请稍后重试。</p>}
+      {loading && <p role="status">宏观数据加载中…</p>}
+      {expanded && (
+        <div id={panelId} className="op-daily-expanded">
+          <nav
+            role="tablist"
+            aria-label="投资观察分类"
+            className="op-v2-topic-nav"
           >
-            {[12, 36, 60].map((window) => (
-              <option key={window} value={window}>
-                {window} 个月
-              </option>
+            {tabs.map(([id, label], i) => (
+              <button
+                key={id}
+                id={`${panelId}-${id}`}
+                role="tab"
+                aria-selected={tab === id}
+                aria-controls={`${panelId}-content`}
+                tabIndex={tab === id ? 0 : -1}
+                onClick={() => open(id)}
+                onKeyDown={(event) => {
+                  const delta =
+                    event.key === "ArrowRight"
+                      ? 1
+                      : event.key === "ArrowLeft"
+                        ? -1
+                        : 0;
+                  if (!delta && event.key !== "Home" && event.key !== "End")
+                    return;
+                  event.preventDefault();
+                  const next =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? tabs.length - 1
+                        : (i + delta + tabs.length) % tabs.length;
+                  open(tabs[next][0]);
+                  (
+                    event.currentTarget.parentElement?.querySelectorAll(
+                      "button",
+                    )[next] as HTMLButtonElement
+                  )?.focus();
+                }}
+              >
+                {label}
+              </button>
             ))}
-          </select>
-        </label>
-        <span>图表窗口；研究统计采用固定历史样本。</span>
-      </div>
-    );
-    return (
-      <ResearchBoard
-        data={readyData}
-        renderStudyTracking={renderStudyTracking}
-        onStudyEvent={onStudyEvent}
-        studyPending={studyPending}
-        studyError={studyError}
-        scopeKey={scopeKey}
-        onIndexSelect={onIndexSelect}
-        directions={directions}
-        onDirectionSelect={onDirectionSelect}
-        hideTracking={hideTracking}
-        canViewOperations={canViewOperations}
-        directionLabel={
-          selectedDirection
-            ? `${selectedDirection.marketLabel} · ${selectedDirection.label}`
-            : undefined
-        }
-        trackingEnabled={monitorEnabled}
-        onTrack={
-          !hideTracking &&
-          onMonitor &&
-          !monitorEnabled &&
-          !monitorPending &&
-          !monitorLoading
-            ? () => onMonitor(true)
-            : undefined
-        }
-        topics={[
-          {
-            id: "research-macro",
-            label: "宏观与流动性",
-            render: () => (
+          </nav>
+          <div
+            role="tabpanel"
+            id={`${panelId}-content`}
+            aria-labelledby={`${panelId}-${tab}`}
+            className="op-research-topic-body"
+          >
+            {tab === "events" && (
               <>
-                {windowSelector}
-                {readyData.researchBoard?.methodVersion ===
-                "research-board-v2" ? (
+                <DailyResearchReport
+                  data={ready?.dailyResearch}
+                  directions={directions}
+                  onDirectionSelect={onDirectionSelect}
+                  onTrack={onStudyEvent}
+                  trackingPending={studyPending}
+                  trackingError={studyError}
+                />
+                {(ready?.actionableZones ?? []).map((result) => (
+                  <ActionablePlan
+                    key={`${result.subjectKind}:${result.subjectId}`}
+                    result={result}
+                  />
+                ))}
+                {!ready?.actionableZones?.length && (
+                  <p>
+                    双轨价格依据尚未齐备，可在工作台选择标的查看实际研究数据。
+                  </p>
+                )}
+                {!!ready?.events?.filter((event) => !reportIds.has(event.id))
+                  .length && (
+                  <details>
+                    <summary>官方发布与其他观察</summary>
+                    <MacroEvents
+                      events={ready.events.filter(
+                        (event) => !reportIds.has(event.id),
+                      )}
+                      state={ready.eventState}
+                    />
+                  </details>
+                )}
+              </>
+            )}
+            {tab === "macro" && (
+              <>
+                <label className="op-macro-window">
+                  宏观观察窗口{" "}
+                  <select
+                    aria-label="宏观观察窗口"
+                    value={months}
+                    onChange={(event) =>
+                      onMonthsChange?.(Number(event.target.value))
+                    }
+                  >
+                    {[12, 36, 60].map((value) => (
+                      <option key={value} value={value}>
+                        {value} 个月
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {ready && (
                   <MacroEvidencePanel
-                    data={readyData}
+                    data={ready}
                     marketId={selectedDirection?.marketId}
                     directionId={selectedDirection?.id}
                     selectedIndexId={selectedIndexId}
                     months={months}
-                    renderMacro={(item) => (
-                      <EvidenceCard
-                        item={{
-                          ...item,
-                          historyMonths:
-                            item.historyMonths ?? readyData.months ?? months,
-                        }}
-                      />
-                    )}
-                  />
-                ) : (
-                  <>
-                    <EnergyObservations
-                      rows={readyData.dailyResearch?.report?.energy}
-                    />
-                    <div className="op-macro-grid">
-                      {readyData.items.map((item) => (
-                        <EvidenceCard
-                          key={item.code}
-                          item={{
-                            ...item,
-                            historyMonths:
-                              item.historyMonths ?? readyData.months ?? months,
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <RadarDetails
-                      data={{ ...readyData, series: core }}
-                      section="series"
-                    />
-                  </>
-                )}
-              </>
-            ),
-          },
-          {
-            id: "research-market",
-            label: "指数与基金",
-            render: () => (
-              <>
-                <RadarDetails data={readyData} section="market" />
-                <p className="op-muted">
-                  基金费用、跟踪质量及产品证据可在下方选择基金后查看研究诊断。
-                </p>
-              </>
-            ),
-          },
-          {
-            id: "research-global",
-            label: "全球市场与事件",
-            render: () => (
-              <>
-                {readyData.researchBoard?.methodVersion !==
-                  "research-board-v2" && (
-                  <RadarDetails
-                    data={{ ...readyData, series: global }}
-                    section="series"
                   />
                 )}
-                <MacroEvents
-                  events={(readyData.events ?? []).filter(
-                    (event) => !reportEventIds.has(event.id),
-                  )}
-                  state={readyData.eventState}
-                />
               </>
-            ),
-          },
-          {
-            id: "research-strategy",
-            label: "策略与持仓",
-            render: () => <RadarDetails data={readyData} section="strategy" />,
-          },
-        ]}
-        renderTracking={() => (
-          <RadarDetails
-            data={readyData}
-            section="monitor"
-            hideTracking={hideTracking}
-            onMonitor={onMonitor}
-            monitorEnabled={monitorEnabled}
-            monitorPending={monitorPending}
-            monitorLoading={monitorLoading}
-            monitorError={monitorError}
-            onNoticeAck={onNoticeAck}
-            ackPending={ackPending}
-            ackError={ackError}
-          />
-        )}
-      />
-    );
-  }
-  return (
-    <section className="op-panel op-macro-research">
-      <button
-        className="op-macro-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span>
-          <Globe2 size={19} />
-          <strong>市场环境概览</strong>
-          <span className="op-muted">增长 · 通胀 · 流动性 · 风险</span>
-        </span>
-        <span>
-          <span className="op-badge">
-            {error
-              ? "读取失败"
-              : loading
-                ? "加载中"
-                : readyData?.state === "READY"
-                  ? "事实已更新"
-                  : "证据待核对"}
-          </span>
-          <ChevronDown size={16} />
-        </span>
-      </button>
-      <div className="op-macro-overview">
-        {error ? (
-          <p role="alert">宏观数据读取失败，请稍后重试。</p>
-        ) : loading ? (
-          <p role="status">宏观数据加载中…</p>
-        ) : readyData?.radar ? (
-          <RadarOverview
-            data={readyData}
-            selectedDirection={selectedDirection}
-          />
-        ) : (
-          <>
-            <p>
-              {research?.summary ??
-                (readyData?.items.length
-                  ? "已采集宏观事实，解释与核验信息待更新。"
-                  : "宏观数据尚未接入。方向探索和基金搜索仍可使用。")}
-            </p>
-            {!!readyData?.items.length && (
-              <div className="op-macro-latest">
-                {readyData.items.map((item) => (
-                  <span key={item.code}>
-                    {item.label}{" "}
-                    {item.value == null || !Number.isFinite(item.value)
-                      ? "—"
-                      : `${item.value} ${macroUnit(item)}`.trim()}
-                  </span>
-                ))}
-              </div>
             )}
-          </>
-        )}
-      </div>
-      {open && readyData && (
-        <>
-          <RadarDetails
-            data={readyData}
-            hideTracking={hideTracking}
-            onMonitor={onMonitor}
-            monitorEnabled={monitorEnabled}
-            monitorPending={monitorPending}
-            monitorLoading={monitorLoading}
-            monitorError={monitorError}
-            onNoticeAck={onNoticeAck}
-            ackPending={ackPending}
-            ackError={ackError}
-          />
-          <div className="op-macro-window">
-            <label>
-              宏观观察窗口{" "}
-              <select
-                aria-label="宏观观察窗口"
-                value={months}
-                onChange={(event) =>
-                  onMonthsChange?.(Number(event.target.value))
-                }
-              >
-                {[12, 36, 60].map((window) => (
-                  <option key={window} value={window}>
-                    {window} 个月
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span>图表窗口；研究统计采用固定历史样本。</span>
+            {tab === "tracking" &&
+              (renderStudyTracking?.() ?? (
+                <p>从今日重点或当前标的保存研究，后续在此核对与复盘。</p>
+              ))}
           </div>
-          {research && (
-            <section className="op-macro-dimensions" aria-label="四维宏观研究">
-              {research.dimensions.map((dimension) => (
-                <article key={dimension.id}>
-                  <strong>{dimension.label}</strong>
-                  <span className="op-badge">
-                    {{
-                      PARTIAL: "部分覆盖",
-                      INSUFFICIENT: "证据不足",
-                      CONFLICT: "证据冲突",
-                    }[dimension.state] ?? "待研究"}
-                  </span>
-                  <p>{dimension.summary}</p>
-                  {!!dimension.evidenceCodes.length && (
-                    <p>依据：{dimension.evidenceCodes.join("、")}</p>
-                  )}
-                  {!!dimension.missingEvidence.length && (
-                    <p>待核查：{dimension.missingEvidence.join("、")}</p>
-                  )}
-                </article>
-              ))}
-            </section>
-          )}
-          <div className="op-macro-grid">
-            {readyData.items.map((item) => (
-              <EvidenceCard
-                key={item.code}
-                item={{
-                  ...item,
-                  historyMonths: item.historyMonths ?? data?.months ?? months,
-                }}
-              />
-            ))}
-          </div>
-          {research && (
-            <section className="op-macro-changes" aria-label="关键变化与限制">
-              <h3>关键变化与待核查事项</h3>
-              {research.changes.map((change) => (
-                <p key={change.code}>{change.summary}</p>
-              ))}
-              {research.limitations.map((limit) => (
-                <p key={limit}>{limit}</p>
-              ))}
-              <small>研究方法：{research.methodVersion}</small>
-            </section>
-          )}
-          <MacroEvents
-            events={readyData.events ?? []}
-            state={readyData.eventState}
-          />
-          <ResearchDirections
-            data={readyData}
-            directions={directions}
-            selectedDirection={selectedDirection}
-            onSelect={onDirectionSelect}
-          />
-        </>
+        </div>
       )}
     </section>
   );

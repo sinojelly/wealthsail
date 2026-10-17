@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { EvidenceCard } from "./components/EvidenceCards";
 import MacroContextStrip from "./components/MacroContextStrip";
+import { MemoryRouter } from "react-router-dom";
 import { getMarketContext, type MacroContext } from "../../api/investment";
 
 const context: MacroContext = {
@@ -32,9 +34,7 @@ afterEach(() => {
 });
 
 it("shows actual historical coverage, reported units and adjacent-month change", async () => {
-  const user = userEvent.setup();
-  render(<MacroContextStrip data={context} error={false} />);
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
+  render(<EvidenceFixture data={context} error={false} />);
   expect(screen.getByText("49.8 指数点")).toBeInTheDocument();
   expect(screen.getByText(/已采集 2 个历史样本/)).toBeInTheDocument();
   expect(screen.getByText(/连续月变化：\+0.30 指数点/)).toBeInTheDocument();
@@ -45,40 +45,9 @@ it("shows actual historical coverage, reported units and adjacent-month change",
   expect(screen.getByText(/2026年8月 至 2026年9月/)).toBeInTheDocument();
 });
 
-it("lets the parent request a 12, 36 or 60 month observation window", async () => {
-  const user = userEvent.setup();
-  const changes: number[] = [];
-  const { rerender } = render(
-    <MacroContextStrip
-      data={context}
-      error={false}
-      months={36}
-      onMonthsChange={(months) => changes.push(months)}
-    />,
-  );
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
-  const windowSelect = screen.getByRole("combobox", { name: "宏观观察窗口" });
-  expect(windowSelect).toHaveValue("36");
-  expect(
-    screen.getAllByRole("option").map((option) => option.textContent),
-  ).toEqual(["12 个月", "36 个月", "60 个月"]);
-  await user.selectOptions(windowSelect, "12");
-  expect(changes).toEqual([12]);
-  rerender(
-    <MacroContextStrip
-      data={context}
-      error={false}
-      months={12}
-      onMonthsChange={(months) => changes.push(months)}
-    />,
-  );
-  expect(windowSelect).toHaveValue("12");
-});
-
 it("preserves current-only fixtures and reports missing historical data honestly", async () => {
-  const user = userEvent.setup();
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         state: "UNVERIFIED",
@@ -96,14 +65,12 @@ it("preserves current-only fixtures and reports missing historical data honestly
       }}
     />,
   );
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
   expect(screen.getByText(/历史序列尚未采集/)).toBeInTheDocument();
   expect(screen.getByText(/连续月变化：暂不可计算/)).toBeInTheDocument();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
 });
 
 it("uses percentage-point changes and does not infer them across missing months", async () => {
-  const user = userEvent.setup();
   const cpi = {
     ...context.items[0],
     code: "CPI_YOY",
@@ -117,7 +84,7 @@ it("uses percentage-point changes and does not infer them across missing months"
     ],
   };
   const { rerender } = render(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         state: "UNVERIFIED",
@@ -125,10 +92,9 @@ it("uses percentage-point changes and does not infer them across missing months"
       }}
     />,
   );
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
   expect(screen.getByText(/连续月变化：-0.10 个百分点/)).toBeInTheDocument();
   rerender(
-    <MacroContextStrip
+    <EvidenceFixture
       error={false}
       data={{
         state: "UNVERIFIED",
@@ -166,9 +132,8 @@ it("passes the requested month window to the macro read endpoint", async () => {
 });
 
 it("does not imply continuity when adjacent samples change their source", async () => {
-  const user = userEvent.setup();
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       data={{
         ...context,
         items: [
@@ -194,16 +159,14 @@ it("does not imply continuity when adjacent samples change their source", async 
       error={false}
     />,
   );
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
   const graph = screen.getByRole("img", { name: "制造业 PMI 历史走势" });
   expect(graph.querySelectorAll("circle")).toHaveLength(2);
   expect(graph.querySelectorAll("line")).toHaveLength(0);
 });
 
 it("does not draw a shared axis across incomparable history units", async () => {
-  const user = userEvent.setup();
   render(
-    <MacroContextStrip
+    <EvidenceFixture
       data={{
         ...context,
         items: [
@@ -219,7 +182,31 @@ it("does not draw a shared axis across incomparable history units", async () => 
       error={false}
     />,
   );
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
   expect(screen.getByText(/历史单位发生变化/)).toBeInTheDocument();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
+});
+
+function EvidenceFixture({ data }: { data: MacroContext; error?: boolean }) {
+  return (
+    <>
+      {data.items.map((item) => (
+        <EvidenceCard key={item.code} item={item} />
+      ))}
+    </>
+  );
+}
+it("changes the macro observation window without changing the active research identity", async () => {
+  const changes: number[] = [];
+  render(
+    <MemoryRouter initialEntries={["/?researchTab=macro&index=hs300"]}>
+      <MacroContextStrip
+        data={context}
+        error={false}
+        months={36}
+        onMonthsChange={(value) => changes.push(value)}
+      />
+    </MemoryRouter>,
+  );
+  await userEvent.selectOptions(screen.getByLabelText("宏观观察窗口"), "60");
+  expect(changes).toEqual([60]);
 });

@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import type { OpportunityContext } from "../../api/investment";
 import MacroContextStrip from "./components/MacroContextStrip";
 
@@ -19,28 +20,6 @@ const data: OpportunityContext = {
   state: "READY",
   items: [],
   events: [event, { ...event, id: "independent-id", summary: "独立事实正文" }],
-  researchBoard: {
-    methodVersion: "research-board-v2",
-    asOf: "2026-10-16T02:00:00Z",
-    items: [],
-    summaries: [],
-    direction: {
-      label: "当前方向",
-      researchState: "UNKNOWN",
-      qualificationState: "INCOMPLETE",
-      supports: [],
-      counterFactors: [],
-      recommendedChecks: [],
-      itemIds: [],
-    },
-    dataStatus: {
-      itemIds: [],
-      collectedAt: null,
-      nextCheckAt: null,
-      sourceResults: {},
-      methodVersions: [],
-    },
-  },
   dailyResearch: {
     methodVersion: "daily-v1",
     state: "READY",
@@ -85,8 +64,9 @@ function show(context: OpportunityContext) {
   );
 }
 
-it("keeps the daily event as the main copy by ID while retaining a separate fact with the same title", () => {
+it("keeps the daily event as the main copy by ID while retaining a separate fact with the same title", async () => {
   show(data);
+  await userEvent.click(screen.getByText("官方发布与其他观察"));
   const official = screen.getByRole("region", { name: "官方关键事件" });
   expect(within(official).queryByText("宏观重复正文")).not.toBeInTheDocument();
   expect(within(official).getByText("独立事实正文")).toBeInTheDocument();
@@ -99,8 +79,9 @@ it("keeps the daily event as the main copy by ID while retaining a separate fact
   expect(within(official).getAllByText("同名官方公告")).toHaveLength(1);
 });
 
-it("retains the official fact when no saved daily report contains that ID", () => {
+it("retains the official fact when no saved daily report contains that ID", async () => {
   show({ ...data, dailyResearch: undefined });
+  await userEvent.click(screen.getByText("官方发布与其他观察"));
   expect(screen.getByText("宏观重复正文")).toBeInTheDocument();
   expect(screen.getByText("独立事实正文")).toBeInTheDocument();
 });

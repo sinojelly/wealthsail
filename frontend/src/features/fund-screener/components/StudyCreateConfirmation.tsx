@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { sourceHref, timeLabel } from "../macro-display";
 
 export interface StudyPreview {
@@ -23,18 +23,21 @@ export default function StudyCreateConfirmation({
   error,
   onCancel,
   onSave,
+  children,
 }: {
   preview: StudyPreview;
   pending?: boolean;
   error?: string;
   onCancel: () => void;
   onSave: (horizonDays: number) => void;
+  children?: ReactNode;
 }) {
   const [days, setDays] = useState("30");
   const [invalid, setInvalid] = useState(false);
   return (
     <section className="op-study-confirmation" aria-label="确认研究假设">
       <h4>确认研究假设 · {preview.title}</h4>
+      {children}
       <details open>
         <summary>原始研究假设与依据</summary>
         <p>{preview.thesis}</p>

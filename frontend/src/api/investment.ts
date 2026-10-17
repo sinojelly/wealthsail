@@ -179,133 +179,6 @@ export interface OpportunityScope {
 export interface OpportunityQuery extends OpportunityScope {
   months: number;
 }
-export type ResearchTone = "RED" | "ORANGE" | "GREEN" | "BLUE" | "GRAY";
-export interface ResearchAction {
-  type:
-    | "VIEW_HOLDINGS"
-    | "VIEW_POLICY"
-    | "UPDATE_HOLDINGS"
-    | "VIEW_CANDIDATES"
-    | "VIEW_EVIDENCE"
-    | "VIEW_DATA"
-    | "TRACK"
-    | "VIEW_OPERATIONS"
-    | "VIEW_ISSUES"
-    | "VIEW_DIRECTION";
-  label: string;
-  target: string | null;
-  href: string | null;
-  enabled: boolean;
-  disabledReason: string | null;
-}
-export interface DirectionEvidence {
-  label: string;
-  summary: string;
-  evidenceIds: string[];
-  state: string;
-}
-export interface ResearchIssue {
-  id: string;
-  key: string;
-  category: "RISK" | "OPPORTUNITY" | "CHANGE" | "DATA_GAP" | "SYSTEM";
-  severity: "HIGH" | "MEDIUM" | "LOW";
-  confidence: "VERIFIED" | "PARTIAL" | "UNKNOWN";
-  factVerification?: "VERIFIED" | "UNKNOWN";
-  tone: ResearchTone;
-  summary: string;
-  impact: string;
-  evidenceIds: string[];
-  selectionRelevance: "CURRENT_SELECTION";
-  holdingRelevance: "HELD" | "NOT_HELD" | "UNKNOWN";
-  affectedAssets: { [Key in keyof OpportunityScope]?: string | null };
-  owner: string;
-  actionability: "USER" | "SYSTEM" | "ADMIN" | "READ_ONLY";
-  nextAction: ResearchAction;
-  firstSeenAt: string | null;
-  lastChangedAt: string | null;
-  status: "OPEN";
-  blocker?: {
-    code: string;
-    state: string;
-    owner: string;
-    reason: string;
-    affectedJudgment: string;
-    userFixable: boolean;
-    lastAttemptAt: string | null;
-    nextCheckAt: string | null;
-    sourceKey: string | null;
-  } | null;
-}
-export interface ResearchBoardData {
-  methodVersion: string;
-  asOf: string | null;
-  items: ResearchIssue[];
-  summaries: Array<{
-    id: "HOLDINGS" | "OPPORTUNITIES" | "CHANGES";
-    label: string;
-    state: string;
-    summary: string;
-    tone: ResearchTone;
-    itemIds: string[];
-    nextAction: ResearchAction;
-  }>;
-  direction: {
-    label: string;
-    researchState: string;
-    qualificationState: string;
-    supports: DirectionEvidence[];
-    counterFactors: DirectionEvidence[];
-    recommendedChecks: string[];
-    itemIds: string[];
-    blockerIds?: string[];
-    relatedIndexIds?: string[];
-    failedConditions?: Array<{
-      id: string;
-      label: string;
-      reason: string;
-      evidenceIds: string[];
-    }>;
-    summary?: string;
-    nextStep?: string;
-    nextAction?: ResearchAction;
-  };
-  dataStatus: {
-    itemIds: string[];
-    groups?: Array<{
-      id: "MARKET" | "MACRO" | "PERMISSION" | "PORTFOLIO" | "STRATEGY";
-      label: string;
-      summary: string;
-      impact: string;
-      owner: string;
-      itemIds: string[];
-    }>;
-    adminAction?: ResearchAction | null;
-    collectedAt: string | null;
-    nextCheckAt: string | null;
-    collectionState?: "FINISHED" | "CANCELLED" | "CLAIMED" | "NOT_COLLECTED";
-    sourceResults: Record<
-      string,
-      {
-        status: string;
-        reason?: string;
-        errorClass?: string;
-        observations?: number;
-        httpStatus?: number;
-      }
-    >;
-    methodVersions: string[];
-  };
-}
-export interface RadarChange {
-  id: string;
-  priority: "CRITICAL" | "ATTENTION" | "INFO";
-  kind: "RISK" | "SUPPORT" | "GAP" | "OBSERVATION";
-  summary: string;
-  impact: string;
-  evidenceIds: string[];
-  timeScale: string;
-  relatedDirectionIds: string[];
-}
 export interface OpportunitySeries {
   code: string;
   label: string;
@@ -385,47 +258,41 @@ export interface MarketEvidence {
   sourceUri: string | null;
   asOf: string | null;
 }
+export type PlanTrack = "LEFT_VALUE" | "RIGHT_TREND";
+export type PlanPrice = number | string | null;
+export interface ActionableZoneTrack {
+  track: PlanTrack;
+  state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
+  entryZoneMin: PlanPrice;
+  entryZoneMax: PlanPrice;
+  stopLossPrice: PlanPrice;
+  takeProfitT1: PlanPrice;
+  takeProfitT2: PlanPrice;
+  reasons: string[];
+  priceState: string;
+  missingEvidence?: string[];
+}
+export interface ActionableZoneResult {
+  methodVersion: string;
+  subjectKind: "index" | "fund" | "nav";
+  subjectId: string;
+  label: string;
+  priceBasis: string;
+  unit: string | null;
+  asOf: string | null;
+  sourceUri: string | null;
+  currentPrice: PlanPrice;
+  indicators: Record<string, PlanPrice>;
+  tracks: ActionableZoneTrack[];
+  selectedTrack?: PlanTrack;
+  parameters?: Record<string, number | number[]>;
+  orderPriceAvailable?: boolean;
+}
 export interface OpportunityContext extends MacroContext {
+  actionableZones?: ActionableZoneResult[];
   dailyResearch?: DailyResearch | null;
-  researchOverview?: {
-    methodVersion: string;
-    asOf: string | null;
-    summary?: string;
-    evidenceIds?: string[];
-    groups?: Array<{
-      id: "RISKS" | "OPPORTUNITIES" | "HOLDINGS" | "UPCOMING";
-      label: string;
-      state: "READY" | "EMPTY" | "UNKNOWN";
-      summary: string;
-      nextAction: ResearchAction | null;
-      items: OverviewItem[];
-    }>;
-    highlights: OverviewItem[];
-  } | null;
-  researchBoard?: ResearchBoardData | null;
   series?: OpportunitySeries[];
   marketEvidence?: MarketEvidence[];
-  radar?: {
-    methodVersion: string;
-    asOf: string | null;
-    headline: RadarChange;
-    questions: Array<{
-      id: "CHANGE" | "IMPACT" | "QUALIFICATION" | "PERSONAL";
-      label: string;
-      state: string;
-      summary: string;
-      critical: boolean;
-    }>;
-    changes: RadarChange[];
-    sections: Array<{
-      id: "MACRO" | "INTEREST_CREDIT" | "MARKET" | "GLOBAL";
-      label: string;
-      state: string;
-      summary: string;
-      criticalImpact: string | null;
-      missingEvidence: string[];
-    }>;
-  } | null;
   directionModel?: {
     summary?: string;
     methodVersion: string;
@@ -457,34 +324,17 @@ export interface OpportunityContext extends MacroContext {
     qualificationState?: string;
   } | null;
   decision?: {
-    state: "WAIT" | "ENTRY_CANDIDATE" | "HOLD_REVIEW" | "POSITION_REVIEW";
+    state: string;
+    actionableZones?: ActionableZoneResult;
     marketState: string;
     personalState: string;
     summary: string;
-    gates: Array<{
-      id: string;
-      label: string;
-      state: "PASS" | "BLOCKED" | "UNKNOWN";
-      reason: string;
-    }>;
-    validation: {
-      state: string;
-      summary: string;
-      methodVersion: string;
-      netReturn?: number | null;
-      benchmarkReturn?: number | null;
-      maxDrawdown?: number | null;
-      sampleCount?: number;
-      inputHash?: string;
-      limitations?: string[];
-    };
     nextChecks: string[];
     assessment?: {
       holdingState: string;
       riskState: string;
       marketResearchState: string;
     };
-    actions?: ResearchAction[];
   } | null;
   portfolio?: {
     state: string;
@@ -499,36 +349,6 @@ export interface OpportunityContext extends MacroContext {
     budgetState?: string;
   } | null;
   notices?: ConditionNotice[];
-}
-export type ResearchTab =
-  "events" | "macro" | "direction" | "tracking" | "quality";
-export interface OverviewItem {
-  id: string;
-  kind: string;
-  resultType?:
-    "CONFIRMED_RISK" | "LIMITED_CLUE" | "STRATEGY_CANDIDATE" | "INCONCLUSIVE";
-  condition?: "PASSED" | "FAILED" | "UNKNOWN";
-  nextValidation?: string[];
-  counterConditions?: string[];
-  title: string;
-  summary: string;
-  impact: string;
-  tone: ResearchTone;
-  targetTab: ResearchTab;
-  indexId: string | null;
-  directionIds: string[];
-  sourceIds: string[];
-  asOf?: string | null;
-  scope?: "GLOBAL" | "SELECTION" | "HOLDINGS";
-  stage?:
-    | "EVENT_LEAD"
-    | "DIRECTION_LEAD"
-    | "INDEX_CONDITION"
-    | "FUND_TOOL"
-    | "EXECUTION_CONDITION";
-  phase?: string | null;
-  evidenceIds?: string[];
-  nextAction?: ResearchAction;
 }
 export interface DailyResearch {
   methodVersion: string;
@@ -662,6 +482,7 @@ export interface ValueEvidence {
   };
 }
 export interface Analysis {
+  actionableZones?: ActionableZoneResult;
   state: string;
   score: number | null;
   indicators: Record<string, number | null>;
@@ -707,7 +528,6 @@ export interface ScreenFilters {
   analysisAsOf?: string;
   scorableOnly?: string;
   performanceOnly?: string;
-  valueCandidateOnly?: string;
   minHistoryDays?: string;
   page: number;
   pageSize: number;

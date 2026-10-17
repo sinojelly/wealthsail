@@ -79,28 +79,6 @@ const series = (code: string): OpportunitySeries => ({
     { date: "2026-10-16", value: 1.9, state: "READY" },
   ],
 });
-const board: OpportunityContext["researchBoard"] = {
-  methodVersion: "research-board-v2",
-  asOf: null,
-  items: [],
-  summaries: [],
-  direction: {
-    label: "宽基",
-    researchState: "WAIT_CONDITIONS",
-    qualificationState: "INCOMPLETE",
-    supports: [],
-    counterFactors: [],
-    recommendedChecks: [],
-    itemIds: [],
-  },
-  dataStatus: {
-    itemIds: [],
-    collectedAt: null,
-    nextCheckAt: null,
-    sourceResults: {},
-    methodVersions: [],
-  },
-};
 const direction = (id: string): Direction => ({
   id,
   marketId: id.split(":")[0],
@@ -162,7 +140,7 @@ function show(
   ) => (
     <MemoryRouter initialEntries={["/?researchOpen=1&researchTab=macro"]}>
       <MacroContextStrip
-        data={{ ...next, researchBoard: board }}
+        data={next}
         error={false}
         selectedDirection={nextDirection ? direction(nextDirection) : undefined}
         selectedIndexId={nextIndex}
@@ -424,7 +402,7 @@ it("puts only the selected broad index trend and independent PE ahead of macro e
   );
   expect(within(core).queryByText(/沪深300/)).not.toBeInTheDocument();
   expect(within(core).getByText(/相对MA200：-1%/)).toBeInTheDocument();
-  expect(within(core).getByText(/独立PE.*不能判断便宜/)).toBeInTheDocument();
+  expect(within(core).getByText(/PE倍数为独立事实/)).toBeInTheDocument();
   await full("中证500价格趋势");
   expect(screen.getByText(/250 个实际样本/)).toBeInTheDocument();
   expect(screen.getByText(/当前窗口不代表完整历史已核验/)).toBeInTheDocument();

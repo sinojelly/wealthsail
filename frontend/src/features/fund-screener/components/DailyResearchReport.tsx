@@ -346,7 +346,7 @@ function DailyResearchContent({
             </p>
           )}
           <p className="op-muted">
-            以下影响与情景均为模型条件推演；原文核对不等于投资判断已核实，不生成买卖资格。
+            以下影响与情景为模型推演；买卖区间使用程序按真实历史计算的同口径价格依据。
           </p>
           <ul className="op-daily-events" aria-label="重要事件">
             {priorityEvents.map((event) => (

@@ -1,5 +1,9 @@
 import { request } from "./client";
-import type { OpportunityScope } from "./investment";
+import type {
+  ActionableZoneResult,
+  OpportunityScope,
+  PlanTrack,
+} from "./investment";
 export type StudyScope = OpportunityScope;
 export interface StudyCondition {
   metric: string;
@@ -22,6 +26,7 @@ export interface StudyObservation {
   verification?: string;
 }
 export interface StudySnapshot {
+  actionablePlan?: ActionableZoneResult;
   title: string;
   phase?: string | null;
   importance?: string | null;
@@ -177,7 +182,12 @@ export type CreateStudy =
       scope?: StudyScope;
       horizonDays?: number;
     }
-  | { originType: "SELECTION"; scope: StudyScope; horizonDays?: number };
+  | {
+      originType: "SELECTION";
+      scope: StudyScope;
+      horizonDays?: number;
+      planTrack?: PlanTrack;
+    };
 export interface StudyVersionRequest {
   expectedGeneration: number;
   reason: string;

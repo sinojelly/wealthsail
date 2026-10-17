@@ -6,8 +6,7 @@ import type {
   OpportunitySeries,
 } from "../../api/investment";
 import MacroEvidencePanel from "./components/MacroEvidencePanel";
-import MacroContextStrip from "./components/MacroContextStrip";
-import { SeriesCard } from "./components/OpportunityRadar";
+import { EvidenceCard, SeriesCard } from "./components/EvidenceCards";
 
 const pmi: OpportunityContext["items"][number] = {
   code: "PMI",
@@ -173,12 +172,7 @@ it("groups actual evidence by economic question and prioritizes dollar rates for
 });
 
 it("resizes monthly plot coordinates to the measured parent without stretching its labels", async () => {
-  render(
-    <MacroContextStrip data={{ state: "READY", items: [pmi] }} error={false} />,
-  );
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: /市场环境概览/ }));
+  render(<EvidenceCard item={pmi} />);
   const graph = screen.getByRole("img", { name: "制造业 PMI 历史走势" });
   resizePlot(graph, 840);
   expect(graph).toHaveAttribute("viewBox", "0 0 840 280");
@@ -221,11 +215,8 @@ it("does not put different units on a shared market-series axis", () => {
 });
 
 it("places provenance after the plot and facts while preserving the backend statistics basis", async () => {
-  render(
-    <MacroContextStrip data={{ state: "READY", items: [pmi] }} error={false} />,
-  );
+  render(<EvidenceCard item={pmi} />);
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: /市场环境概览/ }));
   const graph = screen.getByRole("img", { name: "制造业 PMI 历史走势" });
   const layout = graph.closest(".op-evidence-layout");
   expect(layout).not.toBeNull();

@@ -128,6 +128,49 @@ beforeEach(() => {
     total: 0,
   });
 });
+it("shows the frozen track prices, date and method from the selected study version", async () => {
+  const plan: NonNullable<api.StudySnapshot["actionablePlan"]> = {
+    methodVersion: "frozen-zones-v1",
+    subjectKind: "index",
+    subjectId: "hs300",
+    label: "沪深300",
+    selectedTrack: "RIGHT_TREND",
+    priceBasis: "INDEX_PRICE",
+    unit: "points",
+    asOf: "2026-10-10",
+    sourceUri: "https://example.org/frozen",
+    currentPrice: "3750.125",
+    indicators: { ma20: 3700 },
+    tracks: [
+      {
+        track: "RIGHT_TREND",
+        state: "CANDIDATE",
+        priceState: "PARTIAL",
+        entryZoneMin: "3700.125",
+        entryZoneMax: "3750.125",
+        stopLossPrice: null,
+        takeProfitT1: null,
+        takeProfitT2: null,
+        reasons: ["原版本缺少ATR，目标未计算。"],
+      },
+    ],
+  };
+  vi.mocked(api.getStudyDetail).mockResolvedValue({
+    ...detail,
+    version: {
+      ...detail.version,
+      snapshot: { ...snapshot, actionablePlan: plan },
+    },
+  });
+  show("/fund-screener?studyTrack=track-1");
+  const frozen = await screen.findByRole("region", { name: "沪深300双轨计划" });
+  expect(frozen).toHaveTextContent("冻结轨道：右侧趋势");
+  expect(frozen).toHaveTextContent("3700.125–3750.125 指数点");
+  expect(frozen).toHaveTextContent("2026年10月10日");
+  expect(frozen).toHaveTextContent("止损：—");
+  expect(frozen).toHaveTextContent("frozen-zones-v1");
+  expect(within(frozen).queryByRole("button")).not.toBeInTheDocument();
+});
 it("only freezes the explicit READY report origin after a user action, with the default thirty-day horizon", async () => {
   show("/fund-screener", {
     originType: "DAILY_EVENT",
