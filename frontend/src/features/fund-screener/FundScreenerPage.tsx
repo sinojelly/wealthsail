@@ -422,6 +422,20 @@ function ResearchWorkspace({ subject }: { subject: string }) {
             queryKey: ["study", subject, "list"],
           });
         }}
+        onStudyQuantScan={async (input) => {
+          const result = await createStudyTrack({
+            originType: "DAILY_QUANT_SCAN",
+            ...input,
+            horizonDays: 30,
+          });
+          client.setQueryData(
+            ["study", subject, "detail", result.track.id, 0],
+            result,
+          );
+          void client.invalidateQueries({
+            queryKey: ["study", subject, "list"],
+          });
+        }}
         scopeKey={studyScopeKey}
         selectedDirection={direction}
         selectedIndexId={indexId ?? undefined}

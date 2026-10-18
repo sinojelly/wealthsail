@@ -12,10 +12,16 @@ import {
   metricValue,
   macroUnit,
 } from "../macro-display";
-import { planPrice, planTimeBasisNote, planUnit } from "../plan-display";
+import {
+  fundDisplayName,
+  planPrice,
+  planTimeBasisNote,
+  planUnit,
+} from "../plan-display";
 import { readingText, sourceTitle } from "../research-reading";
 import ActionablePlan, { ActionablePlanEvidence } from "./ActionablePlan";
 import { studyMetricLabel } from "./study-display";
+import PlanRevision from "./PlanRevision";
 
 export interface DirectionTrackInput {
   reportRunId: string;
@@ -29,12 +35,6 @@ const labels = {
   RIGHT_TREND: "右侧趋势观察",
   TAKE_PROFIT: "止盈复核",
   WATCH: "继续观察",
-};
-const revisionLabels = {
-  INITIAL: "初始关注区间",
-  UPGRADED: "上调关注区间",
-  DOWNGRADED: "下调关注区间",
-  TAKE_PROFIT_ALERT: "止盈复核提示",
 };
 
 type MacroFact = NonNullable<ValueDirection["macroEvidence"]>[number];
@@ -186,9 +186,12 @@ function FundPlan({
     }
   }
   return (
-    <article className="op-value-fund" aria-label={`${plan.label}买卖计划`}>
+    <article
+      className="op-value-fund"
+      aria-label={`${fundDisplayName(plan.label, code)}买卖计划`}
+    >
       <h4>
-        {readingText(plan.label, 70)} <span>{code}</span>
+        {readingText(fundDisplayName(plan.label, code), 70)} <span>{code}</span>
       </h4>
       <p className="op-value-current">
         {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
@@ -226,17 +229,7 @@ function FundPlan({
       {planTimeBasisNote(plan) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
       )}
-      {(plan.priceRevisionStatus || plan.priceRevisionNote) && (
-        <p
-          className="op-value-revision"
-          role="status"
-          aria-label="价格计划调整"
-        >
-          {plan.priceRevisionStatus &&
-            `计划调整：${revisionLabels[plan.priceRevisionStatus]}。`}
-          {readingText(plan.priceRevisionNote ?? "", 140)}
-        </p>
-      )}
+      <PlanRevision plan={plan} />
       {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
         <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
       )}

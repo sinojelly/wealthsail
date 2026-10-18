@@ -50,7 +50,12 @@ export function readingText(text: string, limit = 140): string {
     .replace(/\s+/g, " ")
     .trim();
   const characters = Array.from(translated);
-  const length = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 140;
+  const length =
+    limit === Infinity
+      ? characters.length
+      : Number.isFinite(limit)
+        ? Math.max(0, Math.floor(limit))
+        : 140;
   return characters.length > length
     ? length > 0
       ? characters.slice(0, length - 1).join("") + "…"

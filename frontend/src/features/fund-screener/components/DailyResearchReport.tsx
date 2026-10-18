@@ -364,7 +364,7 @@ function DailyResearchContent({
             </section>
           )}
           <details
-            className="op-daily-full-report"
+            className="op-daily-full-report op-print-disclosure"
             open={fullOpen}
             onToggle={(event) => setFullOpen(event.currentTarget.open)}
           >

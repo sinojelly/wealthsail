@@ -380,7 +380,7 @@ export interface ActionableZoneResult {
   themeCode?: ResearchThemeKey | null;
   track?: PlanTrack;
   priceRevisionStatus?:
-    "INITIAL" | "UPGRADED" | "DOWNGRADED" | "TAKE_PROFIT_ALERT";
+    "INITIAL" | "MAINTAINED" | "UPGRADED" | "DOWNGRADED" | "TAKE_PROFIT_ALERT";
   priceRevisionNote?: string | null;
   calibrationRuleKeys?: string[];
   calibrationNote?: string | null;
@@ -389,6 +389,24 @@ export interface ActionableZoneResult {
   valueDirectionTitle?: string | null;
   volatilityMethod?: string | null;
   market?: "FUND_CN" | "SSE" | null;
+}
+export interface QuantitativeScanItem extends ActionableZoneResult {
+  signals: Array<{
+    track: PlanTrack;
+    triggerState: "CANDIDATE" | "WATCH";
+    inEntryZone: boolean;
+    distanceToEntryPct: number;
+  }>;
+  discoverySector?: string;
+  historyQuality?: string;
+  historySampleCount?: number;
+}
+export interface QuantitativeScan {
+  methodVersion: string;
+  asOf: string | null;
+  minimumHistorySamples: number;
+  coverage: { pricedFundCount: number; targetHistoryFundCount: number };
+  items: QuantitativeScanItem[];
 }
 export interface ValueDirection {
   key: string;
@@ -510,6 +528,7 @@ export interface DailyResearch {
     summary: string;
     macroCycle?: string | null;
     actionablePlans?: ActionableZoneResult[];
+    quantitativeScan?: QuantitativeScan;
     valueDirections?: ValueDirection[];
     coverage: Array<{ topic: string; status: string; summary: string }>;
     sources: Array<{

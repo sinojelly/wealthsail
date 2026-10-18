@@ -13,6 +13,7 @@ import MacroEvidencePanel from "./MacroEvidencePanel";
 import ActionablePlan from "./ActionablePlan";
 import Phase2Evidence from "./Phase2Evidence";
 import ValueDirections, { type DirectionTrackInput } from "./ValueDirections";
+import QuantitativeScan, { type QuantScanTrackInput } from "./QuantitativeScan";
 import { researchSummary } from "../research-reading";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
@@ -164,6 +165,7 @@ export default function MacroContextStrip({
   renderStudyTracking,
   renderResearchRefresh,
   onStudyDirection,
+  onStudyQuantScan,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -178,6 +180,7 @@ export default function MacroContextStrip({
   renderStudyTracking?: () => ReactNode;
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
+  onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
 }) {
   const [params, setParams] = useSearchParams();
   const panelId = useId();
@@ -308,6 +311,10 @@ export default function MacroContextStrip({
                   onTrack={onStudyDirection}
                   onViewMacro={() => open("macro")}
                 />
+                <QuantitativeScan
+                  data={ready?.dailyResearch}
+                  onTrack={onStudyQuantScan}
+                />
                 {!ready?.dailyResearch?.report &&
                   !!ready?.actionableZones?.length && (
                     <section aria-label="程序价格观察">
@@ -328,6 +335,7 @@ export default function MacroContextStrip({
                 {!!ready?.events?.filter((event) => !reportIds.has(event.id))
                   .length && (
                   <details
+                    className="op-print-disclosure"
                     key={`official:${ready.dailyResearch?.reportRunId ?? ready.dailyResearch?.report?.asOf ?? "no-report"}`}
                   >
                     <summary>官方发布与其他观察</summary>

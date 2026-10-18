@@ -4,8 +4,14 @@ import type {
   PlanTrack,
 } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
-import { planPrice, planTimeBasisNote, planUnit } from "../plan-display";
+import {
+  fundDisplayName,
+  planPrice,
+  planTimeBasisNote,
+  planUnit,
+} from "../plan-display";
 import { readingText } from "../research-reading";
+import PlanRevision from "./PlanRevision";
 
 const planTrackLabel = (track: PlanTrack) =>
   track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势";
@@ -167,25 +173,15 @@ export default function ActionablePlan({
   return (
     <section
       className="op-actionable-plan"
-      aria-label={`${result.label}双轨计划`}
+      aria-label={`${fundDisplayName(result.label, result.fundCode ?? result.subjectId)}双轨计划`}
     >
-      <h3>{result.label} · 双轨计划</h3>
-      {result.priceRevisionStatus && (
-        <p>
-          计划调整：
-          {(
-            {
-              INITIAL: "初始计划",
-              UPGRADED: "上调价格区间",
-              DOWNGRADED: "下调价格区间",
-              TAKE_PROFIT_ALERT: "止盈复核提示",
-            } as Record<string, string>
-          )[result.priceRevisionStatus] ?? "调整状态待核对"}
-        </p>
-      )}
-      {result.priceRevisionNote && (
-        <p>{readingText(result.priceRevisionNote, 600)}</p>
-      )}
+      <h3>
+        {fundDisplayName(result.label, result.fundCode ?? result.subjectId)} ·
+        双轨计划
+      </h3>
+      <PlanRevision
+        plan={{ ...result, selectedTrack: undefined, track: undefined }}
+      />
       {!!result.calibrationRuleKeys?.length && result.calibrationNote && (
         <p>复盘校准：{readingText(result.calibrationNote, 600)}</p>
       )}

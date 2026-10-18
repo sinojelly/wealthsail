@@ -217,6 +217,44 @@ it("freezes each direction and fund directly without prices or confirmation and 
   );
 });
 
+it("saves a scan-only fund with the exact frozen report identity and no client prices", async () => {
+  const data = context();
+  Object.assign(data.dailyResearch.report, {
+    quantitativeScan: {
+      methodVersion: "quantitative-scan-v1",
+      asOf: "2026-10-19T03:12:00+08:00",
+      minimumHistorySamples: 220,
+      coverage: { pricedFundCount: 1, targetHistoryFundCount: 1 },
+      items: [
+        {
+          ...plan("007466"),
+          signals: [
+            {
+              track: "LEFT_VALUE",
+              triggerState: "CANDIDATE",
+              inEntryZone: true,
+              distanceToEntryPct: 0,
+            },
+          ],
+        },
+      ],
+    },
+  });
+  mocks.context.mockResolvedValue(data);
+  renderWithSession(<FundScreenerPage />);
+  await userEvent.click(await screen.findByText(/查看全市场 1 只/));
+  await userEvent.click(screen.getByRole("button", { name: "+ 跟踪 007466" }));
+  expect(study.createStudyTrack).toHaveBeenCalledExactlyOnceWith({
+    originType: "DAILY_QUANT_SCAN",
+    reportRunId: "ready:today",
+    subjectKind: "nav",
+    subjectId: "007466",
+    planTrack: "LEFT_VALUE",
+    horizonDays: 30,
+  });
+  expect(screen.getByRole("button", { name: "已跟踪 007466" })).toBeDisabled();
+});
+
 it("keeps a failed direct save retryable without borrowing another fund's status", async () => {
   vi.mocked(study.createStudyTrack).mockRejectedValueOnce(
     new Error("保存失败，请重试"),
@@ -272,7 +310,7 @@ it("keeps dynamic price revisions readable on the compact plan before algorithm 
   const card = await screen.findByRole("article", {
     name: "医药研究基金006000买卖计划",
   });
-  expect(within(card).getByText(/计划调整：下调关注区间/)).toBeVisible();
+  expect(within(card).getByText(/计划调整：下修关注区间/)).toBeVisible();
   expect(
     within(card).getByRole("status", { name: "价格计划调整" }),
   ).toHaveTextContent("订单兑现减弱，关注区间下调。");

@@ -18,6 +18,7 @@ import ActionablePlan from "./ActionablePlan";
 import Decimal from "decimal.js";
 import type { ActionableZoneResult } from "../../../api/investment";
 import { planPrice, planUnit } from "../plan-display";
+import PriceWatchSummary from "./PriceWatchSummary";
 
 function excursionLabel(value: string | null | undefined) {
   if (value == null || value.trim() === "" || !Number.isFinite(Number(value)))
@@ -120,6 +121,7 @@ function StudyWorkspace({ actor, scope, origin, preview }: StudyTrackingProps) {
               {track.title} · {states[track.status] ?? "待核对"}
               {track.unreadCount ? ` · ${track.unreadCount}项未读变化` : ""}
             </button>
+            <PriceWatchSummary watch={track.priceWatch} />
             <p className="op-study-next">
               下一条件：
               {id === track.id && value?.track.id === track.id && snapshot
@@ -252,6 +254,9 @@ function StudyWorkspace({ actor, scope, origin, preview }: StudyTrackingProps) {
               观察至 {timeLabel(snapshot.expiresOn)}
             </p>
           </header>
+          {(!selectedVersion || selectedVersion.id === current.id) && (
+            <PriceWatchSummary watch={value.priceWatch} />
+          )}
           <div className="op-research-actions">
             <button
               disabled={command.isPending || !value.capabilities.canCheck}

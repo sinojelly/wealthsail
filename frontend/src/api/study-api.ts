@@ -66,6 +66,7 @@ export interface StudySnapshot {
   benchmarkIndexId?: string | null;
 }
 export interface StudyTrack {
+  priceWatch?: StudyPriceWatch | null;
   id: string;
   title: string;
   enabled: boolean;
@@ -75,6 +76,41 @@ export interface StudyTrack {
   updatedAt: string;
   unreadCount: number;
   scope: StudyScope;
+}
+export interface StudyPriceWatch {
+  frozenPlan: ActionableZoneResult | null;
+  confirmedNav: {
+    value: string | null;
+    asOf: string | null;
+    retrievedAt?: string | null;
+    sourceUri?: string | null;
+    unit?: string | null;
+    priceBasis?: string | null;
+    quality?: string | null;
+    usable?: boolean;
+  } | null;
+  estimate1430: {
+    value: string | null;
+    asOf: string | null;
+    checkedAt?: string | null;
+    sourceUri?: string | null;
+    unit?: string | null;
+    priceBasis?: string | null;
+    state?: string | null;
+    runDate?: string | null;
+    usable?: boolean;
+  } | null;
+  holding: { state: "CONFIRMED" | "UNKNOWN" | "NONE"; asOf?: string | null };
+  state:
+    | "ENTRY_ZONE"
+    | "HOLDING"
+    | "STOP_LOSS"
+    | "TAKE_PROFIT"
+    | "OBSERVING"
+    | "UNKNOWN";
+  basis: "CONFIRMED_NAV" | "ESTIMATE_1430" | null;
+  asOf: string | null;
+  reason: string;
 }
 export interface StudyVersion {
   id: string;
@@ -147,6 +183,7 @@ export interface StudyTradeLink {
   fill: EligibleStudyTrade;
 }
 export interface StudyDetail {
+  priceWatch?: StudyPriceWatch | null;
   excursions?: {
     state?: string;
     mfePct: string | null;
@@ -189,6 +226,14 @@ export interface StudyDetail {
   };
 }
 export type CreateStudy =
+  | {
+      originType: "DAILY_QUANT_SCAN";
+      reportRunId: string;
+      subjectKind: "fund" | "nav";
+      subjectId: string;
+      planTrack: PlanTrack;
+      horizonDays?: number;
+    }
   | {
       originType: "DAILY_DIRECTION";
       reportRunId: string;

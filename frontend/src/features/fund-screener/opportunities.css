@@ -2024,6 +2024,159 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+.op-alternate-track {
+  color: #526477;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.op-quant-scan {
+  min-width: 0;
+  margin: 18px 0 24px;
+  border-top: 1px solid #dbe4ec;
+  padding-top: 16px;
+}
+.op-quant-scan > summary {
+  cursor: pointer;
+  color: #345369;
+  line-height: 1.6;
+  font-weight: 600;
+}
+.op-scan-description {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.op-scan-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dbe4ec;
+  border-radius: 8px;
+}
+.op-scan-scroll table {
+  width: 100%;
+  min-width: 1070px;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.op-scan-scroll th,
+.op-scan-scroll td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
+}
+.op-scan-scroll thead {
+  background: #f6f9fc;
+  color: #526477;
+}
+.op-scan-scroll tbody th {
+  width: 210px;
+  min-width: 160px;
+  font-weight: 500;
+}
+.op-scan-scroll td:nth-child(4) {
+  min-width: 145px;
+}
+.op-scan-scroll td:nth-child(5),
+.op-scan-scroll td:nth-child(7) {
+  white-space: nowrap;
+}
+.op-scan-scroll small {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 400;
+  margin-top: 3px;
+}
+.op-scan-scroll details {
+  margin-top: 4px;
+}
+.op-scan-scroll details p {
+  min-width: 170px;
+  white-space: normal;
+}
+.op-scan-scroll button {
+  white-space: nowrap;
+  border: 1px solid #8db8af;
+  color: #075c4b;
+  background: #effbf6;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.op-scan-scroll button:disabled {
+  color: #64748b;
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  cursor: default;
+}
+.op-scan-hit,
+.op-scan-stop {
+  color: #b4232d;
+}
+.op-price-watch {
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 3px solid #8db8af;
+  margin: 10px 0;
+  background: #f6f9fc;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.op-price-watch p {
+  margin: 5px 0;
+}
+.op-price-watch small {
+  display: block;
+  color: #64748b;
+}
+.op-price-watch a {
+  margin-left: 6px;
+}
+.op-price-watch-state {
+  font-size: 13px;
+  color: #075c4b;
+}
+.op-price-watch-state.state-stop_loss,
+.op-price-watch-state.state-take_profit,
+.op-price-watch-state.state-entry_zone {
+  color: #b4232d;
+}
+.op-price-watch-name span {
+  color: #64748b;
+  margin-left: 5px;
+}
+@media print {
+  html:has(.opportunities) {
+    background: white;
+  }
+  .op-print-disclosure:not([open]) > :not(summary) {
+    display: none !important;
+  }
+  .op-quant-scan[open] .op-scan-scroll {
+    overflow: visible;
+    border: 0;
+  }
+  .op-quant-scan[open] table {
+    min-width: 0;
+    font-size: 10px;
+  }
+  .op-quant-scan[open] th,
+  .op-quant-scan[open] td {
+    padding: 5px;
+    min-width: 0;
+    white-space: normal;
+  }
+  .op-quant-scan[open] tbody th {
+    min-width: 0;
+    width: 18%;
+  }
+}
 .op-manual-research {
   min-width: 0;
   border: 1px solid #dbe4ec;
@@ -2113,4 +2266,146 @@
   color: var(--op-muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+@media print {
+  body:has(.opportunities) .sidebar,
+  body:has(.opportunities) .topbar,
+  body:has(.opportunities) .chat-fab,
+  body:has(.opportunities) .chat-drawer,
+  .opportunities .op-v2-topic-nav,
+  .opportunities .op-debug-refresh,
+  .op-value-fund > button {
+    display: none !important;
+  }
+  body:has(.opportunities) .app-shell {
+    background: white;
+    min-height: 0;
+  }
+  body:has(.opportunities) {
+    background: white;
+    min-height: 0;
+  }
+  body:has(.opportunities) .content-shell {
+    margin-left: 0;
+    min-height: 0;
+  }
+  body:has(.opportunities) .page-content {
+    padding: 0;
+    max-width: none;
+    container-type: normal;
+  }
+  .opportunities {
+    display: block;
+    background: white;
+    padding: 0;
+    border-radius: 0;
+    gap: 10px;
+    font-size: 10.5px;
+  }
+  .opportunities h1 {
+    font-size: 18px;
+  }
+  .opportunities h3,
+  .op-value-thesis h3 {
+    font-size: 12px;
+  }
+  .opportunities small,
+  .op-value-fund small,
+  .op-value-prices dt,
+  .op-value-catalysts,
+  .op-value-risks,
+  .op-value-catalysts a,
+  .op-value-risks a,
+  .op-alternate-track,
+  .op-value-macro,
+  .op-plan-time-basis {
+    font-size: 10px;
+  }
+  .op-value-fund h4,
+  .op-value-prices dd {
+    font-size: 11px;
+  }
+  .op-daily-expanded .op-research-topic-body {
+    display: block;
+    padding: 10px;
+    gap: 10px;
+    font-size: 10px;
+    line-height: 1.45;
+  }
+  .op-macro-overview {
+    padding: 10px;
+  }
+  .op-macro-overview p,
+  .op-daily-report > .op-daily-events .op-event-reading p {
+    font-size: 10px;
+    line-height: 1.45;
+  }
+  .op-value-signal {
+    font-size: 10px;
+    padding: 3px 5px;
+  }
+  .op-value-directions {
+    margin-bottom: 8px;
+  }
+  .op-value-direction {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+    break-inside: auto;
+    overflow: visible;
+    margin: 6px 0;
+    border-radius: 6px;
+  }
+  .op-value-thesis,
+  .op-value-funds {
+    padding: 9px;
+  }
+  .op-value-funds {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .op-value-thesis p,
+  .op-value-fund p {
+    line-height: 1.5;
+    margin: 6px 0;
+  }
+  .op-value-prices {
+    break-inside: avoid;
+    gap: 8px;
+    margin: 8px 0;
+  }
+  .op-value-fund {
+    break-inside: auto;
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .op-value-revision {
+    font-size: 10px;
+  }
+  .op-quant-scan {
+    margin: 10px 0;
+    padding-top: 8px;
+  }
+  .opportunities .op-panel {
+    overflow: visible;
+  }
+  .op-daily-expanded .op-research-topic-body > * {
+    margin-bottom: 10px;
+  }
+  .op-value-direction h3,
+  .op-value-direction h4 {
+    break-after: avoid;
+  }
+  .op-daily-report > .op-daily-events {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .op-daily-report > .op-daily-events .op-daily-event {
+    padding: 8px;
+  }
+  .op-daily-report > .op-daily-events .op-daily-event h3 {
+    font-size: 11px;
+  }
+  .op-daily-events .op-research-actions {
+    display: none;
+  }
 }
