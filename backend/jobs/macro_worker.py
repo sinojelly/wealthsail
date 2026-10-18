@@ -26,6 +26,7 @@ from backend.jobs.investment_macro_refresh import (
 from backend.jobs.macro_evidence import run_macro_evidence_service, sync_macro_evidence
 from backend.jobs.daily_research import run_daily_research_service
 from backend.jobs.alpha_public import sync_alpha_public
+from backend.jobs.fund_research import run_fund_research_service
 
 logger = logging.getLogger("wealthsail.macro_worker")
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -249,6 +250,14 @@ async def _serve(pool, settings=None):
     index = asyncio.create_task(
         independent(run_index_research_service), name="wealthsail-index-research"
     )
+    fund = asyncio.create_task(
+        independent(
+            lambda pool, *, stop_event: run_fund_research_service(
+                pool, settings, stop_event=stop_event
+            )
+        ),
+        name="wealthsail-fund-research",
+    )
     daily = asyncio.create_task(
         independent(
             lambda pool, *, stop_event: run_daily_research_service(
@@ -271,7 +280,17 @@ async def _serve(pool, settings=None):
         if service in done:
             await service
     finally:
-        for task in (service, official, market, monitor, index, daily, alpha, stopping):
+        for task in (
+            service,
+            official,
+            market,
+            monitor,
+            index,
+            fund,
+            daily,
+            alpha,
+            stopping,
+        ):
             if not task.done():
                 task.cancel()
         await asyncio.gather(
@@ -280,6 +299,7 @@ async def _serve(pool, settings=None):
             market,
             monitor,
             index,
+            fund,
             daily,
             alpha,
             stopping,

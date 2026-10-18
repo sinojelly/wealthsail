@@ -818,14 +818,27 @@ async def analysis(conn, kind, subject_id):
         from backend.investment.theme_graph import cached_nav_analysis
 
         code = await conn.fetchval(
-            "SELECT fund_code FROM reference.research_fund_catalog WHERE instrument_id::text=$1",
+            """SELECT fund_code FROM reference.research_fund_catalog
+            WHERE instrument_id::text=$1 AND market='FUND_CN' AND trade_form='FUND'""",
             str(subject_id),
         )
         nav = await cached_nav_analysis(
             conn, code, now_shanghai(), subject_kind="fund", subject_id=str(subject_id)
         )
-        if nav and nav["dataQuality"] == "READY":
-            result["actionableZones"] = nav["actionableZones"]
+        if nav:
+            newer = result.get("asOf") is None
+            try:
+                newer = (
+                    date.fromisoformat(nav["asOf"]),
+                    datetime.fromisoformat(nav["retrievedAt"]),
+                ) >= (
+                    date.fromisoformat(result["asOf"]),
+                    datetime.fromisoformat(result["retrievedAt"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                pass
+            if newer:
+                result.update(nav)
     return result
 
 

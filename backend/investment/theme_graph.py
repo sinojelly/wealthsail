@@ -435,13 +435,43 @@ async def cached_nav_analysis(conn, code, now, *, subject_kind="nav", subject_id
     if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
         return None
     bundle = await read_alpha_public(conn, now)
-    history = next(
-        (row for row in bundle.get("fundHistories", []) if row.get("fundCode") == code),
-        None,
+    rows = await conn.fetch(
+        """SELECT payload FROM market.fund_research_nav_histories
+        WHERE fund_code=$1 AND retrieved_at<=$2 AND available_at<=$2
+          AND payload->>'asOf'<=$3
+        ORDER BY payload->>'asOf' DESC,retrieved_at DESC,id DESC LIMIT 1""",
+        code,
+        now,
+        now.date().isoformat(),
     )
-    if not history:
+    candidates = list(bundle.get("fundHistories", []))
+    for row in rows:
+        payload = row.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                continue
+        if isinstance(payload, dict):
+            candidates.append(payload)
+    valid = [
+        history
+        for history in candidates
+        if isinstance(history, dict)
+        and history.get("fundCode") == code
+        and nav_plan(history, now=now, subject_kind=subject_kind, subject_id=subject_id)
+    ]
+    if not valid:
         return None
-    history = deepcopy(history)
+    history = deepcopy(
+        sorted(
+            valid,
+            key=lambda row: (
+                row["asOf"],
+                _local(datetime.fromisoformat(row["retrievedAt"])),
+            ),
+        )[-1]
+    )
     try:
         history["calendarProof"] = await _calendar_proof(conn, history, _local(now))
     except Exception:  # noqa: BLE001 -- display history without certifying current prices
@@ -449,16 +479,47 @@ async def cached_nav_analysis(conn, code, now, *, subject_kind="nav", subject_id
     plan = nav_plan(history, now=now, subject_kind=subject_kind, subject_id=subject_id)
     if not plan:
         return None
+    changes = {
+        "basis": "UNIT_NAV_CHANGE",
+        "unit": "decimal_fraction",
+        "sampleCount": len(history["points"]),
+        "missingWindows": [],
+        "reasons": [],
+    }
+    for window in (63, 252):
+        points = history["points"]
+        changes[f"change{window}"] = (
+            float(
+                Decimal(points[-1]["close"]) / Decimal(points[-window - 1]["close"]) - 1
+            )
+            if len(points) > window
+            else None
+        )
+        if len(points) <= window:
+            changes["missingWindows"].append(window)
+            changes["reasons"].append(
+                f"不足 {window + 1} 个实际单位净值观察，无法计算 {window} 期净值变动。"
+            )
+    from backend.indicators.performance import analyze as analyze_performance
+
     return {
         "state": plan["historyQuality"],
         "dataQuality": plan["historyQuality"],
         "score": None,
         "indicators": plan["indicators"],
         "points": deepcopy(history["points"]),
-        "reasons": ["确认单位净值研究坐标；不含假定分红再投资收益。"],
+        "reasons": [
+            "确认单位净值研究坐标；不含假定分红再投资收益。",
+            *changes["reasons"],
+        ],
         "asOf": plan["asOf"],
         "source": plan["sourceUri"],
         "retrievedAt": plan["retrievedAt"],
+        "availableAt": history["availableAt"],
         "seriesKind": "UNIT_NAV",
+        "performance": analyze_performance(
+            history["points"], series_kind="UNIT_NAV", quality=plan["historyQuality"]
+        ),
+        "navChanges": changes,
         "actionableZones": plan,
     }
