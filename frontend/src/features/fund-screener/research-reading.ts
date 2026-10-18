@@ -56,6 +56,17 @@ export function readingText(text: string, limit = 140): string {
     : translated;
 }
 
+/** Saved model titles may contain status claims; the source badge owns that status. */
+export function sourceTitle(text: string, limit = 200): string {
+  return readingText(
+    text.replace(
+      /^\s*(?:(?:UNVERIFIED|SOURCE_CHECKED|REPORTED)\s*[｜|:：]\s*)+/i,
+      "",
+    ),
+    limit,
+  );
+}
+
 /** Summary-only projection; diagnostic details remain available in their source panels. */
 export function researchSummary(text: string, limit = 280): string {
   return (

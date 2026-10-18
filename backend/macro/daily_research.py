@@ -751,6 +751,7 @@ def build_prompt(packet):
         "给出简明中文macroCycle宏观周期定位与操作总纲；结合M1-M2、信用、收益率、房价、广域新闻与真实行情，自动提炼valueDirections，不要求用户筛选。五主题只是种子，可发现医药、消费、宽基、红利等任何有依据的价值方向。计划/市场隐含价格不等于已发生事实。\n"
         "财联社电报中的上市公司公告（回购、并购重组、股权转让、业绩）、重磅产业会议和地缘动态属于核心一等催化线索，严禁因未二次抓取官网原文而丢弃或降权。UNVERIFIED只表示尚未核对官网原文，与研究优先级独立；可直接引用财联社sourceUri作为媒体原文，注明报道身份，不伪装成官网已核对。按alphaPublic.sectorCatalysts逐行业检查，综合同链多条催化，不遗漏小行业线索。\n"
         "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
+        "每只基金可选价格轨道取quantitativeScan.items[].signals，WATCH也选择其中已有完整价格的轨道；技术state与当前inEntryZone分开表述；某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道，不将缺一条轨道扩大为整只基金无价格。\n"
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"
         "每方向匹配1至2只实际基金，优先行业联接与另一弹性品种；只要有有效净值锚点就选择完整plans，不把有真实价格的基金藏在文字候选里。尚未到买点可WATCH并保留对应双轨计划。缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]。每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。\n"
@@ -837,6 +838,10 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         }
         if identity not in sources or proof["verification"] == "SOURCE_CHECKED":
             sources[identity] = proof
+    value_directions = validate_value_directions(
+        report["valueDirections"], packet, completed_at, aliases
+    )
+    directions.update(row["key"] for row in value_directions)
     events = {}
     for row in report["events"]:
         refs = _references(row, aliases, directions)
@@ -893,9 +898,6 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     }
     if any(code not in energy for code in report["energy"]):
         raise ValueError("unknown energy observation")
-    value_directions = validate_value_directions(
-        report["valueDirections"], packet, completed_at, aliases
-    )
     legacy_plans = validate_actionable_plans(
         report["actionablePlans"], packet, completed_at
     )
@@ -925,7 +927,11 @@ def _unique_object(pairs):
 
 
 # Reject executable markup; ordinary forecasts and trade language are allowed.
-_UNSAFE_MARKUP = re.compile(r"<[^>]+>|OFFICIAL_FACT", re.IGNORECASE)
+_UNSAFE_MARKUP = re.compile(
+    r"</?[A-Za-z][A-Za-z0-9:_-]*(?:\s[^<>]*|\s*/?)>"
+    r"|<!--[\s\S]*?-->|<![A-Za-z][^<>]*>|<\?[^<>]*>|OFFICIAL_FACT",
+    re.IGNORECASE,
+)
 
 
 def _safe_narrative(value):

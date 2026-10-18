@@ -141,13 +141,14 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
         "DAILY_RESEARCH_CATCH_UP": "true",
         "DAILY_RESEARCH_DEBUG_ENABLED": os.environ.get("DAILY_RESEARCH_DEBUG_ENABLED", "true"),
         "DAILY_RESEARCH_CODEX_PATH": json.dumps(Path(executable).as_posix() if executable else ""),
+        "DAILY_RESEARCH_AUDIT_DIR": json.dumps(os.environ.get("DAILY_RESEARCH_AUDIT_DIR", (LOCAL / "research-audit").as_posix())),
     }
     if os.environ.get("DAILY_RESEARCH_MODEL"):
         macro_settings["DAILY_RESEARCH_MODEL"] = json.dumps(os.environ["DAILY_RESEARCH_MODEL"])
     # Keep the operator's scoped Phase2 configuration across generated restarts.
     from dotenv import dotenv_values
     previous = dotenv_values(LOCAL / "macro.env")
-    for name in ("ALPHA_PUBLIC_ENABLED", "ALPHA_OPPORTUNITY_ENABLED", "WECOM_OPPORTUNITY_WEBHOOK_URL", "OPPORTUNITY_TENANT_ID", "OPPORTUNITY_USER_ID"):
+    for name in ("ALPHA_PUBLIC_ENABLED", "ALPHA_OPPORTUNITY_ENABLED", "WECOM_OPPORTUNITY_WEBHOOK_URL", "OPPORTUNITY_TENANT_ID", "OPPORTUNITY_USER_ID", "DAILY_RESEARCH_AUDIT_DIR"):
         value = os.environ.get(name, previous.get(name))
         if value is not None:
             macro_settings[name] = json.dumps(value)

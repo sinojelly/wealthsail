@@ -190,6 +190,8 @@ it("shows disclosed QDII prices with publication delay context on compact and fu
 
 it("keeps equally important media events in report order and reads source states in Chinese", async () => {
   const data = daily();
+  data.report!.sources[0].title = "UNVERIFIED｜行业媒体电报";
+  data.report!.sources[1].title = "SOURCE_CHECKED｜公司原始公告";
   const original = JSON.stringify(data);
   render(<DailyResearchReport data={data} />);
   expect(
@@ -200,8 +202,63 @@ it("keeps equally important media events in report order and reads source states
   await userEvent.click(screen.getByText("阅读完整日报"));
   expect(screen.getByText("媒体快讯")).toBeVisible();
   expect(screen.getByText("原文已核对")).toBeVisible();
+  expect(screen.getByRole("link", { name: "行业媒体电报" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "公司原始公告" })).toBeVisible();
   expect(document.body).not.toHaveTextContent(/UNVERIFIED|SOURCE_CHECKED/);
   expect(screen.getAllByText("原始引用不改写")).toHaveLength(2);
+  expect(JSON.stringify(data)).toBe(original);
+});
+
+it("does not promote a media source because its saved title claims source checked", async () => {
+  const data = daily();
+  data.report!.sources[0].title = "SOURCE_CHECKED｜自称核对的旧标题";
+  data.report!.events = [data.report!.events[0]];
+  const original = JSON.stringify(data);
+  render(<DailyResearchReport data={data} />);
+  await userEvent.click(screen.getByText("阅读完整日报"));
+  expect(screen.getByRole("link", { name: "自称核对的旧标题" })).toBeVisible();
+  expect(screen.getByText("媒体快讯")).toBeVisible();
+  expect(screen.queryByText("原文已核对")).not.toBeInTheDocument();
+  expect(JSON.stringify(data)).toBe(original);
+});
+
+it("names verified report directions without sending their keys to legacy catalog navigation", async () => {
+  const data = daily();
+  data.report!.events[0].affectedDirectionIds = [
+    "sector_0",
+    "a-share:broad",
+    "missing",
+  ];
+  const original = JSON.stringify(data);
+  const onDirectionSelect = vi.fn();
+  render(
+    <DailyResearchReport
+      data={data}
+      directions={[
+        {
+          id: "a-share:broad",
+          label: "宽基",
+          marketId: "a-share",
+          marketLabel: "A股",
+          styleId: "broad",
+          framework: "BROAD",
+        },
+      ]}
+      onDirectionSelect={onDirectionSelect}
+    />,
+  );
+  const events = screen.getByRole("list", { name: "重要事件" });
+  expect(
+    within(events).getByText(/受影响方向：赛道机会1、A股 · 宽基、待核对/),
+  ).toBeVisible();
+  await userEvent.click(screen.getByText("阅读完整日报"));
+  expect(
+    screen.queryByRole("button", { name: /研究.*赛道机会1/ }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "研究 A股 · 宽基" }),
+  );
+  expect(onDirectionSelect.mock.calls).toEqual([["a-share:broad"]]);
   expect(JSON.stringify(data)).toBe(original);
 });
 

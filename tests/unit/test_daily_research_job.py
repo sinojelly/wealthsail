@@ -191,6 +191,44 @@ async def test_cli_unavailable_is_terminal_and_does_not_fallback_or_retry(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [False, True])
+async def test_public_model_result_is_audited_before_validation_without_retry(
+    monkeypatch, invalid
+):
+    mod, state = isolate(monkeypatch)
+    records = []
+
+    def audit(settings, run_id, **record):
+        records.append(record)
+        return False  # an unavailable diagnostic directory is nonfatal
+
+    def validate(raw, *args, **kwargs):
+        assert records[-1]["stage"] == "SOURCES_CHECKED"
+        if invalid:
+            raise ValueError("unknown public direction key")
+        return raw
+
+    monkeypatch.setattr(mod, "write_research_audit", audit, raising=False)
+    monkeypatch.setattr(mod, "validate_report", validate)
+    outcome = await mod.sync_daily_research(object(), settings(), NOW)
+    assert outcome["status"] == ("FAILED" if invalid else "READY")
+    assert [r["stage"] for r in records] == [
+        "MODEL_RETURNED",
+        "SOURCES_CHECKED",
+        "VALIDATION_FAILED" if invalid else "READY",
+    ]
+    assert all(r["raw"] == {"summary": "public", "sources": []} for r in records)
+    assert records[0].get("source_checks") is None
+    assert records[-1]["source_checks"] == {"summary": "public", "sources": []}
+    assert isinstance(records[-1].get("error"), ValueError) is invalid
+    assert state["terminal"][0]["error_class"] == ("ValueError" if invalid else None)
+    assert (await mod.sync_daily_research(object(), settings(), NOW))[
+        "status"
+    ] == "SKIPPED"
+    mod.run_codex_research.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_collection_crossing_midnight_does_not_dispatch_before_next_0830(
     monkeypatch,
 ):

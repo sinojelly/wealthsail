@@ -13,7 +13,7 @@ import {
   macroUnit,
 } from "../macro-display";
 import { planPrice, planTimeBasisNote, planUnit } from "../plan-display";
-import { readingText } from "../research-reading";
+import { readingText, sourceTitle } from "../research-reading";
 import ActionablePlan, { ActionablePlanEvidence } from "./ActionablePlan";
 import { studyMetricLabel } from "./study-display";
 
@@ -118,7 +118,7 @@ function DirectionSignals({
                   href={href}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label={`${risk ? "风险" : "催化"}来源：${readingText(source.title, 100)}`}
+                  aria-label={`${risk ? "风险" : "催化"}来源：${sourceTitle(source.title, 100)}`}
                 >
                   [来源{sourceIndex + 1}]
                 </a>
@@ -333,10 +333,10 @@ export default function ValueDirections({
                             target="_blank"
                             rel="noreferrer"
                           >
-                            {readingText(source.title, 100)}
+                            {sourceTitle(source.title, 100)}
                           </a>
                         ) : (
-                          readingText(source.title, 100)
+                          sourceTitle(source.title, 100)
                         )}
                       </p>
                     )

@@ -223,6 +223,14 @@ def test_prompt_prioritizes_media_and_quantitative_dual_engine_without_active_fu
     assert "自身真实净值" in prompt
 
 
+def test_prompt_selects_available_fund_tracks_without_dropping_watch_candidates():
+    prompt = engine().build_prompt(packet())
+    assert "可选价格轨道取quantitativeScan.items[].signals" in prompt
+    assert "WATCH也选择其中已有完整价格的轨道" in prompt
+    assert "某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道" in prompt
+    assert "技术state与当前inEntryZone分开表述" in prompt
+
+
 def test_public_price_projection_keeps_verified_nav_time_and_quality_metadata():
     result = engine()._public_actionable_plan(
         {
@@ -319,6 +327,101 @@ def test_source_check_certifies_quote_only_and_never_implementation_or_market_ca
     assert event["marketReaction"] == "UNVERIFIED"
     assert event["id"].startswith("event:")
     assert result["asOf"] == NOW.isoformat()
+
+
+@pytest.mark.parametrize("field", ["events", "upcoming"])
+def test_event_references_accept_current_validated_value_direction_keys(field):
+    from test_value_directions import (
+        quantitative_packet,
+        direction,
+        NOW as direction_now,
+    )
+
+    raw = {
+        **report(),
+        "macroCycle": "行业与真实净值共同研究。",
+        "actionablePlans": [],
+        "valueDirections": [direction(macroCodes=[], quantitativeFundCodes=["005112"])],
+    }
+    public = {
+        **quantitative_packet(),
+        "directions": [{"id": "a-share:broad"}],
+        "discoveryUniverse": [],
+    }
+    if field == "upcoming":
+        raw[field] = [
+            {
+                "title": "未来行业会议",
+                "phase": "PLANNED",
+                "scheduledDate": "2026-10-20",
+                "scheduledAt": None,
+                "sourceIds": ["s1"],
+                "affectedDirectionIds": ["healthcare-recovery"],
+                "watchFor": [],
+            }
+        ]
+    else:
+        raw[field][0]["affectedDirectionIds"] = ["healthcare-recovery"]
+    actual = engine().validate_report(raw, public, {}, completed_at=direction_now)
+    assert actual[field][0]["affectedDirectionIds"] == ["healthcare-recovery"]
+    raw[field][0]["affectedDirectionIds"] = ["nonexistent-current-direction"]
+    with pytest.raises(ValueError, match="unknown research direction reference"):
+        engine().validate_report(raw, public, {}, completed_at=direction_now)
+
+
+def test_invalid_current_directions_are_validated_before_event_key_references():
+    from test_value_directions import (
+        quantitative_packet,
+        direction,
+        NOW as direction_now,
+    )
+
+    raw = {
+        **report(),
+        "macroCycle": "行业研究",
+        "actionablePlans": [],
+        "valueDirections": [direction(macroCodes=[], quantitativeFundCodes=["005112"])]
+        * 2,
+    }
+    raw["events"][0]["affectedDirectionIds"] = ["healthcare-recovery"]
+    public = {
+        **quantitative_packet(),
+        "directions": [{"id": "a-share:broad"}],
+        "discoveryUniverse": [],
+    }
+    with pytest.raises(ValueError, match="duplicate value direction"):
+        engine().validate_report(raw, public, {}, completed_at=direction_now)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "RSI14<38且净值>20日均线时观察趋势。",
+        "跌幅<=8%，且净值>MA20后观察右侧。",
+        "净值<MA20且目标收益>10%时等待确认。",
+    ],
+)
+def test_plain_financial_comparators_are_not_misread_as_html(text):
+    raw = report()
+    raw["events"][0]["summary"] = text
+    assert validate(raw)["events"][0]["summary"] == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "<a href='https://example.org'>链接</a>",
+        "<!-- injected -->",
+        "OFFICIAL_FACT",
+    ],
+)
+def test_actual_html_and_unsupported_claim_markers_remain_rejected(text):
+    raw = report()
+    raw["events"][0]["summary"] = text
+    with pytest.raises(ValueError, match="unsupported research instruction or claim"):
+        validate(raw)
 
 
 @pytest.mark.parametrize(

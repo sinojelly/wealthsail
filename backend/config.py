@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     daily_research_model: str | None = Field(default=None)
     daily_research_catch_up: bool = Field(default=True)
     daily_research_timeout_seconds: float = Field(default=900, ge=30, le=1200)
+    daily_research_audit_dir: str = Field(default="", repr=False)
     alpha_public_enabled: bool = Field(default=True)
     alpha_opportunity_enabled: bool = Field(default=True)
     wecom_opportunity_webhook_url: str = Field(default="", repr=False)

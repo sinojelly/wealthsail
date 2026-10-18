@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { DailyResearch, Direction } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
-import { readingText } from "../research-reading";
+import { readingText, sourceTitle } from "../research-reading";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未研究",
   RUNNING: "已登记每日研究",
@@ -187,10 +187,10 @@ function DailyResearchContent({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  {source.title}
+                  {sourceTitle(source.title)}
                 </a>
               ) : (
-                <strong>{source.title}</strong>
+                <strong>{sourceTitle(source.title)}</strong>
               )}
               <p>
                 <span className="op-badge">
@@ -259,8 +259,13 @@ function DailyResearchContent({
         ...new Set(
           ids.map((id) => {
             const direction = directions.find((row) => row.id === id);
-            return direction
-              ? `${direction.marketLabel} · ${direction.label}`
+            if (direction)
+              return `${direction.marketLabel} · ${direction.label}`;
+            const valueDirection = report?.valueDirections?.find(
+              (row) => row.key === id,
+            );
+            return valueDirection
+              ? readingText(valueDirection.title, 100)
               : "待核对";
           }),
         ),

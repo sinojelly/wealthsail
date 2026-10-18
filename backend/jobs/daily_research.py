@@ -36,6 +36,7 @@ from backend.macro.daily_research import (
     make_research_packet,
     validate_report,
 )
+from backend.macro.research_audit import write_research_audit
 
 logger = logging.getLogger("wealthsail.daily_research")
 
@@ -225,6 +226,7 @@ async def sync_daily_research(
     run_id = claim["run_id"]
     result = {"status": "FAILED", "runId": str(run_id)}
     payload, error = None, unavailable
+    raw, checks, audit_error = None, None, None
     try:
         if unavailable:
             return result
@@ -235,22 +237,56 @@ async def sync_daily_research(
             timeout=settings.daily_research_timeout_seconds,
             model=settings.daily_research_model or cli.get("selectedModel"),
         )
+        write_research_audit(
+            settings,
+            run_id,
+            raw=raw,
+            stage="MODEL_RETURNED",
+            completed_at=local(now_shanghai()),
+        )
         checks = await verify_research_sources(
             raw.get("sources", []), now=local(now_shanghai())
+        )
+        write_research_audit(
+            settings,
+            run_id,
+            raw=raw,
+            source_checks=checks,
+            stage="SOURCES_CHECKED",
+            completed_at=local(now_shanghai()),
         )
         payload = validate_report(
             raw, packet, checks, completed_at=local(now_shanghai())
         )
         result["status"], error = "READY", None
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
+        audit_error = exc
         result["status"], error = "UNCERTAIN", "CancelledError"
         raise
-    except TimeoutError:
+    except TimeoutError as exc:
+        audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
     except Exception as exc:  # noqa: BLE001 -- never persist stderr, prompts or exception messages
+        audit_error = exc
         error = type(exc).__name__
         logger.warning("daily_research_failed error_class=%s", error)
     finally:
+        if raw is not None:
+            write_research_audit(
+                settings,
+                run_id,
+                raw=raw,
+                source_checks=checks,
+                stage=(
+                    "READY"
+                    if result["status"] == "READY"
+                    else "VALIDATION_FAILED"
+                    if checks is not None
+                    else "SOURCE_CHECK_FAILED"
+                ),
+                completed_at=local(now_shanghai()),
+                error=audit_error,
+            )
         async with system_connection(pool) as conn:
             await finish_daily_run(
                 conn,
