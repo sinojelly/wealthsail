@@ -2808,6 +2808,43 @@ async def _readback(conn: asyncpg.Connection) -> None:
         ) != (column in {"enabled", "generation", "updated_at"}):
             raise RuntimeError("study head boundary is missing or unsafe")
 
+    universe_table = "reference.discovery_fund_universe"
+    if not await conn.fetchval("SELECT to_regclass($1)", universe_table):
+        raise RuntimeError("discovery industry universe is missing or unsafe")
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in (
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "TRUNCATE",
+            "REFERENCES",
+            "TRIGGER",
+        ):
+            if await conn.fetchval(
+                "SELECT has_table_privilege($1,$2,$3)", role, universe_table, privilege
+            ) != (role != "authenticated" and privilege == "SELECT"):
+                raise RuntimeError("discovery industry universe is missing or unsafe")
+        if await conn.fetchval(
+            "SELECT has_any_column_privilege($1,$2,'INSERT') OR has_any_column_privilege($1,$2,'UPDATE') OR has_any_column_privilege($1,$2,'REFERENCES')",
+            role,
+            universe_table,
+        ):
+            raise RuntimeError("discovery industry universe is missing or unsafe")
+    if await conn.fetchval(
+        "SELECT has_any_column_privilege('authenticated',$1,'SELECT')",
+        universe_table,
+    ):
+        raise RuntimeError("discovery industry universe is missing or unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)",
+        universe_table,
+    ) or not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=$1::regclass AND contype='p' AND convalidated)",
+        universe_table,
+    ):
+        raise RuntimeError("discovery industry universe is missing or unsafe")
+
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
     )

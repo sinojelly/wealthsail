@@ -197,6 +197,7 @@ async def test_real_public_packet_uses_api_read_only_connection_without_actor_or
             "discoveryUniverse",
             "discoveryActionableZones",
             "previousValueDirections",
+            "discoveryCoverage",
         }
         assert {row["indexId"] for row in packet["indices"]} == {
             "hs300",

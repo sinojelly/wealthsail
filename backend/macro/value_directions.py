@@ -7,6 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.macro.alpha_research import _price, _program_plan
 
+MAX_VALUE_DIRECTIONS = 6
+
+
+class DirectionEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    summary: str = Field(min_length=1, max_length=240)
+    sourceIds: list[str] = Field(min_length=1, max_length=8)
+
 
 class ValuePlanProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -30,6 +38,8 @@ class ValueDirectionProposal(BaseModel):
     sourceIds: list[str] = Field(min_length=1, max_length=8)
     macroCodes: list[str] = Field(max_length=8)
     watchFor: list[str] = Field(max_length=4)
+    catalysts: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
+    risks: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
     plans: list[ValuePlanProposal] = Field(max_length=2)
 
 
@@ -123,7 +133,7 @@ def validate_value_directions(proposals, packet, now, source_aliases):
     }
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
-    if len(proposals) > 5:
+    if len(proposals) > MAX_VALUE_DIRECTIONS:
         raise ValueError("too many value directions")
     for raw in proposals:
         direction = ValueDirectionProposal.model_validate(raw).model_dump()
@@ -140,6 +150,16 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             or len(refs) + len(macros) < 2
         ):
             raise ValueError("direction needs multiple available evidence")
+        for field in ("catalysts", "risks"):
+            for note in direction[field]:
+                if any(
+                    ref not in source_aliases or source_aliases[ref] not in refs
+                    for ref in note["sourceIds"]
+                ):
+                    raise ValueError("direction note needs related current sources")
+                note["sourceIds"] = sorted(
+                    {source_aliases[ref] for ref in note["sourceIds"]}
+                )
         plans, used = [], set()
         for proposal in direction["plans"]:
             identity = plan_identity(proposal)

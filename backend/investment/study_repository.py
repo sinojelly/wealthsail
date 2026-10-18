@@ -135,6 +135,8 @@ async def daily_direction_origin(
             "sourceIds",
             "macroCodes",
             "watchFor",
+            "catalysts",
+            "risks",
         )
         if key in direction
     }

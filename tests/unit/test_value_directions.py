@@ -208,3 +208,98 @@ def test_daily_report_uses_new_dynamic_directions_and_flattens_verified_prices()
     raw.pop("valueDirections")
     with pytest.raises(ValueError):
         validate_report(raw, public, {}, completed_at=NOW)
+
+
+def test_six_distinct_directions_survive_report_validation_without_price_anchors():
+    from backend.macro.daily_research import validate_report
+    from test_daily_research import report
+
+    rows = [
+        direction(key=f"opportunity-{number}", signal="WATCH", plans=[])
+        for number in range(6)
+    ]
+    raw = {
+        **report(),
+        "macroCycle": "信用与行业催化提供多方向研究线索。",
+        "actionablePlans": [],
+        "valueDirections": rows,
+    }
+    public = {
+        **packet(),
+        "directions": [{"id": "a-share:broad"}],
+        "discoveryUniverse": [],
+        "discoveryActionableZones": [],
+    }
+    actual = validate_report(raw, public, {}, completed_at=NOW)
+    assert [row["key"] for row in actual["valueDirections"]] == [
+        "opportunity-0",
+        "opportunity-1",
+        "opportunity-2",
+        "opportunity-3",
+        "opportunity-4",
+        "opportunity-5",
+    ]
+    assert all(row["plans"] == [] for row in actual["valueDirections"])
+    raw["valueDirections"].append(
+        direction(key="opportunity-6", signal="WATCH", plans=[])
+    )
+    with pytest.raises(ValueError):
+        validate_report(raw, public, {}, completed_at=NOW)
+
+
+def test_direction_catalysts_and_risks_keep_related_sources_and_normalize_aliases():
+    actual = validate(
+        [
+            direction(
+                sourceIds=["s1", "s2"],
+                catalysts=[
+                    {
+                        "summary": "同链企业回购意向与经营改善构成联合催化。",
+                        "sourceIds": ["s2", "s1", "s1"],
+                    }
+                ],
+                risks=[
+                    {"summary": "相关企业解禁可能增加短期供给。", "sourceIds": ["s2"]}
+                ],
+            )
+        ]
+    )[0]
+    assert actual["catalysts"] == [
+        {
+            "summary": "同链企业回购意向与经营改善构成联合催化。",
+            "sourceIds": ["source:one", "source:two"],
+        }
+    ]
+    assert actual["risks"] == [
+        {"summary": "相关企业解禁可能增加短期供给。", "sourceIds": ["source:two"]}
+    ]
+
+
+def test_existing_direction_without_structured_notes_keeps_empty_compatible_fields():
+    actual = validate()[0]
+    assert actual["catalysts"] == []
+    assert actual["risks"] == []
+
+
+@pytest.mark.parametrize("field", ["catalysts", "risks"])
+@pytest.mark.parametrize("source", ["s2", "unknown"])
+def test_direction_notes_cannot_attach_unrelated_or_unknown_sources(field, source):
+    raw = direction(
+        **{field: [{"summary": "来源须与该方向相关。", "sourceIds": [source]}]}
+    )
+    with pytest.raises(ValueError):
+        validate([raw])
+
+
+@pytest.mark.parametrize("field", ["catalysts", "risks"])
+@pytest.mark.parametrize(
+    "notes",
+    [
+        [{"summary": "过长" * 121, "sourceIds": ["s1"]}],
+        [{"summary": "没有来源", "sourceIds": []}],
+        [{"summary": "简短来源说明", "sourceIds": ["s1"]}] * 3,
+    ],
+)
+def test_direction_structured_notes_are_bounded(field, notes):
+    with pytest.raises(ValueError):
+        validate([direction(**{field: notes})])

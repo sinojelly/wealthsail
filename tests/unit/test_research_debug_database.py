@@ -40,7 +40,10 @@ async def fixture(*, committed=False):
     assert (
         parts.hostname == "127.0.0.1"
         and parts.port == 55434
-        and parts.path.startswith("/wealthsail_review07_validation_v")
+        and (
+            parts.path.startswith("/wealthsail_review07_validation_v")
+            or parts.path == "/wealthsail_review08_validation_v1"
+        )
     )
     conn = await asyncpg.connect(DSN)
     tenant, owner, other = uuid4(), uuid4(), uuid4()

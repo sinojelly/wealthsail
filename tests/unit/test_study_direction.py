@@ -151,6 +151,39 @@ async def test_report_direction_origin_keeps_exact_plan_and_only_related_evidenc
 
 
 @pytest.mark.asyncio
+async def test_direction_catalysts_and_risks_remain_frozen_with_original_sources():
+    original = report()
+    original["valueDirections"][0].update(
+        catalysts=[{"summary": "行业经营与资金意向共振。", "sourceIds": ["s1", "s2"]}],
+        risks=[{"summary": "相关个股解禁可能形成短期压力。", "sourceIds": ["s2"]}],
+    )
+    conn = AsyncMock()
+    run = uuid4()
+    conn.fetchrow.return_value = {
+        "run_id": run,
+        "recorded_at": NOW,
+        "payload": original,
+    }
+    origin = await repo.daily_direction_origin(
+        conn, run, "healthcare-recovery", "nav", "000001", "LEFT_VALUE", NOW
+    )
+    snapshot = study.freeze_hypothesis(origin, now=NOW + timedelta(days=1))
+    assert snapshot["valueDirection"]["catalysts"] == [
+        {"summary": "行业经营与资金意向共振。", "sourceIds": ["s1", "s2"]}
+    ]
+    assert snapshot["valueDirection"]["risks"] == [
+        {"summary": "相关个股解禁可能形成短期压力。", "sourceIds": ["s2"]}
+    ]
+    original["valueDirections"][0]["catalysts"][0]["summary"] = "后续资料改写"
+    origin["valueDirection"]["risks"][0]["sourceIds"].append("later-source")
+    assert (
+        snapshot["valueDirection"]["catalysts"][0]["summary"]
+        == "行业经营与资金意向共振。"
+    )
+    assert snapshot["valueDirection"]["risks"][0]["sourceIds"] == ["s2"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "problem",
     [

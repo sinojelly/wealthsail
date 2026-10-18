@@ -128,9 +128,15 @@ async def _calendar_proof(conn, history, now):
         return None
     rows = await conn.fetch(
         """SELECT calendar_date,is_trading_day,
-        EXISTS(SELECT 1 FROM reference.theme_asset_graph g
+        (EXISTS(SELECT 1 FROM reference.theme_asset_graph g
           WHERE g.market='FUND_CN' AND g.asset_code=$3
-          AND g.metadata->>'overseasCalendarRequired'='true') AS overseas_calendar_required
+          AND g.metadata->>'overseasCalendarRequired'='true')
+        OR EXISTS(SELECT 1 FROM reference.discovery_fund_universe u
+          WHERE u.market='FUND_CN' AND u.fund_code=$3 AND u.overseas_calendar_required)
+        OR EXISTS(SELECT 1 FROM reference.research_fund_catalog c
+          WHERE c.market='FUND_CN' AND c.fund_code=$3
+            AND (c.fund_type ILIKE '%QDII%' OR c.fund_name ILIKE '%QDII%')))
+        AS overseas_calendar_required
         FROM reference.trading_calendars
         WHERE market='SSE' AND calendar_date BETWEEN $1 AND $2 ORDER BY calendar_date""",
         first,

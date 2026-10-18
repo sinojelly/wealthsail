@@ -295,6 +295,8 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
                 "sourceIds",
                 "macroCodes",
                 "watchFor",
+                "catalysts",
+                "risks",
             }
         }
         if "macroEvidence" in origin["valueDirection"]:

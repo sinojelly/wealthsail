@@ -226,6 +226,7 @@ async def connection():
             "/wealthsail_phase2_validation_v2",
             "/wealthsail_phase2_validation_v3",
             "/wealthsail_review07_validation_v6",
+            "/wealthsail_review08_validation_v1",
         }
     ), "disposable DB boundary"
     return await asyncpg.connect(DSN)

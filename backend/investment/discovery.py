@@ -10,11 +10,16 @@ async def read_discovery_assets(conn, now, themes):
     rows = await conn.fetch(
         """SELECT c.instrument_id,c.fund_code,c.fund_name,c.market,
         count(*) OVER(PARTITION BY c.market,c.fund_code) AS mapping_count,
-        (c.fund_type ILIKE '%QDII%' OR c.fund_name ILIKE '%QDII%') AS overseas_calendar_required
+        u.sector AS discovery_sector,u.priority AS seed_priority,
+        u.source_uri AS identity_source_uri,u.verified_at AS identity_verified_at,
+        (c.fund_type ILIKE '%QDII%' OR c.fund_name ILIKE '%QDII%'
+          OR COALESCE(u.overseas_calendar_required,false)) AS overseas_calendar_required
         FROM reference.research_fund_catalog c
+        LEFT JOIN reference.discovery_fund_universe u ON u.market=c.market AND u.fund_code=c.fund_code
+          AND u.enabled AND u.verified_at<=$1
         WHERE c.market='FUND_CN' AND c.fund_code~'^[0-9]{6}$'
           AND c.trade_form IN ('FUND','LOF')
-        ORDER BY CASE WHEN EXISTS(SELECT 1 FROM reference.research_product_index_links p
+        ORDER BY CASE WHEN u.fund_code IS NOT NULL THEN -1 WHEN EXISTS(SELECT 1 FROM reference.research_product_index_links p
             WHERE p.fund_code=c.fund_code AND p.market=c.market
               AND p.relationship_type IN ('TRACKS','ETF_LINK') AND p.verified_at<=$1
               AND p.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
@@ -24,7 +29,7 @@ async def read_discovery_assets(conn, now, themes):
           WHEN EXISTS(SELECT 1 FROM market.investment_analysis_snapshots s
             WHERE s.subject_kind='fund' AND s.subject_key=c.instrument_id::text
               AND s.available_at<=$1 AND s.retrieved_at<=$1) THEN 2 ELSE 3 END,
-          c.fund_code,c.instrument_id NULLS LAST LIMIT 96""",
+          u.priority NULLS LAST,c.fund_code,c.instrument_id NULLS LAST LIMIT 96""",
         now,
     )
     assets = {}
@@ -55,6 +60,12 @@ async def read_discovery_assets(conn, now, themes):
                 is True,
             },
         )
+        if row.get("discovery_sector"):
+            assets[(market, code)].update(
+                discoverySector=row["discovery_sector"],
+                identitySourceUri=row.get("identity_source_uri"),
+                identityVerifiedAt=str(row.get("identity_verified_at")),
+            )
     for row in themes:
         if row.get("market") != "FUND_CN" or row.get("assetKind") not in {
             "ETF_LINK_FUND",
@@ -81,7 +92,33 @@ async def read_discovery_assets(conn, now, themes):
                 "label": row.get("assetName") or code,
                 "overseasCalendarRequired": overseas,
             }
-    return _public_universe(list(assets.values()))
+    return _industry_order(_public_universe(list(assets.values())))
+
+
+def _industry_order(assets):
+    """One per industry first; retain eight slots for the wider public catalog."""
+    groups, expansion = {}, []
+    for asset in assets:
+        sector = asset.get("discoverySector")
+        if sector:
+            groups.setdefault(sector, []).append(asset)
+        else:
+            expansion.append(asset)
+    representatives = [group[0] for group in groups.values()]
+    rest = [
+        group[i]
+        for i in range(1, max((len(g) for g in groups.values()), default=0))
+        for group in groups.values()
+        if i < len(group)
+    ]
+    ordered = [
+        *representatives[:24],
+        *expansion[:8],
+        *representatives[24:],
+        *rest,
+        *expansion[8:],
+    ]
+    return ordered
 
 
 def _public_universe(rows):
@@ -129,6 +166,13 @@ def _public_universe(rows):
                 "overseasCalendarRequired": row.get("overseasCalendarRequired") is True,
             },
         )
+        sector = row.get("discoverySector")
+        if isinstance(sector, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", sector):
+            products[code].update(
+                discoverySector=sector,
+                identitySourceUri=row.get("identitySourceUri"),
+                identityVerifiedAt=row.get("identityVerifiedAt"),
+            )
     return [
         row
         for code, row in products.items()
@@ -138,7 +182,12 @@ def _public_universe(rows):
 
 
 def discovery_packet(universe, anchors, previous, now):
-    from backend.macro.daily_research import _public_actionable_plan, _pick, _visible
+    from backend.macro.daily_research import (
+        _public_actionable_plan,
+        _pick,
+        _visible,
+        _texts,
+    )
 
     universe = _public_universe(universe)
     products = {
@@ -202,7 +251,11 @@ def discovery_packet(universe, anchors, previous, now):
             # old candidate, so an obsolete buy zone cannot remain active.
             unique[(item["subjectKind"], item["subjectId"])] = item
     prior = []
-    for row in ((previous or {}).get("report") or {}).get("valueDirections", [])[:5]:
+    from backend.macro.value_directions import MAX_VALUE_DIRECTIONS
+
+    for row in ((previous or {}).get("report") or {}).get("valueDirections", [])[
+        :MAX_VALUE_DIRECTIONS
+    ]:
         if (
             not isinstance(row, dict)
             or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", str(row.get("key") or ""))
@@ -218,11 +271,22 @@ def discovery_packet(universe, anchors, previous, now):
                         "title",
                         "thesis",
                         "signal",
-                        "watchFor",
-                        "sourceIds",
-                        "macroCodes",
                     ),
                 ),
+                "sourceIds": _texts(row.get("sourceIds"))[:8],
+                "macroCodes": _texts(row.get("macroCodes"))[:8],
+                "watchFor": _texts(row.get("watchFor"))[:4],
+                **{
+                    field: [
+                        {
+                            "summary": str(item.get("summary") or "")[:240],
+                            "sourceIds": _texts(item.get("sourceIds"))[:8],
+                        }
+                        for item in (row.get(field) or [])[:2]
+                        if isinstance(item, dict)
+                    ]
+                    for field in ("catalysts", "risks")
+                },
                 "plans": [
                     item for plan in row.get("plans", [])[:2] if (item := clean(plan))
                 ],
@@ -295,4 +359,30 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
         )
         if plan:
             anchors.append(plan)
-    return discovery_packet(universe, anchors, previous, now)
+    result = discovery_packet(universe, anchors, previous, now)
+    selected = [row["fundCode"] for row in universe[:32]]
+    priced = {
+        row.get("fundCode")
+        for row in result["discoveryActionableZones"]
+        if row.get("historyQuality") == "READY"
+        and any(
+            track.get("entryZoneMin") is not None for track in row.get("tracks", [])
+        )
+    }
+    result["discoveryCoverage"] = {
+        "universeCount": len(universe),
+        "selectedFundCodes": selected,
+        "historyFundCodes": [
+            code for code in selected if histories.get(code, {}).get("points")
+        ],
+        "pricedFundCodes": [code for code in selected if code in priced],
+        "sectorCodes": list(
+            dict.fromkeys(
+                row["discoverySector"]
+                for row in universe[:32]
+                if row.get("discoverySector")
+            )
+        ),
+        "selectionLimit": 32,
+    }
+    return result
