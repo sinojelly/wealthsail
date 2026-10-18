@@ -231,6 +231,18 @@ async def load_observations(conn, scope, now):
     return output
 
 
+async def list_studies(conn, tenant_id, user_id, now, *, limit=50, offset=0):
+    from backend.investment.study_price_watch import enrich_tracks
+
+    data = await repository.list_tracks(
+        conn, tenant_id, user_id, now, limit=limit, offset=offset
+    )
+    return {
+        **data,
+        "items": await enrich_tracks(conn, tenant_id, user_id, data["items"], now),
+    }
+
+
 async def get_detail(
     conn, tenant_id, user_id, track_id, now, *, limit=50, offset=0, observations=None
 ):
@@ -285,13 +297,47 @@ async def get_detail(
         if excursion
         else None
     )
+    from backend.investment.study_price_watch import enrich_tracks
+
+    enriched = await enrich_tracks(
+        conn,
+        tenant_id,
+        user_id,
+        [detail["track"]],
+        now,
+        versions={str(detail["track"]["id"]): detail["version"]},
+    )
+    detail["track"] = enriched[0]
+    detail["priceWatch"] = enriched[0]["priceWatch"]
     return detail
 
 
 async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_key=None):
     data = body(request)
     scope = await validate_scope(conn, data.get("scope") or {}, now)
-    if data["originType"] == "DAILY_DIRECTION":
+    if data["originType"] == "DAILY_QUANT_SCAN":
+        origin = await repository.daily_quant_scan_origin(
+            conn,
+            data["reportRunId"],
+            data["subjectKind"],
+            data["subjectId"],
+            data["planTrack"],
+            now,
+        )
+        plan = origin["actionablePlan"]
+        scope = await validate_scope(
+            conn, await repository.direction_plan_scope(conn, plan), now
+        )
+        origin_key = semantic_hash(
+            {
+                "originType": "DAILY_QUANT_SCAN",
+                "subjectKind": plan["subjectKind"],
+                "subjectId": plan["subjectId"],
+                "market": plan.get("market"),
+                "planTrack": data["planTrack"],
+            }
+        )
+    elif data["originType"] == "DAILY_DIRECTION":
         origin = await repository.daily_direction_origin(
             conn,
             data["reportRunId"],
@@ -385,6 +431,21 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
                 **({"planTrack": data["planTrack"]} if data.get("planTrack") else {}),
             }
         )
+    if data["originType"] in {"DAILY_DIRECTION", "DAILY_QUANT_SCAN"}:
+        # The shared asset lock serializes cross-entry deduplication before each
+        # origin's independent stable-key lock. It never broadens actor scope.
+        asset = (
+            scope.get("fundCode") or scope.get("instrumentId") or scope.get("indexId")
+        )
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            f"study-plan:{tenant_id}:{user_id}:{scope.get('fundMarket')}:{asset}:{data['planTrack']}",
+        )
+        matching = await repository.matching_report_plan_track(
+            conn, tenant_id, user_id, origin, now
+        )
+        if matching:
+            return await get_detail(conn, tenant_id, user_id, matching, now)
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtext($1))",
         f"study-create:{tenant_id}:{user_id}:{origin_key}",

@@ -8,6 +8,12 @@ import math
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
+from backend.macro.price_revision import (
+    PriceRevisionStatus,
+    normalize_price_revision,
+    same_coordinate,
+)
+
 THEMES = {
     "HAINAN_FTP",
     "PUDONG_DEV",
@@ -25,9 +31,7 @@ class ActionableProposal(BaseModel):
     subjectKind: Literal["index", "fund", "nav"]
     subjectId: str = Field(min_length=1, max_length=100)
     track: Literal["LEFT_VALUE", "RIGHT_TREND"]
-    priceRevisionStatus: Literal[
-        "INITIAL", "UPGRADED", "DOWNGRADED", "TAKE_PROFIT_ALERT"
-    ]
+    priceRevisionStatus: PriceRevisionStatus
     priceRevisionNote: str = Field(min_length=1, max_length=1000)
     calibrationRuleKeys: list[str] = Field(max_length=16)
     calibrationNote: str = Field(max_length=1000)
@@ -130,18 +134,17 @@ def validate_actionable_plans(proposals, packet, now):
         ):
             raise ValueError("unknown calibration rule")
         old = previous.get(key)
-        if row["priceRevisionStatus"] == "INITIAL" and old:
-            raise ValueError("initial plan has previous version")
-        if row["priceRevisionStatus"] != "INITIAL" and not old:
-            raise ValueError("revision has no previous version")
-        if old:
+        old_track = None
+        if same_coordinate(anchor, old):
             old_day, _, old_track = _program_plan(old, row["track"], now)
             if old_day > day:
                 raise ValueError("previous price anchor is later than current")
         if row["priceRevisionStatus"] == "TAKE_PROFIT_ALERT":
             try:
                 proven = (
-                    old.get("priceBasis") == anchor.get("priceBasis")
+                    old is not None
+                    and old_track is not None
+                    and old.get("priceBasis") == anchor.get("priceBasis")
                     and old.get("unit") == anchor.get("unit")
                     and old.get("sourceUri") == anchor.get("sourceUri")
                     and current >= _price(old_track["takeProfitT1"])
@@ -150,6 +153,7 @@ def validate_actionable_plans(proposals, packet, now):
                 proven = False
             if not proven:
                 raise ValueError("take profit lacks same-basis observed price proof")
+        normalize_price_revision(row, anchor, track, old, old_track)
         output.append(
             {
                 **deepcopy(anchor),

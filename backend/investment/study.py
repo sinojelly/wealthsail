@@ -254,7 +254,15 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
             "originType": origin.get("originType", "SELECTION"),
             **{
                 key: origin.get(key)
-                for key in ("reportRunId", "eventId", "reportAsOf", "valueDirectionKey")
+                for key in (
+                    "reportRunId",
+                    "eventId",
+                    "reportAsOf",
+                    "valueDirectionKey",
+                    "subjectKind",
+                    "subjectId",
+                    "planTrack",
+                )
             },
         },
         "scope": {

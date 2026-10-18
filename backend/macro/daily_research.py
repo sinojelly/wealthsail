@@ -20,7 +20,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-value-directions-v6"
+PROMPT_VERSION = "daily-research-value-directions-v7"
 MAX_REPORT_SOURCES = 24
 
 
@@ -758,7 +758,8 @@ def build_prompt(packet):
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"
         "每方向匹配1至2只实际基金，优先行业联接与另一弹性品种；只要有有效净值锚点就选择完整plans，不把有真实价格的基金藏在文字候选里。尚未到买点可WATCH并保留对应双轨计划。缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]。每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。\n"
-        "plans与previousValueDirections同方向/同标的/同轨对照，无前次INITIAL，有前次UPGRADED/DOWNGRADED并解释；calibrationRuleKeys只引用本方向DISCOVERY:key或真实种子关联规则。不要把支持率称盈利胜率。净值的NAV_ABS_CHANGE_STD_V1为独立风险尺度，不能称真实ATR或精确收益预测。\n"
+        "plans仅与previousValueDirections同方向稳定key/同标的/同轨/同价格口径对照：它只来自上海日期slot_date早于本轮的最近有效报告，严禁从同日DEBUG或previousResearch/history补回价格比较。没有可比前次用INITIAL或MAINTAINED；有前次且买区与目标未变用MAINTAINED，不能因无新净值、锚点不变或只换日期而DOWNGRADED。买区或目标一致上移才UPGRADED，一致下移才DOWNGRADED，双向变化及仅止损变化用MAINTAINED；最终状态由服务器根据真实Decimal价格校正。\n"
+        "动态方向同价时若有真正基本面改善/恶化，可分别UPGRADED/DOWNGRADED并提交priceRevisionBasis=FUNDAMENTAL及priceRevisionSourceIds，引用本方向当前catalysts/risks中实际来源；一般价格比较用PRICE和空引用。priceRevisionNote只写一句调整或维持的原因，严禁重复抄写表格已有的净值、买区、止损、T1/T2数字；备选轨道由页面从结构化价格展示。calibrationRuleKeys只引用本方向DISCOVERY:key或真实种子关联规则。不要把支持率称盈利胜率。净值的NAV_ABS_CHANGE_STD_V1为独立风险尺度，不能称真实ATR或精确收益预测。\n"
         "actionablePlans保留旧五主题兼容结构，新报告此字段输出[]，计划统一放在valueDirections。只有旧包才选择themeActionableZones中的themeCode/subjectKind/subjectId/track；价格均由服务器复制，没有有效锚点时不输出该标的计划。达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
         "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金可用自身真实净值生成完整价格计划；未披露或未核验持仓只限制行业持仓归因，不阻止基于自身净值的计划，不从主题名称制造持仓事实。\n"
         "PB、真实PIT或MA200不足不全局阻止机会发现，分别披露所依赖指标及价格完整度，不虚构未做的历史胜率或经验。\n"
@@ -904,8 +905,12 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     legacy_plans = validate_actionable_plans(
         report["actionablePlans"], packet, completed_at
     )
+    from backend.investment.quantitative_scan import public_quantitative_scan
+
+    scan = public_quantitative_scan(packet.get("quantitativeScan"), completed_at)
     return {
         **report,
+        **({"quantitativeScan": scan} if scan is not None else {}),
         "methodVersion": VERSION,
         "asOf": completed_at.isoformat(),
         "sources": sorted(sources.values(), key=lambda r: r["id"]),

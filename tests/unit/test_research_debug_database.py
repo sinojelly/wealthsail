@@ -46,6 +46,7 @@ async def fixture(*, committed=False):
             in {
                 "/wealthsail_review08_validation_v1",
                 "/wealthsail_review09_validation_v1",
+                "/wealthsail_review44_validation_v1",
             }
         )
     )
@@ -445,7 +446,11 @@ async def test_revocation_during_official_collection_never_starts_model(monkeypa
 
         monkeypatch.setattr(daily, "collect_daily_sources", revoke)
         monkeypatch.setattr(daily, "now_shanghai", lambda: NOW)
-        monkeypatch.setattr(daily, "load_public_packet", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            daily,
+            "load_public_packet",
+            AsyncMock(return_value={"asOf": NOW.isoformat()}),
+        )
         monkeypatch.setattr(daily, "build_prompt", lambda packet: "public fixture")
         monkeypatch.setattr(
             daily, "preflight_codex", AsyncMock(return_value={"executable": "fixture"})

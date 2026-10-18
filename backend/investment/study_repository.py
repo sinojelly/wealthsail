@@ -156,6 +156,18 @@ async def daily_direction_origin(
         "originType": "DAILY_DIRECTION",
         "reportRunId": str(row["run_id"]),
         "valueDirectionKey": direction_key,
+        "scanReuseAllowed": sum(
+            any(
+                isinstance(item, dict)
+                and item.get("subjectKind") == subject_kind
+                and item.get("subjectId") == subject_id
+                and item.get("selectedTrack", item.get("track")) == plan_track
+                for item in candidate.get("plans", [])
+            )
+            for candidate in report.get("valueDirections", [])
+            if isinstance(candidate, dict)
+        )
+        == 1,
         "reportAsOf": report["asOf"],
         "title": f"{direction['title']} · {plan.get('label') or subject_id}",
         "summary": direction["thesis"],
@@ -212,6 +224,111 @@ async def direction_plan_scope(conn, plan):
         "fundCode": rows[0]["fund_code"],
         "fundMarket": rows[0]["market"],
     }
+
+
+async def daily_quant_scan_origin(
+    conn, run_id, subject_kind, subject_id, plan_track, now
+):
+    """Authenticate one original public scan coordinate at the report's clock."""
+    from backend.investment.quantitative_scan import (
+        public_quantitative_scan,
+        report_with_quantitative_scan,
+    )
+    from backend.macro.alpha_research import _program_plan
+    from backend.macro.daily_research import _stamp
+
+    row = await conn.fetchrow(
+        """SELECT r.run_id,r.public_packet,t.payload,t.recorded_at
+        FROM research.daily_research_runs r JOIN research.daily_research_results t USING(run_id)
+        WHERE r.run_id=$1 AND t.status='READY' AND t.recorded_at<=$2 AND r.dispatched_at<=$2""",
+        run_id,
+        now,
+    )
+    if row is None:
+        raise NotFoundError("有效研究报告不存在")
+    report = decode(row["payload"])
+    try:
+        if not isinstance(report, dict):
+            raise ValueError("missing scan report payload")
+        stamp = _stamp(report.get("asOf"))
+        if stamp is None or stamp > now or subject_kind not in {"fund", "nav"}:
+            raise ValueError("unavailable scan report clock or subject")
+        report = report_with_quantitative_scan(
+            report, decode(row.get("public_packet")), now
+        )
+        scan = public_quantitative_scan(report.get("quantitativeScan"), stamp)
+        if scan is None:
+            raise ValueError("report has no quantitative scan")
+        plans = [
+            item
+            for item in scan["items"]
+            if item["subjectKind"] == subject_kind and item["subjectId"] == subject_id
+        ]
+        if len(plans) != 1:
+            raise ValueError("missing or ambiguous scan fund")
+        plan = plans[0]
+        if (
+            len([signal for signal in plan["signals"] if signal["track"] == plan_track])
+            != 1
+        ):
+            raise ValueError("unavailable scan track")
+        _program_plan(plan, plan_track, stamp, require_theme=False)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValidationError_("该日报的基金量化扫描或轨道无效，无法冻结") from exc
+    plan = {**deepcopy(plan), "selectedTrack": plan_track}
+    return {
+        "originType": "DAILY_QUANT_SCAN",
+        "reportRunId": str(row["run_id"]),
+        "reportAsOf": report["asOf"],
+        "subjectKind": subject_kind,
+        "subjectId": subject_id,
+        "planTrack": plan_track,
+        "title": f"{plan['label']} · 量化位置研究",
+        "summary": "来自原日报完整基金扫描的真实净值与程序研究区间；技术条件和实际入区分别观察。",
+        "watchFor": ["确认净值与冻结买区的关系、轨道技术条件及后续产业催化。"],
+        "sources": [
+            {
+                "id": "quant-scan:" + plan["fundCode"],
+                "title": plan["label"] + "真实净值历史",
+                "url": plan["sourceUri"],
+                "retrievedAt": plan.get("retrievedAt"),
+            }
+        ],
+        "actionablePlan": plan,
+    }
+
+
+async def matching_report_plan_track(conn, tenant_id, user_id, origin, now):
+    """Reuse the other entry point for this exact report, asset and track only."""
+    if origin.get("scanReuseAllowed") is False:
+        return None
+    plan = origin["actionablePlan"]
+    opposite = (
+        "DAILY_DIRECTION"
+        if origin["originType"] == "DAILY_QUANT_SCAN"
+        else "DAILY_QUANT_SCAN"
+    )
+    return await conn.fetchval(
+        """SELECT t.id FROM research.study_tracks t
+        JOIN LATERAL(SELECT snapshot FROM research.study_versions v
+          WHERE v.tenant_id=t.tenant_id AND v.user_id=t.user_id AND v.track_id=t.id
+            AND v.created_at<=$3 ORDER BY version DESC LIMIT 1) v ON TRUE
+        WHERE t.tenant_id=$1 AND t.user_id=$2 AND t.created_at<=$3
+          AND v.snapshot#>>'{origin,reportRunId}'=$4
+          AND v.snapshot#>>'{origin,originType}'=$8
+          AND v.snapshot#>>'{actionablePlan,subjectKind}'=$5
+          AND v.snapshot#>>'{actionablePlan,subjectId}'=$6
+          AND COALESCE(v.snapshot#>>'{actionablePlan,selectedTrack}',v.snapshot#>>'{actionablePlan,track}')=$7
+        ORDER BY t.created_at,t.id LIMIT 1""",
+        tenant_id,
+        user_id,
+        now,
+        origin["reportRunId"],
+        plan["subjectKind"],
+        plan["subjectId"],
+        plan.get("selectedTrack", plan.get("track")),
+        opposite,
+    )
 
 
 async def lock_track(conn, tenant_id, user_id, track_id, expected_generation=None):

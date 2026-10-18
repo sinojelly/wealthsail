@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
@@ -26,6 +26,7 @@ from backend.macro.daily_repository import (
     local,
     next_run,
     read_daily_research,
+    read_previous_daily_research,
     read_recent_public_research,
     scheduled_for,
 )
@@ -111,6 +112,7 @@ async def load_public_packet(conn, now, external, *, debug_request_id=None):
     directions = [dict(row) for row in await repository.directions(conn)]
     previous = await read_daily_research(conn, now)
     previous["history"] = await read_recent_public_research(conn, now)
+    price_previous = await read_previous_daily_research(conn, now)
     packet = make_research_packet(
         context,
         series,
@@ -122,13 +124,13 @@ async def load_public_packet(conn, now, external, *, debug_request_id=None):
     )
     packet.update(
         extend_public_packet(
-            bundle, themes, theme_plans(themes, bundle, now), rules, previous, now
+            bundle, themes, theme_plans(themes, bundle, now), rules, price_previous, now
         )
     )
     from backend.investment.discovery import build_discovery_packet
 
     packet.update(
-        await build_discovery_packet(conn, packet, bundle, themes, previous, now)
+        await build_discovery_packet(conn, packet, bundle, themes, price_previous, now)
     )
     return packet
 
@@ -198,9 +200,14 @@ async def sync_daily_research(
     except Exception as exc:  # noqa: BLE001 -- safe preflight failure, no gateway fallback
         unavailable = type(exc).__name__
     dispatched = local(now_shanghai())
-    if dispatched < stamp or (
-        not debug
-        and (dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp))
+    packet_day = local(datetime.fromisoformat(packet["asOf"])).date()
+    if (
+        dispatched < stamp
+        or packet_day != dispatched.date()
+        or (
+            not debug
+            and (dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp))
+        )
     ):
         return {"status": "SKIPPED"}
     async with system_connection(pool) as conn:

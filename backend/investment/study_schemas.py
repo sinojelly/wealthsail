@@ -47,9 +47,9 @@ class StudyScope(_Request):
 
 
 class CreateStudyRequest(_Request):
-    origin_type: Literal["DAILY_EVENT", "SELECTION", "DAILY_DIRECTION"] = Field(
-        alias="originType"
-    )
+    origin_type: Literal[
+        "DAILY_EVENT", "SELECTION", "DAILY_DIRECTION", "DAILY_QUANT_SCAN"
+    ] = Field(alias="originType")
     report_run_id: UUID | None = Field(default=None, alias="reportRunId")
     event_id: str | None = Field(
         default=None, alias="eventId", min_length=1, max_length=120
@@ -71,6 +71,20 @@ class CreateStudyRequest(_Request):
 
     @model_validator(mode="after")
     def origin(self):
+        if self.origin_type == "DAILY_QUANT_SCAN":
+            if (
+                self.report_run_id is None
+                or self.subject_kind not in {"nav", "fund"}
+                or self.subject_id is None
+                or self.plan_track is None
+                or {"scope", "event_id", "value_direction_key"}.intersection(
+                    self.model_fields_set
+                )
+            ):
+                raise ValueError(
+                    "scan tracking requires an exact report, fund and track without caller context"
+                )
+            return self
         direction_fields = (
             self.value_direction_key,
             self.subject_kind,

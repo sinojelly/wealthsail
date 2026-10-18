@@ -138,15 +138,14 @@ def test_real_broad_index_anchor_is_not_limited_to_seed_themes():
     assert validate([raw], public)[0]["plans"][0]["subjectId"] == "hs300"
 
 
-def test_previous_same_direction_requires_revision_and_preserves_day_and_targets():
+def test_previous_same_direction_corrects_unchanged_revision_and_preserves_day_and_targets():
     public, raw = packet(), direction()
     previous = deepcopy(public["discoveryActionableZones"][0])
     previous.update(valueDirectionKey=raw["key"], selectedTrack="LEFT_VALUE")
     public["previousValueDirections"] = [{"key": raw["key"], "plans": [previous]}]
-    with pytest.raises(ValueError):
-        validate([raw], public)
+    assert validate([raw], public)[0]["plans"][0]["priceRevisionStatus"] == "MAINTAINED"
     raw["plans"][0].update(priceRevisionStatus="DOWNGRADED")
-    assert validate([raw], public)[0]["plans"][0]["priceRevisionStatus"] == "DOWNGRADED"
+    assert validate([raw], public)[0]["plans"][0]["priceRevisionStatus"] == "MAINTAINED"
     raw["plans"][0]["priceRevisionStatus"] = "TAKE_PROFIT_ALERT"
     with pytest.raises(ValueError):
         validate([raw], public)
@@ -174,7 +173,7 @@ def test_old_frozen_previous_price_is_retained_for_revision_comparison():
     old.update(asOf="2020-01-01", selectedTrack="LEFT_VALUE")
     public["previousValueDirections"] = [{"key": raw["key"], "plans": [old]}]
     raw["plans"][0]["priceRevisionStatus"] = "UPGRADED"
-    assert validate([raw], public)[0]["plans"][0]["priceRevisionStatus"] == "UPGRADED"
+    assert validate([raw], public)[0]["plans"][0]["priceRevisionStatus"] == "MAINTAINED"
 
 
 def test_duplicate_direction_and_product_track_rejected():

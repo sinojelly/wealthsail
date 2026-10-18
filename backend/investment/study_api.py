@@ -12,7 +12,7 @@ from backend.dependencies import (
     now_shanghai,
 )
 from backend.errors import ok
-from backend.investment import study_repository as repository, study_service as service
+from backend.investment import study_service as service
 from backend.investment.study_schemas import (
     CreateStudyRequest,
     VersionRequest,
@@ -35,7 +35,7 @@ async def list_tracks(
 ):
     now = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
-        data = await repository.list_tracks(
+        data = await service.list_studies(
             conn, ctx.tenant_id, ctx.user_id, now, limit=limit, offset=offset
         )
     return ok(data, request_id=request_id, as_of=now)

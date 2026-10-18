@@ -6,6 +6,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.macro.alpha_research import _price, _program_plan
+from backend.macro.price_revision import (
+    PriceRevisionStatus,
+    normalize_price_revision,
+    same_coordinate,
+)
 
 MAX_VALUE_DIRECTIONS = 8
 
@@ -21,9 +26,9 @@ class ValuePlanProposal(BaseModel):
     subjectKind: Literal["index", "fund", "nav"]
     subjectId: str = Field(min_length=1, max_length=100)
     track: Literal["LEFT_VALUE", "RIGHT_TREND"]
-    priceRevisionStatus: Literal[
-        "INITIAL", "UPGRADED", "DOWNGRADED", "TAKE_PROFIT_ALERT"
-    ]
+    priceRevisionStatus: PriceRevisionStatus
+    priceRevisionBasis: Literal["PRICE", "FUNDAMENTAL"] = "PRICE"
+    priceRevisionSourceIds: list[str] = Field(default_factory=list, max_length=8)
     priceRevisionNote: str = Field(min_length=1, max_length=1000)
     calibrationRuleKeys: list[str] = Field(max_length=16)
     calibrationNote: str = Field(max_length=1000)
@@ -287,21 +292,46 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 raise ValueError("current direction price is stale or unverified")
             old = previous.get((key, *pair))
             revision = proposal["priceRevisionStatus"]
-            if (revision == "INITIAL") != (old is None):
-                raise ValueError("revision does not match previous direction plan")
-            if old:
+            old_track = None
+            if same_coordinate(anchor, old):
                 old_day, _, old_track = _program_plan(
                     old, proposal["track"], now, require_theme=False
                 )
                 if old_day > day:
                     raise ValueError("direction previous plan is later than current")
-                if revision == "TAKE_PROFIT_ALERT" and not (
-                    old.get("priceBasis") == anchor.get("priceBasis")
+            if revision == "TAKE_PROFIT_ALERT":
+                if not (
+                    old is not None
+                    and old_track is not None
+                    and old.get("priceBasis") == anchor.get("priceBasis")
                     and old.get("unit") == anchor.get("unit")
                     and old.get("sourceUri") == anchor.get("sourceUri")
                     and current >= _price(old_track.get("takeProfitT1"))
                 ):
                     raise ValueError("direction profit alert lacks observed target")
+            note_field = "catalysts" if revision == "UPGRADED" else "risks"
+            note_refs = {
+                ref for note in direction[note_field] for ref in note["sourceIds"]
+            }
+            fundamental_refs = []
+            requested_refs = proposal["priceRevisionSourceIds"]
+            if requested_refs and all(
+                ref in source_aliases
+                and source_aliases[ref] in refs
+                and source_aliases[ref] in note_refs
+                for ref in requested_refs
+            ):
+                fundamental_refs = sorted(
+                    {source_aliases[ref] for ref in requested_refs}
+                )
+            normalize_price_revision(
+                proposal,
+                anchor,
+                track,
+                old,
+                old_track,
+                fundamental_refs=fundamental_refs,
+            )
             allowed_rules = {f"DISCOVERY:{key}", anchor.get("themeCode")}
             if any(
                 rule not in rules or rules[rule].get("themeCode") not in allowed_rules

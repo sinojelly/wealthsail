@@ -127,6 +127,8 @@ _READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
 
 
 async def read_daily_research(conn, now, *, enabled=True):
+    from backend.investment.quantitative_scan import report_with_quantitative_scan
+
     stamp = local(now)
     latest = await conn.fetchrow(
         _READ + " ORDER BY r.dispatched_at DESC,r.run_id DESC LIMIT 1",
@@ -190,7 +192,13 @@ async def read_daily_research(conn, now, *, enabled=True):
         if report_row and report_row.get("source_batch_id")
         else None,
         "promptVersion": report_row.get("prompt_version") if report_row else None,
-        "report": _object(report_row.get("payload")) if report_row else None,
+        "report": report_with_quantitative_scan(
+            _object(report_row.get("payload")),
+            _object(report_row.get("public_packet")),
+            stamp,
+        )
+        if report_row
+        else None,
     }
 
 
@@ -215,3 +223,25 @@ async def read_recent_public_research(conn, now):
         }
         for row in rows
     ]
+
+
+async def read_previous_daily_research(conn, now):
+    """A price-comparison baseline must predate this Shanghai calendar slot."""
+    stamp = local(now)
+    row = await conn.fetchrow(
+        """SELECT r.run_id,r.slot_date,r.dispatched_at,t.recorded_at,t.payload
+        FROM research.daily_research_runs r JOIN research.daily_research_results t
+        ON t.run_id=r.run_id
+        WHERE r.slot_date<$1 AND t.status='READY'
+          AND r.dispatched_at<=$2 AND t.recorded_at<=$2
+        ORDER BY r.slot_date DESC,r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC
+        LIMIT 1""",
+        stamp.date(),
+        stamp,
+    )
+    return {
+        "reportRunId": str(row["run_id"]) if row else None,
+        "reportSlotDate": row["slot_date"] if row else None,
+        "reportCompletedAt": row["recorded_at"] if row else None,
+        "report": _object(row.get("payload")) if row else None,
+    }

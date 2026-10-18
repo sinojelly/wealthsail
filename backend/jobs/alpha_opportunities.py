@@ -327,6 +327,9 @@ def compare_frozen_price(frozen, observation, now):
         coveragePct=str(coverage) if coverage is not None else None,
         estimatePriceBasis=observation.get("priceBasis"),
     )
+    from backend.investment.study_price_watch import _source_uri
+
+    output["marketSourceUri"] = _source_uri(observation.get("sourceUri"))
     if (
         value is None
         or stamp is None
