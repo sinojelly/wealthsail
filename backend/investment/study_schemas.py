@@ -47,12 +47,23 @@ class StudyScope(_Request):
 
 
 class CreateStudyRequest(_Request):
-    origin_type: Literal["DAILY_EVENT", "SELECTION"] = Field(alias="originType")
+    origin_type: Literal["DAILY_EVENT", "SELECTION", "DAILY_DIRECTION"] = Field(
+        alias="originType"
+    )
     report_run_id: UUID | None = Field(default=None, alias="reportRunId")
     event_id: str | None = Field(
         default=None, alias="eventId", min_length=1, max_length=120
     )
     scope: StudyScope | None = None
+    value_direction_key: str | None = Field(
+        default=None, alias="valueDirectionKey", pattern=r"^[a-z][a-z0-9_-]{0,63}$"
+    )
+    subject_kind: Literal["index", "fund", "nav"] | None = Field(
+        default=None, alias="subjectKind"
+    )
+    subject_id: str | None = Field(
+        default=None, alias="subjectId", min_length=1, max_length=100
+    )
     horizon_days: int = Field(default=30, alias="horizonDays", ge=1, le=365)
     plan_track: Literal["LEFT_VALUE", "RIGHT_TREND"] | None = Field(
         default=None, alias="planTrack"
@@ -60,6 +71,24 @@ class CreateStudyRequest(_Request):
 
     @model_validator(mode="after")
     def origin(self):
+        direction_fields = (
+            self.value_direction_key,
+            self.subject_kind,
+            self.subject_id,
+        )
+        if self.origin_type == "DAILY_DIRECTION":
+            if (
+                not all(direction_fields)
+                or self.report_run_id is None
+                or self.plan_track is None
+                or {"scope", "event_id"}.intersection(self.model_fields_set)
+            ):
+                raise ValueError(
+                    "direction tracking requires an exact report, direction, subject and track without caller scope"
+                )
+            return self
+        if any(value is not None for value in direction_fields):
+            raise ValueError("direction identity requires a DAILY_DIRECTION origin")
         if self.origin_type == "DAILY_EVENT":
             if self.plan_track is not None:
                 raise ValueError("a quantitative track requires its own selection")

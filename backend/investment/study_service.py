@@ -66,9 +66,12 @@ async def validate_scope(conn, scope, now):
         "fundMarket": "fund_market",
     }
     from backend.investment.theme_graph import THEMES
+
     if scope.get("themeCode") is not None and scope["themeCode"] not in THEMES:
         raise ValidationError_("未知研究主题")
-    await validate(conn, {names[key]: value for key, value in scope.items() if key in names}, now)
+    await validate(
+        conn, {names[key]: value for key, value in scope.items() if key in names}, now
+    )
     result = dict(scope)
     if result.get("instrumentId") or result.get("fundCode"):
         identity = await resolve_instrument(
@@ -261,15 +264,58 @@ async def get_detail(
     detail["review"] = review_evidence(
         snapshot, snapshot.get("observations") or [], observations, trades, now=now
     )
-    excursion=await conn.fetchrow("SELECT * FROM research.study_excursions WHERE tenant_id=$1 AND user_id=$2 AND track_id=$3 AND version_id=$4 AND updated_at<=$5",tenant_id,user_id,track_id,detail["version"]["id"],now)
-    detail["excursions"]={"mfePct":str(excursion["mfe_pct"]),"maePct":str(excursion["mae_pct"]),"baseAsOf":excursion["base_as_of"].isoformat(),"lastAsOf":excursion["last_as_of"].isoformat(),"sampleCount":excursion["sample_count"],"priceBasis":excursion["price_basis"],"unit":excursion["unit"]} if excursion else None
+    excursion = await conn.fetchrow(
+        "SELECT * FROM research.study_excursions WHERE tenant_id=$1 AND user_id=$2 AND track_id=$3 AND version_id=$4 AND updated_at<=$5",
+        tenant_id,
+        user_id,
+        track_id,
+        detail["version"]["id"],
+        now,
+    )
+    detail["excursions"] = (
+        {
+            "mfePct": str(excursion["mfe_pct"]),
+            "maePct": str(excursion["mae_pct"]),
+            "baseAsOf": excursion["base_as_of"].isoformat(),
+            "lastAsOf": excursion["last_as_of"].isoformat(),
+            "sampleCount": excursion["sample_count"],
+            "priceBasis": excursion["price_basis"],
+            "unit": excursion["unit"],
+        }
+        if excursion
+        else None
+    )
     return detail
 
 
 async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_key=None):
     data = body(request)
     scope = await validate_scope(conn, data.get("scope") or {}, now)
-    if data["originType"] == "DAILY_EVENT":
+    if data["originType"] == "DAILY_DIRECTION":
+        origin = await repository.daily_direction_origin(
+            conn,
+            data["reportRunId"],
+            data["valueDirectionKey"],
+            data["subjectKind"],
+            data["subjectId"],
+            data["planTrack"],
+            now,
+        )
+        plan = origin["actionablePlan"]
+        scope = await validate_scope(
+            conn, await repository.direction_plan_scope(conn, plan), now
+        )
+        origin_key = semantic_hash(
+            {
+                "originType": "DAILY_DIRECTION",
+                "valueDirectionKey": data["valueDirectionKey"],
+                "subjectKind": plan["subjectKind"],
+                "subjectId": plan["subjectId"],
+                "market": plan.get("market"),
+                "planTrack": data["planTrack"],
+            }
+        )
+    elif data["originType"] == "DAILY_EVENT":
         origin = await repository.daily_origin(
             conn, data["reportRunId"], data["eventId"], now
         )

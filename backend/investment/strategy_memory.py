@@ -35,6 +35,24 @@ _VERDICTS = {
 }
 _COUNTS = tuple(_VERDICTS.values())
 _PROFIT_COUNTS = ("profit_win_count", "profit_loss_count", "profit_flat_count")
+_DISCOVERY_KEY = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+_SQL_THEME = """CASE WHEN jsonb_typeof(v.snapshot->'valueDirection'->'key')='string'
+    AND v.snapshot->'valueDirection'->>'key' ~ '^[a-z][a-z0-9_-]{0,63}$'
+    THEN 'DISCOVERY:' || (v.snapshot->'valueDirection'->>'key')
+    ELSE COALESCE(v.snapshot->'scope'->>'themeCode',
+      v.snapshot->'actionablePlan'->>'themeCode','UNCLASSIFIED') END"""
+
+
+def is_theme_code(value):
+    return isinstance(value, str) and (
+        value in THEME_CODES
+        or value.startswith("DISCOVERY:")
+        and _DISCOVERY_KEY.fullmatch(value[10:]) is not None
+    )
+
+
+def _theme(value):
+    return value if is_theme_code(value) else "UNCLASSIFIED"
 
 
 def _decimal(value):
@@ -163,7 +181,14 @@ def _stamp(value):
 
 
 def theme_for_snapshot(snapshot):
-    """Only a frozen, enumerated scope or program plan can identify a theme."""
+    """Only a frozen structured direction, scope or plan can identify a theme."""
+    direction = snapshot.get("valueDirection") or {}
+    if (
+        isinstance(direction, dict)
+        and isinstance(direction.get("key"), str)
+        and _DISCOVERY_KEY.fullmatch(direction["key"])
+    ):
+        return "DISCOVERY:" + direction["key"]
     for field in ("scope", "actionablePlan"):
         item = snapshot.get(field) or {}
         code = item.get("themeCode") if isinstance(item, dict) else None
@@ -192,7 +217,7 @@ def _rule_text(category, counts):
 def aggregate_reviews(rows, tenant_id, user_id, theme_code, now, *, fills=()):
     """One latest REVIEW per track; a missing lesson removes prior contribution."""
     now = _clock(now)
-    theme_code = theme_code if theme_code in THEME_CODES else "UNCLASSIFIED"
+    theme_code = _theme(theme_code)
     latest = {}
     by_track, fill_tracks = {}, {}
     for fill in fills:
@@ -233,7 +258,7 @@ def aggregate_reviews(rows, tenant_id, user_id, theme_code, now, *, fills=()):
     }
     for _, row in latest.values():
         raw_theme = row.get("theme_code")
-        row_theme = raw_theme if raw_theme in THEME_CODES else "UNCLASSIFIED"
+        row_theme = _theme(raw_theme)
         if (
             row_theme != theme_code
             or row.get("verdict") not in _VERDICTS
@@ -287,10 +312,9 @@ def aggregate_reviews(rows, tenant_id, user_id, theme_code, now, *, fills=()):
 
 async def _review_evidence(conn, tenant_id, user_id, now):
     return await conn.fetch(
-        """SELECT DISTINCT ON (n.track_id)
+        f"""SELECT DISTINCT ON (n.track_id)
           n.id,n.tenant_id,n.user_id,n.track_id,n.version_id,n.created_at,
-          COALESCE(v.snapshot->'scope'->>'themeCode',
-            v.snapshot->'actionablePlan'->>'themeCode','UNCLASSIFIED') AS theme_code,
+          {_SQL_THEME} AS theme_code,
           n.payload->>'verdict' AS verdict,
           n.payload->'errorCategories' AS error_categories,
           COALESCE(n.payload->>'lessons','') ~ '[^[:space:]]' AS has_lessons
@@ -370,7 +394,7 @@ async def _linked_fill_evidence(conn, tenant_id, user_id, now):
 async def refresh_strategy_memory(conn, tenant_id, user_id, theme_code, now):
     """Recompute in the caller's REVIEW/link transaction; errors roll it back."""
     now = _clock(now)
-    theme_code = theme_code if theme_code in THEME_CODES else "UNCLASSIFIED"
+    theme_code = _theme(theme_code)
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtext($1))",
         f"strategy-memory:{tenant_id}:{user_id}",
@@ -437,7 +461,7 @@ async def read_strategy_memory(conn, tenant_id, user_id, now):
         return []
     reviews = await _review_evidence(conn, tenant_id, user_id, now)
     fills = await _linked_fill_evidence(conn, tenant_id, user_id, now)
-    themes = {row["theme_code"] for row in rows if row["theme_code"] in THEME_CODES}
+    themes = {row["theme_code"] for row in rows if is_theme_code(row["theme_code"])}
     current = {
         (theme, rule["category"]): rule
         for theme in themes
@@ -462,8 +486,7 @@ async def refresh_memory_for_trade(conn, tenant_id, user_id, fill_id, theme_code
         f"strategy-memory:{tenant_id}:{user_id}",
     )
     rows = await conn.fetch(
-        """SELECT DISTINCT COALESCE(v.snapshot->'scope'->>'themeCode',
-          v.snapshot->'actionablePlan'->>'themeCode','UNCLASSIFIED') AS theme_code
+        f"""SELECT DISTINCT {_SQL_THEME} AS theme_code
         FROM research.study_trade_links l
         JOIN research.study_versions v ON v.tenant_id=l.tenant_id AND v.user_id=l.user_id
           AND v.track_id=l.track_id AND v.id=l.version_id
@@ -474,11 +497,8 @@ async def refresh_memory_for_trade(conn, tenant_id, user_id, fill_id, theme_code
         fill_id,
         now,
     )
-    themes = {theme_code if theme_code in THEME_CODES else "UNCLASSIFIED"}
-    themes.update(
-        row["theme_code"] if row["theme_code"] in THEME_CODES else "UNCLASSIFIED"
-        for row in rows
-    )
+    themes = {_theme(theme_code)}
+    themes.update(_theme(row["theme_code"]) for row in rows)
     for theme in sorted(themes):
         await refresh_strategy_memory(conn, tenant_id, user_id, theme, now)
 
@@ -492,7 +512,7 @@ def public_memory(rows, now):
         stamp = _stamp(row.get("updated_at"))
         counts = {key: row.get(key) for key in ("sample_count", *_COUNTS)}
         if (
-            theme not in THEME_CODES
+            not is_theme_code(theme)
             or category not in CATEGORY_LABELS
             or stamp is None
             or stamp > now

@@ -37,7 +37,7 @@ async def actor_role(conn, user):
     await conn.execute("SET LOCAL ROLE wealthsail_api")
 
 
-async def seed(conn, *, problem=None):
+async def seed(conn, *, problem=None, discovery_key=None):
     tenant, user, other, account, instrument = (uuid4() for _ in range(5))
     await conn.execute(
         "INSERT INTO identity.tenants(id,name) VALUES($1,'memory test')", tenant
@@ -68,7 +68,9 @@ async def seed(conn, *, problem=None):
         "INSERT INTO reference.instruments(id,asset_type,primary_market,canonical_name) VALUES($1,'EXCHANGE_FUND','SSE','memory test')",
         instrument,
     )
-    track, version = await add_track(conn, tenant, user, instrument)
+    track, version = await add_track(
+        conn, tenant, user, instrument, discovery_key=discovery_key
+    )
     fills = []
     for side, price, days in (("BUY", Decimal("10"), 3), ("SELL", Decimal("12"), 2)):
         event, fill_id = uuid4(), uuid4()
@@ -158,11 +160,17 @@ async def seed(conn, *, problem=None):
     return tenant, user, other, account, instrument, track, version, fills
 
 
-async def add_track(conn, tenant, user, instrument, theme="AI_MEMORY_HBM"):
+async def add_track(
+    conn, tenant, user, instrument, theme="AI_MEMORY_HBM", *, discovery_key=None
+):
     track, version = uuid4(), uuid4()
-    snapshot = json.dumps(
-        {"scope": {"instrumentId": str(instrument), "themeCode": theme}}
-    )
+    body = {"scope": {"instrumentId": str(instrument), "themeCode": theme}}
+    if discovery_key is not None:
+        body["valueDirection"] = {
+            "key": discovery_key,
+            "title": "PRIVATE original title",
+        }
+    snapshot = json.dumps(body)
     await conn.execute(
         """INSERT INTO research.study_tracks(id,tenant_id,user_id,origin_key,title,scope,created_at,updated_at)
         VALUES($1,$2,$3,$4,'memory test',$5::jsonb,$6,$6)""",
@@ -213,7 +221,11 @@ async def connection():
         url.hostname == "127.0.0.1"
         and url.port == 55434
         and url.path
-        in {"/wealthsail_phase2_validation_v1", "/wealthsail_phase2_validation_v2"}
+        in {
+            "/wealthsail_phase2_validation_v1",
+            "/wealthsail_phase2_validation_v2",
+            "/wealthsail_phase2_validation_v3",
+        }
     ), "disposable DB boundary"
     return await asyncpg.connect(DSN)
 

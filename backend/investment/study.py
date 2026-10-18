@@ -197,7 +197,8 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
         "origin": {
             "originType": origin.get("originType", "SELECTION"),
             **{
-                key: origin.get(key) for key in ("reportRunId", "eventId", "reportAsOf")
+                key: origin.get(key)
+                for key in ("reportRunId", "eventId", "reportAsOf", "valueDirectionKey")
             },
         },
         "scope": {
@@ -225,6 +226,21 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
     }
     if isinstance(origin.get("actionablePlan"), dict):
         snapshot["actionablePlan"] = deepcopy(origin["actionablePlan"])
+    if isinstance(origin.get("valueDirection"), dict):
+        snapshot["valueDirection"] = {
+            key: deepcopy(value)
+            for key, value in origin["valueDirection"].items()
+            if key
+            in {
+                "key",
+                "title",
+                "thesis",
+                "signal",
+                "sourceIds",
+                "macroCodes",
+                "watchFor",
+            }
+        }
     snapshot["benchmarkIndexId"] = (
         snapshot["scope"].get("indexId")
         if snapshot["scope"].get("indexId") in INDICES

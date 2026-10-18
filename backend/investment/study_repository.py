@@ -1,9 +1,17 @@
 """Actor-parameterized append-only study history. Never creates ledger facts."""
 
 import json
-from datetime import date
+from copy import deepcopy
+from datetime import date, datetime
+import re
+from uuid import UUID
 
-from backend.errors import IdempotencyConflictError, NotFoundError, VersionConflictError
+from backend.errors import (
+    IdempotencyConflictError,
+    NotFoundError,
+    VersionConflictError,
+    ValidationError_,
+)
 from backend.investment.decision import semantic_hash
 
 
@@ -42,6 +50,145 @@ async def daily_origin(conn, run_id, event_id, now):
         "sources": [
             source for source in report.get("sources", []) if source.get("id") in refs
         ],
+    }
+
+
+async def daily_direction_origin(
+    conn, run_id, direction_key, subject_kind, subject_id, plan_track, now
+):
+    """Select the exact immutable public report plan; never recalculate prices."""
+    from backend.macro.alpha_research import _program_plan
+    from backend.macro.daily_research import _visible
+
+    row = await conn.fetchrow(
+        """SELECT r.run_id,t.payload,t.recorded_at FROM research.daily_research_runs r
+        JOIN research.daily_research_results t USING(run_id)
+        WHERE r.run_id=$1 AND t.status='READY' AND t.recorded_at<=$2 AND r.dispatched_at<=$2""",
+        run_id,
+        now,
+    )
+    if row is None:
+        raise NotFoundError("有效研究报告不存在")
+    report = decode(row["payload"])
+    try:
+        stamp = datetime.fromisoformat(report["asOf"])
+        if (
+            stamp.tzinfo is None
+            or stamp > now
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", direction_key)
+        ):
+            raise ValueError("unavailable direction date or key")
+        directions = [
+            item
+            for item in report.get("valueDirections", [])
+            if isinstance(item, dict) and item.get("key") == direction_key
+        ]
+        if len(directions) != 1:
+            raise ValueError("missing or ambiguous direction")
+        direction = directions[0]
+        if any(
+            not isinstance(direction.get(key), str) or not direction[key].strip()
+            for key in ("title", "thesis")
+        ):
+            raise ValueError("missing direction explanation")
+        plans = [
+            item
+            for item in direction.get("plans", [])
+            if isinstance(item, dict)
+            and item.get("subjectKind") == subject_kind
+            and item.get("subjectId") == subject_id
+            and item.get("selectedTrack", item.get("track")) == plan_track
+        ]
+        if len(plans) != 1:
+            raise ValueError("missing or ambiguous plan")
+        plan = plans[0]
+        _program_plan(plan, plan_track, now, require_theme=False)
+        refs = set(direction.get("sourceIds") or [])
+        sources = [
+            source
+            for source in report.get("sources", [])
+            if isinstance(source, dict) and source.get("id") in refs
+        ]
+        if (
+            not refs
+            or {source["id"] for source in sources} != refs
+            or any(not _visible(source, now) for source in sources)
+        ):
+            raise ValueError("missing direction sources")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValidationError_("该日报方向或标的计划无效，无法冻结") from exc
+    frozen_direction = {
+        key: deepcopy(direction[key])
+        for key in (
+            "key",
+            "title",
+            "thesis",
+            "signal",
+            "sourceIds",
+            "macroCodes",
+            "watchFor",
+        )
+        if key in direction
+    }
+    return {
+        "originType": "DAILY_DIRECTION",
+        "reportRunId": str(row["run_id"]),
+        "valueDirectionKey": direction_key,
+        "reportAsOf": report["asOf"],
+        "title": f"{direction['title']} · {plan.get('label') or subject_id}",
+        "summary": direction["thesis"],
+        "watchFor": deepcopy(direction.get("watchFor") or []),
+        "sources": deepcopy(sources),
+        "valueDirection": frozen_direction,
+        "actionablePlan": deepcopy(plan),
+    }
+
+
+async def direction_plan_scope(conn, plan):
+    """Resolve identity using the report's exact product and market."""
+    kind, identity, market = (
+        plan.get("subjectKind"),
+        plan.get("subjectId"),
+        plan.get("market"),
+    )
+    if kind == "index":
+        if not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM reference.research_indices WHERE id=$1)",
+            identity,
+        ):
+            raise NotFoundError("日报中的指数标的不存在")
+        return {"indexId": identity}
+    if market != "FUND_CN" or plan.get("priceBasis") != "UNIT_NAV":
+        raise ValidationError_("日报基金净值口径或市场不匹配")
+    if (
+        kind == "nav"
+        and isinstance(identity, str)
+        and re.fullmatch(r"[0-9]{6}", identity)
+    ):
+        if plan.get("fundCode") not in {None, identity}:
+            raise ValidationError_("日报基金代码不匹配")
+        return {"fundCode": identity, "fundMarket": "FUND_CN"}
+    if kind != "fund":
+        raise ValidationError_("日报标的身份无效")
+    try:
+        instrument = UUID(identity)
+    except (ValueError, TypeError) as exc:
+        raise ValidationError_("日报基金身份无效") from exc
+    rows = await conn.fetch(
+        """SELECT DISTINCT c.fund_code,c.market FROM reference.research_fund_catalog c
+        JOIN reference.instruments i ON i.id=c.instrument_id AND i.lifecycle_status='ACTIVE'
+          AND i.asset_type IN ('EXCHANGE_FUND','OFF_EXCHANGE_FUND')
+        WHERE c.instrument_id=$1 AND c.market=$2 AND ($3::text IS NULL OR c.fund_code=$3)""",
+        instrument,
+        market,
+        plan.get("fundCode"),
+    )
+    if len(rows) != 1:
+        raise NotFoundError("日报基金与实际产品目录不匹配")
+    return {
+        "instrumentId": str(instrument),
+        "fundCode": rows[0]["fund_code"],
+        "fundMarket": rows[0]["market"],
     }
 
 
