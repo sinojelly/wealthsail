@@ -86,77 +86,26 @@ beforeEach(() => {
   );
 });
 
-it.each(["ETF_LINK_FUND", "ACTIVE_FUND", "LOF", "OFF_EXCHANGE_FUND"])(
-  "keeps the five-theme choice with an unregistered %s NAV workbench and frozen scope",
-  async (assetKind) => {
-    mocks.context.mockResolvedValue({
-      state: "PARTIAL",
-      items: [],
-      themes: [
-        {
-          themeCode: "GEO_CRUDE_OIL",
-          themeLabel: "地缘与原油",
-          assetKind,
-          assetCode: "006000",
-          assetName: "原油研究基金",
-          market: "FUND_CN",
-          instrumentId: null,
-          relationshipType: "EXPOSURE_REFERENCE",
-          sourceUri: "https://example.org/fund",
-          metadata: {},
-        },
-      ],
-    });
-    renderWithSession(
-      <FundScreenerPage />,
-      "/fund-screener?direction=a-share:broad&index=hs300",
-    );
-    const picker = await screen.findByRole("combobox", { name: "研究主题" });
-    expect(within(picker).getAllByRole("option")).toHaveLength(6);
-    await userEvent.selectOptions(picker, "GEO_CRUDE_OIL");
-    await waitFor(() =>
-      expect(mocks.context).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          themeCode: "GEO_CRUDE_OIL",
-          indexId: "hs300",
-          directionId: "a-share:broad",
-        }),
-        expect.anything(),
-      ),
-    );
-    await userEvent.click(
-      await screen.findByRole("button", { name: "研究原油研究基金" }),
-    );
-    await waitFor(() =>
-      expect(mocks.analysis).toHaveBeenLastCalledWith(
-        "nav",
-        "006000",
-        expect.anything(),
-      ),
-    );
-    expect(picker).toHaveValue("GEO_CRUDE_OIL");
-    await userEvent.click(
-      screen.getByRole("button", { name: "跟踪当前标的研究" }),
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "确认并保存跟踪" }),
-    );
-    await waitFor(() =>
-      expect(study.createStudyTrack).toHaveBeenCalledWith({
-        originType: "SELECTION",
-        horizonDays: 30,
-        scope: {
-          directionId: undefined,
-          indexId: undefined,
-          instrumentId: undefined,
-          fundCode: "006000",
-          fundMarket: "FUND_CN",
-          themeCode: "GEO_CRUDE_OIL",
-        },
-      }),
-    );
-  },
-);
+it("does not expose static themes or forward a retired theme filter from old URLs", async () => {
+  mocks.context.mockResolvedValue({
+    state: "PARTIAL",
+    items: [],
+    themes: [{ themeCode: "GEO_CRUDE_OIL", assetName: "原油研究基金" }],
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?direction=a-share:broad&index=hs300&theme=GEO_CRUDE_OIL",
+  );
+  await waitFor(() => expect(mocks.context).toHaveBeenCalled());
+  expect(
+    screen.queryByRole("combobox", { name: "研究主题" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("原油研究基金")).not.toBeInTheDocument();
+  expect(mocks.context).toHaveBeenLastCalledWith(
+    expect.not.objectContaining({ themeCode: expect.anything() }),
+    expect.anything(),
+  );
+});
 
 it("shows the structured daily plan revision and bounded calibration separately from macro opinion", async () => {
   mocks.context.mockResolvedValue({

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useNavigate } from "react-router-dom";
 import FundScreenerPage from "./FundScreenerPage";
@@ -117,40 +117,29 @@ it("confirms a current selection before saving its full identity and chosen hori
       horizonDays: 90,
     }),
   );
-  expect(
-    await screen.findByRole("tab", { name: "我的跟踪与复盘" }),
-  ).toHaveAttribute("aria-selected", "true");
-});
-it("confirms the displayed READY event without binding it to an unrelated selected fund", async () => {
-  vi.mocked(study.createStudyTrack).mockRejectedValue(
-    new Error("保存失败可重试"),
+  await waitFor(() =>
+    expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    ),
   );
+});
+it("shows saved historical news without offering single-news tracking", async () => {
   renderWithSession(
     <FundScreenerPage />,
-    "/fund-screener?direction=a-share:broad&index=hs300&fund=510330&instrument=fund-1&fundMarket=SSE&researchOpen=1&researchTab=events",
+    "/fund-screener?direction=a-share:broad&index=hs300&researchTab=events",
   );
-  await userEvent.click(
-    await screen.findByRole("button", { name: "持续跟踪全球能源事件" }),
-  );
-  expect(study.createStudyTrack).not.toHaveBeenCalled();
   expect(
-    screen.getByRole("region", { name: "确认研究假设" }),
-  ).toHaveTextContent("全球线索");
-  await userEvent.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
-  await waitFor(() =>
-    expect(study.createStudyTrack).toHaveBeenCalledWith({
-      originType: "DAILY_EVENT",
-      reportRunId: "ready-old",
-      eventId: "global-energy",
-      horizonDays: 30,
-    }),
-  );
-  expect(await screen.findByText("保存失败可重试")).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+    await within(
+      await screen.findByRole("list", { name: "重要事件" }),
+    ).findByRole("heading", { name: "全球能源事件" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /持续跟踪全球能源事件/ }),
+  ).not.toBeInTheDocument();
+  expect(study.createStudyTrack).not.toHaveBeenCalled();
 });
+
 function Navigate() {
   const navigate = useNavigate();
   return (

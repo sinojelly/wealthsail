@@ -4,14 +4,11 @@ import type {
   PlanTrack,
 } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
-import Decimal from "decimal.js";
+import { planPrice, planUnit } from "../plan-display";
+import { readingText } from "../research-reading";
 
 const planTrackLabel = (track: PlanTrack) =>
   track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势";
-const price = (value: PlanPrice | undefined) =>
-  value != null && Number.isFinite(Number(value)) && Number(value) > 0
-    ? new Decimal(value).toFixed(3, Decimal.ROUND_HALF_UP)
-    : "—";
 const states = {
   CANDIDATE: "候选条件成立",
   WATCH: "等待触发",
@@ -30,18 +27,23 @@ export default function ActionablePlan({
   frozen?: boolean;
 }) {
   const basis = result.priceBasis;
-  const unit =
-    (
-      {
-        points: "指数点",
-        index_point: "指数点",
-        CNY: "元",
-        HKD: "港元",
-        USD: "美元",
-      } as Record<string, string>
-    )[result.unit ?? ""] ??
-    result.unit ??
-    "单位待确认";
+  const price = (value: PlanPrice | undefined) => planPrice(value, result);
+  const unit = planUnit(result.unit);
+  const indicatorLabels: Record<string, string> = {
+    ma20: "20期均线",
+    ma60: "60期均线",
+    ma200: "200期均线",
+    rsi14: "14期相对强弱",
+    atr14: "真实ATR14",
+    navVolatility14: "14期净值波动尺度",
+    bollUpper: "布林上轨",
+    bollLower: "布林下轨",
+    momentum20: "20期动量",
+  };
+  const numeric = (value: number | string | null, digits = 4) =>
+    value == null || !Number.isFinite(Number(value))
+      ? "—"
+      : Number(value).toFixed(digits);
   const coordinate =
     result.subjectKind === "index" || basis === "INDEX_PRICE"
       ? "指数点仅为指数研究坐标，不可作为基金挂单价格。"
@@ -69,8 +71,17 @@ export default function ActionablePlan({
           )[result.priceRevisionStatus] ?? "调整状态待核对"}
         </p>
       )}
-      {result.priceRevisionNote && <p>{result.priceRevisionNote}</p>}
-      {result.calibrationNote && <p>复盘校准：{result.calibrationNote}</p>}
+      {result.priceRevisionNote && (
+        <p>{readingText(result.priceRevisionNote, 600)}</p>
+      )}
+      {result.calibrationNote && (
+        <p>复盘校准：{readingText(result.calibrationNote, 600)}</p>
+      )}
+      {result.volatilityMethod === "NAV_ABS_CHANGE_STD_V1" && (
+        <p>
+          净值波动风险法：使用真实净值变化与标准差计算风险尺度，区别于真实高低价ATR。
+        </p>
+      )}
       <p>
         实际观察：{price(result.currentPrice)} {unit} · {timeLabel(result.asOf)}
       </p>
@@ -101,10 +112,12 @@ export default function ActionablePlan({
               <p>部分价格依据：缺少完整输入，止损或目标可能尚未计算。</p>
             )}
             {track.reasons.map((reason, index) => (
-              <p key={index}>{reason}</p>
+              <p key={index}>{readingText(reason, 600)}</p>
             ))}
             {!!track.missingEvidence?.length && (
-              <p>待补充：{track.missingEvidence.join("；")}</p>
+              <p>
+                待补充：{readingText(track.missingEvidence.join("；"), 600)}
+              </p>
             )}
             {onTrack && track.state !== "INSUFFICIENT" && (
               <button
@@ -131,14 +144,20 @@ export default function ActionablePlan({
           <p>
             参数：
             {Object.entries(result.parameters)
-              .map(([key, value]) => `${key}=${value}`)
+              .map(
+                ([key, value]) =>
+                  `${key}=${Array.isArray(value) ? value.map((number) => numeric(number)).join(", ") : numeric(value)}`,
+              )
               .join("；")}
           </p>
         )}
         {Object.entries(result.indicators).map(([name, value]) => (
           <p key={name}>
-            {name}：
-            {value == null || !Number.isFinite(Number(value)) ? "—" : value}
+            {indicatorLabels[name] ?? name}：
+            {numeric(
+              value,
+              name === "rsi14" ? 2 : result.subjectKind === "index" ? 2 : 4,
+            )}
           </p>
         ))}
         {sourceHref(result.sourceUri) && (

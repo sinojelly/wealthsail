@@ -16,12 +16,27 @@ const readingTerms: Array<[RegExp, string]> = [
   [/\bUNKNOWN\b/g, "证据尚不充分"],
   [/\bUNAVAILABLE\b/g, "证据暂不可用"],
   [/\bINCOMPLETE\b/g, "证据尚未齐备"],
+  [/\bPARTIAL\b/g, "部分依据可用"],
+  [/\bHAINAN_FTP\b/g, "海南自贸港"],
+  [/\bPUDONG_DEV\b/g, "浦东发展"],
+  [/\bGEO_CRUDE_OIL\b/g, "地缘与原油"],
+  [/\bAI_MEMORY_HBM\b/g, "AI与存储产业"],
+  [/\bCOMMERCIAL_SPACE\b/g, "商业航天"],
+  [/\bM1_M2_GAP\b/g, "M1与M2剪刀差"],
+  [/\bCN_T10\b/g, "中国10年国债收益率"],
+  [/\bSHIBOR_7D\b/g, "Shibor一周"],
+  [/\bpercentage_points\b/g, "个百分点"],
 ];
 
 /** Reading-only projection; original reports and frozen snapshots stay intact. */
 export function readingText(text: string, limit = 140): string {
   const translated = readingTerms
     .reduce((value, [pattern, label]) => value.replace(pattern, label), text)
+    .replace(/(-?\d+\.\d{5,})/g, (value) => Number(value).toFixed(4))
+    .replace(
+      /(-?\d+(?:\.\d+)?)\s*个百分点/g,
+      (_, value: string) => `${Number(value).toFixed(1)} 个百分点`,
+    )
     .replace(/\s+/g, " ")
     .trim();
   const characters = Array.from(translated);

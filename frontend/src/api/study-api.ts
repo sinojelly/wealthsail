@@ -3,6 +3,7 @@ import type {
   ActionableZoneResult,
   OpportunityScope,
   PlanTrack,
+  ValueDirection,
 } from "./investment";
 export type StudyScope = OpportunityScope;
 export interface StudyCondition {
@@ -27,6 +28,7 @@ export interface StudyObservation {
 }
 export interface StudySnapshot {
   actionablePlan?: ActionableZoneResult;
+  valueDirection?: Omit<ValueDirection, "plans">;
   title: string;
   phase?: string | null;
   importance?: string | null;
@@ -54,6 +56,7 @@ export interface StudySnapshot {
     reportRunId?: string | null;
     eventId?: string | null;
     reportAsOf?: string | null;
+    valueDirectionKey?: string | null;
   };
   scope: StudyScope;
   createdAt: string;
@@ -186,6 +189,15 @@ export interface StudyDetail {
   };
 }
 export type CreateStudy =
+  | {
+      originType: "DAILY_DIRECTION";
+      reportRunId: string;
+      valueDirectionKey: string;
+      subjectKind: "index" | "fund" | "nav";
+      subjectId: string;
+      planTrack: PlanTrack;
+      horizonDays?: number;
+    }
   | {
       originType: "DAILY_EVENT";
       reportRunId: string;

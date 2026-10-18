@@ -2,7 +2,6 @@ import { useRef, useState, type ReactNode } from "react";
 import type { DailyResearch, Direction } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText } from "../research-reading";
-import StudyCreateConfirmation from "./StudyCreateConfirmation";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未研究",
   RUNNING: "已登记每日研究",
@@ -127,13 +126,8 @@ function DailyResearchContent({
   data,
   directions = [],
   onDirectionSelect,
-  onTrack,
-  trackingPending = false,
-  trackingError,
   children,
 }: DailyResearchReportProps) {
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [submittedEventId, setSubmittedEventId] = useState<string | null>(null);
   const [fullOpen, setFullOpen] = useState(false);
   const fullEventRefs = useRef(new Map<string, HTMLElement>());
   const report = data?.report;
@@ -286,52 +280,9 @@ function DailyResearchContent({
           .join("；")
       : readingText(channel || "尚未声明传导假设，需人工核查。");
   }
-  function trackButton(event: (typeof events)[number]) {
-    return data?.reportRunId && onTrack ? (
-      <button
-        type="button"
-        disabled={trackingPending}
-        aria-label={`持续跟踪${event.title}`}
-        onClick={() => {
-          setSubmittedEventId(null);
-          setSelectedEventId(event.id);
-        }}
-      >
-        持续跟踪
-      </button>
-    ) : null;
-  }
-  function confirmation(event: (typeof events)[number]) {
-    return event.id === selectedEventId && data?.reportRunId && onTrack ? (
-      <StudyCreateConfirmation
-        key={`${data.reportRunId}:${event.id}`}
-        preview={{
-          title: event.title,
-          thesis: event.summary,
-          asOf: report?.asOf ?? data.asOf,
-          watchFor: event.watchFor,
-          counterFactors: event.scenarios.map((scenario) => scenario.counter),
-          sources:
-            report?.sources.filter((source) =>
-              event.sourceIds.includes(source.id),
-            ) ?? [],
-        }}
-        pending={trackingPending}
-        error={submittedEventId === event.id ? trackingError : undefined}
-        onCancel={() => {
-          setSelectedEventId(null);
-          setSubmittedEventId(null);
-        }}
-        onSave={(horizonDays) => {
-          setSubmittedEventId(event.id);
-          onTrack(data.reportRunId!, event.id, horizonDays);
-        }}
-      />
-    ) : null;
-  }
   return (
     <section className="op-daily-report" aria-label="每日事件研究">
-      <h3>{report ? "重要事件" : "暂无有效日报"}</h3>
+      <h3>{report ? "关键经济要闻" : "暂无有效日报"}</h3>
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
       {!report ? (
         <>
@@ -345,9 +296,6 @@ function DailyResearchContent({
               当前显示历史报告及原始日期，不代表今日已完成研究。
             </p>
           )}
-          <p className="op-muted">
-            以下影响与情景为模型推演；买卖区间使用程序按真实历史计算的同口径价格依据。
-          </p>
           <ul className="op-daily-events" aria-label="重要事件">
             {priorityEvents.map((event) => (
               <li key={event.id}>
@@ -373,30 +321,16 @@ function DailyResearchContent({
                         100,
                       )}
                     </p>
-                    <p>
-                      当前证据：
-                      {event.sourceIds.length
-                        ? `${new Set(event.sourceIds).size}项引用，${checkedCount(event.sourceIds)}项原文已核对；事件事实与影响仍待核验。`
-                        : "未提供原始来源，事件事实仍待核验。"}
-                    </p>
-                    <p className="op-daily-next">
-                      下一步：
-                      {readingText(
-                        event.watchFor[0] || "未声明下一条件，需人工核查。",
-                      )}
-                    </p>
                   </div>
                   <div className="op-research-actions">
-                    {trackButton(event)}
                     <button
                       type="button"
                       aria-label={`查看${event.title}事件依据与情景`}
                       onClick={() => viewEvent(event.id)}
                     >
-                      查看事件依据与情景
+                      展开详情与原文依据
                     </button>
                   </div>
-                  {confirmation(event)}
                 </article>
               </li>
             ))}
@@ -421,7 +355,7 @@ function DailyResearchContent({
           >
             <summary>阅读完整日报</summary>
             <h4>整体研究摘要</h4>
-            <p>{report.summary}</p>
+            <p>{readingText(report.summary, 1500)}</p>
             <ul className="op-daily-events" aria-label="完整日报事件">
               {events.map((event) => (
                 <li key={event.id}>
@@ -434,9 +368,9 @@ function DailyResearchContent({
                     }}
                   >
                     <header>
-                      <h3>{event.title}</h3>
+                      <h3>{readingText(event.title, 200)}</h3>
                     </header>
-                    <p>{event.summary}</p>
+                    <p>{readingText(event.summary, 5000)}</p>
                     <p className="op-daily-affected">
                       受影响方向：
                       {affectedDirections(event.affectedDirectionIds)}
@@ -457,16 +391,12 @@ function DailyResearchContent({
                           {phases[event.phase] ?? "阶段待核查"}
                         </span>
                       </p>
-                      {!priorityEvents.some((row) => row.id === event.id) &&
-                        trackButton(event)}
-                      {!priorityEvents.some((row) => row.id === event.id) &&
-                        confirmation(event)}
                       <small>事件事实尚未独立核验；影响为模型条件推演。</small>
                       {!!event.channels.length && (
                         <section>
                           <h4>可能传导 · 模型条件推演</h4>
                           {event.channels.map((channel, i) => (
-                            <p key={i}>{channel}</p>
+                            <p key={i}>{readingText(channel, 1200)}</p>
                           ))}
                         </section>
                       )}
@@ -475,9 +405,15 @@ function DailyResearchContent({
                           <h4>正反情景与验证条件</h4>
                           {event.scenarios.map((scenario, i) => (
                             <div key={i}>
-                              <strong>若：{scenario.condition}</strong>
-                              <p>可能影响：{scenario.impact}</p>
-                              <p>反方条件：{scenario.counter}</p>
+                              <strong>
+                                若：{readingText(scenario.condition, 1000)}
+                              </strong>
+                              <p>
+                                可能影响：{readingText(scenario.impact, 1000)}
+                              </p>
+                              <p>
+                                反方条件：{readingText(scenario.counter, 1000)}
+                              </p>
                             </div>
                           ))}
                         </section>
@@ -489,7 +425,9 @@ function DailyResearchContent({
                         <section>
                           <h4>其他核查条件</h4>
                           {event.watchFor.slice(1).map((condition) => (
-                            <p key={condition}>{condition}</p>
+                            <p key={condition}>
+                              {readingText(condition, 1000)}
+                            </p>
                           ))}
                         </section>
                       )}
@@ -497,7 +435,7 @@ function DailyResearchContent({
                         <section>
                           <h4>尚未确认</h4>
                           {event.unknowns.map((unknown) => (
-                            <p key={unknown}>{unknown}</p>
+                            <p key={unknown}>{readingText(unknown, 1000)}</p>
                           ))}
                         </section>
                       )}

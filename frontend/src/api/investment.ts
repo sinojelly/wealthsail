@@ -183,6 +183,26 @@ export type ThemeCode =
   | "GEO_CRUDE_OIL"
   | "AI_MEMORY_HBM"
   | "COMMERCIAL_SPACE";
+export type ResearchThemeKey =
+  ThemeCode | "UNCLASSIFIED" | `DISCOVERY:${string}`;
+export interface StrategyMemoryRule {
+  key: string;
+  themeCode: ResearchThemeKey;
+  category: string;
+  ruleText: string;
+  sampleCount: number;
+  supportedCount: number;
+  mixedCount: number;
+  refutedCount: number;
+  inconclusiveCount: number;
+  supportRate: string | null;
+  profitSampleCount: number;
+  profitWinCount: number;
+  profitLossCount: number;
+  profitFlatCount: number;
+  winRate: string | null;
+  updatedAt: string;
+}
 export interface ThemeGraphRow {
   themeCode: ThemeCode;
   themeLabel: string;
@@ -356,15 +376,31 @@ export interface ActionableZoneResult {
   selectedTrack?: PlanTrack;
   parameters?: Record<string, number | number[]>;
   orderPriceAvailable?: boolean;
-  themeCode?: ThemeCode | "UNCLASSIFIED" | null;
+  themeCode?: ResearchThemeKey | null;
   track?: PlanTrack;
   priceRevisionStatus?:
     "INITIAL" | "UPGRADED" | "DOWNGRADED" | "TAKE_PROFIT_ALERT";
   priceRevisionNote?: string | null;
   calibrationRuleKeys?: string[];
   calibrationNote?: string | null;
+  fundCode?: string | null;
+  valueDirectionKey?: string | null;
+  valueDirectionTitle?: string | null;
+  volatilityMethod?: string | null;
+  market?: "FUND_CN" | "SSE" | null;
+}
+export interface ValueDirection {
+  key: string;
+  title: string;
+  thesis: string;
+  signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH";
+  sourceIds: string[];
+  macroCodes: string[];
+  watchFor: string[];
+  plans: ActionableZoneResult[];
 }
 export interface OpportunityContext extends MacroContext {
+  strategyMemoryRules?: StrategyMemoryRule[];
   themes?: ThemeGraphRow[];
   alphaPublic?: AlphaPublic | null;
   actionableZones?: ActionableZoneResult[];
@@ -456,6 +492,7 @@ export interface DailyResearch {
     summary: string;
     macroCycle?: string | null;
     actionablePlans?: ActionableZoneResult[];
+    valueDirections?: ValueDirection[];
     coverage: Array<{ topic: string; status: string; summary: string }>;
     sources: Array<{
       id: string;

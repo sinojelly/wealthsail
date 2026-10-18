@@ -165,7 +165,7 @@ it("shows the frozen track prices, date and method from the selected study versi
   show("/fund-screener?studyTrack=track-1");
   const frozen = await screen.findByRole("region", { name: "沪深300双轨计划" });
   expect(frozen).toHaveTextContent("冻结轨道：右侧趋势");
-  expect(frozen).toHaveTextContent("3700.125–3750.125 指数点");
+  expect(frozen).toHaveTextContent("3700.13–3750.13 指数点");
   expect(frozen).toHaveTextContent("2026年10月10日");
   expect(frozen).toHaveTextContent("止损：—");
   expect(frozen).toHaveTextContent("frozen-zones-v1");

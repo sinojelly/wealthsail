@@ -21,7 +21,6 @@ import ActionablePlan from "./components/ActionablePlan";
 import { metricValue, timeLabel } from "./macro-display";
 import StudyTracking from "./components/StudyTracking";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
-import { themeOptions } from "./theme-display";
 import "./opportunities.css";
 
 export default function FundScreenerPage() {
@@ -33,6 +32,9 @@ export default function FundScreenerPage() {
 function ResearchWorkspace({ subject }: { subject: string }) {
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
+  const [manualOpen, setManualOpen] = useState(() =>
+    ["fund", "instrument", "index"].some((key) => params.has(key)),
+  );
   const [direct, setDirect] = useState<api.SearchResult | null>(null);
   const [run, setRun] = useState<{
     id: string;
@@ -70,9 +72,6 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     : (params.get("index") ?? indices.data?.[0]?.id ?? null);
   const index = indices.data?.find((i) => i.id === indexId);
   const fundCode = params.get("fund");
-  const themeCode = themeOptions.find(
-    (row) => row.code === params.get("theme"),
-  )?.code;
   const selection: Selection = {
     directionId,
     indexId,
@@ -119,7 +118,6 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     instrumentId: selectedFund?.instrumentId ?? selection.fundId ?? undefined,
     fundCode: fundCode ?? undefined,
     fundMarket: selectedFund?.market ?? selection.fundMarket ?? undefined,
-    ...(themeCode ? { themeCode } : {}),
   };
   const opportunityKey = [
     subject,
@@ -129,7 +127,6 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     opportunityScope.instrumentId ?? null,
     fundCode,
     opportunityScope.fundMarket ?? null,
-    themeCode ?? null,
     macroMonths,
   ] as const;
   const studyScopeKey = JSON.stringify(opportunityKey.slice(0, -1));
@@ -287,6 +284,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     }
   }, [status.data?.status, activeRun, client, subject, setParams]);
   function updateSelection(next: Selection) {
+    setManualOpen(true);
     const p = new URLSearchParams(params);
     for (const [k, v] of [
       ["direction", next.directionId],
@@ -324,28 +322,6 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         id: item.kind === "fund" ? (item.instrumentId ?? "") : item.id,
       }),
     );
-  }
-  function selectThemeAsset(row: api.ThemeGraphRow) {
-    setDirect({
-      kind: "fund",
-      id: row.instrumentId ?? "",
-      code: row.assetCode,
-      name: row.assetName,
-      fundName: row.assetName,
-      fundCode: row.assetCode,
-      instrumentId: row.instrumentId ?? null,
-      market: row.market ?? undefined,
-      tradeForm: row.assetKind === "ETF" ? "ETF" : "FUND",
-      directionId: null,
-      indexId: null,
-    });
-    updateSelection({
-      directionId: null,
-      indexId: null,
-      fundId: row.instrumentId ?? null,
-      fundCode: row.assetCode,
-      fundMarket: row.market,
-    });
   }
   function filter(k: string, v: string) {
     const p = new URLSearchParams(params);
@@ -408,48 +384,29 @@ function ResearchWorkspace({ subject }: { subject: string }) {
             <Sparkles size={20} />
             投资机会中心 <span className="op-research-badge">研究模式</span>
           </h1>
-          <p>从市场环境到指数与基金的连续研究工作台</p>
+          <p>每日综合宏观与要闻，发现价值方向和基金买卖区间</p>
         </div>
         <span className="op-muted">双轨机会 · 真实价格依据 · 跟踪复盘</span>
       </header>
-      <GlobalResearchSearch
-        key={subject}
-        subject={subject}
-        onSelect={searchSelect}
-      />
       <MacroContextStrip
         data={radarData}
-        selectedTheme={themeCode}
-        onThemeSelect={(code) =>
-          setParams((current) => {
-            const next = new URLSearchParams(current);
-            if (code) next.set("theme", code);
-            else next.delete("theme");
-            next.delete("studyTrack");
-            return next;
-          })
-        }
-        onThemeAssetSelect={selectThemeAsset}
         renderStudyTracking={() => (
           <StudyTracking actor={subject} scope={opportunityScope} />
         )}
-        studyPending={studyCreate.isPending && studyCreatingCurrent}
-        studyError={
-          studyCreate.variables?.origin.originType === "DAILY_EVENT"
-            ? studyCreateError
-            : undefined
-        }
-        onStudyEvent={(reportRunId, eventId, horizonDays) =>
-          studyCreate.mutate({
-            origin: {
-              originType: "DAILY_EVENT",
-              reportRunId,
-              eventId,
-              horizonDays,
-            },
-            scopeKey: studyScopeKey,
-          })
-        }
+        onStudyDirection={async (input) => {
+          const result = await createStudyTrack({
+            originType: "DAILY_DIRECTION",
+            ...input,
+            horizonDays: 30,
+          });
+          client.setQueryData(
+            ["study", subject, "detail", result.track.id, 0],
+            result,
+          );
+          void client.invalidateQueries({
+            queryKey: ["study", subject, "list"],
+          });
+        }}
         scopeKey={studyScopeKey}
         selectedDirection={direction}
         selectedIndexId={indexId ?? undefined}
@@ -476,356 +433,376 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       {directions.isError && (
         <p role="alert">方向读取失败，仍可直接搜索基金。</p>
       )}
-      <div className="op-workspace">
-        <section
-          className="op-panel op-candidates"
-          id="op-research-targets"
-          tabIndex={-1}
-        >
-          <header>
-            <div>
-              <h2>候选选择</h2>
-              <p aria-label="研究路径">{path}</p>
+      <details
+        className="op-manual-research"
+        open={manualOpen}
+        onToggle={(event) => setManualOpen(event.currentTarget.open)}
+      >
+        <summary>手动研究指数与基金</summary>
+        <GlobalResearchSearch
+          key={subject}
+          subject={subject}
+          onSelect={searchSelect}
+        />
+        <div className="op-workspace">
+          <section
+            className="op-panel op-candidates"
+            id="op-research-targets"
+            tabIndex={-1}
+          >
+            <header>
+              <div>
+                <h2>候选选择</h2>
+                <p aria-label="研究路径">{path}</p>
+              </div>
+              <span>选择指数研究风险暴露，选择基金研究投资工具</span>
+            </header>
+            <div className="op-workbench-selection">
+              <label>
+                市场与方向{" "}
+                <select
+                  aria-label="市场与方向"
+                  value={directionId ?? ""}
+                  onChange={(event) => {
+                    setDirect(null);
+                    updateSelection({
+                      directionId: event.target.value || null,
+                      indexId: null,
+                      fundId: null,
+                      fundCode: null,
+                      fundMarket: null,
+                    });
+                  }}
+                >
+                  <option value="">全部基金</option>
+                  {directions.data?.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.marketLabel} · {row.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                研究指数{" "}
+                <select
+                  aria-label="研究指数"
+                  value={indexId ?? ""}
+                  onChange={(event) => {
+                    setDirect(null);
+                    updateSelection(chooseIndex(selection, event.target.value));
+                  }}
+                  disabled={!directionId || indices.isPending}
+                >
+                  <option value="">请选择指数</option>
+                  {indices.data?.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {indices.isError && (
+                <p role="alert">指数读取失败，仍可直接搜索基金。</p>
+              )}
             </div>
-            <span>选择指数研究风险暴露，选择基金研究投资工具</span>
-          </header>
-          <div className="op-workbench-selection">
-            <label>
-              市场与方向{" "}
-              <select
-                aria-label="市场与方向"
-                value={directionId ?? ""}
-                onChange={(event) => {
-                  setDirect(null);
-                  updateSelection({
-                    directionId: event.target.value || null,
-                    indexId: null,
-                    fundId: null,
-                    fundCode: null,
-                    fundMarket: null,
-                  });
-                }}
+            <div className="op-filter-toggle">
+              <button
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen(!filtersOpen)}
               >
-                <option value="">全部基金</option>
-                {directions.data?.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.marketLabel} · {row.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              研究指数{" "}
-              <select
-                aria-label="研究指数"
-                value={indexId ?? ""}
-                onChange={(event) => {
-                  setDirect(null);
-                  updateSelection(chooseIndex(selection, event.target.value));
-                }}
-                disabled={!directionId || indices.isPending}
-              >
-                <option value="">请选择指数</option>
-                {indices.data?.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {indices.isError && (
-              <p role="alert">指数读取失败，仍可直接搜索基金。</p>
+                高级筛选
+              </button>
+              <span>服务端组合筛选 · 范围内候选</span>
+            </div>
+            {filtersOpen && (
+              <div className="op-filters">
+                <label>
+                  关键词
+                  <input
+                    aria-label="基金列表关键词"
+                    value={params.get("keyword") ?? ""}
+                    onChange={(e) => filter("keyword", e.target.value)}
+                  />
+                </label>
+                <label>
+                  类型
+                  <select
+                    value={params.get("tradeForm") ?? ""}
+                    onChange={(e) => filter("tradeForm", e.target.value)}
+                  >
+                    <option value="">全部</option>
+                    <option value="ETF">ETF</option>
+                    <option value="FUND">场外基金</option>
+                  </select>
+                </label>
+                <label>
+                  排序
+                  <select
+                    value={params.get("sortBy") ?? "name"}
+                    onChange={(e) => filter("sortBy", e.target.value)}
+                  >
+                    <option value="name">名称</option>
+                    <option value="code">代码</option>
+                    <option value="navPosition">净值区间位置</option>
+                    <option value="technicalScore">技术状态评分</option>
+                  </select>
+                </label>
+                <label>
+                  指标覆盖
+                  <select
+                    value={params.get("scorableOnly") ?? "false"}
+                    onChange={(e) => filter("scorableOnly", e.target.value)}
+                  >
+                    <option value="false">全部候选</option>
+                    <option value="true">可完整评分</option>
+                  </select>
+                </label>
+                <label>
+                  收益风险覆盖
+                  <select
+                    value={params.get("performanceOnly") ?? "false"}
+                    onChange={(e) => filter("performanceOnly", e.target.value)}
+                  >
+                    <option value="false">全部历史状态</option>
+                    <option value="true">可比收益与风险数据齐备</option>
+                  </select>
+                </label>
+                <label>
+                  最少历史日数
+                  <input
+                    type="number"
+                    min="0"
+                    max="10000"
+                    value={params.get("minHistoryDays") ?? ""}
+                    onChange={(e) => filter("minHistoryDays", e.target.value)}
+                  />
+                </label>
+                <label>
+                  顺序
+                  <select
+                    value={params.get("sortOrder") ?? "asc"}
+                    onChange={(e) => filter("sortOrder", e.target.value)}
+                  >
+                    <option value="asc">升序</option>
+                    <option value="desc">降序</option>
+                  </select>
+                </label>
+              </div>
             )}
-          </div>
-          <div className="op-filter-toggle">
+            <FundResultsTable
+              data={funds.data}
+              selectedCode={fundCode}
+              selectedId={selectedFund?.instrumentId}
+              selectedMarket={selectedFund?.market}
+              indexName={index?.name}
+              onSelect={selectFund}
+              page={page}
+              onPage={(p) => {
+                const next = new URLSearchParams(params);
+                next.set("page", String(p));
+                if (funds.data?.analysisAsOf)
+                  next.set("analysisAsOf", funds.data.analysisAsOf);
+                setParams(next);
+              }}
+              loading={funds.isFetching}
+              error={funds.isError}
+            />
+          </section>
+          <aside
+            className="op-panel op-target-research"
+            aria-label="当前标的研究"
+          >
+            <header>
+              <h2>{title}</h2>
+              <p>
+                {mode === "fund" ? (fundCode ?? selection.fundId) : index?.code}{" "}
+                · {path}
+              </p>
+            </header>
             <button
-              aria-expanded={filtersOpen}
-              onClick={() => setFiltersOpen(!filtersOpen)}
+              className="op-watch"
+              aria-label={mode === "index" ? "关注指数" : "加入自选基金"}
+              disabled={
+                mode === "index" ||
+                !selectedFund?.market ||
+                (add.isPending && watchActionCurrent) ||
+                watchedCode ||
+                watchAdded
+              }
+              title={
+                mode === "index"
+                  ? "指数关注服务尚未接入"
+                  : watchedCode && !watchAdded
+                    ? "该代码和类型已有自选，现有服务未提供精确市场归属。"
+                    : "加入现有基金自选"
+              }
+              onClick={() => {
+                if (selectedFund?.market && fundCode)
+                  add.mutate({
+                    symbol: fundCode,
+                    name: title,
+                    assetType:
+                      selectedFund.tradeForm === "ETF" ? "ETF" : "FUND",
+                    market: selectedFund.market,
+                    currency: selectedFund.currency,
+                  });
+              }}
             >
-              高级筛选
+              <ListPlus size={16} />
+              {mode === "index"
+                ? "关注指数"
+                : watchAdded
+                  ? "已加入自选"
+                  : watchedCode
+                    ? "代码已有自选 · 市场待核验"
+                    : "加入自选基金"}
             </button>
-            <span>服务端组合筛选 · 范围内候选</span>
-          </div>
-          {filtersOpen && (
-            <div className="op-filters">
-              <label>
-                关键词
-                <input
-                  aria-label="基金列表关键词"
-                  value={params.get("keyword") ?? ""}
-                  onChange={(e) => filter("keyword", e.target.value)}
-                />
-              </label>
-              <label>
-                类型
-                <select
-                  value={params.get("tradeForm") ?? ""}
-                  onChange={(e) => filter("tradeForm", e.target.value)}
-                >
-                  <option value="">全部</option>
-                  <option value="ETF">ETF</option>
-                  <option value="FUND">场外基金</option>
-                </select>
-              </label>
-              <label>
-                排序
-                <select
-                  value={params.get("sortBy") ?? "name"}
-                  onChange={(e) => filter("sortBy", e.target.value)}
-                >
-                  <option value="name">名称</option>
-                  <option value="code">代码</option>
-                  <option value="navPosition">净值区间位置</option>
-                  <option value="technicalScore">技术状态评分</option>
-                </select>
-              </label>
-              <label>
-                指标覆盖
-                <select
-                  value={params.get("scorableOnly") ?? "false"}
-                  onChange={(e) => filter("scorableOnly", e.target.value)}
-                >
-                  <option value="false">全部候选</option>
-                  <option value="true">可完整评分</option>
-                </select>
-              </label>
-              <label>
-                收益风险覆盖
-                <select
-                  value={params.get("performanceOnly") ?? "false"}
-                  onChange={(e) => filter("performanceOnly", e.target.value)}
-                >
-                  <option value="false">全部历史状态</option>
-                  <option value="true">可比收益与风险数据齐备</option>
-                </select>
-              </label>
-              <label>
-                最少历史日数
-                <input
-                  type="number"
-                  min="0"
-                  max="10000"
-                  value={params.get("minHistoryDays") ?? ""}
-                  onChange={(e) => filter("minHistoryDays", e.target.value)}
-                />
-              </label>
-              <label>
-                顺序
-                <select
-                  value={params.get("sortOrder") ?? "asc"}
-                  onChange={(e) => filter("sortOrder", e.target.value)}
-                >
-                  <option value="asc">升序</option>
-                  <option value="desc">降序</option>
-                </select>
-              </label>
-            </div>
-          )}
-          <FundResultsTable
-            data={funds.data}
-            selectedCode={fundCode}
-            selectedId={selectedFund?.instrumentId}
-            selectedMarket={selectedFund?.market}
-            indexName={index?.name}
-            onSelect={selectFund}
-            page={page}
-            onPage={(p) => {
-              const next = new URLSearchParams(params);
-              next.set("page", String(p));
-              if (funds.data?.analysisAsOf)
-                next.set("analysisAsOf", funds.data.analysisAsOf);
-              setParams(next);
-            }}
-            loading={funds.isFetching}
-            error={funds.isError}
-          />
-        </section>
-        <aside
-          className="op-panel op-target-research"
-          aria-label="当前标的研究"
-        >
-          <header>
-            <h2>{title}</h2>
+            <button
+              type="button"
+              className="op-refresh"
+              disabled={!analysisId || busy || refresh.isPending}
+              onClick={() => {
+                if (analysisId)
+                  refresh.mutate({
+                    kind: analysisMode,
+                    id: analysisId,
+                    target,
+                  });
+              }}
+            >
+              {busy || refresh.isPending ? "更新中…" : "更新研究数据"}
+            </button>
+            {message && <p role="status">{message}</p>}
+            {diagnosis.isError && (
+              <p role="alert">标的研究读取失败，请重试。</p>
+            )}
+            {diagnosis.isPending && analysisId && (
+              <p role="status">标的研究加载中…</p>
+            )}
             <p>
-              {mode === "fund" ? (fundCode ?? selection.fundId) : index?.code} ·{" "}
-              {path}
+              研究截止：{timeLabel(diagnosis.data?.asOf)} · 数据来源：
+              {typeof diagnosis.data?.source === "string"
+                ? diagnosis.data.source
+                : "待接入"}
             </p>
-          </header>
-          <button
-            className="op-watch"
-            aria-label={mode === "index" ? "关注指数" : "加入自选基金"}
-            disabled={
-              mode === "index" ||
-              !selectedFund?.market ||
-              (add.isPending && watchActionCurrent) ||
-              watchedCode ||
-              watchAdded
-            }
-            title={
-              mode === "index"
-                ? "指数关注服务尚未接入"
-                : watchedCode && !watchAdded
-                  ? "该代码和类型已有自选，现有服务未提供精确市场归属。"
-                  : "加入现有基金自选"
-            }
-            onClick={() => {
-              if (selectedFund?.market && fundCode)
-                add.mutate({
-                  symbol: fundCode,
-                  name: title,
-                  assetType: selectedFund.tradeForm === "ETF" ? "ETF" : "FUND",
-                  market: selectedFund.market,
-                  currency: selectedFund.currency,
-                });
-            }}
-          >
-            <ListPlus size={16} />
-            {mode === "index"
-              ? "关注指数"
-              : watchAdded
-                ? "已加入自选"
-                : watchedCode
-                  ? "代码已有自选 · 市场待核验"
-                  : "加入自选基金"}
-          </button>
-          <button
-            type="button"
-            className="op-refresh"
-            disabled={!analysisId || busy || refresh.isPending}
-            onClick={() => {
-              if (analysisId)
-                refresh.mutate({ kind: analysisMode, id: analysisId, target });
-            }}
-          >
-            {busy || refresh.isPending ? "更新中…" : "更新研究数据"}
-          </button>
-          {message && <p role="status">{message}</p>}
-          {diagnosis.isError && <p role="alert">标的研究读取失败，请重试。</p>}
-          {diagnosis.isPending && analysisId && (
-            <p role="status">标的研究加载中…</p>
-          )}
-          <p>
-            研究截止：{timeLabel(diagnosis.data?.asOf)} · 数据来源：
-            {typeof diagnosis.data?.source === "string"
-              ? diagnosis.data.source
-              : "待接入"}
-          </p>
-          {currentZones && (
-            <ActionablePlan
-              result={currentZones}
-              pending={studyCreate.isPending && studyCreatingCurrent}
-              onTrack={(track) => {
+            {currentZones && (
+              <ActionablePlan
+                result={currentZones}
+                pending={studyCreate.isPending && studyCreatingCurrent}
+                onTrack={(track) => {
+                  studyCreate.reset();
+                  setPlanConfirmation({ result: currentZones, track });
+                  setConfirmStudyScope(studyScopeKey);
+                }}
+              />
+            )}
+            {!currentZones && (
+              <p>当前标的尚无可用双轨价格依据，仍可保存研究并跟踪。</p>
+            )}
+            <button
+              type="button"
+              disabled={
+                !analysisId || (studyCreate.isPending && studyCreatingCurrent)
+              }
+              onClick={() => {
                 studyCreate.reset();
-                setPlanConfirmation({ result: currentZones, track });
+                setPlanConfirmation(null);
                 setConfirmStudyScope(studyScopeKey);
               }}
-            />
-          )}
-          {!currentZones && (
-            <p>当前标的尚无可用双轨价格依据，仍可保存研究并跟踪。</p>
-          )}
-          <button
-            type="button"
-            disabled={
-              !analysisId || (studyCreate.isPending && studyCreatingCurrent)
-            }
-            onClick={() => {
-              studyCreate.reset();
-              setPlanConfirmation(null);
-              setConfirmStudyScope(studyScopeKey);
-            }}
-          >
-            跟踪当前标的研究
-          </button>
-          {confirmStudyScope === studyScopeKey && (
-            <StudyCreateConfirmation
-              key={`study-confirm:${studyScopeKey}:${planConfirmation?.track ?? "research"}`}
-              preview={{
-                title: `${title}研究`,
-                thesis:
-                  opportunity.data?.directionModel?.summary ||
-                  "保留当前观察，继续核对研究条件。",
-                watchFor:
-                  opportunity.data?.directionModel?.missingEvidence ?? [],
-                counterFactors: (
-                  opportunity.data?.directionModel?.counterFactors ?? []
-                ).map((row) => row.summary || row.label),
-                supports: (
-                  opportunity.data?.directionModel?.supports ?? []
-                ).map((row) => row.summary || row.label),
-                sources: [],
-                selection: true,
-              }}
-              pending={studyCreate.isPending && studyCreatingCurrent}
-              error={studyCreateError}
-              onCancel={() => {
-                setConfirmStudyScope(null);
-                setPlanConfirmation(null);
-              }}
-              onSave={(horizonDays) =>
-                studyCreate.mutate({
-                  origin: {
-                    originType: "SELECTION",
-                    scope: opportunityScope,
-                    horizonDays,
-                    ...(planConfirmation
-                      ? { planTrack: planConfirmation.track }
-                      : {}),
-                  },
-                  scopeKey: studyScopeKey,
-                })
-              }
             >
-              {planConfirmation && (
-                <ActionablePlan
-                  result={{
-                    ...planConfirmation.result,
-                    selectedTrack: planConfirmation.track,
-                    tracks: planConfirmation.result.tracks.filter(
-                      (row) => row.track === planConfirmation.track,
-                    ),
-                  }}
-                />
-              )}
-            </StudyCreateConfirmation>
-          )}
-          {studyCreateError &&
-            confirmStudyScope !== studyScopeKey &&
-            studyCreate.variables?.origin.originType === "SELECTION" && (
-              <p role="alert">{studyCreateError}</p>
+              跟踪当前标的研究
+            </button>
+            {confirmStudyScope === studyScopeKey && (
+              <StudyCreateConfirmation
+                key={`study-confirm:${studyScopeKey}:${planConfirmation?.track ?? "research"}`}
+                preview={{
+                  title: `${title}研究`,
+                  thesis:
+                    opportunity.data?.directionModel?.summary ||
+                    "保留当前观察，继续核对研究条件。",
+                  watchFor:
+                    opportunity.data?.directionModel?.missingEvidence ?? [],
+                  counterFactors: (
+                    opportunity.data?.directionModel?.counterFactors ?? []
+                  ).map((row) => row.summary || row.label),
+                  supports: (
+                    opportunity.data?.directionModel?.supports ?? []
+                  ).map((row) => row.summary || row.label),
+                  sources: [],
+                  selection: true,
+                }}
+                pending={studyCreate.isPending && studyCreatingCurrent}
+                error={studyCreateError}
+                onCancel={() => {
+                  setConfirmStudyScope(null);
+                  setPlanConfirmation(null);
+                }}
+                onSave={(horizonDays) =>
+                  studyCreate.mutate({
+                    origin: {
+                      originType: "SELECTION",
+                      scope: opportunityScope,
+                      horizonDays,
+                      ...(planConfirmation
+                        ? { planTrack: planConfirmation.track }
+                        : {}),
+                    },
+                    scopeKey: studyScopeKey,
+                  })
+                }
+              >
+                {planConfirmation && (
+                  <ActionablePlan
+                    result={{
+                      ...planConfirmation.result,
+                      selectedTrack: planConfirmation.track,
+                      tracks: planConfirmation.result.tracks.filter(
+                        (row) => row.track === planConfirmation.track,
+                      ),
+                    }}
+                  />
+                )}
+              </StudyCreateConfirmation>
             )}
-          <details>
-            <summary>历史收益与风险</summary>
-            <p>
-              63观察日收益：
-              {metricValue(
-                diagnosis.data?.performance?.return63 == null
-                  ? null
-                  : diagnosis.data.performance.return63 * 100,
+            {studyCreateError &&
+              confirmStudyScope !== studyScopeKey &&
+              studyCreate.variables?.origin.originType === "SELECTION" && (
+                <p role="alert">{studyCreateError}</p>
               )}
-              % · 252观察日收益：
-              {metricValue(
-                diagnosis.data?.performance?.return252 == null
-                  ? null
-                  : diagnosis.data.performance.return252 * 100,
-              )}
-              %
-            </p>
-            <p>
-              样本最大回撤：
-              {metricValue(
-                diagnosis.data?.performance?.maxDrawdown == null
-                  ? null
-                  : diagnosis.data.performance.maxDrawdown * 100,
-              )}
-              % · 实际观察：{diagnosis.data?.performance?.sampleCount ?? "未知"}
-            </p>
-          </details>
-        </aside>
-      </div>
-      {add.isError && watchActionCurrent && (
-        <p role="alert">加入自选失败，请重试。</p>
-      )}
+            <details>
+              <summary>历史收益与风险</summary>
+              <p>
+                63观察日收益：
+                {metricValue(
+                  diagnosis.data?.performance?.return63 == null
+                    ? null
+                    : diagnosis.data.performance.return63 * 100,
+                )}
+                % · 252观察日收益：
+                {metricValue(
+                  diagnosis.data?.performance?.return252 == null
+                    ? null
+                    : diagnosis.data.performance.return252 * 100,
+                )}
+                %
+              </p>
+              <p>
+                样本最大回撤：
+                {metricValue(
+                  diagnosis.data?.performance?.maxDrawdown == null
+                    ? null
+                    : diagnosis.data.performance.maxDrawdown * 100,
+                )}
+                % · 实际观察：
+                {diagnosis.data?.performance?.sampleCount ?? "未知"}
+              </p>
+            </details>
+          </aside>
+        </div>
+        {add.isError && watchActionCurrent && (
+          <p role="alert">加入自选失败，请重试。</p>
+        )}
+      </details>
     </div>
   );
 }

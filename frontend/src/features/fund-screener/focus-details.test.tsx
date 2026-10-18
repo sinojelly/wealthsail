@@ -8,6 +8,7 @@ import DailyResearchReport, {
   DailyResearchStatus,
 } from "./components/DailyResearchReport";
 import StudyTracking from "./components/StudyTracking";
+import { readingText } from "./research-reading";
 
 vi.mock("../../api/study-api", () => ({
   getStudyTracks: vi.fn(),
@@ -123,7 +124,7 @@ it("keeps the existing impact conditional and readable before opening the full r
   });
 });
 
-it("shows the canonical event as four short reading lines and opens its complete evidence explicitly", async () => {
+it("shows the canonical event as compact facts and impact and opens its complete evidence explicitly", async () => {
   const track = vi.fn();
   const selectDirection = vi.fn();
   render(
@@ -142,8 +143,6 @@ it("shows the canonical event as four short reading lines and opens its complete
   expect(
     within(list).getByText(/潜在影响：.*供应变化可能传到运输成本/),
   ).toBeVisible();
-  expect(within(list).getByText(/当前证据：.*1.*原文已核对/)).toBeVisible();
-  expect(within(list).getByText(/下一批实际到货量/)).toBeVisible();
   expect(within(list).getByText("受影响方向：A股 · 宽基")).toBeVisible();
   const details = screen.getByText("阅读完整日报").closest("details")!;
   expect(details).not.toHaveAttribute("open");
@@ -188,7 +187,7 @@ it("shows at most three events and retains every original event and quotation in
       }}
     />,
   );
-  expect(screen.getByRole("heading", { name: "重要事件" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "关键经济要闻" })).toBeVisible();
   const list = screen.getByRole("list", { name: "重要事件" });
   expect(within(list).getAllByRole("listitem")).toHaveLength(3);
   for (const fact of within(list).getAllByText(`事实：${event.summary}`))
@@ -293,9 +292,10 @@ it("bounds and translates the reading preview while preserving complete original
     /historyQuality|CONFLICT|PIT|SOURCE_CHECKED|IMPLEMENTED/,
   );
   const full = screen.getByText("阅读完整日报").closest("details")!;
-  expect(within(full).getByText(original)).not.toBeVisible();
+  expect(within(full).getByText(readingText(original, 5000))).not.toBeVisible();
   await userEvent.click(within(full).getByText("阅读完整日报"));
-  expect(within(full).getByText(original)).toBeVisible();
+  expect(within(full).getByText(readingText(original, 5000))).toBeVisible();
+  expect(original).toContain("historyQuality=CONFLICT");
 });
 
 it("keeps current asset content after the important events and before the collapsed calendar and report", () => {
@@ -319,104 +319,20 @@ it("keeps current asset content after the important events and before the collap
   ).toBeTruthy();
 });
 
-it("opens a read-only event confirmation before tracking and saves only the effective report identity with the chosen horizon", async () => {
+it("keeps news as read-only evidence before and after opening the full report", async () => {
   const track = vi.fn();
   render(<DailyResearchReport data={daily} onTrack={track} />);
-  const user = userEvent.setup();
-  await user.click(
-    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
-  );
-  expect(track).not.toHaveBeenCalled();
-  const form = screen.getByRole("form", { name: "确认研究跟踪" });
-  const confirmation = screen.getByRole("region", { name: "确认研究假设" });
-  expect(within(confirmation).getByText(event.summary)).toBeVisible();
   expect(
-    within(confirmation).getByText(/下一步验证：下一批实际到货量/),
-  ).toBeVisible();
-  expect(within(confirmation).getByText(/反方条件：运力仍有限/)).toBeVisible();
-  expect(within(confirmation).getByText(/失效条件.*未声明/)).toBeVisible();
-  await user.clear(within(form).getByRole("spinbutton", { name: "观察天数" }));
-  await user.type(
-    within(form).getByRole("spinbutton", { name: "观察天数" }),
-    "90",
-  );
-  await user.click(
-    within(form).getByRole("button", { name: "确认并保存跟踪" }),
-  );
-  expect(track).toHaveBeenCalledExactlyOnceWith(
-    "ready-yesterday",
-    "energy-policy",
-    90,
-  );
-});
-
-it("cancels event confirmation without tracking and does not inherit it when the report identity changes", async () => {
-  const track = vi.fn();
-  const view = render(<DailyResearchReport data={daily} onTrack={track} />);
-  const user = userEvent.setup();
-  await user.click(
-    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
-  );
-  await user.click(screen.getByRole("button", { name: "取消跟踪确认" }));
+    screen.queryByRole("button", { name: /持续跟踪/ }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("阅读完整日报"));
   expect(
-    screen.queryByRole("form", { name: "确认研究跟踪" }),
+    screen.queryByRole("button", { name: /持续跟踪/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("region", { name: "确认研究假设" }),
   ).not.toBeInTheDocument();
   expect(track).not.toHaveBeenCalled();
-  await user.click(
-    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
-  );
-  await user.clear(screen.getByRole("spinbutton", { name: "观察天数" }));
-  await user.type(screen.getByRole("spinbutton", { name: "观察天数" }), "90");
-  view.rerender(
-    <DailyResearchReport
-      data={{ ...daily, reportRunId: "new-ready" }}
-      onTrack={track}
-    />,
-  );
-  expect(
-    screen.queryByRole("form", { name: "确认研究跟踪" }),
-  ).not.toBeInTheDocument();
-  expect(track).not.toHaveBeenCalled();
-  await user.click(
-    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
-  );
-  expect(screen.getByRole("spinbutton", { name: "观察天数" })).toHaveValue(30);
-});
-
-it("does not show a previous event's save error in a new confirmation session", async () => {
-  const track = vi.fn();
-  const report = {
-    ...daily,
-    report: {
-      ...daily.report!,
-      events: [event, { ...event, id: "other-event", title: "另一个事件" }],
-    },
-  };
-  const view = render(<DailyResearchReport data={report} onTrack={track} />);
-  const user = userEvent.setup();
-  await user.click(
-    screen.getByRole("button", { name: "持续跟踪能源政策线索" }),
-  );
-  await user.click(screen.getByRole("button", { name: "确认并保存跟踪" }));
-  view.rerender(
-    <DailyResearchReport
-      data={report}
-      onTrack={track}
-      trackingError="A事件保存失败"
-    />,
-  );
-  expect(
-    within(screen.getByRole("region", { name: "确认研究假设" })).getByRole(
-      "alert",
-    ),
-  ).toHaveTextContent("A事件保存失败");
-  await user.click(screen.getByRole("button", { name: "取消跟踪确认" }));
-  await user.click(screen.getByRole("button", { name: "持续跟踪另一个事件" }));
-  expect(
-    within(screen.getByRole("region", { name: "确认研究假设" })).queryByRole(
-      "alert",
-    ),
-  ).not.toBeInTheDocument();
 });
 
 it("separates the failed task from the actual historical report inside execution details and names an absent valid report", () => {

@@ -4,16 +4,97 @@ import type {
   Direction,
   OpportunityContext,
   MacroEvent,
-  ThemeCode,
-  ThemeGraphRow,
 } from "../../../api/investment";
-import { sourceHref, timeLabel } from "../macro-display";
+import { sourceHref, timeLabel, monthLabel } from "../macro-display";
 import DailyResearchReport, {
   DailyResearchStatus,
 } from "./DailyResearchReport";
 import MacroEvidencePanel from "./MacroEvidencePanel";
 import ActionablePlan from "./ActionablePlan";
-import Phase2Evidence, { ThemeResearch } from "./Phase2Evidence";
+import Phase2Evidence from "./Phase2Evidence";
+import ValueDirections, { type DirectionTrackInput } from "./ValueDirections";
+import { readingText } from "../research-reading";
+
+function MacroOverview({ data }: { data: OpportunityContext }) {
+  const facts = [
+    {
+      code: "PMI",
+      label: "制造业PMI",
+      item: data.items.find((row) => row.code === "PMI"),
+    },
+    ...[
+      ["M1_M2_GAP", "M1−M2剪刀差"],
+      ["CN_T10", "中国10年国债"],
+      ["US_T10_REAL", "美国10年实际利率"],
+    ].map(([code, label]) => ({
+      code,
+      label,
+      item: [...(data.series ?? []), ...(data.alphaPublic?.observations ?? [])]
+        .filter((row) => row.code === code)
+        .sort((a, b) =>
+          String(
+            b.asOf ?? ("referenceDate" in b ? b.referenceDate : ""),
+          ).localeCompare(
+            String(a.asOf ?? ("referenceDate" in a ? a.referenceDate : "")),
+          ),
+        )[0],
+    })),
+  ];
+  const report = data.dailyResearch?.report;
+  return (
+    <section className="op-macro-overview" aria-label="今日宏观总纲">
+      <h3>
+        {report
+          ? data.dailyResearch?.state === "READY"
+            ? "宏观周期与今日总纲"
+            : "历史宏观研判"
+          : "当前宏观事实"}
+      </h3>
+      <p>
+        {readingText(
+          report?.macroCycle ||
+            report?.summary ||
+            "综合研究尚未生成，以下为实际已采集观察。",
+          280,
+        )}
+      </p>
+      {report && (
+        <small>
+          研判证据：{timeLabel(report.asOf ?? data.dailyResearch?.asOf)}
+        </small>
+      )}
+      <div className="op-core-facts">
+        {facts
+          .filter(
+            ({ item }) =>
+              item?.value != null &&
+              !(typeof item.value === "string" && item.value.trim() === "") &&
+              Number.isFinite(Number(item.value)) &&
+              item.state !== "CONFLICT" &&
+              item.state !== "UNAVAILABLE",
+          )
+          .map(({ code, label, item }) => (
+            <div key={code}>
+              <span>{label}</span>
+              <strong>
+                {Number(item!.value).toFixed(code === "PMI" ? 1 : 2)}{" "}
+                {code === "M1_M2_GAP" ? "个百分点" : code === "PMI" ? "" : "%"}
+              </strong>
+              <small>
+                {"referencePeriod" in item!
+                  ? monthLabel(item.referencePeriod)
+                  : timeLabel(
+                      "referenceDate" in item!
+                        ? item.referenceDate
+                        : item!.asOf,
+                    )}
+              </small>
+            </div>
+          ))}
+      </div>
+    </section>
+  );
+}
 function MacroEvents({
   events,
   state,
@@ -81,12 +162,7 @@ export default function MacroContextStrip({
   selectedDirection,
   selectedIndexId,
   renderStudyTracking,
-  onStudyEvent,
-  studyPending,
-  studyError,
-  selectedTheme,
-  onThemeSelect,
-  onThemeAssetSelect,
+  onStudyDirection,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -99,16 +175,7 @@ export default function MacroContextStrip({
   selectedIndexId?: string;
   scopeKey?: string;
   renderStudyTracking?: () => ReactNode;
-  onStudyEvent?: (
-    reportRunId: string,
-    eventId: string,
-    horizonDays: number,
-  ) => void;
-  studyPending?: boolean;
-  studyError?: string;
-  selectedTheme?: ThemeCode;
-  onThemeSelect?: (code: ThemeCode | undefined) => void;
-  onThemeAssetSelect?: (asset: ThemeGraphRow) => void;
+  onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
 }) {
   const [params, setParams] = useSearchParams();
   const panelId = useId();
@@ -231,50 +298,29 @@ export default function MacroContextStrip({
           >
             {tab === "events" && (
               <>
-                <ThemeResearch
-                  rows={ready?.themes}
-                  selected={selectedTheme}
-                  onSelect={onThemeSelect}
-                  onAssetSelect={onThemeAssetSelect}
+                {ready && <MacroOverview data={ready} />}
+                <ValueDirections
+                  key={ready?.dailyResearch?.reportRunId ?? "no-report"}
+                  data={ready?.dailyResearch}
+                  onTrack={onStudyDirection}
                 />
-                {ready?.dailyResearch?.report?.macroCycle && (
-                  <section aria-label="宏观周期研究观点">
-                    <h3>宏观周期 · 模型观点</h3>
-                    <p>{ready.dailyResearch.report.macroCycle}</p>
-                  </section>
-                )}
+                {!ready?.dailyResearch?.report &&
+                  !!ready?.actionableZones?.length && (
+                    <section aria-label="程序价格观察">
+                      <h3>程序价格观察 · 尚非今日综合研判</h3>
+                      {ready.actionableZones.map((result) => (
+                        <ActionablePlan
+                          key={`${result.subjectKind}:${result.subjectId}`}
+                          result={result}
+                        />
+                      ))}
+                    </section>
+                  )}
                 <DailyResearchReport
                   data={ready?.dailyResearch}
                   directions={directions}
                   onDirectionSelect={onDirectionSelect}
-                  onTrack={onStudyEvent}
-                  trackingPending={studyPending}
-                  trackingError={studyError}
                 />
-                {!!ready?.dailyResearch?.report?.actionablePlans?.length && (
-                  <section aria-label="日报结构化研究计划">
-                    <h3>日报结构化研究计划</h3>
-                    {ready.dailyResearch.report.actionablePlans.map(
-                      (result) => (
-                        <ActionablePlan
-                          key={`${result.themeCode}:${result.subjectKind}:${result.subjectId}:${result.track ?? result.selectedTrack}`}
-                          result={result}
-                        />
-                      ),
-                    )}
-                  </section>
-                )}
-                {(ready?.actionableZones ?? []).map((result) => (
-                  <ActionablePlan
-                    key={`${result.subjectKind}:${result.subjectId}`}
-                    result={result}
-                  />
-                ))}
-                {!ready?.actionableZones?.length && (
-                  <p>
-                    双轨价格依据尚未齐备，可在工作台选择标的查看实际研究数据。
-                  </p>
-                )}
                 {!!ready?.events?.filter((event) => !reportIds.has(event.id))
                   .length && (
                   <details>
