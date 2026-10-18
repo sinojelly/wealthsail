@@ -5,10 +5,16 @@ import type {
   PlanTrack,
   ValueDirection,
 } from "../../../api/investment";
-import { sourceHref, timeLabel } from "../macro-display";
+import {
+  sourceHref,
+  timeLabel,
+  monthLabel,
+  metricValue,
+} from "../macro-display";
 import { planPrice, planUnit } from "../plan-display";
 import { readingText } from "../research-reading";
 import ActionablePlan from "./ActionablePlan";
+import { studyMetricLabel } from "./study-display";
 
 export interface DirectionTrackInput {
   reportRunId: string;
@@ -29,6 +35,85 @@ const revisionLabels = {
   DOWNGRADED: "下调关注区间",
   TAKE_PROFIT_ALERT: "止盈复核提示",
 };
+
+type MacroFact = NonNullable<ValueDirection["macroEvidence"]>[number];
+function macroLabel(row: MacroFact) {
+  const known = studyMetricLabel(row.code);
+  if (known !== "其他待核查指标") return known;
+  const extra: Record<string, string> = {
+    M1_YOY: "M1同比",
+    TSF_STOCK_YOY: "社融存量同比",
+    DXY: "美元指数",
+    USD_CNY: "美元兑人民币",
+  };
+  if (extra[row.code]) return extra[row.code];
+  const translated = readingText(row.code);
+  if (translated !== row.code) return translated;
+  const house =
+    /^HOUSE_(HAIKOU|SANYA|SHANGHAI|SHENZHEN)_(NEW|SECOND)_MOM$/.exec(row.code);
+  if (house)
+    return `${({ HAIKOU: "海口", SANYA: "三亚", SHANGHAI: "上海", SHENZHEN: "深圳" } as Record<string, string>)[house[1]]}${house[2] === "NEW" ? "新房" : "二手房"}环比`;
+  return row.label && row.label !== row.code
+    ? readingText(row.label, 80)
+    : "其他宏观观察";
+}
+function MacroFacts({ rows }: { rows?: ValueDirection["macroEvidence"] }) {
+  if (!rows?.length) return null;
+  return (
+    <section aria-label="该方向宏观依据">
+      <h4>实际宏观观察</h4>
+      {rows.map((row) => {
+        const label = macroLabel(row);
+        const numeric =
+          (typeof row.value === "number" ||
+            (typeof row.value === "string" && row.value.trim() !== "")) &&
+          Number.isFinite(Number(row.value))
+            ? Number(row.value)
+            : null;
+        const unit =
+          (
+            {
+              percentage_points: "个百分点",
+              index_point: "指数点",
+              percent: "%",
+              "USD/barrel": "美元/桶",
+              "USD/gallon": "美元/加仑",
+            } as Record<string, string>
+          )[row.unit ?? ""] ??
+          row.unit ??
+          "";
+        const period = row.referencePeriod
+          ? monthLabel(row.referencePeriod)
+          : timeLabel(row.referenceDate ?? row.asOf);
+        const href = sourceHref(row.sourceUri);
+        return (
+          <article
+            key={`${row.code}:${row.referencePeriod ?? row.referenceDate ?? row.asOf ?? "unknown"}`}
+            aria-label={label}
+          >
+            <p>
+              <strong>{label}</strong>：
+              {numeric === null
+                ? "未知（暂无有效数值）"
+                : `${metricValue(numeric, 2)} ${unit}`}
+            </p>
+            <small>
+              观察期：{period}
+              {row.retrievedAt && ` · 获取：${timeLabel(row.retrievedAt)}`}
+            </small>
+            {href && (
+              <p>
+                <a href={href} target="_blank" rel="noreferrer">
+                  {label}来源
+                </a>
+              </p>
+            )}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
 
 function FundPlan({
   plan,
@@ -232,6 +317,7 @@ export default function ValueDirections({
                     )
                   );
                 })}
+                <MacroFacts rows={direction.macroEvidence} />
                 {direction.watchFor.map((text) => (
                   <p key={text}>{readingText(text, 180)}</p>
                 ))}

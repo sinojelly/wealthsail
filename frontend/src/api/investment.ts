@@ -396,6 +396,17 @@ export interface ValueDirection {
   signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH";
   sourceIds: string[];
   macroCodes: string[];
+  macroEvidence?: Array<{
+    code: string;
+    label?: string | null;
+    value: number | string | null;
+    unit?: string | null;
+    asOf?: string | null;
+    referenceDate?: string | null;
+    referencePeriod?: string | null;
+    sourceUri?: string | null;
+    retrievedAt?: string | null;
+  }>;
   watchFor: string[];
   plans: ActionableZoneResult[];
 }
