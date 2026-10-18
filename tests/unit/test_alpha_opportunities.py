@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from importlib import import_module, util
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -918,7 +919,7 @@ def test_estimate_at_thirty_minute_boundary_retains_disclosed_interval_and_cover
     )
     rows = [{**study(), "check": checked}]
     text = module()._fund_message(rows, NOW.date())
-    assert "估算范围 0.99–1.03 元/份" in text and "覆盖率 85.5%" in text
+    assert "估算范围 0.9900–1.0300 元/份" in text and "覆盖率 85.50%" in text
     assert "可能误差" in text
 
 
@@ -998,9 +999,478 @@ def test_morning_message_includes_cycle_theme_and_server_coordinates_only():
     text = module()._morning_message(payload, NOW.date())
     assert "信用扩张尚待核实" in text and "AI算力与HBM/DRAM" in text
     assert "110022" in text and "左侧价值" in text and "单位净值（元/份）" in text
-    assert "0.98–1.02" in text and "止损 0.9" in text and "目标一 1.1" in text
+    assert "0.9800–1.0200" in text and "止损 0.9000" in text and "目标一 1.1000" in text
     assert "2026-10-16" in text and "zones-v2" in text
     assert "PRIVATE_" not in text
+
+
+def test_dynamic_direction_morning_coordinates_are_visible_and_rounded_by_basis():
+    nav = plan(
+        subjectKind="nav",
+        subjectId="000051",
+        fundCode="000051",
+        label="华夏沪深300ETF联接A",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+        currentPrice="1.2345678901234567",
+        tracks=[
+            {
+                **plan()["tracks"][0],
+                "entryZoneMin": "1.2000123456789",
+                "entryZoneMax": "1.2400678912345",
+                "stopLossPrice": "1.100023456789",
+                "takeProfitT1": "1.400078912345",
+                "takeProfitT2": "1.500067891234",
+            }
+        ],
+    )
+    index = plan(
+        subjectKind="index",
+        subjectId="hs300",
+        label="沪深300",
+        priceBasis="INDEX_POINTS",
+        unit="points",
+        currentPrice="4170.617899",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+        tracks=[
+            {
+                **plan()["tracks"][0],
+                "entryZoneMin": "4116.1234567",
+                "entryZoneMax": "4191.7876543",
+                "stopLossPrice": "3981.123456",
+                "takeProfitT1": "4543.456789",
+                "takeProfitT2": "4679.987654",
+            }
+        ],
+    )
+    text = module()._morning_message({"actionablePlans": [nav, index]}, NOW.date())
+    assert "核心宽基低吸" in text and "000051" in text and "hs300" in text
+    assert "1.2000–1.2401" in text and "1.1000" in text
+    assert "4116.12–4191.79" in text and "3981.12" in text
+    assert "123456" not in text and "core-value-recovery" not in text
+
+
+def test_fund_markdown_rounds_prices_ranges_and_coverage_without_changing_comparison():
+    frozen = plan(currentPrice="1.00000012345678")
+    checked = module().compare_frozen_price(
+        frozen,
+        quote(
+            value="1.0100123456789",
+            lowerValue="0.990023456789",
+            upperValue="1.030078912345",
+            coveragePct="83.123456789",
+        ),
+        NOW,
+    )
+    assert checked["price"] == "1.0100123456789"
+    text = module()._fund_message([{**study(), "check": checked}], NOW.date())
+    assert "0.9900–1.0301" in text and "83.12%" in text
+    assert "单位净值（元/份） 1.0100" in text and "0.9800–1.0200" in text
+    assert "123456" not in text
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "mapping_count": 2,
+            "graph_scope_verified": True,
+            "graph_asset_kind": "ETF_LINK_FUND",
+            "instrument_id": None,
+            "asset_type": None,
+            "trade_form": None,
+            "scope": {"fundCode": "110022", "fundMarket": "FUND_CN"},
+        },
+        {"scope": {"fundCode": "110022", "fundMarket": "SSE"}},
+    ],
+)
+def test_catalog_ambiguity_or_conflicting_scope_cannot_be_overridden_by_graph(changes):
+    assert module()._mapped_otc(study(**changes)) is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_direction_daily_plan_resolves_unique_catalog_fund_without_theme(
+    monkeypatch,
+):
+    job, db, _ = install(monkeypatch)
+    candidate = plan(
+        subjectKind="nav",
+        subjectId="000051",
+        fundCode="000051",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+    )
+    db.report = {
+        "run_id": uuid4(),
+        "slot_date": NOW.date(),
+        "recorded_at": NOW,
+        "payload": {"actionablePlans": [candidate]},
+    }
+    original = db.fetch
+
+    async def fetch(sql, *args):
+        if "research_fund_catalog" in sql and "research.study_tracks" not in sql:
+            return [
+                {
+                    "asset_code": "000051",
+                    "asset_name": "华夏沪深300ETF联接A",
+                    "market": "FUND_CN",
+                    "instrument_id": None,
+                    "mapping_count": 1,
+                    "trade_form": "FUND",
+                    "asset_type": None,
+                    "catalog_present": True,
+                    "graph_scope_verified": False,
+                }
+            ]
+        return await original(sql, *args)
+
+    db.fetch = fetch
+    rows = await job._daily_plan_rows(object(), NOW)
+    assert len(rows) == 1
+    assert rows[0]["fund_code"] == "000051" and rows[0]["market"] == "FUND_CN"
+    assert (
+        rows[0]["snapshot"]["actionablePlan"]["valueDirectionKey"]
+        == "core-value-recovery"
+    )
+    assert rows[0]["graph_scope_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_direction_fund_reaches_single_1430_estimate_and_reminder(
+    monkeypatch,
+):
+    job, db, send = install(monkeypatch)
+    db.studies = []
+    candidate = plan(
+        subjectKind="nav",
+        subjectId="000051",
+        fundCode="000051",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+    )
+    db.report = {
+        "run_id": uuid4(),
+        "slot_date": NOW.date(),
+        "recorded_at": NOW,
+        "payload": {"actionablePlans": [candidate]},
+    }
+    original = db.fetch
+
+    async def fetch(sql, *args):
+        if "research_fund_catalog" in sql and "research.study_tracks" not in sql:
+            return [
+                {
+                    "asset_code": "000051",
+                    "asset_name": "华夏沪深300ETF联接A",
+                    "market": "FUND_CN",
+                    "instrument_id": None,
+                    "mapping_count": 1,
+                    "trade_form": "FUND",
+                    "asset_type": None,
+                    "catalog_present": True,
+                    "graph_scope_verified": False,
+                }
+            ]
+        return await original(sql, *args)
+
+    db.fetch = fetch
+    prices_for = []
+
+    async def load(pool, rows, stamp):
+        prices_for.extend(rows)
+        return {
+            str(row["track_id"]): quote(subjectKind="nav", subjectId="000051")
+            for row in rows
+        }
+
+    first = await job.sync_alpha_opportunities(
+        object(), settings(), NOW, now_provider=lambda: NOW, price_loader=load
+    )
+    second = await job.sync_alpha_opportunities(
+        object(), settings(), NOW, now_provider=lambda: NOW, price_loader=load
+    )
+    assert (
+        first["fund1430"]["checked"] == 1
+        and first["fund1430"]["checks"][0]["state"] == "IN_ENTRY_ZONE"
+    )
+    assert second["fund1430"]["status"] == "SKIPPED"
+    assert len(prices_for) == 1 and prices_for[0]["fund_code"] == "000051"
+    text = send.call_args.args[1]
+    assert "核心宽基低吸" in text and "000051" in text and "1.0100" in text
+    assert send.await_count == 2  # daily morning plus one consolidated 14:30 reminder
+
+
+@pytest.mark.parametrize(
+    "plan_changes,row_changes",
+    [
+        ({"subjectId": "000052", "fundCode": "000052"}, {}),
+        ({"market": "SSE"}, {}),
+        ({"fundCode": "999999"}, {}),
+        ({"valueDirectionKey": "INVALID KEY"}, {}),
+        ({}, {"mapping_count": 2, "graph_scope_verified": True}),
+        ({}, {"market": "SSE"}),
+        ({}, {"trade_form": "ETF", "asset_type": "EXCHANGE_FUND"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dynamic_direction_title_cannot_certify_unknown_ambiguous_or_exchange_identity(
+    monkeypatch, plan_changes, row_changes
+):
+    job, db, _ = install(monkeypatch)
+    candidate = plan(
+        subjectKind="nav",
+        subjectId="000051",
+        fundCode="000051",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+    )
+    db.report = {
+        "run_id": uuid4(),
+        "slot_date": NOW.date(),
+        "recorded_at": NOW,
+        "payload": {"actionablePlans": [{**candidate, **plan_changes}]},
+    }
+    original = db.fetch
+
+    async def fetch(sql, *args):
+        if "research_fund_catalog" in sql and "research.study_tracks" not in sql:
+            return [
+                {
+                    "asset_code": "000051",
+                    "asset_name": "华夏沪深300ETF联接A",
+                    "market": "FUND_CN",
+                    "instrument_id": None,
+                    "mapping_count": 1,
+                    "trade_form": "FUND",
+                    "asset_type": None,
+                    "catalog_present": True,
+                    "graph_scope_verified": False,
+                    **row_changes,
+                }
+            ]
+        return await original(sql, *args)
+
+    db.fetch = fetch
+    assert await job._daily_plan_rows(object(), NOW) == []
+
+
+@pytest.mark.asyncio
+async def test_dynamic_morning_checks_catalog_identity_and_known_index_before_sending(
+    monkeypatch,
+):
+    job, db, send = install(monkeypatch)
+    stamp = NOW.replace(hour=8, minute=40)
+    dynamic = {
+        "valueDirectionKey": "new-medical-cycle",
+        "valueDirectionTitle": "医疗产业新周期",
+    }
+    good = plan(subjectKind="nav", subjectId="000051", fundCode="000051", **dynamic)
+    unknown = plan(
+        subjectKind="nav",
+        subjectId="999999",
+        fundCode="999999",
+        label="伪造的基金名称",
+        **dynamic,
+    )
+    broad = plan(
+        subjectKind="index",
+        subjectId="hs300",
+        priceBasis="INDEX_POINTS",
+        unit="points",
+        **dynamic,
+    )
+    db.report = {
+        "run_id": uuid4(),
+        "slot_date": stamp.date(),
+        "recorded_at": stamp,
+        "payload": {"actionablePlans": [good, unknown, broad]},
+    }
+    original = db.fetch
+
+    async def fetch(sql, *args):
+        if "research_fund_catalog" in sql and "research.study_tracks" not in sql:
+            return [
+                {
+                    "asset_code": "000051",
+                    "asset_name": "华夏沪深300ETF联接A",
+                    "market": "FUND_CN",
+                    "instrument_id": None,
+                    "mapping_count": 1,
+                    "trade_form": "FUND",
+                    "asset_type": None,
+                    "catalog_present": True,
+                    "graph_scope_verified": False,
+                }
+            ]
+        if "reference.research_indices" in sql:
+            return [{"id": "hs300", "name": "沪深300", "market": "SSE"}]
+        return await original(sql, *args)
+
+    db.fetch = fetch
+    outcome = await job.sync_alpha_opportunities(
+        object(), settings(), stamp, now_provider=lambda: stamp
+    )
+    assert outcome["morning"]["status"] == "SENT"
+    text = send.call_args.args[1]
+    assert "医疗产业新周期" in text and "000051" in text and "沪深300(hs300)" in text
+    assert "999999" not in text and "伪造" not in text
+
+
+@pytest.mark.parametrize("change", ["date", "membership"])
+@pytest.mark.asyncio
+async def test_morning_rechecks_clock_and_membership_after_catalog_lookup(
+    monkeypatch, change
+):
+    job, db, send = install(monkeypatch)
+    stamp = NOW.replace(hour=8, minute=40)
+    clock = [stamp]
+    candidate = plan(
+        subjectKind="nav",
+        subjectId="000051",
+        fundCode="000051",
+        valueDirectionKey="core-value-recovery",
+        valueDirectionTitle="核心宽基低吸",
+    )
+    db.report = {
+        "run_id": uuid4(),
+        "slot_date": stamp.date(),
+        "recorded_at": stamp,
+        "payload": {"actionablePlans": [candidate]},
+    }
+    original = db.fetch
+
+    async def fetch(sql, *args):
+        if "research_fund_catalog" in sql and "research.study_tracks" not in sql:
+            if change == "date":
+                clock[0] += timedelta(days=1)
+            else:
+                db.active = False
+            return []
+        return await original(sql, *args)
+
+    db.fetch = fetch
+    result = await job.sync_alpha_opportunities(
+        object(), settings(), stamp, now_provider=lambda: clock[0]
+    )
+    assert result["morning"]["status"] == "EXPIRED"
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("INVESTMENT_TEST_DATABASE_URL"), reason="isolated DB required"
+)
+async def test_real_catalog_ambiguity_excludes_public_and_frozen_fund_checks(
+    monkeypatch,
+):
+    import asyncpg
+    from backend.common.database import apply_tenant_context
+
+    job = module()
+    conn = await asyncpg.connect(os.environ["INVESTMENT_TEST_DATABASE_URL"])
+    tx = conn.transaction()
+    await tx.start()
+    tenant, user, instrument, duplicate, track, version = [uuid4() for _ in range(6)]
+    frozen = plan(
+        subjectId=str(instrument),
+        valueDirectionKey="medical-recovery",
+        valueDirectionTitle="医疗服务复苏",
+    )
+    scope = {
+        "instrumentId": str(instrument),
+        "fundCode": "989981",
+        "fundMarket": "FUND_CN",
+    }
+
+    @asynccontextmanager
+    async def connection(*args):
+        yield conn
+
+    monkeypatch.setattr(job, "system_connection", connection)
+    monkeypatch.setattr(job, "tenant_transaction", connection)
+    try:
+        await conn.execute(
+            "INSERT INTO identity.tenants(id,name) VALUES($1,'isolated alpha identity fixture')",
+            tenant,
+        )
+        await conn.execute(
+            "INSERT INTO identity.profiles(id,nickname) VALUES($1,'isolated actor')",
+            user,
+        )
+        await conn.execute(
+            "INSERT INTO identity.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'OWNER')",
+            tenant,
+            user,
+        )
+        await conn.execute(
+            "INSERT INTO reference.instruments(id,asset_type,primary_market,canonical_name) VALUES($1,'OFF_EXCHANGE_FUND','FUND_CN','真实目录基金')",
+            instrument,
+        )
+        await conn.execute(
+            "INSERT INTO reference.instrument_aliases(instrument_id,alias_type,alias_value,market,effective_from) VALUES($1,'TICKER','989981','FUND_CN','2026-01-01')",
+            instrument,
+        )
+        await conn.execute(
+            "INSERT INTO research.study_tracks(id,tenant_id,user_id,origin_key,title,scope,created_at,updated_at) VALUES($1,$2,$3,'isolated-alpha','隔离跟踪',$4::jsonb,$5,$5)",
+            track,
+            tenant,
+            user,
+            json.dumps(scope),
+            NOW,
+        )
+        await conn.execute(
+            "INSERT INTO research.study_versions(id,tenant_id,user_id,track_id,version,generation,snapshot,reason,command_key,command_hash,created_at) VALUES($1,$2,$3,$4,1,1,$5::jsonb,'isolated','fixture','hash',$6)",
+            version,
+            tenant,
+            user,
+            track,
+            json.dumps({"actionablePlan": frozen}),
+            NOW,
+        )
+        await apply_tenant_context(conn, user, tenant)
+        known = await job._known_public_plans(
+            object(), {"actionablePlans": [frozen]}, NOW
+        )
+        assert len(known) == 1 and known[0][0]["label"] == "真实目录基金"
+        broad = plan(
+            subjectKind="index",
+            subjectId="hs300",
+            priceBasis="INDEX_POINTS",
+            unit="points",
+            valueDirectionKey="core-value-recovery",
+            valueDirectionTitle="核心宽基低吸",
+        )
+        indices = await job._known_public_plans(
+            object(), {"actionablePlans": [broad]}, NOW, funds_only=False
+        )
+        assert len(indices) == 1 and indices[0][0]["label"] == "沪深300"
+        assert (
+            await job._known_public_plans(object(), {"actionablePlans": [broad]}, NOW)
+            == []
+        )
+        rows = await job._read_studies(object(), (tenant, user), NOW)
+        assert len(rows) == 1 and job._mapped_otc(rows[0])
+        await conn.execute("RESET ROLE")
+        await conn.execute(
+            "INSERT INTO reference.instruments(id,asset_type,primary_market,canonical_name) VALUES($1,'OFF_EXCHANGE_FUND','FUND_CN','重复目录身份')",
+            duplicate,
+        )
+        await conn.execute(
+            "INSERT INTO reference.instrument_aliases(instrument_id,alias_type,alias_value,market,effective_from) VALUES($1,'TICKER','989981','FUND_CN','2025-01-01')",
+            duplicate,
+        )
+        await apply_tenant_context(conn, user, tenant)
+        assert (
+            await job._known_public_plans(object(), {"actionablePlans": [frozen]}, NOW)
+            == []
+        )
+        rows = await job._read_studies(object(), (tenant, user), NOW)
+        assert len(rows) == 1 and not job._mapped_otc(rows[0])
+    finally:
+        await tx.rollback()
+        await conn.close()
 
 
 def test_morning_message_does_not_relabel_index_coordinates_as_fund_nav_or_print_bad_plans():

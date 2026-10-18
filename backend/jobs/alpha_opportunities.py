@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 import json
 import logging
+import re
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -196,7 +197,9 @@ async def _read_studies(pool, scope, now):
             JOIN LATERAL(SELECT id,snapshot FROM research.study_versions v
               WHERE v.tenant_id=t.tenant_id AND v.user_id=t.user_id AND v.track_id=t.id
               AND v.created_at<=$3 ORDER BY version DESC LIMIT 1) v ON TRUE
-            LEFT JOIN LATERAL(SELECT c.*,count(*) OVER() AS mapping_count
+            LEFT JOIN LATERAL(SELECT c.*,(SELECT count(*)
+                FROM reference.research_fund_catalog other
+                WHERE other.market=c.market AND other.fund_code=c.fund_code) AS mapping_count
               FROM reference.research_fund_catalog c
               WHERE (NULLIF(t.scope->>'instrumentId','') IS NOT NULL
                      AND c.instrument_id::text=t.scope->>'instrumentId')
@@ -206,6 +209,7 @@ async def _read_studies(pool, scope, now):
             LEFT JOIN LATERAL(SELECT asset_code,asset_name,asset_kind,market
               FROM reference.theme_asset_graph g
               WHERE NULLIF(t.scope->>'instrumentId','') IS NULL
+                AND c.fund_code IS NULL
                 AND t.scope->>'fundMarket'='FUND_CN' AND g.market='FUND_CN'
                 AND g.asset_code=t.scope->>'fundCode'
                 AND g.asset_kind IN ('ETF_LINK_FUND','ACTIVE_FUND','LOF')
@@ -233,8 +237,18 @@ async def _read_studies(pool, scope, now):
 
 def _mapped_otc(row):
     scope = _body(row.get("scope"))
+    if any(
+        scope.get(key) and str(scope[key]) != str(row.get(field))
+        for key, field in (
+            ("fundCode", "fund_code"),
+            ("fundMarket", "market"),
+            ("instrumentId", "instrument_id"),
+        )
+    ):
+        return False
     graph_known = (
         row.get("graph_scope_verified") is True
+        and row.get("mapping_count") in {None, 0}
         and row.get("graph_asset_kind") in {"ETF_LINK_FUND", "ACTIVE_FUND", "LOF"}
         and not scope.get("instrumentId")
         and scope.get("fundCode") == row.get("fund_code")
@@ -423,7 +437,19 @@ def _bounded_lines(lines, limit=3900):
 
 def _public_coordinate(plan, day, *, funds_only=False):
     """Select typed server coordinates, never model notes or private fields."""
-    if not isinstance(plan, dict) or plan.get("themeCode") not in THEME_LABELS:
+    if not isinstance(plan, dict):
+        return None
+    direction = plan.get("valueDirectionKey")
+    if direction is not None:
+        if (
+            not isinstance(direction, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", direction)
+            or not isinstance(plan.get("valueDirectionTitle"), str)
+            or not plan["valueDirectionTitle"].strip()
+            or len(plan["valueDirectionTitle"]) > 100
+        ):
+            return None
+    elif plan.get("themeCode") not in THEME_LABELS:
         return None
     kind, basis = plan.get("subjectKind"), plan.get("priceBasis")
     if not isinstance(plan.get("subjectId"), str) or not plan["subjectId"]:
@@ -431,6 +457,20 @@ def _public_coordinate(plan, day, *, funds_only=False):
     if kind in {"fund", "nav"}:
         if basis != "UNIT_NAV" or _unit(plan.get("unit"), basis) != "CNY/份":
             return None
+        if kind == "nav" and (
+            not re.fullmatch(r"[0-9]{6}", plan["subjectId"])
+            or plan.get("fundCode") not in {None, plan["subjectId"]}
+            or any(
+                plan.get(key) not in {None, "FUND_CN"}
+                for key in ("market", "fundMarket")
+            )
+        ):
+            return None
+        if kind == "fund":
+            try:
+                UUID(plan["subjectId"])
+            except (ValueError, TypeError):
+                return None
     elif (
         funds_only
         or kind != "index"
@@ -481,6 +521,15 @@ def _public_coordinate(plan, day, *, funds_only=False):
     return selected, track
 
 
+def _price_text(value, basis):
+    number = _number(value)
+    return (
+        format(number, ".4f" if basis == "UNIT_NAV" else ".2f")
+        if number is not None
+        else "—"
+    )
+
+
 def _morning_message(payload, day):
     plans = []
     for plan in (payload.get("actionablePlans") or [])[:24]:
@@ -494,7 +543,7 @@ def _morning_message(payload, day):
             else "指数点（仅研究坐标）"
         )
         plans.append(
-            f"{THEME_LABELS[plan['themeCode']]} · {_text(plan.get('label') or plan['subjectId'], 50)}({_text(plan.get('fundCode') or plan['subjectId'], 40)}) · {TRACK_LABELS[selected]}；{basis_label}；14:30关注区间 {track['entryZoneMin']}–{track['entryZoneMax']}；止损 {track.get('stopLossPrice') or '—'}；目标一 {track.get('takeProfitT1') or '—'}；目标二 {track.get('takeProfitT2') or '—'}；价格日期 {_day(plan['asOf'])} / {_text(plan['methodVersion'], 40)}"
+            f"{_text(plan.get('valueDirectionTitle') or THEME_LABELS.get(plan.get('themeCode'), '重点方向'), 100)} · {_text(plan.get('label') or plan['subjectId'], 50)}({_text(plan.get('fundCode') or plan['subjectId'], 40)}) · {TRACK_LABELS[selected]}；{basis_label}；最新 {_price_text(plan['currentPrice'], plan['priceBasis'])}；14:30关注区间 {_price_text(track['entryZoneMin'], plan['priceBasis'])}–{_price_text(track['entryZoneMax'], plan['priceBasis'])}；止损 {_price_text(track.get('stopLossPrice'), plan['priceBasis'])}；目标一 {_price_text(track.get('takeProfitT1'), plan['priceBasis'])}；目标二 {_price_text(track.get('takeProfitT2'), plan['priceBasis'])}；价格日期 {_day(plan['asOf'])} / {_text(plan['methodVersion'], 40)}"
         )
     return _bounded_lines(
         [
@@ -526,20 +575,25 @@ def _fund_message(rows, day):
     ]
     for row in rows:
         checked = row["check"]
-        track = row["snapshot"]["actionablePlan"].get("selectedTrack")
+        frozen = row["snapshot"]["actionablePlan"]
+        track = frozen.get("selectedTrack")
         track_label = TRACK_LABELS.get(track, "轨道待核对")
         origin = (
             "今日日报计划"
             if row.get("planOrigin") == "DAILY_REPORT"
             else "本人冻结计划"
         )
-        line = f"{_text(row.get('fund_name'), 50)}({_text(row.get('fund_code'), 12)}) · {origin} · {track_label}：{labels[checked['state']]}"
+        direction = frozen.get("valueDirectionTitle") or THEME_LABELS.get(
+            frozen.get("themeCode")
+        )
+        line = _text(direction, 100) + " · " if direction else ""
+        line += f"{_text(row.get('fund_name'), 50)}({_text(row.get('fund_code'), 12)}) · {origin} · {track_label}：{labels[checked['state']]}"
         if checked.get("lowerValue") and checked.get("upperValue"):
-            line += f"；估算范围 {checked['lowerValue']}–{checked['upperValue']} 元/份（可能误差范围）"
+            line += f"；估算范围 {_price_text(checked['lowerValue'], 'UNIT_NAV')}–{_price_text(checked['upperValue'], 'UNIT_NAV')} 元/份（可能误差范围）"
         else:
             line += "；估算范围 未提供；可能误差 未知"
         line += (
-            f"；覆盖率 {checked['coveragePct']}%"
+            f"；覆盖率 {_coverage(checked['coveragePct']):.2f}%"
             if checked.get("coveragePct") is not None
             else "；覆盖率 未提供"
         )
@@ -555,9 +609,9 @@ def _fund_message(rows, day):
                 if checked["priceBasis"] == "UNIT_NAV"
                 else "收益指数（研究坐标）"
             )
-            line += f"；{basis_label} {checked['price']}；入场区间 {checked['entryZoneMin']}–{checked['entryZoneMax']}；止损 {checked.get('stopLossPrice') or '—'}；目标一 {checked.get('takeProfitT1') or '—'}；观察 {checked['asOf']}；冻结 {checked.get('planAsOf')} / {_text(checked.get('methodVersion'), 40)}"
+            line += f"；{basis_label} {_price_text(checked['price'], checked['priceBasis'])}；入场区间 {_price_text(checked['entryZoneMin'], checked['priceBasis'])}–{_price_text(checked['entryZoneMax'], checked['priceBasis'])}；止损 {_price_text(checked.get('stopLossPrice'), checked['priceBasis'])}；目标一 {_price_text(checked.get('takeProfitT1'), checked['priceBasis'])}；观察 {checked['asOf']}；冻结 {checked.get('planAsOf')} / {_text(checked.get('methodVersion'), 40)}"
         if checked.get("conversionAsOf"):
-            line += f"；估算净值 {checked['observedNav']}，按{checked['conversionAsOf']}确认配对换算收益指数"
+            line += f"；估算净值 {_price_text(checked['observedNav'], 'UNIT_NAV')}，按{checked['conversionAsOf']}确认配对换算收益指数"
         lines.append(line)
     return _bounded_lines(lines)
 
@@ -738,42 +792,79 @@ async def _today_report(pool, now):
     return report
 
 
-async def _daily_plan_rows(pool, now):
-    """Public plans are temporary checks, never private studies or trades."""
-    report = await _today_report(pool, now)
-    if report is None:
-        return []
+async def _known_public_plans(pool, payload, now, *, funds_only=True):
+    """Resolve public identities through the catalog; a direction is not identity proof."""
     plans = [
         plan
-        for plan in _body(report.get("payload")).get("actionablePlans", [])
-        if _public_coordinate(plan, now.date(), funds_only=True)
+        for plan in (payload.get("actionablePlans") or [])[:24]
+        if _public_coordinate(plan, now.date(), funds_only=funds_only)
     ]
     if not plans:
         return []
+    fund_plans = [plan for plan in plans if plan["subjectKind"] in {"fund", "nav"}]
+    identities = sorted(
+        {plan["subjectId"] for plan in fund_plans if plan["subjectKind"] == "fund"}
+    )
+    codes = sorted(
+        {plan["subjectId"] for plan in fund_plans if plan["subjectKind"] == "nav"}
+    )
+    graph, indices = [], []
     async with system_connection(pool) as conn:
-        graph = await conn.fetch(
-            """SELECT g.theme_code,g.asset_code,g.asset_name,g.asset_kind,g.market,
-            c.instrument_id,c.mapping_count,c.trade_form,i.asset_type
-            FROM reference.theme_asset_graph g
-            LEFT JOIN LATERAL(SELECT c.*,count(*) OVER() AS mapping_count
-              FROM reference.research_fund_catalog c
-              WHERE c.fund_code=g.asset_code AND c.market=g.market
-              ORDER BY c.market,c.fund_code LIMIT 1) c ON TRUE
+        if fund_plans:
+            graph = await conn.fetch(
+                """SELECT NULL::text AS theme_code,c.fund_code AS asset_code,
+            c.fund_name AS asset_name,NULL::text AS asset_kind,c.market,c.instrument_id,
+            (SELECT count(*) FROM reference.research_fund_catalog other
+              WHERE other.market=c.market AND other.fund_code=c.fund_code) AS mapping_count,
+            c.trade_form,i.asset_type,true AS catalog_present,false AS graph_scope_verified
+            FROM reference.research_fund_catalog c
             LEFT JOIN reference.instruments i ON i.id=c.instrument_id
+            WHERE c.instrument_id::text=ANY($1::text[])
+              OR (c.fund_code=ANY($2::text[]) AND c.market='FUND_CN')
+            UNION ALL
+            SELECT g.theme_code,g.asset_code,g.asset_name,g.asset_kind,g.market,
+            NULL::uuid AS instrument_id,0::bigint AS mapping_count,NULL::text AS trade_form,
+            NULL::text AS asset_type,false AS catalog_present,true AS graph_scope_verified
+            FROM reference.theme_asset_graph g
             WHERE g.market='FUND_CN' AND g.asset_kind IN ('ETF_LINK_FUND','ACTIVE_FUND','LOF')
-            AND g.theme_code=ANY($1::text[]) ORDER BY g.theme_code,g.asset_code""",
-            sorted({plan["themeCode"] for plan in plans}),
+              AND g.asset_code=ANY($2::text[])
+              AND NOT EXISTS(SELECT 1 FROM reference.research_fund_catalog c
+                WHERE c.fund_code=g.asset_code AND c.market=g.market)
+            ORDER BY market,asset_code,theme_code NULLS FIRST""",
+                identities,
+                codes,
+            )
+        index_ids = sorted(
+            {plan["subjectId"] for plan in plans if plan["subjectKind"] == "index"}
         )
-    output, seen = [], set()
+        if index_ids:
+            indices = await conn.fetch(
+                "SELECT id,name,market FROM reference.research_indices WHERE id=ANY($1::text[])",
+                index_ids,
+            )
+    output = []
     for plan in plans:
+        if plan["subjectKind"] == "index":
+            matches = [
+                row
+                for row in indices
+                if row["id"] == plan["subjectId"]
+                and plan.get("market") in {None, row["market"]}
+            ]
+            if len(matches) == 1:
+                output.append(({**plan, "label": matches[0]["name"]}, None))
+            continue
         matches = [
             dict(row)
             for row in graph
-            if row["theme_code"] == plan["themeCode"]
-            and row["market"] == "FUND_CN"
-            and row["asset_kind"] in {"ETF_LINK_FUND", "ACTIVE_FUND", "LOF"}
+            if (
+                not row.get("theme_code")
+                or not plan.get("themeCode")
+                or row["theme_code"] == plan["themeCode"]
+            )
             and (
                 plan["subjectKind"] == "nav"
+                and row["market"] == "FUND_CN"
                 and plan["subjectId"] == row["asset_code"]
                 or plan["subjectKind"] == "fund"
                 and row.get("mapping_count") == 1
@@ -784,10 +875,47 @@ async def _daily_plan_rows(pool, now):
         if len(matches) != 1:
             continue
         mapped = matches[0]
-        if plan.get("fundCode") not in {None, mapped["asset_code"]} or mapped.get(
-            "mapping_count"
-        ) not in {None, 0, 1}:
+        mapped = {
+            **mapped,
+            "fund_code": mapped["asset_code"],
+            "fund_name": mapped["asset_name"],
+            "scope": {"fundCode": mapped["asset_code"], "fundMarket": mapped["market"]},
+            "graph_scope_verified": mapped.get(
+                "graph_scope_verified", mapped.get("mapping_count") in {None, 0}
+            ),
+            "graph_asset_kind": mapped.get("asset_kind"),
+        }
+        if (
+            plan.get("fundCode") not in {None, mapped["asset_code"]}
+            or any(
+                plan.get(key) not in {None, mapped["market"]}
+                for key in ("market", "fundMarket")
+            )
+            or not _mapped_otc(mapped)
+        ):
             continue
+        output.append(
+            (
+                {
+                    **plan,
+                    "label": mapped["asset_name"],
+                    "fundCode": mapped["asset_code"],
+                    "market": mapped["market"],
+                },
+                mapped,
+            )
+        )
+    return output
+
+
+async def _daily_plan_rows(pool, now):
+    """Public plans are temporary checks, never private studies or trades."""
+    report = await _today_report(pool, now)
+    if report is None:
+        return []
+    plans = await _known_public_plans(pool, _body(report.get("payload")), now)
+    output, seen = [], set()
+    for plan, mapped in plans:
         selected, _ = _public_coordinate(plan, now.date(), funds_only=True)
         key = (mapped["market"], mapped["asset_code"], selected)
         if key in seen:
@@ -810,8 +938,8 @@ async def _daily_plan_rows(pool, now):
                 "mapping_count": mapped.get("mapping_count"),
                 "trade_form": mapped.get("trade_form"),
                 "asset_type": mapped.get("asset_type"),
-                "graph_scope_verified": True,
-                "graph_asset_kind": mapped["asset_kind"],
+                "graph_scope_verified": mapped["graph_scope_verified"],
+                "graph_asset_kind": mapped.get("asset_kind"),
                 "planOrigin": "DAILY_REPORT",
                 "source": "DAILY_RESEARCH",
                 "reportRunId": str(report["run_id"]),
@@ -838,11 +966,19 @@ async def sync_alpha_opportunities(
         if report:
 
             async def morning():
+                payload = _body(report["payload"])
+                known = await _known_public_plans(
+                    pool, payload, stamp, funds_only=False
+                )
                 active = await _active(pool, scope)
                 if _local(now_provider()).date() != stamp.date() or not active:
                     return "EXPIRED", {}
                 await send_opportunity_webhook(
-                    settings, _morning_message(_body(report["payload"]), stamp.date())
+                    settings,
+                    _morning_message(
+                        {**payload, "actionablePlans": [plan for plan, _ in known]},
+                        stamp.date(),
+                    ),
                 )
                 return "SENT", {"reportRunId": str(report["run_id"])}
 
