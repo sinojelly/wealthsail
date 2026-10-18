@@ -545,7 +545,7 @@ async def _cls(fetch, cutoff):
             "last_time": cursor,
             "os": "web",
             "refresh_type": "1",
-            "rn": "100",
+            "rn": "20",
             "sv": "8.4.6",
         }
         params["sign"] = hashlib.md5(
@@ -557,11 +557,17 @@ async def _cls(fetch, cutoff):
                 raise TimeoutError("CLS daily window budget exhausted")
             pages += 1
             payload = await asyncio.wait_for(fetch(CLS_URL, params=params), remaining)
-            raw = (
-                payload.get("data", {}).get("roll_data")
-                if isinstance(payload, dict)
-                else None
-            )
+            if (
+                isinstance(payload, dict)
+                and "errno" in payload
+                and (
+                    type(payload["errno"]) not in {int, str}
+                    or str(payload["errno"]) != "0"
+                )
+            ):
+                raise _Unavailable("CLS upstream rejected request")
+            data = payload.get("data") if isinstance(payload, dict) else None
+            raw = data.get("roll_data") if isinstance(data, dict) else None
             if not isinstance(raw, list):
                 raise _Unavailable("CLS roll data unavailable")
         except Exception as error:  # noqa: BLE001 -- keep completed public pages
@@ -577,7 +583,7 @@ async def _cls(fetch, cutoff):
             break
         retrieved = _aware(now_shanghai())
         page_new, page_times, reached_window = 0, [], False
-        for item in raw[:100]:
+        for item in raw[:20]:
             if not isinstance(item, dict):
                 continue
             seconds = _number(item.get("ctime"))

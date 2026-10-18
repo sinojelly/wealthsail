@@ -275,7 +275,7 @@ async def test_cls_paginates_capped_twenty_row_pages_through_151st_item(monkeypa
     assert {"cls:1020", "cls:1150", "cls:1299"} <= identities
     assert len(identities) == 300
     assert len(calls) == 15
-    assert all(call["rn"] == "100" for call in calls)
+    assert all(call["rn"] == "20" for call in calls)
     assert calls[1]["last_time"] < calls[0]["last_time"]
     assert calls[1]["sign"] != calls[0]["sign"]
     assert result["status"] == "PARTIAL"
@@ -420,6 +420,53 @@ async def test_cls_stops_nonadvancing_provider_cursor_with_usable_facts(monkeypa
     assert result["coverage"]["pages"] == 2
     assert result["coverage"]["stopReason"] == "CURSOR_NOT_ADVANCING"
     assert result["status"] == "PARTIAL"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"errno": 1001, "msg": "invalid request", "data": {"roll_data": []}},
+        {"errno": "1001", "data": {"roll_data": []}},
+        {"errno": False, "data": {"roll_data": []}},
+        {"errno": 0, "data": {}},
+        {"errno": 0, "data": None},
+        {"errno": 0, "data": {"roll_data": None}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_cls_provider_error_or_missing_shape_is_not_a_successful_empty_page(
+    monkeypatch, response
+):
+    module = engine(monkeypatch)
+
+    def handler(request):
+        return (
+            httpx.Response(200, json=response)
+            if request.url.host == "www.cls.cn"
+            else route(request)
+        )
+
+    result = await collect(module, handler)
+    assert result["catalysts"] == []
+    assert result["sourceResults"]["CLS_TELEGRAPH"]["status"] == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_cls_documented_successful_empty_page_remains_success(monkeypatch):
+    module = engine(monkeypatch)
+
+    def handler(request):
+        if request.url.host == "www.cls.cn":
+            return httpx.Response(
+                200, json={"errno": 0, "msg": "", "data": {"roll_data": []}}
+            )
+        return route(request)
+
+    result = await collect(module, handler)
+    source = result["sourceResults"]["CLS_TELEGRAPH"]
+    assert result["catalysts"] == [] and source["status"] == "SUCCESS"
+    assert source["coverage"]["stopReason"] == "EMPTY_PAGE"
+    assert source["coverage"]["truncated"] is False
 
 
 @pytest.mark.asyncio
