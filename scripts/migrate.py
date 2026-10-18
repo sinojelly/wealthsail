@@ -2536,7 +2536,11 @@ async def _readback(conn: asyncpg.Connection) -> None:
     if missing:
         raise RuntimeError(f"runtime role privileges missing: {', '.join(missing)}")
 
-    daily_tables = ("research.daily_research_runs", "research.daily_research_results")
+    daily_tables = (
+        "research.daily_research_runs",
+        "research.daily_research_results",
+        "market.fund_research_nav_histories",
+    )
     for table in daily_tables:
         if not await conn.fetchval("SELECT to_regclass($1)", table):
             raise RuntimeError("daily research boundary is missing or unsafe")
@@ -2565,8 +2569,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
             table,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
+    # 085 replaces daily_research_runs_slot_date_key with a scheduled-only index.
     for table, constraint in (
-        ("research.daily_research_runs", "daily_research_runs_slot_date_key"),
         ("research.daily_research_results", "daily_research_results_pkey"),
     ):
         if not await conn.fetchval(
@@ -2575,6 +2579,168 @@ async def _readback(conn: asyncpg.Connection) -> None:
             constraint,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
+
+    for table, index, column, mode in (
+        (
+            "research.daily_research_runs",
+            "daily_research_scheduled_slot",
+            "slot_date",
+            "SCHEDULED",
+        ),
+        (
+            "research.daily_research_runs",
+            "daily_research_debug_request",
+            "debug_request_id",
+            "DEBUG",
+        ),
+        (
+            "market.alpha_public_batches",
+            "alpha_public_scheduled_slot",
+            "run_date",
+            "SCHEDULED",
+        ),
+        (
+            "market.alpha_public_batches",
+            "alpha_public_debug_request",
+            "debug_request_id",
+            "DEBUG",
+        ),
+    ):
+        row = await conn.fetchrow(
+            """SELECT i.indisunique,pg_get_indexdef(i.indexrelid) AS definition,
+            pg_get_expr(i.indpred,i.indrelid) AS predicate
+            FROM pg_index i WHERE i.indrelid=$1::regclass AND i.indexrelid=to_regclass($2)""",
+            table,
+            table.split(".")[0] + "." + index,
+        )
+        if (
+            not row
+            or not row["indisunique"]
+            or f"({column})" not in row["definition"]
+            or row["predicate"] != f"(run_mode = '{mode}'::text)"
+        ):
+            raise RuntimeError(
+                "debug research slot identity boundary is missing or unsafe"
+            )
+    for constraint in (
+        "daily_research_mode_request",
+        "daily_research_debug_source_required",
+        "daily_research_debug_source_identity",
+    ):
+        if not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='research.daily_research_runs'::regclass AND conname=$1 AND convalidated)",
+            constraint,
+        ):
+            raise RuntimeError(
+                "debug research source identity boundary is missing or unsafe"
+            )
+    queue_table = "research.daily_research_refresh_requests"
+    safe = await conn.fetchval(
+        """SELECT c.relrowsecurity AND c.relforcerowsecurity AND
+        EXISTS(SELECT 1 FROM pg_policies p WHERE p.schemaname='research' AND p.tablename='daily_research_refresh_requests'
+          AND p.cmd='SELECT' AND p.qual LIKE '%uid()%' AND p.qual LIKE '%OWNER%' AND p.qual LIKE '%ADMIN%') AND
+        EXISTS(SELECT 1 FROM pg_policies p WHERE p.schemaname='research' AND p.tablename='daily_research_refresh_requests'
+          AND p.cmd='INSERT' AND p.with_check LIKE '%uid()%' AND p.with_check LIKE '%QUEUED%')
+        FROM pg_class c WHERE c.oid=to_regclass($1)""",
+        queue_table,
+    )
+    if not safe:
+        raise RuntimeError("debug research request RLS boundary is missing or unsafe")
+    queue_columns = await conn.fetch(
+        "SELECT attname FROM pg_attribute WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped",
+        queue_table,
+    )
+    insert_columns = {"tenant_id", "user_id", "command_key", "requested_at"}
+    update_columns = {
+        "status",
+        "started_at",
+        "completed_at",
+        "batch_id",
+        "report_run_id",
+        "error_class",
+    }
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in ("SELECT", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+            if await conn.fetchval(
+                "SELECT has_table_privilege($1,$2,$3)", role, queue_table, privilege
+            ) != (privilege == "SELECT" and role != "authenticated"):
+                raise RuntimeError(
+                    "debug research request privilege boundary is missing or unsafe"
+                )
+        for column in queue_columns:
+            for privilege, allowed_columns in (
+                ("INSERT", insert_columns),
+                ("UPDATE", update_columns),
+            ):
+                expected = column["attname"] in allowed_columns and (
+                    role != "authenticated"
+                    if privilege == "INSERT"
+                    else role == "wealthsail_worker"
+                )
+                if (
+                    await conn.fetchval(
+                        "SELECT has_column_privilege($1,$2,$3,$4)",
+                        role,
+                        queue_table,
+                        column["attname"],
+                        privilege,
+                    )
+                    != expected
+                ):
+                    raise RuntimeError(
+                        "debug research request column boundary is missing or unsafe"
+                    )
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)",
+        queue_table,
+    ):
+        raise RuntimeError("debug research request exposes PUBLIC privileges")
+    command_table = "research.daily_research_refresh_commands"
+    for column in ("id", "status"):
+        if not await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_worker','identity.tenants',$1,'SELECT')",
+            column,
+        ):
+            raise RuntimeError("debug research tenant status read boundary is missing")
+    for column in ("id", "email"):
+        if not await conn.fetchval(
+            "SELECT has_column_privilege('wealthsail_worker','identity.profiles',$1,'SELECT')",
+            column,
+        ):
+            raise RuntimeError("debug research local operator read boundary is missing")
+    if await conn.fetchval(
+        "SELECT has_column_privilege('wealthsail_worker','identity.profiles','password_hash','SELECT')"
+    ):
+        raise RuntimeError("debug research worker must not read password hashes")
+    if not await conn.fetchval(
+        """SELECT c.relrowsecurity AND c.relforcerowsecurity AND
+        EXISTS(SELECT 1 FROM pg_policies p WHERE p.schemaname='research' AND p.tablename='daily_research_refresh_commands'
+          AND p.cmd='SELECT' AND p.qual LIKE '%uid()%' AND p.qual LIKE '%OWNER%' AND p.qual LIKE '%ADMIN%')
+        FROM pg_class c WHERE c.oid=to_regclass($1)""",
+        command_table,
+    ):
+        raise RuntimeError("debug research command RLS boundary is missing or unsafe")
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in (
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "TRUNCATE",
+            "REFERENCES",
+            "TRIGGER",
+        ):
+            if await conn.fetchval(
+                "SELECT has_table_privilege($1,$2,$3)", role, command_table, privilege
+            ) != (role != "authenticated" and privilege in {"SELECT", "INSERT"}):
+                raise RuntimeError(
+                    "debug research command privilege boundary is missing or unsafe"
+                )
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)",
+        command_table,
+    ):
+        raise RuntimeError("debug research command exposes PUBLIC privileges")
 
     for name in (
         "study_tracks",

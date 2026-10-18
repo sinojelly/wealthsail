@@ -70,11 +70,20 @@ def _object(value):
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
-async def claim_alpha_batch(conn, now):
+async def claim_alpha_batch(conn, now, *, debug_request_id=None):
     stamp = local(now)
+    if debug_request_id is not None:
+        return await conn.fetchrow(
+            """INSERT INTO market.alpha_public_batches(run_date,claimed_at,status,run_mode,debug_request_id)
+            VALUES($1,$2,'CLAIMED','DEBUG',$3)
+            ON CONFLICT(debug_request_id) WHERE run_mode='DEBUG' DO NOTHING RETURNING *""",
+            stamp.date(),
+            stamp,
+            debug_request_id,
+        )
     return await conn.fetchrow(
         """INSERT INTO market.alpha_public_batches(run_date,claimed_at,status)
-        VALUES($1,$2,'CLAIMED') ON CONFLICT(run_date) DO NOTHING RETURNING *""",
+        VALUES($1,$2,'CLAIMED') ON CONFLICT(run_date) WHERE run_mode='SCHEDULED' DO NOTHING RETURNING *""",
         stamp.date(),
         stamp,
     )
@@ -93,20 +102,28 @@ async def finish_alpha_batch(conn, identity, now, status, payload):
     )
 
 
-async def read_alpha_public(conn, now):
+async def read_alpha_public(conn, now, *, debug_request_id=None):
     stamp = local(now)
+    exact = " AND debug_request_id=$3" if debug_request_id is not None else ""
+    arguments = (
+        (stamp.date(), stamp, debug_request_id)
+        if debug_request_id is not None
+        else (stamp.date(), stamp)
+    )
     latest = await conn.fetchrow(
         """SELECT * FROM market.alpha_public_batches
-        WHERE run_date<=$1 AND claimed_at<=$2 ORDER BY run_date DESC,claimed_at DESC LIMIT 1""",
-        stamp.date(),
-        stamp,
+        WHERE run_date<=$1 AND claimed_at<=$2"""
+        + exact
+        + " ORDER BY run_date DESC,claimed_at DESC,id DESC LIMIT 1",
+        *arguments,
     )
     ready = await conn.fetchrow(
         """SELECT * FROM market.alpha_public_batches WHERE run_date<=$1
         AND claimed_at<=$2 AND completed_at<=$2 AND status IN ('READY','PARTIAL')
-        ORDER BY run_date DESC,completed_at DESC LIMIT 1""",
-        stamp.date(),
-        stamp,
+        """
+        + exact
+        + " ORDER BY run_date DESC,completed_at DESC,id DESC LIMIT 1",
+        *arguments,
     )
     result = empty_public()
     if (
@@ -127,6 +144,7 @@ async def read_alpha_public(conn, now):
         result["asOf"] = payload.get("asOf")
         result["collectionAsOf"] = _stamp(ready["completed_at"]).isoformat()
         result["cacheRunDate"] = _day(ready["run_date"]).isoformat()
+        result["batchId"] = str(ready["id"])
     else:
         ready = None
         result.update(collectionAsOf=None, cacheRunDate=None)
