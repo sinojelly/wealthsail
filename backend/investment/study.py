@@ -128,6 +128,62 @@ def _strings(values, limit=8):
     )
 
 
+def direction_macro_evidence(rows, macro_codes, *, now):
+    """Whitelist exact report facts, validating against that report's clock."""
+    from backend.macro.daily_research import _visible, _url
+
+    now = _now(now)
+    if not isinstance(rows, list) or len(rows) > 8 or not isinstance(macro_codes, list):
+        raise ValueError("invalid direction macro evidence")
+    if any(not isinstance(code, str) for code in macro_codes):
+        raise ValueError("invalid direction macro codes")
+    fields = {
+        "code",
+        "label",
+        "value",
+        "unit",
+        "asOf",
+        "referenceDate",
+        "referencePeriod",
+        "sourceUri",
+        "retrievedAt",
+        "availableAt",
+        "publishedAt",
+        "timeBasis",
+        "state",
+    }
+    output, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("invalid direction macro fact")
+        code = row.get("code")
+        if (
+            not isinstance(code, str)
+            or code not in macro_codes
+            or code in seen
+            or _number(row.get("value")) is None
+            or not _visible(row, now)
+            or row.get("state", "READY") not in {"READY", "VERIFIED", "OBSERVED"}
+            or not any(
+                row.get(key) for key in ("asOf", "referenceDate", "referencePeriod")
+            )
+        ):
+            raise ValueError("unavailable direction macro fact")
+        if row.get("sourceUri") is not None:
+            _url(row["sourceUri"])
+        fact = {key: deepcopy(value) for key, value in row.items() if key in fields}
+        if any(
+            key != "value" and value is not None and not isinstance(value, str)
+            for key, value in fact.items()
+        ):
+            raise ValueError("invalid direction macro field")
+        output.append(fact)
+        seen.add(code)
+    if seen != set(macro_codes):
+        raise ValueError("incomplete direction macro proof")
+    return output
+
+
 def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
     now = _now(now)
     if type(horizon_days) is not int or not 1 <= horizon_days <= 365:
@@ -241,6 +297,15 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
                 "watchFor",
             }
         }
+        if "macroEvidence" in origin["valueDirection"]:
+            report_clock = _stamp(origin.get("reportAsOf"))
+            if report_clock is None or report_clock > now:
+                raise ValueError("macro proof requires the original report clock")
+            snapshot["valueDirection"]["macroEvidence"] = direction_macro_evidence(
+                origin["valueDirection"]["macroEvidence"],
+                origin["valueDirection"].get("macroCodes") or [],
+                now=report_clock,
+            )
     snapshot["benchmarkIndexId"] = (
         snapshot["scope"].get("indexId")
         if snapshot["scope"].get("indexId") in INDICES

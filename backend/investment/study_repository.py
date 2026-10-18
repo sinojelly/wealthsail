@@ -59,6 +59,7 @@ async def daily_direction_origin(
     """Select the exact immutable public report plan; never recalculate prices."""
     from backend.macro.alpha_research import _program_plan
     from backend.macro.daily_research import _visible
+    from backend.investment.study import direction_macro_evidence
 
     row = await conn.fetchrow(
         """SELECT r.run_id,t.payload,t.recorded_at FROM research.daily_research_runs r
@@ -115,6 +116,13 @@ async def daily_direction_origin(
             or any(not _visible(source, now) for source in sources)
         ):
             raise ValueError("missing direction sources")
+        macro_evidence = (
+            direction_macro_evidence(
+                direction["macroEvidence"], direction.get("macroCodes") or [], now=stamp
+            )
+            if "macroEvidence" in direction
+            else None
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError_("该日报方向或标的计划无效，无法冻结") from exc
     frozen_direction = {
@@ -130,6 +138,8 @@ async def daily_direction_origin(
         )
         if key in direction
     }
+    if macro_evidence is not None:
+        frozen_direction["macroEvidence"] = macro_evidence
     return {
         "originType": "DAILY_DIRECTION",
         "reportRunId": str(row["run_id"]),
