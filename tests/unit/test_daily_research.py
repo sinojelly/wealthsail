@@ -240,6 +240,8 @@ def test_prompt_prioritizes_current_cross_industry_catalysts_before_extra_techni
     assert "金融重磅会议" in prompt and "券商与银行" in prompt
     assert "黄金与油气" in prompt and "互补的1至2只基金" in prompt
     assert "纯量化与消费补充不挤掉已有核心产业催化" in prompt
+    assert "逐主题说明未找到或未核实" not in prompt
+    assert "优先综合可用事实与价格发现机会" in prompt
 
 
 def test_report_source_budget_accepts_24_distinct_sources_and_rejects_a_25th():
