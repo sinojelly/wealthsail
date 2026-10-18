@@ -1888,9 +1888,19 @@
 .op-value-risks a {
   display: inline-block;
   font-size: 12px;
-  margin-left: 6px;
   color: inherit;
   text-underline-offset: 2px;
+}
+.op-inline-sources {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 6px;
+}
+.op-plan-time-basis {
+  color: #7c5421;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .op-value-macro {
   color: #526477;

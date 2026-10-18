@@ -327,7 +327,9 @@ export default function MacroContextStrip({
                 />
                 {!!ready?.events?.filter((event) => !reportIds.has(event.id))
                   .length && (
-                  <details>
+                  <details
+                    key={`official:${ready.dailyResearch?.reportRunId ?? ready.dailyResearch?.report?.asOf ?? "no-report"}`}
+                  >
                     <summary>官方发布与其他观察</summary>
                     <MacroEvents
                       events={ready.events.filter(

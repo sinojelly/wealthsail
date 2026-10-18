@@ -116,7 +116,7 @@ interface DailyResearchReportProps {
 export default function DailyResearchReport(props: DailyResearchReportProps) {
   return (
     <DailyResearchContent
-      key={props.data?.reportRunId ?? "no-report"}
+      key={props.data?.reportRunId ?? props.data?.report?.asOf ?? "no-report"}
       {...props}
     />
   );
@@ -136,22 +136,13 @@ function DailyResearchContent({
       (event, index, rows) =>
         rows.findIndex((row) => row.id === event.id) === index,
     ) ?? [];
-  const checkedCount = (ids: string[]) =>
-    [...new Set(ids)].filter((id) =>
-      report?.sources.some(
-        (source) =>
-          source.id === id && source.verification === "SOURCE_CHECKED",
-      ),
-    ).length;
   const importance: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const priorityEvents = events
     .map((event, order) => ({ event, order }))
     .sort(
       (a, b) =>
         (importance[a.event.importance] ?? 3) -
-          (importance[b.event.importance] ?? 3) ||
-        checkedCount(b.event.sourceIds) - checkedCount(a.event.sourceIds) ||
-        a.order - b.order,
+          (importance[b.event.importance] ?? 3) || a.order - b.order,
     )
     .slice(0, 3)
     .map(({ event }) => event);
@@ -202,11 +193,20 @@ function DailyResearchContent({
                 <strong>{source.title}</strong>
               )}
               <p>
+                <span className="op-badge">
+                  {source.verification === "SOURCE_CHECKED"
+                    ? "原文已核对"
+                    : source.verification === "UNVERIFIED" ||
+                        source.verification === "REPORTED"
+                      ? "媒体快讯"
+                      : "来源状态待补充"}
+                </span>{" "}
                 {source.verification === "SOURCE_CHECKED"
-                  ? "原文已核对，仅证明引用匹配，不代表影响判断已核实。"
-                  : source.verification === "REPORTED"
-                    ? "报道线索，原文与事实仍待核查。"
-                    : "来源尚未完成核对。"}
+                  ? "引用与原始发布匹配；影响为研究推演。"
+                  : source.verification === "UNVERIFIED" ||
+                      source.verification === "REPORTED"
+                    ? "保留报道中的公告与事件阶段，用于产业催化研究。"
+                    : "来源信息尚未齐全。"}
               </p>
               <blockquote>{source.quote}</blockquote>
               <small>

@@ -4,7 +4,7 @@ import type {
   PlanTrack,
 } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
-import { planPrice, planUnit } from "../plan-display";
+import { planPrice, planTimeBasisNote, planUnit } from "../plan-display";
 import { readingText } from "../research-reading";
 
 const planTrackLabel = (track: PlanTrack) =>
@@ -72,6 +72,7 @@ export function ActionablePlanEvidence({
     Number.isFinite(value) ? String(Number(value.toFixed(4))) : "—";
   return (
     <div className="op-plan-evidence">
+      {planTimeBasisNote(result) && <p>{planTimeBasisNote(result)}</p>}
       {showConditions && (
         <>
           <p>{coordinateLabel(result)}</p>
@@ -196,6 +197,9 @@ export default function ActionablePlan({
       <p>
         实际观察：{price(result.currentPrice)} {unit} · {timeLabel(result.asOf)}
       </p>
+      {planTimeBasisNote(result) && (
+        <p className="op-plan-time-basis">{planTimeBasisNote(result)}</p>
+      )}
       <p>{coordinateLabel(result)}</p>
       {(result.selectedTrack ?? result.track) && (
         <p>

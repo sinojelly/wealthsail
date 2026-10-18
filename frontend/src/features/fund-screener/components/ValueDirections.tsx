@@ -12,7 +12,7 @@ import {
   metricValue,
   macroUnit,
 } from "../macro-display";
-import { planPrice, planUnit } from "../plan-display";
+import { planPrice, planTimeBasisNote, planUnit } from "../plan-display";
 import { readingText } from "../research-reading";
 import ActionablePlan, { ActionablePlanEvidence } from "./ActionablePlan";
 import { studyMetricLabel } from "./study-display";
@@ -98,27 +98,35 @@ function DirectionSignals({
       className={risk ? "op-value-risks" : "op-value-catalysts"}
       aria-label={risk ? "关键风险" : "机会催化"}
     >
-      {rows.slice(0, 2).map((row, index) => (
-        <p key={index}>
-          <strong>{risk ? "风险" : "催化"}：</strong>
-          {readingText(row.summary, 150)}
-          {[...new Set(row.sourceIds)].map((id) => {
-            const source = sources.find((item) => item.id === id);
-            const href = source && sourceHref(source.url);
-            return href ? (
-              <a
-                key={id}
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`${risk ? "风险" : "催化"}来源：${readingText(source.title, 100)}`}
-              >
-                原文
-              </a>
-            ) : null;
-          })}
-        </p>
-      ))}
+      {rows.slice(0, 2).map((row, index) => {
+        const seen = new Set<string>();
+        const references = [...new Set(row.sourceIds)].flatMap((id) => {
+          const source = sources.find((item) => item.id === id);
+          const href = source && sourceHref(source.url);
+          if (!source || !href || seen.has(href)) return [];
+          seen.add(href);
+          return [{ source, href }];
+        });
+        return (
+          <p key={index}>
+            <strong>{risk ? "风险" : "催化"}：</strong>
+            {readingText(row.summary, 150)}
+            <span className="op-inline-sources">
+              {references.map(({ source, href }, sourceIndex) => (
+                <a
+                  key={source.id}
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`${risk ? "风险" : "催化"}来源：${readingText(source.title, 100)}`}
+                >
+                  [来源{sourceIndex + 1}]
+                </a>
+              ))}
+            </span>
+          </p>
+        );
+      })}
     </section>
   );
 }
@@ -215,6 +223,9 @@ function FundPlan({
         {planUnit(plan.unit)} · {timeLabel(plan.asOf)} ·{" "}
         {selected === "LEFT_VALUE" ? "左侧" : "右侧"}研究坐标
       </small>
+      {planTimeBasisNote(plan) && (
+        <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
+      )}
       {(plan.priceRevisionStatus || plan.priceRevisionNote) && (
         <p
           className="op-value-revision"
@@ -271,6 +282,7 @@ export default function ValueDirections({
   const directions = report.valueDirections;
   return (
     <section
+      key={data?.reportRunId ?? report.asOf ?? "no-report"}
       className="op-value-directions"
       aria-label="今日价值方向与买卖计划"
     >

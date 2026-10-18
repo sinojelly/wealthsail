@@ -367,6 +367,7 @@ export interface ActionableZoneResult {
   subjectId: string;
   label: string;
   priceBasis: string;
+  priceTimeBasis?: "LATEST_DISCLOSED_NAV";
   unit: string | null;
   asOf: string | null;
   sourceUri: string | null;
@@ -398,6 +399,8 @@ export interface ValueDirection {
   catalysts?: Array<{ summary: string; sourceIds: string[] }>;
   risks?: Array<{ summary: string; sourceIds: string[] }>;
   macroCodes: string[];
+  quantitativeFundCodes?: string[];
+  quantitativeEvidence?: unknown[];
   macroEvidence?: Array<{
     code: string;
     label?: string | null;

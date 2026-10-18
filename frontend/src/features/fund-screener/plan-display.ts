@@ -34,3 +34,11 @@ export function planUnit(unit: string | null): string {
     "单位待确认"
   );
 }
+
+export function planTimeBasisNote(
+  result: Pick<ActionableZoneResult, "priceTimeBasis">,
+): string | null {
+  return result.priceTimeBasis === "LATEST_DISCLOSED_NAV"
+    ? "最新披露净值参考，存在跨市场发布延迟；不是当日估值。"
+    : null;
+}

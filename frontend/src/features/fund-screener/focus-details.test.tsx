@@ -243,7 +243,7 @@ it("marks unresolved affected directions honestly and never tracks an event usin
   ).not.toBeInTheDocument();
 });
 
-it("ranks importance before checked-reference counts, deduplicates identities and keeps tied input order without changing the report", () => {
+it("ranks importance, deduplicates identities and keeps tied input order without changing the report", () => {
   const rows = [
     { ...event, id: "medium", title: "相关中等事件", importance: "MEDIUM" },
     {
@@ -268,7 +268,7 @@ it("ranks importance before checked-reference counts, deduplicates identities an
     within(list)
       .getAllByRole("heading")
       .map((heading) => heading.textContent),
-  ).toEqual(["先到高影响事件", "后到高影响事件", "待核对高影响事件"]);
+  ).toEqual(["待核对高影响事件", "先到高影响事件", "后到高影响事件"]);
   expect(screen.queryByText("重复事件")).not.toBeInTheDocument();
   expect(JSON.stringify(rows)).toBe(original);
 });
