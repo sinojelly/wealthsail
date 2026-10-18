@@ -285,6 +285,38 @@ async def test_registered_fund_uses_stored_real_nav_analysis_when_public_history
     )
 
 
+def test_stored_analysis_plan_retains_database_availability_for_packet_visibility():
+    from datetime import timedelta
+    from backend.investment.service import actionable_plan_for_analysis
+
+    later = NOW + timedelta(minutes=1)
+    result = {
+        "state": "READY",
+        "dataQuality": "READY",
+        "seriesKind": "UNIT_NAV",
+        "asOf": "2026-10-16",
+        "source": "https://example.org/nav",
+        "retrievedAt": NOW.isoformat(),
+        "availableAt": later.isoformat(),
+        "points": [{"date": "2026-10-16", "close": "1.25"}],
+    }
+    plan = actionable_plan_for_analysis(result, "fund", str(uuid4()), now=NOW)
+    assert plan["availableAt"] == later.isoformat()
+    universe = [
+        {
+            "subjectKind": "fund",
+            "subjectId": plan["subjectId"],
+            "fundCode": "005112",
+            "market": "FUND_CN",
+            "label": "实际基金",
+        }
+    ]
+    assert (
+        module().discovery_packet(universe, [plan], {}, NOW)["discoveryActionableZones"]
+        == []
+    )
+
+
 @pytest.mark.parametrize(
     "basis,quality", [("PROVIDER_RETURN_INDEX", "READY"), ("UNIT_NAV", "STALE")]
 )

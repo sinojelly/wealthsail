@@ -533,6 +533,7 @@ def actionable_plan_for_analysis(result, kind, subject_id, *, label=None, now=No
     )
     plan.update(
         retrievedAt=_iso(result.get("retrievedAt")),
+        availableAt=_iso(result.get("availableAt")),
         publishedAt=_iso(result.get("publishedAt")),
         timeBasis=result.get("timeBasis"),
         inputHash=result.get("inputHash"),
@@ -572,7 +573,7 @@ async def _research_analysis(conn, kind, subject_id):
 
     row = await conn.fetchrow(
         """
-        SELECT result,as_of,input_hash,source_uri,points,retrieved_at,series_kind
+        SELECT result,as_of,input_hash,source_uri,points,retrieved_at,available_at,series_kind
         FROM market.investment_analysis_snapshots
         WHERE subject_kind=$1 AND subject_key=$2 AND retrieved_at<=now() AND available_at<=now()
         ORDER BY retrieved_at DESC,id DESC LIMIT 1
@@ -745,6 +746,7 @@ async def _research_analysis(conn, kind, subject_id):
                     "source": row["source_uri"],
                     "points": json.loads(points) if isinstance(points, str) else points,
                     "retrievedAt": _iso(row.get("retrieved_at")),
+                    "availableAt": _iso(row.get("available_at")),
                     "seriesKind": row.get("series_kind"),
                     "indexCollection": collection,
                 },
@@ -802,6 +804,7 @@ async def _research_analysis(conn, kind, subject_id):
             "source": row["source_uri"],
             "points": json.loads(points) if isinstance(points, str) else points,
             "retrievedAt": _iso(row.get("retrieved_at")),
+            "availableAt": _iso(row.get("available_at")),
             "seriesKind": row.get("series_kind"),
         },
         kind,
