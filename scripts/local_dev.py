@@ -116,6 +116,7 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
         "WEB_BASE_URL": url, "CORS_ORIGINS": json.dumps([url]),
         "TIANTIAN_IMPORT_ENABLED": "true",
         "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "true"),
+        "DAILY_RESEARCH_DEBUG_ENABLED": os.environ.get("DAILY_RESEARCH_DEBUG_ENABLED", "true"),
     }
     (LOCAL / "api.env").write_text(
         "\n".join(f"{key}={value}" for key, value in api_settings.items()) + "\n",
@@ -138,6 +139,7 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
         "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "2",
         "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "true"),
         "DAILY_RESEARCH_CATCH_UP": "true",
+        "DAILY_RESEARCH_DEBUG_ENABLED": os.environ.get("DAILY_RESEARCH_DEBUG_ENABLED", "true"),
         "DAILY_RESEARCH_CODEX_PATH": json.dumps(Path(executable).as_posix() if executable else ""),
     }
     if os.environ.get("DAILY_RESEARCH_MODEL"):
@@ -168,6 +170,27 @@ def refresh_local_macro(args: argparse.Namespace, env: dict[str, str]) -> None:
     run([str(python), str(Path(__file__).resolve()), "--initialize", "--db-port", str(db_port)], env)
     run([str(python), "-m", "backend.jobs.macro_worker", "--once"],
         {**env, "WEALTHSAIL_ENV_FILE": str(LOCAL / "macro.env")})
+
+
+def refresh_local_research(args: argparse.Namespace, env: dict[str, str]) -> None:
+    """Explicitly enqueue one development research version, then wait for it."""
+    path = LOCAL / "secrets.json"
+    if not path.exists():
+        raise RuntimeError("Start local services before RefreshResearch")
+    state = read_state()
+    if not state or state.get("phase") != "ready" or not state_alive(state, env):
+        raise RuntimeError("Local services must be ready before RefreshResearch")
+    if state.get("skip_macro"):
+        raise RuntimeError("RefreshResearch requires the local macro Worker; restart without -SkipMacro")
+    settings = json.loads(path.read_text("utf-8"))
+    db_port = state.get("db_port", args.db_port)
+    configure_macro(settings, db_port)
+    python = select_python(env, skip_install=True)
+    run([str(python), str(Path(__file__).resolve()), "--initialize", "--db-port", str(db_port)], env)
+    command = [str(python), "-m", "backend.jobs.research_debug", "--email", EMAIL]
+    if getattr(args, "research_request_key", None):
+        command.extend(["--request-key", str(args.research_request_key)])
+    run(command, {**env, "WEALTHSAIL_ENV_FILE": str(LOCAL / "macro.env")})
 
 
 def select_python(env: dict[str, str], *, skip_install: bool) -> Path:
@@ -567,7 +590,8 @@ def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("start", "stop", "status", "refreshmacro"), default="start")
+    parser.add_argument("--action", choices=("start", "stop", "status", "refreshmacro", "refreshresearch"), default="start")
+    parser.add_argument("--research-request-key")
     parser.add_argument("--postgres-bin", type=Path)
     parser.add_argument("--db-port", type=int, default=55432)
     parser.add_argument("--api-port", type=int, default=8000)
@@ -586,6 +610,9 @@ def main() -> None:
                 "VITE_API_BASE_URL": "/api"})
     if args.action == "refreshmacro":
         refresh_local_macro(args, env)
+        return
+    if args.action == "refreshresearch":
+        refresh_local_research(args, env)
         return
     if args.action != "start":
         runtime_action(args.action, env, args.postgres_bin)
@@ -612,7 +639,8 @@ def main() -> None:
         try:
             state = {"pid": os.getpid(), "created": process_info(os.getpid(), env)["created"],
                      "run_id": run_id, "phase": "preparing", "postgres_bin": str(binary_dir),
-                     "web_port": args.web_port, "api_port": args.api_port, "db_port": args.db_port}
+                     "web_port": args.web_port, "api_port": args.api_port, "db_port": args.db_port,
+                     "skip_macro": args.skip_macro}
             write_state(state)
             settings, binary_dir = prepare_runtime(args, env)
             state["phase"] = "starting"

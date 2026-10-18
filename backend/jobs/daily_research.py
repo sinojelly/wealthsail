@@ -40,7 +40,7 @@ from backend.macro.daily_research import (
 logger = logging.getLogger("wealthsail.daily_research")
 
 
-async def load_public_packet(conn, now, external):
+async def load_public_packet(conn, now, external, *, debug_request_id=None):
     """Only shared research queries; never assemble an actor/portfolio context."""
     from backend.investment import repository
     from backend.investment.opportunity_service import market_evidence
@@ -81,7 +81,15 @@ async def load_public_packet(conn, now, external):
         row = market_evidence(index, result)
         row["actionableZones"] = result.get("actionableZones")
         evidence.append(row)
-    bundle = await read_alpha_public(conn, now)
+    bundle = await read_alpha_public(
+        conn,
+        now,
+        **(
+            {"debug_request_id": debug_request_id}
+            if debug_request_id is not None
+            else {}
+        ),
+    )
     series = merge_alpha_series(series, bundle, now)
     themes = await read_themes(conn, now)
     rules = []
@@ -124,22 +132,33 @@ async def load_public_packet(conn, now, external):
     return packet
 
 
-async def sync_daily_research(pool, settings, now):
+async def sync_daily_research(
+    pool, settings, now, *, debug_request_id=None, source_batch_id=None
+):
     stamp = local(now)
+    debug = debug_request_id is not None
+    if debug and (
+        getattr(settings, "app_env", None) not in {"development", "test"}
+        or not getattr(settings, "daily_research_debug_enabled", False)
+    ):
+        return {"status": "DISABLED"}
+    if debug and source_batch_id is None:
+        raise ValueError("debug research requires its collected source batch")
     if not settings.daily_research_enabled:
         return {"status": "DISABLED"}
-    if stamp < scheduled_for(stamp):
+    if not debug and stamp < scheduled_for(stamp):
         return {"status": "NOT_DUE"}
-    async with system_connection(pool) as conn:
-        if await consumed(conn, stamp):
-            return {"status": "SKIPPED"}
-    if getattr(settings, "alpha_public_enabled", False):
+    if not debug:
+        async with system_connection(pool) as conn:
+            if await consumed(conn, stamp):
+                return {"status": "SKIPPED"}
+    if not debug and getattr(settings, "alpha_public_enabled", False):
         from backend.jobs.alpha_public import sync_alpha_public
 
         await sync_alpha_public(pool, stamp)
         async with system_connection(pool) as conn:
             batch = await conn.fetchrow(
-                "SELECT status,claimed_at FROM market.alpha_public_batches WHERE run_date=$1",
+                "SELECT status,claimed_at FROM market.alpha_public_batches WHERE run_date=$1 AND run_mode='SCHEDULED'",
                 stamp.date(),
             )
         current = local(now_shanghai())
@@ -152,7 +171,12 @@ async def sync_daily_research(pool, settings, now):
     external = await collect_daily_sources(stamp)
     # HTTP finishes first: its observations are never backdated to 08:30.
     async with system_connection(pool) as conn:
-        packet = await load_public_packet(conn, local(now_shanghai()), external)
+        packet = await load_public_packet(
+            conn,
+            local(now_shanghai()),
+            external,
+            **({"debug_request_id": debug_request_id} if debug else {}),
+        )
     prompt = build_prompt(packet)
     unavailable, cli = None, {}
     try:
@@ -160,7 +184,10 @@ async def sync_daily_research(pool, settings, now):
     except Exception as exc:  # noqa: BLE001 -- safe preflight failure, no gateway fallback
         unavailable = type(exc).__name__
     dispatched = local(now_shanghai())
-    if dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp):
+    if dispatched < stamp or (
+        not debug
+        and (dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp))
+    ):
         return {"status": "SKIPPED"}
     async with system_connection(pool) as conn:
         claim = await claim_daily_run(
@@ -170,6 +197,14 @@ async def sync_daily_research(pool, settings, now):
             input_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             prompt_version=PROMPT_VERSION,
             cli_version=cli.get("version"),
+            **(
+                {
+                    "debug_request_id": debug_request_id,
+                    "source_batch_id": source_batch_id,
+                }
+                if debug
+                else {}
+            ),
         )
     if claim is None:
         return {"status": "SKIPPED"}

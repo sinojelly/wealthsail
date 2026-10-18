@@ -850,7 +850,7 @@ async def _launches(fetch, cutoff):
         launches=rows,
         allowEmpty=True,
         limitations=[
-            "生产匿名接口最多15次/小时；本进程每日只尝试一次，持久去重由调用方日任务负责；单页不跟随next。"
+            "生产匿名接口最多15次/小时；每个采集任务只尝试一次，调试重跑是显式新任务，仍受来源限频；单页不跟随next。"
         ],
     )
 

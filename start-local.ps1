@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Start', 'Stop', 'Status', 'RefreshMacro')][string]$Action = 'Start',
+    [ValidateSet('Start', 'Stop', 'Status', 'RefreshMacro', 'RefreshResearch')][string]$Action = 'Start',
+    [Guid]$ResearchRequestKey,
     [string]$PostgresBin,
     [ValidateRange(1024, 65535)][int]$DbPort = 55432,
     [ValidateRange(1024, 65535)][int]$ApiPort = 8000,
@@ -42,6 +43,7 @@ $launcherArgs = @(
 if ($SkipInstall) { $launcherArgs += '--skip-install' }
 if ($NoBrowser) { $launcherArgs += '--no-browser' }
 if ($SkipMacro) { $launcherArgs += '--skip-macro' }
+if ($PSBoundParameters.ContainsKey('ResearchRequestKey')) { $launcherArgs += @('--research-request-key', "$ResearchRequestKey") }
 if ($PostgresBin) { $launcherArgs += @('--postgres-bin', $PostgresBin) }
 & $selected.Command @($selected.Args) @launcherArgs
 exit $LASTEXITCODE

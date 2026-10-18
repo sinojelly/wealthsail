@@ -32,7 +32,8 @@ async def test_direction_creation_freezes_exact_report_and_repeated_reports_do_n
     assert (
         url.hostname == "127.0.0.1"
         and url.port == 55434
-        and url.path == "/wealthsail_phase2_validation_v3"
+        and url.path
+        in {"/wealthsail_phase2_validation_v3", "/wealthsail_review07_validation_v6"}
     )
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()
@@ -145,7 +146,8 @@ async def test_direction_registered_fund_scope_requires_exact_catalog_and_market
     assert (
         url.hostname == "127.0.0.1"
         and url.port == 55434
-        and url.path == "/wealthsail_phase2_validation_v3"
+        and url.path
+        in {"/wealthsail_phase2_validation_v3", "/wealthsail_review07_validation_v6"}
     )
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()

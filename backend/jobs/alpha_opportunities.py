@@ -777,7 +777,7 @@ async def _today_report(pool, now):
         report = await conn.fetchrow(
             """SELECT r.run_id,r.slot_date,x.recorded_at,x.payload FROM research.daily_research_runs r
             JOIN research.daily_research_results x USING(run_id)
-            WHERE r.slot_date=$1 AND x.status='READY' AND r.dispatched_at<=$2 AND x.recorded_at<=$2
+            WHERE r.slot_date=$1 AND r.run_mode='SCHEDULED' AND x.status='READY' AND r.dispatched_at<=$2 AND x.recorded_at<=$2
             ORDER BY x.recorded_at DESC LIMIT 1""",
             now.date(),
             now,

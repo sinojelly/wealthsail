@@ -16,6 +16,15 @@ async def run_alpha_runtime(
         from backend.jobs.daily_research import run_daily_research_service
 
         services = []
+        if getattr(settings, "daily_research_debug_enabled", False) and getattr(
+            settings, "app_env", None
+        ) in {"development", "test"}:
+            from backend.jobs.research_debug import run_debug_research_service
+
+            async def debug(pool, *, stop_event):
+                await run_debug_research_service(pool, settings, stop_event=stop_event)
+
+            services.append(debug)
         if getattr(settings, "alpha_public_enabled", False):
             services.append(run_alpha_public_service)
         if getattr(settings, "alpha_opportunity_enabled", False):

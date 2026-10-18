@@ -34,11 +34,20 @@ async def sync_alpha_public(
     collector=collect_alpha_public,
     now_provider=now_shanghai,
     nav_collector=None,
+    debug_request_id=None,
 ):
     stamp = local(now if now is not None else now_provider())
     async with system_connection(pool) as conn:
         async with conn.transaction():
-            claim = await claim_alpha_batch(conn, stamp)
+            claim = await claim_alpha_batch(
+                conn,
+                stamp,
+                **(
+                    {"debug_request_id": debug_request_id}
+                    if debug_request_id is not None
+                    else {}
+                ),
+            )
     if claim is None:
         return {"status": "SKIPPED", "runDate": stamp.date().isoformat()}
     # The UNIQUE run_date has committed. Neither public collector owns this conn.
