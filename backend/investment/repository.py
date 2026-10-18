@@ -2,6 +2,10 @@
 
 from backend.investment.schemas import ScreenQuery
 
+_CURRENT_RELATION = """f.verified_at<=now()
+    AND f.effective_from<=(now() AT TIME ZONE 'Asia/Shanghai')::date
+    AND (f.effective_to IS NULL OR f.effective_to>=(now() AT TIME ZONE 'Asia/Shanghai')::date)"""
+
 
 async def directions(conn):
     return await conn.fetch("""
@@ -14,13 +18,13 @@ async def directions(conn):
 
 async def indices(conn, direction_id):
     return await conn.fetch(
-        """
-        SELECT i.*, count(DISTINCT f.instrument_id) AS fund_count
+        f"""
+        SELECT i.*, count(DISTINCT (f.market,f.fund_code))
+          FILTER (WHERE f.fund_code IS NOT NULL) AS fund_count
         FROM reference.research_indices i
         JOIN reference.direction_index_links d ON d.index_id=i.id
-        LEFT JOIN reference.fund_index_links f ON f.index_id=i.id
-          AND f.effective_from<=CURRENT_DATE
-          AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+        LEFT JOIN reference.research_product_index_links f ON f.index_id=i.id
+          AND {_CURRENT_RELATION}
         WHERE d.direction_id=$1
         GROUP BY i.id ORDER BY i.sort_order, i.id
     """,
@@ -93,12 +97,12 @@ def _where(query):
         add("c.trade_form=?", query.trade_form)
     if query.index_id:
         add(
-            "EXISTS (SELECT 1 FROM reference.fund_index_links f WHERE f.instrument_id=c.instrument_id AND f.index_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))",
+            f"EXISTS (SELECT 1 FROM reference.research_product_index_links f WHERE f.fund_code=c.fund_code AND f.market=c.market AND f.index_id=? AND {_CURRENT_RELATION})",
             query.index_id,
         )
     if query.direction_id:
         add(
-            "EXISTS (SELECT 1 FROM reference.fund_index_links f JOIN reference.direction_index_links d ON d.index_id=f.index_id WHERE f.instrument_id=c.instrument_id AND d.direction_id=? AND f.effective_from<=CURRENT_DATE AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE))",
+            f"EXISTS (SELECT 1 FROM reference.research_product_index_links f JOIN reference.direction_index_links d ON d.index_id=f.index_id WHERE f.fund_code=c.fund_code AND f.market=c.market AND d.direction_id=? AND {_CURRENT_RELATION})",
             query.direction_id,
         )
     if query.nav_position_min is not None:
@@ -221,18 +225,25 @@ async def screen(conn, query: ScreenQuery):
     return rows, total
 
 
-async def location(conn, instrument_id):
+async def location(conn, instrument_id=None, *, fund_code=None, market=None):
+    if instrument_id is None and (not fund_code or not market):
+        return None
     return await conn.fetchrow(
-        """
+        f"""
       SELECT f.index_id, d.direction_id, r.market_id, r.style_id
-      FROM reference.fund_index_links f
+      FROM reference.research_product_index_links f
       JOIN reference.direction_index_links d ON d.index_id=f.index_id
       JOIN reference.research_directions r ON r.id=d.direction_id
-      WHERE f.instrument_id=$1 AND f.effective_from<=CURRENT_DATE
-        AND (f.effective_to IS NULL OR f.effective_to>=CURRENT_DATE)
+      WHERE (($1::uuid IS NOT NULL AND f.instrument_id=$1)
+        OR ($1::uuid IS NULL AND f.fund_code=$2 AND f.market=$3))
+        AND ($2::text IS NULL OR f.fund_code=$2)
+        AND ($3::text IS NULL OR f.market=$3)
+        AND {_CURRENT_RELATION}
       ORDER BY r.sort_order, d.direction_id, f.index_id LIMIT 1
     """,
         instrument_id,
+        fund_code,
+        market,
     )
 
 

@@ -407,10 +407,11 @@ async def search(conn, keyword):
     rows, _ = await repository.screen(conn, ScreenQuery(keyword=keyword, pageSize=10))
     for row in rows:
         item = fund_dto(dict(row))
-        loc = (
-            await repository.location(conn, row["instrument_id"])
-            if row["instrument_id"]
-            else None
+        loc = await repository.location(
+            conn,
+            row["instrument_id"],
+            fund_code=row["fund_code"],
+            market=row["market"],
         )
         result.append(
             {

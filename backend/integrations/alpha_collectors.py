@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
 import inspect
@@ -85,6 +85,81 @@ KEYWORDS = (
     "社融",
     "货币",
     "美联储",
+)
+INVESTMENT_KEYWORDS = KEYWORDS + (
+    "宏观",
+    "经济",
+    "政策",
+    "财政",
+    "关税",
+    "自贸",
+    "封关",
+    "利率",
+    "通胀",
+    "降息",
+    "降准",
+    "PMI",
+    "CPI",
+    "PPI",
+    "GDP",
+    "就业",
+    "银行",
+    "保险",
+    "证券",
+    "金融",
+    "红利",
+    "股息",
+    "财报",
+    "季报",
+    "年报",
+    "业绩",
+    "营收",
+    "利润",
+    "订单",
+    "产能",
+    "投资",
+    "回购",
+    "并购",
+    "重组",
+    "医药",
+    "医疗",
+    "创新药",
+    "生物",
+    "消费",
+    "零售",
+    "旅游",
+    "食品",
+    "家电",
+    "汽车",
+    "新能源",
+    "光伏",
+    "锂电",
+    "电力",
+    "煤炭",
+    "有色",
+    "黄金",
+    "铜",
+    "铝",
+    "钢铁",
+    "化工",
+    "房地产",
+    "地产",
+    "住房",
+    "基建",
+    "军工",
+    "国防",
+    "科技",
+    "半导体",
+    "芯片",
+    "算力",
+    "数据中心",
+    "机器人",
+    "通信",
+    "软件",
+    "航运",
+    "出口",
+    "进口",
+    "贸易",
 )
 _launch_day = None
 
@@ -457,86 +532,170 @@ async def _housing(fetch, cutoff, *, hainan):
 
 
 async def _cls(fetch, cutoff):
-    params = {
-        "app": "CailianpressWeb",
-        "category": "",
-        "last_time": int(cutoff.timestamp()),
-        "os": "web",
-        "refresh_type": "1",
-        "rn": "20",
-        "sv": "8.4.6",
-    }
-    params["sign"] = hashlib.md5(
-        hashlib.sha1(urlencode(params).encode()).hexdigest().encode()
-    ).hexdigest()
-    payload = await fetch(CLS_URL, params=params)
-    raw = (
-        payload.get("data", {}).get("roll_data") if isinstance(payload, dict) else None
-    )
-    if not isinstance(raw, list):
-        raise _Unavailable("CLS roll data unavailable")
-    retrieved, rows = _aware(now_shanghai()), []
-    for item in raw[:20]:
-        if item.get("level") not in {"A", "B"}:
-            continue
-        seconds = _number(item.get("ctime"))
-        if seconds is None:
-            continue
+    window_start = cutoff - timedelta(hours=24)
+    cursor = int(cutoff.timestamp())
+    rows, seen_ids, seen_texts = [], set(), set()
+    pages, scanned, oldest, error_fields = 0, 0, None, {}
+    deadline = asyncio.get_running_loop().time() + 18
+    stop_reason = "PAGE_LIMIT"
+    for _ in range(15):
+        params = {
+            "app": "CailianpressWeb",
+            "category": "",
+            "last_time": cursor,
+            "os": "web",
+            "refresh_type": "1",
+            "rn": "100",
+            "sv": "8.4.6",
+        }
+        params["sign"] = hashlib.md5(
+            hashlib.sha1(urlencode(params).encode()).hexdigest().encode()
+        ).hexdigest()
         try:
-            published = datetime.fromtimestamp(float(seconds), SHANGHAI)
-        except (ValueError, OSError, OverflowError):
-            continue
-        if published > cutoff or published > retrieved:
-            continue
-        title, content = _text(item.get("title"), 200), _text(item.get("content"), 1000)
-        text = title + " " + content
-        matched = [
-            word
-            for word in KEYWORDS
-            if (
-                re.search(r"\b" + re.escape(word) + r"\b", text, re.I)
-                if word.isascii()
-                else word in text
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("CLS daily window budget exhausted")
+            pages += 1
+            payload = await asyncio.wait_for(fetch(CLS_URL, params=params), remaining)
+            raw = (
+                payload.get("data", {}).get("roll_data")
+                if isinstance(payload, dict)
+                else None
             )
-        ]
-        if not matched:
-            continue
-        identity = str(item.get("id") or "")
-        source_uri = (
-            f"https://www.cls.cn/detail/{identity}"
-            if re.fullmatch(r"[1-9]\d{0,18}", identity)
-            else "https://www.cls.cn/telegraph"
-        )
-        rows.append(
-            {
-                "id": "cls:"
-                + (
-                    identity
-                    if identity.isdecimal()
-                    else hashlib.sha256(text.encode()).hexdigest()[:20]
-                ),
-                "title": title,
-                "content": content,
-                "phase": "REPORTED",
-                "importance": "HIGH" if item["level"] == "A" else "MEDIUM",
-                "matchedKeywords": matched,
-                "factVerification": "UNVERIFIED",
-                "asOf": published.date().isoformat(),
-                "publishedAt": published.isoformat(),
-                "retrievedAt": retrieved.isoformat(),
-                "availableAt": retrieved.isoformat(),
-                "timeBasis": "PROVIDER_PUBLICATION",
-                "sourceKey": "CLS_TELEGRAPH",
-                "sourceUri": source_uri,
-                "sourceName": "财联社电报",
-                "methodVersion": VERSION,
-            }
-        )
+            if not isinstance(raw, list):
+                raise _Unavailable("CLS roll data unavailable")
+        except Exception as error:  # noqa: BLE001 -- keep completed public pages
+            if not scanned:
+                raise
+            stop_reason = "PAGE_FAILED"
+            error_fields["errorClass"] = type(error).__name__
+            if isinstance(error, httpx.HTTPStatusError):
+                error_fields["httpStatus"] = error.response.status_code
+            break
+        if not raw:
+            stop_reason = "EMPTY_PAGE"
+            break
+        retrieved = _aware(now_shanghai())
+        page_new, page_times, reached_window = 0, [], False
+        for item in raw[:100]:
+            if not isinstance(item, dict):
+                continue
+            seconds = _number(item.get("ctime"))
+            if seconds is None:
+                continue
+            try:
+                published = datetime.fromtimestamp(float(seconds), SHANGHAI)
+            except (ValueError, OSError, OverflowError):
+                continue
+            if published > cutoff or published > retrieved:
+                continue
+            page_times.append(published)
+            if published < window_start:
+                reached_window = True
+                continue
+            title, content = (
+                _text(item.get("title"), 200),
+                _text(item.get("content"), 1000),
+            )
+            text = title + " " + content
+            if not text.strip():
+                continue
+            raw_identity = str(item.get("id") or "")
+            identity = (
+                raw_identity if re.fullmatch(r"[1-9]\d{0,18}", raw_identity) else None
+            )
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            key = identity or digest
+            if key in seen_ids or digest in seen_texts:
+                continue
+            seen_ids.add(key)
+            seen_texts.add(digest)
+            scanned += 1
+            page_new += 1
+            oldest = published if oldest is None else min(oldest, published)
+            matched = [
+                word
+                for word in INVESTMENT_KEYWORDS
+                if (
+                    re.search(
+                        r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])",
+                        text,
+                        re.I,
+                    )
+                    if word.isascii()
+                    else word in text
+                )
+            ]
+            level = item.get("level")
+            if level in {"A", "B"} or matched:
+                rows.append(
+                    {
+                        "id": "cls:" + (identity or digest[:20]),
+                        "title": title,
+                        "content": content,
+                        "phase": "REPORTED",
+                        "importance": "HIGH"
+                        if level == "A"
+                        else "MEDIUM"
+                        if level == "B"
+                        else "LOW",
+                        "matchedKeywords": matched,
+                        "factVerification": "UNVERIFIED",
+                        "asOf": published.date().isoformat(),
+                        "publishedAt": published.isoformat(),
+                        "retrievedAt": retrieved.isoformat(),
+                        "availableAt": retrieved.isoformat(),
+                        "timeBasis": "PROVIDER_PUBLICATION",
+                        "sourceKey": "CLS_TELEGRAPH",
+                        "sourceUri": f"https://www.cls.cn/detail/{identity}"
+                        if identity
+                        else "https://www.cls.cn/telegraph",
+                        "sourceName": "财联社电报",
+                        "methodVersion": VERSION,
+                    }
+                )
+            if scanned >= 300:
+                break
+        if scanned >= 300:
+            stop_reason = "ITEM_LIMIT"
+            break
+        if reached_window:
+            stop_reason = "WINDOW_START"
+            break
+        if page_new == 0:
+            stop_reason = "DUPLICATE_PAGE" if page_times else "NO_VALID_CURSOR"
+            break
+        next_cursor = int(min(page_times).timestamp()) - 1
+        if next_cursor >= cursor:
+            stop_reason = "CURSOR_NOT_ADVANCING"
+            break
+        cursor = next_cursor
+    complete = stop_reason in {"EMPTY_PAGE", "WINDOW_START"}
+    rows.sort(
+        key=lambda row: (
+            {"HIGH": 2, "MEDIUM": 1, "LOW": 0}[row["importance"]],
+            row["publishedAt"],
+            row["id"],
+        ),
+        reverse=True,
+    )
     return _result(
         catalysts=rows,
+        status="SUCCESS" if complete else "PARTIAL",
         allowEmpty=True,
+        coverage={
+            "scannedCount": scanned,
+            "retainedCount": len(rows),
+            "pages": pages,
+            "windowStart": window_start.isoformat(),
+            "windowEnd": cutoff.isoformat(),
+            "oldestPublishedAt": oldest.isoformat() if oldest else None,
+            "truncated": not complete,
+            "stopReason": stop_reason,
+        },
+        **error_fields,
         limitations=[
-            "仅最近20条中的A/B级、指定主题关键词；媒体报道不认证事件实施或因果。"
+            "最近24小时最多300条、15页；A/B重点与广域投资词普通电报，覆盖不足记录在coverage。媒体报道尚待原始来源印证。"
         ],
     )
 
@@ -851,11 +1010,15 @@ async def collect_alpha_public(now, *, client=None, provider=None, timeout_secon
             for name in ("observations", "catalysts", "odds", "launches"):
                 bundle[name].extend(result.get(name, []))
             status = {
-                "status": "SUCCESS",
+                "status": "PARTIAL" if result.get("status") == "PARTIAL" else "SUCCESS",
                 "records": count,
                 "retrievedAt": _aware(now_shanghai()).isoformat(),
                 "limitations": result.get("limitations", []),
             }
+            if key == "CLS_TELEGRAPH":
+                for field in ("coverage", "errorClass", "httpStatus"):
+                    if field in result:
+                        status[field] = result[field]
         except _Skipped:
             status = {
                 "status": "SKIPPED",

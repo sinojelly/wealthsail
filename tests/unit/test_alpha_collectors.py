@@ -95,7 +95,7 @@ def payload(request):
                         "title": "普通娱乐报道",
                         "content": "明星动态",
                         "ctime": stamp,
-                        "level": "A",
+                        "level": "C",
                     },
                     {
                         "id": 125,
@@ -209,13 +209,217 @@ async def test_selected_city_housing_converts_only_mom_and_retains_actual_index(
 
 
 @pytest.mark.asyncio
-async def test_cls_filters_importance_topics_future_time_and_html(monkeypatch):
+async def test_cls_keeps_broad_investment_news_and_filters_future_time_and_html(
+    monkeypatch,
+):
     result = await collect(engine(monkeypatch))
-    assert len(result["catalysts"]) == 1
+    assert {row["id"] for row in result["catalysts"]} == {"cls:123", "cls:125"}
     row = result["catalysts"][0]
     assert row["sourceUri"] == "https://www.cls.cn/detail/123"
     assert row["phase"] == "REPORTED" and row["factVerification"] == "UNVERIFIED"
     assert "<p>" not in row["content"] and "卫星" in row["matchedKeywords"]
+
+
+def cls_row(identity, *, seconds=0, level="B", title=None):
+    return {
+        "id": identity,
+        "title": title or f"重要经营动态{identity}",
+        "content": f"<p>公开报道内容{identity}</p>",
+        "ctime": int((NOW - timedelta(minutes=1, seconds=seconds)).timestamp()),
+        "level": level,
+    }
+
+
+@pytest.mark.asyncio
+async def test_cls_keeps_non_theme_important_news_and_broad_investment_topics(
+    monkeypatch,
+):
+    module = engine(monkeypatch)
+    pages = [
+        [
+            cls_row(901, title="公司披露重大经营变化", level="A"),
+            cls_row(902, title="医药创新药临床结果公布", level="C"),
+            cls_row(903, title="消费龙头三季报利润增长", level="C"),
+            cls_row(904, title="普通娱乐明星动态", level="C"),
+        ],
+        [],
+    ]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    result = await module._cls(fetch, NOW)
+    assert {row["id"] for row in result["catalysts"]} == {
+        "cls:901",
+        "cls:902",
+        "cls:903",
+    }
+    assert result["catalysts"][0]["id"] == "cls:901"
+    assert result["coverage"]["scannedCount"] == 4
+    assert result["coverage"]["retainedCount"] == 3
+
+
+@pytest.mark.asyncio
+async def test_cls_paginates_capped_twenty_row_pages_through_151st_item(monkeypatch):
+    module = engine(monkeypatch)
+    calls = []
+
+    async def fetch(uri, *, params):
+        calls.append(dict(params))
+        start = (len(calls) - 1) * 20
+        rows = [cls_row(1000 + i, seconds=i) for i in range(start, start + 20)]
+        return {"data": {"roll_data": rows}}
+
+    result = await module._cls(fetch, NOW)
+    identities = {row["id"] for row in result["catalysts"]}
+    assert {"cls:1020", "cls:1150", "cls:1299"} <= identities
+    assert len(identities) == 300
+    assert len(calls) == 15
+    assert all(call["rn"] == "100" for call in calls)
+    assert calls[1]["last_time"] < calls[0]["last_time"]
+    assert calls[1]["sign"] != calls[0]["sign"]
+    assert result["status"] == "PARTIAL"
+    assert result["coverage"]["truncated"] is True
+    assert result["coverage"]["stopReason"] == "ITEM_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_cls_deduplicates_repeated_pages_instead_of_looping(monkeypatch):
+    module = engine(monkeypatch)
+    calls = 0
+
+    async def fetch(uri, *, params):
+        nonlocal calls
+        calls += 1
+        return {"data": {"roll_data": [cls_row(801), cls_row(802, seconds=1)]}}
+
+    result = await module._cls(fetch, NOW)
+    assert [row["id"] for row in result["catalysts"]] == ["cls:801", "cls:802"]
+    assert calls == 2
+    assert result["coverage"]["scannedCount"] == 2
+    assert result["coverage"]["stopReason"] == "DUPLICATE_PAGE"
+    assert result["status"] == "PARTIAL"
+
+
+@pytest.mark.asyncio
+async def test_cls_bounds_sparse_pages_without_claiming_complete_coverage(monkeypatch):
+    module = engine(monkeypatch)
+    calls = 0
+
+    async def fetch(uri, *, params):
+        nonlocal calls
+        calls += 1
+        return {"data": {"roll_data": [cls_row(700 + calls, seconds=calls)]}}
+
+    result = await module._cls(fetch, NOW)
+    assert calls == 15 and len(result["catalysts"]) == 15
+    assert result["coverage"]["stopReason"] == "PAGE_LIMIT"
+    assert result["coverage"]["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_cls_respects_the_24h_window_and_does_not_publish_future_rows(
+    monkeypatch,
+):
+    module = engine(monkeypatch)
+    calls = 0
+
+    async def fetch(uri, *, params):
+        nonlocal calls
+        calls += 1
+        return {
+            "data": {
+                "roll_data": [
+                    cls_row(601, seconds=-7200),
+                    cls_row(602),
+                    cls_row(603, seconds=24 * 3600),
+                ]
+            }
+        }
+
+    result = await module._cls(fetch, NOW)
+    assert [row["id"] for row in result["catalysts"]] == ["cls:602"]
+    assert calls == 1
+    assert result["coverage"]["windowStart"] == "2026-10-17T09:00:00+08:00"
+    assert result["coverage"]["windowEnd"] == NOW.isoformat()
+    assert result["coverage"]["stopReason"] == "WINDOW_START"
+    assert result["coverage"]["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_cls_later_page_denial_keeps_facts_and_marks_partial_without_retry(
+    monkeypatch,
+):
+    module = engine(monkeypatch)
+    calls = []
+
+    def handler(request):
+        if request.url.host != "www.cls.cn":
+            return route(request)
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(200, json={"data": {"roll_data": [cls_row(501)]}})
+        return httpx.Response(429, headers={"Retry-After": "90"})
+
+    result = await collect(module, handler)
+    assert [row["id"] for row in result["catalysts"]] == ["cls:501"]
+    source = result["sourceResults"]["CLS_TELEGRAPH"]
+    assert source["status"] == "PARTIAL" and source["records"] == 1
+    assert source["httpStatus"] == 429
+    assert source["errorClass"] == "HTTPStatusError"
+    assert source["coverage"]["stopReason"] == "PAGE_FAILED"
+    assert source["coverage"]["pages"] == 2 and len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_cls_ascii_investment_terms_work_next_to_chinese_without_matching_chair(
+    monkeypatch,
+):
+    module = engine(monkeypatch)
+    pages = [
+        [
+            cls_row(401, level="C", title="DRAM价格上调"),
+            cls_row(402, level="C", title="HBM需求再增长"),
+            cls_row(403, level="C", title="CHAIR普通家具展示"),
+        ],
+        [],
+    ]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    result = await module._cls(fetch, NOW)
+    assert {row["id"] for row in result["catalysts"]} == {"cls:401", "cls:402"}
+
+
+@pytest.mark.asyncio
+async def test_cls_deduplicates_same_content_with_different_ids(monkeypatch):
+    module = engine(monkeypatch)
+    original = cls_row(301)
+    duplicate = {**original, "id": 302}
+    pages = [[original, duplicate], []]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    result = await module._cls(fetch, NOW)
+    assert [row["id"] for row in result["catalysts"]] == ["cls:301"]
+    assert result["coverage"]["scannedCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cls_stops_nonadvancing_provider_cursor_with_usable_facts(monkeypatch):
+    module = engine(monkeypatch)
+    pages = [[cls_row(201, seconds=1)], [cls_row(202)]]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    result = await module._cls(fetch, NOW)
+    assert len(result["catalysts"]) == 2
+    assert result["coverage"]["pages"] == 2
+    assert result["coverage"]["stopReason"] == "CURSOR_NOT_ADVANCING"
+    assert result["status"] == "PARTIAL"
 
 
 @pytest.mark.asyncio
