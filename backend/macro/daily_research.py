@@ -13,9 +13,13 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
+from backend.macro.value_directions import (
+    ValueDirectionProposal,
+    validate_value_directions,
+)
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-alpha-v2-phase2"
+PROMPT_VERSION = "daily-research-value-directions-v3"
 
 
 class _Strict(BaseModel):
@@ -84,6 +88,7 @@ class _Report(_Strict):
     energy: list[Literal["DCOILBRENTEU", "GASDESW"]] = Field(max_length=2)
     macroCycle: str = Field(min_length=1, max_length=1000)
     actionablePlans: list[ActionableProposal] = Field(max_length=24)
+    valueDirections: list[ValueDirectionProposal] = Field(max_length=5)
 
 
 REPORT_SCHEMA = _Report.model_json_schema()
@@ -250,10 +255,11 @@ def _texts(value, limit=8, width=300):
     )[:limit]
 
 
-def _public_actionable_plan(value, index_id, now):
+def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
     if (
         not isinstance(value, dict)
-        or value.get("subjectKind") != "index"
+        or value.get("subjectKind") != subject_kind
+        or subject_kind not in {"index", "fund", "nav"}
         or value.get("subjectId") != index_id
         or not value.get("asOf")
         or not _visible(value, now)
@@ -270,6 +276,7 @@ def _public_actionable_plan(value, index_id, now):
             "unit",
             "asOf",
             "sourceUri",
+            "volatilityMethod",
         ),
     )
     result["orderPriceAvailable"] = False
@@ -287,6 +294,24 @@ def _public_actionable_plan(value, index_id, now):
         return str(raw)
 
     result["currentPrice"] = price(value.get("currentPrice"))
+    result["parameters"] = _pick(
+        value.get("parameters") or {},
+        (
+            "ma",
+            "rsi",
+            "atr",
+            "bollinger",
+            "momentum",
+            "maximumPePercentile",
+            "maximumMA200Gap",
+            "oversoldRSI",
+            "navAbsoluteChangeWindow",
+            "navAbsoluteChangeMultiplier",
+            "navStdWindow",
+            "navStdMultiplier",
+            "navRiskFloorRatio",
+        ),
+    )
     result["indicators"] = _pick(
         value.get("indicators") or {},
         (
@@ -295,6 +320,7 @@ def _public_actionable_plan(value, index_id, now):
             "ma200",
             "rsi14",
             "atr14",
+            "navVolatility14",
             "bollLower",
             "bollMiddle",
             "bollUpper",
@@ -713,8 +739,11 @@ def build_prompt(packet):
         "给出原始来源链接和不超过300字符的原文短引文；SOURCE_CHECKED仅证明原文核对，不认证摘要、传导或预测。\n"
         "结合情景给出预期差、概率估计与买卖思路，写清估计依据、反方和失效条件；预测与实际观察分别表述。\n"
         "使用actionableZones中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
-        "给出macroCycle宏观周期定位及其不确定项；结合alphaPublic的M1-M2、信用、收益率、四城房价、媒体、市场隐含赔率与发射计划分析五大主题传导，计划/市场价格不等于已发生事实。\n"
-        "actionablePlans只选择themeActionableZones中的themeCode/subjectKind/subjectId/track。价格由服务器复制；没有有效锚点时不输出该标的计划。与previousActionablePlans比较，无前次同标的同轨为INITIAL，否则UPGRADED/DOWNGRADED并写priceRevisionNote；达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
+        "给出简明中文macroCycle宏观周期定位与操作总纲；结合M1-M2、信用、收益率、房价、广域新闻与真实行情，自动提炼valueDirections，不要求用户筛选。五主题只是种子，可发现医药、消费、宽基、红利等任何有依据的价值方向。计划/市场隐含价格不等于已发生事实。\n"
+        "valueDirections目标3至5项但证据不足可更少或空；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码；至少两项不同来源或一项来源加宏观事实。\n"
+        "每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；不得自报价格或将指数点当基金净值。signal LEFT_VALUE/RIGHT_TREND须有对应CANDIDATE轨道；无合格计划则WATCH并保持plans空。符合前次同口径T1证据才可TAKE_PROFIT。\n"
+        "plans与previousValueDirections同方向/同标的/同轨对照，无前次INITIAL，有前次UPGRADED/DOWNGRADED并解释；calibrationRuleKeys只引用本方向DISCOVERY:key或真实种子关联规则。不要把支持率称盈利胜率。净值的NAV_ABS_CHANGE_STD_V1为独立风险尺度，不能称真实ATR或精确收益预测。\n"
+        "actionablePlans保留旧五主题兼容结构，新报告此字段输出[]，计划统一放在valueDirections。只有旧包才选择themeActionableZones中的themeCode/subjectKind/subjectId/track；价格均由服务器复制，没有有效锚点时不输出该标的计划。达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
         "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金最新高仓位未核验时只作候选，不能从主题名称制造持仓事实。\n"
         "PB、真实PIT或MA200不足不全局阻止机会发现，分别披露所依赖指标及价格完整度，不虚构未做的历史胜率或经验。\n"
         "不使用中债/CFETS受限来源，不绕过403；无实际价格前后证据时marketReaction保持UNVERIFIED。\n"
@@ -738,6 +767,8 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     if "themeActionableZones" not in packet:
         # Compatibility for pre-Phase2 packets only, never a new model request.
         raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
+    if "discoveryUniverse" not in packet:
+        raw = {"valueDirections": [], **raw}
     report = _Report.model_validate(raw).model_dump()
     _safe_narrative(report)
     directions = {row["id"] for row in packet.get("directions", [])}
@@ -850,6 +881,12 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     }
     if any(code not in energy for code in report["energy"]):
         raise ValueError("unknown energy observation")
+    value_directions = validate_value_directions(
+        report["valueDirections"], packet, completed_at, aliases
+    )
+    legacy_plans = validate_actionable_plans(
+        report["actionablePlans"], packet, completed_at
+    )
     return {
         **report,
         "methodVersion": VERSION,
@@ -858,9 +895,11 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         "events": sorted(events.values(), key=lambda r: r["id"]),
         "upcoming": sorted(upcoming.values(), key=lambda r: r["id"]),
         "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
-        "actionablePlans": validate_actionable_plans(
-            report["actionablePlans"], packet, completed_at
-        ),
+        "valueDirections": value_directions,
+        "actionablePlans": [
+            plan for direction in value_directions for plan in direction["plans"]
+        ]
+        + legacy_plans,
     }
 
 

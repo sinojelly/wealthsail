@@ -12,6 +12,39 @@ from backend.macro import alpha_research as alpha
 NOW = datetime(2026, 10, 18, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
+def test_public_packet_keeps_broad_news_after_fortieth_and_partial_coverage():
+    rows = [
+        {
+            "id": f"cls:{number}",
+            "title": f"消费与医药资讯{number}",
+            "asOf": "2026-10-18",
+            "retrievedAt": NOW.isoformat(),
+            "sourceUri": "https://www.cls.cn/telegraph",
+        }
+        for number in range(151)
+    ]
+    bundle = {
+        "catalysts": rows,
+        "sourceResults": {
+            "CLS_TELEGRAPH": {
+                "status": "PARTIAL",
+                "coverage": {
+                    "scannedCount": 180,
+                    "retainedCount": 151,
+                    "pages": 9,
+                    "stopReason": "HTTP_ERROR",
+                    "truncated": True,
+                    "private": "omit",
+                },
+            }
+        },
+    }
+    public = alpha.extend_public_packet(bundle, [], [], [], {}, NOW)["alphaPublic"]
+    assert len(public["catalysts"]) == 151
+    assert public["sourceResults"]["CLS_TELEGRAPH"]["coverage"]["scannedCount"] == 180
+    assert "private" not in public["sourceResults"]["CLS_TELEGRAPH"]["coverage"]
+
+
 def anchor():
     return {
         "methodVersion": "actionable-zones-v2",

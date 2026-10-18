@@ -116,6 +116,11 @@ async def load_public_packet(conn, now, external):
             bundle, themes, theme_plans(themes, bundle, now), rules, previous, now
         )
     )
+    from backend.investment.discovery import build_discovery_packet
+
+    packet.update(
+        await build_discovery_packet(conn, packet, bundle, themes, previous, now)
+    )
     return packet
 
 

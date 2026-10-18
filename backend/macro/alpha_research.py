@@ -49,7 +49,7 @@ def _price(value):
         raise ValueError("invalid program price") from exc
 
 
-def _program_plan(plan, track_name, now):
+def _program_plan(plan, track_name, now, *, require_theme=True):
     from backend.macro.daily_research import _url, _visible
 
     if not isinstance(plan, dict) or not _visible(plan, now):
@@ -61,7 +61,8 @@ def _program_plan(plan, track_name, now):
     if (
         day > now.date()
         or not plan.get("methodVersion")
-        or _identity(plan)[0] not in THEMES
+        or require_theme
+        and _identity(plan)[0] not in THEMES
     ):
         raise ValueError("unknown program plan")
     _url(plan.get("sourceUri"))
@@ -183,6 +184,20 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
             row, ("status", "errorClass", "records", "retrievedAt", "retryAfter")
         )
         public["sourceResults"][key]["limitations"] = _texts(row.get("limitations"), 8)
+        if isinstance(row.get("coverage"), dict):
+            public["sourceResults"][key]["coverage"] = _pick(
+                row["coverage"],
+                (
+                    "scannedCount",
+                    "retainedCount",
+                    "pages",
+                    "windowStart",
+                    "windowEnd",
+                    "oldestPublishedAt",
+                    "truncated",
+                    "stopReason",
+                ),
+            )
     fields = {
         "observations": (
             "code",
@@ -267,12 +282,15 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                 )[-24:]
             ]
         else:
-            rows = rows[:40]
+            rows = rows[: 300 if name == "catalysts" else 40]
         for row in rows:
             try:
                 if not _visible(row, now):
                     continue
                 item = _pick(row, keys)
+                if name == "catalysts":
+                    item["title"] = str(item.get("title") or "")[:200]
+                    item["content"] = str(item.get("content") or "")[:400]
                 if row.get("sourceUri"):
                     item["sourceUri"] = _url(row["sourceUri"])
                 if name == "observations":

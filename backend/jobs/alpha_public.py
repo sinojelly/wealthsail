@@ -62,9 +62,9 @@ async def sync_alpha_public(
             payload[key] = raw.get(key, [])
         payload["sourceResults"] = raw["sourceResults"]
         if nav_collector is None:
-            from backend.investment.theme_graph import collect_theme_nav_histories
+            from backend.investment.discovery import collect_discovery_nav_histories
 
-            nav_collector = collect_theme_nav_histories
+            nav_collector = collect_discovery_nav_histories
         try:
             nav = await nav_collector(pool, stamp)
             if not isinstance(nav.get("fundHistories"), list) or not isinstance(
