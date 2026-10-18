@@ -10,10 +10,11 @@ import {
   timeLabel,
   monthLabel,
   metricValue,
+  macroUnit,
 } from "../macro-display";
 import { planPrice, planUnit } from "../plan-display";
 import { readingText } from "../research-reading";
-import ActionablePlan from "./ActionablePlan";
+import ActionablePlan, { ActionablePlanEvidence } from "./ActionablePlan";
 import { studyMetricLabel } from "./study-display";
 
 export interface DirectionTrackInput {
@@ -57,60 +58,67 @@ function macroLabel(row: MacroFact) {
     ? readingText(row.label, 80)
     : "其他宏观观察";
 }
-function MacroFacts({ rows }: { rows?: ValueDirection["macroEvidence"] }) {
+function MacroReferences({ rows }: { rows?: ValueDirection["macroEvidence"] }) {
   if (!rows?.length) return null;
   return (
-    <section aria-label="该方向宏观依据">
-      <h4>实际宏观观察</h4>
-      {rows.map((row) => {
-        const label = macroLabel(row);
-        const numeric =
-          (typeof row.value === "number" ||
-            (typeof row.value === "string" && row.value.trim() !== "")) &&
-          Number.isFinite(Number(row.value))
-            ? Number(row.value)
-            : null;
-        const unit =
-          (
-            {
-              percentage_points: "个百分点",
-              index_point: "指数点",
-              percent: "%",
-              "USD/barrel": "美元/桶",
-              "USD/gallon": "美元/加仑",
-            } as Record<string, string>
-          )[row.unit ?? ""] ??
-          row.unit ??
-          "";
-        const period = row.referencePeriod
-          ? monthLabel(row.referencePeriod)
-          : timeLabel(row.referenceDate ?? row.asOf);
-        const href = sourceHref(row.sourceUri);
-        return (
-          <article
-            key={`${row.code}:${row.referencePeriod ?? row.referenceDate ?? row.asOf ?? "unknown"}`}
-            aria-label={label}
-          >
-            <p>
-              <strong>{label}</strong>：
-              {numeric === null
-                ? "未知（暂无有效数值）"
-                : `${metricValue(numeric, 2)} ${unit}`}
-            </p>
-            <small>
-              观察期：{period}
-              {row.retrievedAt && ` · 获取：${timeLabel(row.retrievedAt)}`}
-            </small>
-            {href && (
-              <p>
-                <a href={href} target="_blank" rel="noreferrer">
-                  {label}来源
-                </a>
-              </p>
-            )}
-          </article>
-        );
-      })}
+    <p className="op-value-macro">
+      宏观参考：
+      {rows
+        .map((row) => {
+          const label = macroLabel(row);
+          const numeric =
+            (typeof row.value === "number" ||
+              (typeof row.value === "string" && row.value.trim() !== "")) &&
+            Number.isFinite(Number(row.value))
+              ? Number(row.value)
+              : null;
+          const unit = macroUnit({ code: row.code, unit: row.unit ?? "" });
+          const period = row.referencePeriod
+            ? monthLabel(row.referencePeriod)
+            : timeLabel(row.referenceDate ?? row.asOf);
+          return `${label} ${numeric === null ? "未知" : `${metricValue(numeric, 2)} ${unit}`}（${period}）`;
+        })
+        .join("；")}
+    </p>
+  );
+}
+
+function DirectionSignals({
+  rows,
+  sources,
+  risk = false,
+}: {
+  rows?: ValueDirection["catalysts"];
+  sources: NonNullable<DailyResearch["report"]>["sources"];
+  risk?: boolean;
+}) {
+  if (!rows?.length) return null;
+  return (
+    <section
+      className={risk ? "op-value-risks" : "op-value-catalysts"}
+      aria-label={risk ? "关键风险" : "机会催化"}
+    >
+      {rows.slice(0, 2).map((row, index) => (
+        <p key={index}>
+          <strong>{risk ? "风险" : "催化"}：</strong>
+          {readingText(row.summary, 150)}
+          {[...new Set(row.sourceIds)].map((id) => {
+            const source = sources.find((item) => item.id === id);
+            const href = source && sourceHref(source.url);
+            return href ? (
+              <a
+                key={id}
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`${risk ? "风险" : "催化"}来源：${readingText(source.title, 100)}`}
+              >
+                原文
+              </a>
+            ) : null;
+          })}
+        </p>
+      ))}
     </section>
   );
 }
@@ -221,12 +229,6 @@ function FundPlan({
       {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
         <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
       )}
-      {plan.volatilityMethod === "NAV_ABS_CHANGE_STD_V1" && (
-        <small>
-          净值波动风险法 · 14期净值波动尺度{" "}
-          {price(plan.indicators.navVolatility14)}
-        </small>
-      )}
       {plan.subjectKind === "index" && (
         <small>指数点位用于指数研究，基金提醒须使用基金净值。</small>
       )}
@@ -246,8 +248,8 @@ function FundPlan({
       )}
       {error && <p role="alert">{error}</p>}
       <details>
-        <summary>价格依据与风险条件</summary>
-        <ActionablePlan
+        <summary>查看技术指标与算法依据</summary>
+        <ActionablePlanEvidence
           result={{ ...plan, tracks: track ? [track] : plan.tracks }}
         />
       </details>
@@ -258,9 +260,11 @@ function FundPlan({
 export default function ValueDirections({
   data,
   onTrack,
+  onViewMacro,
 }: {
   data?: DailyResearch | null;
   onTrack?: (input: DirectionTrackInput) => Promise<void>;
+  onViewMacro?: () => void;
 }) {
   const report = data?.report;
   if (!report) return null;
@@ -295,6 +299,15 @@ export default function ValueDirections({
                 </span>
               </header>
               <p>{readingText(direction.thesis, 260)}</p>
+              <DirectionSignals
+                rows={direction.catalysts}
+                sources={report.sources}
+              />
+              <DirectionSignals
+                rows={direction.risks}
+                sources={report.sources}
+                risk
+              />
               <details>
                 <summary>综合依据与后续观察</summary>
                 {direction.sourceIds.map((id) => {
@@ -317,7 +330,12 @@ export default function ValueDirections({
                     )
                   );
                 })}
-                <MacroFacts rows={direction.macroEvidence} />
+                <MacroReferences rows={direction.macroEvidence} />
+                {!!direction.macroEvidence?.length && onViewMacro && (
+                  <button type="button" onClick={onViewMacro}>
+                    查看市场证据
+                  </button>
+                )}
                 {direction.watchFor.map((text) => (
                   <p key={text}>{readingText(text, 180)}</p>
                 ))}

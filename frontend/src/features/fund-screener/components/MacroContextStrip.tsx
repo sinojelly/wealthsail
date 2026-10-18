@@ -306,6 +306,7 @@ export default function MacroContextStrip({
                   key={ready?.dailyResearch?.reportRunId ?? "no-report"}
                   data={ready?.dailyResearch}
                   onTrack={onStudyDirection}
+                  onViewMacro={() => open("macro")}
                 />
                 {!ready?.dailyResearch?.report &&
                   !!ready?.actionableZones?.length && (

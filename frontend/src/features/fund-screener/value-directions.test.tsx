@@ -277,7 +277,7 @@ it("keeps dynamic price revisions readable on the compact plan before algorithm 
     within(card).getByRole("status", { name: "价格计划调整" }),
   ).toHaveTextContent("订单兑现减弱，关注区间下调。");
   expect(
-    within(card).getByText("价格依据与风险条件").closest("details"),
+    within(card).getByText("查看技术指标与算法依据").closest("details"),
   ).not.toHaveAttribute("open");
 });
 
@@ -321,7 +321,7 @@ it("keeps a historical macro conclusion and directions dated instead of presenti
   ).toBeVisible();
 });
 
-it("keeps the direction's actual macro evidence folded and formats zero, negative values and provenance without raw codes", async () => {
+it("keeps compact frozen macro references folded, formats zero and negatives, and opens the shared market evidence", async () => {
   const data = context();
   Object.assign(data.dailyResearch.report.valueDirections[0], {
     macroEvidence: [
@@ -344,32 +344,30 @@ it("keeps the direction's actual macro evidence folded and formats zero, negativ
       { code: "OTHER_UNKNOWN", value: "", unit: "%" },
     ],
   });
+  const original = JSON.stringify(data);
   mocks.context.mockResolvedValue(data);
   renderWithSession(<FundScreenerPage />);
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
-  const facts = within(card).getByRole("region", { name: "该方向宏观依据" });
+  const facts = within(card).getByText(/宏观参考：/);
   expect(facts).not.toBeVisible();
   await userEvent.click(within(card).getByText("综合依据与后续观察"));
   expect(facts).toBeVisible();
-  const pmi = within(facts).getByRole("article", { name: "制造业PMI" });
-  expect(pmi).toHaveTextContent("0 指数点");
-  expect(pmi).toHaveTextContent("观察期：2026年9月");
-  expect(pmi).toHaveTextContent("获取：2026年10月18日 08:31");
-  expect(
-    within(pmi).getByRole("link", { name: "制造业PMI来源" }),
-  ).toHaveAttribute("href", "https://example.org/pmi");
-  expect(
-    within(facts).getByRole("article", { name: "M1与M2剪刀差" }),
-  ).toHaveTextContent("-4.12 个百分点");
-  expect(
-    within(facts).getByRole("article", { name: "中国10年国债收益率" }),
-  ).toHaveTextContent("未知");
-  expect(
-    within(facts).getByRole("article", { name: "其他宏观观察" }),
-  ).not.toHaveTextContent("0 %");
+  expect(facts).toHaveTextContent("制造业PMI 0 指数点（2026年9月）");
+  expect(facts).toHaveTextContent("M1与M2剪刀差 -4.12 个百分点");
+  expect(facts).toHaveTextContent("中国10年国债收益率 未知");
+  expect(facts).toHaveTextContent("其他宏观观察 未知");
   expect(facts).not.toHaveTextContent(
     /M1_M2_GAP|CN_T10|OTHER_UNKNOWN|percentage_points|index_point|4\.123456789/,
   );
+  expect(card.querySelector('[aria-label="该方向宏观依据"]')).toBeNull();
+  await userEvent.click(
+    within(card).getByRole("button", { name: "查看市场证据" }),
+  );
+  expect(screen.getByRole("tab", { name: "市场证据" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(JSON.stringify(data)).toBe(original);
 });
 
 it("labels the displayed debug report and keeps secondary evidence collapsed", async () => {
@@ -385,8 +383,7 @@ it("labels the displayed debug report and keeps secondary evidence collapsed", a
   for (const label of [
     "阅读完整日报",
     "执行与报告状态",
-    "价格依据与算法",
-    "价格依据与风险条件",
+    "查看技术指标与算法依据",
     "综合依据与后续观察",
   ]) {
     for (const summary of screen.getAllByText(label))

@@ -1,4 +1,8 @@
 const readingTerms: Array<[RegExp, string]> = [
+  [
+    /previousValueDirections\s*(?:为|是)?\s*空(?:数组)?(?:[，,]\s*首次建立(?:同|该)方向(?:基准)?计划)?/g,
+    "首次建立该方向基准计划",
+  ],
   [/historyQuality\s*=\s*CONFLICT\b/g, "历史数据存在冲突"],
   [/historyQuality\s*=\s*STALE\b/g, "历史数据待更新"],
   [/historyQuality\s*=\s*UNKNOWN\b/g, "历史数据尚未核验"],
@@ -32,6 +36,10 @@ const readingTerms: Array<[RegExp, string]> = [
 export function readingText(text: string, limit = 140): string {
   const translated = readingTerms
     .reduce((value, [pattern, label]) => value.replace(pattern, label), text)
+    .replace(
+      /\$\s*(?:[A-Za-z]|\\[A-Za-z]+(?:\{[A-Za-z]+\})?)\s*=\s*(-?\d+(?:\.\d+)?)\s*\$/g,
+      (_, value: string) => String(Number(value)),
+    )
     .replace(/(-?\d+\.\d{5,})/g, (value) => Number(value).toFixed(4))
     .replace(
       /(-?\d+(?:\.\d+)?)\s*个百分点/g,

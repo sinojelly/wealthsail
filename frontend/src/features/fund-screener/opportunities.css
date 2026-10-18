@@ -1852,11 +1852,11 @@
   grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.6fr);
   border: 1px solid #ccd9e1;
   border-radius: 12px;
-  margin: 14px 0;
+  margin: 10px 0;
   overflow: hidden;
 }
 .op-value-thesis {
-  padding: 18px;
+  padding: 14px;
   background: #f6f9fc;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1874,7 +1874,38 @@
 }
 .op-value-thesis p {
   line-height: 1.7;
-  margin: 14px 0;
+  margin: 10px 0;
+}
+.op-value-catalysts,
+.op-value-risks {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.op-value-risks {
+  color: #b4232d;
+}
+.op-value-catalysts a,
+.op-value-risks a {
+  display: inline-block;
+  font-size: 12px;
+  margin-left: 6px;
+  color: inherit;
+  text-underline-offset: 2px;
+}
+.op-value-macro {
+  color: #526477;
+  font-size: 12px;
+}
+.op-value-thesis details button {
+  border: 0;
+  background: none;
+  color: #075c4b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .op-value-signal {
   font-size: 12px;
@@ -1888,14 +1919,14 @@
   background: #fee2e2;
 }
 .op-value-funds {
-  padding: 16px;
+  padding: 14px;
   min-width: 0;
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 .op-value-fund {
   min-width: 0;
-  padding-bottom: 14px;
+  padding-bottom: 10px;
   border-bottom: 1px solid #e2e8f0;
   overflow-wrap: anywhere;
 }
@@ -1977,11 +2008,11 @@
   line-height: 1.6;
   margin-top: 10px;
 }
-.op-value-fund .op-actionable-plan {
-  margin-bottom: 0;
-}
-.op-value-fund .op-plan-tracks {
-  grid-template-columns: minmax(0, 1fr);
+.op-plan-evidence {
+  color: #526477;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 .op-manual-research {
   min-width: 0;

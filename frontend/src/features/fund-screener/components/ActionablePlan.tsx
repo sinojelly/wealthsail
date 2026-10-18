@@ -35,20 +35,23 @@ const parameterLabel = (key: string) =>
     }) as Record<string, string>
   )[key] ?? "其他策略参数";
 
-export default function ActionablePlan({
+const coordinateLabel = (result: ActionableZoneResult) =>
+  result.subjectKind === "index" || result.priceBasis === "INDEX_PRICE"
+    ? "指数点仅为指数研究坐标，不可作为基金挂单价格。"
+    : result.priceBasis === "ETF_HFQ" || result.priceBasis === "ADJUSTED_PRICE"
+      ? "后复权研究坐标，不可直接作为实时挂单价格。"
+      : result.priceBasis.includes("NAV")
+        ? "净值研究坐标，不可作为实时挂单价格。"
+        : "同口径研究坐标，价格口径未确认时不可直接挂单。";
+
+/** Shared evidence only; the owning plan renders its price table once. */
+export function ActionablePlanEvidence({
   result,
-  onTrack,
-  pending = false,
-  frozen = false,
+  showConditions = true,
 }: {
   result: ActionableZoneResult;
-  onTrack?: (track: PlanTrack) => void;
-  pending?: boolean;
-  frozen?: boolean;
+  showConditions?: boolean;
 }) {
-  const basis = result.priceBasis;
-  const price = (value: PlanPrice | undefined) => planPrice(value, result);
-  const unit = planUnit(result.unit);
   const indicatorLabels: Record<string, string> = {
     ma20: "20期均线",
     ma60: "60期均线",
@@ -65,14 +68,101 @@ export default function ActionablePlan({
     value == null || !Number.isFinite(Number(value))
       ? "—"
       : Number(value).toFixed(digits);
-  const coordinate =
-    result.subjectKind === "index" || basis === "INDEX_PRICE"
-      ? "指数点仅为指数研究坐标，不可作为基金挂单价格。"
-      : basis === "ETF_HFQ" || basis === "ADJUSTED_PRICE"
-        ? "后复权研究坐标，不可直接作为实时挂单价格。"
-        : basis.includes("NAV")
-          ? "净值研究坐标，不可作为实时挂单价格。"
-          : "同口径研究坐标，价格口径未确认时不可直接挂单。";
+  const parameter = (value: number) =>
+    Number.isFinite(value) ? String(Number(value.toFixed(4))) : "—";
+  return (
+    <div className="op-plan-evidence">
+      {showConditions && (
+        <>
+          <p>{coordinateLabel(result)}</p>
+          {result.volatilityMethod === "NAV_ABS_CHANGE_STD_V1" && (
+            <p>
+              净值波动风险法：使用真实净值变化与标准差计算风险尺度，区别于真实高低价ATR。
+            </p>
+          )}
+          {result.tracks.map((track) => (
+            <section
+              key={track.track}
+              aria-label={`${planTrackLabel(track.track)}风险条件`}
+            >
+              <p>
+                {planTrackLabel(track.track)} · {states[track.state]}
+              </p>
+              {track.priceState === "PARTIAL" && (
+                <p>部分价格依据：缺少完整输入，止损或目标可能尚未计算。</p>
+              )}
+              {track.reasons.map((reason, index) => (
+                <p key={index}>{readingText(reason, 600)}</p>
+              ))}
+              {!!track.missingEvidence?.length && (
+                <p>
+                  待补充：{readingText(track.missingEvidence.join("；"), 600)}
+                </p>
+              )}
+            </section>
+          ))}
+        </>
+      )}
+      {!!result.calibrationRuleKeys?.length && (
+        <p>结构化复盘规则：{result.calibrationRuleKeys.join("、")}</p>
+      )}
+      <p>
+        方法：{result.methodVersion} · 价格口径：
+        {(
+          {
+            UNIT_NAV: "单位净值",
+            ACCUMULATED_NAV: "累计净值",
+            INDEX_PRICE: "指数点位",
+            INDEX_POINTS: "指数点位",
+            ETF_HFQ: "后复权价格",
+            ADJUSTED_PRICE: "复权价格",
+            PROVIDER_RETURN_INDEX: "供应商收益指数",
+          } as Record<string, string>
+        )[result.priceBasis] ?? "待核查口径"}{" "}
+        · 标的：{result.subjectId}
+      </p>
+      {result.parameters && (
+        <p>
+          参数：
+          {Object.entries(result.parameters)
+            .map(
+              ([key, value]) =>
+                `${parameterLabel(key)}=${Array.isArray(value) ? value.map(parameter).join(", ") : parameter(value)}`,
+            )
+            .join("；")}
+        </p>
+      )}
+      {Object.entries(result.indicators).map(([name, value]) => (
+        <p key={name}>
+          {indicatorLabels[name] ?? "其他算法观察"}：
+          {numeric(
+            value,
+            name === "rsi14" ? 2 : result.subjectKind === "index" ? 2 : 4,
+          )}
+        </p>
+      ))}
+      {sourceHref(result.sourceUri) && (
+        <a href={sourceHref(result.sourceUri)} target="_blank" rel="noreferrer">
+          原始价格来源
+        </a>
+      )}
+    </div>
+  );
+}
+
+export default function ActionablePlan({
+  result,
+  onTrack,
+  pending = false,
+  frozen = false,
+}: {
+  result: ActionableZoneResult;
+  onTrack?: (track: PlanTrack) => void;
+  pending?: boolean;
+  frozen?: boolean;
+}) {
+  const price = (value: PlanPrice | undefined) => planPrice(value, result);
+  const unit = planUnit(result.unit);
   return (
     <section
       className="op-actionable-plan"
@@ -106,7 +196,7 @@ export default function ActionablePlan({
       <p>
         实际观察：{price(result.currentPrice)} {unit} · {timeLabel(result.asOf)}
       </p>
-      <p>{coordinate}</p>
+      <p>{coordinateLabel(result)}</p>
       {(result.selectedTrack ?? result.track) && (
         <p>
           {frozen ? "冻结轨道" : "研究轨道"}：
@@ -154,54 +244,7 @@ export default function ActionablePlan({
       </div>
       <details>
         <summary>价格依据与算法</summary>
-        {!!result.calibrationRuleKeys?.length && (
-          <p>结构化复盘规则：{result.calibrationRuleKeys.join("、")}</p>
-        )}
-        <p>
-          方法：{result.methodVersion} · 价格口径：
-          {(
-            {
-              UNIT_NAV: "单位净值",
-              ACCUMULATED_NAV: "累计净值",
-              INDEX_PRICE: "指数点位",
-              INDEX_POINTS: "指数点位",
-              ETF_HFQ: "后复权价格",
-              ADJUSTED_PRICE: "复权价格",
-              PROVIDER_RETURN_INDEX: "供应商收益指数",
-            } as Record<string, string>
-          )[result.priceBasis] ?? "待核查口径"}{" "}
-          · 标的：
-          {result.subjectId}
-        </p>
-        {result.parameters && (
-          <p>
-            参数：
-            {Object.entries(result.parameters)
-              .map(
-                ([key, value]) =>
-                  `${parameterLabel(key)}=${Array.isArray(value) ? value.map((number) => numeric(number)).join(", ") : numeric(value)}`,
-              )
-              .join("；")}
-          </p>
-        )}
-        {Object.entries(result.indicators).map(([name, value]) => (
-          <p key={name}>
-            {indicatorLabels[name] ?? "其他算法观察"}：
-            {numeric(
-              value,
-              name === "rsi14" ? 2 : result.subjectKind === "index" ? 2 : 4,
-            )}
-          </p>
-        ))}
-        {sourceHref(result.sourceUri) && (
-          <a
-            href={sourceHref(result.sourceUri)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            原始价格来源
-          </a>
-        )}
+        <ActionablePlanEvidence result={result} showConditions={false} />
       </details>
     </section>
   );

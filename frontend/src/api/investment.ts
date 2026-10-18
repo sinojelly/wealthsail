@@ -395,6 +395,8 @@ export interface ValueDirection {
   thesis: string;
   signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH";
   sourceIds: string[];
+  catalysts?: Array<{ summary: string; sourceIds: string[] }>;
+  risks?: Array<{ summary: string; sourceIds: string[] }>;
   macroCodes: string[];
   macroEvidence?: Array<{
     code: string;
