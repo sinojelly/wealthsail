@@ -7,6 +7,7 @@ import {
   monthLabel,
   sourceHref,
   timeLabel,
+  unitLabel,
   valueVerificationLabels,
   type MacroItem,
 } from "../macro-display";
@@ -128,7 +129,7 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
       >
         <title>{series.label} 实际观察样本，冲突及口径改变不连接</title>
         <text x={4} y={14}>
-          {series.unit ?? "单位待确认"}
+          {unitLabel(series.unit)}
         </text>
         {[low - padding, (low + high) / 2, high + padding].map((v) => (
           <g key={v}>
@@ -196,7 +197,7 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
       </figcaption>
       <p role="status" aria-label={`${series.label} 历史明细`}>
         {active
-          ? `${dateLabel(active.date)}：${active.value} ${active.unit ?? "单位待确认"} · 来源：${active.sourceName ?? series.sourceName ?? "待确认"} · 可得：${timeLabel(active.availableAt ?? active.retrievedAt)}`
+          ? `${dateLabel(active.date)}：${active.value} ${unitLabel(active.unit)} · 来源：${active.sourceName ?? series.sourceName ?? "待确认"} · 可得：${timeLabel(active.availableAt ?? active.retrievedAt)}`
           : "悬停或键盘聚焦查看实际观察值与来源。"}
       </p>
     </figure>
@@ -228,7 +229,7 @@ export function SeriesCard({ series }: { series: OpportunitySeries }) {
         <div className="op-evidence-facts">
           <p className="op-series-value">
             {finite(series.value)
-              ? `${metricValue(series.value)} ${series.unit ?? "单位待确认"}`
+              ? `${metricValue(series.value)} ${unitLabel(series.unit)}`
               : "—"}
           </p>
           <p>
@@ -248,7 +249,7 @@ export function SeriesCard({ series }: { series: OpportunitySeries }) {
             <>
               <p>
                 前一同口径有效值：{number(series.changes.previousValue)}{" "}
-                {series.unit ?? ""}
+                {unitLabel(series.unit, "")}
               </p>
               {series.frequency === "YTD" ? (
                 <p>年内累计值，未经核实不计算单月差，也不跨年比较。</p>

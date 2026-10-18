@@ -283,6 +283,11 @@ function DailyResearchContent({
   return (
     <section className="op-daily-report" aria-label="每日事件研究">
       <h3>{report ? "关键经济要闻" : "暂无有效日报"}</h3>
+      {data?.reportRunMode === "DEBUG" && (
+        <p className="op-debug-version">
+          当前报告：调试版（显式重新采集与分析）
+        </p>
+      )}
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
       {!report ? (
         <>

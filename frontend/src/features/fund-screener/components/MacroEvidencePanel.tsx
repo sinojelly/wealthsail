@@ -10,6 +10,7 @@ import {
   monthLabel,
   sourceHref,
   timeLabel,
+  unitLabel,
   type MacroItem,
 } from "../macro-display";
 import { EvidenceCard, SeriesCard } from "./EvidenceCards";
@@ -77,6 +78,31 @@ type EvidenceRow = {
   summary: string;
   detail: () => ReactNode;
 };
+function AlternativeSources({
+  label,
+  rows,
+}: {
+  label: string;
+  rows: EvidenceRow[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>其他来源与口径 · {label}</summary>
+      {open && (
+        <>
+          <p>分别保留原始日期与定义，不混合计算。</p>
+          {rows.map((row) => (
+            <div key={row.id}>{row.detail()}</div>
+          ))}
+        </>
+      )}
+    </details>
+  );
+}
 type Props = {
   data: OpportunityContext;
   renderMacro?: (item: MacroItem) => ReactNode;
@@ -230,7 +256,7 @@ function evidenceRows({
         code: item.code,
         label: item.label,
         value: item.value,
-        unit: item.unit,
+        unit: unitLabel(item.unit),
         date: timeLabel(item.asOf),
         state: item.state,
         change:
@@ -238,7 +264,7 @@ function evidenceRows({
             ? "年内累计值，不跨年比较。"
             : `${item.frequency === "MONTHLY" ? "连续月变化" : "近5个可比较样本"}：${finite(change) && unit ? `${change > 0 ? "+" : ""}${metricValue(change)} ${unit}` : "暂不可计算"}`,
         reference: finite(item.changes.median)
-          ? `历史样本中位数：${metricValue(item.changes.median)} ${item.unit ?? ""}`
+          ? `历史样本中位数：${metricValue(item.changes.median)} ${unitLabel(item.unit, "")}`
           : undefined,
         summary: "实际市场观察，需结合当前资产与其他证据独立判断。",
         detail: () => <SeriesCard series={item} />,
@@ -350,8 +376,15 @@ function EvidenceContent({
             "US_T10_NOMINAL",
             "US_T10_REAL",
           ];
-  const available = rows.filter(usable),
-    pending = rows.filter((row) => !usable(row));
+  const primary = new Map<string, EvidenceRow>();
+  for (const row of rows) {
+    const previous = primary.get(row.code);
+    if (!previous || (!usable(previous) && usable(row)))
+      primary.set(row.code, row);
+  }
+  const primaryRows = [...primary.values()];
+  const available = primaryRows.filter(usable),
+    pending = primaryRows.filter((row) => !usable(row));
   const rank = (code: string) =>
     preferred.includes(code) ? preferred.indexOf(code) : 99;
   const core = [...available]
@@ -407,6 +440,16 @@ function EvidenceContent({
         {row.reference && <small>{row.reference}</small>}
         <span className="op-compact-explanation">{row.summary}</span>
         {evidenceButton(row)}
+        {rows.some(
+          (other) => other.code === row.code && other.id !== row.id,
+        ) && (
+          <AlternativeSources
+            label={row.label}
+            rows={rows.filter(
+              (other) => other.code === row.code && other.id !== row.id,
+            )}
+          />
+        )}
       </article>
     );
   }

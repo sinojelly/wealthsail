@@ -1,4 +1,4 @@
-import { readingText } from "./research-reading";
+import { readingText, researchSummary } from "./research-reading";
 
 it("renders internal indicator units and theme labels in Chinese with bounded decimal precision", () => {
   const original =
@@ -7,4 +7,10 @@ it("renders internal indicator units and theme labels in Chinese with bounded de
     "地缘与原油；M1与M2剪刀差=-4.0 个百分点；中国10年国债收益率=1.6512；部分依据可用",
   );
   expect(original).toContain("1.6512345678901");
+});
+
+it("keeps economic conclusions in the macro summary and removes collector diagnostics without rewriting originals", () => {
+  const text = "信用边际修复。媒体零命中，当前抓取20条。仍需关注需求兑现。";
+  expect(researchSummary(text)).toBe("信用边际修复。仍需关注需求兑现。");
+  expect(text).toContain("媒体零命中");
 });

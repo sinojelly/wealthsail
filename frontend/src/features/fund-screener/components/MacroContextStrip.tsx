@@ -13,7 +13,7 @@ import MacroEvidencePanel from "./MacroEvidencePanel";
 import ActionablePlan from "./ActionablePlan";
 import Phase2Evidence from "./Phase2Evidence";
 import ValueDirections, { type DirectionTrackInput } from "./ValueDirections";
-import { readingText } from "../research-reading";
+import { researchSummary } from "../research-reading";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
   const facts = [
@@ -51,7 +51,7 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
           : "当前宏观事实"}
       </h3>
       <p>
-        {readingText(
+        {researchSummary(
           report?.macroCycle ||
             report?.summary ||
             "综合研究尚未生成，以下为实际已采集观察。",
@@ -162,6 +162,7 @@ export default function MacroContextStrip({
   selectedDirection,
   selectedIndexId,
   renderStudyTracking,
+  renderResearchRefresh,
   onStudyDirection,
 }: {
   data?: OpportunityContext;
@@ -175,6 +176,7 @@ export default function MacroContextStrip({
   selectedIndexId?: string;
   scopeKey?: string;
   renderStudyTracking?: () => ReactNode;
+  renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
 }) {
   const [params, setParams] = useSearchParams();
@@ -238,6 +240,7 @@ export default function MacroContextStrip({
           <small>下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}</small>
         )}
       </header>
+      {renderResearchRefresh?.()}
       {confirmedBreach && (
         <p role="alert" className="op-confirmed-risk">
           已确认持仓风险预算超限。市场双轨计划继续独立展示；请先核对个人持仓与风险预算。{" "}

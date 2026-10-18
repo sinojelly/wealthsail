@@ -476,6 +476,8 @@ export interface OpportunityContext extends MacroContext {
   notices?: ConditionNotice[];
 }
 export interface DailyResearch {
+  runMode?: "SCHEDULED" | "DEBUG" | null;
+  reportRunMode?: "SCHEDULED" | "DEBUG" | null;
   methodVersion: string;
   scheduleState?: "NOT_DUE" | "DUE_NOT_DISPATCHED" | "DISPATCHED" | "DISABLED";
   todayScheduledFor?: string | null;
@@ -610,6 +612,15 @@ export interface ValueEvidence {
   };
 }
 export interface Analysis {
+  navChanges?: {
+    basis: "UNIT_NAV_CHANGE";
+    unit: "decimal_fraction";
+    change63: number | null;
+    change252: number | null;
+    sampleCount: number;
+    missingWindows: number[];
+    reasons: string[];
+  };
   actionableZones?: ActionableZoneResult;
   state: string;
   score: number | null;

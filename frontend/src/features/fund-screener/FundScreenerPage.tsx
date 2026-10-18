@@ -20,6 +20,7 @@ import FundResultsTable from "./components/FundResultsTable";
 import ActionablePlan from "./components/ActionablePlan";
 import { metricValue, timeLabel } from "./macro-display";
 import StudyTracking from "./components/StudyTracking";
+import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
 import "./opportunities.css";
 
@@ -390,8 +391,22 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       </header>
       <MacroContextStrip
         data={radarData}
+        renderResearchRefresh={() => <DailyResearchRefresh actor={subject} />}
         renderStudyTracking={() => (
-          <StudyTracking actor={subject} scope={opportunityScope} />
+          <StudyTracking
+            actor={subject}
+            scope={opportunityScope}
+            preview={
+              analysisId
+                ? {
+                    direction: direction?.label,
+                    subject: title,
+                    code: fundCode ?? index?.code ?? undefined,
+                    plan: currentZones,
+                  }
+                : undefined
+            }
+          />
         )}
         onStudyDirection={async (input) => {
           const result = await createStudyTrack({
@@ -771,6 +786,32 @@ function ResearchWorkspace({ subject }: { subject: string }) {
               )}
             <details>
               <summary>历史收益与风险</summary>
+              {diagnosis.data?.navChanges?.basis === "UNIT_NAV_CHANGE" &&
+                diagnosis.data.navChanges.unit === "decimal_fraction" && (
+                  <>
+                    <p>
+                      63期单位净值变动：
+                      {metricValue(
+                        diagnosis.data.navChanges.change63 == null
+                          ? null
+                          : diagnosis.data.navChanges.change63 * 100,
+                      )}
+                      % · 252期单位净值变动：
+                      {metricValue(
+                        diagnosis.data.navChanges.change252 == null
+                          ? null
+                          : diagnosis.data.navChanges.change252 * 100,
+                      )}
+                      %
+                    </p>
+                    <small>
+                      单位净值变动不含分红再投，不代表基金总收益或个人交易盈亏。
+                    </small>
+                    {diagnosis.data.navChanges.reasons.map((reason) => (
+                      <p key={reason}>{reason}</p>
+                    ))}
+                  </>
+                )}
               <p>
                 63观察日收益：
                 {metricValue(

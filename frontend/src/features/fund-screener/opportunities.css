@@ -2041,3 +2041,35 @@
     width: 100%;
   }
 }
+
+.op-debug-refresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--op-line);
+  min-width: 0;
+}
+.op-debug-refresh button {
+  border: 1px solid var(--op-teal);
+  border-radius: 6px;
+  padding: 7px 12px;
+  color: var(--op-teal);
+  background: white;
+  cursor: pointer;
+}
+.op-debug-refresh button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.op-debug-refresh p {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+.op-debug-refresh small,
+.op-debug-version {
+  color: var(--op-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

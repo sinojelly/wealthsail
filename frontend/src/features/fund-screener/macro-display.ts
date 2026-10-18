@@ -49,11 +49,29 @@ export function timeLabel(raw?: string | null) {
 }
 
 export function macroUnit(item: Pick<MacroItem, "code" | "unit">) {
-  if (item.unit === "index_point") return "指数点";
-  if (item.unit === "percent") return "%";
-  if (item.unit) return item.unit;
+  if (item.unit) return unitLabel(item.unit);
   if (item.code === "PMI") return "指数点";
   return ["CPI_YOY", "PPI_YOY", "M2_YOY"].includes(item.code) ? "%" : "";
+}
+
+export function unitLabel(unit?: string | null, fallback = "单位待确认") {
+  return (
+    (
+      {
+        percentage_points: "个百分点",
+        index_point: "指数点",
+        points: "指数点",
+        percent: "%",
+        bp: "基点",
+        pp: "个百分点",
+        "USD/barrel": "美元/桶",
+        "USD/gallon": "美元/加仑",
+        "CNY/份": "元/份",
+      } as Record<string, string>
+    )[unit ?? ""] ??
+    unit ??
+    fallback
+  );
 }
 
 export function changeLabel(value: number | null | undefined, item: MacroItem) {

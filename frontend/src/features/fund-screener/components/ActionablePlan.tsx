@@ -14,6 +14,26 @@ const states = {
   WATCH: "等待触发",
   INSUFFICIENT: "条件数据不足",
 };
+const parameterLabel = (key: string) =>
+  (
+    ({
+      ma: "均线周期",
+      rsi: "相对强弱周期",
+      atr: "真实波幅周期",
+      bollinger: "布林周期与倍数",
+      momentum: "动量周期",
+      maximumPePercentile: "市盈率分位上限",
+      maximumMA200Gap: "偏离200期均线上限",
+      oversoldRSI: "超卖强弱阈值",
+      bollingerProximity: "布林接近倍数",
+      maximumTrendRSI: "趋势强弱上限",
+      navAbsoluteChangeWindow: "净值绝对变化窗口",
+      navAbsoluteChangeMultiplier: "净值绝对变化倍数",
+      navStdWindow: "净值标准差窗口",
+      navStdMultiplier: "净值标准差倍数",
+      navRiskFloorRatio: "净值最小风险幅度",
+    }) as Record<string, string>
+  )[key] ?? "其他策略参数";
 
 export default function ActionablePlan({
   result,
@@ -37,6 +57,7 @@ export default function ActionablePlan({
     atr14: "真实ATR14",
     navVolatility14: "14期净值波动尺度",
     bollUpper: "布林上轨",
+    bollMiddle: "布林中轨",
     bollLower: "布林下轨",
     momentum20: "20期动量",
   };
@@ -74,7 +95,7 @@ export default function ActionablePlan({
       {result.priceRevisionNote && (
         <p>{readingText(result.priceRevisionNote, 600)}</p>
       )}
-      {result.calibrationNote && (
+      {!!result.calibrationRuleKeys?.length && result.calibrationNote && (
         <p>复盘校准：{readingText(result.calibrationNote, 600)}</p>
       )}
       {result.volatilityMethod === "NAV_ABS_CHANGE_STD_V1" && (
@@ -137,7 +158,19 @@ export default function ActionablePlan({
           <p>结构化复盘规则：{result.calibrationRuleKeys.join("、")}</p>
         )}
         <p>
-          方法：{result.methodVersion} · 价格口径：{result.priceBasis} · 标的：
+          方法：{result.methodVersion} · 价格口径：
+          {(
+            {
+              UNIT_NAV: "单位净值",
+              ACCUMULATED_NAV: "累计净值",
+              INDEX_PRICE: "指数点位",
+              INDEX_POINTS: "指数点位",
+              ETF_HFQ: "后复权价格",
+              ADJUSTED_PRICE: "复权价格",
+              PROVIDER_RETURN_INDEX: "供应商收益指数",
+            } as Record<string, string>
+          )[result.priceBasis] ?? "待核查口径"}{" "}
+          · 标的：
           {result.subjectId}
         </p>
         {result.parameters && (
@@ -146,14 +179,14 @@ export default function ActionablePlan({
             {Object.entries(result.parameters)
               .map(
                 ([key, value]) =>
-                  `${key}=${Array.isArray(value) ? value.map((number) => numeric(number)).join(", ") : numeric(value)}`,
+                  `${parameterLabel(key)}=${Array.isArray(value) ? value.map((number) => numeric(number)).join(", ") : numeric(value)}`,
               )
               .join("；")}
           </p>
         )}
         {Object.entries(result.indicators).map(([name, value]) => (
           <p key={name}>
-            {indicatorLabels[name] ?? name}：
+            {indicatorLabels[name] ?? "其他算法观察"}：
             {numeric(
               value,
               name === "rsi14" ? 2 : result.subjectKind === "index" ? 2 : 4,

@@ -218,7 +218,7 @@ function FundPlan({
           {readingText(plan.priceRevisionNote ?? "", 140)}
         </p>
       )}
-      {plan.calibrationNote && (
+      {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
         <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
       )}
       {plan.volatilityMethod === "NAV_ABS_CHANGE_STD_V1" && (
@@ -344,7 +344,9 @@ export default function ValueDirections({
         <p>当前证据尚未形成有充分依据的价值方向。</p>
       ) : (
         <>
-          <p>此份历史格式报告未生成综合方向，保留原始研究计划。</p>
+          <p>
+            此份历史格式报告未生成综合方向，保留原始研究计划。需要重新采集并分析以查看新版方向与买卖点；历史原价不会回算。
+          </p>
           {report.actionablePlans?.map((plan) => (
             <ActionablePlan
               key={`${plan.subjectKind}:${plan.subjectId}:${plan.selectedTrack ?? plan.track}`}

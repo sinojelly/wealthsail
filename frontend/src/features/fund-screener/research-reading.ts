@@ -47,3 +47,11 @@ export function readingText(text: string, limit = 140): string {
       : ""
     : translated;
 }
+
+/** Summary-only projection; diagnostic details remain available in their source panels. */
+export function researchSummary(text: string, limit = 280): string {
+  return (
+    readingText(text.replace(/媒体零命中[^。；;]*(?:[。；;]|$)/g, ""), limit) ||
+    "综合研判暂无可读结论，请核查当前市场证据。"
+  );
+}

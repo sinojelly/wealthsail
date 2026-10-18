@@ -270,7 +270,7 @@ it("uses distinct indicator identities across macro and market series sharing a 
     items: [macro("PPI_YOY")],
     series: [{ ...series("PPI_YOY"), label: "另一个来源序列" }],
   });
-  await full("另一个来源序列");
+  await userEvent.click(screen.getByText("其他来源与口径 · PPI同比"));
   expect(
     screen.getByRole("img", { name: "另一个来源序列 历史观察" }),
   ).toBeInTheDocument();

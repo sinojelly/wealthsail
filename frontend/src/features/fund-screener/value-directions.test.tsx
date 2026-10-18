@@ -371,3 +371,26 @@ it("keeps the direction's actual macro evidence folded and formats zero, negativ
     /M1_M2_GAP|CN_T10|OTHER_UNKNOWN|percentage_points|index_point|4\.123456789/,
   );
 });
+
+it("labels the displayed debug report and keeps secondary evidence collapsed", async () => {
+  const data = context();
+  Object.assign(data.dailyResearch, { reportRunMode: "DEBUG" });
+  Object.assign(data.dailyResearch.report.valueDirections[0].plans[0], {
+    calibrationRuleKeys: [],
+    calibrationNote: "strategyMemoryRules为空，无真实规则key",
+  });
+  mocks.context.mockResolvedValue(data);
+  renderWithSession(<FundScreenerPage />);
+  expect(await screen.findByText(/当前报告：调试版/)).toBeVisible();
+  for (const label of [
+    "阅读完整日报",
+    "执行与报告状态",
+    "价格依据与算法",
+    "价格依据与风险条件",
+    "综合依据与后续观察",
+  ]) {
+    for (const summary of screen.getAllByText(label))
+      expect(summary.closest("details")).not.toHaveAttribute("open");
+  }
+  expect(document.body).not.toHaveTextContent("strategyMemoryRules为空");
+});

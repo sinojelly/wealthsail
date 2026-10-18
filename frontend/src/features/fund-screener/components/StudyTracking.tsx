@@ -16,6 +16,8 @@ import {
 import StudyVersionEditor from "./StudyVersionEditor";
 import ActionablePlan from "./ActionablePlan";
 import Decimal from "decimal.js";
+import type { ActionableZoneResult } from "../../../api/investment";
+import { planPrice, planUnit } from "../plan-display";
 
 function excursionLabel(value: string | null | undefined) {
   if (value == null || value.trim() === "" || !Number.isFinite(Number(value)))
@@ -26,6 +28,12 @@ export interface StudyTrackingProps {
   actor: string;
   scope: api.StudyScope;
   origin?: api.CreateStudy | null;
+  preview?: {
+    direction?: string;
+    subject: string;
+    code?: string;
+    plan?: ActionableZoneResult;
+  };
 }
 export default function StudyTracking(props: StudyTrackingProps) {
   const [params] = useSearchParams();
@@ -36,7 +44,7 @@ export default function StudyTracking(props: StudyTrackingProps) {
     />
   );
 }
-function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
+function StudyWorkspace({ actor, scope, origin, preview }: StudyTrackingProps) {
   const [params, setParams] = useSearchParams();
   const id = params.get("studyTrack");
   const [offset, setOffset] = useState(0);
@@ -146,6 +154,47 @@ function StudyWorkspace({ actor, scope, origin }: StudyTrackingProps) {
               ? "来源：当前展示的有效日报事件；保存原始报告身份与研究快照。"
               : "来源：当前方向、指数或基金选择；不自动替换已有研究。"}
           </p>
+          <section aria-label="即将跟踪的研究对象">
+            <strong>
+              {preview?.direction ??
+                (scope.directionId ? "当前所选研究方向" : "标的研究")}
+            </strong>
+            <p>
+              {preview?.subject ??
+                (scope.indexId
+                  ? subjectLabel(scope.indexId)
+                  : scope.fundCode
+                    ? "当前所选基金"
+                    : scope.instrumentId
+                      ? "当前所选基金"
+                      : "尚未选择具体研究对象")}{" "}
+              ·{" "}
+              {preview?.code ??
+                scope.fundCode ??
+                scope.indexId ??
+                scope.instrumentId ??
+                "未选择"}
+            </p>
+            {preview?.plan ? (
+              <>
+                <p>
+                  当前{preview.plan.priceBasis === "UNIT_NAV" ? "净值" : "点位"}
+                  ：{planPrice(preview.plan.currentPrice, preview.plan)}{" "}
+                  {planUnit(preview.plan.unit)}
+                </p>
+                {preview.plan.tracks.map((track) => (
+                  <p key={track.track}>
+                    {track.track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势"}
+                    区间：{planPrice(track.entryZoneMin, preview.plan!)}–
+                    {planPrice(track.entryZoneMax, preview.plan!)}
+                  </p>
+                ))}
+              </>
+            ) : (
+              <p>当前价格与买入区间尚无有效依据；保存时由服务器核对。</p>
+            )}
+            <small>只读预览；保存时冻结服务端读取的原始证据。</small>
+          </section>
           <label>
             观察天数
             <input

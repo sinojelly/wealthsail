@@ -570,3 +570,37 @@ it("does not display a late watch failure for the newly selected fund", async ()
   await act(async () => fail(new Error("watch-A-rejected")));
   expect(screen.queryByText("加入自选失败，请重试。")).not.toBeInTheDocument();
 });
+
+it("shows actual unit-NAV changes separately from unknown reinvested fund returns", async () => {
+  api.analysis.mockResolvedValue({
+    state: "READY",
+    indicators: {},
+    points: [],
+    reasons: [],
+    navChanges: {
+      basis: "UNIT_NAV_CHANGE",
+      unit: "decimal_fraction",
+      change63: 0,
+      change252: -0.1234,
+      sampleCount: 253,
+      missingWindows: [],
+      reasons: [],
+    },
+    performance: {
+      return63: null,
+      return252: null,
+      maxDrawdown: null,
+      sampleCount: 253,
+    },
+  });
+  renderWithSession(
+    <FundScreenerPage />,
+    "/fund-screener?fund=000051&fundMarket=FUND_CN",
+  );
+  await userEvent.click(await screen.findByText("历史收益与风险"));
+  expect(
+    await screen.findByText(/63期单位净值变动：0%.*252期单位净值变动：-12.34%/),
+  ).toBeVisible();
+  expect(screen.getByText(/单位净值变动不含分红再投/)).toBeVisible();
+  expect(screen.getByText(/63观察日收益：—%/)).toBeVisible();
+});
