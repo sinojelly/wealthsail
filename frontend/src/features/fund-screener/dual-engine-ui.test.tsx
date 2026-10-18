@@ -190,6 +190,7 @@ it("shows disclosed QDII prices with publication delay context on compact and fu
 
 it("keeps equally important media events in report order and reads source states in Chinese", async () => {
   const data = daily();
+  data.report!.sources = data.report!.sources.slice(0, 2);
   data.report!.sources[0].title = "UNVERIFIED｜行业媒体电报";
   data.report!.sources[1].title = "SOURCE_CHECKED｜公司原始公告";
   const original = JSON.stringify(data);
@@ -211,6 +212,7 @@ it("keeps equally important media events in report order and reads source states
 
 it("does not promote a media source because its saved title claims source checked", async () => {
   const data = daily();
+  data.report!.sources = data.report!.sources.slice(0, 1);
   data.report!.sources[0].title = "SOURCE_CHECKED｜自称核对的旧标题";
   data.report!.events = [data.report!.events[0]];
   const original = JSON.stringify(data);
@@ -220,6 +222,41 @@ it("does not promote a media source because its saved title claims source checke
   expect(screen.getByText("媒体快讯")).toBeVisible();
   expect(screen.queryByText("原文已核对")).not.toBeInTheDocument();
   expect(JSON.stringify(data)).toBe(original);
+});
+
+it("keeps direction-only report sources and Chinese verification states readable without event rows", async () => {
+  const data = daily();
+  data.report!.events = [];
+  data.report!.sources = data.report!.sources.slice(0, 2);
+  const original = JSON.stringify(data);
+  render(<DailyResearchReport data={data} />);
+  const full = screen.getByText("阅读完整日报").closest("details")!;
+  expect(full).not.toHaveAttribute("open");
+  await userEvent.click(screen.getByText("阅读完整日报"));
+  expect(
+    within(full).getByRole("link", { name: "行业媒体电报" }),
+  ).toBeVisible();
+  expect(
+    within(full).getByRole("link", { name: "公司原始公告" }),
+  ).toBeVisible();
+  expect(within(full).getByText("媒体快讯")).toBeVisible();
+  expect(within(full).getByText("原文已核对")).toBeVisible();
+  expect(JSON.stringify(data)).toBe(original);
+});
+
+it("shows the remaining report sources once after event evidence without duplicating that evidence", async () => {
+  const data = daily();
+  data.report!.events = [data.report!.events[0]];
+  data.report!.sources = data.report!.sources.slice(0, 2);
+  render(<DailyResearchReport data={data} />);
+  await userEvent.click(screen.getByText("阅读完整日报"));
+  const full = screen.getByText("阅读完整日报").closest("details")!;
+  expect(
+    within(full).getAllByRole("link", { name: "行业媒体电报" }),
+  ).toHaveLength(1);
+  expect(
+    within(full).getAllByRole("link", { name: "公司原始公告" }),
+  ).toHaveLength(1);
 });
 
 it("names verified report directions without sending their keys to legacy catalog navigation", async () => {

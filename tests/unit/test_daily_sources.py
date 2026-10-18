@@ -145,6 +145,33 @@ async def test_unapproved_media_link_is_retained_as_unverified_without_http():
     assert checked["media"]["verification"] == "UNVERIFIED"
 
 
+@pytest.mark.asyncio
+async def test_verification_keeps_the_bounded_24_source_budget_without_fetching_a_25th():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(
+            200, text="<h1>Original</h1><p>A public policy license was issued.</p>"
+        )
+
+    candidates = [
+        {
+            "id": f"source{i}",
+            "url": f"https://ofac.treasury.gov/source-{i}",
+            "quote": "A public policy license was issued.",
+            "publishedDate": None,
+        }
+        for i in range(25)
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        checked = await sources.verify_research_sources(
+            candidates, now=NOW, client=client, clock=lambda: NOW
+        )
+    assert len(checked) == len(seen) == 24
+    assert "source23" in checked and "source24" not in checked
+
+
 def test_energy_units_frequency_missing_values_and_actual_observation_changes():
     brent = sources.parse_energy_csv(
         "observation_date,DCOILBRENTEU\n2026-10-12,125\n2026-10-13,.\n2026-10-14,126\n",

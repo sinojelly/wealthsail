@@ -147,7 +147,7 @@ it("shows the canonical event as compact facts and impact and opens its complete
   const details = screen.getByText("阅读完整日报").closest("details")!;
   expect(details).not.toHaveAttribute("open");
   expect(within(details).getByText("原始短引文")).toBeInTheDocument();
-  expect(screen.queryByText("未被事件引用的来源")).not.toBeInTheDocument();
+  expect(within(details).getByText("未被事件引用的来源")).not.toBeVisible();
   expect(
     screen.queryByRole("region", { name: "日报原始来源" }),
   ).not.toBeInTheDocument();

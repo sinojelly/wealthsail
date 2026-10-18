@@ -70,6 +70,40 @@ def test_public_packet_projects_industry_catalysts_without_upgrading_media_facts
     assert "PRIVATE" not in str(public)
 
 
+def test_public_packet_keeps_later_catalysts_in_bounded_multi_industry_calendar_text():
+    content = (
+        "本周行业日程："
+        + "已公布活动说明。" * 90
+        + "AI技术大会与具身智能比赛将举行，金融会议将发布政策安排。"
+    )
+    assert content.index("AI技术大会") > 400
+    bundle = {
+        "catalysts": [
+            {
+                "id": "cls:calendar",
+                "title": "本周资本市场大事提醒",
+                "content": content,
+                "asOf": "2026-10-18",
+                "retrievedAt": NOW.isoformat(),
+                "sourceUri": "https://www.cls.cn/detail/123",
+                "sectorBuckets": [
+                    "AI_COMPUTE_SEMICONDUCTOR",
+                    "ROBOTICS_MOBILITY",
+                    "FINANCE_POLICY",
+                ],
+                "factVerification": "UNVERIFIED",
+            }
+        ]
+    }
+    public = alpha.extend_public_packet(bundle, [], [], [], {}, NOW)["alphaPublic"]
+    assert "AI技术大会与具身智能比赛" in public["catalysts"][0]["content"]
+    assert len(public["catalysts"][0]["content"]) <= 1000
+    assert all(
+        public["sectorCatalysts"][sector] == ["cls:calendar"]
+        for sector in bundle["catalysts"][0]["sectorBuckets"]
+    )
+
+
 def anchor():
     return {
         "methodVersion": "actionable-zones-v2",

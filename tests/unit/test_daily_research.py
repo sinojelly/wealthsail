@@ -231,6 +231,66 @@ def test_prompt_selects_available_fund_tracks_without_dropping_watch_candidates(
     assert "技术state与当前inEntryZone分开表述" in prompt
 
 
+def test_prompt_prioritizes_current_cross_industry_catalysts_before_extra_technical_slots():
+    prompt = engine().build_prompt(packet())
+    assert engine().PROMPT_VERSION == "daily-research-value-directions-v6"
+    assert "sources总预算最多24条" in prompt
+    assert "先跨行业覆盖本次输入中真实存在的核心催化" in prompt
+    assert "再分配同链补充来源和纯量化方向" in prompt
+    assert "金融重磅会议" in prompt and "券商与银行" in prompt
+    assert "黄金与油气" in prompt and "互补的1至2只基金" in prompt
+    assert "纯量化与消费补充不挤掉已有核心产业催化" in prompt
+
+
+def test_report_source_budget_accepts_24_distinct_sources_and_rejects_a_25th():
+    raw = report()
+    original = raw["sources"][0]
+    raw["sources"] = [
+        {
+            **original,
+            "id": "s1" if i == 0 else f"extra{i}",
+            "url": f"https://www.stats.gov.cn/source-{i}",
+        }
+        for i in range(24)
+    ]
+    assert len(validate(raw, source_checks={})["sources"]) == 24
+    assert engine().REPORT_SCHEMA["properties"]["sources"]["maxItems"] == 24
+    raw["sources"].append(
+        {**original, "id": "extra24", "url": "https://www.stats.gov.cn/source-24"}
+    )
+    with pytest.raises(ValueError):
+        validate(raw, source_checks={})
+
+
+def test_continuation_preserves_an_event_relying_on_the_last_of_24_sources():
+    old = report()
+    original = old["sources"][0]
+    old["sources"] = [
+        {**original, "id": f"source{i}", "url": f"https://www.stats.gov.cn/source-{i}"}
+        for i in range(24)
+    ]
+    old["events"][0].update(id="retained-last-source", sourceIds=["source23"])
+    public = engine().make_research_packet(
+        {},
+        [],
+        [],
+        [],
+        now=NOW,
+        previous={
+            "history": [
+                {
+                    "status": "READY",
+                    "runId": "previous-run",
+                    "completedAt": (NOW - timedelta(minutes=5)).isoformat(),
+                    "report": old,
+                }
+            ]
+        },
+    )
+    assert public["previousResearch"][0]["eventId"] == "retained-last-source"
+    assert public["previousResearch"][0]["sources"][0]["id"] == "source23"
+
+
 def test_public_price_projection_keeps_verified_nav_time_and_quality_metadata():
     result = engine()._public_actionable_plan(
         {

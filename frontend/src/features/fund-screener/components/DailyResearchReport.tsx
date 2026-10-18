@@ -136,6 +136,11 @@ function DailyResearchContent({
       (event, index, rows) =>
         rows.findIndex((row) => row.id === event.id) === index,
     ) ?? [];
+  const eventSourceIds = new Set(events.flatMap((event) => event.sourceIds));
+  const remainingSourceIds =
+    report?.sources
+      .filter((source) => !eventSourceIds.has(source.id))
+      .map((source) => source.id) ?? [];
   const importance: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const priorityEvents = events
     .map((event, order) => ({ event, order }))
@@ -455,6 +460,7 @@ function DailyResearchContent({
                 </li>
               ))}
             </ul>
+            {!!remainingSourceIds.length && sources(remainingSourceIds)}
             {!!report.coverage.length && (
               <section aria-label="研究覆盖与未找到主题">
                 <h4>研究覆盖与未找到主题</h4>

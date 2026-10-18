@@ -20,7 +20,8 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-value-directions-v5"
+PROMPT_VERSION = "daily-research-value-directions-v6"
+MAX_REPORT_SOURCES = 24
 
 
 class _Strict(BaseModel):
@@ -82,7 +83,7 @@ class _Upcoming(_Strict):
 class _Report(_Strict):
     summary: str = Field(min_length=1, max_length=1000)
     coverage: list[_Coverage] = Field(max_length=6)
-    sources: list[_Source] = Field(max_length=16)
+    sources: list[_Source] = Field(max_length=MAX_REPORT_SOURCES)
     events: list[_Event] = Field(max_length=12)
     upcoming: list[_Upcoming] = Field(max_length=12)
     # Only select program-supplied series; the model cannot author energy values.
@@ -372,7 +373,7 @@ def _public_continuation(previous, now):
     events, plans, seen, seen_plans = [], [], set(), set()
     for stamp, record, report in sorted(valid, key=lambda item: item[0], reverse=True):
         sources = {}
-        for source in report.get("sources", [])[:16]:
+        for source in report.get("sources", [])[:MAX_REPORT_SOURCES]:
             if not isinstance(source, dict) or not _visible(source, now):
                 continue
             try:
@@ -750,6 +751,8 @@ def build_prompt(packet):
         "使用actionableZones中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
         "给出简明中文macroCycle宏观周期定位与操作总纲；结合M1-M2、信用、收益率、房价、广域新闻与真实行情，自动提炼valueDirections，不要求用户筛选。五主题只是种子，可发现医药、消费、宽基、红利等任何有依据的价值方向。计划/市场隐含价格不等于已发生事实。\n"
         "财联社电报中的上市公司公告（回购、并购重组、股权转让、业绩）、重磅产业会议和地缘动态属于核心一等催化线索，严禁因未二次抓取官网原文而丢弃或降权。UNVERIFIED只表示尚未核对官网原文，与研究优先级独立；可直接引用财联社sourceUri作为媒体原文，注明报道身份，不伪装成官网已核对。按alphaPublic.sectorCatalysts逐行业检查，综合同链多条催化，不遗漏小行业线索。\n"
+        "sources总预算最多24条：先跨行业覆盖本次输入中真实存在的核心催化，为半导体/AI算力、稀土有色、机器人智驾、金融政策、医药临床、黄金地缘能源、航天军工逐项保留相关来源与方向名额，再分配同链补充来源和纯量化方向。以本次实际线索为准，合并同一投资逻辑；纯量化与消费补充不挤掉已有核心产业催化。\n"
+        "输入出现金融重磅会议时，将政策议程关联到券商与银行等实际敏感环节；出现地缘升级时，比较黄金与油气的避险/供需传导及各自技术位置，可在同一方向选互补的1至2只基金。只依据输入真实线索与基金锚点；尚缺技术触发时用WATCH保留完整价格计划和可观察条件。\n"
         "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
         "每只基金可选价格轨道取quantitativeScan.items[].signals，WATCH也选择其中已有完整价格的轨道；技术state与当前inEntryZone分开表述；某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道，不将缺一条轨道扩大为整只基金无价格。\n"
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"

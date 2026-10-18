@@ -266,7 +266,7 @@ async def sync_daily_research(
     except TimeoutError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
-    except Exception as exc:  # noqa: BLE001 -- never persist stderr, prompts or exception messages
+    except Exception as exc:  # noqa: BLE001 -- normal logs expose only error classes
         audit_error = exc
         error = type(exc).__name__
         logger.warning("daily_research_failed error_class=%s", error)

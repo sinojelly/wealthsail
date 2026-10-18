@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 MAX_BYTES = 2 * 1024 * 1024
 SOURCE_TIMEOUT_SECONDS = 45
+MAX_RESEARCH_SOURCE_CHECKS = 24
 OFFICIAL_HOSTS = frozenset(
     {
         "ofac.treasury.gov",
@@ -327,7 +328,11 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
                 "reason": "SOURCE_FETCH_FAILED",
             }
 
-    return dict(await asyncio.gather(*(check(source) for source in sources[:16])))
+    return dict(
+        await asyncio.gather(
+            *(check(source) for source in sources[:MAX_RESEARCH_SOURCE_CHECKS])
+        )
+    )
 
 
 def parse_energy_csv(text, code, now):

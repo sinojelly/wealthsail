@@ -297,7 +297,7 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                     )
 
                     item["title"] = str(item.get("title") or "")[:200]
-                    item["content"] = str(item.get("content") or "")[:400]
+                    item["content"] = str(item.get("content") or "")[:1000]
                     item["sectorBuckets"] = [
                         sector
                         for sector in _texts(row.get("sectorBuckets"))
