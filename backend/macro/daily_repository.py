@@ -50,7 +50,13 @@ async def claim_daily_run(
         return await conn.fetchrow(
             """INSERT INTO research.daily_research_runs
             (slot_date,scheduled_for,dispatched_at,input_hash,prompt_version,public_packet,cli_version,run_mode,debug_request_id,source_batch_id)
-            VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,'DEBUG',$8,$9)
+            SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,'DEBUG',$8,$9
+            WHERE EXISTS(
+              SELECT 1 FROM research.daily_research_refresh_requests q
+              JOIN identity.tenant_members m ON m.tenant_id=q.tenant_id AND m.user_id=q.user_id
+              JOIN identity.tenants t ON t.id=m.tenant_id
+              WHERE q.id=$8 AND q.requested_at<=$3 AND m.status='ACTIVE'
+                AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE')
             ON CONFLICT(debug_request_id) WHERE run_mode='DEBUG' DO NOTHING RETURNING *""",
             stamp.date(),
             slot,

@@ -372,3 +372,103 @@ async def test_clock_regression_cannot_claim_another_request_while_future_starte
         claimed = await repo.claim_refresh(conn, NOW + timedelta(minutes=10))
         assert str(claimed["id"]) == first["id"]
         assert await repo.claim_refresh(conn, NOW + timedelta(minutes=2)) is None
+
+
+@pytest.mark.parametrize("change", ["role", "membership", "tenant", "future_request"])
+async def test_model_slot_revalidates_current_operator_authority_and_request_visibility(
+    change,
+):
+    async with fixture() as (conn, tenant, owner, other):
+        requested = NOW + timedelta(minutes=1) if change == "future_request" else NOW
+        request = await enqueue(conn, tenant, owner, now=requested)
+        identity = UUID(request["id"])
+        batch = await claim_alpha_batch(conn, requested, debug_request_id=identity)
+        if change == "role":
+            await conn.execute(
+                "UPDATE identity.tenant_members SET role='VIEWER' WHERE tenant_id=$1 AND user_id=$2",
+                tenant,
+                owner,
+            )
+        elif change == "membership":
+            await conn.execute(
+                "UPDATE identity.tenant_members SET status='SUSPENDED' WHERE tenant_id=$1 AND user_id=$2",
+                tenant,
+                owner,
+            )
+        elif change == "tenant":
+            await conn.execute(
+                "UPDATE identity.tenants SET status='CLOSED' WHERE id=$1", tenant
+            )
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        result = await claim_daily_run(
+            conn,
+            NOW,
+            {},
+            input_hash="fixture",
+            prompt_version="fixture",
+            debug_request_id=identity,
+            source_batch_id=batch["id"],
+        )
+        assert result is None
+        assert not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM research.daily_research_runs WHERE debug_request_id=$1)",
+            identity,
+        )
+
+
+async def test_revocation_during_official_collection_never_starts_model(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from backend.common.database import create_pool
+    from backend.jobs import daily_research as daily
+
+    async with fixture(committed=True) as (admin, tenant, owner, other):
+        request = await enqueue(admin, tenant, owner)
+        identity = UUID(request["id"])
+        batch = await claim_alpha_batch(admin, NOW, debug_request_id=identity)
+        await finish_alpha_batch(admin, batch["id"], NOW, "READY", {"catalysts": []})
+
+        async def revoke(*args):
+            await admin.execute(
+                "UPDATE identity.tenant_members SET role='VIEWER' WHERE tenant_id=$1 AND user_id=$2",
+                tenant,
+                owner,
+            )
+            return {}
+
+        monkeypatch.setattr(daily, "collect_daily_sources", revoke)
+        monkeypatch.setattr(daily, "now_shanghai", lambda: NOW)
+        monkeypatch.setattr(daily, "load_public_packet", AsyncMock(return_value={}))
+        monkeypatch.setattr(daily, "build_prompt", lambda packet: "public fixture")
+        monkeypatch.setattr(
+            daily, "preflight_codex", AsyncMock(return_value={"executable": "fixture"})
+        )
+        model = AsyncMock(return_value={"summary": "fixture"})
+        monkeypatch.setattr(daily, "run_codex_research", model)
+        monkeypatch.setattr(
+            daily, "verify_research_sources", AsyncMock(return_value={})
+        )
+        monkeypatch.setattr(daily, "validate_report", lambda raw, *args, **kwargs: raw)
+        settings = SimpleNamespace(
+            app_env="test",
+            daily_research_debug_enabled=True,
+            daily_research_enabled=True,
+            daily_research_codex_path="fixture",
+            daily_research_model=None,
+            daily_research_timeout_seconds=900,
+        )
+        pool = await create_pool(
+            DSN, min_size=1, max_size=1, runtime_role="wealthsail_worker"
+        )
+        try:
+            result = await daily.sync_daily_research(
+                pool,
+                settings,
+                NOW,
+                debug_request_id=identity,
+                source_batch_id=batch["id"],
+            )
+        finally:
+            await pool.close()
+        assert result["status"] == "SKIPPED"
+        assert model.await_count == 0
