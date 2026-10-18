@@ -329,7 +329,9 @@ function EvidenceContent({
   directionId?: string;
 }) {
   const [selected, setSelected] = useState<IndicatorId | null>(null);
-  const [group, setGroup] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
   const panelId = useId();
   const preferred =
     directionId === "a-share:cyclical"
@@ -359,8 +361,19 @@ function EvidenceContent({
   const active = rows.find((row) => row.id === selected);
   const detailId = (row: EvidenceRow) => `${panelId}-${row.id}-detail`;
   function toggleGroup(id: string) {
-    setSelected(null);
-    setGroup(group === id ? null : id);
+    const members =
+      id === "pending"
+        ? pending
+        : remaining.filter((row) => categoryFor(row.code).id === id);
+    if (expandedGroups.has(id) && members.some((row) => row.id === selected)) {
+      setSelected(null);
+    }
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
   function evidenceButton(row: EvidenceRow) {
     return (
@@ -436,13 +449,13 @@ function EvidenceContent({
                 >
                   <button
                     type="button"
-                    aria-expanded={group === category.id}
+                    aria-expanded={expandedGroups.has(category.id)}
                     aria-controls={`${panelId}-${category.id}`}
                     onClick={() => toggleGroup(category.id)}
                   >
                     {category.label}
                   </button>
-                  {group === category.id && (
+                  {expandedGroups.has(category.id) && (
                     <div id={`${panelId}-${category.id}`}>
                       <div className="op-compact-metrics">
                         {members.map(compact)}
@@ -459,7 +472,7 @@ function EvidenceContent({
         <section className="op-evidence-pending" aria-label="待补充证据">
           <button
             type="button"
-            aria-expanded={group === "pending"}
+            aria-expanded={expandedGroups.has("pending")}
             aria-controls={`${panelId}-pending`}
             onClick={() => toggleGroup("pending")}
           >
@@ -468,7 +481,7 @@ function EvidenceContent({
           <small>
             {pending.map((row) => row.label).join("、")}仍待补充或核对。
           </small>
-          {group === "pending" && (
+          {expandedGroups.has("pending") && (
             <section id={`${panelId}-pending`} aria-label="待补充证据清单">
               <ul>
                 {pending.map((row) => (

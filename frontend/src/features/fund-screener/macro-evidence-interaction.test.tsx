@@ -179,7 +179,56 @@ it("keeps the real PPI graph next to its core grid with matching accessible cont
   ).toBeInTheDocument();
 });
 
-it("keeps grouped PPI detail inside inflation and clears it on group switch or collapse", async () => {
+it("allows all remaining evidence groups and pending evidence to stay expanded independently", async () => {
+  show({
+    state: "READY",
+    items: [macro("PMI"), macro("CPI_YOY"), macro("M2_YOY"), macro("PPI_YOY")],
+    series: [
+      series("CN_T10"),
+      series("M1_YOY"),
+      series("TSF_STOCK_YOY"),
+      series("SHIBOR_7D"),
+      series("HOUSE_HAIKOU_NEW_MOM"),
+      series("DXY"),
+      { ...series("DR007"), value: null, state: "NOT_COLLECTED" },
+    ],
+  });
+  const labels = ["通胀与成本", "利率与信用", "四城地产", "全球风险与市场"];
+  for (const [index, label] of labels.entries()) {
+    await open(label);
+    for (const expanded of labels.slice(0, index + 1)) {
+      const button = screen.getByRole("button", { name: expanded });
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      expect(
+        document.getElementById(button.getAttribute("aria-controls")!),
+      ).toBeVisible();
+    }
+  }
+  await open("待补充证据");
+  await open("利率与信用");
+  expect(screen.getByRole("button", { name: "利率与信用" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  for (const label of [
+    "通胀与成本",
+    "四城地产",
+    "全球风险与市场",
+    "待补充证据",
+  ]) {
+    expect(screen.getByRole("button", { name: label })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  }
+  await open("利率与信用");
+  expect(screen.getByRole("button", { name: "利率与信用" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+});
+
+it("keeps grouped PPI detail open when other groups toggle and clears it when its own group collapses", async () => {
   show({
     state: "READY",
     items: [macro("PMI"), macro("CPI_YOY"), macro("M2_YOY"), macro("PPI_YOY")],
@@ -197,6 +246,14 @@ it("keeps grouped PPI detail inside inflation and clears it on group switch or c
     within(inflation).getByRole("img", { name: "PPI同比 历史走势" }),
   ).toBeInTheDocument();
   await open("全球风险与市场");
+  expect(
+    screen.getByRole("img", { name: "PPI同比 历史走势" }),
+  ).toBeInTheDocument();
+  await open("全球风险与市场");
+  expect(
+    screen.getByRole("img", { name: "PPI同比 历史走势" }),
+  ).toBeInTheDocument();
+  await open("通胀与成本");
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   await open("通胀与成本");
   expect(
