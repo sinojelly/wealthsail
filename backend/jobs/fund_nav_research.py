@@ -69,6 +69,13 @@ async def refresh_fund_nav_history(
         "priceBasis": "UNIT_NAV",
         "points": points,
     }
+    proofs = [
+        (obs.metadata or {}).get("providerHistoryProof")
+        for obs in observations
+        if (obs.metadata or {}).get("providerHistoryProof")
+    ]
+    if proofs and all(proof == proofs[0] for proof in proofs):
+        history["providerHistoryProof"] = proofs[0]
     async with system_connection(pool) as conn:
         await conn.execute(
             """INSERT INTO market.fund_research_nav_histories

@@ -42,7 +42,11 @@ async def fixture(*, committed=False):
         and parts.port == 55434
         and (
             parts.path.startswith("/wealthsail_review07_validation_v")
-            or parts.path == "/wealthsail_review08_validation_v1"
+            or parts.path
+            in {
+                "/wealthsail_review08_validation_v1",
+                "/wealthsail_review09_validation_v1",
+            }
         )
     )
     conn = await asyncpg.connect(DSN)

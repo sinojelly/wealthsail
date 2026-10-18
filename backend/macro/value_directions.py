@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.macro.alpha_research import _price, _program_plan
 
-MAX_VALUE_DIRECTIONS = 6
+MAX_VALUE_DIRECTIONS = 8
 
 
 class DirectionEvidence(BaseModel):
@@ -35,8 +35,9 @@ class ValueDirectionProposal(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     thesis: str = Field(min_length=1, max_length=600)
     signal: Literal["LEFT_VALUE", "RIGHT_TREND", "TAKE_PROFIT", "WATCH"]
-    sourceIds: list[str] = Field(min_length=1, max_length=8)
+    sourceIds: list[str] = Field(max_length=8)
     macroCodes: list[str] = Field(max_length=8)
+    quantitativeFundCodes: list[str] = Field(default_factory=list, max_length=2)
     watchFor: list[str] = Field(max_length=4)
     catalysts: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
     risks: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
@@ -45,6 +46,112 @@ class ValueDirectionProposal(BaseModel):
 
 def plan_identity(plan):
     return plan.get("subjectKind"), plan.get("subjectId")
+
+
+def direction_quantitative_evidence(rows, codes, now, *, plans=None):
+    """Copy original server NAV facts with a closed projection, never model values."""
+    from backend.macro.daily_research import (
+        _visible,
+        _public_actionable_plan,
+        _pick,
+        _finite,
+    )
+
+    import re
+
+    if (
+        not isinstance(codes, list)
+        or len(codes) > 2
+        or len(set(codes)) != len(codes)
+        or any(
+            not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code)
+            for code in codes
+        )
+        or not isinstance(rows, list)
+    ):
+        raise ValueError("invalid quantitative fund references")
+    output = []
+    for code in codes:
+        matches = [
+            row for row in rows if isinstance(row, dict) and row.get("fundCode") == code
+        ]
+        if len(matches) != 1:
+            raise ValueError("missing or ambiguous quantitative fund")
+        row = matches[0]
+        if row.get("historyQuality") != "READY" or not _visible(row, now):
+            raise ValueError("unavailable quantitative history")
+        if plans is not None:
+            matches = [
+                plan
+                for plan in plans
+                if plan.get("fundCode") == code
+                and plan_identity(plan) == plan_identity(row)
+            ]
+            if not matches:
+                raise ValueError("quantitative fund must belong to this direction plan")
+            base = matches[0]
+            if any(
+                row.get(key) != base.get(key)
+                for key in ("asOf", "currentPrice", "tracks")
+            ):
+                raise ValueError("quantitative facts differ from selected server plan")
+        else:
+            base = row
+        kind, subject = plan_identity(base)
+        if kind not in {"nav", "fund"} or base.get("priceBasis") != "UNIT_NAV":
+            raise ValueError("quantitative evidence requires the same fund NAV")
+        selected = base.get("selectedTrack", base.get("track"))
+        valid_tracks = [
+            track
+            for track in base.get("tracks", [])
+            if track.get("state") in {"CANDIDATE", "WATCH"}
+        ]
+        if selected is None and valid_tracks:
+            selected = valid_tracks[0]["track"]
+        day, _, _ = _program_plan(base, selected, now, require_theme=False)
+        if (now.date() - day).days > 10:
+            raise ValueError("quantitative evidence predates the current study")
+        clean = _public_actionable_plan(base, subject, now, subject_kind=kind)
+        if clean is None:
+            raise ValueError("invalid quantitative coordinate")
+        clean["historyQuality"] = "READY"
+        clean.update(
+            _pick(
+                row,
+                (
+                    "fundCode",
+                    "discoverySector",
+                    "sourceUri",
+                    "retrievedAt",
+                    "availableAt",
+                    "priceTimeBasis",
+                    "historySampleCount",
+                    "historyTargetSamples",
+                    "historyCoverage",
+                ),
+            )
+        )
+        clean["signals"] = []
+        for signal in row.get("signals", [])[:2]:
+            if (
+                not isinstance(signal, dict)
+                or signal.get("track") not in {"LEFT_VALUE", "RIGHT_TREND"}
+                or signal.get("triggerState")
+                not in {"CANDIDATE", "WATCH", "INSUFFICIENT"}
+                or type(signal.get("inEntryZone")) is not bool
+            ):
+                raise ValueError("invalid quantitative signal")
+            distance = signal.get("distanceToEntryPct")
+            if distance is not None and _finite(distance) is None:
+                raise ValueError("invalid quantitative distance")
+            clean["signals"].append(
+                _pick(
+                    signal,
+                    ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
+                )
+            )
+        output.append(clean)
+    return output
 
 
 def _macro_codes(packet, now):
@@ -145,11 +252,8 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             raise ValueError("unknown direction source")
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
         macros = sorted(set(direction["macroCodes"]))
-        if (
-            any(code not in macro_codes for code in macros)
-            or len(refs) + len(macros) < 2
-        ):
-            raise ValueError("direction needs multiple available evidence")
+        if any(code not in macro_codes for code in macros):
+            raise ValueError("unknown direction macro fact")
         for field in ("catalysts", "risks"):
             for note in direction[field]:
                 if any(
@@ -214,6 +318,34 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                     "orderPriceAvailable": False,
                 }
             )
+        quantitative = []
+        if direction["quantitativeFundCodes"]:
+            from backend.macro.daily_research import _visible
+
+            scan = packet.get("quantitativeScan") or {}
+            if (
+                scan.get("methodVersion") != "fund-quant-scan-v1"
+                or scan.get("minimumHistorySamples") != 220
+                or not _visible(scan, now)
+            ):
+                raise ValueError("missing current quantitative scan")
+            quantitative = direction_quantitative_evidence(
+                scan.get("items"), direction["quantitativeFundCodes"], now, plans=plans
+            )
+        qualifying_track = any(
+            track.get("state") == "CANDIDATE"
+            for plan in plans
+            if plan.get("fundCode") in direction["quantitativeFundCodes"]
+            for track in plan.get("tracks", [])
+            if track.get("track") == plan.get("selectedTrack")
+        )
+        if not refs:
+            if not quantitative or not qualifying_track:
+                raise ValueError(
+                    "pure quantitative direction needs a triggered fund plan"
+                )
+        elif len(refs) + len(macros) + len(quantitative) < 2:
+            raise ValueError("direction needs multiple available evidence")
         if direction["signal"] in {"LEFT_VALUE", "RIGHT_TREND"} and not any(
             plan["selectedTrack"] == direction["signal"]
             and next(
@@ -233,6 +365,7 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 "sourceIds": refs,
                 "macroCodes": macros,
                 "macroEvidence": [deepcopy(macro_codes[code]) for code in macros],
+                "quantitativeEvidence": quantitative,
                 "plans": plans,
             }
         )

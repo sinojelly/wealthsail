@@ -184,6 +184,83 @@ async def test_direction_catalysts_and_risks_remain_frozen_with_original_sources
 
 
 @pytest.mark.asyncio
+async def test_pure_quantitative_direction_freezes_original_scan_without_fake_news():
+    original = report()
+    evidence = {
+        **plan(historyQuality="READY"),
+        "signals": [
+            {
+                "track": "LEFT_VALUE",
+                "triggerState": "CANDIDATE",
+                "inEntryZone": True,
+                "distanceToEntryPct": 0,
+            }
+        ],
+        "private": "NEVER_COPY",
+    }
+    original["valueDirections"][0].update(
+        sourceIds=[],
+        macroCodes=[],
+        quantitativeFundCodes=["000001"],
+        quantitativeEvidence=[evidence],
+    )
+    conn = AsyncMock()
+    run = uuid4()
+    conn.fetchrow.return_value = {
+        "run_id": run,
+        "recorded_at": NOW,
+        "payload": original,
+    }
+    origin = await repo.daily_direction_origin(
+        conn, run, "healthcare-recovery", "nav", "000001", "LEFT_VALUE", NOW
+    )
+    snapshot = study.freeze_hypothesis(origin, now=NOW + timedelta(days=1))
+    assert snapshot["sources"] == []
+    assert snapshot["valueDirection"]["quantitativeFundCodes"] == ["000001"]
+    assert (
+        snapshot["valueDirection"]["quantitativeEvidence"][0]["currentPrice"]
+        == "1.0000"
+    )
+    assert "NEVER_COPY" not in str(snapshot)
+    evidence["currentPrice"] = "9"
+    assert (
+        snapshot["valueDirection"]["quantitativeEvidence"][0]["currentPrice"]
+        == "1.0000"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["wrong_price", "future", "missing", "unrelated"])
+async def test_direction_freeze_rejects_changed_or_unrelated_quantitative_facts(
+    problem,
+):
+    original = report()
+    proof = plan(historyQuality="READY")
+    original["valueDirections"][0].update(
+        quantitativeFundCodes=["000001"], quantitativeEvidence=[proof]
+    )
+    if problem == "wrong_price":
+        proof["currentPrice"] = "2"
+    elif problem == "future":
+        proof["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    elif problem == "missing":
+        original["valueDirections"][0]["quantitativeEvidence"] = []
+    else:
+        proof["subjectId"] = "another"
+    conn = AsyncMock()
+    run = uuid4()
+    conn.fetchrow.return_value = {
+        "run_id": run,
+        "recorded_at": NOW,
+        "payload": original,
+    }
+    with pytest.raises(ValidationError_):
+        await repo.daily_direction_origin(
+            conn, run, "healthcare-recovery", "nav", "000001", "LEFT_VALUE", NOW
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "problem",
     [

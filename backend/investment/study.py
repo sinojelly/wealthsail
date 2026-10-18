@@ -297,6 +297,7 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
                 "watchFor",
                 "catalysts",
                 "risks",
+                "quantitativeFundCodes",
             }
         }
         if "macroEvidence" in origin["valueDirection"]:
@@ -307,6 +308,21 @@ def freeze_hypothesis(origin, *, now, horizon_days=30, scope=None):
                 origin["valueDirection"]["macroEvidence"],
                 origin["valueDirection"].get("macroCodes") or [],
                 now=report_clock,
+            )
+        if "quantitativeEvidence" in origin["valueDirection"]:
+            from backend.macro.value_directions import direction_quantitative_evidence
+
+            report_clock = _stamp(origin.get("reportAsOf"))
+            if report_clock is None or report_clock > now:
+                raise ValueError(
+                    "quantitative proof requires the original report clock"
+                )
+            snapshot["valueDirection"]["quantitativeEvidence"] = (
+                direction_quantitative_evidence(
+                    origin["valueDirection"]["quantitativeEvidence"],
+                    origin["valueDirection"].get("quantitativeFundCodes") or [],
+                    report_clock,
+                )
             )
     snapshot["benchmarkIndexId"] = (
         snapshot["scope"].get("indexId")

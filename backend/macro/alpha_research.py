@@ -176,6 +176,7 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
         "sourceResults": {},
         "observations": [],
         "catalysts": [],
+        "sectorCatalysts": {},
         "odds": [],
         "launches": [],
     }
@@ -190,6 +191,7 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                 (
                     "scannedCount",
                     "retainedCount",
+                    "filteredNoiseCount",
                     "pages",
                     "windowStart",
                     "windowEnd",
@@ -289,8 +291,30 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                     continue
                 item = _pick(row, keys)
                 if name == "catalysts":
+                    from backend.integrations.alpha_collectors import (
+                        SECTOR_KEYWORDS,
+                        core_catalyst,
+                    )
+
                     item["title"] = str(item.get("title") or "")[:200]
                     item["content"] = str(item.get("content") or "")[:400]
+                    item["sectorBuckets"] = [
+                        sector
+                        for sector in _texts(row.get("sectorBuckets"))
+                        if sector in {*SECTOR_KEYWORDS, "OTHER"}
+                    ]
+                    item["researchPriority"] = (
+                        "CORE_CATALYST"
+                        if core_catalyst(
+                            item["title"] + " " + item["content"],
+                            [
+                                sector
+                                for sector in item["sectorBuckets"]
+                                if sector in SECTOR_KEYWORDS
+                            ],
+                        )
+                        else "MARKET_CLUE"
+                    )
                 if row.get("sourceUri"):
                     item["sourceUri"] = _url(row["sourceUri"])
                 if name == "observations":
@@ -317,6 +341,11 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                 public[name].append(item)
             except (ValueError, TypeError):
                 continue
+    for row in public["catalysts"]:
+        for sector in row.get("sectorBuckets", []):
+            ids = public["sectorCatalysts"].setdefault(sector, [])
+            if row.get("id") and row["id"] not in ids and len(ids) < 12:
+                ids.append(row["id"])
     allowed = {
         (
             row["themeCode"],

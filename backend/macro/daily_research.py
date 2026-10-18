@@ -20,7 +20,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-value-directions-v4"
+PROMPT_VERSION = "daily-research-value-directions-v5"
 
 
 class _Strict(BaseModel):
@@ -280,6 +280,11 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "asOf",
             "sourceUri",
             "volatilityMethod",
+            "priceTimeBasis",
+            "historyQuality",
+            "historySampleCount",
+            "historyTargetSamples",
+            "historyCoverage",
         ),
     )
     result["orderPriceAvailable"] = False
@@ -744,12 +749,14 @@ def build_prompt(packet):
         "给出原始来源链接和不超过300字符的原文短引文；SOURCE_CHECKED表示原文核对状态，投资传导与预测写成有依据的分析。\n"
         "使用actionableZones中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
         "给出简明中文macroCycle宏观周期定位与操作总纲；结合M1-M2、信用、收益率、房价、广域新闻与真实行情，自动提炼valueDirections，不要求用户筛选。五主题只是种子，可发现医药、消费、宽基、红利等任何有依据的价值方向。计划/市场隐含价格不等于已发生事实。\n"
-        "valueDirections目标4至6项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码；至少两项不同来源或一项来源加宏观事实。\n"
+        "财联社电报中的上市公司公告（回购、并购重组、股权转让、业绩）、重磅产业会议和地缘动态属于核心一等催化线索，严禁因未二次抓取官网原文而丢弃或降权。UNVERIFIED只表示尚未核对官网原文，与研究优先级独立；可直接引用财联社sourceUri作为媒体原文，注明报道身份，不伪装成官网已核对。按alphaPublic.sectorCatalysts逐行业检查，综合同链多条催化，不遗漏小行业线索。\n"
+        "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
+        "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"
-        "缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]，不因不能立即定价而丢掉机会。每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。\n"
+        "每方向匹配1至2只实际基金，优先行业联接与另一弹性品种；只要有有效净值锚点就选择完整plans，不把有真实价格的基金藏在文字候选里。尚未到买点可WATCH并保留对应双轨计划。缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]。每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。\n"
         "plans与previousValueDirections同方向/同标的/同轨对照，无前次INITIAL，有前次UPGRADED/DOWNGRADED并解释；calibrationRuleKeys只引用本方向DISCOVERY:key或真实种子关联规则。不要把支持率称盈利胜率。净值的NAV_ABS_CHANGE_STD_V1为独立风险尺度，不能称真实ATR或精确收益预测。\n"
         "actionablePlans保留旧五主题兼容结构，新报告此字段输出[]，计划统一放在valueDirections。只有旧包才选择themeActionableZones中的themeCode/subjectKind/subjectId/track；价格均由服务器复制，没有有效锚点时不输出该标的计划。达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
-        "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金最新高仓位未核验时只作候选，不能从主题名称制造持仓事实。\n"
+        "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金可用自身真实净值生成完整价格计划；未披露或未核验持仓只限制行业持仓归因，不阻止基于自身净值的计划，不从主题名称制造持仓事实。\n"
         "PB、真实PIT或MA200不足不全局阻止机会发现，分别披露所依赖指标及价格完整度，不虚构未做的历史胜率或经验。\n"
         "不使用中债/CFETS受限来源，不绕过403；无实际价格前后证据时marketReaction保持UNVERIFIED。\n"
         "energy仅选择包中真实可用的序列code，不生成能源数值；保留布伦特与柴油单位/频率差异。\n"

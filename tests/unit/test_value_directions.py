@@ -210,13 +210,13 @@ def test_daily_report_uses_new_dynamic_directions_and_flattens_verified_prices()
         validate_report(raw, public, {}, completed_at=NOW)
 
 
-def test_six_distinct_directions_survive_report_validation_without_price_anchors():
+def test_eight_distinct_directions_survive_report_validation_without_price_anchors():
     from backend.macro.daily_research import validate_report
     from test_daily_research import report
 
     rows = [
         direction(key=f"opportunity-{number}", signal="WATCH", plans=[])
-        for number in range(6)
+        for number in range(8)
     ]
     raw = {
         **report(),
@@ -238,13 +238,172 @@ def test_six_distinct_directions_survive_report_validation_without_price_anchors
         "opportunity-3",
         "opportunity-4",
         "opportunity-5",
+        "opportunity-6",
+        "opportunity-7",
     ]
     assert all(row["plans"] == [] for row in actual["valueDirections"])
     raw["valueDirections"].append(
-        direction(key="opportunity-6", signal="WATCH", plans=[])
+        direction(key="opportunity-8", signal="WATCH", plans=[])
     )
     with pytest.raises(ValueError):
         validate_report(raw, public, {}, completed_at=NOW)
+
+
+def quantitative_packet():
+    public = packet()
+    plan = public["discoveryActionableZones"][0]
+    plan.update(fundCode="005112", historyQuality="READY")
+    public["quantitativeScan"] = {
+        "methodVersion": "fund-quant-scan-v1",
+        "asOf": NOW.isoformat(),
+        "minimumHistorySamples": 220,
+        "coverage": {},
+        "items": [
+            {
+                **deepcopy(plan),
+                "discoverySector": "HEALTHCARE",
+                "signals": [
+                    {
+                        "track": "LEFT_VALUE",
+                        "triggerState": "CANDIDATE",
+                        "inEntryZone": False,
+                        "distanceToEntryPct": "0.04",
+                    }
+                ],
+            }
+        ],
+    }
+    return public
+
+
+@pytest.mark.parametrize("sources", [["s1"], []])
+def test_real_nav_quantitative_scan_can_supply_independent_direction_evidence(sources):
+    public = quantitative_packet()
+    actual = validate(
+        [direction(sourceIds=sources, macroCodes=[], quantitativeFundCodes=["005112"])],
+        public,
+    )[0]
+    assert actual["quantitativeFundCodes"] == ["005112"]
+    assert actual["quantitativeEvidence"][0]["currentPrice"] == "1.2500"
+    assert actual["quantitativeEvidence"][0]["fundCode"] == "005112"
+    public["quantitativeScan"]["items"][0]["currentPrice"] = "99"
+    assert actual["quantitativeEvidence"][0]["currentPrice"] == "1.2500"
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing",
+        "unknown",
+        "stale",
+        "future",
+        "wrong_identity",
+        "wrong_price",
+        "unrelated",
+        "duplicate",
+        "no_scan_method",
+    ],
+)
+def test_quantitative_evidence_rejects_unavailable_forged_or_unrelated_funds(problem):
+    public = quantitative_packet()
+    raw = direction(sourceIds=["s1"], macroCodes=[], quantitativeFundCodes=["005112"])
+    scan = public["quantitativeScan"]
+    if problem == "missing":
+        public.pop("quantitativeScan")
+    elif problem == "unknown":
+        raw["quantitativeFundCodes"] = ["999999"]
+    elif problem == "stale":
+        scan["items"][0]["historyQuality"] = "STALE"
+    elif problem == "future":
+        scan["items"][0]["asOf"] = "2026-10-19"
+    elif problem == "wrong_identity":
+        scan["items"][0]["subjectId"] = "another"
+    elif problem == "wrong_price":
+        scan["items"][0]["currentPrice"] = "3"
+    elif problem == "unrelated":
+        raw.update(signal="WATCH", plans=[])
+    elif problem == "duplicate":
+        raw["quantitativeFundCodes"] = ["005112", "005112"]
+    else:
+        scan.pop("methodVersion")
+    with pytest.raises(ValueError):
+        validate([raw], public)
+
+
+def test_pure_quantitative_direction_needs_a_triggered_selected_track():
+    public = quantitative_packet()
+    public["discoveryActionableZones"][0]["tracks"][0]["state"] = "WATCH"
+    public["quantitativeScan"]["items"][0]["tracks"][0]["state"] = "WATCH"
+    with pytest.raises(ValueError):
+        validate(
+            [
+                direction(
+                    sourceIds=[],
+                    macroCodes=[],
+                    signal="WATCH",
+                    quantitativeFundCodes=["005112"],
+                )
+            ],
+            public,
+        )
+
+
+def test_dual_fund_direction_keeps_both_real_plans_and_quantitative_facts():
+    public = quantitative_packet()
+    second = deepcopy(public["discoveryActionableZones"][0])
+    second.update(subjectId="320007", fundCode="320007", label="真实主动基金")
+    public["discoveryActionableZones"].append(second)
+    public["quantitativeScan"]["items"].append(deepcopy(second))
+    raw = direction(macroCodes=[], quantitativeFundCodes=["005112", "320007"])
+    second_selection = deepcopy(raw["plans"][0])
+    second_selection["subjectId"] = "320007"
+    raw["plans"].append(second_selection)
+    actual = validate([raw], public)[0]
+    assert [row["fundCode"] for row in actual["plans"]] == ["005112", "320007"]
+    assert [row["fundCode"] for row in actual["quantitativeEvidence"]] == [
+        "005112",
+        "320007",
+    ]
+
+
+def test_report_keeps_cls_media_as_unverified_while_using_its_catalyst_with_nav():
+    from backend.macro.daily_research import validate_report
+    from test_daily_research import report
+
+    raw = {
+        **report(),
+        "macroCycle": "行业催化与量化共同研究。",
+        "actionablePlans": [],
+        "valueDirections": [direction(macroCodes=[], quantitativeFundCodes=["005112"])],
+    }
+    raw["sources"][0]["url"] = "https://www.cls.cn/detail/123"
+    public = {
+        **quantitative_packet(),
+        "directions": [{"id": "a-share:broad"}],
+        "discoveryUniverse": [],
+    }
+    actual = validate_report(raw, public, {}, completed_at=NOW)
+    assert actual["sources"][0]["verification"] == "UNVERIFIED"
+    assert actual["valueDirections"][0]["plans"][0]["currentPrice"] == "1.2500"
+
+
+def test_pure_quantitative_candidate_must_be_one_of_the_referenced_scan_funds():
+    public = quantitative_packet()
+    first = public["discoveryActionableZones"][0]
+    first["tracks"][0]["state"] = "WATCH"
+    public["quantitativeScan"]["items"][0]["tracks"][0]["state"] = "WATCH"
+    second = deepcopy(first)
+    second.update(subjectId="320007", fundCode="320007")
+    second["tracks"][0]["state"] = "CANDIDATE"
+    public["discoveryActionableZones"].append(second)
+    raw = direction(
+        sourceIds=[], macroCodes=[], signal="WATCH", quantitativeFundCodes=["005112"]
+    )
+    second_selection = deepcopy(raw["plans"][0])
+    second_selection["subjectId"] = "320007"
+    raw["plans"].append(second_selection)
+    with pytest.raises(ValueError):
+        validate([raw], public)
 
 
 def test_direction_catalysts_and_risks_keep_related_sources_and_normalize_aliases():

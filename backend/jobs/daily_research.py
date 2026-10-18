@@ -168,7 +168,20 @@ async def sync_daily_research(
             and current - batch["claimed_at"] < timedelta(minutes=10)
         ):
             return {"status": "WAITING_PUBLIC_DATA"}
+    nav_error = None
+    if not debug:
+        from backend.investment.discovery import collect_discovery_nav_histories
+
+        try:
+            await collect_discovery_nav_histories(pool, local(now_shanghai()))
+        except Exception as exc:  # noqa: BLE001 -- keep available research when one collection fails
+            nav_error = type(exc).__name__
     external = await collect_daily_sources(stamp)
+    if nav_error:
+        external.setdefault("sourceResults", {})["CORE_FUND_NAV"] = {
+            "status": "FAILED",
+            "errorClass": nav_error,
+        }
     # HTTP finishes first: its observations are never backdated to 08:30.
     async with system_connection(pool) as conn:
         packet = await load_public_packet(

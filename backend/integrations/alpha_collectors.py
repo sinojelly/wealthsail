@@ -161,7 +161,154 @@ INVESTMENT_KEYWORDS = KEYWORDS + (
     "进口",
     "贸易",
 )
+SECTOR_KEYWORDS = {
+    "AI_COMPUTE_SEMICONDUCTOR": (
+        "人工智能",
+        "AI",
+        "英伟达",
+        "NVIDIA",
+        "GTC",
+        "PCB",
+        "半导体",
+        "芯片",
+        "算力",
+        "数据中心",
+        "HBM",
+        "DRAM",
+        "内存",
+        "存储",
+        "海光",
+        "澜起",
+        "中科曙光",
+        "生益科技",
+        "台积电",
+    ),
+    "RARE_EARTH_METALS": (
+        "稀土",
+        "盛和资源",
+        "中国稀土",
+        "有色",
+        "战略资源",
+        "铜",
+        "铝",
+        "矿产",
+    ),
+    "ROBOTICS_MOBILITY": (
+        "机器人",
+        "具身智能",
+        "智驾",
+        "自动驾驶",
+        "智能驾驶",
+        "汽车",
+        "人形",
+    ),
+    "FINANCE_POLICY": (
+        "金融",
+        "金融街",
+        "央行",
+        "货币",
+        "社融",
+        "财政",
+        "证监",
+        "券商",
+        "银行",
+        "证券",
+        "保险",
+        "降息",
+        "降准",
+        "政策利率",
+    ),
+    "HEALTHCARE": ("医药", "医疗", "创新药", "临床", "ESMO", "ASCO", "FDA", "生物制药"),
+    "GOLD_GEO_ENERGY": (
+        "黄金",
+        "原油",
+        "油气",
+        "石油",
+        "天然气",
+        "以色列",
+        "伊朗",
+        "中东",
+        "俄乌",
+        "俄罗斯",
+        "乌克兰",
+        "预警打击",
+        "地缘",
+    ),
+    "SPACE_DEFENSE": (
+        "商业航天",
+        "卫星",
+        "火箭",
+        "发射",
+        "军工",
+        "国防",
+        "航天",
+        "航空",
+    ),
+}
+NOISE_PATTERNS = (
+    "新闻联播",
+    "礼节性",
+    "外事礼节",
+    "零星火灾",
+    "零星疾病",
+    "居民楼发生",
+    "疾病病例",
+)
+ANNOUNCEMENT_KEYWORDS = (
+    "回购",
+    "增持",
+    "并购",
+    "重组",
+    "股权转让",
+    "业绩",
+    "财报",
+    "季报",
+    "年报",
+    "营收",
+    "利润",
+)
 _launch_day = None
+
+
+def _keyword_in_text(word, text):
+    return (
+        bool(
+            re.search(
+                r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", text, re.I
+            )
+        )
+        if word.isascii()
+        else word in text
+    )
+
+
+def catalyst_sectors(text):
+    return [
+        sector
+        for sector, words in SECTOR_KEYWORDS.items()
+        if any(_keyword_in_text(word, text) for word in words)
+    ]
+
+
+def core_catalyst(text, sectors=None):
+    return bool(sectors or catalyst_sectors(text)) or any(
+        word in text for word in ANNOUNCEMENT_KEYWORDS
+    )
+
+
+def _industry_order(rows):
+    """Keep every retained item; bring one leading clue per industry forward."""
+    groups = {}
+    for row in rows:
+        # A multi-industry article appears once while retaining all its tags.
+        sector = (row.get("sectorBuckets") or ["OTHER"])[0]
+        groups.setdefault(sector, []).append(row)
+    return [
+        group[i]
+        for i in range(max((len(group) for group in groups.values()), default=0))
+        for group in groups.values()
+        if i < len(group)
+    ]
 
 
 class _Unavailable(ValueError):
@@ -536,6 +683,7 @@ async def _cls(fetch, cutoff):
     cursor = int(cutoff.timestamp())
     rows, seen_ids, seen_texts = [], set(), set()
     pages, scanned, oldest, error_fields = 0, 0, None, {}
+    filtered_noise = 0
     deadline = asyncio.get_running_loop().time() + 18
     stop_reason = "PAGE_LIMIT"
     for _ in range(15):
@@ -620,20 +768,15 @@ async def _cls(fetch, cutoff):
             page_new += 1
             oldest = published if oldest is None else min(oldest, published)
             matched = [
-                word
-                for word in INVESTMENT_KEYWORDS
-                if (
-                    re.search(
-                        r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])",
-                        text,
-                        re.I,
-                    )
-                    if word.isascii()
-                    else word in text
-                )
+                word for word in INVESTMENT_KEYWORDS if _keyword_in_text(word, text)
             ]
+            sectors = catalyst_sectors(text)
+            if not sectors and any(pattern in text for pattern in NOISE_PATTERNS):
+                filtered_noise += 1
+                continue
             level = item.get("level")
-            if level in {"A", "B"} or matched:
+            core = core_catalyst(text, sectors)
+            if level in {"A", "B"} or matched or core:
                 rows.append(
                     {
                         "id": "cls:" + (identity or digest[:20]),
@@ -646,6 +789,8 @@ async def _cls(fetch, cutoff):
                         if level == "B"
                         else "LOW",
                         "matchedKeywords": matched,
+                        "sectorBuckets": sectors or ["OTHER"],
+                        "researchPriority": "CORE_CATALYST" if core else "MARKET_CLUE",
                         "factVerification": "UNVERIFIED",
                         "asOf": published.date().isoformat(),
                         "publishedAt": published.isoformat(),
@@ -686,12 +831,13 @@ async def _cls(fetch, cutoff):
         reverse=True,
     )
     return _result(
-        catalysts=rows,
+        catalysts=_industry_order(rows),
         status="SUCCESS" if complete else "PARTIAL",
         allowEmpty=True,
         coverage={
             "scannedCount": scanned,
             "retainedCount": len(rows),
+            "filteredNoiseCount": filtered_noise,
             "pages": pages,
             "windowStart": window_start.isoformat(),
             "windowEnd": cutoff.isoformat(),

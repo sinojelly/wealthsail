@@ -260,6 +260,88 @@ async def test_cls_keeps_non_theme_important_news_and_broad_investment_topics(
 
 
 @pytest.mark.asyncio
+async def test_cls_balances_core_industry_catalysts_and_removes_unmapped_noise(
+    monkeypatch,
+):
+    module = engine(monkeypatch)
+    headlines = [
+        "英伟达GTC与AI算力PCB公司回购",
+        "盛和资源与中国稀土集团整合",
+        "上海具身智能机器人大赛即将举行",
+        "金融街论坛四部委掌门人同台演讲",
+        "创新药ESMO临床试验结果公布",
+        "以色列转向进攻与预警打击",
+        "商业航天卫星组网发射计划",
+    ]
+    pages = [
+        [
+            *[
+                cls_row(2000 + i, title=title, level="C")
+                for i, title in enumerate(headlines)
+            ],
+            cls_row(2100, title="新闻联播内容汇总", level="A"),
+            cls_row(2101, title="大使礼节性拜会当地官员", level="A"),
+            cls_row(2102, title="海外居民楼发生零星火灾", level="A"),
+            cls_row(2103, title="海外出现零星疾病病例", level="A"),
+            cls_row(2104, title="央行宣布降低政策利率", level="A"),
+            cls_row(2105, title="消费龙头发布季度业绩", level="B"),
+            cls_row(2106, title="某上市公司披露股权转让公告", level="C"),
+        ],
+        [],
+    ]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    actual = await module._cls(fetch, NOW)
+    rows = {row["id"]: row for row in actual["catalysts"]}
+    assert {f"cls:{2000 + i}" for i in range(7)} <= rows.keys()
+    assert not {f"cls:{2100 + i}" for i in range(4)} & rows.keys()
+    assert {"cls:2104", "cls:2105", "cls:2106"} <= rows.keys()
+    assert rows["cls:2106"]["researchPriority"] == "CORE_CATALYST"
+    assert set().union(
+        *(set(rows[f"cls:{2000 + i}"]["sectorBuckets"]) for i in range(7))
+    ) == {
+        "AI_COMPUTE_SEMICONDUCTOR",
+        "RARE_EARTH_METALS",
+        "ROBOTICS_MOBILITY",
+        "FINANCE_POLICY",
+        "HEALTHCARE",
+        "GOLD_GEO_ENERGY",
+        "SPACE_DEFENSE",
+    }
+    assert all(
+        rows[f"cls:{2000 + i}"]["researchPriority"] == "CORE_CATALYST" for i in range(7)
+    )
+    assert all(row["factVerification"] == "UNVERIFIED" for row in rows.values())
+    assert actual["coverage"]["filteredNoiseCount"] == 4
+
+
+@pytest.mark.asyncio
+async def test_cls_sector_round_robin_keeps_small_industry_near_front(monkeypatch):
+    module = engine(monkeypatch)
+    pages = [
+        [
+            *[
+                cls_row(3000 + i, title=f"AI算力公司{i}回购", level="A", seconds=i)
+                for i in range(12)
+            ],
+            cls_row(3100, title="盛和资源稀土产业整合", level="C", seconds=20),
+            cls_row(3101, title="创新药ESMO临床窗口", level="C", seconds=21),
+        ],
+        [],
+    ]
+
+    async def fetch(uri, *, params):
+        return {"data": {"roll_data": pages.pop(0)}}
+
+    actual = await module._cls(fetch, NOW)
+    assert {"cls:3000", "cls:3100", "cls:3101"} == {
+        row["id"] for row in actual["catalysts"][:3]
+    }
+
+
+@pytest.mark.asyncio
 async def test_cls_paginates_capped_twenty_row_pages_through_151st_item(monkeypatch):
     module = engine(monkeypatch)
     calls = []

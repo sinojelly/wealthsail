@@ -55,10 +55,7 @@ def _history_quality(history, points, now):
         or isinstance(proof, dict)
         and proof.get("overseasCalendarRequired") is True
     ):
-        return (
-            "UNVERIFIED",
-            "该基金需要境外交易日与净值发布依据；当前仅有境内日历，保留历史观察。",
-        )
+        return _disclosed_nav_quality(history, points, now)
     cutoff = now.date() if now.time() >= time(18) else now.date() - timedelta(days=1)
     if not isinstance(proof, dict) or proof.get("market") != "SSE":
         return (
@@ -116,6 +113,72 @@ def _history_quality(history, points, now):
         return "READY", None
     except (KeyError, TypeError, ValueError):
         return "UNVERIFIED", "已存交易日历事实无效，不能认证当前净值日期。"
+
+
+def _disclosed_nav_quality(history, points, now):
+    """A complete disclosed series supports dated research, not today's estimate."""
+    from backend.integrations.nav_history_proof import nav_points_digest
+
+    proof = history.get("providerHistoryProof")
+    unknown = (
+        "UNVERIFIED",
+        "缺少同基金完整披露净值证明；境外日历尚未接入，等待来源补全。",
+    )
+    if not isinstance(proof, dict) or not isinstance(points, list) or not points:
+        return unknown
+    try:
+        retrieved = _local(datetime.fromisoformat(proof["retrievedAt"]))
+        history_retrieved = _local(datetime.fromisoformat(history["retrievedAt"]))
+        start, end = (
+            date.fromisoformat(proof[key]) for key in ("queryStart", "queryEnd")
+        )
+        first, last = (date.fromisoformat(points[i]["date"]) for i in (0, -1))
+        fields = (
+            "totalCount",
+            "receivedRowCount",
+            "uniquePointCount",
+            "pointCount",
+            "pageCount",
+            "requiredPages",
+        )
+        if any(type(proof.get(key)) is not int or proof[key] <= 0 for key in fields):
+            return unknown
+        allowed = {
+            ("eastmoney-nav-history-v1", "https://api.fund.eastmoney.com/f10/lsjz"),
+            (
+                "akshare-unit-nav-history-v1",
+                f"https://fund.eastmoney.com/pingzhongdata/{history['fundCode']}.js",
+            ),
+            ("akshare-unit-nav-history-v1", "https://api.fund.eastmoney.com/f10/lsjz"),
+        }
+        if (
+            (proof.get("methodVersion"), proof.get("sourceUri")) not in allowed
+            or proof.get("fundCode") != history["fundCode"]
+            or proof.get("complete") is not True
+            or not start <= first <= last <= end <= now.date()
+            or end < retrieved.date()
+            or proof["pointCount"] != len(points)
+            or proof["uniquePointCount"] < len(points)
+            or proof["totalCount"] < proof["uniquePointCount"]
+            or proof["receivedRowCount"] < proof["totalCount"]
+            or proof["pageCount"] < proof["requiredPages"]
+            or proof.get("firstDate") != first.isoformat()
+            or proof.get("lastDate") != last.isoformat()
+            or proof.get("pointsDigest") != nav_points_digest(points)
+            or not retrieved <= history_retrieved <= now
+        ):
+            return unknown
+        if (now.date() - last).days > 10 or now - retrieved > timedelta(hours=36):
+            return (
+                "STALE",
+                "最新披露净值或来源核查已过期，需重新同步后计算当前研究参考。",
+            )
+        return (
+            "READY",
+            "依据最新披露净值计算研究参考；境外日历尚未接入，存在跨市场发布延迟，不是当日估值。",
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return unknown
 
 
 async def _calendar_proof(conn, history, now):
@@ -272,8 +335,19 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         publishedAt=None,
         timeBasis="PROVIDER_NAV_DATE",
         historyQuality=quality,
+        historySampleCount=len(points),
+        historyTargetSamples=220,
+        historyCoverage="SUFFICIENT" if len(points) >= 220 else "SHORT_HISTORY",
         orderPriceAvailable=False,
     )
+    if quality == "READY" and (
+        history.get("overseasCalendarRequired") is True
+        or (history.get("calendarProof") or {}).get("overseasCalendarRequired") is True
+    ):
+        plan["priceTimeBasis"] = "LATEST_DISCLOSED_NAV"
+        plan["timeBasis"] = "LATEST_DISCLOSED_NAV"
+        for track in plan["tracks"]:
+            track["reasons"].append(reason)
     if quality != "READY":
         for track in plan["tracks"]:
             track.update(
@@ -297,8 +371,16 @@ async def collect_theme_nav_histories(
     now_provider=now_shanghai,
     asset_rows=None,
     clock=monotonic,
+    minimum_points=0,
 ):
     from backend.integrations.market_data import fetch_fund_nav_history
+
+    if minimum_points:
+        from backend.integrations.fund_nav_fallback import (
+            fetch_fund_nav_history_with_fallback,
+        )
+
+        fetch_fund_nav_history = fetch_fund_nav_history_with_fallback
 
     deadline = clock() + 240 if asset_rows is not None else None
     if asset_rows is None:
@@ -340,11 +422,11 @@ async def collect_theme_nav_histories(
                 observations = await asyncio.wait_for(
                     (fetcher or fetch_fund_nav_history)(
                         code,
-                        now.date() - timedelta(days=370),
+                        now.date() - timedelta(days=730 if minimum_points else 370),
                         now.date(),
                         client,
                         page_size=100,
-                        max_pages=20,
+                        max_pages=32 if minimum_points else 20,
                     ),
                     timeout=min(45, remaining),
                 )
@@ -366,7 +448,7 @@ async def collect_theme_nav_histories(
                             "date": stamp.date().isoformat(),
                             "close": str(value),
                         }
-                points = [by_day[day] for day in sorted(by_day)]
+                points = [by_day[day] for day in sorted(by_day)][-500:]
                 if not points:
                     statuses[code] = {"status": "UNAVAILABLE", "records": 0}
                     continue
@@ -382,6 +464,13 @@ async def collect_theme_nav_histories(
                     "overseasCalendarRequired": row.get("overseas_calendar_required")
                     is True,
                 }
+                proofs = [
+                    (obs.metadata or {}).get("providerHistoryProof")
+                    for obs in observations
+                    if (obs.metadata or {}).get("providerHistoryProof")
+                ]
+                if proofs and all(proof == proofs[0] for proof in proofs):
+                    history["providerHistoryProof"] = deepcopy(proofs[0])
                 try:
                     async with system_connection(pool) as conn:
                         history["calendarProof"] = await _calendar_proof(

@@ -1896,6 +1896,7 @@ async def fetch_fund_nav_history(
     required_pages: int | None = None
     received = 0
     completed = False
+    valid_response = True
     for page_index in range(1, max_pages + 1):
         response = None
         for attempt in range(2):
@@ -1967,13 +1968,17 @@ async def fetch_fund_nav_history(
             raise RuntimeError("fund NAV provider pagination was truncated")
 
         received += len(rows)
+        if len(rows) > response_page_size:
+            valid_response = False
         for raw in rows:
             if not isinstance(raw, dict):
+                valid_response = False
                 continue
             try:
                 observed_on = date.fromisoformat(str(raw.get("FSRQ", "")))
                 nav = _decimal(raw.get("DWJZ"))
             except (ValueError, TypeError, ArithmeticError):
+                valid_response = False
                 continue
             if (
                 observed_on < start
@@ -1981,7 +1986,12 @@ async def fetch_fund_nav_history(
                 or not nav.is_finite()
                 or nav <= 0
             ):
+                valid_response = False
                 continue
+            if observed_on in by_day and by_day[observed_on].value != nav:
+                # Preserve the historical first-row-wins observation contract,
+                # but never certify conflicting provider coordinates.
+                valid_response = False
             by_day.setdefault(
                 observed_on,
                 Observation(
@@ -2005,7 +2015,35 @@ async def fetch_fund_nav_history(
 
     if total_count is not None and not completed:
         raise RuntimeError("fund NAV provider page bound exceeded")
-    return [by_day[day] for day in sorted(by_day)]
+    result = [by_day[day] for day in sorted(by_day)]
+    if result and completed and valid_response and received == total_count:
+        from backend.integrations.nav_history_proof import nav_points_digest
+
+        retained = [
+            {"date": row.as_of.date().isoformat(), "close": row.value}
+            for row in result[-500:]
+        ]
+        proof = {
+            "methodVersion": "eastmoney-nav-history-v1",
+            "fundCode": symbol,
+            "sourceUri": url,
+            "queryStart": start.isoformat(),
+            "queryEnd": end.isoformat(),
+            "totalCount": total_count,
+            "receivedRowCount": received,
+            "uniquePointCount": len(result),
+            "pointCount": len(retained),
+            "pageCount": page_index,
+            "requiredPages": required_pages,
+            "complete": True,
+            "firstDate": retained[0]["date"],
+            "lastDate": retained[-1]["date"],
+            "pointsDigest": nav_points_digest(retained),
+            "retrievedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        for observation in result:
+            observation.metadata["providerHistoryProof"] = proof
+    return result
 
 
 async def fetch_fund_disclosures(symbols: list[str]) -> list[FundDisclosure]:

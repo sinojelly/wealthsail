@@ -27,6 +27,7 @@ async def test_industry_pool_has_verified_products_not_review_code_mismatches():
         assert "主要消费" in by_code["009179"]["fund_name"]
         assert by_code["270042"]["overseas_calendar_required"]
         assert by_code["162411"]["overseas_calendar_required"]
+        assert {"021607", "004854", "007466", "000962", "008281"} <= set(by_code)
         async with conn.transaction():
             await conn.execute("SET LOCAL ROLE wealthsail_worker")
             assets = await read_discovery_assets(

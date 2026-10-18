@@ -1,6 +1,9 @@
 """Bounded public product discovery, independent of actor-selected filters."""
 
 import re
+import json
+from copy import deepcopy
+from datetime import datetime
 from uuid import UUID
 
 from backend.common.database import system_connection
@@ -276,6 +279,29 @@ def discovery_packet(universe, anchors, previous, now):
                 "sourceIds": _texts(row.get("sourceIds"))[:8],
                 "macroCodes": _texts(row.get("macroCodes"))[:8],
                 "watchFor": _texts(row.get("watchFor"))[:4],
+                "quantitativeFundCodes": _texts(
+                    row.get("quantitativeFundCodes"), width=6
+                )[:2],
+                "quantitativeEvidence": [
+                    {
+                        **_pick(
+                            item,
+                            (
+                                "subjectKind",
+                                "subjectId",
+                                "fundCode",
+                                "label",
+                                "asOf",
+                                "sourceUri",
+                                "historyQuality",
+                                "priceTimeBasis",
+                                "historySampleCount",
+                            ),
+                        ),
+                    }
+                    for item in (row.get("quantitativeEvidence") or [])[:2]
+                    if isinstance(item, dict)
+                ],
                 **{
                     field: [
                         {
@@ -292,27 +318,193 @@ def discovery_packet(universe, anchors, previous, now):
                 ],
             }
         )
-    return {
+    result = {
         "discoveryUniverse": universe[:108],
         "discoveryActionableZones": list(unique.values()),
         "previousValueDirections": prior,
     }
+    result["quantitativeScan"] = _quantitative_scan(result, now)
+    return result
+
+
+def _quantitative_scan(public, now):
+    """Independent server scan; a qualifying condition is not an in-zone price."""
+    items = []
+    sectors = {
+        row["fundCode"]: row.get("discoverySector")
+        for row in public["discoveryUniverse"]
+    }
+    for plan in public["discoveryActionableZones"]:
+        code = plan.get("fundCode")
+        if not code or plan.get("historyQuality") != "READY":
+            continue
+        signals = []
+        for track in plan.get("tracks", []):
+            if track.get("state") not in {"CANDIDATE", "WATCH"}:
+                continue
+            try:
+                current, low, high = (
+                    float(value)
+                    for value in (
+                        plan["currentPrice"],
+                        track["entryZoneMin"],
+                        track["entryZoneMax"],
+                    )
+                )
+                if not 0 < low <= high or current <= 0:
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+            distance = (
+                (low - current) / current
+                if current < low
+                else (current - high) / current
+                if current > high
+                else 0
+            )
+            signals.append(
+                {
+                    "track": track["track"],
+                    "triggerState": track["state"],
+                    "inEntryZone": low <= current <= high,
+                    "distanceToEntryPct": round(distance * 100, 4),
+                }
+            )
+        if not signals:
+            continue
+        item = deepcopy(plan)
+        item["signals"] = signals
+        if sectors.get(code):
+            item["discoverySector"] = sectors[code]
+        items.append(item)
+    return {
+        "methodVersion": "fund-quant-scan-v1",
+        "asOf": now.isoformat(),
+        "minimumHistorySamples": 220,
+        "items": items,
+        "coverage": {
+            "pricedFundCount": len(items),
+            "targetHistoryFundCount": sum(
+                item.get("historySampleCount", 0) >= 220 for item in items
+            ),
+        },
+    }
+
+
+async def _cached_histories(conn, codes, now):
+    if not codes:
+        return {}
+    rows = await conn.fetch(
+        """SELECT DISTINCT ON(fund_code) fund_code,payload
+        FROM market.fund_research_nav_histories WHERE fund_code=ANY($1::text[])
+          AND retrieved_at<=$2 AND available_at<=$2 AND payload->>'asOf'<=$3
+        ORDER BY fund_code,payload->>'asOf' DESC,retrieved_at DESC,id DESC""",
+        codes,
+        now,
+        now.date().isoformat(),
+    )
+    result = {}
+    for row in rows:
+        payload = row.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("fundCode") in codes
+            and row.get("fund_code", payload.get("fundCode")) == payload["fundCode"]
+        ):
+            result[payload["fundCode"]] = payload
+    return result
+
+
+def _history_rank(history):
+    from backend.macro.daily_research import _stamp
+
+    stamp = _stamp(history.get("retrievedAt"))
+    return str(history.get("asOf") or ""), stamp.timestamp() if stamp else 0
 
 
 async def collect_discovery_nav_histories(pool, now):
-    from backend.investment.theme_graph import read_themes, collect_theme_nav_histories
+    from backend.investment.theme_graph import (
+        read_themes,
+        collect_theme_nav_histories,
+        _calendar_proof,
+        nav_plan,
+        _disclosed_nav_quality,
+    )
 
     async with system_connection(pool) as conn:
         themes = await read_themes(conn, now)
         assets = await read_discovery_assets(conn, now, themes)
+        cached = await _cached_histories(
+            conn, [row["fundCode"] for row in assets[:32]], now
+        )
+    reused, needed, statuses = [], [], {}
+    for asset in assets[:32]:
+        history = cached.get(asset["fundCode"])
+        if not isinstance(history, dict) or not isinstance(history.get("points"), list):
+            needed.append(asset)
+            continue
+        try:
+            same_day = (
+                datetime.fromisoformat(history["retrievedAt"])
+                .astimezone(now.tzinfo)
+                .date()
+                == now.date()
+            )
+        except (KeyError, TypeError, ValueError):
+            same_day = False
+        complete_short = (
+            same_day
+            and _disclosed_nav_quality(history, history.get("points", []), now)[0]
+            == "READY"
+        )
+        if same_day and (len(history.get("points", [])) >= 220 or complete_short):
+            async with system_connection(pool) as conn:
+                history = deepcopy(history)
+                history["calendarProof"] = await _calendar_proof(conn, history, now)
+            plan = nav_plan(history, now=now)
+            if plan and plan.get("historyQuality") == "READY":
+                reused.append(history)
+                statuses[asset["fundCode"]] = {
+                    "status": "SUCCESS",
+                    "records": len(history["points"]),
+                    "retrievedAt": history["retrievedAt"],
+                    "cache": "REUSED_CONFIRMED",
+                }
+                continue
+        needed.append(asset)
     rows = [
         {
             "asset_code": row["fundCode"],
             "overseas_calendar_required": row["overseasCalendarRequired"],
         }
-        for row in assets[:32]
+        for row in needed
     ]
-    return await collect_theme_nav_histories(pool, now, asset_rows=rows)
+    collected = await collect_theme_nav_histories(
+        pool, now, asset_rows=rows, minimum_points=220
+    )
+    async with system_connection(pool) as conn:
+        for history in collected["fundHistories"]:
+            await conn.execute(
+                """INSERT INTO market.fund_research_nav_histories
+                (fund_code,retrieved_at,available_at,payload) VALUES($1,$2,$3,$4::jsonb)""",
+                history["fundCode"],
+                datetime.fromisoformat(history["retrievedAt"]),
+                datetime.fromisoformat(history["availableAt"]),
+                json.dumps(history),
+            )
+    order = {row["fundCode"]: i for i, row in enumerate(assets[:32])}
+    return {
+        "fundHistories": sorted(
+            [*reused, *collected["fundHistories"]],
+            key=lambda row: order[row["fundCode"]],
+        ),
+        "themeNavSourceResults": {**statuses, **collected["themeNavSourceResults"]},
+    }
 
 
 async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
@@ -321,7 +513,15 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
     from backend.investment import service
 
     universe = await read_discovery_assets(conn, now, themes)
-    histories = {row.get("fundCode"): row for row in bundle.get("fundHistories", [])}
+    histories = await _cached_histories(
+        conn, [row["fundCode"] for row in universe[:32]], now
+    )
+    for history in bundle.get("fundHistories", []):
+        code = history.get("fundCode")
+        if code not in histories or _history_rank(history) >= _history_rank(
+            histories[code]
+        ):
+            histories[code] = history
     anchors = [
         *packet.get("actionableZones", []),
         *packet.get("themeActionableZones", []),

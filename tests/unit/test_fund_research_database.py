@@ -39,10 +39,10 @@ class SingleConnection:
 async def fixture():
     parts = urlsplit(DSN)
     assert parts.hostname == "127.0.0.1" and parts.port == 55434
-    assert (
-        parts.path.startswith("/wealthsail_review07_validation_v")
-        or parts.path == "/wealthsail_review08_validation_v1"
-    )
+    assert parts.path.startswith("/wealthsail_review07_validation_v") or parts.path in {
+        "/wealthsail_review08_validation_v1",
+        "/wealthsail_review09_validation_v1",
+    }
     conn = await asyncpg.connect(DSN)
     transaction = conn.transaction()
     await transaction.start()

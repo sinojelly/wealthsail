@@ -45,6 +45,31 @@ def test_public_packet_keeps_broad_news_after_fortieth_and_partial_coverage():
     assert "private" not in public["sourceResults"]["CLS_TELEGRAPH"]["coverage"]
 
 
+def test_public_packet_projects_industry_catalysts_without_upgrading_media_facts():
+    bundle = {
+        "catalysts": [
+            {
+                "id": "cls:123",
+                "title": "盛和资源整合",
+                "content": "媒体报道整合计划。",
+                "asOf": "2026-10-18",
+                "retrievedAt": NOW.isoformat(),
+                "sourceUri": "https://www.cls.cn/detail/123",
+                "factVerification": "UNVERIFIED",
+                "sectorBuckets": ["RARE_EARTH_METALS", "PRIVATE"],
+                "researchPriority": "CORE_CATALYST",
+                "private": "omit",
+            }
+        ]
+    }
+    public = alpha.extend_public_packet(bundle, [], [], [], {}, NOW)["alphaPublic"]
+    assert public["catalysts"][0]["sectorBuckets"] == ["RARE_EARTH_METALS"]
+    assert public["catalysts"][0]["researchPriority"] == "CORE_CATALYST"
+    assert public["catalysts"][0]["factVerification"] == "UNVERIFIED"
+    assert public["sectorCatalysts"]["RARE_EARTH_METALS"] == ["cls:123"]
+    assert "PRIVATE" not in str(public)
+
+
 def anchor():
     return {
         "methodVersion": "actionable-zones-v2",

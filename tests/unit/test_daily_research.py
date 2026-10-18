@@ -212,6 +212,38 @@ def test_packet_whitelists_public_facts_without_discarding_current_partial_resea
     assert "SOURCE_CHECKED" in prompt and "08:30" not in prompt
 
 
+def test_prompt_prioritizes_media_and_quantitative_dual_engine_without_active_fund_veto():
+    prompt = engine().build_prompt(packet())
+    assert "6至8" in prompt
+    assert "quantitativeScan" in prompt and "quantitativeFundCodes" in prompt
+    assert "核心一等催化线索" in prompt
+    assert "严禁因未二次抓取官网原文而丢弃或降权" in prompt
+    assert "sourceIds=[]" in prompt
+    assert "主动基金最新高仓位未核验时只作候选" not in prompt
+    assert "自身真实净值" in prompt
+
+
+def test_public_price_projection_keeps_verified_nav_time_and_quality_metadata():
+    result = engine()._public_actionable_plan(
+        {
+            "subjectKind": "nav",
+            "subjectId": "320007",
+            "asOf": "2026-10-16",
+            "priceTimeBasis": "CONFIRMED_UNIT_NAV",
+            "historyQuality": "READY",
+            "currentPrice": "1.25",
+            "private": "omit",
+            "tracks": [],
+        },
+        "320007",
+        NOW,
+        subject_kind="nav",
+    )
+    assert result["priceTimeBasis"] == "CONFIRMED_UNIT_NAV"
+    assert result["historyQuality"] == "READY"
+    assert "private" not in result
+
+
 @pytest.mark.parametrize("field", ["retrievedAt", "availableAt", "publishedAt"])
 def test_packet_cannot_present_future_collected_facts_as_current(field):
     future = {

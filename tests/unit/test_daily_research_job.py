@@ -33,6 +33,13 @@ def settings(**updates):
 
 
 def isolate(monkeypatch):
+    from backend.investment import discovery
+
+    monkeypatch.setattr(
+        discovery,
+        "collect_discovery_nav_histories",
+        AsyncMock(return_value={"fundHistories": [], "themeNavSourceResults": {}}),
+    )
     mod, state = job(), {"consumed": False, "active": 0, "terminal": []}
 
     @asynccontextmanager

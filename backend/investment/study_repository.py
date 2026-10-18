@@ -60,6 +60,7 @@ async def daily_direction_origin(
     from backend.macro.alpha_research import _program_plan
     from backend.macro.daily_research import _visible
     from backend.investment.study import direction_macro_evidence
+    from backend.macro.value_directions import direction_quantitative_evidence
 
     row = await conn.fetchrow(
         """SELECT r.run_id,t.payload,t.recorded_at FROM research.daily_research_runs r
@@ -110,10 +111,8 @@ async def daily_direction_origin(
             for source in report.get("sources", [])
             if isinstance(source, dict) and source.get("id") in refs
         ]
-        if (
-            not refs
-            or {source["id"] for source in sources} != refs
-            or any(not _visible(source, now) for source in sources)
+        if {source["id"] for source in sources} != refs or any(
+            not _visible(source, now) for source in sources
         ):
             raise ValueError("missing direction sources")
         macro_evidence = (
@@ -123,6 +122,14 @@ async def daily_direction_origin(
             if "macroEvidence" in direction
             else None
         )
+        quantitative = direction_quantitative_evidence(
+            direction.get("quantitativeEvidence") or [],
+            direction.get("quantitativeFundCodes") or [],
+            stamp,
+            plans=direction.get("plans") or [],
+        )
+        if not refs and not quantitative:
+            raise ValueError("missing direction evidence")
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError_("该日报方向或标的计划无效，无法冻结") from exc
     frozen_direction = {
@@ -137,11 +144,14 @@ async def daily_direction_origin(
             "watchFor",
             "catalysts",
             "risks",
+            "quantitativeFundCodes",
         )
         if key in direction
     }
     if macro_evidence is not None:
         frozen_direction["macroEvidence"] = macro_evidence
+    if quantitative:
+        frozen_direction["quantitativeEvidence"] = quantitative
     return {
         "originType": "DAILY_DIRECTION",
         "reportRunId": str(row["run_id"]),
