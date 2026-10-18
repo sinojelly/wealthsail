@@ -29,3 +29,13 @@ it("does not let a preceding dollar amount swallow a later parameter expression"
     "预算$100，真实波幅周期 14；目标$120",
   );
 });
+
+it("reads standalone plan status tokens in Chinese while preserving raw notes and longer identifiers", () => {
+  const original =
+    "左侧CANDIDATE已入区，右侧WATCH；WATCHLIST、CANDIDATE_V2不属于独立状态。";
+  expect(readingText(original, 300)).toBe(
+    "左侧候选条件成立已入区，右侧等待触发；WATCHLIST、CANDIDATE_V2不属于独立状态。",
+  );
+  expect(original).toContain("CANDIDATE已入区");
+  expect(original).toContain("右侧WATCH");
+});

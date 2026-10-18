@@ -21,6 +21,8 @@ const readingTerms: Array<[RegExp, string]> = [
   [/\bUNAVAILABLE\b/g, "证据暂不可用"],
   [/\bINCOMPLETE\b/g, "证据尚未齐备"],
   [/\bPARTIAL\b/g, "部分依据可用"],
+  [/\bCANDIDATE\b/g, "候选条件成立"],
+  [/\bWATCH\b/g, "等待触发"],
   [/\bHAINAN_FTP\b/g, "海南自贸港"],
   [/\bPUDONG_DEV\b/g, "浦东发展"],
   [/\bGEO_CRUDE_OIL\b/g, "地缘与原油"],
