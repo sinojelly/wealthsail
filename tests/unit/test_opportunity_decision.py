@@ -531,7 +531,7 @@ async def test_current_fund_candidate_uses_own_history_without_pb_pit_or_macro_q
     assert output["decision"]["state"] == "LEFT_VALUE_CANDIDATE"
     assert output["decision"]["validation"]["state"] == "UNAVAILABLE"
     assert output["decision"]["actionableZones"]["subjectId"] == "fund"
-    assert output["decision"]["actionableZones"]["currentPrice"] == "101"
+    assert output["decision"]["actionableZones"]["currentPrice"] == "101.0000"
     assert output["decision"]["assessment"]["riskState"] == "UNKNOWN"
 
 

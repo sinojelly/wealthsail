@@ -467,7 +467,7 @@ async def test_context_exposes_actual_selected_index_plan_without_legacy_board(
     assert len(result["actionableZones"]) == 1
     assert result["actionableZones"][0]["subjectId"] == "a500"
     assert result["actionableZones"][0]["label"] == "中证A500"
-    assert result["actionableZones"][0]["currentPrice"] == "101"
+    assert result["actionableZones"][0]["currentPrice"] == "101.00"
     assert (
         "researchOverview" not in result
         and "researchBoard" not in result

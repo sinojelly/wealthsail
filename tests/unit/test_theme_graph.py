@@ -78,7 +78,7 @@ def nav_history(**changes):
     }
 
 
-def test_nav_history_produces_partial_same_fund_plan_without_fabricated_atr():
+def test_nav_history_produces_same_fund_risk_plan_without_fabricated_atr():
     history = nav_history()
     history["points"][-1]["close"] = "1.25"
     plan = graph.nav_plan(history, now=NOW)
@@ -86,9 +86,125 @@ def test_nav_history_produces_partial_same_fund_plan_without_fabricated_atr():
     assert plan["subjectKind"] == "nav"
     assert plan["priceBasis"] == "UNIT_NAV"
     assert plan["indicators"]["atr14"] is None
-    assert plan["tracks"][1]["priceState"] == "PARTIAL"
-    assert plan["currentPrice"] == "1.25"
+    assert plan["volatilityMethod"] == "NAV_ABS_CHANGE_STD_V1"
+    assert plan["indicators"]["navVolatility14"] > 0
+    assert plan["tracks"][1]["priceState"] == "READY"
+    assert plan["currentPrice"] == "1.2500"
     assert plan["historyQuality"] == "READY"
+
+
+@pytest.mark.asyncio
+async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirements(
+    monkeypatch,
+):
+    from backend.integrations.market_data import Observation
+
+    class Conn:
+        async def fetch(self, sql, *args):
+            assert "reference.trading_calendars" in sql
+            return []
+
+    @asynccontextmanager
+    async def acquire(pool):
+        yield Conn()
+
+    monkeypatch.setattr(graph, "system_connection", acquire)
+
+    async def fetcher(code, start, end, client, **kwargs):
+        return [
+            Observation(
+                symbol=code,
+                subject_type="FUND",
+                field_code="NAV",
+                value=Decimal("1.2500"),
+                as_of=NOW.replace(day=16, hour=15),
+                quality_status="FRESH",
+            )
+        ]
+
+    result = await graph.collect_theme_nav_histories(
+        object(),
+        NOW,
+        fetcher=fetcher,
+        now_provider=lambda: NOW,
+        asset_rows=[
+            {"asset_code": "000001", "overseas_calendar_required": False},
+            {"asset_code": "000001", "overseas_calendar_required": True},
+            {"asset_code": "008281", "overseas_calendar_required": False},
+            {"asset_code": "008281/other"},
+            {"asset_code": 8281},
+            {"asset_code": "12345"},
+        ],
+    )
+    assert [row["fundCode"] for row in result["fundHistories"]] == ["000001", "008281"]
+    assert result["fundHistories"][0]["overseasCalendarRequired"] is True
+    assert result["fundHistories"][1]["overseasCalendarRequired"] is False
+
+
+@pytest.mark.asyncio
+async def test_injected_nav_discovery_is_capped_at_thirty_two_distinct_assets():
+    async def fetcher(code, start, end, client, **kwargs):
+        return []
+
+    result = await graph.collect_theme_nav_histories(
+        object(),
+        NOW,
+        fetcher=fetcher,
+        now_provider=lambda: NOW,
+        asset_rows=[{"asset_code": str(100000 + i)} for i in range(35)],
+    )
+    assert list(result["themeNavSourceResults"]) == [str(100000 + i) for i in range(32)]
+    assert result["fundHistories"] == []
+
+
+@pytest.mark.asyncio
+async def test_discovery_collection_budget_keeps_history_without_fetching_remaining(
+    monkeypatch,
+):
+    from backend.integrations.market_data import Observation
+
+    elapsed = [0]
+
+    class Conn:
+        async def fetch(self, sql, *args):
+            return []
+
+    @asynccontextmanager
+    async def acquire(pool):
+        yield Conn()
+
+    monkeypatch.setattr(graph, "system_connection", acquire)
+
+    async def fetcher(code, start, end, client, **kwargs):
+        assert code == "008281", "exhausted budget must not fetch another code"
+        elapsed[0] = 241
+        return [
+            Observation(
+                symbol=code,
+                subject_type="FUND",
+                field_code="NAV",
+                value=Decimal("1.2500"),
+                as_of=NOW.replace(day=16, hour=15),
+                quality_status="FRESH",
+            )
+        ]
+
+    result = await graph.collect_theme_nav_histories(
+        object(),
+        NOW,
+        fetcher=fetcher,
+        now_provider=lambda: NOW,
+        asset_rows=[{"asset_code": code} for code in ("008281", "000001", "320007")],
+        clock=lambda: elapsed[0],
+    )
+    assert [row["fundCode"] for row in result["fundHistories"]] == ["008281"]
+    assert result["themeNavSourceResults"]["008281"]["status"] == "SUCCESS"
+    for code in ("000001", "320007"):
+        assert result["themeNavSourceResults"][code] == {
+            "status": "UNAVAILABLE",
+            "records": 0,
+            "reason": "BUDGET_EXHAUSTED",
+        }
 
 
 def test_future_or_wrong_nav_history_is_not_available():
@@ -457,24 +573,46 @@ def test_malformed_calendar_fact_is_unknown_and_keeps_history():
 async def test_real_provider_clamped_twenty_row_pages_still_cover_history(monkeypatch):
     import httpx
     from datetime import timedelta
+
     class Conn:
-        async def fetch(self,sql,*args):
-            if 'reference.theme_asset_graph' in sql:
-                return [{"asset_code":"008281","overseas_calendar_required":False}]
+        async def fetch(self, sql, *args):
+            if "reference.theme_asset_graph" in sql:
+                return [{"asset_code": "008281", "overseas_calendar_required": False}]
             return []
+
     @asynccontextmanager
     async def acquire(pool):
         yield Conn()
-    monkeypatch.setattr(graph,"system_connection",acquire)
-    requested=[]
+
+    monkeypatch.setattr(graph, "system_connection", acquire)
+    requested = []
+
     def request(req):
-        page=int(req.url.params['pageIndex'])
+        page = int(req.url.params["pageIndex"])
         requested.append(page)
-        rows=[{"FSRQ":(NOW.date()-timedelta(days=day+1)).isoformat(),"DWJZ":"1.25"} for day in range((page-1)*20,min(page*20,121))]
-        return httpx.Response(200,json={"Data":{"LSJZList":rows},"PageIndex":page,"PageSize":20,"TotalCount":121})
-    client_class=httpx.AsyncClient
-    monkeypatch.setattr(graph.httpx,"AsyncClient",lambda **kwargs:client_class(transport=httpx.MockTransport(request),**kwargs))
-    result=await graph.collect_theme_nav_histories(object(),NOW,now_provider=lambda:NOW)
-    assert result['themeNavSourceResults']['008281']['status']=='SUCCESS'
-    assert result['themeNavSourceResults']['008281']['records']==121
-    assert requested==[1,2,3,4,5,6,7]
+        rows = [
+            {"FSRQ": (NOW.date() - timedelta(days=day + 1)).isoformat(), "DWJZ": "1.25"}
+            for day in range((page - 1) * 20, min(page * 20, 121))
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "Data": {"LSJZList": rows},
+                "PageIndex": page,
+                "PageSize": 20,
+                "TotalCount": 121,
+            },
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        graph.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(request), **kwargs),
+    )
+    result = await graph.collect_theme_nav_histories(
+        object(), NOW, now_provider=lambda: NOW
+    )
+    assert result["themeNavSourceResults"]["008281"]["status"] == "SUCCESS"
+    assert result["themeNavSourceResults"]["008281"]["records"] == 121
+    assert requested == [1, 2, 3, 4, 5, 6, 7]

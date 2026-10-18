@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 import json
 import re
+from time import monotonic
 from urllib.parse import urlsplit
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -283,17 +284,52 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
 
 
 async def collect_theme_nav_histories(
-    pool, now, *, fetcher=None, now_provider=now_shanghai
+    pool,
+    now,
+    *,
+    fetcher=None,
+    now_provider=now_shanghai,
+    asset_rows=None,
+    clock=monotonic,
 ):
     from backend.integrations.market_data import fetch_fund_nav_history
 
-    async with system_connection(pool) as conn:
-        rows = await conn.fetch("""SELECT asset_code,bool_or(COALESCE(metadata->>'overseasCalendarRequired'='true',false)) AS overseas_calendar_required
+    deadline = clock() + 240 if asset_rows is not None else None
+    if asset_rows is None:
+        async with system_connection(pool) as conn:
+            rows = await conn.fetch("""SELECT asset_code,bool_or(COALESCE(metadata->>'overseasCalendarRequired'='true',false)) AS overseas_calendar_required
         FROM reference.theme_asset_graph WHERE asset_kind IN ('ETF_LINK_FUND','ACTIVE_FUND','OFF_EXCHANGE_FUND','LOF') GROUP BY asset_code ORDER BY asset_code LIMIT 12""")
+    else:
+        selected = {}
+        for asset in asset_rows:
+            if not isinstance(asset, dict):
+                continue
+            code = asset.get("asset_code")
+            if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
+                continue
+            if code not in selected:
+                if len(selected) >= 32:
+                    continue
+                selected[code] = {
+                    "asset_code": code,
+                    "overseas_calendar_required": False,
+                }
+            selected[code]["overseas_calendar_required"] |= (
+                asset.get("overseas_calendar_required") is True
+            )
+        rows = list(selected.values())
     histories, statuses = [], {}
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         for row in rows:
             code = row["asset_code"]
+            remaining = deadline - clock() if deadline is not None else 45
+            if remaining <= 0:
+                statuses[code] = {
+                    "status": "UNAVAILABLE",
+                    "records": 0,
+                    "reason": "BUDGET_EXHAUSTED",
+                }
+                continue
             try:
                 observations = await asyncio.wait_for(
                     (fetcher or fetch_fund_nav_history)(
@@ -304,7 +340,7 @@ async def collect_theme_nav_histories(
                         page_size=100,
                         max_pages=20,
                     ),
-                    timeout=45,
+                    timeout=min(45, remaining),
                 )
                 by_day = {}
                 for obs in observations:

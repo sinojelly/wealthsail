@@ -164,7 +164,7 @@ def test_raw_etf_plan_retains_own_identity_unit_and_source():
         market="SSE",
     )
     assert plan["orderPriceAvailable"] is True
-    assert plan["currentPrice"] == "2.7"
+    assert plan["currentPrice"] == "2.7000"
     assert plan["sourceUri"] == "https://quotes.test/etf"
     assert plan["unit"] == "CNY" and plan["market"] == "SSE"
 
@@ -183,7 +183,7 @@ def test_future_tail_is_excluded_at_explicit_observation_date_without_mutating_i
     rows = points([100] * 199 + [90, 10000])
     before = deepcopy(rows)
     plan = calculate(rows, as_of=rows[-2]["date"])
-    assert plan["currentPrice"] == "90"
+    assert plan["currentPrice"] == "90.00"
     assert plan["indicators"]["ma200"] == 99.95
     assert rows == before
 
@@ -257,3 +257,164 @@ def test_left_or_is_watch_only_when_all_branches_are_known_false():
         pe_percentile=80,
     )
     assert track(plan, "LEFT_VALUE")["state"] == "WATCH"
+
+
+def nav_calculate(rows):
+    return engine().compute_actionable_price_plan(
+        rows,
+        subject_kind="nav",
+        subject_id="008281",
+        price_basis="UNIT_NAV",
+        unit="CNY",
+    )
+
+
+def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
+    plan = nav_calculate(points([1] * 20, ohlc=False))
+    assert plan["indicators"]["atr14"] is None
+    assert plan["indicatorStates"]["atr14"]["state"] == "MISSING_OHLC"
+    assert plan["indicators"]["navVolatility14"] == pytest.approx(0.012)
+    assert plan["volatilityMethod"] == "NAV_ABS_CHANGE_STD_V1"
+    left = track(plan, "LEFT_VALUE")
+    assert left["priceState"] == "READY"
+    assert [
+        left[key]
+        for key in (
+            "entryZoneMin",
+            "entryZoneMax",
+            "stopLossPrice",
+            "takeProfitT1",
+            "takeProfitT2",
+        )
+    ] == ["0.9904", "1.0000", "0.9664", "1.0300", "1.0540"]
+    right = track(plan, "RIGHT_TREND")
+    assert [
+        right[key]
+        for key in (
+            "entryZoneMin",
+            "entryZoneMax",
+            "stopLossPrice",
+            "takeProfitT1",
+            "takeProfitT2",
+        )
+    ] == ["0.9976", "1.0072", "0.9760", "1.0312", "1.0540"]
+
+
+@pytest.mark.parametrize(
+    ("closes", "expected"),
+    [([1, 1.1] * 10, 0.14), ([1] * 10 + [2] * 10, 0.325)],
+)
+def test_nav_scale_respects_real_absolute_changes_and_population_deviation(
+    closes, expected
+):
+    plan = nav_calculate(points(closes, ohlc=False))
+    assert plan["indicators"]["navVolatility14"] == pytest.approx(expected)
+    assert plan["indicators"]["atr14"] is None
+
+
+def test_nav_targets_stay_ordered_after_a_drop_with_a_high_ma60():
+    plan = nav_calculate(points([5] * 40 + [1] * 20, ohlc=False))
+    left = track(plan, "LEFT_VALUE")
+    assert left["takeProfitT1"] == "3.6667"
+    assert left["takeProfitT2"] == "3.6787"
+    assert left["priceState"] == "READY"
+
+
+@pytest.mark.parametrize("count", [0, 1, 14, 15, 19])
+def test_short_nav_history_does_not_create_risk_prices(count):
+    plan = nav_calculate(points([1] * count, ohlc=False))
+    assert plan["indicators"]["navVolatility14"] is None
+    assert all(
+        row["stopLossPrice"] is row["takeProfitT1"] is None for row in plan["tracks"]
+    )
+
+
+def test_invalid_nav_observation_cannot_be_removed_to_fill_twenty_samples():
+    rows = points([1] * 40, ohlc=False)
+    rows[-20]["close"] = None
+    plan = nav_calculate(rows)
+    assert plan["inputWindow"]["sampleCount"] == 19
+    assert plan["indicators"]["navVolatility14"] is None
+    assert all(
+        row["stopLossPrice"] is row["takeProfitT1"] is None for row in plan["tracks"]
+    )
+
+
+@pytest.mark.parametrize("basis", ["INDEX_POINTS", "ETF_HFQ", "PROVIDER_RETURN_INDEX"])
+def test_close_only_other_price_bases_never_borrow_nav_risk_prices(basis):
+    plan = calculate(points([100] * 20, ohlc=False), price_basis=basis)
+    assert plan["indicators"].get("navVolatility14") is None
+    assert plan.get("volatilityMethod") != "NAV_ABS_CHANGE_STD_V1"
+    assert all(
+        row["stopLossPrice"] is row["takeProfitT1"] is None for row in plan["tracks"]
+    )
+
+
+def test_real_nav_ohlc_keeps_atr_and_never_substitutes_nav_scale():
+    plan = nav_calculate(points([3] * 20))
+    assert plan["indicators"]["atr14"] == 2
+    assert plan["indicators"].get("navVolatility14") is None
+    assert plan.get("volatilityMethod") != "NAV_ABS_CHANGE_STD_V1"
+
+
+def test_nav_conflicting_ohlc_is_not_relabelled_as_missing_ohlc():
+    rows = points([3] * 20)
+    rows[-1]["high"] = 1
+    plan = nav_calculate(rows)
+    assert plan["indicatorStates"]["atr14"]["state"] == "CONFLICT"
+    assert plan["indicators"].get("navVolatility14") is None
+    assert all(row["stopLossPrice"] is None for row in plan["tracks"])
+
+
+def test_small_nav_rounding_does_not_emit_zero_or_collapsed_risk_prices():
+    plan = nav_calculate(points([0.0001] * 20, ohlc=False))
+    assert plan["indicators"]["navVolatility14"] is None
+    assert all(row["priceState"] != "READY" for row in plan["tracks"])
+    assert all(
+        row["stopLossPrice"] is row["takeProfitT1"] is None for row in plan["tracks"]
+    )
+
+
+def test_nav_future_or_unordered_points_cannot_feed_current_risk_scale():
+    rows = points([1] * 20 + [10000], ohlc=False)
+    plan = engine().compute_actionable_price_plan(
+        rows,
+        subject_kind="nav",
+        subject_id="008281",
+        price_basis="UNIT_NAV",
+        as_of=rows[-2]["date"],
+    )
+    assert plan["currentPrice"] == "1.0000"
+    assert plan["indicators"]["navVolatility14"] == pytest.approx(0.012)
+    rows[-1]["date"] = rows[-2]["date"]
+    conflict = nav_calculate(rows)
+    assert conflict["indicators"]["navVolatility14"] is None
+    assert all(row["stopLossPrice"] is None for row in conflict["tracks"])
+
+
+def test_price_coordinates_are_quantized_by_basis_without_long_float_artifacts():
+    index = calculate(points([100.123456789] * 20))
+    assert index["currentPrice"] == "100.12"
+    assert track(index, "LEFT_VALUE")["entryZoneMax"] == "100.12"
+    nav = nav_calculate(points([1.23456789] * 20, ohlc=False))
+    assert nav["currentPrice"] == "1.2346"
+    assert all(
+        value is None or len(value.split(".")[-1]) == 4
+        for row in nav["tracks"]
+        for key, value in row.items()
+        if key
+        in {
+            "entryZoneMin",
+            "entryZoneMax",
+            "stopLossPrice",
+            "takeProfitT1",
+            "takeProfitT2",
+        }
+    )
+
+
+def test_rounding_cannot_hide_an_inverted_original_reference_range():
+    plan = calculate(points([100] * 199 + [99.9999], ohlc=False))
+    left = track(plan, "LEFT_VALUE")
+    assert left["priceState"] == "INVALID"
+    assert left["entryZoneMin"] is left["entryZoneMax"] is None

@@ -1,11 +1,11 @@
 """Versioned, deterministic research coordinates for two independent tracks."""
 
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import math
 from statistics import pstdev
 
-VERSION = "actionable-zones-v2"
+VERSION = "actionable-zones-v3"
 PARAMETERS = {
     "ma": [20, 60, 200],
     "rsi": 14,
@@ -17,6 +17,11 @@ PARAMETERS = {
     "oversoldRSI": 38,
     "bollingerProximity": 1.02,
     "maximumTrendRSI": 75,
+    "navAbsoluteChangeWindow": 14,
+    "navAbsoluteChangeMultiplier": 1.4,
+    "navStdWindow": 20,
+    "navStdMultiplier": 0.65,
+    "navRiskFloorRatio": 0.012,
 }
 
 
@@ -50,12 +55,22 @@ def _wilder(values):
     return average
 
 
-def _price(value):
+def _quantized(value, places):
     value = _number(value)
-    return format(value, "f") if value is not None and value > 0 else None
+    if value is None or value <= 0:
+        return None
+    with localcontext() as context:
+        context.prec = max(28, value.adjusted() + places + 2)
+        value = value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    return value if value > 0 else None
 
 
-def _zone(kind, values, close):
+def _price(value, places=4):
+    value = _quantized(value, places)
+    return format(value, "f") if value is not None else None
+
+
+def _zone(kind, values, close, *, places, nav_scale=False):
     result = {
         "entryZoneMin": None,
         "entryZoneMax": None,
@@ -68,9 +83,10 @@ def _zone(kind, values, close):
     ma20, lower, atr = (
         _number(values.get(key)) for key in ("ma20", "bollLower", "atr14")
     )
+    scale = _number(values.get("navVolatility14")) if nav_scale else atr
     if close is None or ma20 is None or lower is None:
         return result, ["入场参考区间缺少有效收盘、MA20或布林带。"]
-    if atr is None:
+    if scale is None:
         minimum, maximum = (
             (lower, min(close, ma20))
             if kind == "LEFT_VALUE"
@@ -81,30 +97,65 @@ def _zone(kind, values, close):
     else:
         minimum, maximum = (
             (
-                min(lower, close - Decimal("0.8") * atr),
-                min(ma20, close + Decimal("0.3") * atr),
+                min(lower, close - Decimal("0.8") * scale),
+                min(ma20, close + Decimal("0.3") * scale),
             )
             if kind == "LEFT_VALUE"
-            else (ma20 - Decimal("0.2") * atr, max(close, ma20 + Decimal("0.6") * atr))
+            else (
+                ma20 - Decimal("0.2") * scale,
+                max(close, ma20 + Decimal("0.6") * scale),
+            )
         )
         result["priceState"] = "READY"
-    if minimum <= 0 or maximum <= 0 or minimum > maximum:
+    rounded_minimum, rounded_maximum = (
+        _quantized(value, places) for value in (minimum, maximum)
+    )
+    if (
+        minimum > maximum
+        or rounded_minimum is None
+        or rounded_maximum is None
+        or rounded_minimum > rounded_maximum
+    ):
         result["priceState"] = "INVALID"
-        return result, reasons + ["计算入场区间非正或顺序无效，未调整原始锚点。"]
-    result.update(entryZoneMin=_price(minimum), entryZoneMax=_price(maximum))
-    if atr is not None:
-        stop = minimum - 2 * atr
+        return result, reasons + [
+            "计算入场区间在舍入后非正或顺序无效，未调整原始锚点。"
+        ]
+    result.update(
+        entryZoneMin=_price(rounded_minimum, places),
+        entryZoneMax=_price(rounded_maximum, places),
+    )
+    if scale is not None:
         ma60, ma200 = (_number(values.get(key)) for key in ("ma60", "ma200"))
-        first = max(ma60 or maximum + 2 * atr, maximum + 2 * atr)
-        second = max(ma200 or first + 2 * atr, first + 2 * atr)
-        if 0 < stop < minimum:
-            result["stopLossPrice"] = _price(stop)
+        if nav_scale:
+            stop = (minimum if kind == "LEFT_VALUE" else ma20) - 2 * scale
+            first = max(
+                ma60 or maximum + 2 * scale,
+                close + Decimal("2.5") * scale,
+                maximum + 2 * scale,
+            )
+            second = max(
+                _number(values.get("bollUpper")) or first + scale,
+                close + Decimal("4.5") * scale,
+                first + scale,
+            )
+            reasons.append(
+                "风险价使用真实净值变化、20期标准差与明确的最小风险幅度；该尺度不是ATR。"
+            )
         else:
-            reasons.append("止损计算非正或未低于入场区，止损不可用。")
-        if first > maximum:
-            result["takeProfitT1"] = _price(first)
-            if second > first:
-                result["takeProfitT2"] = _price(second)
+            stop = minimum - 2 * scale
+            first = max(ma60 or maximum + 2 * scale, maximum + 2 * scale)
+            second = max(ma200 or first + 2 * scale, first + 2 * scale)
+        stop, first, second = (
+            _quantized(value, places) for value in (stop, first, second)
+        )
+        if stop is not None and stop < rounded_minimum:
+            result["stopLossPrice"] = _price(stop, places)
+        else:
+            reasons.append("止损在舍入后非正或未低于入场区，止损不可用。")
+        if first is not None and first > rounded_maximum:
+            result["takeProfitT1"] = _price(first, places)
+            if second is not None and second > first:
+                result["takeProfitT2"] = _price(second, places)
         if not result["takeProfitT1"] or not result["takeProfitT2"]:
             reasons.append("目标未依次高于入场区，未制造替代目标。")
         if any(
@@ -225,6 +276,42 @@ def compute_actionable_price_plan(
         "sampleCount": len(true_ranges),
         "requiredSamples": 14,
     }
+    values["navVolatility14"] = None
+    nav_applicable = (
+        price_basis == "UNIT_NAV"
+        and str(subject_kind).lower() in {"nav", "fund"}
+        and values["atr14"] is None
+    )
+    if (
+        nav_applicable
+        and not ohlc_conflict
+        and len(closes) >= 20
+        and deviation is not None
+    ):
+        nav_changes = [
+            abs(_number(right["close"]) - _number(left["close"]))
+            for left, right in zip(suffix[-15:], suffix[-14:])
+        ]
+        scale = _quantized(
+            max(
+                sum(nav_changes, Decimal(0)) / 14 * Decimal("1.4"),
+                Decimal(str(deviation)) * Decimal("0.65"),
+                close * Decimal("0.012"),
+            ),
+            4,
+        )
+        values["navVolatility14"] = float(scale) if scale is not None else None
+    states["navVolatility14"] = {
+        "state": "READY"
+        if values["navVolatility14"] is not None
+        else "CONFLICT"
+        if nav_applicable and ohlc_conflict
+        else "INSUFFICIENT"
+        if nav_applicable
+        else "NOT_APPLICABLE",
+        "sampleCount": len(closes),
+        "requiredSamples": 20,
+    }
     pe = _number(pe_percentile)
     pe = pe if pe is not None and 0 <= pe <= 100 else None
     values["pePercentile"] = float(pe) if pe is not None else None
@@ -300,7 +387,16 @@ def compute_actionable_price_plan(
             )
             else "INSUFFICIENT"
         )
-        zone, reasons = _zone(kind, values, close)
+        zone, reasons = _zone(
+            kind,
+            values,
+            close,
+            places=2
+            if str(subject_kind).lower() == "index"
+            or price_basis in {"INDEX_POINTS", "INDEX_PRICE"}
+            else 4,
+            nav_scale=values["navVolatility14"] is not None,
+        )
         missing = [name for name, value in conditions if value is None]
         tracks.append(
             {
@@ -324,6 +420,11 @@ def compute_actionable_price_plan(
     return {
         "methodVersion": VERSION,
         "parameters": dict(PARAMETERS),
+        "volatilityMethod": "NAV_ABS_CHANGE_STD_V1"
+        if values["navVolatility14"] is not None
+        else "ATR_WILDER14"
+        if values["atr14"] is not None
+        else None,
         "subjectKind": str(subject_kind).lower(),
         "subjectId": str(subject_id),
         "label": label or str(subject_id),
@@ -334,7 +435,13 @@ def compute_actionable_price_plan(
         if suffix
         else (_day(as_of).isoformat() if _day(as_of) else None),
         "sourceUri": source_uri,
-        "currentPrice": _price(close),
+        "currentPrice": _price(
+            close,
+            2
+            if str(subject_kind).lower() == "index"
+            or price_basis in {"INDEX_POINTS", "INDEX_PRICE"}
+            else 4,
+        ),
         "orderPriceAvailable": close is not None
         and str(subject_kind).lower() in {"fund", "etf"}
         and price_basis in {"ETF_RAW", "RAW_PRICE"}
