@@ -27,6 +27,10 @@ import httpx
 from bs4 import BeautifulSoup
 
 from backend.dependencies import now_shanghai
+from backend.integrations.institutional_signals import (
+    is_media_noise,
+    split_numbered_digest,
+)
 
 VERSION = "alpha-public-v1"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -245,15 +249,6 @@ SECTOR_KEYWORDS = {
         "航空",
     ),
 }
-NOISE_PATTERNS = (
-    "新闻联播",
-    "礼节性",
-    "外事礼节",
-    "零星火灾",
-    "零星疾病",
-    "居民楼发生",
-    "疾病病例",
-)
 ANNOUNCEMENT_KEYWORDS = (
     "回购",
     "增持",
@@ -749,7 +744,7 @@ async def _cls(fetch, cutoff):
                 continue
             title, content = (
                 _text(item.get("title"), 200),
-                _text(item.get("content"), 1000),
+                _text(item.get("content"), 32000),
             )
             text = title + " " + content
             if not text.strip():
@@ -767,21 +762,49 @@ async def _cls(fetch, cutoff):
             scanned += 1
             page_new += 1
             oldest = published if oldest is None else min(oldest, published)
-            matched = [
-                word for word in INVESTMENT_KEYWORDS if _keyword_in_text(word, text)
-            ]
-            sectors = catalyst_sectors(text)
-            if not sectors and any(pattern in text for pattern in NOISE_PATTERNS):
+            if "新闻联播" in title and is_media_noise(title, ""):
                 filtered_noise += 1
                 continue
             level = item.get("level")
-            core = core_catalyst(text, sectors)
-            if level in {"A", "B"} or matched or core:
+            parent_id = "cls:" + (identity or digest[:20])
+            for ordinal, child_title, child_content in split_numbered_digest(
+                title, content
+            ):
+                child_text = child_title + " " + child_content
+                matched = [
+                    word
+                    for word in INVESTMENT_KEYWORDS
+                    if _keyword_in_text(word, child_text)
+                ]
+                sectors = catalyst_sectors(child_text)
+                if is_media_noise(child_title, child_content):
+                    filtered_noise += 1
+                    continue
+                core = core_catalyst(child_text, sectors)
+                if level not in {"A", "B"} and not matched and not core:
+                    continue
+                child_id = (
+                    parent_id
+                    if ordinal is None
+                    else (
+                        f"{parent_id}:item:{ordinal}:"
+                        + hashlib.sha256(child_content.encode()).hexdigest()[:12]
+                    )
+                )
                 rows.append(
                     {
-                        "id": "cls:" + (identity or digest[:20]),
-                        "title": title,
-                        "content": content,
+                        "id": child_id,
+                        "title": child_title,
+                        "content": child_content,
+                        **(
+                            {
+                                "parentSourceId": parent_id,
+                                "parentTitle": title,
+                                "itemOrdinal": ordinal,
+                            }
+                            if ordinal is not None
+                            else {}
+                        ),
                         "phase": "REPORTED",
                         "importance": "HIGH"
                         if level == "A"
@@ -830,13 +853,17 @@ async def _cls(fetch, cutoff):
         ),
         reverse=True,
     )
+    if len(rows) > 300:
+        complete = False
+        stop_reason = "EXPANDED_ITEM_LIMIT"
+    retained = _industry_order(rows)[:300]
     return _result(
-        catalysts=_industry_order(rows),
+        catalysts=retained,
         status="SUCCESS" if complete else "PARTIAL",
         allowEmpty=True,
         coverage={
             "scannedCount": scanned,
-            "retainedCount": len(rows),
+            "retainedCount": len(retained),
             "filteredNoiseCount": filtered_noise,
             "pages": pages,
             "windowStart": window_start.isoformat(),
@@ -847,7 +874,7 @@ async def _cls(fetch, cutoff):
         },
         **error_fields,
         limitations=[
-            "最近24小时最多300条、15页；A/B重点与广域投资词普通电报，覆盖不足记录在coverage。媒体报道尚待原始来源印证。"
+            "最近24小时最多300条父电报、15页；编号合集每篇最多40子项，行业均衡后最多保留300项，覆盖不足记录在coverage。媒体报道尚待原始来源印证。"
         ],
     )
 
