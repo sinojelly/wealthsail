@@ -124,6 +124,19 @@ it("does not offer a meaningless expand button for a short macro thesis", () => 
   ).not.toBeInTheDocument();
 });
 
+it("reads the NAV risk method in Chinese without rewriting the saved report", () => {
+  const data = daily("净值风险尺度为NAV_ABS_CHANGE_STD_V1，非真实ATR。");
+  render(
+    <MemoryRouter>
+      <MacroContextStrip data={context(data)} error={false} />
+    </MemoryRouter>,
+  );
+  expect(
+    screen.getByRole("region", { name: "今日宏观总纲" }),
+  ).toHaveTextContent("净值风险尺度为净值日变动标准差，非真实ATR。");
+  expect(data.report!.macroCycle).toContain("NAV_ABS_CHANGE_STD_V1");
+});
+
 it("puts a triggered buy zone before a geometric WATCH right-track zone, including old scan payloads", async () => {
   const data = daily();
   data.report!.quantitativeScan = {

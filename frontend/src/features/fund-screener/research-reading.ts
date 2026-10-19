@@ -23,6 +23,7 @@ const readingTerms: Array<[RegExp, string]> = [
   [/\bPARTIAL\b/g, "部分依据可用"],
   [/\bCANDIDATE\b/g, "候选条件成立"],
   [/\bWATCH\b/g, "等待触发"],
+  [/\bNAV_ABS_CHANGE_STD_V1\b/g, "净值日变动标准差"],
   [/\bHAINAN_FTP\b/g, "海南自贸港"],
   [/\bPUDONG_DEV\b/g, "浦东发展"],
   [/\bGEO_CRUDE_OIL\b/g, "地缘与原油"],
