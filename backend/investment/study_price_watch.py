@@ -170,9 +170,13 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
     if candidate is None:
         return result
     value = _number(candidate["value"])
+    in_zone = _number(track["entryZoneMin"]) <= value <= _number(track["entryZoneMax"])
+    technical_candidate = track.get("state") == "CANDIDATE"
     result.update(
         basis="ESTIMATE_1430" if estimate_ok else "CONFIRMED_NAV",
         asOf=candidate["asOf"],
+        inEntryZone=in_zone,
+        technicalCandidate=technical_candidate,
     )
     result["state"] = (
         "STOP_LOSS"
@@ -180,7 +184,7 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
         else "TAKE_PROFIT"
         if value >= _number(track["takeProfitT1"])
         else "ENTRY_ZONE"
-        if _number(track["entryZoneMin"]) <= value <= _number(track["entryZoneMax"])
+        if in_zone and technical_candidate
         else "HOLDING"
         if (holding or {}).get("state") == "CONFIRMED"
         else "OBSERVING"
@@ -190,6 +194,8 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
         if estimate_ok
         else "按最新已确认披露净值核对冻结参考线。"
     )
+    if in_zone and not technical_candidate:
+        result["reason"] += "价格位于参考区间内，冻结轨道的技术条件待触发。"
     return result
 
 

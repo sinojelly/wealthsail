@@ -38,7 +38,7 @@ def test_explicit_maintained_is_valid_and_preserves_one_sentence_reason():
 @pytest.mark.parametrize(
     "shift,expected",
     [
-        ({"entryZoneMin": "1.1000000000000001"}, "UPGRADED"),
+        ({"entryZoneMin": "1.1000000000000001"}, "MAINTAINED"),
         (
             {"entryZoneMin": "1.09", "entryZoneMax": "1.19", "takeProfitT1": "1.39"},
             "DOWNGRADED",
@@ -225,7 +225,7 @@ async def test_both_price_packets_use_previous_day_without_changing_news_continu
         received["theme"] = args[-2]
         return {}
 
-    async def build(*args):
+    async def build(*args, **kwargs):
         received["discovery"] = args[-2]
         return {}
 

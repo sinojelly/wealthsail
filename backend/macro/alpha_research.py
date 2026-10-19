@@ -4,13 +4,16 @@ from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import math
+import re
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 from backend.macro.price_revision import (
     PriceRevisionStatus,
+    index_previous_plans,
     normalize_price_revision,
+    previous_plan,
     same_coordinate,
 )
 
@@ -113,10 +116,9 @@ def _program_plan(plan, track_name, now, *, require_theme=True):
 def validate_actionable_plans(proposals, packet, now):
     anchors = {_identity(row): row for row in packet.get("themeActionableZones", [])}
     rules = {row["key"]: row for row in packet.get("strategyMemoryRules", [])}
-    previous = {
-        (*_identity(row), row.get("selectedTrack", row.get("track"))): row
-        for row in packet.get("previousActionablePlans", [])
-    }
+    previous = index_previous_plans(
+        packet.get("previousActionablePlans", []), list(anchors.values())
+    )
     output, seen = [], set()
     for raw in proposals:
         row = ActionableProposal.model_validate(raw).model_dump()
@@ -133,7 +135,7 @@ def validate_actionable_plans(proposals, packet, now):
             for key in row["calibrationRuleKeys"]
         ):
             raise ValueError("unknown calibration rule")
-        old = previous.get(key)
+        old = previous_plan(previous, anchor, row["track"])
         old_track = None
         if same_coordinate(anchor, old):
             old_day, _, old_track = _program_plan(old, row["track"], now)
@@ -233,6 +235,9 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
             "availableAt",
             "sourceKey",
             "sourceUri",
+            "parentSourceId",
+            "parentTitle",
+            "itemOrdinal",
         ),
         "odds": (
             "marketId",
@@ -350,16 +355,24 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
             ids = public["sectorCatalysts"].setdefault(sector, [])
             if row.get("id") and row["id"] not in ids and len(ids) < 12:
                 ids.append(row["id"])
-    allowed = {
-        (
+    theme_identities = {}
+    for row in themes:
+        if row["assetKind"] not in {
+            "ETF_LINK_FUND",
+            "ACTIVE_FUND",
+            "OFF_EXCHANGE_FUND",
+            "LOF",
+        }:
+            continue
+        identity = (
             row["themeCode"],
             "fund" if row.get("instrumentId") else "nav",
             row.get("instrumentId") or row["assetCode"],
         )
-        for row in themes
-        if row["assetKind"]
-        in {"ETF_LINK_FUND", "ACTIVE_FUND", "OFF_EXCHANGE_FUND", "LOF"}
-    }
+        theme_identities.setdefault(identity, set()).add(
+            (row.get("market"), row["assetCode"])
+        )
+    allowed = set(theme_identities)
     clean_anchors = []
     for row in anchors[:24]:
         if _identity(row) not in allowed:
@@ -374,6 +387,8 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                 fundCode=row.get("fundCode"),
                 retrievedAt=row.get("retrievedAt"),
             )
+            if row.get("market") is not None:
+                item["market"] = row["market"]
             clean_anchors.append(item)
     prior = []
     for row in ((previous or {}).get("report") or {}).get("actionablePlans", [])[:24]:
@@ -388,6 +403,8 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                     row,
                     (
                         "themeCode",
+                        "fundCode",
+                        "market",
                         "subjectKind",
                         "selectedTrack",
                         "track",
@@ -397,6 +414,19 @@ def extend_public_packet(bundle, themes, anchors, rules, previous, now):
                     ),
                 )
             )
+            mappings = theme_identities[_identity(row)]
+            if len(mappings) == 1:
+                market, code = next(iter(mappings))
+                if (
+                    market == "FUND_CN"
+                    and isinstance(code, str)
+                    and re.fullmatch(r"[0-9]{6}", code)
+                    and row.get("fundCode") in {None, code}
+                ):
+                    if row.get("market") is None:
+                        item["market"] = market
+                    if row.get("fundCode") is None:
+                        item["fundCode"] = code
             prior.append(item)
     return {
         "alphaPublic": public,

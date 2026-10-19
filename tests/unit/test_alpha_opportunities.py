@@ -278,7 +278,7 @@ async def test_price_loading_crossing_1500_expires_without_sending(monkeypatch):
         ("missing_frozen_nav", "UNKNOWN"),
         ("missing_latest_nav", "UNKNOWN"),
         ("duplicate_frozen_day", "UNKNOWN"),
-        ("none", "IN_ENTRY_ZONE"),
+        ("none", "WATCH"),
     ],
 )
 @pytest.mark.asyncio
@@ -489,7 +489,9 @@ def test_return_index_conversion_requires_a_real_same_subject_pair_without_divid
         }
     )
     result = module().compare_frozen_price(frozen, observed, NOW)
-    assert result["state"] == "IN_ENTRY_ZONE" and result["price"] == "101.00"
+    assert result["state"] == "WATCH" and result["price"] == "101.00"
+    assert result["inEntryZone"] is True
+    assert result["reason"] == "TECHNICAL_STATE_UNKNOWN"
     assert result["conversionAsOf"] == "2026-10-16"
     assert module().compare_frozen_price(frozen, quote(), NOW)["state"] == "UNKNOWN"
     observed["conversion"]["dividendConflict"] = True
@@ -514,7 +516,7 @@ def test_return_index_declared_units_are_not_compared_directly_to_currency():
     }
     assert (
         module().compare_frozen_price(frozen, quote(conversion=pair), NOW)["state"]
-        == "IN_ENTRY_ZONE"
+        == "WATCH"
     )
     assert (
         module().compare_frozen_price(frozen, quote(conversion=pair, unit="USD"), NOW)[

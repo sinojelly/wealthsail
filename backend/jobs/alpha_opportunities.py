@@ -395,19 +395,29 @@ def compare_frozen_price(frozen, observation, now):
     )
     if low is None or high is None or low > high:
         return output
+    in_zone = low <= value <= high
+    technical_candidate = track.get("state") == "CANDIDATE"
     state = (
         "STOP_LOSS"
         if stop is not None and stop < low and value <= stop
         else "TAKE_PROFIT_T1"
         if first is not None and first > high and value >= first
         else "IN_ENTRY_ZONE"
-        if low <= value <= high
+        if in_zone and technical_candidate
         else "WATCH"
     )
     return {
         **output,
         "state": state,
-        "reason": "FROZEN_COORDINATES",
+        "reason": (
+            "TECHNICAL_NOT_TRIGGERED"
+            if state == "WATCH" and in_zone and track.get("state") == "WATCH"
+            else "TECHNICAL_STATE_UNKNOWN"
+            if state == "WATCH" and in_zone and not technical_candidate
+            else "FROZEN_COORDINATES"
+        ),
+        "inEntryZone": in_zone,
+        "technicalCandidate": technical_candidate,
         "methodVersion": frozen.get("methodVersion"),
         "selectedTrack": frozen.get("selectedTrack"),
         "planAsOf": frozen.get("asOf"),
@@ -590,7 +600,14 @@ def _fund_message(rows, day):
             frozen.get("themeCode")
         )
         line = _text(direction, 100) + " · " if direction else ""
-        line += f"{_text(row.get('fund_name'), 50)}({_text(row.get('fund_code'), 12)}) · {origin} · {track_label}：{labels[checked['state']]}"
+        status_label = (
+            "价格在区间内，技术条件待触发"
+            if checked.get("reason") == "TECHNICAL_NOT_TRIGGERED"
+            else "价格在区间内，冻结技术状态未知"
+            if checked.get("reason") == "TECHNICAL_STATE_UNKNOWN"
+            else labels[checked["state"]]
+        )
+        line += f"{_text(row.get('fund_name'), 50)}({_text(row.get('fund_code'), 12)}) · {origin} · {track_label}：{status_label}"
         if checked.get("lowerValue") and checked.get("upperValue"):
             line += f"；估算范围 {_price_text(checked['lowerValue'], 'UNIT_NAV')}–{_price_text(checked['upperValue'], 'UNIT_NAV')} 元/份（可能误差范围）"
         else:

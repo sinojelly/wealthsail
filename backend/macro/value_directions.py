@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.macro.alpha_research import _price, _program_plan
 from backend.macro.price_revision import (
     PriceRevisionStatus,
+    index_previous_plans,
     normalize_price_revision,
+    previous_plan,
     same_coordinate,
 )
 
@@ -149,11 +151,31 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
             distance = signal.get("distanceToEntryPct")
             if distance is not None and _finite(distance) is None:
                 raise ValueError("invalid quantitative distance")
+            matching = [
+                item
+                for item in base.get("tracks", [])
+                if item.get("track") == signal["track"]
+            ]
+            if len(matching) != 1:
+                raise ValueError("ambiguous quantitative technical track")
+            technical = matching[0]
+            candidate = technical.get("state") == "CANDIDATE"
+            in_zone = (
+                _price(technical["entryZoneMin"])
+                <= _price(base["currentPrice"])
+                <= _price(technical["entryZoneMax"])
+            )
             clean["signals"].append(
-                _pick(
-                    signal,
-                    ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
-                )
+                {
+                    **_pick(
+                        signal,
+                        ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
+                    ),
+                    "candidate": candidate,
+                    "entryReady": candidate
+                    and in_zone
+                    and technical.get("priceState") == "READY",
+                }
             )
         output.append(clean)
     return output
@@ -234,15 +256,17 @@ def validate_value_directions(proposals, packet, now, source_aliases):
         if identity in anchors and anchors[identity] != plan:
             raise ValueError("ambiguous discovery anchor")
         anchors[identity] = plan
-    previous = {
-        (
-            direction["key"],
-            *plan_identity(plan),
-            plan.get("selectedTrack", plan.get("track")),
-        ): plan
-        for direction in packet.get("previousValueDirections", [])
-        for plan in direction.get("plans", [])
-    }
+    previous = index_previous_plans(
+        [
+            *packet.get("previousActionablePlans", []),
+            *(
+                plan
+                for direction in packet.get("previousValueDirections", [])
+                for plan in direction.get("plans", [])
+            ),
+        ],
+        list(anchors.values()),
+    )
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
     if len(proposals) > MAX_VALUE_DIRECTIONS:
@@ -290,7 +314,7 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 or (now.astimezone(_TZ).date() - day).days > 10
             ):
                 raise ValueError("current direction price is stale or unverified")
-            old = previous.get((key, *pair))
+            old = previous_plan(previous, anchor, proposal["track"])
             revision = proposal["priceRevisionStatus"]
             old_track = None
             if same_coordinate(anchor, old):
@@ -354,7 +378,8 @@ def validate_value_directions(proposals, packet, now, source_aliases):
 
             scan = packet.get("quantitativeScan") or {}
             if (
-                scan.get("methodVersion") != "fund-quant-scan-v1"
+                scan.get("methodVersion")
+                not in {"fund-quant-scan-v1", "fund-quant-scan-v2"}
                 or scan.get("minimumHistorySamples") != 220
                 or not _visible(scan, now)
             ):

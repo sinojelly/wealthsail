@@ -194,8 +194,8 @@ def test_reference_and_full_price_formulas_keep_original_anchors():
     assert Decimal(right["entryZoneMin"]) == Decimal("99.6")
     assert Decimal(right["entryZoneMax"]) == Decimal("101.2")
     assert Decimal(right["stopLossPrice"]) == Decimal("95.6")
-    assert Decimal(right["takeProfitT1"]) == Decimal("105.2")
-    assert Decimal(right["takeProfitT2"]) == Decimal("109.2")
+    assert Decimal(right["takeProfitT1"]) == Decimal("107.60")
+    assert Decimal(right["takeProfitT2"]) == Decimal("111.92")
     no_atr = track(calculate(points([100] * 200, ohlc=False)), "RIGHT_TREND")
     assert Decimal(no_atr["entryZoneMin"]) == Decimal(no_atr["entryZoneMax"]) == 100
     assert no_atr["priceState"] == "PARTIAL"
@@ -286,7 +286,7 @@ def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
             "takeProfitT1",
             "takeProfitT2",
         )
-    ] == ["0.9904", "1.0000", "0.9664", "1.0300", "1.0540"]
+    ] == ["0.9904", "1.0000", "0.9664", "1.0384", "1.0644"]
     right = track(plan, "RIGHT_TREND")
     assert [
         right[key]
@@ -297,7 +297,7 @@ def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
             "takeProfitT1",
             "takeProfitT2",
         )
-    ] == ["0.9976", "1.0072", "0.9760", "1.0312", "1.0540"]
+    ] == ["0.9976", "1.0072", "0.9760", "1.0420", "1.0658"]
 
 
 @pytest.mark.parametrize(

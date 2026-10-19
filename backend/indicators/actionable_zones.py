@@ -1,7 +1,13 @@
 """Versioned, deterministic research coordinates for two independent tracks."""
 
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+from decimal import (
+    Decimal,
+    InvalidOperation,
+    ROUND_CEILING,
+    ROUND_HALF_UP,
+    localcontext,
+)
 import math
 from statistics import pstdev
 
@@ -22,6 +28,9 @@ PARAMETERS = {
     "navStdWindow": 20,
     "navStdMultiplier": 0.65,
     "navRiskFloorRatio": 0.012,
+    "minimumRewardRiskT1": 1.5,
+    "minimumRewardRiskT2": 2.4,
+    "rewardRiskBasis": "DISPLAYED_ENTRY_MID_AND_STOP",
 }
 
 
@@ -150,6 +159,22 @@ def _zone(kind, values, close, *, places, nav_scale=False):
         )
         if stop is not None and stop < rounded_minimum:
             result["stopLossPrice"] = _price(stop, places)
+            middle = (rounded_minimum + rounded_maximum) / 2
+            risk = middle - stop
+            # Round each lower bound upward so the displayed coordinates still
+            # satisfy the minimum ratio; ordinary half-up can fall below it.
+            quantum = Decimal(1).scaleb(-places)
+            with localcontext() as context:
+                context.prec = max(28, middle.adjusted() + places + 8)
+                first_floor = (middle + Decimal("1.5") * risk).quantize(
+                    quantum, rounding=ROUND_CEILING
+                )
+                second_floor = (middle + Decimal("2.4") * risk).quantize(
+                    quantum, rounding=ROUND_CEILING
+                )
+            first = max(first, first_floor) if first is not None else first_floor
+            second = max(second, second_floor) if second is not None else second_floor
+            reasons.append("目标参考至少满足入场区间中点至止损的1.5倍/2.4倍风险空间。")
         else:
             reasons.append("止损在舍入后非正或未低于入场区，止损不可用。")
         if first is not None and first > rounded_maximum:
@@ -402,6 +427,7 @@ def compute_actionable_price_plan(
             {
                 "track": kind,
                 "state": state,
+                "candidate": state == "CANDIDATE",
                 **zone,
                 "asOf": _day(suffix[-1]["date"]).isoformat() if suffix else None,
                 "reasons": [
