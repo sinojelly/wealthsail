@@ -99,11 +99,18 @@ async def test_packet_discloses_real_selected_history_and_price_coverage():
     result = await discovery.build_discovery_packet(conn, {}, {}, [], {}, NOW)
     assert result["discoveryCoverage"] == {
         "universeCount": 2,
+        "coreFundCodes": ["012733", "011035"],
+        "coreMissingFundCodes": [
+            code
+            for code in discovery.CORE_FUND_CODES
+            if code not in {"012733", "011035"}
+        ],
+        "dynamicFundCodes": [],
         "selectedFundCodes": ["012733", "011035"],
         "historyFundCodes": [],
         "pricedFundCodes": [],
         "sectorCodes": ["AI", "RESOURCE"],
-        "selectionLimit": 32,
+        "selectionLimit": 40,
     }
 
 

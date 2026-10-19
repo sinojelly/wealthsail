@@ -20,11 +20,11 @@ pytestmark = [
 
 async def test_previous_ready_sql_excludes_today_debug_future_and_failed_with_role_readonly():
     parts = urlsplit(DSN)
-    assert (parts.hostname, parts.port, parts.path) == (
-        "127.0.0.1",
-        55434,
+    assert (parts.hostname, parts.port) == ("127.0.0.1", 55434)
+    assert parts.path in {
         "/wealthsail_review44_validation_v1",
-    )
+        "/wealthsail_review45_validation_v1",
+    }
     conn = await asyncpg.connect(DSN)
     transaction = conn.transaction()
     await transaction.start()

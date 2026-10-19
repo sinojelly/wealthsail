@@ -10,6 +10,7 @@ import {
   fundDisplayName,
   planPrice,
   planTimeBasisNote,
+  entryReady,
 } from "../plan-display";
 import { timeLabel } from "../macro-display";
 
@@ -30,7 +31,7 @@ function preferred(item: QuantitativeScanItem) {
     })
     .sort(
       (a, b) =>
-        Number(b.signal.inEntryZone) - Number(a.signal.inEntryZone) ||
+        Number(entryReady(b.signal)) - Number(entryReady(a.signal)) ||
         distance(a.signal) - distance(b.signal) ||
         a.track.track.localeCompare(b.track.track),
     )[0];
@@ -116,14 +117,18 @@ function ScanRow({
           : "—"}
       </td>
       <td>
-        <span className={signal?.inEntryZone ? "op-scan-hit" : ""}>
-          {signal?.inEntryZone
+        <span className={signal && entryReady(signal) ? "op-scan-hit" : ""}>
+          {signal && entryReady(signal)
             ? track?.track === "LEFT_VALUE"
               ? "🎯已入左侧买区"
               : "📈已入右侧买区"
-            : Number.isFinite(distance(signal))
-              ? `⏳距买区 ${distance(signal).toFixed(2)}%`
-              : "价格依据待补齐"}
+            : signal?.inEntryZone
+              ? track?.track === "RIGHT_TREND"
+                ? "价格近均线·待趋势触发"
+                : "已处左侧参考区·待条件触发"
+              : Number.isFinite(distance(signal))
+                ? `⏳距买区 ${distance(signal).toFixed(2)}%`
+                : "价格依据待补齐"}
         </span>
         {track && (
           <small>
@@ -180,7 +185,8 @@ export default function QuantitativeScan({
     const first = preferred(a)?.signal;
     const second = preferred(b)?.signal;
     return (
-      Number(!!second?.inEntryZone) - Number(!!first?.inEntryZone) ||
+      Number(!!second && entryReady(second)) -
+        Number(!!first && entryReady(first)) ||
       distance(first) - distance(second) ||
       (a.fundCode || a.subjectId).localeCompare(b.fundCode || b.subjectId)
     );
@@ -196,7 +202,7 @@ export default function QuantitativeScan({
       </summary>
       <p className="op-scan-description">
         代表池逐项扫描 · {timeLabel(scan.asOf)}
-        。已入区优先，再按距买区由近及远排序；价格位置与技术条件分别展示。
+        。技术成立且已入区优先，再按距买区由近及远排序；价格位置与技术条件分别展示。
       </p>
       <div
         className="op-scan-scroll"

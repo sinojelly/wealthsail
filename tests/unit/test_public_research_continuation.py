@@ -120,7 +120,7 @@ def test_runtime_history_empty_does_not_forward_questions_from_expired_fallback(
     assert result["previousQuestions"] == []
 
 
-def test_candidate_audit_index_is_bounded_and_not_copied_into_model_prompt():
+def test_candidate_audit_index_is_bounded_with_only_short_public_titles_in_model_prompt():
     external = {
         "candidateIndex": [
             {
@@ -139,7 +139,9 @@ def test_candidate_audit_index_is_bounded_and_not_copied_into_model_prompt():
     result = engine().make_research_packet({}, [], [], [], now=NOW, external=external)
     assert len(result["candidateIndex"]) == 40
     assert "PRIVATE_FULL_BODY" not in str(result) and "SECRET" not in str(result)
-    assert "PUBLIC_CANDIDATE" not in engine().build_prompt(result)
+    prompt = engine().build_prompt(result)
+    assert "PUBLIC_CANDIDATE" in prompt
+    assert "PRIVATE_FULL_BODY" not in prompt and "SECRET" not in prompt
 
 
 @pytest.mark.asyncio

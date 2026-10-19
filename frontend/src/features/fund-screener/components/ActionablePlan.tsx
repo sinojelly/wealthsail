@@ -38,6 +38,9 @@ const parameterLabel = (key: string) =>
       navStdWindow: "净值标准差窗口",
       navStdMultiplier: "净值标准差倍数",
       navRiskFloorRatio: "净值最小风险幅度",
+      minimumRewardRiskT1: "目标一最低风险收益比",
+      minimumRewardRiskT2: "目标二最低风险收益比",
+      rewardRiskBasis: "风险基准",
     }) as Record<string, string>
   )[key] ?? "其他策略参数";
 
@@ -74,8 +77,14 @@ export function ActionablePlanEvidence({
     value == null || !Number.isFinite(Number(value))
       ? "—"
       : Number(value).toFixed(digits);
-  const parameter = (value: number) =>
-    Number.isFinite(value) ? String(Number(value.toFixed(4))) : "—";
+  const parameter = (value: number | string) =>
+    typeof value === "string"
+      ? value === "DISPLAYED_ENTRY_MID_AND_STOP"
+        ? "显示买区中点与止损"
+        : readingText(value, 100)
+      : Number.isFinite(value)
+        ? String(Number(value.toFixed(4)))
+        : "—";
   return (
     <div className="op-plan-evidence">
       {planTimeBasisNote(result) && <p>{planTimeBasisNote(result)}</p>}
@@ -191,7 +200,11 @@ export default function ActionablePlan({
         </p>
       )}
       <p>
-        实际观察：{price(result.currentPrice)} {unit} · {timeLabel(result.asOf)}
+        实际观察：
+        <span className="op-price-amount">
+          {price(result.currentPrice)} {unit}
+        </span>{" "}
+        · {timeLabel(result.asOf)}
       </p>
       {planTimeBasisNote(result) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(result)}</p>

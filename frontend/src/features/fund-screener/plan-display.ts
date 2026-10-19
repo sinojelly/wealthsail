@@ -13,6 +13,19 @@ export const revisionLabels = {
   TAKE_PROFIT_ALERT: "止盈复核提示",
 };
 
+/** Old snapshots express the same condition via state; WATCH is never entry-ready. */
+export function entryReady(signal: {
+  triggerState: string;
+  inEntryZone: boolean;
+  entryReady?: boolean;
+}): boolean {
+  return (
+    signal.triggerState === "CANDIDATE" &&
+    signal.inEntryZone &&
+    signal.entryReady !== false
+  );
+}
+
 /** Reading projection only; do not mutate provider names or frozen snapshots. */
 export function fundDisplayName(label: string, code?: string | null): string {
   if (!code || !/^\d{6}$/.test(code)) return label;

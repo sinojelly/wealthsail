@@ -3,10 +3,11 @@
 import re
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from uuid import UUID
 
 from backend.common.database import system_connection
+from backend.investment.dynamic_discovery import CORE_FUND_CODES, SELECTION_LIMIT
 
 
 async def read_discovery_assets(conn, now, themes):
@@ -22,7 +23,8 @@ async def read_discovery_assets(conn, now, themes):
           AND u.enabled AND u.verified_at<=$1
         WHERE c.market='FUND_CN' AND c.fund_code~'^[0-9]{6}$'
           AND c.trade_form IN ('FUND','LOF')
-        ORDER BY CASE WHEN u.fund_code IS NOT NULL THEN -1 WHEN EXISTS(SELECT 1 FROM reference.research_product_index_links p
+        ORDER BY CASE WHEN c.fund_code=ANY($2::text[]) THEN -2
+          WHEN u.fund_code IS NOT NULL THEN -1 WHEN EXISTS(SELECT 1 FROM reference.research_product_index_links p
             WHERE p.fund_code=c.fund_code AND p.market=c.market
               AND p.relationship_type IN ('TRACKS','ETF_LINK') AND p.verified_at<=$1
               AND p.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
@@ -34,6 +36,7 @@ async def read_discovery_assets(conn, now, themes):
               AND s.available_at<=$1 AND s.retrieved_at<=$1) THEN 2 ELSE 3 END,
           u.priority NULLS LAST,c.fund_code,c.instrument_id NULLS LAST LIMIT 96""",
         now,
+        list(CORE_FUND_CODES),
     )
     assets = {}
     ambiguous = {
@@ -96,6 +99,17 @@ async def read_discovery_assets(conn, now, themes):
                 "overseasCalendarRequired": overseas,
             }
     return _industry_order(_public_universe(list(assets.values())))
+
+
+async def select_research_assets(conn, now, themes, catalysts=None):
+    """Use the same real identities for collection and report construction."""
+    from backend.investment.dynamic_discovery import read_dynamic_assets
+
+    catalog = await read_discovery_assets(conn, now, themes)
+    by_code = {row["fundCode"]: row for row in catalog}
+    core = [by_code[code] for code in CORE_FUND_CODES if code in by_code]
+    dynamic = await read_dynamic_assets(conn, now, catalysts, CORE_FUND_CODES)
+    return [*core, *dynamic][:SELECTION_LIMIT]
 
 
 def _industry_order(assets):
@@ -366,7 +380,10 @@ def _quantitative_scan(public, now):
                 {
                     "track": track["track"],
                     "triggerState": track["state"],
+                    "candidate": track["state"] == "CANDIDATE",
                     "inEntryZone": low <= current <= high,
+                    "entryReady": track["state"] == "CANDIDATE"
+                    and low <= current <= high,
                     "distanceToEntryPct": round(distance * 100, 4),
                 }
             )
@@ -378,7 +395,7 @@ def _quantitative_scan(public, now):
             item["discoverySector"] = sectors[code]
         items.append(item)
     return {
-        "methodVersion": "fund-quant-scan-v1",
+        "methodVersion": "fund-quant-scan-v2",
         "asOf": now.isoformat(),
         "minimumHistorySamples": 220,
         "items": items,
@@ -395,15 +412,19 @@ async def _cached_histories(conn, codes, now):
     if not codes:
         return {}
     rows = await conn.fetch(
-        """SELECT DISTINCT ON(fund_code) fund_code,payload
-        FROM market.fund_research_nav_histories WHERE fund_code=ANY($1::text[])
-          AND retrieved_at<=$2 AND available_at<=$2 AND payload->>'asOf'<=$3
-        ORDER BY fund_code,payload->>'asOf' DESC,retrieved_at DESC,id DESC""",
+        """WITH ranked AS (
+          SELECT fund_code,payload,retrieved_at,id,
+            row_number() OVER(PARTITION BY fund_code ORDER BY retrieved_at DESC,id DESC) AS recent_rank,
+            row_number() OVER(PARTITION BY fund_code ORDER BY payload->>'asOf' DESC,retrieved_at DESC,id DESC) AS watermark_rank
+          FROM market.fund_research_nav_histories WHERE fund_code=ANY($1::text[])
+            AND retrieved_at<=$2 AND available_at<=$2 AND payload->>'asOf'<=$3
+        ) SELECT fund_code,payload FROM ranked WHERE recent_rank<=4 OR watermark_rank<=4
+          ORDER BY fund_code,payload->>'asOf' DESC,retrieved_at DESC,id DESC""",
         codes,
         now,
         now.date().isoformat(),
     )
-    result = {}
+    candidates = {}
     for row in rows:
         payload = row.get("payload")
         if isinstance(payload, str):
@@ -416,8 +437,93 @@ async def _cached_histories(conn, codes, now):
             and payload.get("fundCode") in codes
             and row.get("fund_code", payload.get("fundCode")) == payload["fundCode"]
         ):
-            result[payload["fundCode"]] = payload
+            if _eligible_history(payload, now):
+                candidates.setdefault(payload["fundCode"], []).append(deepcopy(payload))
+    result = {}
+    proofs = await _cohort_calendar_proofs(conn, candidates, now)
+    for code, histories in candidates.items():
+        # One present-day calendar read covers every cohort of this fund. A bad
+        # later asOf cannot eclipse a trustworthy complete replacement, while a
+        # later retrieval of an older series never lowers a valid NAV watermark.
+        proof = proofs.get(code)
+        for history in histories:
+            candidate = deepcopy(history)
+            if proof is not None:
+                candidate["calendarProof"] = proof
+            if not _eligible_history(candidate, now):
+                continue
+            if code not in result or _cohort_rank(candidate, now) > _cohort_rank(
+                result[code], now
+            ):
+                result[code] = candidate
     return result
+
+
+async def _cohort_calendar_proofs(conn, candidates, now):
+    """Certify all requested funds with one shared, stored-calendar read."""
+    if not candidates:
+        return {}
+    try:
+        start = min(
+            history["points"][0]["date"]
+            for histories in candidates.values()
+            for history in histories
+        )
+        rows = await conn.fetch(
+            """SELECT calendar_date,is_trading_day,ARRAY(
+              SELECT code FROM unnest($3::text[]) code
+              WHERE EXISTS(SELECT 1 FROM reference.theme_asset_graph g
+                  WHERE g.market='FUND_CN' AND g.asset_code=code
+                    AND g.metadata->>'overseasCalendarRequired'='true')
+                OR EXISTS(SELECT 1 FROM reference.discovery_fund_universe u
+                  WHERE u.market='FUND_CN' AND u.fund_code=code AND u.overseas_calendar_required)
+                OR EXISTS(SELECT 1 FROM reference.research_fund_catalog c
+                  WHERE c.market='FUND_CN' AND c.fund_code=code
+                    AND (c.fund_type ILIKE '%QDII%' OR c.fund_name ILIKE '%QDII%'))
+            ) AS overseas_fund_codes FROM reference.trading_calendars
+              WHERE market='SSE' AND calendar_date BETWEEN $1 AND $2 ORDER BY calendar_date""",
+            datetime.fromisoformat(start).date(),
+            now.date(),
+            list(candidates),
+        )
+        overseas = set(rows[0].get("overseas_fund_codes") or []) if rows else set()
+        days = [
+            {"date": str(row["calendar_date"]), "isTradingDay": row["is_trading_day"]}
+            for row in rows
+        ]
+        return {
+            code: {
+                "market": "SSE",
+                "checkedThrough": now.date().isoformat(),
+                "overseasCalendarRequired": code in overseas,
+                "days": days,
+            }
+            for code in candidates
+        }
+    except Exception:  # noqa: BLE001 -- lack of calendar authority does not erase actual NAV facts
+        return {}
+
+
+def _current_calendar(history, now):
+    proof = history.get("calendarProof")
+    return (
+        isinstance(proof, dict)
+        and proof.get("checkedThrough") == now.date().isoformat()
+    )
+
+
+def _eligible_history(history, now):
+    from backend.investment.theme_graph import nav_plan
+
+    plan = nav_plan(history, now=now)
+    if plan is None or plan.get("historyQuality") == "CONFLICT":
+        return False
+    overseas = history.get("overseasCalendarRequired") is True or (
+        isinstance(history.get("calendarProof"), dict)
+        and history["calendarProof"].get("overseasCalendarRequired") is True
+    )
+    cutoff = now.date() if now.time() >= time(18) else now.date() - timedelta(days=1)
+    return overseas or str(history["asOf"]) <= cutoff.isoformat()
 
 
 def _history_rank(history):
@@ -427,7 +533,16 @@ def _history_rank(history):
     return str(history.get("asOf") or ""), stamp.timestamp() if stamp else 0
 
 
-async def collect_discovery_nav_histories(pool, now):
+def _cohort_rank(history, now):
+    from backend.investment.theme_graph import nav_plan
+
+    plan = nav_plan(history, now=now)
+    ready = plan is not None and plan.get("historyQuality") == "READY"
+    return ready, *_history_rank(history)
+
+
+async def collect_discovery_nav_histories(pool, now, *, catalysts=None):
+    from backend.investment.discovery_master import ensure_discovery_fund_master
     from backend.investment.theme_graph import (
         read_themes,
         collect_theme_nav_histories,
@@ -436,18 +551,26 @@ async def collect_discovery_nav_histories(pool, now):
         _disclosed_nav_quality,
     )
 
+    master_result = await ensure_discovery_fund_master(pool, now)
+    if master_result.get("completedAt"):
+        completed = datetime.fromisoformat(master_result["completedAt"])
+        if completed.tzinfo is not None:
+            now = max(now, completed.astimezone(now.tzinfo))
     async with system_connection(pool) as conn:
         themes = await read_themes(conn, now)
-        assets = await read_discovery_assets(conn, now, themes)
-        cached = await _cached_histories(
-            conn, [row["fundCode"] for row in assets[:32]], now
-        )
+        assets = await select_research_assets(conn, now, themes, catalysts)
+        cached = await _cached_histories(conn, [row["fundCode"] for row in assets], now)
     reused, needed, statuses = [], [], {}
-    for asset in assets[:32]:
+    for asset in assets:
         history = cached.get(asset["fundCode"])
         if not isinstance(history, dict) or not isinstance(history.get("points"), list):
             needed.append(asset)
             continue
+        history = deepcopy(history)
+        history["overseasCalendarRequired"] = (
+            asset.get("overseasCalendarRequired") is True
+            or history.get("overseasCalendarRequired") is True
+        )
         try:
             same_day = (
                 datetime.fromisoformat(history["retrievedAt"])
@@ -462,10 +585,10 @@ async def collect_discovery_nav_histories(pool, now):
             and _disclosed_nav_quality(history, history.get("points", []), now)[0]
             == "READY"
         )
-        if same_day and (len(history.get("points", [])) >= 220 or complete_short):
-            async with system_connection(pool) as conn:
-                history = deepcopy(history)
-                history["calendarProof"] = await _calendar_proof(conn, history, now)
+        if len(history.get("points", [])) >= 120 or complete_short:
+            if not _current_calendar(history, now):
+                async with system_connection(pool) as conn:
+                    history["calendarProof"] = await _calendar_proof(conn, history, now)
             plan = nav_plan(history, now=now)
             if plan and plan.get("historyQuality") == "READY":
                 reused.append(history)
@@ -497,36 +620,57 @@ async def collect_discovery_nav_histories(pool, now):
                 datetime.fromisoformat(history["availableAt"]),
                 json.dumps(history),
             )
-    order = {row["fundCode"]: i for i, row in enumerate(assets[:32])}
+    order = {row["fundCode"]: i for i, row in enumerate(assets)}
     return {
         "fundHistories": sorted(
             [*reused, *collected["fundHistories"]],
             key=lambda row: order[row["fundCode"]],
         ),
         "themeNavSourceResults": {**statuses, **collected["themeNavSourceResults"]},
+        "fundMasterSourceResult": master_result,
     }
 
 
-async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
+async def build_discovery_packet(
+    conn, packet, bundle, themes, previous, now, *, catalysts=None
+):
     from copy import deepcopy
     from backend.investment.theme_graph import nav_plan, _calendar_proof
     from backend.investment import service
 
-    universe = await read_discovery_assets(conn, now, themes)
+    universe = await select_research_assets(conn, now, themes, catalysts)
     histories = await _cached_histories(
-        conn, [row["fundCode"] for row in universe[:32]], now
+        conn, [row["fundCode"] for row in universe], now
     )
     for history in bundle.get("fundHistories", []):
+        if not isinstance(history, dict) or not _eligible_history(history, now):
+            continue
         code = history.get("fundCode")
-        if code not in histories or _history_rank(history) >= _history_rank(
-            histories[code]
+        history = deepcopy(history)
+        prior_proof = histories.get(code, {}).get("calendarProof")
+        if _current_calendar(histories.get(code, {}), now):
+            proof_dates = [
+                row.get("date")
+                for row in prior_proof.get("days", [])
+                if isinstance(row, dict) and isinstance(row.get("date"), str)
+            ]
+            if (
+                proof_dates
+                and min(proof_dates) <= history["points"][0]["date"]
+                and max(proof_dates) >= history["asOf"]
+            ):
+                history["calendarProof"] = deepcopy(prior_proof)
+                if not _eligible_history(history, now):
+                    continue
+        if code not in histories or _cohort_rank(history, now) >= _cohort_rank(
+            histories[code], now
         ):
             histories[code] = history
     anchors = [
         *packet.get("actionableZones", []),
         *packet.get("themeActionableZones", []),
     ]
-    for asset in universe[:32]:
+    for asset in universe:
         history = histories.get(asset["fundCode"])
         if not history:
             if asset["subjectKind"] == "fund":
@@ -549,7 +693,8 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
             asset["overseasCalendarRequired"]
             or history.get("overseasCalendarRequired") is True
         )
-        history["calendarProof"] = await _calendar_proof(conn, history, now)
+        if not _current_calendar(history, now):
+            history["calendarProof"] = await _calendar_proof(conn, history, now)
         plan = nav_plan(
             history,
             now=now,
@@ -560,7 +705,7 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
         if plan:
             anchors.append(plan)
     result = discovery_packet(universe, anchors, previous, now)
-    selected = [row["fundCode"] for row in universe[:32]]
+    selected = [row["fundCode"] for row in universe]
     priced = {
         row.get("fundCode")
         for row in result["discoveryActionableZones"]
@@ -571,6 +716,11 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
     }
     result["discoveryCoverage"] = {
         "universeCount": len(universe),
+        "coreFundCodes": [code for code in CORE_FUND_CODES if code in selected],
+        "coreMissingFundCodes": [
+            code for code in CORE_FUND_CODES if code not in selected
+        ],
+        "dynamicFundCodes": [code for code in selected if code not in CORE_FUND_CODES],
         "selectedFundCodes": selected,
         "historyFundCodes": [
             code for code in selected if histories.get(code, {}).get("points")
@@ -578,11 +728,9 @@ async def build_discovery_packet(conn, packet, bundle, themes, previous, now):
         "pricedFundCodes": [code for code in selected if code in priced],
         "sectorCodes": list(
             dict.fromkeys(
-                row["discoverySector"]
-                for row in universe[:32]
-                if row.get("discoverySector")
+                row["discoverySector"] for row in universe if row.get("discoverySector")
             )
         ),
-        "selectionLimit": 32,
+        "selectionLimit": SELECTION_LIMIT,
     }
     return result

@@ -142,7 +142,7 @@ async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirement
 
 
 @pytest.mark.asyncio
-async def test_injected_nav_discovery_is_capped_at_thirty_two_distinct_assets():
+async def test_injected_nav_discovery_is_capped_at_forty_distinct_assets():
     async def fetcher(code, start, end, client, **kwargs):
         return []
 
@@ -151,9 +151,9 @@ async def test_injected_nav_discovery_is_capped_at_thirty_two_distinct_assets():
         NOW,
         fetcher=fetcher,
         now_provider=lambda: NOW,
-        asset_rows=[{"asset_code": str(100000 + i)} for i in range(35)],
+        asset_rows=[{"asset_code": str(100000 + i)} for i in range(45)],
     )
-    assert list(result["themeNavSourceResults"]) == [str(100000 + i) for i in range(32)]
+    assert list(result["themeNavSourceResults"]) == [str(100000 + i) for i in range(40)]
     assert result["fundHistories"] == []
 
 

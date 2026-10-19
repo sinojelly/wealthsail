@@ -144,12 +144,14 @@ function scanned(
   inZone: boolean,
   distance: number,
 ) {
+  const base = plan(code, current);
+  base.tracks[0].state = "CANDIDATE";
   return {
-    ...plan(code, current),
+    ...base,
     signals: [
       {
         track: "LEFT_VALUE",
-        triggerState: "WATCH",
+        triggerState: "CANDIDATE",
         inEntryZone: inZone,
         distanceToEntryPct: distance,
       },

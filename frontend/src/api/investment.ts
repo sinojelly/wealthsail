@@ -352,6 +352,7 @@ export type PlanPrice = number | string | null;
 export interface ActionableZoneTrack {
   track: PlanTrack;
   state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
+  candidate?: boolean;
   entryZoneMin: PlanPrice;
   entryZoneMax: PlanPrice;
   stopLossPrice: PlanPrice;
@@ -375,7 +376,7 @@ export interface ActionableZoneResult {
   indicators: Record<string, PlanPrice>;
   tracks: ActionableZoneTrack[];
   selectedTrack?: PlanTrack;
-  parameters?: Record<string, number | number[]>;
+  parameters?: Record<string, number | number[] | string>;
   orderPriceAvailable?: boolean;
   themeCode?: ResearchThemeKey | null;
   track?: PlanTrack;
@@ -395,6 +396,8 @@ export interface QuantitativeScanItem extends ActionableZoneResult {
     track: PlanTrack;
     triggerState: "CANDIDATE" | "WATCH";
     inEntryZone: boolean;
+    candidate?: boolean;
+    entryReady?: boolean;
     distanceToEntryPct: number;
   }>;
   discoverySector?: string;

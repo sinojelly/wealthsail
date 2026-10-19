@@ -195,8 +195,19 @@ function FundPlan({
       </h4>
       <p className="op-value-current">
         {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
-        <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
-        {inZone && <span className="op-value-hit">已进入观察买入区</span>}
+        <span className="op-price-amount">
+          <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
+        </span>
+        {inZone && track?.state === "CANDIDATE" && (
+          <span className="op-value-hit">已进入观察买入区</span>
+        )}
+        {inZone && track?.state === "WATCH" && (
+          <small>
+            {selected === "RIGHT_TREND"
+              ? "价格近均线·待趋势触发"
+              : "已处左侧参考区·待条件触发"}
+          </small>
+        )}
       </p>
       {track ? (
         <dl className="op-value-prices">
@@ -223,8 +234,8 @@ function FundPlan({
         <p>等待真实价格依据</p>
       )}
       <small>
-        {planUnit(plan.unit)} · {timeLabel(plan.asOf)} ·{" "}
-        {selected === "LEFT_VALUE" ? "左侧" : "右侧"}研究坐标
+        {timeLabel(plan.asOf)} · {selected === "LEFT_VALUE" ? "左侧" : "右侧"}
+        研究坐标
       </small>
       {planTimeBasisNote(plan) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>

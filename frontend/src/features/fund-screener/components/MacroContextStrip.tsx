@@ -17,6 +17,11 @@ import QuantitativeScan, { type QuantScanTrackInput } from "./QuantitativeScan";
 import { researchSummary } from "../research-reading";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
+  const [expandedReport, setExpandedReport] = useState<string | null>(null);
+  const reportKey =
+    data.dailyResearch?.reportRunId ?? data.dailyResearch?.asOf ?? "no-report";
+  const expanded = expandedReport === reportKey;
+  const summaryId = useId();
   const facts = [
     {
       code: "PMI",
@@ -42,6 +47,13 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
     })),
   ];
   const report = data.dailyResearch?.report;
+  const full = researchSummary(
+    report?.macroCycle ||
+      report?.summary ||
+      "综合研究尚未生成，以下为实际已采集观察。",
+    Infinity,
+  );
+  const preview = researchSummary(full, 280);
   return (
     <section className="op-macro-overview" aria-label="今日宏观总纲">
       <h3>
@@ -51,14 +63,18 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
             : "历史宏观研判"
           : "当前宏观事实"}
       </h3>
-      <p>
-        {researchSummary(
-          report?.macroCycle ||
-            report?.summary ||
-            "综合研究尚未生成，以下为实际已采集观察。",
-          280,
-        )}
-      </p>
+      <p id={summaryId}>{expanded ? full : preview}</p>
+      {full !== preview && (
+        <button
+          type="button"
+          className="op-macro-expand"
+          aria-expanded={expanded}
+          aria-controls={summaryId}
+          onClick={() => setExpandedReport(expanded ? null : reportKey)}
+        >
+          {expanded ? "收起今日总纲" : "展开今日总纲"}
+        </button>
+      )}
       {report && (
         <small>
           研判证据：{timeLabel(report.asOf ?? data.dailyResearch?.asOf)}

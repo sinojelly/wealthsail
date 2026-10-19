@@ -47,6 +47,7 @@ async def fixture(*, committed=False):
                 "/wealthsail_review08_validation_v1",
                 "/wealthsail_review09_validation_v1",
                 "/wealthsail_review44_validation_v1",
+                "/wealthsail_review45_validation_v1",
             }
         )
     )
@@ -445,6 +446,14 @@ async def test_revocation_during_official_collection_never_starts_model(monkeypa
             return {}
 
         monkeypatch.setattr(daily, "collect_daily_sources", revoke)
+        prepared = AsyncMock(
+            side_effect=lambda pool, stamp, external, **kwargs: external
+        )
+        monkeypatch.setattr(daily, "prepare_research_inputs", prepared)
+        network = AsyncMock(
+            side_effect=AssertionError("SQL fixture must not call HTTP")
+        )
+        monkeypatch.setattr("httpx.AsyncClient.send", network)
         monkeypatch.setattr(daily, "now_shanghai", lambda: NOW)
         monkeypatch.setattr(
             daily,
@@ -484,3 +493,5 @@ async def test_revocation_during_official_collection_never_starts_model(monkeypa
             await pool.close()
         assert result["status"] == "SKIPPED"
         assert model.await_count == 0
+        assert prepared.await_count == 1
+        assert network.await_count == 0

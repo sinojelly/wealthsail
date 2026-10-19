@@ -73,6 +73,14 @@ def isolate(monkeypatch):
         mod, "load_public_packet", AsyncMock(return_value={"asOf": NOW.isoformat()})
     )
     monkeypatch.setattr(mod, "collect_daily_sources", AsyncMock(side_effect=provider))
+
+    async def preparation(pool, now, external, **kwargs):
+        assert state["active"] == 0
+        return external
+
+    monkeypatch.setattr(
+        mod, "prepare_research_inputs", AsyncMock(side_effect=preparation)
+    )
     monkeypatch.setattr(
         mod,
         "preflight_codex",

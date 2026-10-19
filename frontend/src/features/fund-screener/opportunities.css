@@ -1972,6 +1972,18 @@
   background: #fff1f2;
   font-size: 12px;
 }
+.op-price-amount {
+  display: inline-block;
+  white-space: nowrap;
+}
+.op-macro-expand {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--op-teal);
+  cursor: pointer;
+  text-decoration: underline;
+}
 .op-value-prices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2152,6 +2164,9 @@
   margin-left: 5px;
 }
 @media print {
+  .op-macro-expand {
+    display: none;
+  }
   html:has(.opportunities) {
     background: white;
   }

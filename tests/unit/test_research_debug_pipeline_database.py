@@ -57,6 +57,10 @@ async def test_two_debug_updates_use_new_batches_and_source_failure_keeps_previo
         AsyncMock(return_value={"executable": "test", "version": "test"}),
     )
     monkeypatch.setattr(daily, "collect_daily_sources", AsyncMock(return_value={}))
+    prepared = AsyncMock(side_effect=lambda pool, stamp, external, **kwargs: external)
+    monkeypatch.setattr(daily, "prepare_research_inputs", prepared)
+    network = AsyncMock(side_effect=AssertionError("SQL fixture must not call HTTP"))
+    monkeypatch.setattr("httpx.AsyncClient.send", network)
     monkeypatch.setattr(daily, "run_codex_research", model)
     monkeypatch.setattr(daily, "verify_research_sources", AsyncMock(return_value={}))
     fail = [False]
@@ -127,5 +131,7 @@ async def test_two_debug_updates_use_new_batches_and_source_failure_keeps_previo
                 "reportRunId"
             ] == results[-1]["reportRunId"]
             assert model.await_count == 2
+            assert prepared.await_count == 2
+            assert network.await_count == 0
         finally:
             await pool.close()

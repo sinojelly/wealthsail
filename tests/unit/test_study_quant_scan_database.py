@@ -32,7 +32,8 @@ def guard():
     assert (
         url.hostname == "127.0.0.1"
         and url.port == 55434
-        and url.path == "/wealthsail_review44_validation_v1"
+        and url.path
+        in {"/wealthsail_review44_validation_v1", "/wealthsail_review45_validation_v1"}
     )
 
 

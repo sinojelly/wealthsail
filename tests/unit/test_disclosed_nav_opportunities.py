@@ -110,7 +110,7 @@ def test_quantitative_scan_keeps_technical_trigger_distinct_from_inside_entry_zo
     }
     public = discovery.discovery_packet([asset], [plan], {}, NOW)
     scan = public["quantitativeScan"]
-    assert scan["methodVersion"] == "fund-quant-scan-v1"
+    assert scan["methodVersion"] == "fund-quant-scan-v2"
     assert scan["minimumHistorySamples"] == 220
     row = scan["items"][0]
     assert (

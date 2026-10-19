@@ -250,7 +250,7 @@ async def test_registered_fund_uses_stored_real_nav_analysis_when_public_history
     conn = AsyncMock()
     conn.fetch.return_value = [
         {
-            "fund_code": "005112",
+            "fund_code": "012737",
             "fund_name": "实际医药基金",
             "market": "FUND_CN",
             "instrument_id": instrument,
@@ -261,7 +261,7 @@ async def test_registered_fund_uses_stored_real_nav_analysis_when_public_history
     stored.update(
         subjectKind="fund",
         subjectId=instrument,
-        fundCode="005112",
+        fundCode="012737",
         historyQuality="READY",
     )
     monkeypatch.setattr(

@@ -18,11 +18,11 @@ def public_quantitative_scan(value, now):
     stamp = _stamp(value.get("asOf"))
     rows = value.get("items")
     if (
-        value.get("methodVersion") != "fund-quant-scan-v1"
+        value.get("methodVersion") not in {"fund-quant-scan-v1", "fund-quant-scan-v2"}
         or stamp is None
         or stamp > now
         or not isinstance(rows, list)
-        or len(rows) > 32
+        or len(rows) > 40
     ):
         raise ValueError("invalid quantitative scan version or time")
     items, seen, identities = [], set(), set()
@@ -109,11 +109,28 @@ def public_quantitative_scan(value, now):
                 > Decimal("0.0001")
             ):
                 raise ValueError("quantitative signal differs from original prices")
-            signals.append(
-                _pick(
-                    signal,
-                    ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
+            candidate = track["state"] == "CANDIDATE"
+            if value["methodVersion"] == "fund-quant-scan-v2" and (
+                type(signal.get("candidate")) is not bool
+                or type(signal.get("entryReady")) is not bool
+                or signal["candidate"] != candidate
+                or signal["entryReady"] != (candidate and in_zone)
+            ):
+                raise ValueError(
+                    "quantitative entry readiness differs from technical state"
                 )
+            signals.append(
+                {
+                    **_pick(
+                        signal,
+                        ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
+                    ),
+                    **(
+                        {"candidate": candidate, "entryReady": candidate and in_zone}
+                        if value["methodVersion"] == "fund-quant-scan-v2"
+                        else {}
+                    ),
+                }
             )
         if not signals:
             continue

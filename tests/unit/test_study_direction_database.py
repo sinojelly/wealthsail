@@ -39,6 +39,7 @@ async def test_direction_creation_freezes_exact_report_and_repeated_reports_do_n
             "/wealthsail_review08_validation_v1",
             "/wealthsail_review09_validation_v1",
             "/wealthsail_review44_validation_v1",
+            "/wealthsail_review45_validation_v1",
         }
     )
     conn = await asyncpg.connect(DSN)
@@ -159,6 +160,7 @@ async def test_direction_registered_fund_scope_requires_exact_catalog_and_market
             "/wealthsail_review08_validation_v1",
             "/wealthsail_review09_validation_v1",
             "/wealthsail_review44_validation_v1",
+            "/wealthsail_review45_validation_v1",
         }
     )
     conn = await asyncpg.connect(DSN)

@@ -86,9 +86,66 @@ def bundle():
     }
 
 
-async def empty_nav(pool, now):
+async def empty_nav(pool, now, *, catalysts):
     assert pool.borrowed == 0
     return {"fundHistories": [], "themeNavSourceResults": {}}
+
+
+@pytest.mark.asyncio
+async def test_dynamic_nav_uses_the_actual_news_completion_clock_without_backdating():
+    from backend.investment.dynamic_discovery import event_themes
+
+    pool = Pool()
+    published = NOW + timedelta(seconds=1)
+    current = NOW + timedelta(seconds=2)
+
+    async def collect(now):
+        raw = bundle()
+        raw["catalysts"] = [
+            {
+                "id": "satellite",
+                "title": "卫星互联网订单",
+                "publishedAt": published.isoformat(),
+                "retrievedAt": published.isoformat(),
+            }
+        ]
+        return raw
+
+    async def nav(pool, now, *, catalysts):
+        assert now == current
+        assert event_themes(catalysts, now)
+        return {"fundHistories": [], "themeNavSourceResults": {}}
+
+    result = await engine().sync_alpha_public(
+        pool, NOW, collector=collect, nav_collector=nav, now_provider=lambda: current
+    )
+    assert result["status"] == "READY"
+
+
+@pytest.mark.asyncio
+async def test_a_proven_fresh_master_cache_is_not_a_failed_public_source():
+    pool, raw = Pool(), bundle()
+    original = deepcopy(raw)
+
+    async def collect(now):
+        return raw
+
+    async def nav(pool, now, *, catalysts):
+        return {
+            "fundHistories": [],
+            "themeNavSourceResults": {},
+            "fundMasterSourceResult": {
+                "status": "SKIPPED",
+                "reason": "FRESH",
+                "catalogCount": 28107,
+            },
+        }
+
+    result = await engine().sync_alpha_public(
+        pool, NOW, collector=collect, nav_collector=nav, now_provider=lambda: NOW
+    )
+    assert result["status"] == "READY"
+    assert raw == original
 
 
 @pytest.mark.asyncio
@@ -166,7 +223,7 @@ async def test_nav_failures_make_partial_batch_without_discarding_macro_observat
     async def collect(now):
         return bundle()
 
-    async def nav(pool, now):
+    async def nav(pool, now, *, catalysts):
         assert pool.borrowed == 0
         return {
             "fundHistories": [],
@@ -247,7 +304,7 @@ async def test_nav_success_without_any_actual_history_is_still_partial():
     async def collect(now):
         return bundle()
 
-    async def nav(pool, now):
+    async def nav(pool, now, *, catalysts):
         return {
             "fundHistories": [],
             "themeNavSourceResults": {"008975": {"status": "SUCCESS", "records": 0}},

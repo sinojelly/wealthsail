@@ -43,6 +43,7 @@ async def fixture():
         "/wealthsail_review08_validation_v1",
         "/wealthsail_review09_validation_v1",
         "/wealthsail_review44_validation_v1",
+        "/wealthsail_review45_validation_v1",
     }
     conn = await asyncpg.connect(DSN)
     transaction = conn.transaction()

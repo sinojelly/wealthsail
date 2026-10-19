@@ -86,10 +86,8 @@ async def test_daily_model_prepares_core_nav_even_without_macro_collection_servi
     from test_daily_research_job import isolate, settings, NOW as JOB_NOW
 
     job, state = isolate(monkeypatch)
-    prepared = AsyncMock(
-        return_value={"fundHistories": [], "themeNavSourceResults": {}}
-    )
-    monkeypatch.setattr(discovery, "collect_discovery_nav_histories", prepared)
+    prepared = AsyncMock(side_effect=lambda pool, now, external, **kwargs: external)
+    monkeypatch.setattr(job, "prepare_research_inputs", prepared)
     result = await job.sync_daily_research(
         object(), settings(alpha_public_enabled=False), JOB_NOW
     )
@@ -120,10 +118,8 @@ async def test_daily_rechecks_pool_after_consumed_alpha_slot_with_latest_clock(
     monkeypatch.setattr(
         alpha_public, "sync_alpha_public", AsyncMock(return_value={"status": "SKIPPED"})
     )
-    prepared = AsyncMock(
-        return_value={"fundHistories": [], "themeNavSourceResults": {}}
-    )
-    monkeypatch.setattr(discovery, "collect_discovery_nav_histories", prepared)
+    prepared = AsyncMock(side_effect=lambda pool, now, external, **kwargs: external)
+    monkeypatch.setattr(job, "prepare_research_inputs", prepared)
     result = await job.sync_daily_research(
         object(), settings(alpha_public_enabled=True), JOB_NOW
     )

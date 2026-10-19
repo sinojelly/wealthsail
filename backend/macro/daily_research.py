@@ -12,6 +12,11 @@ from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
+from backend.macro.model_projection import (
+    model_packet,
+    separate_fund_codes as separate_fund_codes,
+    readable_fund_codes,
+)
 from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
 from backend.macro.value_directions import (
     MAX_VALUE_DIRECTIONS,
@@ -20,7 +25,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-value-directions-v7"
+PROMPT_VERSION = "daily-research-value-directions-v8"
 MAX_REPORT_SOURCES = 24
 
 
@@ -319,6 +324,9 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "navStdWindow",
             "navStdMultiplier",
             "navRiskFloorRatio",
+            "minimumRewardRiskT1",
+            "minimumRewardRiskT2",
+            "rewardRiskBasis",
         ),
     )
     result["indicators"] = _pick(
@@ -346,7 +354,7 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             continue
         result["tracks"].append(
             {
-                **_pick(row, ("track", "state", "priceState")),
+                **_pick(row, ("track", "state", "priceState", "candidate")),
                 **{key: price(row.get(key)) for key in price_keys},
                 "reasons": _texts(row.get("reasons")),
             }
@@ -469,6 +477,40 @@ def _public_continuation(previous, now):
                 }
             )
     return events[:12], plans[:12]
+
+
+def _nav_collection_results(rows, now):
+    result = {}
+    if not isinstance(rows, dict):
+        return result
+    for code, row in rows.items():
+        if (
+            not isinstance(code, str)
+            or not re.fullmatch(r"[0-9]{6}", code)
+            or not isinstance(row, dict)
+        ):
+            continue
+        item = {
+            "status": row.get("status")
+            if row.get("status") in {"SUCCESS", "FAILED", "UNAVAILABLE", "TIMEOUT"}
+            else "UNKNOWN"
+        }
+        if type(row.get("records")) is int and 0 <= row["records"] <= 100000:
+            item["records"] = row["records"]
+        if row.get("cache") == "REUSED_CONFIRMED":
+            item["cache"] = row["cache"]
+        for field in ("reason", "errorClass"):
+            if isinstance(row.get(field), str) and re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_]{0,79}", row[field]
+            ):
+                item[field] = row[field]
+        retrieved = _stamp(row.get("retrievedAt"))
+        if retrieved is not None and retrieved <= now:
+            item["retrievedAt"] = retrieved.isoformat()
+        result[code] = item
+        if len(result) == 40:
+            break
+    return result
 
 
 def make_research_packet(
@@ -708,10 +750,33 @@ def make_research_packet(
             source_results[key] = {
                 "status": row.get("status")
                 if row.get("status")
-                in {"SUCCESS", "FAILED", "UNAVAILABLE", "PERMISSION_REQUIRED"}
+                in {
+                    "SUCCESS",
+                    "PARTIAL",
+                    "FAILED",
+                    "UNAVAILABLE",
+                    "PERMISSION_REQUIRED",
+                    "SKIPPED",
+                    "TIMEOUT",
+                }
                 else "UNKNOWN"
             }
             error = row.get("errorClass")
+            source_results[key].update(
+                _pick(
+                    row,
+                    (
+                        "reason",
+                        "totalEntries",
+                        "catalogCount",
+                        "catalogCountBefore",
+                        "unknownFundTypeCount",
+                        "lastSuccessAt",
+                        "retrievedAt",
+                        "completedAt",
+                    ),
+                )
+            )
             if isinstance(error, str) and re.fullmatch(
                 r"[A-Za-z][A-Za-z0-9_]{0,79}", error
             ):
@@ -735,6 +800,9 @@ def make_research_packet(
         "previousUpcoming": previous_upcoming,
         "candidateIndex": candidate_index,
         "sourceResults": source_results,
+        "dynamicNavSourceResults": _nav_collection_results(
+            (external or {}).get("dynamicNavSourceResults"), now
+        ),
     }
 
 
@@ -748,17 +816,21 @@ def build_prompt(packet):
         "多家同链企业回购/增持意向、行业或海外龙头业绩改善、近期重要会议及超卖/趋势突破可共同构成催化，优先评估组合信号与预期差，归纳成独立方向；回购提议有意向信号价值，海外业绩有产业景气参考价值，阶段和传导待验证不自动否定研究价值。\n"
         "结合情景给出买卖思路、验证点与失效条件，并准确区分PLANNED计划、ANNOUNCED宣布、IMPLEMENTED实施、REPORTED报道和OPINION观点；提议保留提议身份，超卖或财报增幅不单独等于反转和盈利胜率。\n"
         "给出原始来源链接和不超过300字符的原文短引文；SOURCE_CHECKED表示原文核对状态，投资传导与预测写成有依据的分析。\n"
-        "使用actionableZones中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
+        "使用quantitativeScan中对应标的与同口径的双轨价格锚点分析买入区间、止损与目标，不把指数点位当ETF挂单价；缺失价格保持未知。\n"
         "给出简明中文macroCycle宏观周期定位与操作总纲；结合M1-M2、信用、收益率、房价、广域新闻与真实行情，自动提炼valueDirections，不要求用户筛选。五主题只是种子，可发现医药、消费、宽基、红利等任何有依据的价值方向。计划/市场隐含价格不等于已发生事实。\n"
+        "alphaPublic.observations按相同指标/来源/定义分组，points保留各观察日数值及差异来源时刻，未列差异字段继承组级元数据；定义断点不同组不串同口径趋势，RETRIEVAL_ONLY不能当历史公布时刻。\n"
         "财联社电报中的上市公司公告（回购、并购重组、股权转让、业绩）、重磅产业会议和地缘动态属于核心一等催化线索，严禁因未二次抓取官网原文而丢弃或降权。UNVERIFIED只表示尚未核对官网原文，与研究优先级独立；可直接引用财联社sourceUri作为媒体原文，注明报道身份，不伪装成官网已核对。按alphaPublic.sectorCatalysts逐行业检查，综合同链多条催化，不遗漏小行业线索。\n"
+        "早晚精选/投资日历已拆为独立子新闻，逐项检查，父URL相同不冒充多个独立来源。重点综合institutionalSignals的研报/大行观点、公司注销回购与预增扭亏，以及ETF公开数据，在相关方向催化中明确点出真实机构或公司依据。ETF_SHARE_CHANGE是两交易日清算份额净变化，SECONDARY_MAIN_NET_FLOW_CNY是二级市场按订单分类的主力流，均不证明机构身份或机构现金净申购；预测/提议保留实际阶段，不能写成已实现。\n"
         "sources总预算最多24条：先跨行业覆盖本次输入中真实存在的核心催化，为半导体/AI算力、稀土有色、机器人智驾、金融政策、医药临床、黄金地缘能源、航天军工逐项保留相关来源与方向名额，再分配同链补充来源和纯量化方向。以本次实际线索为准，合并同一投资逻辑；纯量化与消费补充不挤掉已有核心产业催化。\n"
         "输入出现金融重磅会议时，将政策议程关联到券商与银行等实际敏感环节；出现地缘升级时，比较黄金与油气的避险/供需传导及各自技术位置，可在同一方向选互补的1至2只基金。只依据输入真实线索与基金锚点；尚缺技术触发时用WATCH保留完整价格计划和可观察条件。\n"
         "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
         "每只基金可选价格轨道取quantitativeScan.items[].signals，WATCH也选择其中已有完整价格的轨道；技术state与当前inEntryZone分开表述；某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道，不将缺一条轨道扩大为整只基金无价格。\n"
+        "扫描包含30核心底座和最多10只按本轮新闻从全市场主数据新增的热点基金；优先匹配真实事件，不受旧30限制。entryReady才表示技术条件成立且价格入区；右轨WATCH即使inEntryZone=true，也只能说价格近均线、待趋势触发，不能称已入右侧买区。全部净值/买区/止损/T1/T2/备选轨/技术依据由Python在输出后按所选标的和轨道复制，不输出或重抄数值，不编短历史。\n"
+        "dynamicNavSourceResults保留本轮逐基金采集样本数、缓存复用和失败原因；SUCCESS只表示取得真实记录，五条短历史不等于可定价READY，最终以quantitativeScan中的完整价格锚点为准。\n"
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"
-        "每方向匹配1至2只实际基金，优先行业联接与另一弹性品种；只要有有效净值锚点就选择完整plans，不把有真实价格的基金藏在文字候选里。尚未到买点可WATCH并保留对应双轨计划。缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]。每方向plans只选discoveryActionableZones中subjectKind/subjectId/track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。\n"
-        "plans仅与previousValueDirections同方向稳定key/同标的/同轨/同价格口径对照：它只来自上海日期slot_date早于本轮的最近有效报告，严禁从同日DEBUG或previousResearch/history补回价格比较。没有可比前次用INITIAL或MAINTAINED；有前次且买区与目标未变用MAINTAINED，不能因无新净值、锚点不变或只换日期而DOWNGRADED。买区或目标一致上移才UPGRADED，一致下移才DOWNGRADED，双向变化及仅止损变化用MAINTAINED；最终状态由服务器根据真实Decimal价格校正。\n"
+        "每方向匹配1至2只实际基金，优先行业联接与另一弹性品种；只要有有效净值锚点就选择完整plans，不把有真实价格的基金藏在文字候选里。尚未到买点可WATCH并保留对应双轨计划。缺价格锚点仍保留有依据的方向、催化和后续验证点，使用WATCH及plans=[]。每方向plans只选quantitativeScan中subjectKind/subjectId及tracks[].track，最多2个标的；价格由服务器提供，signal LEFT_VALUE/RIGHT_TREND对应实际CANDIDATE轨道。符合前次同口径T1证据才可TAKE_PROFIT。并列基金代码之间用与或、分隔，严禁0183445004854式连写。\n"
+        "plans与previousFundPlans按六位fundCode/同市场/同轨/同价格口径对照，不依赖directionKey：它只来自上海日期slot_date早于本轮的最近有效报告，严禁从同日DEBUG或previousResearch/history补回价格比较。没有可比前次用INITIAL或MAINTAINED；买区上下沿变动各小于0.5%用MAINTAINED，两沿均上移至少0.5%才UPGRADED，均下移至少0.5%才DOWNGRADED；混合/仅一沿达阈值/仅止损或目标变化维持；不能因无新净值、锚点不变或只换日期而DOWNGRADED，最终由服务器Decimal校正。\n"
         "动态方向同价时若有真正基本面改善/恶化，可分别UPGRADED/DOWNGRADED并提交priceRevisionBasis=FUNDAMENTAL及priceRevisionSourceIds，引用本方向当前catalysts/risks中实际来源；一般价格比较用PRICE和空引用。priceRevisionNote只写一句调整或维持的原因，严禁重复抄写表格已有的净值、买区、止损、T1/T2数字；备选轨道由页面从结构化价格展示。calibrationRuleKeys只引用本方向DISCOVERY:key或真实种子关联规则。不要把支持率称盈利胜率。净值的NAV_ABS_CHANGE_STD_V1为独立风险尺度，不能称真实ATR或精确收益预测。\n"
         "actionablePlans保留旧五主题兼容结构，新报告此字段输出[]，计划统一放在valueDirections。只有旧包才选择themeActionableZones中的themeCode/subjectKind/subjectId/track；价格均由服务器复制，没有有效锚点时不输出该标的计划。达到同口径前次T1才可TAKE_PROFIT_ALERT。\n"
         "用strategyMemoryRules中的真实key写calibrationRuleKeys和calibrationNote；展示样本数与判断支持率，未知盈利胜率不能虚构。主动基金可用自身真实净值生成完整价格计划；未披露或未核验持仓只限制行业持仓归因，不阻止基于自身净值的计划，不从主题名称制造持仓事实。\n"
@@ -766,7 +838,7 @@ def build_prompt(packet):
         "不使用中债/CFETS受限来源，不绕过403；无实际价格前后证据时marketReaction保持UNVERIFIED。\n"
         "energy仅选择包中真实可用的序列code，不生成能源数值；保留布伦特与柴油单位/频率差异。\n"
         + json.dumps(
-            {key: value for key, value in packet.items() if key != "candidateIndex"},
+            model_packet(packet),
             ensure_ascii=False,
             sort_keys=True,
             allow_nan=False,
@@ -788,6 +860,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         raw = {"valueDirections": [], **raw}
     report = _Report.model_validate(raw).model_dump()
     _safe_narrative(report)
+    report = readable_fund_codes(
+        report, {row.get("fundCode") for row in packet.get("discoveryUniverse", [])}
+    )
     directions = {row["id"] for row in packet.get("directions", [])}
     sources, aliases, original = {}, {}, {}
     for row in report["sources"]:

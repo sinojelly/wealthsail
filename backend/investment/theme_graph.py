@@ -396,7 +396,7 @@ async def collect_theme_nav_histories(
             if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
                 continue
             if code not in selected:
-                if len(selected) >= 32:
+                if len(selected) >= 40:
                     continue
                 selected[code] = {
                     "asset_code": code,
@@ -406,87 +406,101 @@ async def collect_theme_nav_histories(
                 asset.get("overseas_calendar_required") is True
             )
         rows = list(selected.values())
-    histories, statuses = [], {}
+    semaphore = asyncio.Semaphore(4)
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-        for row in rows:
-            code = row["asset_code"]
-            remaining = deadline - clock() if deadline is not None else 45
-            if remaining <= 0:
-                statuses[code] = {
-                    "status": "UNAVAILABLE",
-                    "records": 0,
-                    "reason": "BUDGET_EXHAUSTED",
-                }
-                continue
-            try:
-                observations = await asyncio.wait_for(
-                    (fetcher or fetch_fund_nav_history)(
-                        code,
-                        now.date() - timedelta(days=730 if minimum_points else 370),
-                        now.date(),
-                        client,
-                        page_size=100,
-                        max_pages=32 if minimum_points else 20,
-                    ),
-                    timeout=min(45, remaining),
-                )
-                by_day = {}
-                for obs in observations:
-                    value = Decimal(str(obs.value))
-                    stamp = obs.as_of
-                    if (
-                        obs.symbol == code
-                        and obs.subject_type == "FUND"
-                        and obs.field_code == "NAV"
-                        and obs.quality_status in {"FRESH", "STALE", "REVISED"}
-                        and value.is_finite()
-                        and value > 0
-                        and stamp.tzinfo
-                        and stamp <= now
-                    ):
-                        by_day[stamp.date()] = {
-                            "date": stamp.date().isoformat(),
-                            "close": str(value),
-                        }
-                points = [by_day[day] for day in sorted(by_day)][-500:]
-                if not points:
-                    statuses[code] = {"status": "UNAVAILABLE", "records": 0}
-                    continue
-                finished = max(now, now_provider())
-                history = {
-                    "fundCode": code,
-                    "asOf": points[-1]["date"],
-                    "sourceUri": f"https://fund.eastmoney.com/{code}.html",
-                    "retrievedAt": finished.isoformat(),
-                    "availableAt": finished.isoformat(),
-                    "priceBasis": "UNIT_NAV",
-                    "points": points,
-                    "overseasCalendarRequired": row.get("overseas_calendar_required")
-                    is True,
-                }
-                proofs = [
-                    (obs.metadata or {}).get("providerHistoryProof")
-                    for obs in observations
-                    if (obs.metadata or {}).get("providerHistoryProof")
-                ]
-                if proofs and all(proof == proofs[0] for proof in proofs):
-                    history["providerHistoryProof"] = deepcopy(proofs[0])
+
+        async def collect_one(row):
+            async with semaphore:
+                code = row["asset_code"]
+                remaining = deadline - clock() if deadline is not None else 45
+                if remaining <= 0:
+                    return None, {
+                        "status": "UNAVAILABLE",
+                        "records": 0,
+                        "reason": "BUDGET_EXHAUSTED",
+                    }
                 try:
-                    async with system_connection(pool) as conn:
-                        history["calendarProof"] = await _calendar_proof(
-                            conn, history, _local(finished)
+                    observations = await asyncio.wait_for(
+                        (fetcher or fetch_fund_nav_history)(
+                            code,
+                            now.date() - timedelta(days=730 if minimum_points else 370),
+                            now.date(),
+                            client,
+                            page_size=100,
+                            max_pages=32 if minimum_points else 20,
+                        ),
+                        timeout=min(45, remaining),
+                    )
+                    by_day = {}
+                    for obs in observations:
+                        value, stamp = Decimal(str(obs.value)), obs.as_of
+                        if (
+                            obs.symbol == code
+                            and obs.subject_type == "FUND"
+                            and obs.field_code == "NAV"
+                            and obs.quality_status in {"FRESH", "STALE", "REVISED"}
+                            and value.is_finite()
+                            and value > 0
+                            and stamp.tzinfo
+                            and stamp <= now
+                        ):
+                            old = by_day.get(stamp.date())
+                            if old and Decimal(old["close"]) != value:
+                                raise ValueError(
+                                    "conflicting same-day unit NAV observations"
+                                )
+                            by_day[stamp.date()] = {
+                                "date": stamp.date().isoformat(),
+                                "close": str(value),
+                            }
+                    points = [by_day[day] for day in sorted(by_day)][-500:]
+                    if not points:
+                        return None, {"status": "UNAVAILABLE", "records": 0}
+                    finished = max(now, now_provider())
+                    history = {
+                        "fundCode": code,
+                        "asOf": points[-1]["date"],
+                        "sourceUri": f"https://fund.eastmoney.com/{code}.html",
+                        "retrievedAt": finished.isoformat(),
+                        "availableAt": finished.isoformat(),
+                        "priceBasis": "UNIT_NAV",
+                        "points": points,
+                        "overseasCalendarRequired": row.get(
+                            "overseas_calendar_required"
                         )
-                except Exception:  # noqa: BLE001 -- facts survive absent calendar authority
-                    history["calendarProof"] = None
-                histories.append(history)
-                statuses[code] = {
-                    "status": "SUCCESS",
-                    "records": len(points),
-                    "retrievedAt": finished.isoformat(),
-                }
-            except (Exception, InvalidOperation) as exc:  # noqa: BLE001 -- a fund failure does not erase other public facts
-                statuses[code] = {"status": "FAILED", "errorClass": type(exc).__name__}
-    return {"fundHistories": histories, "themeNavSourceResults": statuses}
+                        is True,
+                    }
+                    proofs = [
+                        (obs.metadata or {}).get("providerHistoryProof")
+                        for obs in observations
+                        if (obs.metadata or {}).get("providerHistoryProof")
+                    ]
+                    if proofs and all(proof == proofs[0] for proof in proofs):
+                        history["providerHistoryProof"] = deepcopy(proofs[0])
+                    try:
+                        async with system_connection(pool) as conn:
+                            history["calendarProof"] = await _calendar_proof(
+                                conn, history, _local(finished)
+                            )
+                    except Exception:  # noqa: BLE001 -- facts survive absent calendar authority
+                        history["calendarProof"] = None
+                    return history, {
+                        "status": "SUCCESS",
+                        "records": len(points),
+                        "retrievedAt": finished.isoformat(),
+                    }
+                except Exception as exc:  # noqa: BLE001 -- isolate a public provider failure
+                    return None, {"status": "FAILED", "errorClass": type(exc).__name__}
+
+        # gather preserves input order even when independent providers finish out
+        # of order, and cancellation propagates to all in-flight subprocesses.
+        results = await asyncio.gather(*(collect_one(row) for row in rows))
+    return {
+        "fundHistories": [history for history, _ in results if history is not None],
+        "themeNavSourceResults": {
+            row["asset_code"]: status for row, (_, status) in zip(rows, results)
+        },
+    }
 
 
 def theme_plans(themes, bundle, now):

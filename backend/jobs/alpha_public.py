@@ -69,13 +69,16 @@ async def sync_alpha_public(
         )
         for key in ARRAYS:
             payload[key] = raw.get(key, [])
-        payload["sourceResults"] = raw["sourceResults"]
+        payload["sourceResults"] = dict(raw["sourceResults"])
         if nav_collector is None:
             from backend.investment.discovery import collect_discovery_nav_histories
 
             nav_collector = collect_discovery_nav_histories
         try:
-            nav = await nav_collector(pool, stamp)
+            nav_now = local(now_provider())
+            if nav_now < stamp:
+                raise ValueError("public collection clock regressed")
+            nav = await nav_collector(pool, nav_now, catalysts=payload["catalysts"])
             if not isinstance(nav.get("fundHistories"), list) or not isinstance(
                 nav.get("themeNavSourceResults"), dict
             ):
@@ -84,6 +87,10 @@ async def sync_alpha_public(
                 fundHistories=nav["fundHistories"],
                 themeNavSourceResults=nav["themeNavSourceResults"],
             )
+            if isinstance(nav.get("fundMasterSourceResult"), dict):
+                payload["sourceResults"]["DISCOVERY_FUND_MASTER"] = nav[
+                    "fundMasterSourceResult"
+                ]
         except Exception as error:  # noqa: BLE001 -- NAV failure keeps usable macro evidence
             payload["themeNavSourceResults"] = {
                 "THEME_NAV": {"status": "FAILED", "errorClass": _safe_error(error)}
@@ -106,8 +113,14 @@ async def sync_alpha_public(
             if results
             and nav_complete
             and all(
-                isinstance(row, dict) and row.get("status") == "SUCCESS"
-                for row in results
+                isinstance(row, dict)
+                and (
+                    row.get("status") == "SUCCESS"
+                    or key == "DISCOVERY_FUND_MASTER"
+                    and row.get("status") == "SKIPPED"
+                    and row.get("reason") == "FRESH"
+                )
+                for key, row in payload["sourceResults"].items()
             )
             else "PARTIAL"
         )
