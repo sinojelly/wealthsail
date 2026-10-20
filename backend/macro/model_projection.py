@@ -28,6 +28,17 @@ def _plan(row):
             "historySampleCount",
             "selectedTrack",
             "track",
+            "subscriptionStatus",
+            "subscriptionRestricted",
+            "subscriptionLabel",
+            "preferredEntryEligible",
+            "isDelayedNav",
+            "entryBlocked",
+            "entryBlockReason",
+            "entryStatus",
+            "entryStatusTone",
+            "entryReady",
+            "inBuyZone",
         ),
     )
     result["indicators"] = _pick(
@@ -43,6 +54,7 @@ def _plan(row):
             "momentum20",
             "atr14",
             "navVolatility14",
+            "navPercentile1y",
         ),
     )
     result["tracks"] = [
@@ -59,6 +71,13 @@ def _plan(row):
                 "takeProfitT1",
                 "takeProfitT2",
                 "missingEvidence",
+                "technicalTriggered",
+                "entryReady",
+                "inBuyZone",
+                "entryBlocked",
+                "entryBlockReason",
+                "entryStatus",
+                "entryStatusTone",
             ),
         )
         for track in row.get("tracks", [])[:2]

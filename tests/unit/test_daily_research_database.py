@@ -201,6 +201,7 @@ async def test_real_public_packet_uses_api_read_only_connection_without_actor_or
             "quantitativeScan",
             "institutionalSignals",
             "dynamicNavSourceResults",
+            "fundSubscriptionStatus",
         }
         assert {row["indexId"] for row in packet["indices"]} == {
             "hs300",

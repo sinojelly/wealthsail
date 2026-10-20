@@ -141,7 +141,253 @@ def _usable(quote, frozen, now, *, estimate=False):
     )
 
 
-def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
+_ENTRY_SAFETY_FIELDS = (
+    "entryBlocked",
+    "entryBlockReason",
+    "entryStatus",
+    "entryStatusTone",
+    "subscriptionStatus",
+    "subscriptionRestricted",
+    "subscriptionLabel",
+    "preferredEntryEligible",
+    "isDelayedNav",
+)
+
+
+def entry_permitted(frozen, track, entry_safety=None):
+    """Historical geometric flags do not block a later actual price-zone hit."""
+    current = entry_safety if isinstance(entry_safety, dict) else frozen
+    selected = next(
+        (
+            row
+            for row in current.get("tracks", [])
+            if isinstance(row, dict) and row.get("track") == track.get("track")
+        ),
+        track,
+    )
+    return not any(
+        row.get("entryBlocked") is True
+        or row.get("subscriptionRestricted") is True
+        or row.get("preferredEntryEligible") is False
+        for row in (current, selected)
+    )
+
+
+def _entry_safety_summary(frozen, track, entry_safety=None):
+    current = entry_safety if isinstance(entry_safety, dict) else frozen
+    selected = next(
+        (
+            row
+            for row in current.get("tracks", [])
+            if isinstance(row, dict) and row.get("track") == track.get("track")
+        ),
+        track,
+    )
+    result = {
+        key: deepcopy(current[key]) for key in _ENTRY_SAFETY_FIELDS if key in current
+    }
+    result.update(
+        {
+            key: deepcopy(selected[key])
+            for key in _ENTRY_SAFETY_FIELDS
+            if key in selected
+        }
+    )
+    for field in ("entryBlockReason", "entryStatus", "entryStatusTone"):
+        protected = next(
+            (
+                row[field]
+                for row in (current, selected)
+                if row.get("entryBlocked") is True and field in row
+            ),
+            None,
+        )
+        if protected is not None:
+            result[field] = deepcopy(protected)
+    for key in ("entryBlocked", "subscriptionRestricted"):
+        if any(row.get(key) is True for row in (current, selected)):
+            result[key] = True
+    if any(row.get("preferredEntryEligible") is False for row in (current, selected)):
+        result["preferredEntryEligible"] = False
+    return result
+
+
+def _observed_percentile(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() and 0 <= result <= 100 else None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+async def current_entry_safety(conn, plans, now):
+    """Reapply current public safety facts without carrying historical vetoes forward."""
+    from backend.jobs.opportunity_market import (
+        read_fund_subscription_status,
+        normalize_subscription_status,
+    )
+    from backend.macro.daily_research import apply_entry_guards
+
+    if not plans:
+        return []
+    now = _stamp(now)
+    codes = sorted(
+        {
+            plan.get("fundCode")
+            for plan in plans
+            if isinstance(plan.get("fundCode"), str)
+        }
+    )
+    rows = await conn.fetch(
+        """SELECT r.public_packet,x.payload FROM research.daily_research_runs r
+        JOIN research.daily_research_results x USING(run_id)
+        WHERE r.slot_date=$1 AND x.status='READY' AND r.dispatched_at<=$2 AND x.recorded_at<=$2
+        ORDER BY x.recorded_at DESC,r.run_id DESC LIMIT 1""",
+        now.date(),
+        now,
+    )
+    packet = deepcopy(_object(rows[0].get("public_packet"))) if rows else {}
+    payload = _object(rows[0].get("payload")) if rows else {}
+    subscriptions = await read_fund_subscription_status(conn, now, codes)
+    packet["fundSubscriptionStatus"] = {
+        **_object(packet.get("fundSubscriptionStatus")),
+        **subscriptions,
+    }
+    packet_stamp = _stamp(packet.get("asOf"))
+    current_public = bool(
+        packet_stamp and packet_stamp.date() == now.date() and packet_stamp <= now
+    )
+    transient = (*_ENTRY_SAFETY_FIELDS, "entryReady", "inBuyZone")
+
+    def clear_historical(value):
+        result = deepcopy(value)
+        for row in (result, *result.get("tracks", []), *result.get("signals", [])):
+            for field in transient:
+                row.pop(field, None)
+        return result
+
+    def metadata(value):
+        return {
+            field: deepcopy(value[field])
+            for field in _ENTRY_SAFETY_FIELDS
+            if field in value
+        }
+
+    # Dates/identity are needed for current delayed-NAV shocks. Frozen indicators
+    # are historical technical facts, not evidence that a high-NAV veto still holds.
+    guarded = [clear_historical(plan) for plan in plans]
+    probes = deepcopy(guarded)
+    for probe in probes:
+        probe.pop("indicators", None)
+    checked_frozen = apply_entry_guards({"actionableZones": probes}, packet, now)[
+        "actionableZones"
+    ]
+    for result, checked in zip(guarded, checked_frozen, strict=True):
+        result.update(metadata(checked))
+        for field in ("tracks", "signals"):
+            for target, source in zip(
+                result.get(field, []), checked.get(field, []), strict=True
+            ):
+                target.update(metadata(source))
+
+    public = []
+    for value in (packet, payload):
+        for field in (
+            "discoveryActionableZones",
+            "themeActionableZones",
+            "actionableZones",
+            "actionablePlans",
+        ):
+            public.extend(row for row in value.get(field, []) if isinstance(row, dict))
+        public.extend(
+            row
+            for row in (value.get("quantitativeScan") or {}).get("items", [])
+            if isinstance(row, dict)
+        )
+        public.extend(
+            row
+            for direction in value.get("valueDirections", [])
+            for row in direction.get("plans", [])
+            if isinstance(row, dict)
+        )
+    checked_public = apply_entry_guards(
+        {"actionableZones": [clear_historical(row) for row in public]}, packet, now
+    )["actionableZones"]
+    for original, result in zip(plans, guarded, strict=True):
+        relevant = [
+            fact
+            for fact in checked_public
+            if fact.get("fundCode") == result.get("fundCode")
+            and fact.get("market") == "FUND_CN"
+            and fact.get("priceBasis") == "UNIT_NAV"
+            and fact.get("unit") in _UNITS
+        ]
+        for fact in relevant:
+            if fact.get("entryBlocked") is True:
+                result.update(metadata(fact))
+        old_rows = (original, *original.get("tracks", []), *original.get("signals", []))
+        old_subscription = any(
+            row.get("subscriptionRestricted") is True
+            or row.get("entryBlockReason") == "SUBSCRIPTION_RESTRICTED"
+            or (normalize_subscription_status(row.get("subscriptionStatus")) or {}).get(
+                "restricted"
+            )
+            is True
+            for row in old_rows
+        )
+        reasons = {
+            row.get("entryBlockReason")
+            for row in old_rows
+            if row.get("entryBlocked") is True
+            or row.get("preferredEntryEligible") is False
+        }
+        known_subscription = result.get("fundCode") in subscriptions or (
+            current_public
+            and normalize_subscription_status(
+                packet["fundSubscriptionStatus"].get(result.get("fundCode"))
+            )
+            is not None
+        )
+        old_high = "HIGH_NAV_PERCENTILE" in reasons
+        known_high = current_public and any(
+            _observed_percentile((fact.get("indicators") or {}).get("navPercentile1y"))
+            is not None
+            and _number((fact.get("indicators") or {}).get("ma20")) is not None
+            for fact in relevant
+        )
+        other_reasons = reasons - {"SUBSCRIPTION_RESTRICTED", "HIGH_NAV_PERCENTILE"}
+        # A reasonless subscription veto belongs to the known subscription fact.
+        if old_subscription:
+            other_reasons.discard(None)
+        unknown = (
+            (old_subscription and not known_subscription)
+            or (old_high and not known_high)
+            or (bool(other_reasons) and not current_public)
+        )
+        selected = next(
+            (
+                track
+                for track in result.get("tracks", [])
+                if track.get("track") == result.get("selectedTrack")
+            ),
+            {},
+        )
+        if unknown and entry_permitted(result, selected):
+            result.update(
+                entryBlocked=True,
+                entryBlockReason="CURRENT_SAFETY_UNKNOWN",
+                entryStatus="当前入场保护事实待核验，暂缓入场",
+                entryStatusTone="amber",
+                preferredEntryEligible=False,
+            )
+    return guarded
+
+
+def price_watch(
+    frozen, *, confirmed=None, estimate=None, holding=None, now, entry_safety=None
+):
     """A reference-line hit never asserts a purchase, execution or realized profit."""
     now = _stamp(now)
     if now is None:
@@ -172,6 +418,7 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
     value = _number(candidate["value"])
     in_zone = _number(track["entryZoneMin"]) <= value <= _number(track["entryZoneMax"])
     technical_candidate = track.get("state") == "CANDIDATE"
+    allowed = entry_permitted(frozen, track, entry_safety)
     result.update(
         basis="ESTIMATE_1430" if estimate_ok else "CONFIRMED_NAV",
         asOf=candidate["asOf"],
@@ -184,7 +431,7 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
         else "TAKE_PROFIT"
         if value >= _number(track["takeProfitT1"])
         else "ENTRY_ZONE"
-        if in_zone and technical_candidate
+        if in_zone and technical_candidate and allowed
         else "HOLDING"
         if (holding or {}).get("state") == "CONFIRMED"
         else "OBSERVING"
@@ -196,6 +443,15 @@ def price_watch(frozen, *, confirmed=None, estimate=None, holding=None, now):
     )
     if in_zone and not technical_candidate:
         result["reason"] += "价格位于参考区间内，冻结轨道的技术条件待触发。"
+    if not allowed:
+        safety = _entry_safety_summary(frozen, track, entry_safety)
+        result["entrySafety"] = safety
+        label = (
+            safety.get("subscriptionLabel")
+            or safety.get("entryStatus")
+            or "当前入场保护生效"
+        )
+        result["reason"] += f"暂缓入场：{label}；冻结价格坐标保留，卖出风控继续核对。"
     return result
 
 
@@ -412,6 +668,13 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
             now,
             instrument_ids,
         )
+    safety = dict(
+        zip(
+            frozen,
+            await current_entry_safety(conn, list(frozen.values()), now),
+            strict=True,
+        )
+    )
     current_day = _current_session(calendar, now)
     result = []
     for item in items:
@@ -446,6 +709,7 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
                     estimate=estimate,
                     holding=holding,
                     now=now,
+                    entry_safety=safety[key],
                 ),
             }
         )

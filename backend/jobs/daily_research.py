@@ -150,9 +150,10 @@ async def load_public_packet(conn, now, external, *, debug_request_id=None):
     )
     from backend.investment.opportunity_scoring import rank_report
 
-    packet["quantitativeScan"] = rank_report(
-        {"quantitativeScan": packet["quantitativeScan"]}, packet
-    )["quantitativeScan"]
+    if isinstance(packet.get("quantitativeScan"), dict):
+        packet["quantitativeScan"] = rank_report(
+            {"quantitativeScan": packet["quantitativeScan"]}, packet
+        )["quantitativeScan"]
     return packet
 
 

@@ -544,6 +544,10 @@ def actionable_plan_for_analysis(result, kind, subject_id, *, label=None, now=No
         for item in plan["tracks"]:
             item.update(
                 state="INSUFFICIENT",
+                candidate=False,
+                technicalTriggered=False,
+                entryReady=False,
+                inBuyZone=False,
                 priceState=quality
                 if quality in {"STALE", "CONFLICT", "UNVERIFIED"}
                 else "UNVERIFIED",

@@ -166,6 +166,57 @@ def test_forged_model_score_is_replaced_and_high_rsi_does_not_receive_buy_priori
     assert result["valueDirections"][1]["plans"][0]["opportunityScore"] <= 100
 
 
+def test_blocked_fund_does_not_raise_a_directions_buy_priority_or_displayed_score():
+    mod = import_module("backend.investment.opportunity_scoring")
+    packet = evidence()
+    third = deepcopy(packet["alphaPublic"]["catalysts"][0])
+    third.update(
+        id="third", parentSourceId="3", sourceUri="https://www.cls.cn/detail/3"
+    )
+    packet["alphaPublic"]["catalysts"].append(third)
+    blocked = plan("008281", rsi=25)
+    blocked["entryBlocked"] = blocked["tracks"][0]["entryBlocked"] = True
+    lower = plan("000051", rsi=60)
+    better = plan("000962", rsi=45)
+    lower["label"] = better["label"] = "其他研究产品"
+    raw = {
+        "asOf": NOW.isoformat(),
+        "valueDirections": [
+            {"key": "mixed", "plans": [blocked, lower]},
+            {"key": "better-ready", "plans": [better]},
+        ],
+    }
+    original = deepcopy(raw)
+
+    result = mod.rank_report(raw, packet)
+
+    assert [row["key"] for row in result["valueDirections"]] == [
+        "better-ready",
+        "mixed",
+    ]
+    mixed = result["valueDirections"][1]
+    assert mixed["opportunityScore"] == 47.5
+    assert [row["opportunityScore"] for row in mixed["plans"]] == [52.5, 47.5]
+    assert [row["currentPrice"] for row in mixed["plans"]] == ["1.0", "1.0"]
+    assert raw == original
+
+
+def test_direction_with_only_ready_funds_keeps_the_highest_fund_score():
+    mod = import_module("backend.investment.opportunity_scoring")
+    result = mod.rank_report(
+        {
+            "asOf": NOW.isoformat(),
+            "valueDirections": [
+                {"key": "ready", "plans": [plan(rsi=45), plan("000051", rsi=25)]}
+            ],
+        },
+        evidence(),
+    )
+    direction = result["valueDirections"][0]
+    assert direction["opportunityScore"] == 87.5
+    assert [row["opportunityScore"] for row in direction["plans"]] == [81.5, 87.5]
+
+
 def test_same_run_reading_projection_adds_scores_and_fixes_known_code_prose_only():
     from backend.investment.quantitative_scan import report_with_quantitative_scan
 

@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import type {
   ActionableZoneResult,
   ActionableZoneTrack,
+  EntrySafety,
   PlanPrice,
 } from "../../api/investment";
 
@@ -18,12 +19,60 @@ export function entryReady(signal: {
   triggerState: string;
   inEntryZone: boolean;
   entryReady?: boolean;
+  entryBlocked?: boolean;
+  inBuyZone?: boolean;
 }): boolean {
   return (
     signal.triggerState === "CANDIDATE" &&
     signal.inEntryZone &&
-    signal.entryReady !== false
+    signal.entryReady !== false &&
+    !signal.entryBlocked &&
+    signal.inBuyZone !== false
   );
+}
+
+export function entryAllowed(...rows: Array<EntrySafety | undefined>): boolean {
+  return rows.every(
+    (row) =>
+      !row?.entryBlocked &&
+      row?.entryReady !== false &&
+      row?.inBuyZone !== false,
+  );
+}
+
+/** A protected server status takes precedence over the geometric price position. */
+export function planEntryStatus(
+  result: ActionableZoneResult,
+  track?: ActionableZoneTrack,
+  signal?: EntrySafety,
+): { text: string; warning: boolean } | null {
+  const override = [result, signal, track].find((row) => row?.entryStatus);
+  if (override?.entryStatus)
+    return {
+      text: override.entryStatus,
+      warning: override.entryStatusTone === "amber" || !!override.entryBlocked,
+    };
+  if ([result, signal, track].some((row) => row?.entryBlocked))
+    return { text: "⚠️ 暂缓入场", warning: true };
+  if (
+    track?.track === "RIGHT_TREND" &&
+    result.currentPrice != null &&
+    track.entryZoneMax != null &&
+    Number.isFinite(Number(result.currentPrice)) &&
+    Number.isFinite(Number(track.entryZoneMax)) &&
+    Number(track.entryZoneMax) > 0 &&
+    Number(result.currentPrice) > Number(track.entryZoneMax)
+  ) {
+    const gap = new Decimal(result.currentPrice)
+      .div(track.entryZoneMax)
+      .minus(1)
+      .mul(100);
+    return {
+      text: `🚀 高于买区 ${gap.toFixed(2)}%·等待回踩均线`,
+      warning: false,
+    };
+  }
+  return null;
 }
 
 /** Reading projection only; do not mutate provider names or frozen snapshots. */

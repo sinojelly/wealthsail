@@ -66,6 +66,9 @@ def test_unusable_current_evidence_does_not_expose_active_coordinates(quality):
     result = plan(snapshot(quality=quality))
     assert all(row["state"] == "INSUFFICIENT" for row in result["tracks"])
     assert all(row["entryZoneMin"] is None for row in result["tracks"])
+    assert all(row.get("technicalTriggered") is False for row in result["tracks"])
+    assert all(row.get("entryReady") is False for row in result["tracks"])
+    assert all(row.get("inBuyZone") is False for row in result["tracks"])
     assert result["orderPriceAvailable"] is False
 
 

@@ -300,7 +300,7 @@ def _coverage(value):
         return None
 
 
-def compare_frozen_price(frozen, observation, now):
+def compare_frozen_price(frozen, observation, now, *, entry_safety=None):
     """Compare an auditable same-subject quote without moving frozen targets."""
     now = _local(now)
     output = {
@@ -397,20 +397,30 @@ def compare_frozen_price(frozen, observation, now):
         return output
     in_zone = low <= value <= high
     technical_candidate = track.get("state") == "CANDIDATE"
+    from backend.investment.study_price_watch import (
+        entry_permitted,
+        _entry_safety_summary,
+    )
+
+    allowed = entry_permitted(frozen, track, entry_safety)
+    safety = _entry_safety_summary(frozen, track, entry_safety)
     state = (
         "STOP_LOSS"
         if stop is not None and stop < low and value <= stop
         else "TAKE_PROFIT_T1"
         if first is not None and first > high and value >= first
         else "IN_ENTRY_ZONE"
-        if in_zone and technical_candidate
+        if in_zone and technical_candidate and allowed
         else "WATCH"
     )
     return {
         **output,
         "state": state,
+        **safety,
         "reason": (
-            "TECHNICAL_NOT_TRIGGERED"
+            "ENTRY_PROTECTED"
+            if state == "WATCH" and not allowed
+            else "TECHNICAL_NOT_TRIGGERED"
             if state == "WATCH" and in_zone and track.get("state") == "WATCH"
             else "TECHNICAL_STATE_UNKNOWN"
             if state == "WATCH" and in_zone and not technical_candidate
@@ -601,6 +611,15 @@ def _fund_message(rows, day, *, sell_risk_alerts=()):
             lines.append(line)
     for row in rows:
         checked = row["check"]
+        if checked.get("reason") == "ENTRY_PROTECTED":
+            lines.append(
+                _text(
+                    checked.get("subscriptionLabel")
+                    or checked.get("entryStatus")
+                    or "当前入场保护生效，暂缓入场",
+                    160,
+                )
+            )
         frozen = row["snapshot"]["actionablePlan"]
         track = frozen.get("selectedTrack")
         track_label = TRACK_LABELS.get(track, "轨道待核对")
@@ -1175,6 +1194,17 @@ async def sync_alpha_opportunities(
                 )
             )
         ]
+        from backend.investment.study_price_watch import current_entry_safety
+
+        async with tenant_transaction(pool, scope[1], scope[0]) as conn:
+            safety = await current_entry_safety(
+                conn,
+                [
+                    {**row["snapshot"]["actionablePlan"], "fundCode": row["fund_code"]}
+                    for row in studies
+                ],
+                clock,
+            )
         active = await _active(pool, scope)
         clock = _local(now_provider())
         if (
@@ -1224,9 +1254,10 @@ async def sync_alpha_opportunities(
                     row["snapshot"]["actionablePlan"],
                     prices.get(str(row["track_id"])),
                     clock,
+                    entry_safety=guard,
                 ),
             }
-            for row in studies
+            for row, guard in zip(studies, safety, strict=True)
         ]
         for row in rows:
             if row["fund_code"] not in current and row["check"]["state"] in {

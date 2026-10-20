@@ -2,6 +2,7 @@ import FundNavTrendChart from "./FundNavTrendChart";
 import {
   bestDirectionPriority,
   buyZoneStatus,
+  buyZoneClassName,
   comparePriority,
 } from "../opportunity-display";
 import { useState } from "react";
@@ -192,6 +193,11 @@ function FundPlan({
     >
       <h4>
         {readingText(fundDisplayName(plan.label, code), 70)} <span>{code}</span>
+        {plan.subscriptionLabel && (
+          <span className="op-subscription-restricted">
+            {plan.subscriptionLabel}
+          </span>
+        )}
       </h4>
       <div className="op-value-fund-layout">
         <div className="op-value-price-column">
@@ -200,9 +206,7 @@ function FundPlan({
             <span className="op-price-amount">
               <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
             </span>
-            <span className={`op-buy-zone-status tone-${status.tone}`}>
-              {status.text}
-            </span>
+            <span className={buyZoneClassName(status)}>{status.text}</span>
           </p>
           {track ? (
             <dl className="op-value-prices">

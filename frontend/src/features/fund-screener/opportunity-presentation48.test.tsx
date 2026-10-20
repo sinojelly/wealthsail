@@ -286,3 +286,51 @@ it("keeps old unscored scans on the technical and distance fallback instead of d
     ),
   ).toEqual(["000001", "999999"]);
 });
+
+it("keeps a stronger but subscription-restricted candidate behind an unrestricted fund in both views", () => {
+  const restricted = plan("000001", "RIGHT_TREND", "CANDIDATE", "1.1", 99, 3);
+  restricted.subscriptionRestricted = true;
+  restricted.subscriptionLabel = "⛔ 暂停申购";
+  restricted.preferredEntryEligible = false;
+  const available = plan("999999", "RIGHT_TREND", "CANDIDATE", "1.1", 60, 2);
+  show(
+    <>
+      <ValueDirections data={daily([restricted, available])} />
+      <QuantitativeScan data={daily([restricted, available])} />
+    </>,
+  );
+  const rows = screen.getByRole("table").querySelectorAll("tbody tr");
+  expect(rows[0]).toHaveAttribute("data-fund-code", "999999");
+  expect(
+    screen
+      .getAllByRole("heading", { level: 3 })
+      .map((node) => node.textContent),
+  ).toEqual(["今日价值方向与买卖计划", "方向999999", "方向000001"]);
+  const blockedRow = within(rows[1] as HTMLElement);
+  expect(blockedRow.queryByText("📈 已入右侧趋势买区")).not.toBeInTheDocument();
+  expect(blockedRow.getByText("⛔ 暂停申购")).toHaveClass(
+    "op-subscription-restricted",
+  );
+});
+
+it("preserves signal safety precedence above track text and never styles the blocked scan as a buy hit", () => {
+  const blocked = plan("161129", "RIGHT_TREND", "CANDIDATE", "1.1", 100, 3);
+  Object.assign(blocked.tracks[0], {
+    entryStatus: "轨道级风险提示",
+    entryStatusTone: "amber",
+    entryBlocked: true,
+  });
+  Object.assign(blocked.signals[0], {
+    entryStatus: "已核对最新外盘风险·暂缓入场",
+    entryStatusTone: "amber",
+    entryBlocked: true,
+    entryReady: false,
+    inBuyZone: false,
+  });
+  show(<QuantitativeScan data={daily([blocked])} />);
+  const label = screen.getByText("已核对最新外盘风险·暂缓入场");
+  expect(label).toHaveClass("op-entry-warning");
+  expect(label).not.toHaveClass("op-scan-hit");
+  expect(screen.queryByText("轨道级风险提示")).not.toBeInTheDocument();
+  expect(screen.queryByText("📈 已入右侧趋势买区")).not.toBeInTheDocument();
+});

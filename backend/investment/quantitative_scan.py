@@ -110,11 +110,16 @@ def public_quantitative_scan(value, now):
             ):
                 raise ValueError("quantitative signal differs from original prices")
             candidate = track["state"] == "CANDIDATE"
+            ready = (
+                candidate
+                and in_zone
+                and not any(item.get("entryBlocked") is True for item in (row, track))
+            )
             if value["methodVersion"] == "fund-quant-scan-v2" and (
                 type(signal.get("candidate")) is not bool
                 or type(signal.get("entryReady")) is not bool
                 or signal["candidate"] != candidate
-                or signal["entryReady"] != (candidate and in_zone)
+                or signal["entryReady"] != ready
             ):
                 raise ValueError(
                     "quantitative entry readiness differs from technical state"
@@ -126,7 +131,7 @@ def public_quantitative_scan(value, now):
                         ("track", "triggerState", "inEntryZone", "distanceToEntryPct"),
                     ),
                     **(
-                        {"candidate": candidate, "entryReady": candidate and in_zone}
+                        {"candidate": candidate, "entryReady": ready}
                         if value["methodVersion"] == "fund-quant-scan-v2"
                         else {}
                     ),
@@ -160,7 +165,7 @@ def public_quantitative_scan(value, now):
 
 def report_with_quantitative_scan(report, packet, now):
     """An old READY report may read only its own dispatch's public scan."""
-    from backend.macro.daily_research import _stamp
+    from backend.macro.daily_research import _stamp, apply_entry_guards
 
     if not isinstance(report, dict):
         return report
@@ -183,5 +188,7 @@ def report_with_quantitative_scan(report, packet, now):
         for row in (result.get("quantitativeScan") or {}).get("items", [])
     }
     return readable_fund_codes(
-        rank_report(result, packet), codes, known_company_names(packet)
+        rank_report(apply_entry_guards(result, packet, stamp), packet),
+        codes,
+        known_company_names(packet),
     )

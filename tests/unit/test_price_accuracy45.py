@@ -45,7 +45,7 @@ def test_real_positive_momentum_and_acceptable_rsi_mark_right_candidate():
 
 @pytest.mark.parametrize(
     "index,expected",
-    [(0, ("1.0384", "1.0644")), (1, ("1.0420", "1.0658"))],
+    [(0, ("1.0384", "1.0644")), (1, ("1.0315", "1.0540"))],
 )
 def test_nav_targets_protect_displayed_minimum_reward_to_risk(index, expected):
     item = calculate([1] * 220)["tracks"][index]
@@ -58,9 +58,9 @@ def test_nav_targets_protect_displayed_minimum_reward_to_risk(index, expected):
 
 def test_index_targets_apply_the_same_floor_at_their_display_precision():
     right = calculate([100] * 220, basis="INDEX_POINTS")["tracks"][1]
-    assert right["takeProfitT1"] == "107.60"
-    assert right["takeProfitT2"] == "111.92"
-    assert right["stopLossPrice"] == "95.60"
+    assert right["takeProfitT1"] == "106.90"
+    assert right["takeProfitT2"] == "111.22"
+    assert right["stopLossPrice"] == "94.90"
 
 
 def revision_fixture(*, current=("1.1000", "1.2000"), old_updates=None):

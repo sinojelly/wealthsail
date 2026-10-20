@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,109 @@ def _time(value):
 
 def _json(value):
     return json.loads(value) if isinstance(value, str) else value
+
+
+def normalize_subscription_status(value):
+    """Project verified subscription facts and derive the small-limit guard."""
+    if not isinstance(value, dict):
+        return None
+    purchase = value.get("purchaseStatus")
+    if not isinstance(purchase, str) or purchase not in {
+        "OPEN",
+        "LIMITED",
+        "SUSPENDED",
+    }:
+        return None
+    raw_limit = value.get("dailyLimitCny")
+    limit = None
+    if not isinstance(raw_limit, bool) and isinstance(
+        raw_limit, (str, int, float, Decimal)
+    ):
+        try:
+            amount = Decimal(str(raw_limit))
+            if amount.is_finite() and amount >= 0:
+                limit = amount
+        except (InvalidOperation, ValueError):
+            pass
+    label = (
+        "⛔ 暂停申购"
+        if purchase == "SUSPENDED"
+        else f"⛔ 单日限购{format(limit.normalize(), 'f')}元"
+        if limit is not None and limit <= 100
+        else None
+    )
+    return {
+        "purchaseStatus": purchase,
+        "dailyLimitCny": format(limit.normalize(), "f") if limit is not None else None,
+        "restricted": label is not None,
+        "label": label,
+        **({"retrievedAt": value["retrievedAt"]} if value.get("retrievedAt") else {}),
+    }
+
+
+async def read_fund_subscription_status(conn, now, fund_codes):
+    """Read the effective shared status store; unknown status stays unknown.
+
+    The subscription sync persists to ``reference.fund_profiles``; its narrow
+    research view leaves the source table's worker isolation intact. Catalog
+    funds without an instrument id can resolve a verified ticker alias.
+    """
+    codes = sorted(
+        {
+            code
+            for code in fund_codes
+            if isinstance(code, str) and re.fullmatch(r"[0-9]{6}", code)
+        }
+    )
+    if not codes:
+        return {}
+    now = _time(now)
+    rows = await conn.fetch(
+        """WITH products AS (
+          SELECT c.fund_code,c.instrument_id FROM reference.research_fund_catalog c
+            WHERE c.market='FUND_CN' AND c.fund_code=ANY($1::text[])
+              AND c.instrument_id IS NOT NULL
+          UNION
+          SELECT a.alias_value,a.instrument_id FROM reference.instrument_aliases a
+            JOIN reference.instruments i ON i.id=a.instrument_id
+            WHERE a.alias_type='TICKER' AND a.alias_value=ANY($1::text[])
+              AND i.asset_type='OFF_EXCHANGE_FUND'
+              AND a.effective_from<=($2 AT TIME ZONE 'Asia/Shanghai')::date
+              AND (a.effective_to IS NULL OR a.effective_to>=($2 AT TIME ZONE 'Asia/Shanghai')::date)
+        ), identities AS (
+          SELECT fund_code FROM products GROUP BY fund_code
+            HAVING count(DISTINCT instrument_id)=1
+        ) SELECT DISTINCT ON(p.fund_code) p.fund_code,profile.purchase_status,
+            profile.daily_purchase_limit,profile.retrieved_at
+          FROM products p JOIN identities identity USING(fund_code)
+          JOIN reference.fund_subscription_status profile ON profile.instrument_id=p.instrument_id
+          WHERE profile.effective_from<=($2 AT TIME ZONE 'Asia/Shanghai')::date
+            AND (profile.effective_to IS NULL OR profile.effective_to>=($2 AT TIME ZONE 'Asia/Shanghai')::date)
+            AND (profile.retrieved_at IS NULL OR profile.retrieved_at<=$2)
+          ORDER BY p.fund_code,profile.effective_from DESC,profile.retrieved_at DESC NULLS LAST""",
+        codes,
+        now,
+    )
+    statuses = {}
+    for row in rows:
+        code = row.get("fund_code")
+        retrieved = repository._stamp(row.get("retrieved_at"))
+        if (
+            code not in codes
+            or row.get("retrieved_at") is not None
+            and (retrieved is None or retrieved > now)
+        ):
+            continue
+        status = normalize_subscription_status(
+            {
+                "purchaseStatus": row.get("purchase_status"),
+                "dailyLimitCny": row.get("daily_purchase_limit"),
+                **({"retrievedAt": retrieved.isoformat()} if retrieved else {}),
+            }
+        )
+        if status is not None:
+            statuses[code] = status
+    return statuses
 
 
 def _refresh_due(now, previous):

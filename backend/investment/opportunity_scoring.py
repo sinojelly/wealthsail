@@ -333,9 +333,6 @@ def rank_report(report, packet):
         direction["plans"] = [
             score_plan(plan, packet, now) for plan in direction.get("plans", [])
         ]
-        direction["opportunityScore"] = max(
-            (plan.get("opportunityScore", 0) for plan in direction["plans"]), default=0
-        )
 
     def direction_key(direction):
         keys = [
@@ -346,7 +343,11 @@ def rank_report(report, packet):
             and "opportunityScore" in track
         ]
         group = min((key[0] for key in keys), default=3)
-        rr = max((-key[2] for key in keys), default=0)
+        # Keep each fund's research score, but a blocked/high-zone fund cannot
+        # lift a direction that also offers an eligible buy-zone fund.
+        best_group = [key for key in keys if key[0] == group]
+        direction["opportunityScore"] = max((-key[1] for key in best_group), default=0)
+        rr = max((-key[2] for key in best_group), default=0)
         return (
             group,
             -direction.get("opportunityScore", 0),

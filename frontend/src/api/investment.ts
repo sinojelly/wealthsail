@@ -355,7 +355,14 @@ export interface OpportunityPriority {
   scoreBreakdown?: Record<string, unknown>;
   scoreMethodVersion?: string;
 }
-export interface ActionableZoneTrack extends OpportunityPriority {
+export interface EntrySafety {
+  entryStatus?: string | null;
+  entryStatusTone?: string | null;
+  entryBlocked?: boolean;
+  entryReady?: boolean;
+  inBuyZone?: boolean;
+}
+export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   track: PlanTrack;
   state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
   candidate?: boolean;
@@ -368,7 +375,7 @@ export interface ActionableZoneTrack extends OpportunityPriority {
   priceState: string;
   missingEvidence?: string[];
 }
-export interface ActionableZoneResult extends OpportunityPriority {
+export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
   methodVersion: string;
   subjectKind: "index" | "fund" | "nav";
   subjectId: string;
@@ -396,16 +403,28 @@ export interface ActionableZoneResult extends OpportunityPriority {
   valueDirectionTitle?: string | null;
   volatilityMethod?: string | null;
   market?: "FUND_CN" | "SSE" | null;
+  subscriptionRestricted?: boolean;
+  subscriptionLabel?: string | null;
+  subscriptionStatus?: {
+    purchaseStatus: string;
+    dailyLimitCny: string | null;
+    restricted: boolean;
+    label: string | null;
+    retrievedAt?: string;
+  };
+  preferredEntryEligible?: boolean;
 }
 export interface QuantitativeScanItem extends ActionableZoneResult {
-  signals: Array<{
-    track: PlanTrack;
-    triggerState: "CANDIDATE" | "WATCH";
-    inEntryZone: boolean;
-    candidate?: boolean;
-    entryReady?: boolean;
-    distanceToEntryPct: number;
-  }>;
+  signals: Array<
+    EntrySafety & {
+      track: PlanTrack;
+      triggerState: "CANDIDATE" | "WATCH";
+      inEntryZone: boolean;
+      candidate?: boolean;
+      entryReady?: boolean;
+      distanceToEntryPct: number;
+    }
+  >;
   discoverySector?: string;
   historyQuality?: string;
   historySampleCount?: number;
@@ -463,6 +482,7 @@ export interface SellRiskAlert {
 }
 export interface SellRiskAlerts {
   asOf: string | null;
+  holdingsAsOf?: string | null;
   items: SellRiskAlert[];
   limitations: string[];
 }

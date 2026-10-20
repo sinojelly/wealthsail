@@ -1,23 +1,25 @@
 import type {
   ActionableZoneResult,
   ActionableZoneTrack,
+  EntrySafety,
   OpportunityPriority,
   QuantitativeScanItem,
 } from "../../api/investment";
-import { completeTrack, entryDistance } from "./plan-display";
+import {
+  completeTrack,
+  entryAllowed,
+  entryDistance,
+  planEntryStatus,
+} from "./plan-display";
 
-type EntryGuard = {
-  entryBlocked?: boolean;
-  entryReady?: boolean;
-  inBuyZone?: boolean;
-  entryStatus?: string | null;
-  entryStatusTone?: string | null;
+type EntryGuard = EntrySafety & {
+  triggerState?: string;
+  inEntryZone?: boolean;
 };
 const number = (value: unknown) =>
   value != null && value !== "" && Number.isFinite(Number(value))
     ? Number(value)
     : null;
-const guard = (value: object | undefined) => value as EntryGuard | undefined;
 export function highPriceZone(
   plan: ActionableZoneResult,
   track?: ActionableZoneTrack,
@@ -52,6 +54,17 @@ export function priceInZone(
     current <= high
   );
 }
+function preferredEntryEligible(
+  plan: ActionableZoneResult,
+  track?: ActionableZoneTrack,
+  signal?: EntryGuard,
+) {
+  return (
+    !plan.subscriptionRestricted &&
+    plan.preferredEntryEligible !== false &&
+    entryAllowed(plan, signal, track)
+  );
+}
 export function planEntryReady(
   plan: ActionableZoneResult,
   track?: ActionableZoneTrack,
@@ -59,36 +72,46 @@ export function planEntryReady(
 ) {
   return (
     track?.state === "CANDIDATE" &&
+    (signal?.triggerState == null || signal.triggerState === "CANDIDATE") &&
+    signal?.inEntryZone !== false &&
     priceInZone(plan, track) &&
     !highPriceZone(plan, track) &&
-    [guard(plan), guard(track), signal].every(
-      (row) =>
-        !row?.entryBlocked &&
-        row?.entryReady !== false &&
-        row?.inBuyZone !== false,
-    )
+    preferredEntryEligible(plan, track, signal)
   );
 }
 export function buyZoneStatus(
   plan: ActionableZoneResult,
   track?: ActionableZoneTrack,
   signal?: EntryGuard,
-): { text: string; tone: "left" | "right" | "wait" | "away" | "high" } {
-  const override = [guard(plan), guard(track), signal].find(
-    (row) => row?.entryStatus,
-  );
-  if (override?.entryStatus)
+): {
+  text: string;
+  tone: "left" | "right" | "wait" | "away" | "high";
+  warning?: boolean;
+  position?: boolean;
+} {
+  // Keep the server's checked risk status before geometric and score projections.
+  if (
+    [plan, signal, track].some((row) => row?.entryStatus || row?.entryBlocked)
+  ) {
+    const protectedStatus = planEntryStatus(plan, track, signal)!;
     return {
-      text: override.entryStatus,
-      tone:
-        override.entryBlocked || override.entryStatusTone === "amber"
-          ? "wait"
-          : "away",
+      ...protectedStatus,
+      tone: protectedStatus.warning ? "wait" : "away",
+      position: !protectedStatus.warning,
     };
+  }
   if (highPriceZone(plan, track))
     return { text: "🔥 已入高位止盈区（勿追高）", tone: "high" };
-  if ([guard(plan), guard(track), signal].some((row) => row?.entryBlocked))
-    return { text: "⚠️ 暂缓入场", tone: "wait" };
+  if (plan.subscriptionRestricted || plan.preferredEntryEligible === false)
+    return {
+      text: plan.subscriptionRestricted
+        ? "⚠️ 申购受限·暂缓入场"
+        : "⚠️ 暂缓入场",
+      tone: "wait",
+      warning: true,
+    };
+  const position = planEntryStatus(plan, track, signal);
+  if (position) return { ...position, tone: "away", position: true };
   if (!track) return { text: "价格依据待补齐", tone: "away" };
   if (planEntryReady(plan, track, signal))
     return track.track === "LEFT_VALUE"
@@ -110,6 +133,12 @@ export function buyZoneStatus(
         : "价格依据待补齐",
     tone: "away",
   };
+}
+export function buyZoneClassName(
+  status: ReturnType<typeof buyZoneStatus>,
+  ready = false,
+) {
+  return `op-buy-zone-status tone-${status.tone}${status.warning ? " op-entry-warning" : status.position ? " op-entry-position" : ready ? " op-scan-hit" : ""}`;
 }
 export function priorityScore(value?: OpportunityPriority) {
   const score = value?.opportunityScore;
@@ -137,6 +166,7 @@ export function planPriority(
   signal?: EntryGuard,
 ) {
   return {
+    preferred: preferredEntryEligible(plan, track, signal),
     ready: planEntryReady(plan, track, signal),
     score: priorityScore(track),
     rewardRisk:
@@ -154,6 +184,7 @@ export function comparePriority(
   b: ReturnType<typeof planPriority>,
 ) {
   return (
+    Number(b.preferred) - Number(a.preferred) ||
     Number(b.ready) - Number(a.ready) ||
     b.score - a.score ||
     b.rewardRisk - a.rewardRisk ||
@@ -188,6 +219,7 @@ export function bestDirectionPriority(plans: ActionableZoneResult[]) {
         ),
       )
       .sort(comparePriority)[0] ?? {
+      preferred: false,
       ready: false,
       score: 0,
       rewardRisk: 0,

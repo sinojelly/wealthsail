@@ -352,6 +352,10 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         for track in plan["tracks"]:
             track.update(
                 state="INSUFFICIENT",
+                candidate=False,
+                technicalTriggered=False,
+                entryReady=False,
+                inBuyZone=False,
                 priceState=quality,
                 entryZoneMin=None,
                 entryZoneMax=None,

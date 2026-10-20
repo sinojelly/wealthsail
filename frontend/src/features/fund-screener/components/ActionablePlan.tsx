@@ -1,5 +1,5 @@
 import FundNavTrendChart from "./FundNavTrendChart";
-import { buyZoneStatus } from "../opportunity-display";
+import { buyZoneStatus, buyZoneClassName } from "../opportunity-display";
 import type {
   ActionableZoneResult,
   PlanPrice,
@@ -212,9 +212,7 @@ export default function ActionablePlan({
         </span>{" "}
         · {timeLabel(result.asOf)}
         {status && (
-          <span className={`op-buy-zone-status tone-${status.tone}`}>
-            {status.text}
-          </span>
+          <span className={buyZoneClassName(status)}>{status.text}</span>
         )}
       </p>
       {planTimeBasisNote(result) && (

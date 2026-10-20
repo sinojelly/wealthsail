@@ -1,5 +1,6 @@
 import {
   buyZoneStatus,
+  buyZoneClassName,
   comparePriority,
   planEntryReady,
   planPriority,
@@ -89,6 +90,11 @@ function ScanRow({
     <tr data-fund-code={code}>
       <th scope="row">
         <strong>{fundDisplayName(item.label, code)}</strong>
+        {item.subscriptionLabel && (
+          <span className="op-subscription-restricted">
+            {item.subscriptionLabel}
+          </span>
+        )}
         <small>{code}</small>
         {planTimeBasisNote(item) && <small>{planTimeBasisNote(item)}</small>}
       </th>
@@ -108,11 +114,7 @@ function ScanRow({
         / {rewardRisk(track) > 0 ? `${rewardRisk(track).toFixed(2)}R` : "—"}
       </td>
       <td>
-        <span
-          className={`op-buy-zone-status tone-${status.tone}${ready ? " op-scan-hit" : ""}`}
-        >
-          {status.text}
-        </span>
+        <span className={buyZoneClassName(status, ready)}>{status.text}</span>
         {track && (
           <small>
             {track.track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势"} ·{" "}
