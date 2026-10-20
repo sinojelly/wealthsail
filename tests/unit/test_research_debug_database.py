@@ -39,7 +39,7 @@ async def fixture(*, committed=False):
     parts = urlsplit(DSN)
     assert (
         parts.hostname == "127.0.0.1"
-        and parts.port == 55434
+        and parts.port in {55434, 55436}
         and (
             parts.path.startswith("/wealthsail_review07_validation_v")
             or parts.path
@@ -47,7 +47,7 @@ async def fixture(*, committed=False):
                 "/wealthsail_review08_validation_v1",
                 "/wealthsail_review09_validation_v1",
                 "/wealthsail_review44_validation_v1",
-                "/wealthsail_review45_validation_v1",
+                "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
             }
         )
     )

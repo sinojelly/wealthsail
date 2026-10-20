@@ -50,13 +50,12 @@ _SUPPORTED_JOB_TYPES = (
     "POSITION_PERIOD_METRICS_REBUILD",
     "FUND_NAV_RANGE_FETCH",
     "INVESTMENT_RESEARCH_REFRESH",
+    "FUND_UNIT_NAV_HISTORY_FETCH",
 )
 _PROJECTION_REPAIR_INTERVAL_SECONDS = 60.0
 _ERROR_TEXT_LIMIT = 500
 _URL_QUERY_PATTERN = re.compile(r"(https?://[^\s?]+)\?[^\s]*", re.IGNORECASE)
-_DATABASE_USERINFO_PATTERN = re.compile(
-    r"(postgres(?:ql)?://)[^@\s]+@", re.IGNORECASE
-)
+_DATABASE_USERINFO_PATTERN = re.compile(r"(postgres(?:ql)?://)[^@\s]+@", re.IGNORECASE)
 _SECRET_VALUE_PATTERN = re.compile(
     r"\b(password|passwd|token|secret|api[_-]?key|authorization)=([^\s&]+)",
     re.IGNORECASE,
@@ -298,7 +297,8 @@ async def claim_data_task(
                  WHERE job_type IN ('FUND_NAV_BACKFILL',
                                     'POSITION_PERIOD_METRICS_REBUILD',
                                     'FUND_NAV_RANGE_FETCH',
-                                    'INVESTMENT_RESEARCH_REFRESH')
+                                    'INVESTMENT_RESEARCH_REFRESH',
+                                    'FUND_UNIT_NAV_HISTORY_FETCH')
                    AND (
                        (status IN ('PENDING', 'FAILED') AND
                            CASE WHEN status = 'PENDING'
@@ -377,9 +377,8 @@ async def fail_data_task(
     settings: Settings,
     exc: Exception,
 ) -> bool:
-    terminal = (
-        lease.attempt_count >= settings.data_task_max_attempts
-        or isinstance(exc, _TERMINAL_DATABASE_ERRORS)
+    terminal = lease.attempt_count >= settings.data_task_max_attempts or isinstance(
+        exc, _TERMINAL_DATABASE_ERRORS
     )
     backoff = settings.data_task_base_backoff_seconds * (
         2 ** max(lease.attempt_count - 1, 0)
@@ -405,11 +404,7 @@ async def fail_data_task(
         )
     updated = result.endswith("1")
     if updated:
-        event = (
-            "data_task_failed_terminal"
-            if terminal
-            else "data_task_retry_scheduled"
-        )
+        event = "data_task_failed_terminal" if terminal else "data_task_retry_scheduled"
         logger.warning(
             (
                 "%s run_id=%s batch_id=%s job_type=%s attempt=%d "
@@ -551,8 +546,7 @@ async def persist_nav_observations(
     # never create two competing revisions for the same observation instant.
     observations_by_as_of = {item.as_of: item for item in observations}
     normalized = [
-        observations_by_as_of[as_of]
-        for as_of in sorted(observations_by_as_of)
+        observations_by_as_of[as_of] for as_of in sorted(observations_by_as_of)
     ]
     retrieved_at = datetime.now(_SHANGHAI)
     async with system_connection(pool) as conn:
@@ -818,10 +812,16 @@ async def process_data_task(
     )
     if lease.job_type == "INVESTMENT_RESEARCH_REFRESH":
         from backend.jobs.investment_research import refresh_subject
+
         kind, key = lease.payload.get("kind"), lease.payload.get("id")
         if kind not in ("index", "fund") or not isinstance(key, str):
             raise ValueError("invalid investment research task")
         await refresh_subject(pool, settings, kind, key, as_of)
+        return
+    if lease.job_type == "FUND_UNIT_NAV_HISTORY_FETCH":
+        from backend.jobs.fund_nav_full_history import process_full_history_task
+
+        await process_full_history_task(pool, lease)
         return
     if lease.job_type == "FUND_NAV_RANGE_FETCH":
         fund_code = lease.payload.get("fundCode")
@@ -840,12 +840,13 @@ async def process_data_task(
         return
     if lease.payload.get("projectionOnly") is True:
         try:
-            positions_updated, accounts_updated = (
-                await refresh_fund_position_projections(
-                    pool,
-                    tenant_id=lease.tenant_id,
-                    as_of=as_of,
-                )
+            (
+                positions_updated,
+                accounts_updated,
+            ) = await refresh_fund_position_projections(
+                pool,
+                tenant_id=lease.tenant_id,
+                as_of=as_of,
             )
         except Exception as exc:
             _log_stage_failure(
@@ -874,7 +875,9 @@ async def process_data_task(
             instrument_id=str(instrument_id) if instrument_id else None,
         )
     except Exception as exc:
-        _log_stage_failure(lease, stage="load_open_fund_positions", exc=exc, as_of=as_of)
+        _log_stage_failure(
+            lease, stage="load_open_fund_positions", exc=exc, as_of=as_of
+        )
         raise
     logger.info(
         "data_task_positions_loaded run_id=%s batch_id=%s position_count=%d",
@@ -966,9 +969,7 @@ async def process_data_task(
                 pool, positions, as_of=as_of
             )
         except Exception as exc:
-            _log_stage_failure(
-                lease, stage="load_persisted_nav", exc=exc, as_of=as_of
-            )
+            _log_stage_failure(lease, stage="load_persisted_nav", exc=exc, as_of=as_of)
             raise
     try:
         await materialize_position_metrics(

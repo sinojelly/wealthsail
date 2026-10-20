@@ -27,10 +27,10 @@ async def test_price_watch_real_actor_list_detail_and_existing_1430_facts(
     monkeypatch, estimate
 ):
     uri = urlsplit(DSN)
-    assert (uri.hostname, uri.port) == ("127.0.0.1", 55434)
+    assert uri.hostname == "127.0.0.1" and uri.port in {55434, 55436}
     assert uri.path in {
         "/wealthsail_review44_validation_v1",
-        "/wealthsail_review45_validation_v1",
+        "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
     }
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()

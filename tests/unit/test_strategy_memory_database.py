@@ -219,7 +219,7 @@ async def connection():
     url = urlsplit(DSN)
     assert (
         url.hostname == "127.0.0.1"
-        and url.port == 55434
+        and url.port in {55434, 55436}
         and url.path
         in {
             "/wealthsail_phase2_validation_v1",
@@ -229,7 +229,7 @@ async def connection():
             "/wealthsail_review08_validation_v1",
             "/wealthsail_review09_validation_v1",
             "/wealthsail_review44_validation_v1",
-            "/wealthsail_review45_validation_v1",
+            "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
         }
     ), "disposable DB boundary"
     return await asyncpg.connect(DSN)

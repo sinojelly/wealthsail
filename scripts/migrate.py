@@ -2540,6 +2540,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "research.daily_research_runs",
         "research.daily_research_results",
         "market.fund_research_nav_histories",
+        "market.fund_nav_chart_histories",
     )
     for table in daily_tables:
         if not await conn.fetchval("SELECT to_regclass($1)", table):
@@ -2569,6 +2570,14 @@ async def _readback(conn: asyncpg.Connection) -> None:
             table,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
+    nav_job_constraint = await conn.fetchval(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
+    )
+    if (
+        not nav_job_constraint
+        or "FUND_UNIT_NAV_HISTORY_FETCH" not in nav_job_constraint
+    ):
+        raise RuntimeError("fund NAV chart job contract is missing or unsafe")
     # 085 replaces daily_research_runs_slot_date_key with a scheduled-only index.
     for table, constraint in (
         ("research.daily_research_results", "daily_research_results_pkey"),

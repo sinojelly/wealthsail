@@ -349,7 +349,13 @@ export interface MarketEvidence {
 }
 export type PlanTrack = "LEFT_VALUE" | "RIGHT_TREND";
 export type PlanPrice = number | string | null;
-export interface ActionableZoneTrack {
+export interface OpportunityPriority {
+  opportunityScore?: number;
+  rewardRiskRatio?: PlanPrice;
+  scoreBreakdown?: Record<string, unknown>;
+  scoreMethodVersion?: string;
+}
+export interface ActionableZoneTrack extends OpportunityPriority {
   track: PlanTrack;
   state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
   candidate?: boolean;
@@ -362,7 +368,7 @@ export interface ActionableZoneTrack {
   priceState: string;
   missingEvidence?: string[];
 }
-export interface ActionableZoneResult {
+export interface ActionableZoneResult extends OpportunityPriority {
   methodVersion: string;
   subjectKind: "index" | "fund" | "nav";
   subjectId: string;
@@ -411,7 +417,7 @@ export interface QuantitativeScan {
   coverage: { pricedFundCount: number; targetHistoryFundCount: number };
   items: QuantitativeScanItem[];
 }
-export interface ValueDirection {
+export interface ValueDirection extends OpportunityPriority {
   key: string;
   title: string;
   thesis: string;
@@ -436,7 +442,32 @@ export interface ValueDirection {
   watchFor: string[];
   plans: ActionableZoneResult[];
 }
+export interface SellRiskAlert {
+  fundCode: string;
+  label: string;
+  relationship: Array<"HELD" | "TRACKED">;
+  state: "STOP_LOSS" | "TAKE_PROFIT_T2" | "TAKE_PROFIT_T1" | "RSI_OVERBOUGHT";
+  basis: "CONFIRMED_NAV" | "ESTIMATE_1430";
+  value: PlanPrice;
+  asOf: string | null;
+  sourceUri: string | null;
+  rsi14: PlanPrice;
+  rsiAsOf: string | null;
+  planOrigin: "FROZEN_STUDY" | "DAILY_REPORT" | "NONE";
+  trackId?: string | null;
+  reportRunId?: string | null;
+  selectedTrack?: PlanTrack | null;
+  stopLossPrice: PlanPrice;
+  takeProfitT1: PlanPrice;
+  takeProfitT2: PlanPrice;
+}
+export interface SellRiskAlerts {
+  asOf: string | null;
+  items: SellRiskAlert[];
+  limitations: string[];
+}
 export interface OpportunityContext extends MacroContext {
+  sellRiskAlerts?: SellRiskAlerts;
   strategyMemoryRules?: StrategyMemoryRule[];
   themes?: ThemeGraphRow[];
   alphaPublic?: AlphaPublic | null;

@@ -107,7 +107,7 @@ async def test_claim_is_scoped_to_fund_and_nav_and_recovers_expired_leases(monke
     assert lease.attempt_count == 1
     sql, args = conn.claims[0]
     assert (
-        "(job_type = 'FUND_NAV_RANGE_FETCH' OR (job_type = 'INVESTMENT_RESEARCH_REFRESH' AND payload->>'kind' = 'fund'"
+        "(job_type IN ('FUND_NAV_RANGE_FETCH','FUND_UNIT_NAV_HISTORY_FETCH') OR (job_type = 'INVESTMENT_RESEARCH_REFRESH' AND payload->>'kind' = 'fund'"
         in sql
     )
     assert "c.instrument_id::text = payload->>'id'" in sql

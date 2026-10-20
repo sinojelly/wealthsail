@@ -1,3 +1,12 @@
+import {
+  buyZoneStatus,
+  comparePriority,
+  planEntryReady,
+  planPriority,
+  preferredScanTrack,
+  priorityScore,
+  rewardRisk,
+} from "../opportunity-display";
 import { useState } from "react";
 import type {
   ActionableZoneTrack,
@@ -10,7 +19,6 @@ import {
   fundDisplayName,
   planPrice,
   planTimeBasisNote,
-  entryReady,
 } from "../plan-display";
 import { timeLabel } from "../macro-display";
 
@@ -19,31 +27,6 @@ export interface QuantScanTrackInput {
   subjectKind: "fund" | "nav";
   subjectId: string;
   planTrack: PlanTrack;
-}
-type Signal = QuantitativeScanItem["signals"][number];
-function preferred(item: QuantitativeScanItem) {
-  return item.signals
-    .flatMap((signal) => {
-      const track = item.tracks.find(
-        (row) => row.track === signal.track && completeTrack(row),
-      );
-      return track ? [{ signal, track }] : [];
-    })
-    .sort(
-      (a, b) =>
-        Number(entryReady(b.signal)) - Number(entryReady(a.signal)) ||
-        distance(a.signal) - distance(b.signal) ||
-        a.track.track.localeCompare(b.track.track),
-    )[0];
-}
-function distance(signal?: Signal) {
-  return signal?.inEntryZone
-    ? 0
-    : signal &&
-        Number.isFinite(signal.distanceToEntryPct) &&
-        signal.distanceToEntryPct >= 0
-      ? signal.distanceToEntryPct
-      : Infinity;
 }
 function ScanRow({
   item,
@@ -54,9 +37,11 @@ function ScanRow({
   reportRunId?: string | null;
   onTrack?: (input: QuantScanTrackInput) => Promise<void>;
 }) {
-  const chosen = preferred(item);
+  const chosen = preferredScanTrack(item);
   const track = chosen?.track;
   const signal = chosen?.signal;
+  const status = buyZoneStatus(item, track, signal);
+  const ready = planEntryReady(item, track, signal);
   const code = item.fundCode || item.subjectId;
   const [state, setState] = useState<"idle" | "pending" | "saved">("idle");
   const [error, setError] = useState("");
@@ -117,18 +102,16 @@ function ScanRow({
           : "—"}
       </td>
       <td>
-        <span className={signal && entryReady(signal) ? "op-scan-hit" : ""}>
-          {signal && entryReady(signal)
-            ? track?.track === "LEFT_VALUE"
-              ? "🎯已入左侧买区"
-              : "📈已入右侧买区"
-            : signal?.inEntryZone
-              ? track?.track === "RIGHT_TREND"
-                ? "价格近均线·待趋势触发"
-                : "已处左侧参考区·待条件触发"
-              : Number.isFinite(distance(signal))
-                ? `⏳距买区 ${distance(signal).toFixed(2)}%`
-                : "价格依据待补齐"}
+        {track?.opportunityScore != null
+          ? priorityScore(track).toFixed(1)
+          : "—"}{" "}
+        / {rewardRisk(track) > 0 ? `${rewardRisk(track).toFixed(2)}R` : "—"}
+      </td>
+      <td>
+        <span
+          className={`op-buy-zone-status tone-${status.tone}${ready ? " op-scan-hit" : ""}`}
+        >
+          {status.text}
         </span>
         {track && (
           <small>
@@ -182,13 +165,13 @@ export default function QuantitativeScan({
   const scan = data?.report?.quantitativeScan;
   if (!scan?.items.length) return null;
   const rows = [...scan.items].sort((a, b) => {
-    const first = preferred(a)?.signal;
-    const second = preferred(b)?.signal;
+    const first = preferredScanTrack(a),
+      second = preferredScanTrack(b);
     return (
-      Number(!!second && entryReady(second)) -
-        Number(!!first && entryReady(first)) ||
-      distance(first) - distance(second) ||
-      (a.fundCode || a.subjectId).localeCompare(b.fundCode || b.subjectId)
+      comparePriority(
+        planPriority(a, first?.track, first?.signal),
+        planPriority(b, second?.track, second?.signal),
+      ) || (a.fundCode || a.subjectId).localeCompare(b.fundCode || b.subjectId)
     );
   });
   return (
@@ -202,7 +185,7 @@ export default function QuantitativeScan({
       </summary>
       <p className="op-scan-description">
         代表池逐项扫描 · {timeLabel(scan.asOf)}
-        。技术成立且已入区优先，再按距买区由近及远排序；价格位置与技术条件分别展示。
+        。技术成立且已入区、非高位优先，再按机会优先分与风险收益比排序；分数不是盈利胜率。
       </p>
       <div
         className="op-scan-scroll"
@@ -217,6 +200,7 @@ export default function QuantitativeScan({
                 "基金 / 代码",
                 "最新披露净值",
                 "RSI14",
+                "机会分 / 盈亏比",
                 "买区与技术状态",
                 "建议买入区间",
                 "止损参考",

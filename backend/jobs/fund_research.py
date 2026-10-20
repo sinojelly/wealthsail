@@ -26,7 +26,7 @@ async def claim_fund_refresh(pool, *, owner, lease_seconds):
         row = await conn.fetchrow(
             """WITH candidate AS (
                 SELECT id FROM workflow.job_runs
-                WHERE (job_type = 'FUND_NAV_RANGE_FETCH'
+                WHERE (job_type IN ('FUND_NAV_RANGE_FETCH','FUND_UNIT_NAV_HISTORY_FETCH')
                     OR (job_type = 'INVESTMENT_RESEARCH_REFRESH' AND payload->>'kind' = 'fund'
                         AND EXISTS (SELECT 1 FROM reference.research_fund_catalog c
                             WHERE c.instrument_id::text = payload->>'id'
@@ -62,6 +62,11 @@ async def claim_fund_refresh(pool, *, owner, lease_seconds):
 
 
 async def _refresh_request(pool, settings, lease):
+    if lease.job_type == "FUND_UNIT_NAV_HISTORY_FETCH":
+        from backend.jobs.fund_nav_full_history import process_full_history_task
+
+        await process_full_history_task(pool, lease)
+        return
     if lease.job_type == "FUND_NAV_RANGE_FETCH":
         # Preserve the existing full-history accumulated-NAV range cache too.
         await process_data_task(pool, settings, lease)

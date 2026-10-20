@@ -166,7 +166,7 @@ it("puts a triggered buy zone before a geometric WATCH right-track zone, includi
     "000051",
     "161725",
   ]);
-  expect(rows[0]).toHaveTextContent("📈已入右侧买区");
+  expect(rows[0]).toHaveTextContent("📈 已入右侧趋势买区");
   expect(rows[1]).toHaveTextContent("价格近均线·待趋势触发");
   expect(rows[1].querySelector(".op-scan-hit")).toBeNull();
 });

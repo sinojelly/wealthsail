@@ -45,6 +45,16 @@ CORE_CODES = (
     "011103",
     "161725",
     "161726",
+    "006756",
+    "001361",
+    "001629",
+    "016185",
+    "018027",
+    "024194",
+    "007300",
+    "014880",
+    "000218",
+    "023530",
 )
 
 
@@ -123,9 +133,9 @@ def complete_history(code="008281", count=120):
     }
 
 
-def test_core_configuration_preserves_the_thirty_accepted_real_codes():
+def test_core_configuration_preserves_the_forty_accepted_real_codes():
     assert tuple(helper().CORE_FUND_CODES) == CORE_CODES
-    assert len(set(helper().CORE_FUND_CODES)) == 30
+    assert len(set(helper().CORE_FUND_CODES)) == 40
 
 
 def test_dynamic_themes_read_full_same_batch_text_and_reject_future_news():
@@ -160,7 +170,7 @@ def test_dynamic_themes_do_not_turn_social_aviation_and_daily_roundups_into_indu
 
 
 @pytest.mark.asyncio
-async def test_thirty_core_funds_are_not_displaced_by_ten_event_candidates(monkeypatch):
+async def test_forty_core_funds_are_not_displaced_by_six_event_candidates(monkeypatch):
     assert callable(getattr(discovery, "select_research_assets", None)), (
         "one shared collect/build selection function is required"
     )
@@ -173,10 +183,10 @@ async def test_thirty_core_funds_are_not_displaced_by_ten_event_candidates(monke
         catalog(f"980{i:03}", f"卫星ETF联接A{i}A") for i in range(20)
     ]
     selected = await discovery.select_research_assets(conn, NOW, [], [event("卫星")])
-    assert [row["fundCode"] for row in selected[:30]] == list(CORE_CODES)
-    assert len(selected) == 40
-    assert len({row["fundCode"] for row in selected}) == 40
-    assert all(row["fundCode"] not in CORE_CODES for row in selected[30:])
+    assert [row["fundCode"] for row in selected[:40]] == list(CORE_CODES)
+    assert len(selected) == 46
+    assert len({row["fundCode"] for row in selected}) == 46
+    assert all(row["fundCode"] not in CORE_CODES for row in selected[40:])
 
 
 @pytest.mark.asyncio
@@ -236,7 +246,7 @@ async def test_dynamic_selection_rotates_themes_instead_of_filling_one_theme():
     selected = await helper().read_dynamic_assets(
         conn, NOW, [event("卫星、中药、煤炭")], []
     )
-    assert len(selected) <= 10
+    assert len(selected) <= 6
     assert {row["fundCode"] for row in selected[:3]} >= {"981001", "981002"}
 
 
@@ -318,7 +328,7 @@ async def test_missing_core_identity_is_reported_without_synthesizing_a_mapping(
     assert coverage["coreFundCodes"] == ["008281"]
     assert set(coverage["coreMissingFundCodes"]) == set(CORE_CODES) - {"008281"}
     assert coverage["dynamicFundCodes"] == []
-    assert coverage["selectionLimit"] == 40
+    assert coverage["selectionLimit"] == 46
 
 
 @pytest.mark.asyncio

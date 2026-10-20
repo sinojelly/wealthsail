@@ -79,7 +79,12 @@ def test_validated_report_copies_every_actual_server_scan_item(count):
     )
     assert len(payload["quantitativeScan"]["items"]) == count
     first = payload["quantitativeScan"]["items"][0]
-    assert first["tracks"] == public["items"][0]["tracks"]
+    assert [
+        {key: track[key] for key in original}
+        for track, original in zip(
+            first["tracks"], public["items"][0]["tracks"], strict=True
+        )
+    ] == public["items"][0]["tracks"]
     assert first["signals"] == public["items"][0]["signals"]
     public["items"][0]["tracks"][0]["entryZoneMin"] = "99"
     assert first["tracks"][0]["entryZoneMin"] == "0.9900"

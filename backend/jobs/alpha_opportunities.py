@@ -574,7 +574,7 @@ def _morning_message(payload, day):
     )
 
 
-def _fund_message(rows, day):
+def _fund_message(rows, day, *, sell_risk_alerts=()):
     labels = {
         "UNKNOWN": "数据待核对",
         "STOP_LOSS": "触及冻结止损参考",
@@ -586,6 +586,19 @@ def _fund_message(rows, day):
         f"### 14:30 场外基金核对 · {day}",
         "当日估算净值非最终净值；仅提醒，不执行交易。",
     ]
+    if sell_risk_alerts:
+        lines.append("### 持仓/跟踪卖出与风控提醒")
+        risk_labels = {
+            "STOP_LOSS": "触及止损参考",
+            "TAKE_PROFIT_T2": "达到目标二参考",
+            "TAKE_PROFIT_T1": "达到目标一参考",
+            "RSI_OVERBOUGHT": "确认净值RSI14严重超买",
+        }
+        for alert in sell_risk_alerts:
+            line = f"{_text(alert.get('label'), 60)}({_text(alert.get('fundCode'), 12)})：{risk_labels[alert['state']]}；估算/确认参考 {_price_text(alert.get('value'), 'UNIT_NAV')} 元/份；观察 {_text(alert.get('asOf'), 40)}"
+            if alert.get("rsi14") is not None:
+                line += f"；确认序列RSI14 {_text(alert['rsi14'], 12)}（{_text(alert.get('rsiAsOf'), 12)}）"
+            lines.append(line)
     for row in rows:
         checked = row["check"]
         frozen = row["snapshot"]["actionablePlan"]
@@ -968,6 +981,58 @@ async def _daily_plan_rows(pool, now):
     return output
 
 
+async def _personal_risk_facts(pool, scope, now, *, quotes=False):
+    from backend.investment.sell_risk import load_risk_targets, confirmed_quotes
+
+    report = await _today_report(pool, now)
+    daily = (
+        {
+            "state": "READY",
+            "reportRunId": str(report["run_id"]),
+            "report": _body(report["payload"]),
+        }
+        if report
+        else None
+    )
+    async with tenant_transaction(pool, scope[1], scope[0]) as conn:
+        targets = await load_risk_targets(conn, scope[0], scope[1], now, daily=daily)
+        confirmed = await confirmed_quotes(conn, targets, now) if quotes else {}
+    return targets, confirmed
+
+
+def _risk_plan_row(target):
+    if not isinstance(target.get("plan"), dict):
+        return None
+    instrument = UUID(target["instrumentId"]) if target.get("instrumentId") else None
+    return {
+        "track_id": target.get("trackId") or "risk:" + target["fundCode"],
+        "version_id": target.get("versionId"),
+        "scope": {"fundCode": target["fundCode"], "fundMarket": "FUND_CN"},
+        "snapshot": {"actionablePlan": target["plan"]},
+        "instrument_id": instrument,
+        "fund_code": target["fundCode"],
+        "fund_name": target["label"],
+        "market": "FUND_CN",
+        "mapping_count": 1,
+        "trade_form": target["tradeForm"],
+        "asset_type": "OFF_EXCHANGE_FUND" if instrument else None,
+        "planOrigin": target["planOrigin"],
+        "source": "PERSONAL_HOLDING",
+        "reportRunId": target.get("reportRunId"),
+    }
+
+
+def _risk_quote(target, observation, now):
+    if not isinstance(observation, dict):
+        return None
+    return {
+        **observation,
+        "fundCode": observation.get("fundCode", target["fundCode"]),
+        "retrievedAt": now.isoformat(),
+        "usable": True,
+    }
+
+
 async def sync_alpha_opportunities(
     pool, settings, now=None, *, now_provider=now_shanghai, price_loader=None
 ):
@@ -1045,9 +1110,35 @@ async def sync_alpha_opportunities(
             )
             not in frozen_keys
         )
-        if not studies:
-            return "NO_ALERT", {"checked": 0}
-        prices = await (price_loader or load_opportunity_prices)(pool, studies, stamp)
+        initial_targets, _ = await _personal_risk_facts(pool, scope, stamp)
+        existing = {
+            (row["fund_code"], row["snapshot"]["actionablePlan"].get("selectedTrack"))
+            for row in studies
+        }
+        for target in initial_targets:
+            row = _risk_plan_row(target)
+            if (
+                row
+                and (
+                    row["fund_code"],
+                    row["snapshot"]["actionablePlan"].get("selectedTrack"),
+                )
+                not in existing
+            ):
+                studies.append(row)
+                existing.add(
+                    (
+                        row["fund_code"],
+                        row["snapshot"]["actionablePlan"].get("selectedTrack"),
+                    )
+                )
+        if not studies and not initial_targets:
+            return "NO_ALERT", {"checked": 0, "sellRiskAlerts": []}
+        prices = (
+            await (price_loader or load_opportunity_prices)(pool, studies, stamp)
+            if studies
+            else {}
+        )
         active = await _active(pool, scope)
         clock = _local(now_provider())
         if (
@@ -1056,6 +1147,76 @@ async def sync_alpha_opportunities(
             or not active
         ):
             return "EXPIRED", {"checked": 0}
+        from backend.investment.sell_risk import evaluate_sell_risk, _valid_quote
+
+        targets, confirmed = await _personal_risk_facts(pool, scope, clock, quotes=True)
+        current = {target["fundCode"]: target for target in targets}
+        latest_studies = await _read_studies(pool, scope, clock)
+        current_versions = {
+            (str(row["track_id"]), str(row["version_id"]))
+            for row in latest_studies
+            if _mapped_otc(row)
+            and _identity_matches(row, row["snapshot"]["actionablePlan"])
+        }
+        studies = [
+            row
+            for row in studies
+            if (
+                (
+                    row.get("planOrigin") != "FROZEN_STUDY"
+                    or (str(row["track_id"]), str(row.get("version_id")))
+                    in current_versions
+                )
+                and (
+                    row.get("source") != "PERSONAL_HOLDING"
+                    or row["fund_code"] in current
+                    and row["snapshot"]["actionablePlan"]
+                    == current[row["fund_code"]].get("plan")
+                )
+            )
+        ]
+        active = await _active(pool, scope)
+        clock = _local(now_provider())
+        if (
+            clock.date() != stamp.date()
+            or not time(14, 30) <= clock.time() < time(15)
+            or not active
+        ):
+            return "EXPIRED", {"checked": 0}
+        observed_by_code = {}
+        for row in studies:
+            observed = prices.get(str(row["track_id"]))
+            if observed is not None:
+                observed_by_code.setdefault(row["fund_code"], observed)
+        alerts, risk_estimates = [], []
+        for target in targets:
+            estimate = _risk_quote(
+                target, observed_by_code.get(target["fundCode"]), clock
+            )
+            alert = evaluate_sell_risk(
+                target,
+                confirmed=confirmed.get(target["fundCode"]),
+                estimate=estimate,
+                now=clock,
+            )
+            if alert:
+                alerts.append(alert)
+            if estimate and _valid_quote(estimate, target, clock, estimate=True):
+                risk_estimates.append(
+                    {
+                        **estimate,
+                        **{
+                            key: target.get(key)
+                            for key in (
+                                "trackId",
+                                "versionId",
+                                "reportRunId",
+                                "planOrigin",
+                                "plan",
+                            )
+                        },
+                    }
+                )
         rows = [
             {
                 **row,
@@ -1067,9 +1228,29 @@ async def sync_alpha_opportunities(
             }
             for row in studies
         ]
-        await send_opportunity_webhook(settings, _fund_message(rows, stamp.date()))
+        for row in rows:
+            if row["fund_code"] not in current and row["check"]["state"] in {
+                "STOP_LOSS",
+                "TAKE_PROFIT_T1",
+            }:
+                row["check"] = {
+                    **row["check"],
+                    "state": "WATCH",
+                    "reason": "UNOWNED_SELL_SUPPRESSED",
+                }
+        if not rows and not alerts:
+            return "NO_ALERT", {
+                "checked": 0,
+                "sellRiskAlerts": [],
+                "riskEstimates": risk_estimates,
+            }
+        await send_opportunity_webhook(
+            settings, _fund_message(rows, stamp.date(), sell_risk_alerts=alerts)
+        )
         return "SENT", {
             "checked": len(rows),
+            "sellRiskAlerts": alerts,
+            "riskEstimates": risk_estimates,
             "checks": [
                 {
                     "trackId": str(row["track_id"])

@@ -340,6 +340,9 @@ async def get_context(
         for plan in plans
     ):
         plans.append(selected_plan)
+    from backend.investment.sell_risk import sell_risk_alerts
+
+    sell_alerts = await sell_risk_alerts(conn, tenant_id, user_id, now, daily=daily)
     return {
         **base,
         **personal,
@@ -354,6 +357,7 @@ async def get_context(
         "marketCollection": collected,
         "selectionState": selection_state,
         "dailyResearch": daily,
+        "sellRiskAlerts": sell_alerts,
         "actionableZones": plans,
         "alphaPublic": {
             key: value

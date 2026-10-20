@@ -2424,3 +2424,250 @@
     display: none;
   }
 }
+
+/* Shared plan presentation: price evidence on the left, real unit NAV on the right. */
+.op-value-fund-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-width: 0;
+  container-type: inline-size;
+}
+.op-value-price-column {
+  min-width: 0;
+}
+.op-value-price-column > button {
+  border: 1px solid #8db8af;
+  background: #effbf6;
+  border-radius: 6px;
+  color: #075c4b;
+  padding: 9px 12px;
+  margin: 8px 0;
+  cursor: pointer;
+}
+.op-value-price-column > button:disabled {
+  cursor: default;
+  color: #526477;
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+}
+.op-value-fund {
+  container-type: inline-size;
+}
+@container (min-width: 680px) {
+  .op-value-fund-layout {
+    grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  }
+}
+.op-buy-zone-status {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 3px 6px;
+  margin: 4px 0 4px 7px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.op-buy-zone-status.tone-left {
+  background: #def3eb;
+  color: #076253;
+}
+.op-buy-zone-status.tone-right {
+  background: #edeaff;
+  color: #4f3a9c;
+}
+.op-buy-zone-status.tone-wait,
+.op-buy-zone-status.tone-high {
+  background: #fff4d9;
+  color: #8b530a;
+}
+.op-buy-zone-status.tone-away {
+  background: #f1f4f7;
+  color: #526477;
+}
+.op-nav-trend {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #e0e8ee;
+  border-radius: 8px;
+  padding: 10px;
+  box-sizing: border-box;
+  background: #fff;
+}
+.op-nav-trend > header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+}
+.op-nav-trend > header strong {
+  font-size: 12px;
+  color: #526477;
+}
+.op-nav-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-left: auto;
+}
+.op-nav-periods button {
+  padding: 4px 5px;
+  border: 0;
+  border-radius: 4px;
+  color: #526477;
+  background: #f0f4f7;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.op-nav-periods button[aria-pressed="true"] {
+  background: #dff5f0;
+  color: #066555;
+  font-weight: 650;
+}
+.op-nav-plot {
+  height: 220px;
+  min-width: 0;
+  width: 100%;
+  margin-top: 6px;
+}
+.op-nav-empty {
+  min-height: 185px;
+  display: grid;
+  place-items: center;
+  color: #64748b;
+  font-size: 12px;
+}
+.op-nav-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  color: #64748b;
+  font-size: 10px;
+}
+.op-nav-legend span::before {
+  display: inline-block;
+  width: 14px;
+  height: 4px;
+  margin-right: 4px;
+  content: "";
+  vertical-align: middle;
+}
+.op-nav-legend .buy::before {
+  background: #8edbcc;
+  height: 8px;
+}
+.op-nav-legend .stop::before {
+  border-top: 1px dashed #d14343;
+}
+.op-nav-legend .target::before {
+  border-top: 1px dashed #d97706;
+}
+.op-nav-trend .op-nav-summary,
+.op-nav-trend > small,
+.op-nav-trend > p[role="status"] {
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  color: #64748b;
+}
+.op-nav-retry {
+  border: 0;
+  text-decoration: underline;
+  background: none;
+  color: #086b60;
+  cursor: pointer;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 11px;
+}
+.op-personal-sell-alerts {
+  margin: 12px 18px;
+  padding: 12px 14px;
+  border: 1px solid #e7bb72;
+  border-radius: 8px;
+  background: #fffbef;
+  color: #734607;
+}
+.op-personal-sell-alerts h3 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.op-personal-sell-alerts article + article {
+  border-top: 1px solid #f0d7ab;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.op-personal-sell-alerts p {
+  margin: 5px 0;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.op-personal-sell-alerts p:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.op-personal-sell-alerts small {
+  font-size: 11px;
+}
+.op-personal-sell-alerts a {
+  color: inherit;
+  margin-left: 7px;
+}
+@media (max-width: 600px) {
+  .op-value-price-column > button {
+    width: 100%;
+  }
+  .op-nav-trend {
+    padding: 8px;
+  }
+  .op-personal-sell-alerts {
+    margin: 10px 12px;
+  }
+}
+@media print {
+  .op-nav-periods,
+  .op-nav-retry,
+  .op-value-price-column > button {
+    display: none !important;
+  }
+  .op-value-fund-layout {
+    display: block;
+    container-type: normal;
+  }
+  .op-value-fund {
+    container-type: normal;
+  }
+  .op-nav-trend {
+    break-inside: avoid;
+    margin-top: 8px;
+    padding: 5px;
+    border-radius: 4px;
+  }
+  .op-nav-plot {
+    height: 115px;
+  }
+  .op-nav-trend > header strong,
+  .op-nav-trend .op-nav-summary,
+  .op-nav-trend > small,
+  .op-nav-trend > p[role="status"] {
+    font-size: 8px;
+  }
+  .op-nav-legend {
+    font-size: 7.5px;
+    gap: 4px 8px;
+  }
+  .op-buy-zone-status {
+    font-size: 9px;
+    margin-left: 0;
+    padding: 1px 3px;
+  }
+  .op-personal-sell-alerts {
+    margin: 8px;
+    padding: 8px;
+  }
+}

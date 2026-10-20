@@ -110,7 +110,7 @@ async def test_packet_discloses_real_selected_history_and_price_coverage():
         "historyFundCodes": [],
         "pricedFundCodes": [],
         "sectorCodes": ["AI", "RESOURCE"],
-        "selectionLimit": 40,
+        "selectionLimit": 46,
     }
 
 

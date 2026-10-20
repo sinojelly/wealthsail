@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import timedelta
+from statistics import median
 import json
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -281,6 +282,10 @@ def _changes(points, frequency, code):
         "changeUnit": unit,
         "change3Months": None,
         "change6Months": None,
+        "change5Samples": None,
+        "change20Samples": None,
+        "median": None,
+        "percentile": None,
     }
     if not points or points[-1]["_number"] is None:
         return result
@@ -291,6 +296,50 @@ def _changes(points, frequency, code):
         if point["_basis"] == latest["_basis"] and point["_number"] is not None
     ]
     result["sampleCount"] = len(comparable)
+    if frequency == "DAILY":
+        if latest["state"] != "OBSERVED":
+            return result
+        run = []
+        for point in reversed(points):
+            if point["_basis"] != latest["_basis"] or point["_number"] is None:
+                break
+            run.append(point)
+        run.reverse()
+        result["sampleCount"] = len(run)
+        for distance, field in (
+            (1, "previousValue"),
+            (5, "change5Samples"),
+            (20, "change20Samples"),
+        ):
+            if len(run) > distance:
+                first = run[-distance - 1]["_number"]
+                result[field] = (
+                    float(first)
+                    if distance == 1
+                    else float(
+                        (latest["_number"] - first) * (100 if unit == "bp" else 1)
+                    )
+                )
+        if result["previousValue"] is not None:
+            result["periodChange"] = float(
+                (latest["_number"] - run[-2]["_number"]) * (100 if unit == "bp" else 1)
+            )
+        if len(run) >= 20:
+            values = [point["_number"] for point in run]
+            result["median"] = float(median(values))
+            result["percentile"] = (
+                100
+                * (
+                    sum(value < latest["_number"] for value in values)
+                    + 0.5 * sum(value == latest["_number"] for value in values)
+                )
+                / len(values)
+            )
+        for key in result:
+            if key not in {"changeUnit", "sampleCount"}:
+                finite = _number(result[key])
+                result[key] = float(finite) if finite is not None else None
+        return result
     if len(points) >= 2:
         previous = points[-2]
         prior, current = _day(previous["date"]), _day(latest["date"])

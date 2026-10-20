@@ -22,7 +22,7 @@ def public_quantitative_scan(value, now):
         or stamp is None
         or stamp > now
         or not isinstance(rows, list)
-        or len(rows) > 40
+        or len(rows) > 46
     ):
         raise ValueError("invalid quantitative scan version or time")
     items, seen, identities = [], set(), set()
@@ -165,15 +165,23 @@ def report_with_quantitative_scan(report, packet, now):
     if not isinstance(report, dict):
         return report
     result = deepcopy(report)
-    if "quantitativeScan" in result:
-        return result
     stamp = _stamp(report.get("asOf"))
     if stamp is None or stamp > now or not isinstance(packet, dict):
         return result
-    try:
-        scan = public_quantitative_scan(packet.get("quantitativeScan"), stamp)
-    except (ValueError, TypeError):
-        scan = None
-    if scan is not None:
-        result["quantitativeScan"] = scan
-    return result
+    if "quantitativeScan" not in result:
+        try:
+            scan = public_quantitative_scan(packet.get("quantitativeScan"), stamp)
+        except (ValueError, TypeError):
+            scan = None
+        if scan is not None:
+            result["quantitativeScan"] = scan
+    from backend.investment.opportunity_scoring import rank_report
+    from backend.macro.model_projection import readable_fund_codes, known_company_names
+
+    codes = {
+        row.get("fundCode")
+        for row in (result.get("quantitativeScan") or {}).get("items", [])
+    }
+    return readable_fund_codes(
+        rank_report(result, packet), codes, known_company_names(packet)
+    )

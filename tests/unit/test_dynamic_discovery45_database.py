@@ -27,8 +27,8 @@ pytestmark = [
 async def connect():
     target = urlsplit(DSN)
     assert target.hostname in {"127.0.0.1", "localhost"}
-    assert target.port == 55434
-    assert target.path == "/wealthsail_review45_validation_v1"
+    assert target.port in {55434, 55436}
+    assert target.path in {"/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1"}
     return await asyncpg.connect(DSN)
 
 

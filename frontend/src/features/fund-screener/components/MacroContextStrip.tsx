@@ -1,3 +1,4 @@
+import SellRiskAlerts from "./SellRiskAlerts";
 import { useId, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import type {
@@ -260,6 +261,7 @@ export default function MacroContextStrip({
         )}
       </header>
       {renderResearchRefresh?.()}
+      <SellRiskAlerts data={ready?.sellRiskAlerts} />
       {confirmedBreach && (
         <p role="alert" className="op-confirmed-risk">
           已确认持仓风险预算超限。市场双轨计划继续独立展示；请先核对个人持仓与风险预算。{" "}

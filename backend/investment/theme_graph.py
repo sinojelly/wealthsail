@@ -396,7 +396,7 @@ async def collect_theme_nav_histories(
             if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
                 continue
             if code not in selected:
-                if len(selected) >= 40:
+                if len(selected) >= 46:
                     continue
                 selected[code] = {
                     "asset_code": code,

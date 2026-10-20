@@ -1,3 +1,5 @@
+import FundNavTrendChart from "./FundNavTrendChart";
+import { buyZoneStatus } from "../opportunity-display";
 import type {
   ActionableZoneResult,
   PlanPrice,
@@ -179,6 +181,10 @@ export default function ActionablePlan({
 }) {
   const price = (value: PlanPrice | undefined) => planPrice(value, result);
   const unit = planUnit(result.unit);
+  const selected = result.tracks.find(
+    (row) => row.track === (result.selectedTrack ?? result.track),
+  );
+  const status = selected ? buyZoneStatus(result, selected) : null;
   return (
     <section
       className="op-actionable-plan"
@@ -205,6 +211,11 @@ export default function ActionablePlan({
           {price(result.currentPrice)} {unit}
         </span>{" "}
         · {timeLabel(result.asOf)}
+        {status && (
+          <span className={`op-buy-zone-status tone-${status.tone}`}>
+            {status.text}
+          </span>
+        )}
       </p>
       {planTimeBasisNote(result) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(result)}</p>
@@ -255,6 +266,13 @@ export default function ActionablePlan({
           </article>
         ))}
       </div>
+      {result.priceBasis === "UNIT_NAV" &&
+        /^\d{6}$/.test(result.fundCode ?? result.subjectId) && (
+          <FundNavTrendChart
+            fundCode={result.fundCode ?? result.subjectId}
+            track={selected}
+          />
+        )}
       <details>
         <summary>价格依据与算法</summary>
         <ActionablePlanEvidence result={result} showConditions={false} />

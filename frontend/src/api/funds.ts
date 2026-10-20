@@ -49,12 +49,7 @@ export async function searchFunds(keyword: string): Promise<FundNavRange[]> {
 
 /** 快速筛选类别：缓存浏览，不触发抓取。 */
 export type FundBrowseCategory =
-  | "stable"
-  | "growth"
-  | "index"
-  | "overseas"
-  | "undervalued"
-  | "near_high";
+  "stable" | "growth" | "index" | "overseas" | "undervalued" | "near_high";
 
 export async function browseFunds(
   category: FundBrowseCategory,
@@ -106,7 +101,13 @@ export function fmtPercent(value: number | string | null): string {
 /** 当前分位的五档语义标签（20% 一档，含下界不含上界，顶部档含 100）。 */
 export function percentileBand(
   value: number | string | null,
-): "接近历史底部" | "历史偏低" | "历史中位" | "历史偏高" | "接近历史顶部" | null {
+):
+  | "接近历史底部"
+  | "历史偏低"
+  | "历史中位"
+  | "历史偏高"
+  | "接近历史顶部"
+  | null {
   const parsed = toNumber(value);
   if (parsed == null) return null;
   if (parsed < 20) return "接近历史底部";
@@ -147,4 +148,49 @@ export function fmtDateSlash(value: string | null): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}/${month}/${day}`;
+}
+
+export type FundNavPeriod = "6m" | "1y" | "2y" | "all";
+export interface FundNavHistory {
+  methodVersion: "fund-unit-nav-trend-v1";
+  fundCode: string;
+  fundName: string;
+  period: FundNavPeriod;
+  priceBasis: "UNIT_NAV";
+  unit: string;
+  state: "READY" | "PARTIAL" | "NOT_COLLECTED" | "UNAVAILABLE";
+  asOf: string | null;
+  retrievedAt: string | null;
+  sourceUri: string | null;
+  points: Array<{ date: string; unitNav: string }>;
+  coverage: {
+    startDate: string | null;
+    endDate: string | null;
+    fullHistory: boolean;
+    requestedStartDate: string | null;
+    sampleCount: number;
+  };
+  summary: {
+    minimumNav: string | null;
+    maximumNav: string | null;
+    currentNav: string | null;
+    percentilePct: number | null;
+    percentileMethod: string;
+  };
+  refresh: {
+    state: "IDLE" | "QUEUED" | "RUNNING" | "FAILED";
+    runId: string | null;
+    pollAfterMs: number | null;
+  };
+}
+export async function getFundNavHistory(
+  code: string,
+  period: FundNavPeriod,
+  signal?: AbortSignal,
+): Promise<FundNavHistory> {
+  const envelope = await request<FundNavHistory>(
+    `/v1/funds/${encodeURIComponent(code)}/nav-history?period=${period}`,
+    { signal },
+  );
+  return envelope.data;
 }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, status
 
 from backend.common.database import Pool, tenant_transaction
@@ -74,5 +76,28 @@ async def fetch_fund_range(
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         data = await service.enqueue_fetch(
             conn, tenant_id=ctx.tenant_id, fund_code=fund_code
+        )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.get("/{fund_code}/nav-history")
+async def fund_nav_history(
+    fund_code: str,
+    period: Literal["6m", "1y", "2y", "all"] = Query(default="1y"),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Read disclosed NAV; insufficient depth queues bounded Worker work."""
+    from backend.funds.nav_history import get_nav_history
+
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await get_nav_history(
+            conn,
+            fund_code,
+            period,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            now=now_shanghai(),
         )
     return ok(data, request_id=request_id, as_of=now_shanghai())

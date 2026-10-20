@@ -1,3 +1,9 @@
+import FundNavTrendChart from "./FundNavTrendChart";
+import {
+  bestDirectionPriority,
+  buyZoneStatus,
+  comparePriority,
+} from "../opportunity-display";
 import { useState } from "react";
 import type {
   ActionableZoneResult,
@@ -148,13 +154,7 @@ function FundPlan({
   const track = plan.tracks.find((item) => item.track === selected);
   const price = (value: number | string | null | undefined) =>
     planPrice(value, plan);
-  const current = Number(plan.currentPrice);
-  const inZone =
-    plan.currentPrice != null &&
-    track?.entryZoneMin != null &&
-    track.entryZoneMax != null &&
-    current >= Number(track.entryZoneMin) &&
-    current <= Number(track.entryZoneMax);
+  const status = buyZoneStatus(plan, track);
   const canTrack =
     !!reportRunId &&
     !!onTrack &&
@@ -193,81 +193,82 @@ function FundPlan({
       <h4>
         {readingText(fundDisplayName(plan.label, code), 70)} <span>{code}</span>
       </h4>
-      <p className="op-value-current">
-        {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
-        <span className="op-price-amount">
-          <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
-        </span>
-        {inZone && track?.state === "CANDIDATE" && (
-          <span className="op-value-hit">已进入观察买入区</span>
-        )}
-        {inZone && track?.state === "WATCH" && (
+      <div className="op-value-fund-layout">
+        <div className="op-value-price-column">
+          <p className="op-value-current">
+            {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
+            <span className="op-price-amount">
+              <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
+            </span>
+            <span className={`op-buy-zone-status tone-${status.tone}`}>
+              {status.text}
+            </span>
+          </p>
+          {track ? (
+            <dl className="op-value-prices">
+              <div>
+                <dt>建议买入区间</dt>
+                <dd>
+                  {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
+                </dd>
+              </div>
+              <div className="op-value-stop">
+                <dt>止损参考</dt>
+                <dd>{price(track.stopLossPrice)}</dd>
+              </div>
+              <div>
+                <dt>止盈目标一</dt>
+                <dd>{price(track.takeProfitT1)}</dd>
+              </div>
+              <div>
+                <dt>止盈目标二</dt>
+                <dd>{price(track.takeProfitT2)}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p>等待真实价格依据</p>
+          )}
           <small>
-            {selected === "RIGHT_TREND"
-              ? "价格近均线·待趋势触发"
-              : "已处左侧参考区·待条件触发"}
+            {timeLabel(plan.asOf)} ·{" "}
+            {selected === "LEFT_VALUE" ? "左侧" : "右侧"}
+            研究坐标
           </small>
+          {planTimeBasisNote(plan) && (
+            <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
+          )}
+          <PlanRevision plan={plan} />
+          {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
+            <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
+          )}
+          {plan.subjectKind === "index" && (
+            <small>指数点位用于指数研究，基金提醒须使用基金净值。</small>
+          )}
+          {canTrack && (
+            <button
+              type="button"
+              disabled={state !== "idle"}
+              aria-label={`${state === "saved" ? "已跟踪" : "跟踪该方向与买卖点"} · ${code}`}
+              onClick={() => void save()}
+            >
+              {state === "saved"
+                ? "已跟踪"
+                : state === "pending"
+                  ? "保存中…"
+                  : "跟踪该方向与买卖点"}
+            </button>
+          )}
+          {error && <p role="alert">{error}</p>}
+          <details>
+            <summary>查看技术指标与算法依据</summary>
+            <ActionablePlanEvidence
+              result={{ ...plan, tracks: track ? [track] : plan.tracks }}
+            />
+          </details>
+        </div>
+        {plan.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
+          <FundNavTrendChart fundCode={code} track={track} />
         )}
-      </p>
-      {track ? (
-        <dl className="op-value-prices">
-          <div>
-            <dt>建议买入区间</dt>
-            <dd>
-              {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
-            </dd>
-          </div>
-          <div className="op-value-stop">
-            <dt>止损参考</dt>
-            <dd>{price(track.stopLossPrice)}</dd>
-          </div>
-          <div>
-            <dt>止盈目标一</dt>
-            <dd>{price(track.takeProfitT1)}</dd>
-          </div>
-          <div>
-            <dt>止盈目标二</dt>
-            <dd>{price(track.takeProfitT2)}</dd>
-          </div>
-        </dl>
-      ) : (
-        <p>等待真实价格依据</p>
-      )}
-      <small>
-        {timeLabel(plan.asOf)} · {selected === "LEFT_VALUE" ? "左侧" : "右侧"}
-        研究坐标
-      </small>
-      {planTimeBasisNote(plan) && (
-        <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
-      )}
-      <PlanRevision plan={plan} />
-      {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
-        <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
-      )}
-      {plan.subjectKind === "index" && (
-        <small>指数点位用于指数研究，基金提醒须使用基金净值。</small>
-      )}
-      {canTrack && (
-        <button
-          type="button"
-          disabled={state !== "idle"}
-          aria-label={`${state === "saved" ? "已跟踪" : "跟踪该方向与买卖点"} · ${code}`}
-          onClick={() => void save()}
-        >
-          {state === "saved"
-            ? "已跟踪"
-            : state === "pending"
-              ? "保存中…"
-              : "跟踪该方向与买卖点"}
-        </button>
-      )}
-      {error && <p role="alert">{error}</p>}
-      <details>
-        <summary>查看技术指标与算法依据</summary>
-        <ActionablePlanEvidence
-          result={{ ...plan, tracks: track ? [track] : plan.tracks }}
-        />
-      </details>
+      </div>
     </article>
   );
 }
@@ -283,7 +284,14 @@ export default function ValueDirections({
 }) {
   const report = data?.report;
   if (!report) return null;
-  const directions = report.valueDirections;
+  const directions = report.valueDirections
+    ? [...report.valueDirections].sort((a, b) =>
+        comparePriority(
+          bestDirectionPriority(a.plans),
+          bestDirectionPriority(b.plans),
+        ),
+      )
+    : undefined;
   return (
     <section
       key={data?.reportRunId ?? report.asOf ?? "no-report"}

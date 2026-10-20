@@ -35,9 +35,19 @@ CORE_FUND_CODES = (
     "011103",
     "161725",
     "161726",
+    "006756",
+    "001361",
+    "001629",
+    "016185",
+    "018027",
+    "024194",
+    "007300",
+    "014880",
+    "000218",
+    "023530",
 )
-SELECTION_LIMIT = 40
-DYNAMIC_LIMIT = 10
+SELECTION_LIMIT = 46
+DYNAMIC_LIMIT = 6
 
 # These are name-search hints, not certified holdings or product-index links.
 _THEMES = (

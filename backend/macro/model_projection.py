@@ -167,7 +167,7 @@ def model_packet(packet):
             **_pick(
                 scan, ("methodVersion", "asOf", "coverage", "minimumHistorySamples")
             ),
-            "items": [_plan(row) for row in scan.get("items", [])[:40]],
+            "items": [_plan(row) for row in scan.get("items", [])[:46]],
         }
     else:
         # Old contract packets do not have the unified scan yet.
@@ -218,7 +218,7 @@ def model_packet(packet):
         if key not in seen:
             seen.add(key)
             prior.append(_plan(row))
-    result["previousFundPlans"] = prior[:40]
+    result["previousFundPlans"] = prior[:46]
     return result
 
 
@@ -231,8 +231,8 @@ def separate_fund_codes(text, codes):
     }
     if not valid:
         return text
-    # Thirteen-digit runs in old prose sometimes contain a spurious joining '5'.
-    pattern = re.compile(r"(?<![0-9.])([0-9]{6})(?:5)?([0-9]{6})(?![0-9.])")
+    # Thirteen-digit runs may contain one spurious joining digit between known codes.
+    pattern = re.compile(r"(?<![0-9.])([0-9]{6})(?:[0-9])?([0-9]{6})(?![0-9.])")
 
     def repair(match):
         first, second = match.groups()
@@ -250,11 +250,28 @@ def separate_fund_codes(text, codes):
     return pattern.sub(repair, text)
 
 
-def readable_fund_codes(value, codes):
+def known_company_names(packet):
+    rows = [
+        *(packet.get("alphaPublic") or {}).get("catalysts", []),
+        *packet.get("documents", []),
+    ]
+    text = " ".join(
+        str(row.get(key) or "")
+        for row in rows
+        if isinstance(row, dict)
+        for key in ("title", "content", "summary", "quote")
+    )
+    return tuple(name for name in ("云南锗业", "云南锡业", "云南铜业") if name in text)
+
+
+def readable_fund_codes(value, codes, company_names=()):
     if isinstance(value, str):
-        return separate_fund_codes(value, codes)
+        result = separate_fund_codes(value, codes)
+        if len(company_names) == 1:
+            result = re.sub(r"云南\s+业", company_names[0], result)
+        return result
     if isinstance(value, list):
-        return [readable_fund_codes(item, codes) for item in value]
+        return [readable_fund_codes(item, codes, company_names) for item in value]
     if isinstance(value, dict):
         # Identity, URLs and precise prices must never be rewritten.
         narrative = {
@@ -272,7 +289,7 @@ def readable_fund_codes(value, codes):
             "calibrationNote",
         }
         return {
-            key: readable_fund_codes(item, codes)
+            key: readable_fund_codes(item, codes, company_names)
             if key in narrative
             or isinstance(item, dict)
             or isinstance(item, list)

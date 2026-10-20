@@ -38,7 +38,7 @@ export function timeLabel(raw?: string | null) {
   if (!raw) return "未确认";
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const parts = raw.split("-").map(Number);
-    return `${parts[0]}年${parts[1]}月${parts[2]}日（时刻未提供）`;
+    return `${parts[0]}年${parts[1]}月${parts[2]}日`;
   }
   const day = new Date(raw);
   if (!Number.isFinite(day.getTime())) return "未确认";

@@ -31,9 +31,9 @@ def guard():
     url = urlsplit(DSN)
     assert (
         url.hostname == "127.0.0.1"
-        and url.port == 55434
+        and url.port in {55434, 55436}
         and url.path
-        in {"/wealthsail_review44_validation_v1", "/wealthsail_review45_validation_v1"}
+        in {"/wealthsail_review44_validation_v1", "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1"}
     )
 
 

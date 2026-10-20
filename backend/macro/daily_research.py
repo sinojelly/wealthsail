@@ -16,6 +16,7 @@ from backend.macro.model_projection import (
     model_packet,
     separate_fund_codes as separate_fund_codes,
     readable_fund_codes,
+    known_company_names,
 )
 from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
 from backend.macro.value_directions import (
@@ -25,7 +26,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-value-directions-v8"
+PROMPT_VERSION = "daily-research-value-directions-v9"
 MAX_REPORT_SOURCES = 24
 
 
@@ -508,7 +509,7 @@ def _nav_collection_results(rows, now):
         if retrieved is not None and retrieved <= now:
             item["retrievedAt"] = retrieved.isoformat()
         result[code] = item
-        if len(result) == 40:
+        if len(result) == 46:
             break
     return result
 
@@ -825,7 +826,7 @@ def build_prompt(packet):
         "输入出现金融重磅会议时，将政策议程关联到券商与银行等实际敏感环节；出现地缘升级时，比较黄金与油气的避险/供需传导及各自技术位置，可在同一方向选互补的1至2只基金。只依据输入真实线索与基金锚点；尚缺技术触发时用WATCH保留完整价格计划和可观察条件。\n"
         "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
         "每只基金可选价格轨道取quantitativeScan.items[].signals，WATCH也选择其中已有完整价格的轨道；技术state与当前inEntryZone分开表述；某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道，不将缺一条轨道扩大为整只基金无价格。\n"
-        "扫描包含30核心底座和最多10只按本轮新闻从全市场主数据新增的热点基金；优先匹配真实事件，不受旧30限制。entryReady才表示技术条件成立且价格入区；右轨WATCH即使inEntryZone=true，也只能说价格近均线、待趋势触发，不能称已入右侧买区。全部净值/买区/止损/T1/T2/备选轨/技术依据由Python在输出后按所选标的和轨道复制，不输出或重抄数值，不编短历史。\n"
+        "扫描包含40核心底座和最多6只按本轮新闻从全市场主数据新增的热点基金；优先匹配真实事件，不受旧30限制。entryReady才表示技术条件成立且价格入区；右轨WATCH即使inEntryZone=true，也只能说价格近均线、待趋势触发，不能称已入右侧买区。全部净值/买区/止损/T1/T2/备选轨/技术依据由Python在输出后按所选标的和轨道复制，不输出或重抄数值，不编短历史。\n"
         "dynamicNavSourceResults保留本轮逐基金采集样本数、缓存复用和失败原因；SUCCESS只表示取得真实记录，五条短历史不等于可定价READY，最终以quantitativeScan中的完整价格锚点为准。\n"
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"
@@ -861,7 +862,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     report = _Report.model_validate(raw).model_dump()
     _safe_narrative(report)
     report = readable_fund_codes(
-        report, {row.get("fundCode") for row in packet.get("discoveryUniverse", [])}
+        report,
+        {row.get("fundCode") for row in packet.get("discoveryUniverse", [])},
+        known_company_names(packet),
     )
     directions = {row["id"] for row in packet.get("directions", [])}
     sources, aliases, original = {}, {}, {}
@@ -983,21 +986,26 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     from backend.investment.quantitative_scan import public_quantitative_scan
 
     scan = public_quantitative_scan(packet.get("quantitativeScan"), completed_at)
-    return {
-        **report,
-        **({"quantitativeScan": scan} if scan is not None else {}),
-        "methodVersion": VERSION,
-        "asOf": completed_at.isoformat(),
-        "sources": sorted(sources.values(), key=lambda r: r["id"]),
-        "events": sorted(events.values(), key=lambda r: r["id"]),
-        "upcoming": sorted(upcoming.values(), key=lambda r: r["id"]),
-        "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
-        "valueDirections": value_directions,
-        "actionablePlans": [
-            plan for direction in value_directions for plan in direction["plans"]
-        ]
-        + legacy_plans,
-    }
+    from backend.investment.opportunity_scoring import rank_report
+
+    return rank_report(
+        {
+            **report,
+            **({"quantitativeScan": scan} if scan is not None else {}),
+            "methodVersion": VERSION,
+            "asOf": completed_at.isoformat(),
+            "sources": sorted(sources.values(), key=lambda r: r["id"]),
+            "events": sorted(events.values(), key=lambda r: r["id"]),
+            "upcoming": sorted(upcoming.values(), key=lambda r: r["id"]),
+            "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
+            "valueDirections": value_directions,
+            "actionablePlans": [
+                plan for direction in value_directions for plan in direction["plans"]
+            ]
+            + legacy_plans,
+        },
+        packet,
+    )
 
 
 def _unique_object(pairs):

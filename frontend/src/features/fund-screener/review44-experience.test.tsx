@@ -193,7 +193,7 @@ it("shows the actual scan size, sorts entered then nearest and tracks only froze
     "008975",
     "270042",
   ]);
-  expect(rows[0]).toHaveTextContent("🎯已入左侧买区");
+  expect(rows[0]).toHaveTextContent("🎯 已入左侧低吸买区");
   expect(rows[0]).toHaveTextContent("38.25");
   for (const value of ["0.9800", "1.0200", "0.9000", "1.1200", "1.2000"])
     expect(rows[0]).toHaveTextContent(value);

@@ -114,6 +114,6 @@ export function planTimeBasisNote(
   result: Pick<ActionableZoneResult, "priceTimeBasis">,
 ): string | null {
   return result.priceTimeBasis === "LATEST_DISCLOSED_NAV"
-    ? "最新披露净值参考，存在跨市场发布延迟；不是当日估值。"
+    ? "最新披露净值参考，存在跨市场发布延迟；不是当日估值，请留意最新外盘冲击。"
     : null;
 }
