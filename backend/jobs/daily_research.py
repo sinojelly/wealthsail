@@ -148,12 +148,6 @@ async def load_public_packet(conn, now, external, *, debug_request_id=None):
         external.get("etfFlowSignals", {}),
         now,
     )
-    from backend.investment.opportunity_scoring import rank_report
-
-    if isinstance(packet.get("quantitativeScan"), dict):
-        packet["quantitativeScan"] = rank_report(
-            {"quantitativeScan": packet["quantitativeScan"]}, packet
-        )["quantitativeScan"]
     return packet
 
 
