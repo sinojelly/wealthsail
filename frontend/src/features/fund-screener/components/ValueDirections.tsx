@@ -14,6 +14,8 @@ import {
 } from "../macro-display";
 import {
   fundDisplayName,
+  entryAllowed,
+  planEntryStatus,
   planPrice,
   planTimeBasisNote,
   planUnit,
@@ -149,6 +151,8 @@ function FundPlan({
   const price = (value: number | string | null | undefined) =>
     planPrice(value, plan);
   const current = Number(plan.currentPrice);
+  const status = planEntryStatus(plan, track);
+  const allowed = entryAllowed(plan, track);
   const inZone =
     plan.currentPrice != null &&
     track?.entryZoneMin != null &&
@@ -192,16 +196,30 @@ function FundPlan({
     >
       <h4>
         {readingText(fundDisplayName(plan.label, code), 70)} <span>{code}</span>
+        {plan.subscriptionLabel && (
+          <span className="op-subscription-restricted">
+            {plan.subscriptionLabel}
+          </span>
+        )}
       </h4>
       <p className="op-value-current">
         {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
         <span className="op-price-amount">
           <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
         </span>
-        {inZone && track?.state === "CANDIDATE" && (
+        {status && (
+          <span
+            className={
+              status.warning ? "op-entry-warning" : "op-entry-position"
+            }
+          >
+            {status.text}
+          </span>
+        )}
+        {!status && allowed && inZone && track?.state === "CANDIDATE" && (
           <span className="op-value-hit">已进入观察买入区</span>
         )}
-        {inZone && track?.state === "WATCH" && (
+        {!status && inZone && track?.state === "WATCH" && (
           <small>
             {selected === "RIGHT_TREND"
               ? "价格近均线·待趋势触发"

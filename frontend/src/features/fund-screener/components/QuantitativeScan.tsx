@@ -11,6 +11,8 @@ import {
   planPrice,
   planTimeBasisNote,
   entryReady,
+  entryAllowed,
+  planEntryStatus,
 } from "../plan-display";
 import { timeLabel } from "../macro-display";
 
@@ -21,6 +23,13 @@ export interface QuantScanTrackInput {
   planTrack: PlanTrack;
 }
 type Signal = QuantitativeScanItem["signals"][number];
+function ready(
+  item: QuantitativeScanItem,
+  signal: Signal,
+  track?: ActionableZoneTrack,
+) {
+  return entryReady(signal) && entryAllowed(item, track);
+}
 function preferred(item: QuantitativeScanItem) {
   return item.signals
     .flatMap((signal) => {
@@ -31,7 +40,8 @@ function preferred(item: QuantitativeScanItem) {
     })
     .sort(
       (a, b) =>
-        Number(entryReady(b.signal)) - Number(entryReady(a.signal)) ||
+        Number(ready(item, b.signal, b.track)) -
+          Number(ready(item, a.signal, a.track)) ||
         distance(a.signal) - distance(b.signal) ||
         a.track.track.localeCompare(b.track.track),
     )[0];
@@ -57,6 +67,8 @@ function ScanRow({
   const chosen = preferred(item);
   const track = chosen?.track;
   const signal = chosen?.signal;
+  const status = planEntryStatus(item, track, signal);
+  const isReady = !status && !!signal && ready(item, signal, track);
   const code = item.fundCode || item.subjectId;
   const [state, setState] = useState<"idle" | "pending" | "saved">("idle");
   const [error, setError] = useState("");
@@ -104,6 +116,11 @@ function ScanRow({
     <tr data-fund-code={code}>
       <th scope="row">
         <strong>{fundDisplayName(item.label, code)}</strong>
+        {item.subscriptionLabel && (
+          <span className="op-subscription-restricted">
+            {item.subscriptionLabel}
+          </span>
+        )}
         <small>{code}</small>
         {planTimeBasisNote(item) && <small>{planTimeBasisNote(item)}</small>}
       </th>
@@ -117,18 +134,23 @@ function ScanRow({
           : "—"}
       </td>
       <td>
-        <span className={signal && entryReady(signal) ? "op-scan-hit" : ""}>
-          {signal && entryReady(signal)
-            ? track?.track === "LEFT_VALUE"
-              ? "🎯已入左侧买区"
-              : "📈已入右侧买区"
-            : signal?.inEntryZone
-              ? track?.track === "RIGHT_TREND"
-                ? "价格近均线·待趋势触发"
-                : "已处左侧参考区·待条件触发"
-              : Number.isFinite(distance(signal))
-                ? `⏳距买区 ${distance(signal).toFixed(2)}%`
-                : "价格依据待补齐"}
+        <span
+          className={
+            status?.warning ? "op-entry-warning" : isReady ? "op-scan-hit" : ""
+          }
+        >
+          {status?.text ??
+            (isReady
+              ? track?.track === "LEFT_VALUE"
+                ? "🎯已入左侧买区"
+                : "📈已入右侧买区"
+              : signal?.inEntryZone
+                ? track?.track === "RIGHT_TREND"
+                  ? "价格近均线·待趋势触发"
+                  : "已处左侧参考区·待条件触发"
+                : Number.isFinite(distance(signal))
+                  ? `⏳距买区 ${distance(signal).toFixed(2)}%`
+                  : "价格依据待补齐")}
         </span>
         {track && (
           <small>
@@ -182,12 +204,13 @@ export default function QuantitativeScan({
   const scan = data?.report?.quantitativeScan;
   if (!scan?.items.length) return null;
   const rows = [...scan.items].sort((a, b) => {
-    const first = preferred(a)?.signal;
-    const second = preferred(b)?.signal;
+    const first = preferred(a);
+    const second = preferred(b);
     return (
-      Number(!!second && entryReady(second)) -
-        Number(!!first && entryReady(first)) ||
-      distance(first) - distance(second) ||
+      Number(!!a.subscriptionRestricted) - Number(!!b.subscriptionRestricted) ||
+      Number(!!second && ready(b, second.signal, second.track)) -
+        Number(!!first && ready(a, first.signal, first.track)) ||
+      distance(first?.signal) - distance(second?.signal) ||
       (a.fundCode || a.subjectId).localeCompare(b.fundCode || b.subjectId)
     );
   });

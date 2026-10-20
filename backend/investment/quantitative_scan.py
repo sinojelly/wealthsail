@@ -160,20 +160,20 @@ def public_quantitative_scan(value, now):
 
 def report_with_quantitative_scan(report, packet, now):
     """An old READY report may read only its own dispatch's public scan."""
-    from backend.macro.daily_research import _stamp
+    from backend.macro.daily_research import _stamp, apply_entry_guards
 
     if not isinstance(report, dict):
         return report
     result = deepcopy(report)
-    if "quantitativeScan" in result:
-        return result
     stamp = _stamp(report.get("asOf"))
     if stamp is None or stamp > now or not isinstance(packet, dict):
         return result
+    if "quantitativeScan" in result:
+        return apply_entry_guards(result, packet, stamp)
     try:
         scan = public_quantitative_scan(packet.get("quantitativeScan"), stamp)
     except (ValueError, TypeError):
         scan = None
     if scan is not None:
         result["quantitativeScan"] = scan
-    return result
+    return apply_entry_guards(result, packet, stamp)

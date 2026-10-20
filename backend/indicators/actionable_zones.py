@@ -11,7 +11,7 @@ from decimal import (
 import math
 from statistics import pstdev
 
-VERSION = "actionable-zones-v3"
+VERSION = "actionable-zones-v4"
 PARAMETERS = {
     "ma": [20, 60, 200],
     "rsi": 14,
@@ -22,7 +22,12 @@ PARAMETERS = {
     "maximumMA200Gap": -0.08,
     "oversoldRSI": 38,
     "bollingerProximity": 1.02,
-    "maximumTrendRSI": 75,
+    "maximumTrendRSI": 60,
+    "navPercentileWindow": 220,
+    "maximumNavPercentile": 85,
+    "maximumHighNavMA20Ratio": 1.02,
+    "trendEntryLowScale": 0.55,
+    "trendEntryHighScale": 0.25,
     "navAbsoluteChangeWindow": 14,
     "navAbsoluteChangeMultiplier": 1.4,
     "navStdWindow": 20,
@@ -97,9 +102,7 @@ def _zone(kind, values, close, *, places, nav_scale=False):
         return result, ["入场参考区间缺少有效收盘、MA20或布林带。"]
     if scale is None:
         minimum, maximum = (
-            (lower, min(close, ma20))
-            if kind == "LEFT_VALUE"
-            else (ma20, max(close, ma20))
+            (lower, min(close, ma20)) if kind == "LEFT_VALUE" else (ma20, ma20)
         )
         result["priceState"] = "PARTIAL"
         reasons.append("缺少连续真实高低价，保留均线/布林参考区间；止损和目标未计算。")
@@ -111,8 +114,8 @@ def _zone(kind, values, close, *, places, nav_scale=False):
             )
             if kind == "LEFT_VALUE"
             else (
-                ma20 - Decimal("0.2") * scale,
-                max(close, ma20 + Decimal("0.6") * scale),
+                ma20 - Decimal("0.55") * scale,
+                ma20 + Decimal("0.25") * scale,
             )
         )
         result["priceState"] = "READY"
@@ -233,6 +236,26 @@ def compute_actionable_price_plan(
     closes = [float(_number(point["close"])) for point in suffix]
     close = _number(suffix[-1]["close"]) if suffix else None
     values, states = {}, {}
+    nav_basis = price_basis == "UNIT_NAV" and str(subject_kind).lower() in {
+        "nav",
+        "fund",
+    }
+    # A short series cannot stand in for a year of trading observations. Use
+    # the same valid suffix and observation cutoff as every other indicator.
+    values["navPercentile1y"] = (
+        sum(value <= closes[-1] for value in closes[-220:]) / 220 * 100
+        if nav_basis and len(closes) >= 220
+        else None
+    )
+    states["navPercentile1y"] = {
+        "state": "READY"
+        if values["navPercentile1y"] is not None
+        else "INSUFFICIENT"
+        if nav_basis
+        else "NOT_APPLICABLE",
+        "sampleCount": min(len(closes), 220),
+        "requiredSamples": 220,
+    }
     for period in (20, 60, 200):
         key = f"ma{period}"
         values[key] = (
@@ -386,10 +409,17 @@ def compute_actionable_price_plan(
             values["momentum20"] > 0 if values["momentum20"] is not None else None,
         ),
         (
-            "Wilder RSI14低于75",
-            values["rsi14"] < 75 if values["rsi14"] is not None else None,
+            "Wilder RSI14不高于60",
+            values["rsi14"] <= 60 if values["rsi14"] is not None else None,
         ),
     ]
+    high_nav = (
+        values["navPercentile1y"] is not None
+        and values["navPercentile1y"] >= 85
+        and close is not None
+        and values["ma20"] is not None
+        and close > Decimal(str(values["ma20"])) * Decimal("1.02")
+    )
     tracks = []
     for kind, conditions in (
         ("LEFT_VALUE", left_conditions),
@@ -397,7 +427,9 @@ def compute_actionable_price_plan(
     ):
         known = [value for _, value in conditions if value is not None]
         candidate = (
-            any(known) if kind == "LEFT_VALUE" else len(known) == 3 and all(known)
+            any(known)
+            if kind == "LEFT_VALUE"
+            else len(known) == 3 and all(known) and not high_nav
         )
         state = (
             "INSUFFICIENT"
@@ -408,7 +440,7 @@ def compute_actionable_price_plan(
             if (
                 len(known) == len(conditions)
                 if kind == "LEFT_VALUE"
-                else any(value is False for value in known)
+                else high_nav or any(value is False for value in known)
             )
             else "INSUFFICIENT"
         )
@@ -423,12 +455,47 @@ def compute_actionable_price_plan(
             nav_scale=values["navVolatility14"] is not None,
         )
         missing = [name for name, value in conditions if value is None]
+        low, high = (_number(zone[key]) for key in ("entryZoneMin", "entryZoneMax"))
+        blocked = kind == "RIGHT_TREND" and high_nav
+        in_zone = (
+            close is not None
+            and low is not None
+            and high is not None
+            and low <= close <= high
+        )
+        entry = {
+            "technicalTriggered": state == "CANDIDATE",
+            "inBuyZone": in_zone and not blocked,
+            "entryReady": state == "CANDIDATE"
+            and in_zone
+            and zone["priceState"] == "READY"
+            and not blocked,
+            "entryBlocked": blocked,
+        }
+        if blocked:
+            entry.update(
+                entryBlockReason="HIGH_NAV_PERCENTILE",
+                entryStatus=f"⚠️ 处于近1年高位区({values['navPercentile1y']:.0f}%分位)·勿追高",
+                entryStatusTone="amber",
+            )
+            reasons.append(entry["entryStatus"])
+        elif (
+            kind == "RIGHT_TREND"
+            and close is not None
+            and high is not None
+            and close > high
+        ):
+            entry.update(
+                entryStatus=f"🚀 高于买区 {(close / high - 1) * 100:.2f}%·等待回踩均线",
+                entryStatusTone="amber",
+            )
         tracks.append(
             {
                 "track": kind,
                 "state": state,
                 "candidate": state == "CANDIDATE",
                 **zone,
+                **entry,
                 "asOf": _day(suffix[-1]["date"]).isoformat() if suffix else None,
                 "reasons": [
                     name + ("：满足" if value else "：未触发")

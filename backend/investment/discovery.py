@@ -140,6 +140,8 @@ def _industry_order(assets):
 
 def _public_universe(rows):
     """Only unambiguous public OTC identities cross the research boundary."""
+    from backend.jobs.opportunity_market import normalize_subscription_status
+
     products, identities, bad_codes, bad_identities = {}, {}, set(), set()
     for row in rows:
         if not isinstance(row, dict) or row.get("market") != "FUND_CN":
@@ -183,6 +185,13 @@ def _public_universe(rows):
                 "overseasCalendarRequired": row.get("overseasCalendarRequired") is True,
             },
         )
+        subscription = normalize_subscription_status(row.get("subscriptionStatus"))
+        if subscription is not None:
+            products[code].update(
+                subscriptionStatus=subscription,
+                subscriptionRestricted=subscription["restricted"],
+                subscriptionLabel=subscription["label"],
+            )
         sector = row.get("discoverySector")
         if isinstance(sector, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", sector):
             products[code].update(
@@ -256,6 +265,18 @@ def discovery_packet(universe, anchors, previous, now):
                     market="FUND_CN",
                     fundCode=product["fundCode"],
                     label=product["label"],
+                    overseasCalendarRequired=product["overseasCalendarRequired"],
+                )
+                result.update(
+                    {
+                        field: deepcopy(product[field])
+                        for field in (
+                            "subscriptionStatus",
+                            "subscriptionRestricted",
+                            "subscriptionLabel",
+                        )
+                        if field in product
+                    }
                 )
         return result
 
@@ -637,8 +658,23 @@ async def build_discovery_packet(
     from copy import deepcopy
     from backend.investment.theme_graph import nav_plan, _calendar_proof
     from backend.investment import service
+    from backend.jobs.opportunity_market import read_fund_subscription_status
 
     universe = await select_research_assets(conn, now, themes, catalysts)
+    subscriptions = await read_fund_subscription_status(
+        conn, now, [row["fundCode"] for row in universe]
+    )
+    universe = [
+        {
+            **asset,
+            **(
+                {"subscriptionStatus": subscriptions[asset["fundCode"]]}
+                if asset["fundCode"] in subscriptions
+                else {}
+            ),
+        }
+        for asset in universe
+    ]
     histories = await _cached_histories(
         conn, [row["fundCode"] for row in universe], now
     )
@@ -705,6 +741,7 @@ async def build_discovery_packet(
         if plan:
             anchors.append(plan)
     result = discovery_packet(universe, anchors, previous, now)
+    result["fundSubscriptionStatus"] = subscriptions
     selected = [row["fundCode"] for row in universe]
     priced = {
         row.get("fundCode")

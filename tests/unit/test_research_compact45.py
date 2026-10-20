@@ -140,6 +140,33 @@ def test_compact_model_packet_uses_one_price_table_without_mutating_the_audit_pa
     assert json.dumps(full, sort_keys=True) == original
 
 
+def test_compact_model_input_keeps_entry_guards_and_subscription_limits():
+    raw = scan(1)
+    row = raw["items"][0]
+    row.update(
+        subscriptionRestricted=True,
+        subscriptionLabel="⛔ 单日限购10元",
+        subscriptionStatus={"purchaseStatus": "LIMITED", "dailyLimitCny": "10"},
+        preferredEntryEligible=False,
+        isDelayedNav=True,
+        entryBlocked=True,
+        entryStatus="⚠️ 净值滞后1天·当晚外盘急跌暂缓入场",
+        entryStatusTone="amber",
+    )
+    row["indicators"]["navPercentile1y"] = 95
+    row["tracks"][0].update(entryReady=False, inBuyZone=False, entryBlocked=True)
+    compact = research.model_packet({"quantitativeScan": raw})
+    result = compact["quantitativeScan"]["items"][0]
+    assert result.get("subscriptionRestricted") is True
+    assert result.get("subscriptionStatus", {}).get("dailyLimitCny") == "10"
+    assert result.get("subscriptionLabel") == "⛔ 单日限购10元"
+    assert result.get("preferredEntryEligible") is False
+    assert result.get("entryBlocked") is True
+    assert result.get("entryStatus") == "⚠️ 净值滞后1天·当晚外盘急跌暂缓入场"
+    assert result["indicators"].get("navPercentile1y") == 95
+    assert result["tracks"][0].get("entryReady") is False
+
+
 def test_repair_only_separates_two_known_fund_codes_and_preserves_identifiers_and_amounts():
     codes = {"018344", "004854", "000051", "000962"}
     assert (

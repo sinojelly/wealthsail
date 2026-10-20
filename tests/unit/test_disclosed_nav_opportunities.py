@@ -96,6 +96,9 @@ def test_disclosure_proof_does_not_admit_conflicting_future_stale_or_wrong_ident
     result = theme_graph.nav_plan(history, now=NOW)
     assert result["historyQuality"] != "READY"
     assert all(t["entryZoneMin"] is None for t in result["tracks"])
+    assert all(t.get("technicalTriggered") is False for t in result["tracks"])
+    assert all(t.get("entryReady") is False for t in result["tracks"])
+    assert all(t.get("inBuyZone") is False for t in result["tracks"])
 
 
 def test_quantitative_scan_keeps_technical_trigger_distinct_from_inside_entry_zone():

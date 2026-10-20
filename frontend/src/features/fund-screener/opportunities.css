@@ -2260,6 +2260,34 @@
   border-top: 1px solid var(--op-line);
   min-width: 0;
 }
+
+.op-subscription-restricted,
+.op-entry-warning,
+.op-entry-position {
+  display: inline-block;
+  max-width: 100%;
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.op-value-fund h4 .op-subscription-restricted,
+.op-subscription-restricted {
+  color: #a62626;
+  background: #fff0f0;
+  border: 1px solid #efbaba;
+}
+.op-entry-warning {
+  color: #8a4b08;
+  background: #fff4dc;
+  border: 1px solid #e6ba65;
+}
+.op-entry-position {
+  color: var(--op-muted);
+}
 .op-debug-refresh button {
   border: 1px solid var(--op-teal);
   border-radius: 6px;

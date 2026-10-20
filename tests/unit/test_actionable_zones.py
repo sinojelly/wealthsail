@@ -191,11 +191,11 @@ def test_future_tail_is_excluded_at_explicit_observation_date_without_mutating_i
 def test_reference_and_full_price_formulas_keep_original_anchors():
     plan = calculate(points([100] * 200))
     right = track(plan, "RIGHT_TREND")
-    assert Decimal(right["entryZoneMin"]) == Decimal("99.6")
-    assert Decimal(right["entryZoneMax"]) == Decimal("101.2")
-    assert Decimal(right["stopLossPrice"]) == Decimal("95.6")
-    assert Decimal(right["takeProfitT1"]) == Decimal("107.60")
-    assert Decimal(right["takeProfitT2"]) == Decimal("111.92")
+    assert Decimal(right["entryZoneMin"]) == Decimal("98.9")
+    assert Decimal(right["entryZoneMax"]) == Decimal("100.5")
+    assert Decimal(right["stopLossPrice"]) == Decimal("94.9")
+    assert Decimal(right["takeProfitT1"]) == Decimal("106.90")
+    assert Decimal(right["takeProfitT2"]) == Decimal("111.22")
     no_atr = track(calculate(points([100] * 200, ohlc=False)), "RIGHT_TREND")
     assert Decimal(no_atr["entryZoneMin"]) == Decimal(no_atr["entryZoneMax"]) == 100
     assert no_atr["priceState"] == "PARTIAL"
@@ -297,7 +297,7 @@ def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
             "takeProfitT1",
             "takeProfitT2",
         )
-    ] == ["0.9976", "1.0072", "0.9760", "1.0420", "1.0658"]
+    ] == ["0.9934", "1.0030", "0.9760", "1.0315", "1.0540"]
 
 
 @pytest.mark.parametrize(
@@ -418,3 +418,122 @@ def test_rounding_cannot_hide_an_inverted_original_reference_range():
     left = track(plan, "LEFT_VALUE")
     assert left["priceState"] == "INVALID"
     assert left["entryZoneMin"] is left["entryZoneMax"] is None
+
+
+@pytest.mark.parametrize("ohlc", [True, False])
+def test_right_pullback_zone_does_not_expand_to_a_rising_latest_nav(ohlc):
+    plan = nav_calculate(points([1 + i * 0.001 for i in range(200)], ohlc=ohlc))
+    right = track(plan, "RIGHT_TREND")
+    # The NAV-only risk floor is 0.0144; real OHLC here has ATR=2.
+    if not ohlc:
+        assert right["entryZoneMin"] == "1.1816"
+        assert right["entryZoneMax"] == "1.1931"
+        assert right.get("inBuyZone") is False
+        assert right.get("entryReady") is False
+        assert right.get("entryStatus") == "🚀 高于买区 0.49%·等待回踩均线"
+    else:
+        assert right["entryZoneMin"] == "0.0895"
+        assert right["entryZoneMax"] == "1.6895"
+
+
+def test_right_pullback_without_risk_scale_is_ma20_only_even_above_it():
+    right = track(calculate(points(range(100, 300), ohlc=False)), "RIGHT_TREND")
+    assert right["entryZoneMin"] == right["entryZoneMax"] == "289.50"
+    assert right.get("inBuyZone") is False
+    assert right.get("entryStatus") == "🚀 高于买区 3.28%·等待回踩均线"
+
+
+def test_real_atr_pullback_upper_bound_stays_below_a_rising_price():
+    right = track(calculate(points(range(100, 300))), "RIGHT_TREND")
+    assert right["entryZoneMin"] == "288.40"
+    assert right["entryZoneMax"] == "290.00"
+    assert right.get("inBuyZone") is False
+    assert right.get("entryStatus") == "🚀 高于买区 3.10%·等待回踩均线"
+
+
+def test_right_trend_rsi_above_sixty_cannot_trigger_even_below_seventy():
+    plan = calculate(points([100 + i * 0.2 + (1 if i % 2 else 0) for i in range(200)]))
+    assert 60 < plan["indicators"]["rsi14"] < 70
+    right = track(plan, "RIGHT_TREND")
+    assert right["state"] == "WATCH"
+    assert right.get("technicalTriggered") is False
+    assert right.get("entryReady") is False
+
+
+def test_yearly_high_nav_blocks_trend_despite_moderate_rsi():
+    plan = nav_calculate(points([1] * 200 + [1.10, 1.16] * 10, ohlc=False))
+    assert plan["indicators"]["rsi14"] < 60
+    assert plan["indicators"].get("navPercentile1y") == 100
+    right = track(plan, "RIGHT_TREND")
+    assert right["state"] == "WATCH"
+    assert right.get("entryBlocked") is True
+    assert right.get("entryBlockReason") == "HIGH_NAV_PERCENTILE"
+    assert right.get("entryStatus") == "⚠️ 处于近1年高位区(100%分位)·勿追高"
+    assert right.get("entryStatusTone") == "amber"
+    assert right.get("entryReady") is False
+
+
+def test_yearly_percentile_requires_220_contiguous_samples_and_ignores_older_points():
+    short = nav_calculate(points([1] * 219, ohlc=False))
+    assert short["indicators"].get("navPercentile1y") is None
+    assert (
+        short["indicatorStates"].get("navPercentile1y", {}).get("state")
+        == "INSUFFICIENT"
+    )
+    plan = nav_calculate(points([100] * 10 + list(range(1, 221)), ohlc=False))
+    assert plan["indicators"].get("navPercentile1y") == 100
+    broken = points([1] * 240, ohlc=False)
+    broken[-220]["close"] = None
+    assert nav_calculate(broken)["indicators"].get("navPercentile1y") is None
+
+
+def test_high_percentile_close_to_ma20_does_not_block_normal_pullback():
+    plan = nav_calculate(points([1] * 220, ohlc=False))
+    assert plan["indicators"].get("navPercentile1y") == 100
+    right = track(plan, "RIGHT_TREND")
+    assert right.get("entryBlocked") is False
+    assert right.get("inBuyZone") is True
+
+
+@pytest.mark.parametrize("earlier_highs,blocked", [(33, True), (34, False)])
+def test_nav_high_position_guard_includes_eighty_fifth_percentile(
+    earlier_highs, blocked
+):
+    plan = nav_calculate(
+        points(
+            [2] * earlier_highs + [1] * (200 - earlier_highs) + [1.10, 1.16] * 10,
+            ohlc=False,
+        )
+    )
+    right = track(plan, "RIGHT_TREND")
+    assert right.get("entryBlocked") is blocked
+    assert right["state"] == ("WATCH" if blocked else "CANDIDATE")
+
+
+def test_nav_high_position_guard_requires_strictly_more_than_two_percent_above_ma20():
+    plan = nav_calculate(points([0.9] * 200 + [1] * 18 + [0.98, 1.02], ohlc=False))
+    assert plan["indicators"]["ma20"] == 1
+    assert plan["indicators"]["navPercentile1y"] == 100
+    assert track(plan, "RIGHT_TREND").get("entryBlocked") is False
+
+
+def test_yearly_percentile_respects_explicit_cutoff_before_a_future_high():
+    rows = points(list(range(1, 221)) + [10000], ohlc=False)
+    plan = engine().compute_actionable_price_plan(
+        rows,
+        subject_kind="nav",
+        subject_id="161129",
+        price_basis="UNIT_NAV",
+        as_of=rows[-2]["date"],
+    )
+    assert plan["currentPrice"] == "220.0000"
+    assert plan["indicators"]["navPercentile1y"] == 100
+
+
+def test_right_trend_accepts_rsi_exactly_sixty_when_other_conditions_hold():
+    closes = [100]
+    for change in [3, -2] * 7 + [0] * 6:
+        closes.append(closes[-1] + change)
+    plan = calculate(points(closes))
+    assert plan["indicators"]["rsi14"] == 60
+    assert track(plan, "RIGHT_TREND").get("technicalTriggered") is True

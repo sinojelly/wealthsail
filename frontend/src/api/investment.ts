@@ -349,7 +349,14 @@ export interface MarketEvidence {
 }
 export type PlanTrack = "LEFT_VALUE" | "RIGHT_TREND";
 export type PlanPrice = number | string | null;
-export interface ActionableZoneTrack {
+export interface EntrySafety {
+  entryStatus?: string | null;
+  entryStatusTone?: string | null;
+  entryBlocked?: boolean;
+  entryReady?: boolean;
+  inBuyZone?: boolean;
+}
+export interface ActionableZoneTrack extends EntrySafety {
   track: PlanTrack;
   state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
   candidate?: boolean;
@@ -362,7 +369,7 @@ export interface ActionableZoneTrack {
   priceState: string;
   missingEvidence?: string[];
 }
-export interface ActionableZoneResult {
+export interface ActionableZoneResult extends EntrySafety {
   methodVersion: string;
   subjectKind: "index" | "fund" | "nav";
   subjectId: string;
@@ -390,16 +397,28 @@ export interface ActionableZoneResult {
   valueDirectionTitle?: string | null;
   volatilityMethod?: string | null;
   market?: "FUND_CN" | "SSE" | null;
+  subscriptionRestricted?: boolean;
+  subscriptionLabel?: string | null;
+  subscriptionStatus?: {
+    purchaseStatus: string;
+    dailyLimitCny: string | null;
+    restricted: boolean;
+    label: string | null;
+    retrievedAt?: string;
+  };
+  preferredEntryEligible?: boolean;
 }
 export interface QuantitativeScanItem extends ActionableZoneResult {
-  signals: Array<{
-    track: PlanTrack;
-    triggerState: "CANDIDATE" | "WATCH";
-    inEntryZone: boolean;
-    candidate?: boolean;
-    entryReady?: boolean;
-    distanceToEntryPct: number;
-  }>;
+  signals: Array<
+    EntrySafety & {
+      track: PlanTrack;
+      triggerState: "CANDIDATE" | "WATCH";
+      inEntryZone: boolean;
+      candidate?: boolean;
+      entryReady?: boolean;
+      distanceToEntryPct: number;
+    }
+  >;
   discoverySector?: string;
   historyQuality?: string;
   historySampleCount?: number;
