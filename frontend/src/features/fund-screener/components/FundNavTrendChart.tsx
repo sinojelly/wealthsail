@@ -33,7 +33,7 @@ function Trend({
   fundCode: string;
   track?: ActionableZoneTrack;
 }) {
-  const [period, setPeriod] = useState<FundNavPeriod>("1y");
+  const [period, setPeriod] = useState<FundNavPeriod>("2y");
   const { data, loading, failed, exhausted, retry } = useFundNavHistory(
     fundCode,
     period,

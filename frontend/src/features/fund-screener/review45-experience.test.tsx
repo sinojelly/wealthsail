@@ -194,6 +194,34 @@ it("keeps a WATCH direction from displaying an active buy-zone badge and binds t
   );
 });
 
+it("keeps the confirmed NAV date beside its amount instead of using the report date", () => {
+  const data = daily();
+  const nav = plan("161725");
+  nav.currentPrice = "1.7401";
+  nav.asOf = "2026-10-20";
+  data.report!.valueDirections = [
+    {
+      key: "consumer",
+      title: "消费",
+      thesis: "研究",
+      signal: "WATCH",
+      sourceIds: [],
+      macroCodes: [],
+      watchFor: [],
+      plans: [nav],
+    },
+  ];
+  render(<ValueDirections data={data} />);
+  const amount = screen
+    .getByRole("article", { name: /买卖计划/ })
+    .querySelector(".op-price-amount")!;
+  expect(amount).toHaveTextContent("1.7401 元/份 (10.20)");
+  expect(within(amount as HTMLElement).getByText("(10.20)")).toHaveAttribute(
+    "dateTime",
+    "2026-10-20",
+  );
+});
+
 it("explains the new reward-risk floors without leaking an internal basis code", () => {
   render(
     <ActionablePlanEvidence

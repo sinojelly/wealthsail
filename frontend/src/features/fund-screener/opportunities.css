@@ -1328,6 +1328,14 @@
 .op-observation-meta small {
   overflow-wrap: anywhere;
 }
+.op-observation-next-run {
+  display: block;
+  padding: 0 20px 12px;
+  color: var(--op-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .op-observation-header > .op-daily-summary {
   margin: 0;
   padding: 4px 20px 12px;
@@ -1575,6 +1583,10 @@
 @media (max-width: 600px) {
   .op-observation-meta {
     padding: 0 12px;
+  }
+  .op-observation-next-run {
+    padding-right: 12px;
+    padding-left: 12px;
   }
   .op-observation-header > .op-daily-summary {
     padding-left: 12px;

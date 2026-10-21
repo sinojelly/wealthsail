@@ -5,6 +5,9 @@ import { timeLabel } from "../macro-display";
 
 const LIMIT = 35 * 60 * 1000;
 const active = (status?: string) => status === "QUEUED" || status === "RUNNING";
+const pending = (request?: api.DebugResearchRequest | null) =>
+  active(request?.status) ||
+  (request?.status === "UNCERTAIN" && request.completedAt == null);
 interface Props {
   actor: string;
   onReady?: () => void;
@@ -28,27 +31,24 @@ function RefreshControl({ actor, onReady }: Props) {
     refetchOnWindowFocus: false,
   });
   const current = submitted ?? capability.data?.request;
-  const started = Date.parse(current?.requestedAt ?? "");
-  const expired =
-    !!current &&
-    active(current.status) &&
-    (!Number.isFinite(started) ||
-      openedAt - started >= LIMIT ||
-      timedOut === current.id);
   const status = useQuery({
     queryKey: [actor, "daily-research-debug-status", current?.id],
     queryFn: ({ signal }) => api.getResearchRefreshStatus(current!.id, signal),
-    enabled:
-      capability.data?.enabled === true &&
-      !!current &&
-      active(current.status) &&
-      !expired,
-    refetchInterval: (query) =>
-      active(query.state.data?.status ?? current?.status) ? 3000 : false,
+    enabled: capability.data?.enabled === true && !!current && pending(current),
+    refetchInterval: (query) => {
+      const value = query.state.data ?? current;
+      return active(value?.status) ? 3000 : pending(value) ? 15000 : false;
+    },
     retry: false,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
   });
   const result = status.data?.id === current?.id ? status.data : current;
+  const started = Date.parse(result?.startedAt ?? "");
+  const expired =
+    !!result &&
+    active(result.status) &&
+    Number.isFinite(started) &&
+    (openedAt - started >= LIMIT || timedOut === result.id);
   const busy = !!result && active(result.status) && !expired;
   useEffect(() => {
     if (!current || !active(result?.status) || !Number.isFinite(started))
@@ -108,7 +108,7 @@ function RefreshControl({ actor, onReady }: Props) {
       )}
       {expired && active(result?.status) ? (
         <p role="status">
-          超过35分钟，执行结果待确认。保留上一份有效报告，可检查后台后显式重新运行。
+          超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，可显式重新运行。
         </p>
       ) : result?.status === "QUEUED" || result?.status === "RUNNING" ? (
         <p role="status">
@@ -124,7 +124,10 @@ function RefreshControl({ actor, onReady }: Props) {
         </p>
       ) : result?.status === "UNCERTAIN" ? (
         <p role="status">
-          执行结果待确认：{safeError}。保留上一份有效报告，不自动重跑模型。
+          执行结果待确认：{safeError}。
+          {result.completedAt
+            ? "本次执行已结束，保留上一份有效报告，可显式重新运行。"
+            : "正在继续查询后台结果，保留上一份有效报告，不自动重跑模型。"}
         </p>
       ) : null}
       {status.isError && (

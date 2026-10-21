@@ -112,7 +112,7 @@ class Cache:
         return self.operator
 
     async def fetchrow(self, sql, *args):
-        if "INSERT INTO workflow.job_runs" in sql:
+        if "enqueue_fund_nav_chart_fetch" in sql:
             self.jobs.append(args)
             return {"id": "job47", "status": "PENDING"}
         return None
@@ -311,3 +311,31 @@ async def test_freshly_checked_qdii_disclosures_are_not_stale_because_nav_is_del
     )
     assert result["state"] == "READY" and result["asOf"] == "2026-10-16"
     assert result["refresh"]["state"] == "IDLE" and store.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_deeper_period_requeue_uses_controlled_api_write_path():
+    """The API can invoke its narrow helper, but cannot reset worker leases."""
+    from asyncpg import InsufficientPrivilegeError
+
+    class ApiCache(Cache):
+        async def fetchrow(self, sql, *args):
+            if "UPDATE workflow.job_runs" in sql:
+                raise InsufficientPrivilegeError("permission denied for table job_runs")
+            if "enqueue_fund_nav_chart_fetch" in sql:
+                self.jobs.append(args)
+                return {"id": "job47", "status": "PENDING", "reason": None}
+            if "FROM workflow.job_runs" in sql:
+                return {
+                    "id": "job47",
+                    "status": "COMPLETED",
+                    "finished_at": NOW - timedelta(hours=2),
+                }
+            return None
+
+    store = ApiCache(research=history())
+    result = await module().get_nav_history(
+        store, "008281", "all", tenant_id="t", user_id="u", now=NOW
+    )
+    assert result["points"][-1]["unitNav"] == "3"
+    assert result["refresh"]["state"] == "QUEUED"

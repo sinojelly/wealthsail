@@ -165,6 +165,7 @@ function FundPlan({
     track.entryZoneMin != null &&
     track.entryZoneMax != null;
   const code = plan.fundCode || plan.subjectId;
+  const navDay = plan.asOf?.match(/^\d{4}-(\d{2})-(\d{2})(?:$|T)/);
   async function save() {
     if (!canTrack || !reportRunId || !onTrack || !selected || state !== "idle")
       return;
@@ -205,6 +206,17 @@ function FundPlan({
             {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
             <span className="op-price-amount">
               <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
+              {plan.priceBasis === "UNIT_NAV" && navDay && (
+                <>
+                  {" "}
+                  <time
+                    dateTime={plan.asOf ?? undefined}
+                    title={`净值日期：${timeLabel(plan.asOf)}`}
+                  >
+                    ({navDay[1]}.{navDay[2]})
+                  </time>
+                </>
+              )}
             </span>
             <span className={buyZoneClassName(status)}>{status.text}</span>
           </p>

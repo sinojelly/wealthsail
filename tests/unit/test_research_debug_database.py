@@ -47,7 +47,8 @@ async def fixture(*, committed=False):
                 "/wealthsail_review08_validation_v1",
                 "/wealthsail_review09_validation_v1",
                 "/wealthsail_review44_validation_v1",
-                "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
+                "/wealthsail_review45_validation_v1",
+                "/wealthsail_review48_validation_v1",
             }
         )
     )
@@ -315,6 +316,41 @@ async def test_claim_revalidates_operator_and_expired_running_request_is_never_r
                 UUID(invalid["id"]),
             )
             == "FAILED"
+        )
+
+
+@pytest.mark.parametrize("proof", ["matching", "other_request", "unfinished"])
+async def test_late_ready_requires_the_original_requests_completed_report(proof):
+    async with fixture() as (conn, tenant, owner, other):
+        initial = await enqueue(conn, tenant, owner)
+        identity = UUID(initial["id"])
+        await conn.execute(
+            "UPDATE research.daily_research_refresh_requests SET status='RUNNING',started_at=$2 WHERE id=$1",
+            identity,
+            NOW,
+        )
+        report_request = identity
+        if proof == "other_request":
+            report_request = UUID((await enqueue(conn, tenant, other))["id"])
+        batch, report = await batch_and_report(conn, report_request)
+        if proof == "unfinished":
+            await conn.execute(
+                "DELETE FROM research.daily_research_results WHERE run_id=$1",
+                report["run_id"],
+            )
+        finished = NOW + timedelta(minutes=36)
+        await repo.finish_refresh(
+            conn,
+            identity,
+            finished,
+            status="READY",
+            batch_id=batch["id"],
+            report_run_id=report["run_id"],
+        )
+        actual = await repo.read_refresh(conn, tenant, owner, identity, finished)
+        assert actual["status"] == ("READY" if proof == "matching" else "UNCERTAIN")
+        assert actual["reportRunId"] == (
+            str(report["run_id"]) if proof == "matching" else None
         )
 
 

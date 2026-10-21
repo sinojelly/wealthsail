@@ -106,17 +106,75 @@ it("stops polling and requests current results after READY", async () => {
   expect(onReady).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "重新采集并分析" })).toBeEnabled();
 });
-it("does not poll a request beyond the 35 minute uncertainty limit", async () => {
+it("rechecks an old running request and recovers the server's completed report", async () => {
   vi.mocked(api.getResearchRefresh).mockResolvedValue({
     enabled: true,
     request: {
       ...request("RUNNING"),
       requestedAt: "2020-01-01T00:00:00Z",
+      startedAt: "2020-01-01T00:00:01Z",
+    } as never,
+  });
+  vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(
+    request("READY") as never,
+  );
+  const onReady = vi.fn();
+  renderWithSession(<DailyResearchRefresh actor="owner-a" onReady={onReady} />);
+  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(api.getResearchRefreshStatus).toHaveBeenCalledWith(
+    "debug-1",
+    expect.anything(),
+  );
+  expect(api.startResearchRefresh).not.toHaveBeenCalled();
+  expect(onReady).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
+});
+
+it("checks an uncertain server request again without restarting the model", async () => {
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: {
+      ...request("UNCERTAIN"),
+      errorClass: "ExecutionWindowExpired",
+    } as never,
+  });
+  vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(
+    request("READY") as never,
+  );
+  renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(api.startResearchRefresh).not.toHaveBeenCalled();
+});
+
+it("does not keep polling a terminal uncertain execution", async () => {
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: {
+      ...request("UNCERTAIN"),
+      completedAt: new Date().toISOString(),
+      errorClass: "TimeoutError",
     } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  expect(await screen.findByText(/超过35分钟.*待确认/)).toBeVisible();
+  expect(await screen.findByText(/执行结果待确认.*TimeoutError/)).toBeVisible();
   expect(api.getResearchRefreshStatus).not.toHaveBeenCalled();
+});
+
+it("counts execution from the worker start rather than time spent queued", async () => {
+  const running = {
+    ...request("RUNNING"),
+    requestedAt: "2020-01-01T00:00:00Z",
+    startedAt: new Date().toISOString(),
+  };
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: running as never,
+  });
+  vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(running as never);
+  renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "重新采集并分析" })).toBeDisabled();
+  expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
 });
 
 it("keeps a completed report terminal beyond its original waiting deadline", async () => {

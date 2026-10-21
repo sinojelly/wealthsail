@@ -259,54 +259,27 @@ async def _refresh_state(conn, code, tenant_id, user_id, now):
             "pollAfterMs": 2000,
             "reason": "OPERATOR_REQUIRED",
         }
-    key = f"fund-unit-nav-history:{code}"
-    async with conn.transaction():
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}:{key}"
-        )
-        existing = await conn.fetchrow(
-            """SELECT id,status,finished_at FROM workflow.job_runs WHERE tenant_id=$1 AND job_key=$2""",
-            tenant_id,
-            key,
-        )
-        if existing and existing["status"] in {"PENDING", "RUNNING"}:
-            return {
-                "state": "RUNNING" if existing["status"] == "RUNNING" else "QUEUED",
-                "runId": str(existing["id"]),
-                "pollAfterMs": 2000,
-            }
-        if (
-            existing
-            and existing.get("finished_at")
-            and now - existing["finished_at"] < timedelta(hours=1)
-        ):
-            return {
-                "state": "FAILED",
-                "runId": str(existing["id"]),
-                "pollAfterMs": 2000,
-                "reason": "SOURCE_COOLDOWN",
-            }
-        payload = json.dumps({"fundCode": code, "requestedBy": str(user_id)})
-        if existing:
-            row = await conn.fetchrow(
-                """UPDATE workflow.job_runs SET status='PENDING',available_at=$3,started_at=NULL,finished_at=NULL,error_class=NULL,next_retry_at=NULL,attempt_count=0,lease_token=NULL,lease_owner=NULL,lease_until=NULL,heartbeat_at=NULL,payload=$4::jsonb WHERE id=$1 AND tenant_id=$2 RETURNING id,status""",
-                existing["id"],
-                tenant_id,
-                now,
-                payload,
-            )
-        else:
-            row = await conn.fetchrow(
-                """INSERT INTO workflow.job_runs(tenant_id,job_key,status,job_type,payload,available_at) VALUES($1,$2,'PENDING','FUND_UNIT_NAV_HISTORY_FETCH',$3::jsonb,$4) RETURNING id,status""",
-                tenant_id,
-                key,
-                payload,
-                now,
-            )
-    return {"state": "QUEUED", "runId": str(row["id"]), "pollAfterMs": 2000}
+    # Lease and payload columns belong to the Worker. The narrow helper checks
+    # the active operator again and only resets this fund's chart-fetch task.
+    row = await conn.fetchrow(
+        "SELECT id,status,reason FROM workflow.enqueue_fund_nav_chart_fetch($1,$2,$3)",
+        tenant_id,
+        user_id,
+        code,
+    )
+    return {
+        "state": "FAILED"
+        if row.get("reason") == "SOURCE_COOLDOWN"
+        else "RUNNING"
+        if row["status"] == "RUNNING"
+        else "QUEUED",
+        "runId": str(row["id"]),
+        "pollAfterMs": 2000,
+        **({"reason": row["reason"]} if row.get("reason") else {}),
+    }
 
 
-async def get_nav_history(conn, fund_code, period="1y", *, tenant_id, user_id, now):
+async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, now):
     now = local(now)
     if (
         not isinstance(fund_code, str)

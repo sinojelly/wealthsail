@@ -14,7 +14,7 @@ const track: ActionableZoneTrack = {
   takeProfitT2: "1.8",
   reasons: [],
 };
-function history(code: string, period = "1y", extra = {}) {
+function history(code: string, period = "2y", extra = {}) {
   return {
     methodVersion: "fund-unit-nav-trend-v1",
     fundCode: code,
@@ -71,12 +71,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("loads one-year real NAV and draws the frozen buy band, stop and T1 with period statistics", async () => {
+it("defaults to two-year real NAV and draws the frozen buy band, stop and T1 with period statistics", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url) => {
-      expect(String(url)).toBe("/api/v1/funds/100101/nav-history?period=1y");
-      return response(history("100101"));
+      expect(String(url)).toBe("/api/v1/funds/100101/nav-history?period=2y");
+      return response(history("100101", "2y"));
     }),
   );
   render(<FundNavTrendChart fundCode="100101" track={track} />);
@@ -84,7 +84,7 @@ it("loads one-year real NAV and draws the frozen buy band, stop and T1 with peri
     "最高 1.5000",
   );
   expect(screen.getByText(/该周期 50.0% 分位/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "近1年" })).toHaveAttribute(
+  expect(screen.getByRole("button", { name: "近2年" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -131,6 +131,41 @@ it("switches to full disclosed history without claiming an invented inception da
   );
 });
 
+it("keeps a real curve visible after switching through every observation period", async () => {
+  const requested: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url) => {
+      const period = new URL(String(url), "http://local.test").searchParams.get(
+        "period",
+      )!;
+      requested.push(period);
+      return response(history("100112", period));
+    }),
+  );
+  render(<FundNavTrendChart fundCode="100112" track={track} />);
+  await screen.findByText(/区间最低 1.0000/);
+  for (const [period, label] of [
+    ["6m", "近半年"],
+    ["1y", "近1年"],
+    ["2y", "近2年"],
+    ["all", "成立以来"],
+  ]) {
+    await userEvent.click(screen.getByRole("button", { name: label }));
+    if (period !== "2y")
+      await waitFor(() => expect(requested.at(-1)).toBe(period));
+    expect(screen.getByRole("button", { name: label })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      await screen.findByRole("img", { name: "100112单位净值走势" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("净值走势暂不可用")).not.toBeInTheDocument();
+  }
+  expect(requested).toEqual(["2y", "6m", "1y", "all"]);
+});
+
 it("shares a pending history request across duplicate cards and keeps it alive while one consumer remains", async () => {
   let complete!: (value: Response) => void;
   let observedSignal: AbortSignal | undefined;
@@ -168,7 +203,7 @@ it("aborts an unobserved request and never shows an old fund response in the rep
       }
       return Promise.resolve(
         response(
-          history("100105", "1y", {
+          history("100105", "2y", {
             summary: {
               minimumNav: "2",
               maximumNav: "3",
@@ -197,7 +232,7 @@ it("retains a usable partial curve while queued deep history is being filled", a
     "fetch",
     vi.fn(async () =>
       response(
-        history("100106", "1y", {
+        history("100106", "2y", {
           state: "PARTIAL",
           refresh: { state: "QUEUED", runId: "run", pollAfterMs: 10000 },
         }),
@@ -213,7 +248,7 @@ it("does not draw another fund or cumulative NAV as this fund unit NAV", async (
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      response(history("999999", "1y", { priceBasis: "ACCUMULATED_NAV" })),
+      response(history("999999", "2y", { priceBasis: "ACCUMULATED_NAV" })),
     ),
   );
   render(<FundNavTrendChart fundCode="100107" track={track} />);
@@ -229,7 +264,7 @@ it.each([
   async (code, extra) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => response(history(code, "1y", extra))),
+      vi.fn(async () => response(history(code, "2y", extra))),
     );
     render(<FundNavTrendChart fundCode={code} track={track} />);
     expect(await screen.findByText(/净值走势暂不可用/)).toBeInTheDocument();
@@ -242,9 +277,9 @@ it("stops automatic history polling after ninety seconds while leaving an explic
   vi.setSystemTime(new Date("2026-10-20T08:30:00+08:00"));
   const fetcher = vi.fn(async () =>
     response(
-      history("100108", "1y", {
+      history("100108", "2y", {
         state: "PARTIAL",
-        refresh: { state: "RUNNING", runId: "running", pollAfterMs: 1000 },
+        refresh: { state: "RUNNING", runId: "running", pollAfterMs: 10000 },
       }),
     ),
   );
@@ -254,7 +289,7 @@ it("stops automatic history polling after ninety seconds while leaving an explic
     await vi.advanceTimersByTimeAsync(95000);
   });
   expect(screen.getByRole("button", { name: "重新读取净值" })).toBeEnabled();
-  expect(fetcher.mock.calls.length).toBeLessThanOrEqual(91);
+  expect(fetcher.mock.calls.length).toBeLessThanOrEqual(10);
   const completed = fetcher.mock.calls.length;
   await act(async () => {
     await vi.advanceTimersByTimeAsync(60000);

@@ -189,8 +189,14 @@ async def finish_refresh(
         error_class = "ResearchError"
     stamp = local(now)
     await conn.execute(
-        """UPDATE research.daily_research_refresh_requests SET status=$2,completed_at=$3,batch_id=$4,report_run_id=$5,error_class=$6
-        WHERE id=$1 AND status='RUNNING' AND started_at<=$3 AND started_at>=$7""",
+        """UPDATE research.daily_research_refresh_requests q SET status=$2,completed_at=$3,batch_id=$4,report_run_id=$5,error_class=$6
+        WHERE q.id=$1 AND q.status='RUNNING' AND q.started_at<=$3
+          AND (q.started_at>=$7 OR EXISTS(
+            SELECT 1 FROM research.daily_research_runs r
+            JOIN research.daily_research_results t ON t.run_id=r.run_id
+            WHERE r.run_id=$5 AND r.run_mode='DEBUG' AND r.debug_request_id=q.id
+              AND r.source_batch_id=$4 AND r.dispatched_at>=q.started_at
+              AND t.status=$2 AND t.recorded_at<=$3))""",
         request_id,
         status,
         stamp,

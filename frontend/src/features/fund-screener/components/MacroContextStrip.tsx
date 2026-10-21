@@ -257,7 +257,9 @@ export default function MacroContextStrip({
           />
         </p>
         {ready?.dailyResearch?.nextRunAt && (
-          <small>下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}</small>
+          <small className="op-observation-next-run">
+            下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
+          </small>
         )}
       </header>
       {renderResearchRefresh?.()}

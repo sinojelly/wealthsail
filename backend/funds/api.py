@@ -83,7 +83,7 @@ async def fetch_fund_range(
 @router.get("/{fund_code}/nav-history")
 async def fund_nav_history(
     fund_code: str,
-    period: Literal["6m", "1y", "2y", "all"] = Query(default="1y"),
+    period: Literal["6m", "1y", "2y", "all"] = Query(default="2y"),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
