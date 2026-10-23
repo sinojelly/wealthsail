@@ -6,7 +6,7 @@ from backend.chat.api import _resolve_model
 
 
 def test_chat_model_override_is_not_an_arbitrary_provider_passthrough() -> None:
-    assert _resolve_model(None, "deepseek-chat") == "deepseek-chat"
-    assert _resolve_model("deepseek-chat", "deepseek-chat") == "deepseek-chat"
+    assert _resolve_model(None, "approved-codex") == "approved-codex"
+    assert _resolve_model("approved-codex", "approved-codex") == "approved-codex"
     with pytest.raises(ValueError, match="not allowed"):
-        _resolve_model("expensive-unreviewed-model", "deepseek-chat")
+        _resolve_model("expensive-unreviewed-model", "approved-codex")

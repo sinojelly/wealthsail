@@ -31,7 +31,7 @@ _PUBLIC_RESEARCH_INSTRUCTIONS = (
 )
 
 
-def _isolation_arguments():
+def _isolation_arguments(instructions=_PUBLIC_RESEARCH_INSTRUCTIONS):
     result = []
     for feature in _DISABLED_FEATURES:
         result.extend(["--disable", feature])
@@ -46,7 +46,7 @@ def _isolation_arguments():
         "-c",
         "project_doc_max_bytes=0",
         "-c",
-        "developer_instructions=" + json.dumps(_PUBLIC_RESEARCH_INSTRUCTIONS),
+        "developer_instructions=" + json.dumps(instructions),
     ]
 
 
@@ -92,21 +92,27 @@ def decode_report(text):
 
 def resolve_codex_executable(configured=None, *, environment=None):
     env = os.environ if environment is None else environment
+    def native_path(value):
+        candidate = Path(value).expanduser()
+        resolved = candidate.resolve()
+        blocked = {".cmd", ".ps1", ".bat", ".js"}
+        if (not candidate.is_file() or candidate.suffix.lower() in blocked
+                or resolved.suffix.lower() in blocked):
+            return None
+        return str(resolved)
+
     if configured:
-        candidate = Path(configured).expanduser()
-        return (
-            str(candidate.resolve())
-            if candidate.is_file()
-            and candidate.suffix.lower() not in {".cmd", ".ps1", ".bat", ".js"}
-            else None
-        )
+        return native_path(configured)
     base = env.get("LOCALAPPDATA") or env.get("LocalAppData")
     if base:
         candidates = list((Path(base) / "OpenAI/Codex/bin").glob("*/codex.exe"))
         if candidates:
-            return str(max(candidates, key=lambda p: p.stat().st_mtime).resolve())
-    candidate = shutil.which("codex.exe", path=env.get("PATH"))
-    return str(Path(candidate).resolve()) if candidate else None
+            return native_path(max(candidates, key=lambda p: p.stat().st_mtime))
+    for name in ("codex.exe", "codex"):
+        candidate = shutil.which(name, path=env.get("PATH"))
+        if candidate and (resolved := native_path(candidate)):
+            return resolved
+    return None
 
 
 def public_environment(source, directory):
@@ -121,7 +127,9 @@ def public_environment(source, directory):
         "localappdata",
         "homedrive",
         "homepath",
+        "home",
         "codex_home",
+        "codex_ca_certificate",
         "http_proxy",
         "https_proxy",
         "no_proxy",
@@ -129,7 +137,8 @@ def public_environment(source, directory):
         "ssl_cert_dir",
     }
     env = {key: value for key, value in source.items() if key.lower() in allowed}
-    env.update({"TEMP": str(directory), "TMP": str(directory), "NO_COLOR": "1"})
+    env.update({"TEMP": str(directory), "TMP": str(directory),
+                "TMPDIR": str(directory), "NO_COLOR": "1"})
     return env
 
 

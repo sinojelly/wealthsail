@@ -1,10 +1,11 @@
 """Unit tests for backend.chat.service — context injection + SSE streaming.
 
-No real DB / network: connection and httpx client are fakes.
+No real DB / network or model: database context and Codex transport are fakes.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -46,6 +47,7 @@ class FakeConn:
 
 def _settings(**overrides) -> Settings:
     return Settings(
+        _env_file=None,
         model_base_url=overrides.get(
             "model_base_url", "https://api.example.com/v1"
         ),
@@ -54,6 +56,9 @@ def _settings(**overrides) -> Settings:
         model_timeout_seconds=float(
             overrides.get("model_timeout_seconds", 45.0)
         ),
+        codex_runner_url=overrides.get("codex_runner_url", "http://codex-runner:8001"),
+        codex_runner_token="test-runner-token",
+        codex_model=overrides.get("codex_model"),
     )
 
 
@@ -291,8 +296,8 @@ async def test_build_system_context_degrades_gracefully() -> None:
 # Streaming completion
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_stream_completion_without_api_key(monkeypatch) -> None:
-    svc = ChatService(_settings(model_api_key=None))
+async def test_stream_completion_without_codex_configuration(monkeypatch) -> None:
+    svc = ChatService(_settings(codex_runner_url=""))
     chunks = [
         c async for c in svc.stream_completion(
             ChatRequest(user_id="u1", tenant_id="t1", message="你好"),
@@ -305,48 +310,16 @@ async def test_stream_completion_without_api_key(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_completion_parses_openai_sse_chunks(monkeypatch) -> None:
-    svc = ChatService(_settings())
+async def test_stream_completion_preserves_sse_with_codex_and_no_api_key(monkeypatch) -> None:
+    svc = ChatService(_settings(model_api_key=None))
 
-    class FakeResponse:
-        status_code = 200
+    async def stream(settings, **kwargs):
+        assert kwargs == {"system_prompt": "system context", "user_prompt": "你好", "model": None}
+        yield {"delta": "你"}
+        yield {"delta": "好"}
+        yield {"done": True}
 
-        async def aread(self):
-            return b""
-
-        def aiter_lines(self):
-            async def gen():
-                yield 'data: {"choices":[{"delta":{"content":"你"}}]}'
-                yield 'data: {"choices":[{"delta":{"content":"好"}}]}'
-                yield "data: [DONE]"
-            return gen()
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        def stream(self, method, url, json=None, headers=None):
-            return _CtxResponse(FakeResponse())
-
-    class _CtxResponse:
-        def __init__(self, resp):
-            self._resp = resp
-
-        async def __aenter__(self):
-            return self._resp
-
-        async def __aexit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(
-        "backend.chat.service.httpx.AsyncClient", FakeClient
-    )
+    monkeypatch.setattr("backend.chat.service.codex_client.stream_chat", stream)
     chunks = [
         c async for c in svc.stream_completion(
             ChatRequest(user_id="u1", tenant_id="t1", message="你好"),
@@ -358,3 +331,86 @@ async def test_stream_completion_parses_openai_sse_chunks(monkeypatch) -> None:
         _sse({"delta": "好"}),
         _sse({"done": True}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_codex_chat_error_is_safe_and_sends_done_once(monkeypatch) -> None:
+    from backend.integrations.codex_client import CodexCallError
+
+    async def stream(*_args, **_kwargs):
+        raise CodexCallError("private stderr and token")
+        yield {}
+
+    monkeypatch.setattr("backend.chat.service.codex_client.stream_chat", stream)
+    chunks = [chunk async for chunk in ChatService(_settings()).stream_completion(
+        ChatRequest(user_id="u1", tenant_id="t1", message="hello"), "private tenant context"
+    )]
+    assert chunks.count(_sse({"done": True})) == 1
+    assert "private" not in "".join(chunks) and "token" not in "".join(chunks)
+    assert "Codex" in chunks[0]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_chat_closes_the_codex_transport(monkeypatch) -> None:
+    entered, closed = asyncio.Event(), asyncio.Event()
+
+    async def stream(*_args, **_kwargs):
+        try:
+            entered.set()
+            await asyncio.Future()
+            yield {}
+        finally:
+            closed.set()
+
+    monkeypatch.setattr("backend.chat.service.codex_client.stream_chat", stream)
+    response = ChatService(_settings()).stream_completion(
+        ChatRequest(user_id="u1", tenant_id="t1", message="hello"), "tenant context"
+    )
+    task = asyncio.create_task(response.__anext__())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_model_override_is_rejected_before_codex_dispatch(monkeypatch) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unapproved model must not dispatch")
+
+    monkeypatch.setattr("backend.chat.service.codex_client.stream_chat", forbidden)
+    chunks = [chunk async for chunk in ChatService(_settings(codex_model="approved")).stream_completion(
+        ChatRequest(user_id="u1", tenant_id="t1", message="hello", model="unapproved"), "tenant context"
+    )]
+    assert "未获准" in chunks[0]
+    assert chunks[-1] == _sse({"done": True})
+
+
+@pytest.mark.asyncio
+async def test_chat_heartbeats_preserve_proxy_connection_while_codex_waits(monkeypatch) -> None:
+    release = asyncio.Event()
+    original_wait = asyncio.wait
+    calls = 0
+
+    async def fast_wait(tasks, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return set(), tasks
+        return await original_wait(tasks, timeout=1)
+
+    async def stream(*_args, **_kwargs):
+        await release.wait()
+        yield {"delta": "answer"}
+        yield {"done": True}
+
+    monkeypatch.setattr("backend.chat.service.asyncio.wait", fast_wait)
+    monkeypatch.setattr("backend.chat.service.codex_client.stream_chat", stream)
+    response = ChatService(_settings()).stream_completion(
+        ChatRequest(user_id="u1", tenant_id="t1", message="hello"), "tenant context"
+    )
+    assert await response.__anext__() == ": heartbeat\n\n"
+    release.set()
+    remaining = [chunk async for chunk in response]
+    assert remaining == [_sse({"delta": "answer"}), _sse({"done": True})]

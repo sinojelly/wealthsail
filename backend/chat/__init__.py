@@ -1,1 +1,1 @@
-"""WealthSail Chat domain — Qwen-powered AI assistant with portfolio context."""
+"""WealthSail Chat domain — Codex-powered AI assistant with portfolio context."""

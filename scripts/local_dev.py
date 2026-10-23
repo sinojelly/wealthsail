@@ -48,7 +48,7 @@ def child_environment(source: dict[str, str], directory: Path) -> dict[str, str]
         "path", "systemroot", "windir", "comspec", "pathext", "userprofile",
         "appdata", "localappdata", "programfiles", "programfiles(x86)",
         "programdata", "homedrive", "homepath", "number_of_processors",
-        "processor_architecture", "codex_home",
+        "processor_architecture", "codex_home", "home", "codex_ca_certificate",
         "http_proxy", "https_proxy", "no_proxy", "ssl_cert_file", "ssl_cert_dir",
     }
     env = {k: v for k, v in source.items() if k.lower() in allowed}
@@ -117,11 +117,25 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
         "TIANTIAN_IMPORT_ENABLED": "true",
         "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "true"),
         "DAILY_RESEARCH_DEBUG_ENABLED": os.environ.get("DAILY_RESEARCH_DEBUG_ENABLED", "true"),
+        **local_codex_settings(),
     }
     (LOCAL / "api.env").write_text(
         "\n".join(f"{key}={value}" for key, value in api_settings.items()) + "\n",
         encoding="utf-8")
     return settings
+
+
+def local_codex_settings() -> dict[str, str]:
+    """Explicit local launcher opt-in; never inject API keys into model calls."""
+    from backend.integrations.codex_research import resolve_codex_executable
+
+    executable = resolve_codex_executable(
+        os.environ.get("CODEX_PATH") or os.environ.get("DAILY_RESEARCH_CODEX_PATH")
+    )
+    values = {"CODEX_PATH": json.dumps(Path(executable).as_posix() if executable else "")}
+    if os.environ.get("CODEX_MODEL"):
+        values["CODEX_MODEL"] = json.dumps(os.environ["CODEX_MODEL"])
+    return values
 
 
 def configure_macro(settings: dict[str, str], db_port: int) -> None:
@@ -142,6 +156,7 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
         "DAILY_RESEARCH_DEBUG_ENABLED": os.environ.get("DAILY_RESEARCH_DEBUG_ENABLED", "true"),
         "DAILY_RESEARCH_CODEX_PATH": json.dumps(Path(executable).as_posix() if executable else ""),
         "DAILY_RESEARCH_AUDIT_DIR": json.dumps(os.environ.get("DAILY_RESEARCH_AUDIT_DIR", (LOCAL / "research-audit").as_posix())),
+        **local_codex_settings(),
     }
     if os.environ.get("DAILY_RESEARCH_MODEL"):
         macro_settings["DAILY_RESEARCH_MODEL"] = json.dumps(os.environ["DAILY_RESEARCH_MODEL"])

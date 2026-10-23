@@ -1,31 +1,20 @@
-"""DeepSeek (OpenAI-compatible) model gateway.
-
-The Worker uses this for four-session report generation; the API uses it for
-on-demand report generation. When MODEL_API_KEY is not configured the caller
-falls back to a deterministic local template (model_run status ABSTAINED).
-"""
+"""Report model gateway using only Codex, with no provider fallback or retry."""
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import Any
-
-import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from decimal import Decimal, DecimalException
 
 from backend.config import Settings
-
-logger = logging.getLogger("wealthsail.model_gateway")
+from backend.integrations import codex_client
 
 
 class ModelNotConfiguredError(Exception):
-    """Raised when no LLM API key is configured."""
+    """Raised when Codex is not configured or authenticated."""
 
 
 class ModelCallError(Exception):
-    """Raised when the LLM provider fails after retries."""
+    """Raised when one Codex invocation fails."""
 
 
 @dataclass(frozen=True)
@@ -36,20 +25,6 @@ class ModelResult:
     cost_cny: Decimal
 
 
-@retry(
-    retry=retry_if_exception_type(httpx.HTTPStatusError),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-    reraise=True,
-)
-async def _post_with_retry(
-    client: httpx.AsyncClient, url: str, payload: dict[str, Any]
-) -> httpx.Response:
-    response = await client.post(url, json=payload)
-    response.raise_for_status()
-    return response
-
-
 async def chat_completion(
     *,
     settings: Settings,
@@ -58,45 +33,27 @@ async def chat_completion(
     temperature: float = 0.3,
     json_mode: bool = True,
 ) -> ModelResult:
-    """Call the configured chat model; returns parsed completion."""
-    if not settings.model_api_key:
-        raise ModelNotConfiguredError("MODEL_API_KEY 未配置")
+    """Keep the existing report interface while routing every model call to Codex.
 
-    url = settings.model_base_url.rstrip("/") + "/chat/completions"
-    payload: dict[str, Any] = {
-        "model": settings.model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "stream": False,
-    }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-
-    headers = {"Authorization": f"Bearer {settings.model_api_key}"}
-    timeout = httpx.Timeout(settings.model_timeout_seconds)
-
+    ``temperature`` is retained for callers; Codex selects supported inference
+    parameters. No legacy provider credential or URL is read.
+    """
     try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-            response = await _post_with_retry(client, url, payload)
-    except httpx.HTTPStatusError as exc:
-        logger.error("model gateway rejected request: status=%s", exc.response.status_code)
-        raise ModelCallError(f"模型服务返回 {exc.response.status_code}") from exc
-    except httpx.HTTPError as exc:
-        logger.error("model gateway transport error: %s", exc)
-        raise ModelCallError("模型服务连接失败") from exc
-
-    body = response.json()
-    content = body["choices"][0]["message"]["content"]
-    usage = body.get("usage", {})
-    return ModelResult(
-        content=content,
-        model=body.get("model", settings.model_name),
-        usage={
-            "prompt_tokens": int(usage.get("prompt_tokens", 0)),
-            "completion_tokens": int(usage.get("completion_tokens", 0)),
-        },
-        cost_cny=Decimal("0.0000"),
-    )
+        body = await codex_client.completion(
+            settings, system_prompt=system_prompt, user_prompt=user_prompt,
+            json_mode=json_mode,
+        )
+        usage = body.get("usage") or {}
+        return ModelResult(
+            content=body["content"], model=body.get("model") or "codex",
+            usage={
+                "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0))),
+                "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0))),
+            },
+            cost_cny=Decimal(str(body.get("cost_cny", "0.0000"))),
+        )
+    except codex_client.CodexNotConfiguredError as exc:
+        raise ModelNotConfiguredError("Codex 尚未配置或未完成认证") from exc
+    except (codex_client.CodexCallError, ValueError, TypeError, KeyError,
+            AttributeError, DecimalException, TimeoutError) as exc:
+        raise ModelCallError("Codex 报告生成暂时不可用") from exc

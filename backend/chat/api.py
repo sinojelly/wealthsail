@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 import logging
 from typing import AsyncGenerator
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -22,6 +24,19 @@ from backend.dependencies import (
 logger = logging.getLogger("wealthsail.chat_api")
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """Close a body suspended at yield when ASGI sending fails or disconnects."""
+
+    async def __call__(self, scope, receive, send):
+        try:
+            return await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                close = getattr(self.body_iterator, "aclose", None)
+                if close is not None:
+                    await close()
 
 
 class ChatMessage(BaseModel):
@@ -54,7 +69,7 @@ async def chat_stream(
     """
     chat_svc = ChatService(settings)
     try:
-        model = _resolve_model(body.model, settings.model_name)
+        model = _resolve_model(body.model, settings.codex_model or "codex")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="请求的模型未获准使用") from exc
 
@@ -74,10 +89,11 @@ async def chat_stream(
             message=body.message,
             model=model,
         )
-        async for chunk in chat_svc.stream_completion(request, system_context):
-            yield chunk
+        async with aclosing(chat_svc.stream_completion(request, system_context)) as stream:
+            async for chunk in stream:
+                yield chunk
 
-    return StreamingResponse(
+    return ClosingStreamingResponse(
         _event_stream(),
         media_type="text/event-stream",
         headers={

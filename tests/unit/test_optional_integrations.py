@@ -75,6 +75,38 @@ def test_production_api_can_disable_unconfigured_wecom_and_email() -> None:
     assert validate_runtime_settings(settings, process="api") is settings
 
 
+@pytest.mark.parametrize("url", [
+    "file:///auth", "http://user:password@runner:8090", "http://runner?token=x",
+    "http://runner/path", "http://runner#fragment", "http://runner:bad",
+])
+def test_remote_codex_requires_a_safe_origin(url):
+    with pytest.raises(ValueError, match="CODEX_RUNNER_URL"):
+        validate_runtime_settings(
+            _api_settings(codex_runner_url=url, codex_runner_token="F" * 64), process="api"
+        )
+
+
+def test_remote_codex_requires_separate_authentication_without_api_model_key():
+    with pytest.raises(ValueError, match="CODEX_RUNNER_TOKEN"):
+        validate_runtime_settings(
+            _api_settings(codex_runner_url="http://codex-runner:8090"), process="api"
+        )
+    settings = _api_settings(
+        codex_runner_url="http://codex-runner:8090", codex_runner_token="F" * 64
+    )
+    assert validate_runtime_settings(settings, process="api") is settings
+    assert "F" * 64 not in repr(settings)
+
+
+@pytest.mark.parametrize("value", ["", "  "])
+def test_blank_codex_models_from_env_templates_use_account_default(monkeypatch, value):
+    monkeypatch.setenv("CODEX_MODEL", value)
+    monkeypatch.setenv("DAILY_RESEARCH_MODEL", value)
+    settings = _api_settings()
+    assert settings.codex_model is None
+    assert settings.daily_research_model is None
+
+
 @pytest.mark.parametrize(
     "field,name",
     [

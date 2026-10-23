@@ -1,6 +1,6 @@
-"""WealthSail Chat Service — Qwen LLM integration with portfolio context injection.
+"""WealthSail Codex chat with tenant-scoped portfolio context injection.
 
-Generates streaming chat completions using the configured DashScope/Qwen API.
+Generates streaming chat completions using the authenticated Codex runner/CLI.
 Each request automatically receives portfolio context (holdings, latest report,
 market sentiment) injected as system context.
 """
@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, AsyncIterator
 
-import httpx
+import anyio
 
 from backend.config import Settings
+from backend.integrations import codex_client
 from backend.integrations.market_data import Q_UNAVAILABLE, get_quote
 from backend.integrations.news_api import fetch_news
 
@@ -126,17 +127,15 @@ class ChatRequest:
 
 
 class ChatService:
-    """调用 Qwen/通义千问 流式对话服务。"""
+    """调用 Codex，同时保持原有前端 SSE 协议。"""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._base_url = self.settings.model_base_url.rstrip("/")
-        self._api_key = self.settings.model_api_key
-        self._model = self.settings.model_name
+        self._model = self.settings.codex_model or "codex"
 
     @property
     def is_configured(self) -> bool:
-        return bool(self._api_key)
+        return codex_client.is_configured(self.settings)
 
     # ------------------------------------------------------------------
     # Context builders
@@ -352,7 +351,7 @@ class ChatService:
         结束时发送:     `data: {\"done\": true}\n\n`
         """
         if not self.is_configured:
-            yield _sse({"delta": "[模型 API Key 未配置，请在 .env 中设置 MODEL_API_KEY]"})
+            yield _sse({"delta": "Codex 服务尚未配置，请联系管理员"})
             yield _sse({"done": True})
             return
 
@@ -362,53 +361,45 @@ class ChatService:
             yield _sse({"done": True})
             return
 
-        url = f"{self._base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_context},
-                {"role": "user", "content": request.message},
-            ],
-            "stream": True,
-            "temperature": 0.7,
-            "max_tokens": 4096,
-        }
-
-        logger.info("chat stream start model=%s user=%s", model, request.user_id)
-
+        stream = codex_client.stream_chat(
+            self.settings, system_prompt=system_context, user_prompt=request.message,
+            # "codex" is a display label, never an invented CLI model name.
+            model=self.settings.codex_model,
+        )
+        pending = None
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as resp:
-                    if resp.status_code != 200:
-                        await resp.aread()
-                        logger.error("chat provider rejected request: status=%s", resp.status_code)
-                        yield _sse({"delta": "模型服务暂时不可用，请稍后重试"})
-                        yield _sse({"done": True})
-                        return
-
-                    async for line in resp.aiter_lines():
-                        line = line.strip()
-                        if not line or line == "data: [DONE]":
-                            continue
-                        if line.startswith("data: "):
-                            raw = line[6:]
-                            try:
-                                chunk = json.loads(raw)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                if delta:
-                                    yield _sse({"delta": delta})
-                            except (json.JSONDecodeError, IndexError, KeyError):
-                                continue
-        except httpx.ConnectError:
-            yield _sse({"delta": "模型服务连接失败，请检查网络配置"})
-        except httpx.ReadTimeout:
-            yield _sse({"delta": "模型响应超时，请稍后重试"})
-        except Exception:
-            logger.exception("chat stream error")
-            yield _sse({"delta": "对话生成异常，请稍后重试"})
+            while True:
+                pending = asyncio.create_task(stream.__anext__())
+                while not pending.done():
+                    done, _ = await asyncio.wait({pending}, timeout=15)
+                    if not done:
+                        # The browser ignores comments; proxies still receive
+                        # progress while Codex is thinking or waiting for text.
+                        yield ": heartbeat\n\n"
+                try:
+                    event = pending.result()
+                except StopAsyncIteration:
+                    break
+                pending = None
+                if event.get("done") is True:
+                    break
+                if isinstance(event.get("delta"), str) and event["delta"]:
+                    yield _sse({"delta": event["delta"]})
+        except codex_client.CodexNotConfiguredError:
+            yield _sse({"delta": "Codex 服务尚未就绪，请联系管理员完成认证"})
+        except Exception as exc:
+            logger.warning("Codex chat failed error_class=%s", type(exc).__name__)
+            yield _sse({"delta": "Codex 对话暂时不可用，请稍后重试"})
         finally:
-            yield _sse({"done": True})
+            # ASGI disconnect handling can cancel the active AnyIO scope.
+            # Cleanup still has to reach the HTTP connection/native process.
+            with anyio.CancelScope(shield=True):
+                if pending is not None:
+                    if not pending.done():
+                        pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                await stream.aclose()
+        yield _sse({"done": True})
 
 
 def _sse(obj: dict[str, Any]) -> str:

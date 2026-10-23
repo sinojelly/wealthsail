@@ -18,6 +18,47 @@ def adapter():
     return import_module("backend.integrations.codex_research")
 
 
+def test_linux_native_codex_is_found_on_path(monkeypatch, tmp_path):
+    mod = adapter()
+    executable = tmp_path / "codex"
+    executable.write_bytes(b"\x7fELF-native-fixture")
+    monkeypatch.setattr(
+        mod.shutil, "which",
+        lambda name, path=None: str(executable) if name == "codex" else None,
+    )
+    assert mod.resolve_codex_executable(environment={"PATH": str(tmp_path)}) == str(
+        executable.resolve()
+    )
+
+
+@pytest.mark.parametrize("suffix", [".cmd", ".ps1", ".bat", ".js"])
+def test_explicit_shell_or_node_wrappers_are_rejected(tmp_path, suffix):
+    executable = tmp_path / f"codex{suffix}"
+    executable.touch()
+    assert adapter().resolve_codex_executable(str(executable)) is None
+
+
+def test_discovered_node_wrapper_is_not_a_native_runtime(monkeypatch, tmp_path):
+    mod = adapter()
+    wrapper = tmp_path / "codex.js"
+    wrapper.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    monkeypatch.setattr(mod.shutil, "which", lambda *_args, **_kwargs: str(wrapper))
+    assert mod.resolve_codex_executable(environment={"PATH": str(tmp_path)}) is None
+
+
+def test_linux_home_survives_but_temp_and_credentials_are_scoped(tmp_path):
+    env = adapter().public_environment(
+        {"HOME": "/home/appuser", "CODEX_HOME": "/auth", "TMPDIR": "/private",
+         "CODEX_RUNNER_TOKEN": "private", "MODEL_API_KEY": "private",
+         "OPENAI_API_KEY": "private", "DATABASE_URL": "private"},
+        tmp_path,
+    )
+    assert env["HOME"] == "/home/appuser"
+    assert env["CODEX_HOME"] == "/auth"
+    assert env["TMPDIR"] == str(tmp_path)
+    assert not {"CODEX_RUNNER_TOKEN", "MODEL_API_KEY", "OPENAI_API_KEY", "DATABASE_URL"} & env.keys()
+
+
 def test_child_environment_uses_existing_user_auth_but_no_worker_or_api_secrets(
     tmp_path,
 ):

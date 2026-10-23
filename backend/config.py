@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -80,11 +80,27 @@ class Settings(BaseSettings):
     smtp_password: str | None = Field(default=None)
     smtp_from: str | None = Field(default=None)
 
-    # --- DeepSeek model gateway ----------------------------------------------
+    # Deprecated provider fields are retained to detect stale credential
+    # injection. Model calls use Codex exclusively; these never select a backend.
     model_base_url: str = Field(default="https://api.deepseek.com/v1")
     model_api_key: str | None = Field(default=None)
     model_name: str = Field(default="deepseek-chat")
     model_timeout_seconds: float = Field(default=45.0)
+
+    # Explicitly opt in to the authenticated internal runner, or to an existing
+    # local CLI path. An absent configuration cannot trigger a model by chance.
+    codex_runner_url: str = Field(default="")
+    codex_runner_token: str = Field(default="", repr=False)
+    codex_path: str | None = Field(default=None)
+    codex_model: str | None = Field(default=None)
+    codex_timeout_seconds: float = Field(default=90, ge=5, le=1200)
+    codex_chat_timeout_seconds: float = Field(default=900, ge=5, le=1200)
+
+    @field_validator("codex_model", "daily_research_model", mode="before")
+    @classmethod
+    def normalize_codex_model(cls, value):
+        # Templates intentionally leave these blank to use the account default.
+        return (value.strip() or None) if isinstance(value, str) else value
 
     # Separate, opt-in daily public research using the user's local Codex login.
     daily_research_enabled: bool = Field(default=False)
@@ -227,6 +243,20 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
         raise ValueError(f"unknown process type: {process}")
     if settings.auth_dev_mode:
         raise ValueError("AUTH_DEV_MODE is no longer supported; use bcrypt credentials")
+    if settings.codex_runner_url:
+        try:
+            origin = urlsplit(settings.codex_runner_url)
+            valid = (origin.scheme in {"http", "https"} and origin.hostname
+                     and origin.username is None and origin.password is None
+                     and origin.path in {"", "/"} and not origin.query
+                     and not origin.fragment and not any(
+                         char.isspace() for char in settings.codex_runner_url))
+            origin.port
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("CODEX_RUNNER_URL must be an HTTP(S) origin without credentials, path or query")
+        _require_secret("CODEX_RUNNER_TOKEN", settings.codex_runner_token)
     # Worker initialization installs session-scoped runtime authority, and its
     # cold-start jobs use session advisory locks. Supabase's transaction pooler
     # may move consecutive statements to different PostgreSQL backends, which
@@ -270,6 +300,7 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
                 "BINDING_HMAC_KEY": settings.binding_hmac_key,
                 "ROUTING_ENCRYPTION_KEY": settings.routing_encryption_key,
                 "WECOM_CALLBACK_TOKEN": settings.wecom_callback_token,
+                "CODEX_RUNNER_TOKEN": settings.codex_runner_token,
             }
         )
         if settings.jwt_algorithm != "HS256":

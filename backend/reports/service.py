@@ -6,7 +6,7 @@ Generation is two-phase:
   3. write model_run + report + items + outbox inside a second tenant
      transaction, retrying on unique-version conflicts.
 
-If MODEL_API_KEY is not configured (or the provider fails), a deterministic
+If Codex is not configured/authenticated (or execution fails), a deterministic
 template keeps the workflow usable and records an ABSTAINED model run — the
 report never fabricates market facts it cannot source.
 """
@@ -1332,7 +1332,7 @@ async def _persist_generation(
             provider=(
                 "shared-brief"
                 if generation_mode == "NO_HOLDINGS_SHARED"
-                else "deepseek"
+                else "codex"
             ),
             model=model_result.model,
             prompt_template_version=(
@@ -1368,7 +1368,7 @@ async def _persist_generation(
         model_run_id = await repository.insert_model_run(
             conn,
             tenant_id=ctx.tenant_id,
-            provider="deepseek",
+            provider="codex",
             model="fallback-template",
             prompt_template_version=(
                 "report.no_holdings.v1"

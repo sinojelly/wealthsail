@@ -91,7 +91,7 @@ async def generate(
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """生成指定时段研报（LLM 网关可用时调用 DeepSeek，否则确定性降级）。"""
+    """生成指定时段研报（需要模型时调用 Codex，否则按既有规则生成或降级）。"""
     if body.session == "PRE_MARKET":
         # 045 拆分后 PRE_MARKET 只有 MACRO / PERSONALIZED 两个变体；此端点
         # 以 STANDARD 变体生成，会产出既不被订阅链投递又误导审计的旧 7 行

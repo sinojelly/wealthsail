@@ -201,8 +201,14 @@ async def sync_daily_research(
         )
     prompt = build_prompt(packet)
     unavailable, cli = None, {}
+    remote_codex = bool(getattr(settings, "codex_runner_url", ""))
     try:
-        cli = await preflight_codex(settings.daily_research_codex_path)
+        if remote_codex:
+            from backend.integrations import codex_client
+
+            cli = await codex_client.preflight(settings)
+        else:
+            cli = await preflight_codex(settings.daily_research_codex_path)
     except Exception as exc:  # noqa: BLE001 -- safe preflight failure, no gateway fallback
         unavailable = type(exc).__name__
     dispatched = local(now_shanghai())
@@ -243,13 +249,18 @@ async def sync_daily_research(
     try:
         if unavailable:
             return result
-        raw = await run_codex_research(
-            cli["executable"],
-            prompt,
-            REPORT_SCHEMA,
-            timeout=settings.daily_research_timeout_seconds,
-            model=settings.daily_research_model or cli.get("selectedModel"),
-        )
+        model = settings.daily_research_model or getattr(settings, "codex_model", None)
+        if remote_codex:
+            raw = await codex_client.research(
+                settings, prompt, REPORT_SCHEMA,
+                timeout=settings.daily_research_timeout_seconds, model=model,
+            )
+        else:
+            raw = await run_codex_research(
+                cli["executable"], prompt, REPORT_SCHEMA,
+                timeout=settings.daily_research_timeout_seconds,
+                model=model or cli.get("selectedModel"),
+            )
         write_research_audit(
             settings,
             run_id,

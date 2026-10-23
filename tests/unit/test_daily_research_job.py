@@ -140,6 +140,39 @@ async def test_late_start_catches_up_once_on_weekend_and_restart_does_not_dispat
 
 
 @pytest.mark.asyncio
+async def test_remote_codex_keeps_one_daily_slot_without_local_auth(monkeypatch):
+    from backend.integrations import codex_client
+
+    mod, state = isolate(monkeypatch)
+    preflight = AsyncMock(return_value={"executable": "remote", "version": "codex-cli fixture"})
+    research = AsyncMock(return_value={"summary": "public", "sources": []})
+    monkeypatch.setattr(codex_client, "preflight", preflight)
+    monkeypatch.setattr(codex_client, "research", research)
+    configured = settings(codex_runner_url="http://codex-runner:8090")
+    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "READY"
+    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "SKIPPED"
+    research.assert_awaited_once()
+    mod.preflight_codex.assert_not_awaited()
+    mod.run_codex_research.assert_not_awaited()
+    assert state["terminal"][0]["status"] == "READY"
+
+
+@pytest.mark.asyncio
+async def test_remote_dispatch_timeout_is_uncertain_and_never_retried(monkeypatch):
+    from backend.integrations import codex_client
+
+    mod, state = isolate(monkeypatch)
+    monkeypatch.setattr(codex_client, "preflight", AsyncMock(return_value={"version": "codex-cli fixture"}))
+    research = AsyncMock(side_effect=TimeoutError())
+    monkeypatch.setattr(codex_client, "research", research)
+    configured = settings(codex_runner_url="http://codex-runner:8090")
+    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "UNCERTAIN"
+    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "SKIPPED"
+    assert state["terminal"][0]["status"] == "UNCERTAIN"
+    research.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_disabled_or_before_0830_never_collects_or_dispatches(monkeypatch):
     mod, _ = isolate(monkeypatch)
     assert (
