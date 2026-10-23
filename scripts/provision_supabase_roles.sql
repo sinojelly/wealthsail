@@ -1,5 +1,6 @@
 -- =============================================================================
--- WealthSail Supabase dedicated runtime login provisioning
+-- WealthSail PostgreSQL dedicated runtime login provisioning
+-- Historical filename retained for existing local/CI callers; no Supabase required.
 -- =============================================================================
 -- Run once as the database owner in Supabase SQL Editor / direct psql.
 -- Idempotent: safe to re-run after a `db reset` or whenever roles drift.
@@ -42,15 +43,13 @@ END $$;
 
 -- Reassert attributes on rerun; provisioning is idempotent and repairs drift.
 ALTER ROLE wealthsail_api_login
-    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 ALTER ROLE wealthsail_worker_login
-    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
--- SET-role memberships (WITH SET TRUE is mandatory: PostgreSQL defaults the
--- SET option to false for roles created via GRANT by non-superusers, which
--- would make SET ROLE fail with "permission denied").
-GRANT wealthsail_api TO wealthsail_api_login WITH SET TRUE, INHERIT FALSE;
-GRANT wealthsail_worker TO wealthsail_worker_login WITH SET TRUE, INHERIT FALSE;
+-- Specify all membership options, including removal of stale ADMIN authority.
+GRANT wealthsail_api TO wealthsail_api_login WITH SET TRUE, INHERIT FALSE, ADMIN FALSE;
+GRANT wealthsail_worker TO wealthsail_worker_login WITH SET TRUE, INHERIT FALSE, ADMIN FALSE;
 -- The Worker downgrade path (worker -> api) is granted by migrations/013
 -- (GRANT wealthsail_api TO wealthsail_worker) and is transitive here.
 
@@ -62,8 +61,15 @@ REVOKE wealthsail_api FROM wealthsail_worker_login;
 
 -- Remove the old explicit shared-login grants. `postgres` remains a platform
 -- administrator, but it must never appear in either runtime connection URL.
-REVOKE wealthsail_api FROM postgres;
-REVOKE wealthsail_worker FROM postgres;
+DO $$
+BEGIN
+    -- Official images initialized with POSTGRES_USER=admin need not contain
+    -- a database role named postgres. Never substitute an unrelated admin.
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
+        REVOKE wealthsail_api FROM postgres;
+        REVOKE wealthsail_worker FROM postgres;
+    END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- Connectivity and schema access (idempotent; migrations grant the granular

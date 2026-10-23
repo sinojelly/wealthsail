@@ -139,15 +139,56 @@ async def verify_runtime_login_boundary(
             process,
         )
         return
+    expected_parent = "wealthsail_api" if process == "api" else "wealthsail_worker"
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """
+            f"""
+            WITH role_policy(role_name, login_allowed, inherit_allowed,
+                             bypass_allowed, parent_name, parent_inherited,
+                             reachable_names) AS (
+                VALUES
+                  ('authenticated', FALSE, NULL::boolean, FALSE, NULL::text, FALSE,
+                   ARRAY['authenticated']::text[]),
+                  ('wealthsail_api', FALSE, TRUE, FALSE, 'authenticated', TRUE,
+                   ARRAY['wealthsail_api','authenticated']::text[]),
+                  ('wealthsail_worker', FALSE, FALSE, TRUE, 'wealthsail_api', FALSE,
+                   ARRAY['wealthsail_worker','wealthsail_api','authenticated']::text[]),
+                  (session_user::text, TRUE, FALSE, FALSE, '{expected_parent}', FALSE,
+                   ARRAY[session_user::text,'{expected_parent}',
+                         'wealthsail_api','authenticated']::text[])
+            ), checked_roles AS (
+                SELECT r.*, policy.login_allowed, policy.inherit_allowed,
+                       policy.bypass_allowed, policy.parent_name,
+                       policy.parent_inherited, policy.reachable_names
+                  FROM pg_roles r JOIN role_policy policy ON policy.role_name=r.rolname
+            )
             SELECT session_user::text AS session_user,
                    current_user::text AS current_user,
                    login.rolsuper AS session_superuser,
                    login.rolbypassrls AS session_bypassrls,
                    pg_has_role(session_user, 'wealthsail_api', 'SET') AS can_set_api,
-                   pg_has_role(session_user, 'wealthsail_worker', 'SET') AS can_set_worker
+                   pg_has_role(session_user, 'wealthsail_worker', 'SET') AS can_set_worker,
+                   EXISTS (
+                       SELECT 1 FROM checked_roles role
+                        WHERE role.rolsuper OR role.rolcreatedb OR role.rolcreaterole
+                           OR role.rolreplication
+                           OR role.rolcanlogin <> role.login_allowed
+                           OR role.rolinherit <> role.inherit_allowed
+                           OR role.rolbypassrls <> role.bypass_allowed
+                   ) OR EXISTS (
+                       SELECT 1 FROM checked_roles role JOIN pg_roles reachable
+                         ON reachable.oid <> role.oid
+                        AND (pg_has_role(role.oid,reachable.oid,'SET')
+                             OR pg_has_role(role.oid,reachable.oid,'USAGE'))
+                        WHERE NOT reachable.rolname = ANY(role.reachable_names)
+                   ) OR EXISTS (
+                       SELECT 1 FROM checked_roles role
+                         JOIN pg_auth_members membership ON membership.member=role.oid
+                         JOIN pg_roles parent ON parent.oid=membership.roleid
+                        WHERE parent.rolname IS DISTINCT FROM role.parent_name
+                           OR membership.admin_option OR NOT membership.set_option
+                           OR membership.inherit_option <> role.parent_inherited
+                   ) AS has_unsafe_runtime_role
             FROM pg_roles login
             WHERE login.rolname = session_user
             """
@@ -156,6 +197,8 @@ async def verify_runtime_login_boundary(
         raise RuntimeError("database session login role could not be inspected")
     if bool(row.get("session_superuser", False)) or bool(row["session_bypassrls"]):
         raise RuntimeError("runtime database login must not be superuser/BYPASSRLS")
+    if bool(row.get("has_unsafe_runtime_role", False)):
+        raise RuntimeError("runtime database role has unsafe attributes or role memberships")
     if process == "api":
         if not bool(row["can_set_api"]):
             raise RuntimeError("API login cannot SET ROLE wealthsail_api")
