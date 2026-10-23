@@ -22,10 +22,14 @@ services:
       WECOM_BOT_SECRET: ""
     expose:
       - "8000"
+    depends_on:
+      codex-runner:
+        condition: service_healthy
     volumes:
       - avatar_data:/app/backend/static/avatars
     networks:
       - wealthsail
+      - codex
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
       interval: 30s
@@ -52,12 +56,68 @@ services:
       BINDING_HMAC_KEY: ""
       WECOM_CALLBACK_TOKEN: ""
       WECOM_CALLBACK_AES_KEY: ""
+      MODEL_API_KEY: ""
+      OPENAI_API_KEY: ""
     depends_on:
       api:
         condition: service_healthy
     networks:
       - wealthsail
+      - codex
     # The shared image's HTTP healthcheck belongs to the API process.
+    healthcheck:
+      disable: true
+
+  # Only this process holds the refreshable Codex login. It has no database,
+  # browser-session or messaging credentials and no published host port.
+  codex-runner:
+    image: wealthsail-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "backend.codex_runner"]
+    env_file:
+      - ${CODEX_ENV_FILE:-deployment/env/codex.env}
+    environment:
+      CODEX_HOME: /home/appuser/.codex
+      CODEX_PATH: /usr/local/bin/codex
+    volumes:
+      - codex_auth:/home/appuser/.codex
+    networks:
+      - codex
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # One-shot device login/status tool. It shares only the Codex auth volume;
+  # no env_file or application credentials are injected.
+  codex-auth:
+    image: wealthsail-backend:latest
+    profiles: [tools]
+    entrypoint: ["codex", "-c", 'cli_auth_credentials_store="file"']
+    command: ["login", "status"]
+    environment:
+      CODEX_HOME: /home/appuser/.codex
+      CODEX_PATH: /usr/local/bin/codex
+    volumes:
+      - codex_auth:/home/appuser/.codex
+    networks:
+      - codex
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    stdin_open: true
+    tty: true
     healthcheck:
       disable: true
 
@@ -76,7 +136,10 @@ services:
 
 volumes:
   avatar_data:
+  codex_auth:
 
 networks:
   wealthsail:
+    driver: bridge
+  codex:
     driver: bridge

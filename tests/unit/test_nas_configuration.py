@@ -35,6 +35,20 @@ def test_generated_configuration_separates_runtime_credentials(tmp_path: Path) -
     assert len(api_db.password) >= 64
 
 
+def test_codex_runner_has_only_narrow_shared_model_authority(tmp_path: Path) -> None:
+    from scripts.configure_nas import generate_configuration
+
+    paths = generate_configuration(tmp_path, web_base_url="https://wealth.example.test")
+    api, worker, runner = (dotenv_values(paths[key]) for key in ("api", "worker", "codex"))
+    assert api["CODEX_RUNNER_URL"] == worker["CODEX_RUNNER_URL"] == "http://codex-runner:8090"
+    assert len(runner["CODEX_RUNNER_TOKEN"]) >= 64
+    assert api["CODEX_RUNNER_TOKEN"] == worker["CODEX_RUNNER_TOKEN"] == runner["CODEX_RUNNER_TOKEN"]
+    assert runner["CODEX_RUNNER_TOKEN"] not in {api["JWT_SECRET"], api["ROUTING_ENCRYPTION_KEY"]}
+    assert api["DAILY_RESEARCH_ENABLED"] == worker["DAILY_RESEARCH_ENABLED"] == "false"
+    assert runner["CODEX_HOME"] == "/home/appuser/.codex"
+    assert not {"DATABASE_URL", "WORKER_DATABASE_URL", "JWT_SECRET", "MODEL_API_KEY", "OPENAI_API_KEY"} & runner.keys()
+
+
 def test_configuration_rerun_never_rotates_existing_secrets(tmp_path: Path) -> None:
     from scripts.configure_nas import generate_configuration
 

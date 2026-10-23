@@ -4,6 +4,9 @@
 *.env
 !.env.example
 !*.env.example
+# Codex account credentials must stay in private runtime storage.
+**/.codex/
+**/auth.json
 reference/supabase和企业微信信息.rar
 
 # 敏感图片与资产原图

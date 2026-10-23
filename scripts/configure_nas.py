@@ -89,11 +89,19 @@ def generate_configuration(
         "api": root / "deployment/env/api.env",
         "worker": root / "deployment/env/worker.env",
         "nas": root / "deployment/nas.env",
+        "codex": root / "deployment/env/codex.env",
     }
     for path in paths.values():
         if path.exists():
             raise FileExistsError(f"configuration exists; preserve its secrets: {path}")
     routing_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+    codex_token = secrets.token_hex(32)
+    codex_client = {
+        "CODEX_RUNNER_URL": "http://codex-runner:8090",
+        "CODEX_RUNNER_TOKEN": codex_token,
+        "CODEX_TIMEOUT_SECONDS": "90",
+        "CODEX_CHAT_TIMEOUT_SECONDS": "900",
+    }
     api = {
         "APP_ENV": "production",
         "DATABASE_URL": database_dsn(host=host, port=port, database=database,
@@ -112,6 +120,8 @@ def generate_configuration(
         "DB_POOL_MAX_SIZE": "4",
         "TIANTIAN_IMPORT_ENABLED": "true",
         "AUTH_DEV_MODE": "false",
+        "DAILY_RESEARCH_ENABLED": "false",
+        **codex_client,
     }
     worker = {
         "APP_ENV": "production",
@@ -127,10 +137,20 @@ def generate_configuration(
         "OUTBOX_DELIVERY_CONCURRENCY": "2",
         "DAILY_RESEARCH_ENABLED": "false",
         "AUTH_DEV_MODE": "false",
+        **codex_client,
+    }
+    codex = {
+        "CODEX_RUNNER_TOKEN": codex_token,
+        "CODEX_PATH": "/usr/local/bin/codex",
+        "CODEX_HOME": "/home/appuser/.codex",
+        "CODEX_TIMEOUT_SECONDS": "90",
+        "CODEX_CHAT_TIMEOUT_SECONDS": "900",
+        "CODEX_RUNNER_MAX_CONCURRENT": "2",
     }
     nas = {
         "API_ENV_FILE": "deployment/env/api.env",
         "WORKER_ENV_FILE": "deployment/env/worker.env",
+        "CODEX_ENV_FILE": "deployment/env/codex.env",
         "POSTGRES_NETWORK_NAME": network,
         "POSTGRES_ADMIN_USER": admin_user,
         "WEB_BIND_ADDRESS": web_bind_address,
@@ -138,7 +158,7 @@ def generate_configuration(
     }
     created: list[Path] = []
     try:
-        for name, values in (("api", api), ("worker", worker), ("nas", nas)):
+        for name, values in (("api", api), ("worker", worker), ("nas", nas), ("codex", codex)):
             path = paths[name]
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -1,0 +1,3 @@
+# This minimal, non-secret default is copied into a new Codex runtime volume.
+# Container login writes auth.json here; do not copy desktop MCP/apps/history.
+cli_auth_credentials_store = "file"
