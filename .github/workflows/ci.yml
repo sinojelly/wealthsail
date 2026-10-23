@@ -5,11 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      run_remote_smoke:
-        description: Run the protected remote Supabase smoke on master
+      run_self_hosted_smoke:
+        description: Run the explicitly configured self-hosted PostgreSQL smoke on master
         required: true
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -114,27 +114,62 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Real-database compatibility check. It is intentionally absent from PRs:
-  # executing unreviewed PR code with a production DSN would expose the secret.
-  # Enable after configuring the `production-smoke` environment and setting
-  # repository variable WS_REMOTE_SMOKE_ENABLED=true.
-  remote-supabase-smoke:
+  # Disposable databases only; no deployment credentials are used by this job.
+  nas-postgres-installation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [16-bookworm, 18-bookworm]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: nas_test_admin
+          POSTGRES_PASSWORD: nas-test-only-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nas_test_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NAS_TEST_ADMIN_DATABASE_URL: postgresql://nas_test_admin:nas-test-only-password@127.0.0.1:5432/postgres?sslmode=disable
+      WEALTHSAIL_ENV_FILE: /tmp/wealthsail-test-no-env
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Install an empty database and exercise real identity/tenant flows
+        run: python -m pytest tests/integration/test_nas_postgres_installation.py -q -p no:cacheprovider
+
+  # Opt-in against a separately configured self-hosted target. Old Supabase
+  # variables/secrets cannot accidentally enable or supply this connection.
+  remote-postgres-smoke:
     needs: [backend, frontend, full-stack-smoke]
     if: >-
       github.ref == 'refs/heads/master' &&
-      ((github.event_name == 'push' && vars.WS_REMOTE_SMOKE_ENABLED == 'true') ||
-       (github.event_name == 'workflow_dispatch' && inputs.run_remote_smoke))
+      ((github.event_name == 'push' && vars.WS_SELF_HOSTED_SMOKE_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.run_self_hosted_smoke))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production-smoke
     concurrency:
-      group: wealthsail-remote-supabase-smoke
+      group: wealthsail-remote-postgres-smoke
       cancel-in-progress: false
     env:
-      WS_SMOKE_DATABASE_URL: ${{ secrets.WS_SMOKE_DATABASE_URL }}
-      WS_SMOKE_DATABASE_EXPECTED_HOST: ${{ vars.WS_SMOKE_DATABASE_EXPECTED_HOST }}
-      WS_SMOKE_EMAIL: ${{ secrets.WS_SMOKE_EMAIL }}
-      WS_SMOKE_PASSWORD: ${{ secrets.WS_SMOKE_PASSWORD }}
+      WS_SMOKE_DATABASE_URL: ${{ secrets.WS_SELF_HOSTED_SMOKE_DATABASE_URL }}
+      WS_SMOKE_DATABASE_EXPECTED_HOST: ${{ vars.WS_SELF_HOSTED_SMOKE_DATABASE_EXPECTED_HOST }}
+      WS_SMOKE_EMAIL: ${{ secrets.WS_SELF_HOSTED_SMOKE_EMAIL }}
+      WS_SMOKE_PASSWORD: ${{ secrets.WS_SELF_HOSTED_SMOKE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -153,13 +188,13 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
-      - name: Run local app against protected remote Supabase
+      - name: Run local app against protected self-hosted PostgreSQL
         run: python scripts/full_stack_smoke.py
       - name: Upload remote smoke diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: remote-supabase-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          name: remote-postgres-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/full-stack-smoke/
           if-no-files-found: ignore
           retention-days: 7

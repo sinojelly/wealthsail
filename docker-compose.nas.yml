@@ -1,0 +1,38 @@
+# Overlay for an existing PostgreSQL service. Run with docker-compose.yml.
+# The external network belongs to the NAS PostgreSQL Compose project.
+services:
+  api:
+    networks:
+      - wealthsail
+      - postgres_shared
+
+  worker:
+    networks:
+      - wealthsail
+      - postgres_shared
+
+  db-init:
+    image: wealthsail-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles: [tools]
+    entrypoint: ["python", "scripts/initialize_postgres.py"]
+    env_file:
+      - ${API_ENV_FILE:-deployment/env/api.env}
+      - ${WORKER_ENV_FILE:-deployment/env/worker.env}
+    environment:
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-admin}
+    networks:
+      - postgres_shared
+    stdin_open: true
+    tty: true
+    # This is a one-shot management process, never an API/Worker sidecar.
+    restart: "no"
+    healthcheck:
+      disable: true
+
+networks:
+  postgres_shared:
+    external: true
+    name: ${POSTGRES_NETWORK_NAME:-global-postgres-network}

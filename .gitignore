@@ -58,6 +58,7 @@ backend/static/avatars/*
 /ngrok-*.zip
 /cloudflared-*
 /artifacts/
+/backups/
 
 # 本地金融账户资料与采集结果：包含资产、交易流水、浏览器登录会话，严禁提交
 /reference/天天基金/

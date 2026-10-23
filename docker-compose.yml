@@ -57,6 +57,9 @@ services:
         condition: service_healthy
     networks:
       - wealthsail
+    # The shared image's HTTP healthcheck belongs to the API process.
+    healthcheck:
+      disable: true
 
   frontend:
     build:
@@ -65,7 +68,7 @@ services:
     image: wealthsail-frontend:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:80"
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
     depends_on:
       - api
     networks:
