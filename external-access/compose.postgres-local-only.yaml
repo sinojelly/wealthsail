@@ -1,0 +1,11 @@
+# Optional overlay for the EXISTING postgres + pgadmin Compose project.
+# Requires Docker Compose >= 2.24.4. Never run this file on its own.
+# Docker-network database consumers keep using postgres:5432 unchanged.
+# Loopback isolation needs Engine >= 28, or a verified host firewall on older NAS.
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:${PG_ADMIN_LOCAL_PORT:-5432}:5432"
+  pgadmin:
+    ports: !override
+      - "127.0.0.1:${PGADMIN_LOCAL_PORT:-5500}:80"

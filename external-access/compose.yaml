@@ -1,0 +1,61 @@
+# Start this stack separately from the application Compose projects.
+# Published hostnames and their HTTP origins are managed in Cloudflare, not here.
+name: wealthsail-external-access
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.3
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    command:
+      - tunnel
+      - --metrics
+      - 127.0.0.1:2000
+      - --loglevel
+      - info
+      - run
+      - --token-file
+      - /run/secrets/cloudflared_token
+    environment:
+      TUNNEL_DISABLE_PATH_NORMALIZATION: "false"
+    secrets:
+      - cloudflared_token
+    networks:
+      wealth_edge:
+        ipv4_address: ${CLOUDFLARED_WEALTH_IP:-172.30.91.2}
+      studyos_edge:
+        ipv4_address: ${CLOUDFLARED_STUDYOS_IP:-172.30.92.2}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  # File-backed Compose secrets retain the source file's actual permissions.
+  cloudflared_token:
+    file: ./secrets/cloudflared-token
+
+networks:
+  wealth_edge:
+    name: ${WEALTH_EDGE_NETWORK:-wealthsail-tunnel-edge}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${WEALTH_EDGE_SUBNET:-172.30.91.0/29}
+          # Keep the connector's trusted static IP outside dynamic allocations.
+          ip_range: ${WEALTH_EDGE_IP_RANGE:-172.30.91.4/30}
+  studyos_edge:
+    name: ${STUDYOS_EDGE_NETWORK:-studyos-tunnel-edge}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${STUDYOS_EDGE_SUBNET:-172.30.92.0/29}
+          ip_range: ${STUDYOS_EDGE_IP_RANGE:-172.30.92.4/30}

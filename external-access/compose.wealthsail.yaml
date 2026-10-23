@@ -1,0 +1,27 @@
+# Merge after docker-compose.yml and docker-compose.nas.yml in the repo root.
+# Requires Docker Compose >= 2.24.4 for !override.
+services:
+  frontend:
+    # Tunnel reaches the internal edge network; publish no host bypass.
+    ports: !override []
+    environment:
+      CLOUDFLARED_WEALTH_IP: ${CLOUDFLARED_WEALTH_IP:-172.30.91.2}
+      # Preserve Nginx variables such as $uri and $binary_remote_addr.
+      NGINX_ENVSUBST_FILTER: "^CLOUDFLARED_WEALTH_IP$"
+    volumes:
+      - type: bind
+        source: ./external-access/nginx/wealthsail-security.conf.template
+        target: /etc/nginx/templates/10-tunnel-security.conf.template
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      wealthsail: {}
+      wealth_edge:
+        aliases:
+          - wealthsail-origin
+
+networks:
+  wealth_edge:
+    external: true
+    name: ${WEALTH_EDGE_NETWORK:-wealthsail-tunnel-edge}

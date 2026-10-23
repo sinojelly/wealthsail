@@ -1,0 +1,20 @@
+# Merge after StudyOS's own base Compose file; do not run this file alone.
+# Requires Docker Compose >= 2.24.4 for !override.
+services:
+  studyos:
+    ports: !override []
+    environment:
+      FORWARDED_ALLOW_IPS: ${CLOUDFLARED_STUDYOS_IP:-172.30.92.2}
+      STUDYOS_ALLOWED_HOSTS: ${STUDYOS_ALLOWED_HOSTS:-studyos.sinojelly.kdns.fr}
+    networks:
+      # The base service uses the implicit default application network.
+      default: {}
+      studyos_edge:
+        aliases:
+          - studyos-origin
+
+networks:
+  default: {}
+  studyos_edge:
+    external: true
+    name: ${STUDYOS_EDGE_NETWORK:-studyos-tunnel-edge}

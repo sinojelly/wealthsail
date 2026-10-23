@@ -1,0 +1,27 @@
+# Rendered by the official Nginx image into conf.d, in the HTTP context.
+# NGINX_ENVSUBST_FILTER must select only CLOUDFLARED_WEALTH_IP.
+# Trust exactly this connector address; never trust the complete Docker subnet.
+set_real_ip_from ${CLOUDFLARED_WEALTH_IP};
+real_ip_header CF-Connecting-IP;
+
+# Empty keys are not counted. Normal API calls, refresh and SSE stay outside
+# these limits. $uri is the normalized path and excludes query parameters.
+map $uri $wealthsail_auth_limit_key {
+    default "";
+    ~^/api/v1/auth/(login|register|password-reset/(request|confirm))/?$ $binary_remote_addr;
+}
+
+limit_req_zone $wealthsail_auth_limit_key zone=wealthsail_auth:10m rate=10r/m;
+limit_req zone=wealthsail_auth burst=10 nodelay;
+limit_req_status 429;
+
+map $uri $wealthsail_callback_limit_key {
+    default "";
+    ~^/api/v1/adapters/wecom/callback/?$ $binary_remote_addr;
+}
+
+limit_req_zone $wealthsail_callback_limit_key zone=wealthsail_callback:1m rate=2r/s;
+limit_req zone=wealthsail_callback burst=20 nodelay;
+
+# Match the application's 20 MiB upload allowance, plus multipart overhead.
+client_max_body_size 21m;
