@@ -97,6 +97,8 @@ async def get_access_token(settings: Settings) -> str:
 
     Raises RuntimeError: 凭据无效或接口异常。
     """
+    if not settings.wecom_enabled:
+        raise DeliveryRejectedError("WeCom integration is disabled")
     key = _credential_key(settings)
     cached = _token_cache.get(key)
     if cached and cached[1] > time.time() + 300:
@@ -150,6 +152,8 @@ async def send_message(
         DeliveryRejectedError: 参数或 Provider 明确拒绝。
         DeliveryUnknownError: 超时/网络故障导致投递结果未知，禁止自动换通道重发。
     """
+    if not settings.wecom_enabled:
+        raise DeliveryRejectedError("WeCom integration is disabled")
     if not user_id.strip():
         raise DeliveryRejectedError("WeCom recipient must not be empty")
     if msg_type not in {"text", "markdown"}:
@@ -348,6 +352,8 @@ async def wecom_url_verify(
     settings: Settings = Depends(get_settings_dep),
 ) -> Response:
     """企业微信后台的 URL 验证：返回解密后的 echostr 纯文本。"""
+    if not settings.wecom_enabled:
+        return PlainTextResponse("WeCom integration is disabled", status_code=503)
     try:
         _check_timestamp(timestamp)
         if not verify_signature(
@@ -373,6 +379,8 @@ async def wecom_callback(
     settings: Settings = Depends(get_settings_dep),
 ) -> Response:
     """加密消息回调：验签 → 解密 → 消费 /bind 绑定口令 → 加密被动回复。"""
+    if not settings.wecom_enabled:
+        return PlainTextResponse("WeCom integration is disabled", status_code=503)
     body_bytes = await request.body()
     if len(body_bytes) > 64 * 1024:
         return PlainTextResponse("payload too large", status_code=413)

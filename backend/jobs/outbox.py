@@ -345,6 +345,8 @@ async def _cas_retry_or_dead(
 
 async def deliver_batch(pool: Pool, settings: Settings, limit: int = 20) -> int:
     """Claim, release the DB connection, then deliver a bounded batch."""
+    if not settings.wecom_enabled:
+        return 0
     await mark_stale_sending_unknown(pool)
     rows = await claim_batch(
         pool,

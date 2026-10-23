@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     password_reset_token_ttl_minutes: int = Field(default=30, ge=5, le=1440)
 
     # --- Email -------------------------------------------------------------
+    password_reset_email_enabled: bool = Field(default=True)
     web_base_url: str = Field(default="http://localhost:5173")
     smtp_host: str | None = Field(default=None)
     smtp_port: int = Field(default=587, ge=1, le=65535)
@@ -106,6 +107,7 @@ class Settings(BaseSettings):
     market_master_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
 
     # --- WeCom callback / binding --------------------------------------------
+    wecom_enabled: bool = Field(default=True)
     wecom_callback_token: str = Field(default="")
     wecom_callback_aes_key: str = Field(default="")
     wecom_corp_id: str = Field(default="")
@@ -258,7 +260,8 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
             raise ValueError("DATABASE_URL is required for the API")
         _require_secret("BINDING_HMAC_KEY", settings.binding_hmac_key)
         _require_secret("ROUTING_ENCRYPTION_KEY", settings.routing_encryption_key)
-        _require_secret("WECOM_CALLBACK_TOKEN", settings.wecom_callback_token, min_length=16)
+        if settings.wecom_enabled:
+            _require_secret("WECOM_CALLBACK_TOKEN", settings.wecom_callback_token, min_length=16)
         _require_distinct_secrets(
             {
                 "JWT_SECRET": settings.jwt_secret,
@@ -271,16 +274,18 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
         )
         if settings.jwt_algorithm != "HS256":
             raise ValueError("JWT_ALGORITHM must be HS256")
-        if len(settings.wecom_callback_aes_key.strip()) != 43:
-            raise ValueError("WECOM_CALLBACK_AES_KEY must be exactly 43 characters")
-        if not settings.wecom_corp_id.strip():
-            raise ValueError("WECOM_CORP_ID is required for the API")
-        if not settings.smtp_host or not settings.smtp_from:
-            raise ValueError("SMTP_HOST and SMTP_FROM are required for password reset delivery")
-        if not settings.smtp_starttls:
-            raise ValueError("SMTP_STARTTLS must be true in production")
-        if settings.smtp_username and not settings.smtp_password:
-            raise ValueError("SMTP_PASSWORD is required when SMTP_USERNAME is configured")
+        if settings.wecom_enabled:
+            if len(settings.wecom_callback_aes_key.strip()) != 43:
+                raise ValueError("WECOM_CALLBACK_AES_KEY must be exactly 43 characters")
+            if not settings.wecom_corp_id.strip():
+                raise ValueError("WECOM_CORP_ID is required for the API")
+        if settings.password_reset_email_enabled:
+            if not settings.smtp_host or not settings.smtp_from:
+                raise ValueError("SMTP_HOST and SMTP_FROM are required for password reset delivery")
+            if not settings.smtp_starttls:
+                raise ValueError("SMTP_STARTTLS must be true in production")
+            if settings.smtp_username and not settings.smtp_password:
+                raise ValueError("SMTP_PASSWORD is required when SMTP_USERNAME is configured")
         if settings.worker_database_url.strip():
             raise ValueError("WORKER_DATABASE_URL must not be provided to the API")
         if (settings.wecom_corp_secret or settings.wecom_bot_secret or settings.model_api_key
@@ -302,7 +307,9 @@ def validate_runtime_settings(settings: Settings, *, process: str) -> Settings:
         if not settings.worker_database_url.strip():
             raise ValueError("WORKER_DATABASE_URL is required for the Worker")
         _require_secret("ROUTING_ENCRYPTION_KEY", settings.routing_encryption_key)
-        if not settings.wecom_corp_id.strip() or not settings.wecom_corp_secret.strip():
+        if settings.wecom_enabled and (
+            not settings.wecom_corp_id.strip() or not settings.wecom_corp_secret.strip()
+        ):
             raise ValueError("WECOM_CORP_ID and WECOM_CORP_SECRET are required for the Worker")
         if settings.wecom_bot_enabled and not (
             settings.wecom_bot_id.strip() and settings.wecom_bot_secret.strip()

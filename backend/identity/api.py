@@ -25,7 +25,7 @@ from backend.dependencies import (
     get_tenant_context,
     now_shanghai,
 )
-from backend.errors import ValidationError_, ok
+from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.identity import service
 from backend.domain import domain_tenant, identity_service
 from backend.integrations.email import send_password_reset_email
@@ -139,6 +139,8 @@ async def request_password_reset(
     settings: Settings = Depends(get_settings_dep),
     request_id: str = Depends(get_request_id),
 ) -> dict:
+    if not settings.password_reset_email_enabled:
+        raise DataUnavailableError("密码重置邮件功能尚未配置", retryable=False)
     result = await identity_service(pool, settings).request_password_reset(
         email=body.email
     )
@@ -278,6 +280,8 @@ async def wecom_binding(
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """创建企业微信一次性绑定口令（仅返回一次，库中只存 HMAC 摘要）。"""
+    if not settings.wecom_enabled:
+        raise DataUnavailableError("企业微信集成尚未配置", retryable=False)
     as_of = now_shanghai()
     data = await identity_service(pool, settings).create_binding_challenge(
         domain_tenant(ctx)

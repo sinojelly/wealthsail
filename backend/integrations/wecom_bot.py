@@ -317,6 +317,8 @@ async def send_opportunity_webhook(settings, markdown, *, client=None):
         get_http_client,
     )
 
+    if not getattr(settings, "wecom_enabled", True):
+        raise DeliveryRejectedError("WeCom integration is disabled")
     url = _opportunity_webhook_url(settings)
     if not isinstance(markdown, str) or not markdown.strip():
         raise DeliveryRejectedError("opportunity webhook content is empty")
