@@ -73,3 +73,9 @@ StudyOS 只把该站的 cloudflared 地址设为 `FORWARDED_ALLOW_IPS`，保留�
 - StudyOS 原项目允许很大的单批上传；实际外网请求受 Cloudflare 套餐大小/时长限制。大批量应拆分，或走受信管理通道；不能宣称 1GiB 单请求可原样通过公网。
 - 不修改 StudyOS 仓库源码或其既有数据卷、Codex 认证配置。它的 Agent sandbox 设置继承原项目；网络入口保护不能代替 Agent 文件/执行权限边界。
 - 本机没有 Docker，本次验证配置解析、文件引用及隔离约束；容器启动、镜像、Cloudflare 控制台和双网访问需在 NAS 实测。
+
+## 7. WealthSail 的 Codex 内部服务
+
+聊天、普通报告的模型分析及每日公共研究统一通过 `codex-runner`；固定计算继续由原业务逻辑完成。Runner 只加入独立 `codex` 网络，API/Worker 通过专用令牌调用，不发布 8090，不加入两个 edge 网络或 PostgreSQL 网络。Cloudflare 不新增 Codex 路由，也不参与 Codex 的出站账号登录。
+
+仅 Runner 和一次性 `codex-auth` 登录工具挂载可写 `codex_auth` 卷，以支持凭据自动刷新；API/Worker、frontend、cloudflared 没有 Codex 认证文件。Runner 无数据库、Web 会话、邮件或企微密钥。私人聊天/报告使用独立临时上下文、禁止工具与搜索；公共每日研究保留联网与每日唯一名额。认证卷与 StudyOS 分离，操作见 [Codex 认证与部署指南](../docs/32.Codex统一模型与NAS认证操作指南.md)。

@@ -185,11 +185,13 @@ docker network inspect wealthsail-tunnel-edge studyos-tunnel-edge \
 
 **这样已经满足 WealthSail/StudyOS 的 external 网络前提，不需要先让 Tunnel 在线。**
 
-## 五、部署 WealthSail：生成配置 → 建库 → 启动
+## 五、部署 WealthSail：生成配置 → 建库 → Codex 登录 → 启动
 
 ### 5.1 首次生成配置
 
-以下是空库首装。检查这三个文件是否已经存在：`deployment/nas.env`、`deployment/env/api.env`、`deployment/env/worker.env`。已经生成过就保留它们，不删除重建；若已初始化过应用，使用文末“日常更新”，不要重复首次部署。
+以下是空库首装。检查 `deployment/nas.env`、`deployment/env/api.env`、`deployment/env/worker.env`、`deployment/env/codex.env` 是否已经存在。已经生成过就保留它们，不删除重建；若已初始化过应用，使用文末“日常更新”，不要重复首次部署。
+
+如果此前只生成了前三个文件、还没有 `codex.env`，先保留旧配置，执行 `python3 scripts/configure_codex.py` 补齐 Codex 配置，再从 5.2 继续。NAS 无 Python 时，用下方临时 Python 容器命令，将末尾的 `python scripts/configure_nas.py --web-base-url ...` 换成 `python scripts/configure_codex.py`。补齐工具保留数据库口令、用户会话密钥和现有文件内容，不重新初始化账号。
 
 NAS 已安装 Python 3 时执行：
 
@@ -215,6 +217,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 | `deployment/nas.env` | Compose：PG 网络/管理员名等 | 不需要 |
 | `deployment/env/api.env` | API：运行 DSN、登录/会话密钥、域名 | 不需要，自动生成 |
 | `deployment/env/worker.env` | Worker：独立 DSN、任务参数 | 不需要，自动生成 |
+| `deployment/env/codex.env` | Codex Runner：内部调用令牌、超时和模型参数 | 不需要，自动生成；不含数据库和 Web 会话密钥 |
 
 默认已匹配现有 `postgres:5432`、`admin` 和 `global-postgres-network`。Web 域名也已写好。**不用复制 api/worker 的 `.env.example` 覆盖生成文件，不用手工填写 NAS PG 的 admin 密码。**
 
@@ -234,7 +237,7 @@ docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
   -f "$ACCESS_DIR/compose.wealthsail.yaml" build api frontend
 ```
 
-这是完整源码构建，可能较慢。Worker 和 db-init 复用 API 的后端镜像，不单独建 PostgreSQL 镜像。
+这是完整源码构建，可能较慢。Worker、Codex Runner、Codex 登录工具和 db-init 复用 API 的后端镜像；镜像已包含固定版本的 Linux 原生 Codex CLI，构建时检查版本。不需要在 NAS 宿主安装 Node/Codex，也不用复制 Windows 的 `codex.exe`。不单独建 PostgreSQL 镜像。
 
 ### 5.3 创建空库、管理员和首个租户
 
@@ -261,7 +264,9 @@ docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
 
 迁移/权限 readback 失败时停在这一步，不要继续启动，也不要删账本、跳 migration 或给运行角色授予超级用户。
 
-### 5.4 启动三个常驻服务
+### 5.4 为 WealthSail 完成 Codex 登录
+
+即时聊天、普通报告的模型分析和每日研究全部使用 Codex；不填写 `MODEL_API_KEY`。固定计算和模板报告保留原有行为。使用你准备给 WealthSail 使用的 ChatGPT 账号登录：
 
 ```bash
 docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
@@ -269,12 +274,50 @@ docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
   -f "$WEALTH_ROOT/docker-compose.yml" \
   -f "$WEALTH_ROOT/docker-compose.nas.yml" \
   -f "$ACCESS_DIR/compose.wealthsail.yaml" \
-  up -d --wait --wait-timeout 180 api worker frontend
+  run --rm --no-deps codex-auth login --device-auth
 ```
 
-`db-init` 是一次性工具，上一条命令结束后自动删除，不是需要常驻启动的第四个服务。若 NAS 启动较慢，先查日志，再视情况增加等待时间。
+在自己的电脑或手机浏览器打开命令显示的地址，输入一次性设备码并确认账号。设备码、token 和认证文件都不要发到聊天或工单。若提示设备登录未开启，先在 ChatGPT 个人安全设置或工作区权限中允许设备码登录；替代的认证文件导入方法见 [Codex 认证操作指南](../docs/32.Codex统一模型与NAS认证操作指南.md)。
 
-### 5.5 在 Docker 内检查
+登录完成后，执行**不发模型请求、不消耗每日研究名额**的检查：
+
+```bash
+docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
+  --env-file "$ACCESS_DIR/.env" \
+  -f "$WEALTH_ROOT/docker-compose.yml" \
+  -f "$WEALTH_ROOT/docker-compose.nas.yml" \
+  -f "$ACCESS_DIR/compose.wealthsail.yaml" \
+  run --rm --no-deps codex-auth login status
+
+docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
+  --env-file "$ACCESS_DIR/.env" \
+  -f "$WEALTH_ROOT/docker-compose.yml" \
+  -f "$WEALTH_ROOT/docker-compose.nas.yml" \
+  -f "$ACCESS_DIR/compose.wealthsail.yaml" \
+  run --rm --no-deps --entrypoint python codex-auth \
+  -m scripts.codex_admin check
+```
+
+预期账号已登录，最后检查返回 `"ok": true`。此检查只验证 CLI、登录状态及能力，真实模型权限/网络仍须在 Web 聊天验收。认证文件由容器写入 `codex_auth` 命名卷内的 `/home/appuser/.codex/auth.json`，可写以便自动刷新，只挂载给 Runner 和一次性登录工具。API、Worker、cloudflared 都拿不到该文件。不要运行 `down -v` 删除卷，不要把该卷与 StudyOS 共用。
+
+### 5.5 启动四个常驻服务
+
+```bash
+docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
+  --env-file "$ACCESS_DIR/.env" \
+  -f "$WEALTH_ROOT/docker-compose.yml" \
+  -f "$WEALTH_ROOT/docker-compose.nas.yml" \
+  -f "$ACCESS_DIR/compose.wealthsail.yaml" \
+  up -d --wait --wait-timeout 180 codex-runner api worker frontend
+```
+
+常驻服务为 Codex Runner、API、Worker、Frontend。`db-init` 和 `codex-auth` 是按需执行的一次性工具。若 NAS 启动较慢，先查日志，再视情况增加等待时间。
+
+首次生成的 API 和 Worker 配置均为 `DAILY_RESEARCH_ENABLED=false`，不影响聊天及普通报告使用 Codex。完成本节检查和 Web 聊天验收后，需要定时公共研究时，再将**两个文件** `deployment/env/api.env` 和 `deployment/env/worker.env` 中此项都改为 `true`，并用同一三文件前缀执行 `up -d --force-recreate api worker`。不要用实际 `daily_research --once` 试登录：实际任务会占用当天唯一研究名额，结果不确定也不自动重试。
+
+不指定 `CODEX_MODEL` 时沿用 Codex 账号默认模型；如需指定，API、Worker 和 `codex.env` 使用同一个账号可用的模型名，修改后重建对应容器。具体参数和认证卷备份见 [Codex 操作指南](../docs/32.Codex统一模型与NAS认证操作指南.md)。
+
+### 5.6 在 Docker 内检查
 
 ```bash
 docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
@@ -290,7 +333,7 @@ docker compose --env-file "$WEALTH_ROOT/deployment/nas.env" \
   -f "$ACCESS_DIR/compose.wealthsail.yaml" exec -T frontend nginx -t
 ```
 
-预期 API healthy，Worker/Frontend running，Nginx 显示配置测试成功。端口列显示内部 `80/tcp`、`8000/tcp` 正常，**不能出现宿主端口 `IP:端口->容器端口`**。
+预期 API 和 Codex Runner healthy，Worker/Frontend running，Nginx 显示配置测试成功。端口列显示内部 `80/tcp`、`8000/tcp` 正常，**不能出现宿主端口 `IP:端口->容器端口`**；Runner 的 8090 不发布、不加入 edge 或数据库网络。
 
 当前不通过 `http://NAS-IP:8080` 访问：应用不发布宿主端口。接下来用域名验收。
 
@@ -436,7 +479,8 @@ Path 留空；单 Service URL 字段填写 `http://studyos-origin:8000`。远程
 | 本文第二节 | 替换 NAS 绝对路径和管理员邮箱；只是当前 shell 变量 |
 | `external-access/.env` | 由 `.env.example` 复制；无网段冲突则保持模板值 |
 | `external-access/secrets/cloudflared-token` | 第三节隐藏写入真实 Tunnel token，设置权限 |
-| `deployment/nas.env`、`deployment/env/api.env`、`deployment/env/worker.env` | 第五节生成一次，保留密钥，通常不手改 |
+| `deployment/nas.env`、`deployment/env/api.env`、`deployment/env/worker.env`、`deployment/env/codex.env` | 第五节生成一次，保留密钥；旧三文件用 `configure_codex.py` 补齐 |
+| WealthSail `codex_auth` 命名卷 | 5.4 设备登录后生成认证文件，保留卷并限制备份访问权限 |
 | `studyos/.env` | 从其自身模板复制，填 NAS 的 `CODEX_HOME_DIR` |
 | Cloudflare 控制台 | 两个 Access app、一个 Tunnel、两条精确路由、各自 AUD、HTTPS 和缓存规则 |
 | 所有 `.yml`/`.yaml` | 默认不改名、不移动、不合并；按本文完整 `-f` 顺序使用 |
@@ -470,9 +514,9 @@ WealthSail 更新需先备份，再以第五节的三文件完整前缀执行：
 
 1. `build api frontend`
 2. `run --rm --no-deps db-init --confirm-target postgres:5432/wealthsail`（升级不再传 `--bootstrap-email`）
-3. `up -d --force-recreate api worker frontend`
+3. `up -d --force-recreate codex-runner api worker frontend`
 
-保留生成 env，不重新初始化身份密钥。完整数据库、租户验收和备份说明见 [NAS 数据库操作手册](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md)。
+保留生成 env 和 `codex_auth` 卷，不重新初始化身份密钥。旧三文件配置先补齐 `configure_codex.py`，然后完成 5.4 登录。首次升级至统一 Codex 时按 5.4–5.6 验证。完整数据库、租户验收和备份说明见 [NAS 数据库操作手册](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md)。
 
 StudyOS 更新先备份 `volume`、`codex-runtime` 及配置，再以其双文件前缀 `build studyos`、`up -d --wait studyos`。后续版本的迁移和备份要求同时遵循 StudyOS 自身文档。
 
@@ -491,6 +535,8 @@ StudyOS 更新先备份 `volume`、`codex-runtime` 及配置，再以其双文�
 | 网络地址冲突 | 子网、动态池、固定 IP 成组修改；核实 LAN/VPN/Docker 网络 |
 | `configuration exists; preserve its secrets` | 已有生成配置；保留它们，从校验/构建继续，不删除密钥 |
 | db-init 失败 | 看具体迁移/角色/连接报错；不跳迁移、不修改其他业务库 |
+| Codex 未登录/认证过期 | 执行 5.4 的状态检查及设备登录；保留同一项目名和认证卷，不粘贴 auth.json |
+| Runner healthy 但聊天失败 | healthcheck 只检查进程；按 5.4 检查认证，再看 Runner 日志、NAS 出站 HTTPS 和账号模型权限 |
 | up 等待超时 | 保持同一完整前缀执行 `ps` 和 `logs --tail=100 服务名`，确认健康检查和启动错误 |
 | token permission denied | 检查宿主 UID/GID、0400、父目录权限和 NAS ACL |
 | Tunnel 一直 Inactive | cloudflared 是否已 `up`；NAS 出站 DNS/HTTPS/7844、token 和容器日志 |

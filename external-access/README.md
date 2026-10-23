@@ -132,10 +132,15 @@ ws run --rm --no-deps db-init \
   --bootstrap-email 你的登录邮箱@example.com \
   --nickname 管理员 \
   --tenant-name 我的投研工作台
-ws up -d api worker frontend
+ws run --rm --no-deps codex-auth login --device-auth
+ws run --rm --no-deps codex-auth login status
+ws run --rm --no-deps --entrypoint python codex-auth -m scripts.codex_admin check
+ws up -d codex-runner api worker frontend
 ```
 
 安装器交互输入 NAS PostgreSQL `admin` 密码和新 Web 管理员密码。不会导入开发测试账号或演示租户。迁移、基础目录与首装数据清理规则详见 [NAS 数据库操作手册](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md)。数据库管理员密码不写入此目录。
+
+全部模型请求统一走 Codex；镜像已安装 CLI，设备登录用自己的电脑/手机浏览器完成。`codex_auth` 命名卷只由 Runner 和登录工具使用，与 StudyOS 分开。生成器现在生成四份配置；旧三文件先执行 `python3 scripts/configure_codex.py` 补齐，保留原密钥。认证文件备用导入、模型配置及每日研究开关见 [Codex 指南](../docs/32.Codex统一模型与NAS认证操作指南.md)，完整无简写命令见 [部署步骤 5.4](./DEPLOYMENT.md#54-为-wealthsail-完成-codex-登录)。
 
 ### 已有自建 PostgreSQL 部署
 
@@ -146,7 +151,7 @@ WEB_BASE_URL=https://wealth.sinojelly.kdns.fr
 CORS_ORIGINS=["https://wealth.sinojelly.kdns.fr"]
 ```
 
-执行 `ws config --quiet`，再执行 `ws up -d --force-recreate api frontend`。frontend overlay 清空宿主端口映射，附加可信 IP/限速模板，API/Worker 继续使用原 PostgreSQL 网络。
+旧三文件先执行上文 Codex 配置补齐和设备登录，再执行 `ws config --quiet`、`ws build api frontend`、`ws up -d --force-recreate codex-runner api worker frontend`。frontend overlay 清空宿主端口映射，附加可信 IP/限速模板，API/Worker 继续使用原 PostgreSQL 网络。
 
 ### 检查入口
 

@@ -29,6 +29,8 @@
 ### 应用
 
 - WealthSail 使用原自建 PostgreSQL、受限运行账号、RLS、强口令与邀请制；Access 通过不代表拥有某租户权限。
+- WealthSail 全部模型调用使用内部 Codex Runner；8090 不发布，不加入 edge/数据库网络。API/Worker 仅持有专用内部调用令牌，Runner 仅持有自身可刷新认证卷；不把 `auth.json` 挂载到 API/Worker，也不把数据库/会话密钥传给 Runner。
+- Codex 设备登录在可信浏览器完成，设备码和 `auth.json` 按密码保护。认证卷与 StudyOS 分开；停止 Runner 后再做受限加密备份，不将认证目录放入源码、镜像、Git 或公开日志。操作见 [Codex 指南](../docs/32.Codex统一模型与NAS认证操作指南.md)。
 - StudyOS 首位家长由容器终端初始化；家庭管理员控制学生账号、恢复凭证和敏感操作。不能为了外网首装取消“仅本机初始化”校验。
 - StudyOS 现有 Docker 模式可能使用 `STUDYOS_AGENT_SANDBOX=none` 兼容 NAS，映射为 Codex 的宽执行模式。该应用容器仍可写自己的工作区和 Codex 运行卷，不能承诺模型无法修改文件或使用认证。仅允许可信家庭成员，避免挂载 NAS 其他资料。
 - 可在目标 NAS 验证 `read-only` Agent sandbox，确认识别、批改、流式对话均工作后采用；不要为嵌套沙箱加入 `privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`。
@@ -51,6 +53,7 @@
 - [ ] 用户登录、刷新页面、跨租户拒绝、StudyOS 登录/CSRF 写操作正常，会话 cookie 带 Secure/HttpOnly；CSRF cookie 仍允许前端读取。
 - [ ] WealthSail 登录请求突发超过限额返回 429，普通查询/refresh/SSE 无误伤；不同访客可区分真实 IP。
 - [ ] 两站同源 SSE 实际逐事件显示，Access 到期后的重连能正确重新验证。
+- [ ] WealthSail Codex 设备登录及无模型预检通过，聊天实际逐段返回；重启 Runner 后认证仍保留，API/Worker/cloudflared 均无认证卷；公开研究开关只在验收后启用。
 - [ ] 头像、20MiB 内基金导入正常；StudyOS 按真实公网限额拆分大上传。
 - [ ] Cloudflare 不缓存带用户数据的接口；容器日志不包含口令、token、Cookie 或完整私密请求头。
 - [ ] 分别在 Wi-Fi 和手机蜂窝网络访问两个域名；重启 NAS 后服务恢复，撤销某成员后不可重新访问。
