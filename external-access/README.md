@@ -1,5 +1,7 @@
 # NAS 外网接入操作手册
 
+**本次实操已暂停，实际进度请先看 [2026-10-24 部署交接记录](./DEPLOYMENT-HANDOFF-2026-10-24.md)。** 下文是通用操作指南，不能据此判断 NAS 或 Cloudflare 已完成哪些步骤。
+
 **首次从零部署请先看 [NAS 首次部署详细步骤](./DEPLOYMENT.md)**：按顺序列出需要修改的值、每套 Compose 文件和完整命令，不依赖命令简写。可以先上线 WealthSail，再接入 StudyOS。本文件保留参数、安全和运维说明供查阅。
 
 日期：2026-10-23。使用 Cloudflare Named Tunnel + Access，仅指定成员可访问。NAS **新增一个常驻 `cloudflared` 容器**，不需要公网 IP、路由器端口转发或额外反向代理容器。LAN/WAN 均通过下面的 HTTPS 域名访问，先通过 Access，再登录应用。
