@@ -1,0 +1,16 @@
+# Optional NAS storage overlay; append after the WealthSail base/NAS/access files.
+# Keep the original Compose project and volume names. Prepare these directories
+# and inspect existing volumes before the first use; never replace a live volume.
+volumes:
+  avatar_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${NAS_VALUME_WEALTH_SAIL:?Set NAS_VALUME_WEALTH_SAIL to the existing NAS data root}/avatars
+  codex_auth:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${NAS_VALUME_CODEX:?Set NAS_VALUME_CODEX to the existing private Codex root}/wealthsail/auth
