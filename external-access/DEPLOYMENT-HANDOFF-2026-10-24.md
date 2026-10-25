@@ -37,7 +37,7 @@
 
 本机私密入口是 `external-access/nas.env`，已被 Git 忽略。它包含 NAS 登录信息、源码路径、持久化路径及应用初装参数。**不要把它的内容打印、粘进交接文档、加入 Git 或直接作为 Compose 的 env 文件。** 文件曾使用 GB18030 编码，临时读取工具兼容 UTF-8/GB18030；不要用 shell `source` 执行其内容。
 
-需要保留原有参数名中的拼写 `NAS_VALUME_*`，不要擅自改成 `VOLUME`。真实地址、账号、目录和密码均从私密参数读取，本文只记录变量名。
+需要保留原有参数名中的拼写 `NAS_VOLUME_*`，不要擅自改成 `VOLUME`。真实地址、账号、目录和密码均从私密参数读取，本文只记录变量名。
 
 ## 3. 已完成的代码与 Git 状态
 
@@ -90,7 +90,7 @@ Windows 原生 `ssh-keyscan` 曾报密钥交换算法不支持；临时 Paramiko
 | Compose 合并 | WealthSail 四文件、StudyOS 三文件组合的真实 `config --quiet` 均通过 |
 | 网络预检 | 两个 edge 子网与现有 Docker 网络/主机路由未发现冲突；这不代表 edge 网络已创建 |
 
-私有工具都在 `${NAS_VALUME_CLOUDFLARED}/tools` 下：
+私有工具都在 `${NAS_VOLUME_CLOUDFLARED}/tools` 下：
 
 - `docker-compose-v5.6.1`：经校验的 Compose 二进制。
 - `docker-client/cli-plugins/docker-buildx`：经校验的 Buildx。

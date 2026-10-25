@@ -4,20 +4,20 @@
 
 ## 1. 参数与挂载范围
 
-这些参数沿用用户配置中的 `NAS_VALUME_*` 拼写。它们表示持久化数据根目录，不表示允许模型浏览 NAS 上的其他资料。
+这些参数沿用用户配置中的 `NAS_VOLUME_*` 拼写。它们表示持久化数据根目录，不表示允许模型浏览 NAS 上的其他资料。
 
 | 参数及其子目录 | 容器内目标 | 使用方与权限 |
 |---|---|---|
-| `${NAS_VALUME_WEALTH_SAIL}/avatars` | `/app/backend/static/avatars` | WealthSail API，可写；目录应由 UID/GID `10001:10001` 使用 |
-| `${NAS_VALUME_CODEX}/wealthsail/auth` | `/home/appuser/.codex` | 仅 WealthSail Runner 和一次性认证工具，可写以刷新认证；UID/GID `10001:10001`、目录 `0700` |
-| `${NAS_VALUME_STUDY_OS}` | `/app/data` | StudyOS 业务数据，可写；按当前 StudyOS 镜像的运行身份设置权限 |
-| `${NAS_VALUME_CODEX}/studyos/runtime` | `/root/.codex` | 仅 StudyOS，可写认证和运行状态；当前基础镜像使用 root，目录 `0700` |
-| `${NAS_VALUME_CODEX}/studyos/source` | `/run/codex-host` | StudyOS 基础配置保留的只读认证来源；独立于 runtime，可先是空目录 |
-| `${NAS_VALUME_CLOUDFLARED}/cloudflared-token` | `/run/secrets/cloudflared_token` | 仅 cloudflared，只读文件 secret；文件 owner `65532:65532`、mode `0400` |
+| `${NAS_VOLUME_WEALTH_SAIL}/avatars` | `/app/backend/static/avatars` | WealthSail API，可写；目录应由 UID/GID `10001:10001` 使用 |
+| `${NAS_VOLUME_CODEX}/wealthsail/auth` | `/home/appuser/.codex` | 仅 WealthSail Runner 和一次性认证工具，可写以刷新认证；UID/GID `10001:10001`、目录 `0700` |
+| `${NAS_VOLUME_STUDY_OS}` | `/app/data` | StudyOS 业务数据，可写；按当前 StudyOS 镜像的运行身份设置权限 |
+| `${NAS_VOLUME_CODEX}/studyos/runtime` | `/root/.codex` | 仅 StudyOS，可写认证和运行状态；当前基础镜像使用 root，目录 `0700` |
+| `${NAS_VOLUME_CODEX}/studyos/source` | `/run/codex-host` | StudyOS 基础配置保留的只读认证来源；独立于 runtime，可先是空目录 |
+| `${NAS_VOLUME_CLOUDFLARED}/cloudflared-token` | `/run/secrets/cloudflared_token` | 仅 cloudflared，只读文件 secret；文件 owner `65532:65532`、mode `0400` |
 
 Cloudflared 的父目录由 NAS 管理员保管并设为 `0700`，不把整段目录挂入容器。WealthSail 与 StudyOS 不共用可刷新的认证目录。API、Worker、前端、cloudflared 不挂载 Codex 认证卷。
 
-本补充配置不改变已有 PostgreSQL 服务或其数据卷。WealthSail 的财务数据仍保存在独立 PostgreSQL 数据库，`NAS_VALUME_WEALTH_SAIL` 不是数据库备份或 PG 数据目录。
+本补充配置不改变已有 PostgreSQL 服务或其数据卷。WealthSail 的财务数据仍保存在独立 PostgreSQL 数据库，`NAS_VOLUME_WEALTH_SAIL` 不是数据库备份或 PG 数据目录。
 
 ## 2. 首次启用前的目录检查
 
@@ -30,15 +30,15 @@ Cloudflared 的父目录由 NAS 管理员保管并设为 `0700`，不把整段�
 为 NAS 上的 Compose 单独准备一个 UTF-8、权限 `0600` 的 `external-access/storage.env`，只写下列四个路径参数：
 
 ```dotenv
-NAS_VALUME_WEALTH_SAIL=/path/to/persistent/wealthsail
-NAS_VALUME_STUDY_OS=/path/to/persistent/studyos
-NAS_VALUME_CODEX=/path/to/private/codex
-NAS_VALUME_CLOUDFLARED=/path/to/private/cloudflared
+NAS_VOLUME_WEALTH_SAIL=/path/to/persistent/wealthsail
+NAS_VOLUME_STUDY_OS=/path/to/persistent/studyos
+NAS_VOLUME_CODEX=/path/to/private/codex
+NAS_VOLUME_CLOUDFLARED=/path/to/private/cloudflared
 ```
 
 上面全部是占位示例。不要把包含 SSH 密码的本机 `external-access/nas.env` 直接当作 Compose 环境文件，也不要把其内容复制进文档或 Git。`storage.env` 已由仓库的 `*.env` 规则忽略。
 
-StudyOS 自己的 `.env` 还需要设置 `CODEX_HOME_DIR` 为 `${NAS_VALUME_CODEX}/studyos/source` 的实际 NAS 路径。这个路径用于只读来源挂载，运行中的认证写入独立 `studyos/runtime`，不定期用旧来源文件覆盖刷新后的认证。
+StudyOS 自己的 `.env` 还需要设置 `CODEX_HOME_DIR` 为 `${NAS_VOLUME_CODEX}/studyos/source` 的实际 NAS 路径。这个路径用于只读来源挂载，运行中的认证写入独立 `studyos/runtime`，不定期用旧来源文件覆盖刷新后的认证。
 
 ## 3. 合并文件的顺序
 
@@ -84,7 +84,7 @@ WealthSail 仍使用 `avatar_data`、`codex_auth` 这两个逻辑卷名，StudyO
 
 **已有同名命名卷时，不能直接改 `driver_opts` 然后启动。** 先只读检查卷的 driver、options、mountpoint、使用它的容器及已有数据。如果旧卷与新参数不同，停在这里，先备份并制定单独迁移步骤；Docker 不会把原卷中的数据自动搬到新的 NAS 目录。也不能切换项目名来绕开冲突，否则可能得到一套空卷。
 
-StudyOS 原 `./volume` 目录如已有数据库或学习资料，同样先核对并备份，不直接切换到空的 `${NAS_VALUME_STUDY_OS}`。保留旧数据直到新挂载完成隔离恢复验收。
+StudyOS 原 `./volume` 目录如已有数据库或学习资料，同样先核对并备份，不直接切换到空的 `${NAS_VOLUME_STUDY_OS}`。保留旧数据直到新挂载完成隔离恢复验收。
 
 日常维护保留环境文件、项目名和所有持久目录。更新镜像或重新创建容器不需要删除卷。认证卷备份前停止相应应用，备份需限制访问并加密；不要使用 `down -v`、`volume prune` 或清理整个存储根目录来处理启动错误。
 

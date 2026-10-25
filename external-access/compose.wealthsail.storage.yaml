@@ -7,10 +7,10 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: ${NAS_VALUME_WEALTH_SAIL:?Set NAS_VALUME_WEALTH_SAIL to the existing NAS data root}/avatars
+      device: ${NAS_VOLUME_WEALTH_SAIL:?Set NAS_VOLUME_WEALTH_SAIL to the existing NAS data root}/avatars
   codex_auth:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${NAS_VALUME_CODEX:?Set NAS_VALUME_CODEX to the existing private Codex root}/wealthsail/auth
+      device: ${NAS_VOLUME_CODEX:?Set NAS_VOLUME_CODEX to the existing private Codex root}/wealthsail/auth

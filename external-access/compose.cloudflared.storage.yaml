@@ -2,4 +2,4 @@
 # Only the token file is mounted. Do not mount the whole NAS storage directory.
 secrets:
   cloudflared_token:
-    file: ${NAS_VALUME_CLOUDFLARED:?Set NAS_VALUME_CLOUDFLARED to the existing private Tunnel root}/cloudflared-token
+    file: ${NAS_VOLUME_CLOUDFLARED:?Set NAS_VOLUME_CLOUDFLARED to the existing private Tunnel root}/cloudflared-token
