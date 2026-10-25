@@ -2,7 +2,7 @@
 # 构建：  docker build -f frontend/Dockerfile -t wealthsail-frontend .
 # 运行：  80 端口对外；/api/* 代理到 compose 内 api:8000（见 nginx.conf）
 
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 
 WORKDIR /app
 

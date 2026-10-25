@@ -65,10 +65,10 @@ StudyOS 的 `volume`、`codex-runtime` 和 WealthSail 数据卷应保存在 NAS 
 以下是 **NAS 路径**，不是 `D:\...` 路径。按实际挂载点修改前两行和 Codex 目录；管理员邮箱替换为真实邮箱：
 
 ```bash
-WEALTH_ROOT='/volume1/docker/WealthSail'
-STUDYOS_DIR='/volume1/docker/studyos'
-STUDYOS_CODEX_SOURCE='/volume1/docker-private/studyos-codex'
-ADMIN_EMAIL='你的真实登录邮箱@example.com'
+WEALTH_ROOT='/data_n002/data/udata/real/15221151691/docker/ubuntu_vnc_data/code/wealth-sail'
+STUDYOS_DIR='/data_n002/data/udata/real/15221151691/docker/studyos'
+STUDYOS_CODEX_SOURCE='/data_n002/data/udata/real/15221151691/docker-private/studyos-codex'
+ADMIN_EMAIL='sinojelly@163.com'
 ACCESS_DIR="$WEALTH_ROOT/external-access"
 
 ls "$WEALTH_ROOT/docker-compose.yml" \
