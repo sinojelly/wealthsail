@@ -6,6 +6,12 @@ services:
     environment:
       FORWARDED_ALLOW_IPS: ${CLOUDFLARED_STUDYOS_IP:-172.30.92.2}
       STUDYOS_ALLOWED_HOSTS: ${STUDYOS_ALLOWED_HOSTS:-studyos.sinojelly.kdns.fr}
+      HTTP_PROXY: ${STUDYOS_PROXY_URL:?Set STUDYOS_PROXY_URL}
+      HTTPS_PROXY: ${STUDYOS_PROXY_URL:?Set STUDYOS_PROXY_URL}
+      http_proxy: ${STUDYOS_PROXY_URL:?Set STUDYOS_PROXY_URL}
+      https_proxy: ${STUDYOS_PROXY_URL:?Set STUDYOS_PROXY_URL}
+      NO_PROXY: localhost,127.0.0.1,::1,studyos,studyos-origin
+      no_proxy: localhost,127.0.0.1,::1,studyos,studyos-origin
     networks:
       # The base service uses the implicit default application network.
       default: {}
