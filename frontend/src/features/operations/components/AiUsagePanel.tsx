@@ -2,11 +2,13 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import {
   useAiUsage,
+  useAiAccount,
+  type AiAccount,
   type AiQuota,
   type AiTokens,
-  type AiUsageResponse,
   type AiUsageTask,
 } from "../../../api/ai-usage";
+import { HttpError } from "../../../api/client";
 import { formatShanghaiTime } from "../format-time";
 
 const statuses: Record<string, { label: string; tone: string }> = {
@@ -39,6 +41,7 @@ const quotaReasons: Record<string, string> = {
 };
 const accountMessages: Record<string, string> = {
   READY: "账户可用",
+  STALE: "本次账户查询失败，以下为最后一次成功观测的历史快照。",
   UNAVAILABLE: "账户信息暂不可用，历史记录仍可查看。",
   UNAUTHENTICATED: "Codex 尚未登录或认证已失效。",
   NOT_CONFIGURED: "尚未配置 Codex 账户。",
@@ -57,6 +60,9 @@ const limitationMessages: Record<string, string> = {
   ACCOUNT_UNAUTHENTICATED: "Codex 尚未登录或认证已失效，请联系运维处理。",
   CODEX_NOT_CONFIGURED: "尚未配置 Codex 账户，请联系运维处理。",
   ACCOUNT_READ_FAILED: "账户信息读取失败，历史任务仍可查看。",
+  ACCOUNT_STALE: "历史额度仅供参考，请刷新后确认最新状态。",
+  ACCOUNT_AUTH_CHANGED:
+    "Codex 认证已变更，旧账户快照已清除；请刷新或等待新的账户观测。",
   PLATFORM_ADMIN_REQUIRED: "共享账户详情仅平台管理员可见。",
 };
 
@@ -134,7 +140,7 @@ function Quota({ value }: { value: AiQuota }) {
   );
 }
 
-function Account({ account }: { account: AiUsageResponse["account"] }) {
+function Account({ account }: { account: AiAccount }) {
   const balance = credits(account.credits?.balance ?? null);
   return (
     <section className="ai-account" aria-label="当前 AI 账户">
@@ -143,7 +149,11 @@ function Account({ account }: { account: AiUsageResponse["account"] }) {
         <span
           className={`ai-status ${account.status === "READY" ? "success" : "warning"}`}
         >
-          {account.status === "READY" ? "可用" : "待确认"}
+          {account.status === "READY"
+            ? "可用"
+            : account.status === "STALE"
+              ? "历史快照"
+              : "待确认"}
         </span>
       </div>
       {account.status !== "READY" ? (
@@ -151,7 +161,7 @@ function Account({ account }: { account: AiUsageResponse["account"] }) {
           {accountMessages[account.status] ?? "账户状态未知"}
         </p>
       ) : null}
-      {account.status !== "RESTRICTED" ? (
+      {account.status === "READY" || account.status === "STALE" ? (
         <>
           <dl className="ai-account-meta">
             <div>
@@ -207,7 +217,11 @@ function Account({ account }: { account: AiUsageResponse["account"] }) {
             })}
           </div>
           <p className="ai-note">
-            观测时间 {formatShanghaiTime(account.observedAt)} · 北京时间
+            {account.status === "STALE" ? "最后成功观测时间" : "观测时间"}{" "}
+            {formatShanghaiTime(account.observedAt)} · 北京时间
+            {account.status === "READY"
+              ? " · 近期观测（服务端缓存最长 180 秒）"
+              : ""}
           </p>
         </>
       ) : null}
@@ -336,7 +350,22 @@ function Task({ task }: { task: AiUsageTask }) {
 export default function AiUsagePanel() {
   const [offset, setOffset] = useState(0);
   const usage = useAiUsage(true, offset);
+  const accountQuery = useAiAccount(true);
   const data = usage.data;
+  const accountAccessDenied =
+    accountQuery.error instanceof HttpError &&
+    [401, 403].includes(accountQuery.error.status);
+  const account = accountAccessDenied ? undefined : accountQuery.data;
+  const displayedAccount: AiAccount | undefined =
+    accountQuery.error && account && ["READY", "STALE"].includes(account.status)
+      ? { ...account, status: "STALE" }
+      : account;
+  const refreshing = usage.isFetching || accountQuery.isFetching;
+
+  function refreshAll() {
+    void usage.refetch();
+    accountQuery.refresh();
+  }
   return (
     <div className="ai-usage-panel" role="tabpanel" aria-label="AI 用量">
       <div className="ai-section-heading">
@@ -348,16 +377,39 @@ export default function AiUsagePanel() {
           type="button"
           className="btn-secondary"
           aria-label="刷新 AI 用量"
-          disabled={usage.isFetching}
-          onClick={() => void usage.refetch()}
+          disabled={refreshing}
+          onClick={refreshAll}
         >
-          <RefreshCw
-            size={14}
-            className={usage.isFetching ? "spin" : undefined}
-          />
+          <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
           刷新
         </button>
       </div>
+      {accountQuery.isLoading ? (
+        <p role="status" aria-label="AI 账户加载中">
+          正在读取 Codex 账户信息，历史任务独立加载…
+        </p>
+      ) : null}
+      {accountQuery.error ? (
+        <div
+          role="alert"
+          aria-label="AI 账户加载失败"
+          className="alert alert-warning"
+        >
+          <div>
+            <strong>AI 账户信息加载失败</strong>
+            <p>账户查询暂不可用，历史任务仍可查看。</p>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={accountQuery.isFetching}
+              onClick={accountQuery.refresh}
+            >
+              重试账户信息
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {displayedAccount ? <Account account={displayedAccount} /> : null}
       {usage.isLoading ? (
         <p role="status" aria-label="AI 用量加载中">
           正在读取 AI 用量…
@@ -384,7 +436,6 @@ export default function AiUsagePanel() {
       ) : null}
       {data ? (
         <>
-          <Account account={data.account} />
           <aside className="ai-usage-explanation">
             <strong>用量为账户额度变化估算</strong>
             <p>

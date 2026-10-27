@@ -292,7 +292,10 @@ export default function OperationsPage() {
       </section>
       <footer className="ops-footer">
         <Activity size={14} />
-        <span>监控数据来自后端 Domain API · 当前标签页自动刷新间隔 30 秒</span>
+        <span>
+          监控数据来自后端 Domain API · 任务列表约每 30 秒刷新，AI 账户约每 180
+          秒刷新
+        </span>
       </footer>
     </div>
   );
