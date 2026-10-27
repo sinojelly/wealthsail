@@ -227,7 +227,7 @@ async def test_orchestrator_returns_none_when_no_trigger() -> None:
     )
     try:
         result = await intraday.maybe_generate_intraday_alert(
-            _pool(), _ctx(), Settings()
+            _pool(), _ctx(), Settings(_env_file=None, intraday_tracking_enabled=True)
         )
         # No breach -> generate must not be called, and no cooldown recorded.
         assert result is None
@@ -247,7 +247,7 @@ async def test_orchestrator_skips_when_cooldown_active() -> None:
     )
     try:
         result = await intraday.maybe_generate_intraday_alert(
-            _pool(), _ctx(), Settings()
+            _pool(), _ctx(), Settings(_env_file=None, intraday_tracking_enabled=True)
         )
     finally:
         _stop_patches()
@@ -267,7 +267,10 @@ async def test_orchestrator_generates_when_triggered_and_not_cooled_down() -> No
     )
     try:
         result = await intraday.maybe_generate_intraday_alert(
-            _pool(), _ctx(), Settings(), job_run_id="job-1"
+            _pool(),
+            _ctx(),
+            Settings(_env_file=None, intraday_tracking_enabled=True),
+            job_run_id="job-1",
         )
     finally:
         _stop_patches()
@@ -360,7 +363,9 @@ async def test_intraday_phase_fans_out_per_member_and_skips_without_alert(
     pool = _RunnerPool(jobs)
     now = datetime(2026, 9, 2, 14, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-    outcomes = await run_session(pool, Settings(_env_file=None), "INTRADAY", now)
+    outcomes = await run_session(
+        pool, Settings(_env_file=None, intraday_tracking_enabled=True), "INTRADAY", now
+    )
 
     assert outcomes == {
         "tenant-1:user-1": "SKIPPED:INTRADAY_NO_ALERT",
@@ -387,7 +392,9 @@ async def test_intraday_phase_completes_when_alert_fires(monkeypatch) -> None:
     pool = _RunnerPool(jobs)
     now = datetime(2026, 9, 2, 14, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-    outcomes = await run_session(pool, Settings(_env_file=None), "INTRADAY", now)
+    outcomes = await run_session(
+        pool, Settings(_env_file=None, intraday_tracking_enabled=True), "INTRADAY", now
+    )
 
     assert outcomes == {
         "tenant-1:user-1": "COMPLETED:report=alert-1",
@@ -435,7 +442,9 @@ async def test_intraday_recovery_preserves_member_or_legacy_owner(
         ]
     )
 
-    outcomes = await runner.run_recoverable_jobs(pool, Settings(_env_file=None))
+    outcomes = await runner.run_recoverable_jobs(
+        pool, Settings(_env_file=None, intraday_tracking_enabled=True)
+    )
 
     assert outcomes == {key: "SKIPPED:INTRADAY_NO_ALERT"}
     assert alerts.await_args.args[1].user_id == (audience or "owner-1")

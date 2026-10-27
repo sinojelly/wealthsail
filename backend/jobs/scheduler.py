@@ -255,7 +255,15 @@ class Scheduler:
         now = self._now_provider()
         if now.tzinfo is None:
             raise ValueError("scheduler clock must return a timezone-aware datetime")
-        due = [schedule for schedule in SCHEDULES if is_due(schedule, now)]
+        due = [
+            schedule
+            for schedule in SCHEDULES
+            if is_due(schedule, now)
+            and (
+                schedule.phase != "INTRADAY"
+                or self._settings.intraday_tracking_enabled
+            )
+        ]
         if not due:
             return
         if self._trading_day_check is not None and not await self._trading_day_check(

@@ -156,18 +156,22 @@ async def run_recoverable_jobs(
                    now() - make_interval(mins => $1)
                AND jr.attempt_count < $2
                AND j.is_enabled = TRUE
+               AND ($4::boolean OR j.report_session <> 'INTRADAY')
              ORDER BY COALESCE(jr.next_retry_at, jr.started_at), jr.id
              LIMIT $3
             """,
             settings.job_recovery_window_minutes,
             settings.job_recovery_max_attempts,
             limit,
+            settings.intraday_tracking_enabled,
         )
 
     outcomes: dict[str, str] = {}
     for job in rows:
         key = str(job["job_key"])
         session = str(job["report_session"])
+        if session == "INTRADAY" and not settings.intraday_tracking_enabled:
+            continue
         try:
             outcomes[key] = await _execute_with_lease(pool, settings, job, key, session)
         except Exception as exc:  # noqa: BLE001 -- isolate recoverable runs
@@ -296,6 +300,8 @@ async def run_session(
     member; each member's failure is isolated so one empty/blocked member does
     not abort the rest.
     """
+    if phase == "INTRADAY" and not settings.intraday_tracking_enabled:
+        return {}
     public_session = PUBLIC_SESSION_BY_PHASE.get(phase, phase)
     async with system_connection(pool) as conn:
         jobs = await conn.fetch(
@@ -344,6 +350,8 @@ async def _execute_with_lease(
     key: str,
     public_session: str,
 ) -> str:
+    if public_session == "INTRADAY" and not settings.intraday_tracking_enabled:
+        return "SKIPPED:INTRADAY_DISABLED"
     lease = await claim_job_run(
         pool,
         job,

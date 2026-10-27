@@ -174,7 +174,7 @@ async def test_simultaneous_sessions_start_independently() -> None:
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, intraday_tracking_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,

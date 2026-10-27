@@ -104,6 +104,8 @@ class Settings(BaseSettings):
 
     # Separate, opt-in daily public research using the user's local Codex login.
     daily_research_enabled: bool = Field(default=False)
+    # Independent opt-in for the five-minute holdings anomaly check/alert.
+    intraday_tracking_enabled: bool = Field(default=False)
     daily_research_debug_enabled: bool = Field(default=False)
     daily_research_codex_path: str | None = Field(default=None)
     daily_research_model: str | None = Field(default=None)

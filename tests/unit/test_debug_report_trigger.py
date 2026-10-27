@@ -572,7 +572,7 @@ async def test_debug_intraday_alert_phase_routes_to_real_generator(monkeypatch) 
     result = await debug_service.trigger_report_once(
         object(),
         TenantContext(USER_ID, TENANT_ID, tenant_role="ADMIN"),
-        Settings(_env_file=None, app_env="test"),
+        Settings(_env_file=None, app_env="test", intraday_tracking_enabled=True),
         "INTRADAY",
         phase="ALERT",
     )

@@ -121,6 +121,7 @@ def generate_configuration(
         "TIANTIAN_IMPORT_ENABLED": "true",
         "AUTH_DEV_MODE": "false",
         "DAILY_RESEARCH_ENABLED": "false",
+        "INTRADAY_TRACKING_ENABLED": "false",
         **codex_client,
     }
     worker = {
@@ -135,6 +136,7 @@ def generate_configuration(
         "DB_POOL_MAX_SIZE": "6",
         "DATA_TASK_CONCURRENCY": "2",
         "OUTBOX_DELIVERY_CONCURRENCY": "2",
+        "INTRADAY_TRACKING_ENABLED": "false",
         "DAILY_RESEARCH_ENABLED": "false",
         "AUTH_DEV_MODE": "false",
         **codex_client,

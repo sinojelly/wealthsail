@@ -174,6 +174,8 @@ async def maybe_generate_intraday_alert(
     breach, or every breach was inside its 30-minute cooldown). Callers map
     ``None`` to a graceful ``SKIPPED`` job outcome instead of a failure.
     """
+    if not settings.intraday_tracking_enabled:
+        return None
     asset_scope = AssetScope(kind="MINE", owner_user_id=ctx.user_id)
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         context = await build_report_context(
