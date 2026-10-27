@@ -510,11 +510,15 @@ docker compose --env-file "$ACCESS_DIR/.env" \
 
 恢复仍使用第六节 `up -d cloudflared`。只停连接器不会删除数据库、家庭资料或应用账号；WAN/LAN 域名入口会同时暂停。
 
-WealthSail 更新需先备份，再以第五节的三文件完整前缀执行：
+WealthSail 更新需先备份，再构建、增量迁移、部署。`build_docker_wealthsail.sh` 的默认模式和 `--deploy-only` **都不会自动应用 SQL**；构建镜像也不会修改数据库。
 
-1. `build api frontend`
-2. `run --rm --no-deps db-init --confirm-target postgres:5432/wealthsail`（升级不再传 `--bootstrap-email`）
-3. `up -d --force-recreate codex-runner api worker frontend`
+使用该脚本的既有 NAS 部署，按 [NAS 数据库操作手册第 8 节](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md#8-备份与后续更新) 执行完整命令：
+
+1. `bash build_docker_wealthsail.sh --build-only`，保留现有 env 和卷。
+2. 在维护窗口停止 Worker 和 API，通过同一 `nas-compose ws` 配置启动一次性迁移容器，以管理员身份运行 `scripts/migrate.py --environment production --confirm-target postgres:5432/wealthsail`，先 `--dry-run` 再实际执行。
+3. 迁移返回 `APPLIED`/`SKIP` 和 `READBACK OK` 后，执行 `bash build_docker_wealthsail.sh --deploy-only` 并验收。
+
+迁移容器使用 `--entrypoint python` 替换 `db-init` 的首装入口；不要直接重跑 `initialize_postgres.py`，也不要用 API/Worker 的受限数据库角色执行 DDL。管理员密码按第 8 节隐藏输入，不放入命令行或历史；checksum 不符时停止更新，不跳过校验。若仍手工执行 Compose，则全程保留第五节三文件完整前缀，遵循同样的停止、迁移和启动顺序。
 
 保留生成 env 和 `codex_auth` 卷，不重新初始化身份密钥。旧三文件配置先补齐 `configure_codex.py`，然后完成 5.4 登录。首次升级至统一 Codex 时按 5.4–5.6 验证。完整数据库、租户验收和备份说明见 [NAS 数据库操作手册](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md)。
 
