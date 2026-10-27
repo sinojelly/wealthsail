@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator
 import anyio
 
 from backend.config import Settings
+from backend.ai_usage.tracker import mark_business
 from backend.integrations import codex_client
 from backend.integrations.market_data import Q_UNAVAILABLE, get_quote
 from backend.integrations.news_api import fetch_news
@@ -351,12 +352,14 @@ class ChatService:
         结束时发送:     `data: {\"done\": true}\n\n`
         """
         if not self.is_configured:
+            mark_business("FAILED")
             yield _sse({"delta": "Codex 服务尚未配置，请联系管理员"})
             yield _sse({"done": True})
             return
 
         model = request.model or self._model
         if model != self._model:
+            mark_business("FAILED")
             yield _sse({"delta": "请求的模型未获准使用"})
             yield _sse({"done": True})
             return
@@ -386,8 +389,13 @@ class ChatService:
                 if isinstance(event.get("delta"), str) and event["delta"]:
                     yield _sse({"delta": event["delta"]})
         except codex_client.CodexNotConfiguredError:
+            mark_business("FAILED")
             yield _sse({"delta": "Codex 服务尚未就绪，请联系管理员完成认证"})
+        except (asyncio.CancelledError, GeneratorExit):
+            mark_business("CANCELLED")
+            raise
         except Exception as exc:
+            mark_business("FAILED")
             logger.warning("Codex chat failed error_class=%s", type(exc).__name__)
             yield _sse({"delta": "Codex 对话暂时不可用，请稍后重试"})
         finally:

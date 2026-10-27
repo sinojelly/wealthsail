@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.chat.service import ChatService, ChatRequest
+from backend.ai_usage.tracker import usage_task
+from backend.chat.service import ChatService, ChatRequest, _sse
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
@@ -74,6 +75,20 @@ async def chat_stream(
         raise HTTPException(status_code=400, detail="请求的模型未获准使用") from exc
 
     async def _event_stream() -> AsyncGenerator[str, None]:
+        terminal = None
+        async with usage_task(pool, settings, tenant_id=ctx.tenant_id, user_id=ctx.user_id, task_type="CHAT", task_name="投研对话"):
+            async with aclosing(_reply_stream()) as stream:
+                async for chunk in stream:
+                    if chunk == _sse({"done": True}):
+                        terminal = chunk
+                    else:
+                        yield chunk
+        # Finish usage before advertising completion: clients commonly close
+        # their SSE reader as soon as they receive the terminal event.
+        if terminal is not None:
+            yield terminal
+
+    async def _reply_stream() -> AsyncGenerator[str, None]:
         # Only immutable tenant context is read inside the transaction. Market,
         # news and model network calls happen after the connection is released.
         async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:

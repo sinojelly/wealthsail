@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 
+from backend.ai_usage.tracker import trace_inference, track_task
 from backend.common.database import (
     create_pool,
     system_connection,
@@ -151,6 +152,7 @@ async def load_public_packet(conn, now, external, *, debug_request_id=None):
     return packet
 
 
+@track_task("DAILY_RESEARCH", lambda bound: "基金机会研究（手动）" if bound.get("debug_request_id") is not None else "基金机会研究（自动）")
 async def sync_daily_research(
     pool, settings, now, *, debug_request_id=None, source_batch_id=None
 ):
@@ -256,10 +258,14 @@ async def sync_daily_research(
                 timeout=settings.daily_research_timeout_seconds, model=model,
             )
         else:
-            raw = await run_codex_research(
-                cli["executable"], prompt, REPORT_SCHEMA,
-                timeout=settings.daily_research_timeout_seconds,
-                model=model or cli.get("selectedModel"),
+            selected_model = model or cli.get("selectedModel")
+            raw = await trace_inference(
+                settings, model=selected_model, call_type="research",
+                operation=lambda: run_codex_research(
+                    cli["executable"], prompt, REPORT_SCHEMA,
+                    timeout=settings.daily_research_timeout_seconds,
+                    model=selected_model,
+                ),
             )
         write_research_audit(
             settings,

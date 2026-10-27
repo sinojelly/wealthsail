@@ -19,6 +19,9 @@ from backend.integrations import codex_client
 async def response_with_open_transport(monkeypatch):
     closed = asyncio.Event()
     received = []
+    # Keep this transport test scoped to chat; account inspection has its own
+    # protocol tests and must not share the deliberately never-ending SSE body.
+    monkeypatch.setattr(codex_client, "account", AsyncMock(return_value={"status": "UNAVAILABLE", "windows": [], "credits": None}))
 
     class Stream(httpx.AsyncByteStream):
         async def __aiter__(self):

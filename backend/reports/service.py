@@ -22,6 +22,7 @@ from decimal import Decimal
 
 import asyncpg
 
+from backend.ai_usage.tracker import mark_business, track_task
 from backend.common.database import Pool, tenant_transaction
 from backend.common.formatting import fmt_money
 from backend.common.tenancy import TenantContext
@@ -248,6 +249,7 @@ async def get_report_detail(
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
+@track_task("REPORT", lambda bound: f"报告生成 · {bound['session']}")
 async def generate_report(
     pool: Pool,
     ctx: TenantContext,
@@ -405,6 +407,9 @@ async def generate_report(
             error_class = exc.__class__.__name__
             draft = _fallback_draft(session, context)
         draft = _attach_deterministic_fund_items(session, draft, context)
+
+    if error_class is not None:
+        mark_business("DEGRADED")
 
     # Callers such as the condition-triggered INTRADAY alert supply a tailored
     # push body (trigger condition + live data) instead of the generic preview.
