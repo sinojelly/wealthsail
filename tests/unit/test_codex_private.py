@@ -415,6 +415,60 @@ async def test_account_protocol_failure_is_sanitized_and_bounded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_account_timeout_records_failed_stage_and_cleanup_without_secrets(monkeypatch, caplog):
+    mod = adapter()
+    process = ScriptedProcess(mode="hang", stderr=b"private-token operator@example.test /auth.json")
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    with caplog.at_level("INFO"):
+        result = await mod.read_account("native-codex", environment={}, timeout=0.1)
+    assert result["status"] == "UNAVAILABLE"
+    assert "stage=account_read" in caplog.text and "stage=cleanup" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert all(secret not in caplog.text for secret in ("private-token", "operator@example.test", "/auth.json"))
+
+
+@pytest.mark.asyncio
+async def test_account_deadline_during_cleanup_kills_and_reaps_child(monkeypatch):
+    mod = adapter()
+
+    class SlowCleanupProcess(ScriptedProcess):
+        def reply(self, request):
+            if request.get("method") == "account/read":
+                self.emit({"id": request["id"], "result": {"account": {"type": "chatgpt", "email": "operator@example.test"}}})
+            elif request.get("method") == "account/rateLimits/read":
+                self.emit({"id": request["id"], "result": {}})
+            else:
+                super().reply(request)
+
+        def terminate(self):
+            self.terminated = True
+
+    process = SlowCleanupProcess()
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    result = await mod.read_account("native-codex", environment={}, timeout=0.1)
+    assert result["status"] == "UNAVAILABLE"
+    assert process.terminated and process.killed and process.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_known_logout_is_returned_without_a_limits_rpc_that_can_timeout(monkeypatch):
+    mod = adapter()
+
+    class LoggedOutProcess(ScriptedProcess):
+        def reply(self, request):
+            if request.get("method") == "account/read":
+                self.emit({"id": request["id"], "result": {"account": None}})
+            elif request.get("method") != "account/rateLimits/read":
+                super().reply(request)
+
+    process = LoggedOutProcess()
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    result = await mod.read_account("native-codex", environment={}, timeout=0.1)
+    assert result["status"] == "UNAUTHENTICATED" and result["email"] is None
+    assert "account/rateLimits/read" not in [packet.get("method") for packet in process.sent]
+
+
+@pytest.mark.asyncio
 async def test_stream_preserves_total_usage_for_current_thread_and_turn(monkeypatch):
     mod = adapter()
 

@@ -3,19 +3,33 @@
 import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import inspect
 import logging
+from time import monotonic
 from uuid import uuid4
 
 import anyio
 
 from backend.ai_usage import repository
-from backend.ai_usage.calculation import tokens
+from backend.ai_usage.calculation import stamp, tokens
 
 logger = logging.getLogger(__name__)
 _current = ContextVar("ai_usage_task", default=None)
+# One client call has a 25 second outer limit (HTTP 23s / Runner read 15s).
+# Telemetry gets no retries, and its two independent reads share a finite budget.
+SNAPSHOT_TIMEOUT_SECONDS = 26.0
+SNAPSHOT_TOTAL_BUDGET_SECONDS = 52.0
+_CLOCK_SKEW = timedelta(seconds=5)
+
+
+class AccountSnapshotUnavailable(ValueError):
+    """The independent metadata read did not return a ready account."""
+
+
+class AccountSnapshotNotFresh(ValueError):
+    """The metadata read cannot prove a new observation at this boundary."""
 
 
 def now():
@@ -115,24 +129,61 @@ async def usage_task(pool, settings, *, tenant_id, user_id, task_type, task_name
             )
 
 
-async def account_snapshot(settings):
+async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
     from backend.integrations import codex_client
 
+    started, requested_at = monotonic(), now()
+    stage = stage if stage in {"before", "after"} else "account"
+    timeout_seconds = min(
+        SNAPSHOT_TIMEOUT_SECONDS,
+        SNAPSHOT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds,
+    )
     try:
-        async with asyncio.timeout(8):
-            raw = await codex_client.account(settings)
+        if timeout_seconds <= 0:
+            raise TimeoutError()
+        async with asyncio.timeout(timeout_seconds):
+            # Page metadata may be cached or STALE. Attribution always asks for
+            # a new independent observation, including a separate App Server read.
+            raw = await codex_client.account(settings, fresh=True)
+        if raw.get("status") != "READY":
+            raise AccountSnapshotUnavailable()
+        observed_at = stamp(raw.get("observedAt"))
+        if (
+            not isinstance(raw.get("observationId"), str)
+            or not raw["observationId"]
+            or observed_at is None
+            or observed_at < requested_at - _CLOCK_SKEW
+            or observed_at > now() + _CLOCK_SKEW
+        ):
+            raise AccountSnapshotNotFresh()
         # Never retain email, auth material or arbitrary provider output in history.
         return {
             key: raw.get(key)
             for key in (
+                "status",
                 "accountFingerprint",
+                "authGeneration",
+                "observationId",
                 "planType",
                 "observedAt",
                 "windows",
                 "credits",
             )
         }
-    except Exception:
+    except asyncio.CancelledError:
+        logger.info(
+            "ai_usage_snapshot_cancelled stage=%s error_class=CancelledError elapsed_ms=%.0f",
+            stage,
+            (monotonic() - started) * 1000,
+        )
+        raise
+    except Exception as exc:
+        logger.warning(
+            "ai_usage_snapshot_failed stage=%s error_class=%s elapsed_ms=%.0f",
+            stage,
+            type(exc).__name__,
+            (monotonic() - started) * 1000,
+        )
         return {}
 
 
@@ -152,8 +203,13 @@ async def observe(settings, model, call_type):
     }
     await task.write("start_call", record)
     record.update(status="RUNNING", usage={}, before={})
+    before_elapsed = 0.0
     try:
-        record["before"] = await account_snapshot(settings)
+        snapshot_started = monotonic()
+        try:
+            record["before"] = await account_snapshot(settings, stage="before")
+        finally:
+            before_elapsed = monotonic() - snapshot_started
         yield record
     except BaseException as exc:
         if not (isinstance(exc, GeneratorExit) and record["status"] == "SUCCEEDED"):
@@ -178,13 +234,26 @@ async def observe(settings, model, call_type):
             )
         raise
     finally:
-        with anyio.CancelScope(shield=True):
-            record["after"] = await account_snapshot(settings)
+        cancelled = None
+        try:
+            with anyio.CancelScope(shield=True):
+                record["after"] = await account_snapshot(
+                    settings,
+                    stage="after",
+                    timeout_seconds=max(0, SNAPSHOT_TOTAL_BUDGET_SECONDS - before_elapsed),
+                )
+        except asyncio.CancelledError as exc:
+            # asyncio cancellation can interrupt an AnyIO shield. Commit the
+            # inference evidence before passing cancellation to the business task.
+            record["after"] = {}
+            cancelled = exc
         if record["status"] == "RUNNING":
             record["status"] = "UNCERTAIN"
         record["finishedAt"] = now()
         record["tokens"] = tokens(record.pop("usage", {}))
         await task.write("finish_call", record)
+        if cancelled is not None:
+            raise cancelled
 
 
 async def trace_inference(settings, *, model, call_type, operation):

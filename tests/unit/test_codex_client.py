@@ -183,6 +183,130 @@ async def test_account_reads_runner_metadata_and_degrades_safely_when_unavailabl
 
 
 @pytest.mark.asyncio
+async def test_account_client_forwards_explicit_refresh_and_fresh_without_caching_http(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(str(request.url))
+        return httpx.Response(200, json={
+            "status": "READY", "authType": "chatgpt", "email": "operator@example.test", "planType": "pro",
+            "observedAt": "2026-10-28T00:00:00+00:00", "windows": [], "credits": None,
+            "observationId": "a" * 32, "authGeneration": "b" * 32,
+        })
+
+    transport(monkeypatch, respond)
+    metadata = await codex_client.account(settings(), refresh=True)
+    fresh = await codex_client.account(settings(), fresh=True)
+    assert requests[0].endswith("/v1/account?refresh=true")
+    assert requests[1].endswith("/v1/account?fresh=true")
+    assert metadata["observationId"] == fresh["observationId"] == "a" * 32
+
+
+@pytest.mark.asyncio
+async def test_account_transport_failure_is_sanitized_in_diagnostics(monkeypatch, caplog):
+    transport(monkeypatch, lambda _request: (_ for _ in ()).throw(httpx.ReadTimeout("private-token operator@example.test /auth.json")))
+    with caplog.at_level("INFO"):
+        assert (await codex_client.account(settings()))["status"] == "UNAVAILABLE"
+    assert "stage=transport" in caplog.text and "elapsed_ms=" in caplog.text
+    assert all(secret not in caplog.text for secret in ("private-token", "operator@example.test", "/auth.json"))
+
+
+def account_metadata(email="operator@example.test", generation="a" * 32):
+    return {
+        "status": "READY", "authType": "chatgpt", "email": email, "planType": "pro",
+        "observedAt": "2026-10-28T00:00:00+00:00", "windows": [], "credits": None,
+        "observationId": "b" * 32, "authGeneration": generation,
+    }
+
+
+@pytest.mark.asyncio
+async def test_remote_transport_failure_retains_only_explicitly_stale_metadata(monkeypatch):
+    from backend.integrations import codex_private
+
+    request = AsyncMock(side_effect=[account_metadata(), httpx.ReadTimeout("private"), httpx.ReadTimeout("private"), codex_private.unavailable_account()])
+    monkeypatch.setattr(codex_client, "_request_json", request)
+    good = await codex_client.account(settings())
+    stale = await codex_client.account(settings())
+    fresh_failure = await codex_client.account(settings(), fresh=True)
+    unavailable = await codex_client.account(settings())
+    assert stale["status"] == "STALE" and stale["email"] == good["email"]
+    assert stale["observedAt"] == good["observedAt"] and "ACCOUNT_STALE" in stale["limitations"]
+    assert fresh_failure["status"] == "UNAVAILABLE" and fresh_failure["email"] is None
+    assert unavailable["status"] == "UNAVAILABLE" and unavailable["email"] is None
+
+
+@pytest.mark.asyncio
+async def test_remote_fallback_drops_history_after_config_change_and_logout(monkeypatch):
+    from backend.integrations import codex_private
+
+    logout = codex_private.unavailable_account()
+    logout["status"] = "UNAUTHENTICATED"
+    request = AsyncMock(side_effect=[account_metadata(), httpx.ReadTimeout("private"), account_metadata(), logout, httpx.ReadTimeout("private")])
+    monkeypatch.setattr(codex_client, "_request_json", request)
+    await codex_client.account(settings())
+    changed = settings(codex_runner_token="another-fixture-token")
+    changed_failure = await codex_client.account(changed)
+    assert changed_failure["status"] == "UNAVAILABLE"
+    assert changed_failure["limitations"] == ["ACCOUNT_AUTH_CHANGED"]
+    await codex_client.account(changed)
+    assert (await codex_client.account(changed))["status"] == "UNAUTHENTICATED"
+    assert (await codex_client.account(changed))["status"] == "UNAUTHENTICATED"
+
+
+@pytest.mark.parametrize("failure_status,failure_code", [
+    ("UNAUTHENTICATED", "ACCOUNT_UNAUTHENTICATED"),
+    ("UNAVAILABLE", "ACCOUNT_AUTH_CHANGED"),
+])
+@pytest.mark.asyncio
+async def test_explicit_remote_identity_invalidation_survives_later_transport_failure(monkeypatch, failure_status, failure_code):
+    from backend.integrations import codex_private
+
+    invalidated = codex_private.unavailable_account(failure_code)
+    invalidated["status"] = failure_status
+    request = AsyncMock(side_effect=[
+        account_metadata(), invalidated, httpx.ReadTimeout("private"),
+        account_metadata("new@example.test", "c" * 32), httpx.ReadTimeout("private"),
+    ])
+    monkeypatch.setattr(codex_client, "_request_json", request)
+    await codex_client.account(settings())
+    await codex_client.account(settings())
+    failed = await codex_client.account(settings())
+    assert failed["status"] == failure_status and failed["limitations"] == [failure_code]
+    assert failed["email"] is None and failed["windows"] == []
+    recovered = await codex_client.account(settings())
+    assert recovered["email"] == "new@example.test" and recovered["status"] == "READY"
+    history = await codex_client.account(settings())
+    assert history["status"] == "STALE" and history["email"] == "new@example.test"
+
+
+@pytest.mark.asyncio
+async def test_remote_old_inflight_identity_cannot_replace_new_auth_generation(monkeypatch):
+    started, finish = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await finish.wait()
+            return account_metadata("old@example.test", "a" * 32)
+        if calls == 2:
+            return account_metadata("new@example.test", "c" * 32)
+        raise httpx.ReadTimeout("private")
+
+    monkeypatch.setattr(codex_client, "_request_json", request)
+    pending = asyncio.create_task(codex_client.account(settings()))
+    await started.wait()
+    current = await codex_client.account(settings())
+    finish.set()
+    old = await pending
+    fallback = await codex_client.account(settings())
+    assert current["email"] == fallback["email"] == "new@example.test"
+    assert old["status"] == "UNAVAILABLE" and old["email"] is None
+
+
+@pytest.mark.asyncio
 async def test_remote_output_failure_retains_successful_inference_usage(monkeypatch):
     transport(monkeypatch, lambda request: httpx.Response(502, json={"detail": {
         "message": "safe output failure", "usage": {"prompt_tokens": 18, "cached_input_tokens": 9, "completion_tokens": 2, "total_tokens": 20},

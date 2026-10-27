@@ -269,6 +269,16 @@ def create_app(
     app = FastAPI(title="WealthSail internal Codex runner", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodyLimit)
     app.state.capacity = capacity
+    from backend.integrations.codex_account_cache import AccountMetadataCache, auth_file_generation
+
+    async def inspect_account():
+        from backend.integrations.codex_private import read_account
+
+        return await read_account(executable, environment=child_environment, timeout=15)
+
+    account_cache = AccountMetadataCache(
+        inspect_account, generation=lambda: auth_file_generation(child_environment),
+    )
 
     async def authorize(authorization: Annotated[str | None, Header()] = None):
         supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
@@ -339,11 +349,9 @@ def create_app(
         return {name: result.get(name) for name in ("executable", "version", "selectedModel")}
 
     @app.get("/v1/account", dependencies=[Depends(authorize)])
-    async def account():
-        from backend.integrations.codex_private import read_account
-
+    async def account(fresh: bool = False, refresh: bool = False):
         # Inspection never consumes an inference slot or starts a model turn.
-        return await read_account(executable, environment=child_environment, timeout=15)
+        return await account_cache.get(fresh=fresh, refresh=refresh)
 
     @app.post("/v1/completions", dependencies=[Depends(authorize)])
     async def completion(request: PromptRequest, connection: Request):

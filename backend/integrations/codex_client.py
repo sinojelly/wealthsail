@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
+import hashlib
 import json
+import os
+import time
 from typing import AsyncIterator
 from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -18,6 +22,8 @@ from backend.integrations import codex_research
 
 _MAX_INPUT_BYTES = 2 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+_LOCAL_ACCOUNT_CACHES = WeakKeyDictionary()
+_REMOTE_ACCOUNT_HISTORIES = WeakKeyDictionary()
 
 
 class CodexClientError(Exception):
@@ -181,20 +187,62 @@ async def preflight(settings) -> dict:
     return await _preflight_local(settings, public=True)
 
 
-async def account(settings) -> dict:
+async def account(settings, *, fresh=False, refresh=False) -> dict:
     """Read metadata at the actual runtime; failures never block AI business."""
     private = _private()
+    from backend.integrations.codex_account_cache import AccountMetadataCache, RemoteAccountHistory, account_diagnostic, auth_file_generation
+
+    started = time.monotonic()
+    loop = asyncio.get_running_loop()
+    previous = _REMOTE_ACCOUNT_HISTORIES.get(loop)
+    remote = str(getattr(settings, "codex_runner_url", "") or "").rstrip("/")
+    history, sequence = None, 0
+    if remote:
+        key = (remote, hashlib.sha256(str(getattr(settings, "codex_runner_token", "") or "").encode()).digest())
+        if previous is None or previous.key != key:
+            if previous is not None:
+                previous.invalidate()
+            _REMOTE_ACCOUNT_HISTORIES[loop] = RemoteAccountHistory(key, invalidated=previous is not None)
+        history = _REMOTE_ACCOUNT_HISTORIES[loop]
+        sequence = history.begin()
+    elif previous is not None:
+        previous.invalidate()
+        del _REMOTE_ACCOUNT_HISTORIES[loop]
     try:
         async with asyncio.timeout(25):
             if getattr(settings, "codex_runner_url", ""):
-                result = await _request_json(settings, "GET", "/v1/account", timeout=23)
-                return private.safe_account_snapshot(result)
+                endpoint = "/v1/account"
+                if fresh:
+                    endpoint += "?fresh=true"
+                elif refresh:
+                    endpoint += "?refresh=true"
+                result = await _request_json(settings, "GET", endpoint, timeout=23)
+                result = private.safe_account_snapshot(result)
+                account_diagnostic("transport", started)
+                result = history.accept(sequence, result)
+                if fresh and result["status"] == "STALE":
+                    return private.unavailable_account("ACCOUNT_STALE")
+                return result
             path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
             executable = codex_research.resolve_codex_executable(path)
             if executable is None:
                 return private.unavailable_account("CODEX_NOT_CONFIGURED")
-            return await private.read_account(executable, timeout=15)
-    except Exception:
+            caches = _LOCAL_ACCOUNT_CACHES.setdefault(asyncio.get_running_loop(), {})
+            key = (executable, os.environ.get("CODEX_HOME", ""))
+            if key not in caches:
+                async def inspect():
+                    return await private.read_account(executable, timeout=15)
+
+                if len(caches) >= 8:
+                    caches.pop(next(iter(caches)))
+                caches[key] = AccountMetadataCache(inspect, generation=auth_file_generation)
+            return await caches[key].get(fresh=fresh, refresh=refresh)
+    except Exception as error:
+        account_diagnostic("transport", started, error)
+        if history is not None:
+            fallback = history.failure(sequence)
+            if not fresh:
+                return fallback
         return private.unavailable_account()
 
 

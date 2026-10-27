@@ -1,5 +1,6 @@
 from copy import deepcopy
 from importlib import import_module, util
+from uuid import uuid4
 
 import pytest
 
@@ -236,10 +237,15 @@ async def test_tracker_preserves_actual_inferences_even_when_business_fails(
     async def persist(_pool, _tenant, _user, event, data):
         events.append((event, deepcopy(data)))
 
-    async def account(_settings):
+    async def account(_settings, **_kwargs):
         if outcome == "snapshot_failure":
             raise OSError("not saved in usage")
-        return snapshot()
+        return snapshot(
+            status="READY",
+            observedAt=tracker.now().isoformat(),
+            observationId=str(uuid4()),
+            authGeneration="fixture-auth",
+        )
 
     monkeypatch.setattr(repo, "persist", persist)
     monkeypatch.setattr(codex_client, "account", account, raising=False)
@@ -383,7 +389,7 @@ async def test_cancel_during_before_snapshot_still_finishes_the_call(monkeypatch
     async def persist(_pool, _tenant, _user, event, data):
         events.append((event, deepcopy(data)))
 
-    async def account(_settings):
+    async def account(_settings, **_kwargs):
         nonlocal first
         if first:
             first = False
@@ -420,7 +426,7 @@ async def test_closing_stream_after_done_retains_success_and_measured_tokens(
     async def persist(_pool, _tenant, _user, event, data):
         events.append((event, deepcopy(data)))
 
-    async def account(_settings):
+    async def account(_settings, **_kwargs):
         return {}
 
     async def stream():
@@ -459,7 +465,7 @@ async def test_done_stream_cleanup_does_not_erase_business_cancellation(monkeypa
     async def persist(_pool, _tenant, _user, event, data):
         events.append((event, deepcopy(data)))
 
-    async def account(_settings):
+    async def account(_settings, **_kwargs):
         return {}
 
     async def stream():

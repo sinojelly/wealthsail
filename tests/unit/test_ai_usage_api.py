@@ -53,16 +53,27 @@ def endpoint(monkeypatch):
             "offset": kwargs["offset"],
         }
 
-    async def account(_settings):
+    async def account(_settings, **kwargs):
         state["accountCalled"] = True
+        state["accountOptions"] = kwargs
+        if state.get("accountFailure"):
+            raise RuntimeError(
+                "private@example.test TOKEN_NEVER_LOG raw supplier reply"
+            )
         return {
-            "status": "READY",
+            "status": state.get("accountStatus", "READY"),
             "provider": "codex",
             "email": "operator@example.com",
             "planType": "plus",
             "windows": [],
             "credits": None,
             "accessToken": "NEVER_RETURN",
+            "accountFingerprint": "INTERNAL_ONLY",
+            "authGeneration": "INTERNAL_ONLY",
+            "observedAt": "2026-10-28T01:00:00+00:00",
+            "limitations": ["ACCOUNT_STALE"]
+            if state.get("accountStatus") == "STALE"
+            else [],
         }
 
     monkeypatch.setattr(repository, "list_tasks", tasks)
@@ -97,3 +108,94 @@ def test_ordinary_member_cannot_read_usage(endpoint):
     response = client.get("/api/v1/operations/ai-usage")
     assert response.status_code == 403
     assert not state["seen"] and not state.get("accountCalled")
+
+
+def test_task_poll_does_not_read_account_even_for_platform_operator(endpoint):
+    client, state = endpoint
+    state["platform"] = True
+    response = client.get("/api/v1/operations/ai-usage?view=tasks&limit=10&offset=20")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["tasks"] == [] and data["offset"] == 20
+    assert "account" not in data
+    assert not state.get("accountCalled")
+    assert state["seen"] == [{"include_global": True, "limit": 10, "offset": 20}]
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_account_only_poll_skips_task_scan_and_supports_explicit_refresh(
+    endpoint, refresh
+):
+    client, state = endpoint
+    state["platform"] = True
+    response = client.get(
+        f"/api/v1/operations/ai-usage?view=account&refresh_account={str(refresh).lower()}"
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert set(data) == {"account"}
+    assert data["account"]["status"] == "READY"
+    assert state["accountOptions"].get("refresh", False) is refresh
+    assert not state["seen"]
+    assert "INTERNAL_ONLY" not in response.text and "NEVER_RETURN" not in response.text
+
+
+def test_stale_account_keeps_last_success_time_and_safe_fields(endpoint):
+    client, state = endpoint
+    state.update(platform=True, accountStatus="STALE")
+    response = client.get("/api/v1/operations/ai-usage?view=account")
+    account = response.json()["data"]["account"]
+    assert account["status"] == "STALE"
+    assert account["email"] == "operator@example.com"
+    assert account["observedAt"] == "2026-10-28T01:00:00+00:00"
+    assert account["limitations"] == ["ACCOUNT_STALE"]
+    assert "INTERNAL_ONLY" not in response.text
+
+
+@pytest.mark.parametrize("role", ["OWNER", "VIEWER"])
+def test_account_only_refresh_cannot_bypass_platform_role(endpoint, role):
+    client, state = endpoint
+    state["role"] = role
+    response = client.get(
+        "/api/v1/operations/ai-usage?view=account&refresh_account=true"
+    )
+    assert response.status_code == (200 if role == "OWNER" else 403)
+    if role == "OWNER":
+        assert response.json()["data"] == {
+            "account": {
+                "status": "RESTRICTED",
+                "provider": "codex",
+                "email": None,
+                "planType": None,
+                "authType": None,
+                "observedAt": None,
+                "windows": [],
+                "credits": None,
+                "limitations": ["PLATFORM_ADMIN_REQUIRED"],
+            }
+        }
+    assert not state["seen"] and not state.get("accountCalled")
+
+
+def test_unknown_usage_view_is_rejected_instead_of_silently_reading_account(endpoint):
+    client, state = endpoint
+    response = client.get("/api/v1/operations/ai-usage?view=other")
+    assert response.status_code == 400
+    assert not state["seen"] and not state.get("accountCalled")
+
+
+def test_unexpected_account_failure_is_safe_and_diagnosed_without_losing_tasks(
+    endpoint, caplog
+):
+    client, state = endpoint
+    state.update(platform=True, accountFailure=True)
+    response = client.get("/api/v1/operations/ai-usage")
+    assert response.status_code == 200
+    assert response.json()["data"]["account"]["status"] == "UNAVAILABLE"
+    assert response.json()["data"]["tasks"] == []
+    assert "stage=operations_api" in caplog.text
+    assert "error_class=RuntimeError" in caplog.text and "duration_ms=" in caplog.text
+    assert (
+        "private@example.test" not in caplog.text
+        and "TOKEN_NEVER_LOG" not in caplog.text
+    )

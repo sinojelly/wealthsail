@@ -57,12 +57,27 @@ def quota_delta(before, after, *, concurrent=False):
         or not after.get("accountFingerprint")
         or start is None
         or end is None
-        or end < start
+        or end <= start
+        or before.get("status", "READY") != "READY"
+        or after.get("status", "READY") != "READY"
+        or (
+            (before.get("observationId") or after.get("observationId"))
+            and (
+                not before.get("observationId")
+                or not after.get("observationId")
+                or before["observationId"] == after["observationId"]
+            )
+        )
     ):
         common = "UNKNOWN"
-    elif (before["accountFingerprint"], before.get("planType")) != (
+    elif (
+        before["accountFingerprint"],
+        before.get("planType"),
+        before.get("authGeneration"),
+    ) != (
         after["accountFingerprint"],
         after.get("planType"),
+        after.get("authGeneration"),
     ):
         common = "ACCOUNT_CHANGED"
     elif (start.year, start.month) != (end.year, end.month):

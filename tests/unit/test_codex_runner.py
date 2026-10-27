@@ -96,9 +96,50 @@ async def test_account_endpoint_requires_runner_auth_and_does_not_invoke_inferen
     async with client_for(environment={"CODEX_HOME": "fixture-auth", "DATABASE_URL": "secret"}) as (client, app):
         assert (await client.get("/v1/account")).status_code == 401
         response = await client.get("/v1/account", headers=auth())
-    assert response.status_code == 200 and response.json() == metadata
+    assert response.status_code == 200
+    body = response.json()
+    assert body.pop("observationId") and body.pop("authGeneration")
+    assert body == metadata
     assert "DATABASE_URL" not in read.await_args.kwargs["environment"]
     assert app.state.capacity.active == 0
+
+
+@pytest.mark.asyncio
+async def test_runner_merges_metadata_cache_and_separates_live_quota_captures(monkeypatch):
+    from backend.integrations import codex_private
+
+    metadata = codex_private.account_snapshot(
+        {"account": {"type": "chatgpt", "email": "operator@example.test", "planType": "pro"}},
+        {"rateLimits": {"primary": {"usedPercent": 10, "windowDurationMins": 300, "resetsAt": 1800000000}}},
+    )
+    read = AsyncMock(return_value=metadata)
+    monkeypatch.setattr(codex_private, "read_account", read)
+    async with client_for(environment={"CODEX_HOME": "fixture-auth"}) as (client, _):
+        first = (await client.get("/v1/account", headers=auth())).json()
+        cached = (await client.get("/v1/account", headers=auth())).json()
+        refreshed = (await client.get("/v1/account?refresh=true", headers=auth())).json()
+        before = (await client.get("/v1/account?fresh=true", headers=auth())).json()
+        after = (await client.get("/v1/account?fresh=true", headers=auth())).json()
+    assert cached["observationId"] == first["observationId"]
+    assert len({first["observationId"], refreshed["observationId"], before["observationId"], after["observationId"]}) == 4
+    assert read.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_runner_reauthentication_invalidates_cached_identity(monkeypatch, tmp_path):
+    from backend.integrations import codex_private
+
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("fake-auth-generation-one", encoding="utf-8")
+    metadata = codex_private.account_snapshot(
+        {"account": {"type": "chatgpt", "email": "operator@example.test", "planType": "pro"}}, {},
+    )
+    monkeypatch.setattr(codex_private, "read_account", AsyncMock(side_effect=[metadata, codex_private.unavailable_account()]))
+    async with client_for(environment={"CODEX_HOME": str(tmp_path)}) as (client, _):
+        assert (await client.get("/v1/account", headers=auth())).json()["status"] == "READY"
+        auth_file.unlink()
+        result = (await client.get("/v1/account", headers=auth())).json()
+    assert result["status"] == "UNAVAILABLE" and result["email"] is None
 
 
 @pytest.mark.asyncio

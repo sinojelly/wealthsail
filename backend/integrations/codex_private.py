@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -19,6 +20,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 from backend.integrations.codex_research import (
     CodexExecutionError,
@@ -36,6 +38,11 @@ from backend.integrations.codex_research import (
 
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 _STOP_TIMEOUT_SECONDS = 5
+_ACCOUNT_LIMITATIONS = frozenset({
+    "ACCOUNT_UNAVAILABLE", "ACCOUNT_UNAUTHENTICATED", "ACCOUNT_AUTH_CHANGED",
+    "ACCOUNT_STALE", "ACCOUNT_IDENTITY_UNAVAILABLE", "CODEX_NOT_CONFIGURED",
+    "QUOTA_UNAVAILABLE", "CREDITS_UNAVAILABLE",
+})
 _PRIVATE_INSTRUCTIONS = (
     "Answer this application's private financial request using only the application "
     "context and user request supplied on stdin. Private context explicitly supplied "
@@ -158,7 +165,7 @@ async def _drain_stderr(stream: asyncio.StreamReader) -> None:
             raise CodexOutputError("Codex process output limit exceeded")
 
 
-async def _stop_process(process, stderr_task: asyncio.Task) -> None:
+async def _stop_process(process, stderr_task: asyncio.Task, *, timeout=_STOP_TIMEOUT_SECONDS) -> None:
     try:
         try:
             process.stdin.close()
@@ -170,13 +177,23 @@ async def _stop_process(process, stderr_task: asyncio.Task) -> None:
             except ProcessLookupError:
                 pass
         try:
-            await asyncio.wait_for(process.wait(), _STOP_TIMEOUT_SECONDS)
+            await asyncio.wait_for(process.wait(), timeout)
+        except asyncio.CancelledError:
+            # Inspection's overall deadline can expire while terminating a
+            # successful RPC subprocess. Cancellation must still reap it.
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await asyncio.wait_for(process.wait(), timeout)
+            raise
         except TimeoutError:
             try:
                 process.kill()
             except ProcessLookupError:
                 pass
-            await asyncio.wait_for(process.wait(), _STOP_TIMEOUT_SECONDS)
+            await asyncio.wait_for(process.wait(), timeout)
     finally:
         if not stderr_task.done():
             stderr_task.cancel()
@@ -362,12 +379,16 @@ def account_snapshot(account_response, limits_response, *, limitations=()):
 
 def safe_account_snapshot(value):
     """Apply the same whitelist to account DTOs received across runner HTTP."""
-    if not isinstance(value, dict) or value.get("status") not in {"READY", "UNAVAILABLE", "UNAUTHENTICATED"}:
+    if not isinstance(value, dict) or value.get("status") not in {"READY", "STALE", "UNAVAILABLE", "UNAUTHENTICATED"}:
         return unavailable_account()
-    if value["status"] != "READY":
+    limitations = value.get("limitations")
+    limitations = list(dict.fromkeys(code for code in limitations[:20] if isinstance(code, str) and code in _ACCOUNT_LIMITATIONS)) if isinstance(limitations, list) else []
+    if value["status"] not in {"READY", "STALE"}:
         result = unavailable_account()
         if value["status"] == "UNAUTHENTICATED":
             result.update(status="UNAUTHENTICATED", limitations=["ACCOUNT_UNAUTHENTICATED"])
+        elif limitations:
+            result["limitations"] = limitations
         return result
     buckets = {}
     windows = value.get("windows")
@@ -383,13 +404,18 @@ def safe_account_snapshot(value):
     if not buckets:
         buckets["codex"] = {"limitId": "codex"}
     next(iter(buckets.values()))["credits"] = value.get("credits")
-    limitations = value.get("limitations")
-    limitations = [code for code in limitations[:20] if _safe_text(code, 64) and code.replace("_", "").isalnum() and code.upper() == code] if isinstance(limitations, list) else []
     result = account_snapshot(
         {"account": {"type": value.get("authType"), "email": value.get("email"), "planType": value.get("planType")}},
         {"rateLimitsByLimitId": buckets}, limitations=limitations,
     )
+    if result["status"] != "READY":
+        return result
     result["limitations"] = list(dict.fromkeys(result["limitations"]))
+    result["status"] = value["status"]
+    for name in ("observationId", "authGeneration"):
+        opaque = value.get(name)
+        if isinstance(opaque, str) and len(opaque) == 32 and all(char in "0123456789abcdef" for char in opaque):
+            result[name] = opaque
     try:
         observed = datetime.fromisoformat(value.get("observedAt"))
         if observed.tzinfo is None:
@@ -400,34 +426,58 @@ def safe_account_snapshot(value):
     return result
 
 
-async def read_account(executable, *, environment=None, timeout=8):
+@asynccontextmanager
+async def _account_stage(stage):
+    from backend.integrations.codex_account_cache import account_diagnostic
+
+    started = time.monotonic()
+    try:
+        yield
+    except BaseException as error:
+        account_diagnostic(stage, started, error)
+        raise
+    else:
+        account_diagnostic(stage, started)
+
+
+async def read_account(executable, *, environment=None, timeout=15):
     """Read account/limits with no thread, inference, login or token-file access."""
     source = os.environ if environment is None else environment
     try:
         timeout = min(_timeout(timeout), 15)
-        async with asyncio.timeout(timeout):
-            with tempfile.TemporaryDirectory(prefix="wealthsail-codex-account-") as directory:
-                options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-                process = await asyncio.create_subprocess_exec(
-                    executable, *_policy_arguments(), "app-server",
-                    cwd=directory, env=public_environment(source, directory),
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, limit=_MAX_OUTPUT_BYTES + 1, **options,
-                )
-                stderr_task = asyncio.create_task(_drain_stderr(process.stderr))
-                server = _AppServer(process, stderr_task, asyncio.get_running_loop().time() + timeout)
-                try:
-                    await server.rpc(1, "initialize", {"clientInfo": {"name": "wealthsail", "version": "0.1.0"}, "capabilities": {"experimentalApi": False}})
-                    await server.send({"method": "initialized", "params": {}})
-                    account = await server.rpc(2, "account/read", {"refreshToken": False})
-                    limits, limitations = {}, []
+        async with _account_stage("snapshot"):
+            async with asyncio.timeout(timeout):
+                with tempfile.TemporaryDirectory(prefix="wealthsail-codex-account-") as directory:
+                    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                    async with _account_stage("spawn"):
+                        process = await asyncio.create_subprocess_exec(
+                            executable, *_policy_arguments(), "app-server",
+                            cwd=directory, env=public_environment(source, directory),
+                            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE, limit=_MAX_OUTPUT_BYTES + 1, **options,
+                        )
+                    stderr_task = asyncio.create_task(_drain_stderr(process.stderr))
+                    server = _AppServer(process, stderr_task, asyncio.get_running_loop().time() + timeout)
                     try:
-                        limits = await server.rpc(3, "account/rateLimits/read", {})
-                    except CodexExecutionError:
-                        limitations.append("QUOTA_UNAVAILABLE")
-                    return account_snapshot(account, limits, limitations=limitations)
-                finally:
-                    await _stop_process(process, stderr_task)
+                        async with _account_stage("initialize"):
+                            await server.rpc(1, "initialize", {"clientInfo": {"name": "wealthsail", "version": "0.1.0"}, "capabilities": {"experimentalApi": False}})
+                            await server.send({"method": "initialized", "params": {}})
+                        async with _account_stage("account_read"):
+                            account = await server.rpc(2, "account/read", {"refreshToken": False})
+                        if not isinstance(account.get("account"), dict):
+                            return account_snapshot(account, {})
+                        limits, limitations = {}, []
+                        try:
+                            async with _account_stage("rate_limits_read"):
+                                limits = await server.rpc(3, "account/rateLimits/read", {})
+                        except CodexExecutionError:
+                            limitations.append("QUOTA_UNAVAILABLE")
+                        return account_snapshot(account, limits, limitations=limitations)
+                    finally:
+                        async with _account_stage("cleanup"):
+                            # Do not spend the normal inference shutdown budget
+                            # twice after an inspection has already timed out.
+                            await _stop_process(process, stderr_task, timeout=0.5)
     except Exception:
         return unavailable_account()
 

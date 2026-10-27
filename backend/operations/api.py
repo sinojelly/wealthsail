@@ -6,6 +6,10 @@ both enforce this; the check gives a clean FORBIDDEN before hitting the DB.
 
 from __future__ import annotations
 
+import logging
+import time
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 import asyncpg
 
@@ -24,12 +28,15 @@ from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.operations import repository
 
 router = APIRouter(prefix="/operations", tags=["operations"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/ai-usage")
 async def operations_ai_usage(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    view: Literal["all", "tasks", "account"] = Query(default="all"),
+    refresh_account: bool = Query(default=False),
     pool: Pool = Depends(get_pool),
     ctx: TenantContext = Depends(get_tenant_context),
     settings: Settings = Depends(get_settings_dep),
@@ -40,6 +47,7 @@ async def operations_ai_usage(
 
     _require_owner_admin(ctx)
     limitations = ["ACCOUNT_DELTA_ESTIMATE", "HISTORY_FROM_INSTALLATION"]
+    data = {}
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         platform = bool(
             await conn.fetchval(
@@ -49,18 +57,25 @@ async def operations_ai_usage(
             )
         )
         # A missing migration is actionable and never implies zero usage.
-        try:
-            async with conn.transaction():
-                data = await usage_repository.list_tasks(
-                    conn,
-                    ctx.tenant_id,
-                    include_global=platform,
-                    limit=limit,
-                    offset=offset,
-                )
-        except asyncpg.UndefinedTableError:
-            data = {"tasks": [], "total": 0, "limit": limit, "offset": offset}
-            limitations.append("USAGE_LEDGER_NOT_MIGRATED")
+        if view != "account":
+            try:
+                async with conn.transaction():
+                    data = await usage_repository.list_tasks(
+                        conn,
+                        ctx.tenant_id,
+                        include_global=platform,
+                        limit=limit,
+                        offset=offset,
+                    )
+            except asyncpg.UndefinedTableError:
+                data = {"tasks": [], "total": 0, "limit": limit, "offset": offset}
+                limitations.append("USAGE_LEDGER_NOT_MIGRATED")
+    if view == "tasks":
+        return ok(
+            {**data, "limitations": limitations},
+            request_id=request_id,
+            as_of=now_shanghai(),
+        )
     account = {
         "status": "RESTRICTED",
         "provider": "codex",
@@ -73,13 +88,25 @@ async def operations_ai_usage(
         "limitations": ["PLATFORM_ADMIN_REQUIRED"],
     }
     if platform:
+        started = time.monotonic()
         try:
-            raw = await codex_client.account(settings)
+            raw = (
+                await codex_client.account(settings, refresh=True)
+                if refresh_account
+                else await codex_client.account(settings)
+            )
             account = {key: raw.get(key, default) for key, default in account.items()}
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "codex_account stage=operations_api error_class=%s duration_ms=%.1f",
+                type(exc).__name__,
+                (time.monotonic() - started) * 1000,
+            )
             account.update(status="UNAVAILABLE", limitations=["ACCOUNT_READ_FAILED"])
     return ok(
-        {**data, "account": account, "limitations": limitations},
+        {"account": account}
+        if view == "account"
+        else {**data, "account": account, "limitations": limitations},
         request_id=request_id,
         as_of=now_shanghai(),
     )
