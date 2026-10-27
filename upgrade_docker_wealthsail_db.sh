@@ -7,16 +7,16 @@
 #   chmod +x upgrade_docker_wealthsail_db.sh
 #
 # USAGE:
-#   bash upgrade_docker_wealthsail_db.sh --check   # Read-only preflight; no build/stop/SQL
+#   bash upgrade_docker_wealthsail_db.sh --check   # Read-only preflight + SQL PLAN/SKIP/DRIFT
 #   sudo bash upgrade_docker_wealthsail_db.sh --apply
 #
 # AUTOMATED --apply ORDER:
-#   1. Check project, database, SQL files, network and persistent volumes.
+#   1. Check project, database, and local SQL files vs migration ledger (read-only).
 #   2. Build backend/frontend images; running services stay online.
 #   3. Run a migration DRY RUN using the migration administrator.
-#   4. Confirm production migration; stop ONLY worker and api.
-#   5. Back up PostgreSQL database 'wealthsail' to a private file and verify it.
-#   6. Apply forward-only scripts/migrate.py, require READBACK OK.
+#   4. If NO pending SQL, deploy only (no DB downtime or backup needed).
+#   5. Otherwise confirm, stop ONLY worker/api, and back up PostgreSQL.
+#   6. Apply forward-only scripts/migrate.py, require READBACK OK and ledger match.
 #   7. Deploy images with build_docker_wealthsail.sh --deploy-only; verify services.
 #
 # IMPORTANT:
@@ -64,9 +64,9 @@ EXPECTED_PG_DB='wealthsail'
 EXPECTED_PG_USER='admin'
 BACKUP_DIR='/data_n002/data/udata/real/15221151691/docker/wealth-sail/backups/postgres'
 ADMIN_ENV_FILE="${DB_ADMIN_ENV_FILE:-/data_n002/data/udata/real/15221151691/docker/wealth-sail/private/migration-admin.env}"
-EXPECTED_SQL="$ROOT/migrations/091_ai_usage.sql"
 
 MODE=''
+LOCAL_PENDING_COUNT=''
 PLAN_LOG=''
 APPLY_LOG=''
 PG_ADMIN_PASSWORD=''
@@ -79,11 +79,13 @@ usage() {
   cat <<'USAGE'
 Usage: bash upgrade_docker_wealthsail_db.sh [--check | --apply]
 
-  --check   Validate source, Compose project, live database, migration files,
-            and protected admin credential file (NEVER output its contents).
-            Does NOT build, stop containers, back up, or run SQL.
-  --apply   Upgrade: build -> migration dry-run -> confirmation -> stop
-            worker/api -> database backup -> migrate -> deploy -> verify.
+  --check   Validate deployment and READ-ONLY compare migrations/*.sql to the
+            live PostgreSQL migration ledger (PLAN pending / SKIP applied /
+            DRIFT mismatched). Print counts or "NO PENDING SQL MIGRATIONS".
+            Does NOT build, stop containers, back up, or execute SQL migrations.
+  --apply   Build -> real migration dry-run -> if pending: confirm/stop writers/
+            verified DB backup/migrate -> deploy -> verify. Without pending SQL,
+            deploy code only (no database downtime or backup).
             Uses the protected admin credential file; no password prompt.
   --help    Display these instructions.
 
@@ -105,6 +107,7 @@ For code-only updates with NO new SQL use build_docker_wealthsail.sh.
 
 Production safety: No automatic DB rollback. On a failed migration, do NOT
 restart old services without reviewing the failure and schema state.
+--check checks SQL files and checksums, NOT complete schema correctness.
 USAGE
 }
 
@@ -167,6 +170,97 @@ else:
 PY_ADMIN
 }
 
+# Read-only local migration plan: compare the SAME migration filename/version
+# and SHA-256 calculation as scripts/migrate.py against the live migration ledger.
+# Uses the existing PostgreSQL container's local admin socket, which the main
+# preflight already checked. No migration container, SQL execution, or changes
+# to the migration ledger. Intentionally fail closed on checksum drift and
+# database versions missing from the checked-out code.
+show_migration_plan() {
+  python3 - "$ROOT/migrations" "$EXPECTED_PG_CONTAINER" "$EXPECTED_PG_USER" "$EXPECTED_PG_DB" <<'PY_PLAN'
+import hashlib
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+migration_dir = Path(sys.argv[1])
+container, user, database = sys.argv[2:]
+pattern = re.compile(r"^(\d{3})_[a-zA-Z0-9_.-]+\.sql$")
+source = {}
+for path in sorted(migration_dir.iterdir()):
+    match = pattern.fullmatch(path.name) if path.is_file() else None
+    if not match:
+        continue
+    version = int(match.group(1))
+    if version in source:
+        raise SystemExit(f"ERROR: duplicate source migration version {version:03d}")
+    # Match scripts/migrate.py load_migrations(): read_text normalizes newlines.
+    sql = path.read_text(encoding="utf-8")
+    source[version] = (path.name, hashlib.sha256(sql.encode("utf-8")).hexdigest())
+if not source:
+    raise SystemExit("ERROR: no migrations/*.sql in this checkout")
+
+sql = ("SELECT version, filename, btrim(checksum_sha256) "
+       "FROM public.wealthsail_schema_migrations ORDER BY version")
+cmd = ["sudo", "docker", "exec", container, "psql", "-X", "-q", "-A", "-t",
+       "-F", "\t", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database,
+       "-c", sql]
+try:
+    response = subprocess.run(cmd, check=True, capture_output=True, text=True)
+except subprocess.CalledProcessError as exc:
+    # Avoid echoing arbitrary database stderr into deployment logs.
+    raise SystemExit("ERROR: cannot read production migration ledger with local admin; "
+                     "check database connectivity and ledger schema") from None
+
+applied = {}
+for line in response.stdout.splitlines():
+    if not line.strip():
+        continue
+    fields = line.split("\t")
+    if len(fields) != 3:
+        raise SystemExit("ERROR: malformed migration ledger result")
+    version_str, filename, checksum = fields
+    if not version_str.isdigit() or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise SystemExit("ERROR: malformed migration ledger version/checksum")
+    version = int(version_str)
+    if version in applied:
+        raise SystemExit(f"ERROR: duplicate database migration version {version:03d}")
+    applied[version] = (filename, checksum)
+
+pending = []
+errors = []
+for version, (name, checksum) in sorted(source.items()):
+    db_row = applied.get(version)
+    if db_row is None:
+        pending.append(name)
+        print(f"PLAN {name} sha256={checksum[:12]}")
+    elif db_row[1] != checksum:
+        errors.append(version)
+        print(f"DRIFT {name}: ledger={db_row[1][:12]} source={checksum[:12]}")
+    elif db_row[0] != name:
+        # The real migration runner only guards checksum, but surface a rename.
+        print(f"NOTE {name}: ledger filename differs ({db_row[0]})")
+for version, (name, _) in sorted(applied.items()):
+    if version not in source:
+        errors.append(version)
+        print(f"MISSING_SOURCE {version:03d}: database has {name}")
+
+applied_matches = sum(
+    1 for version, (_, digest) in source.items()
+    if version in applied and applied[version][1] == digest
+)
+print(f"SUMMARY: pending={len(pending)} applied={applied_matches} "
+      f"source={len(source)} ledger={len(applied)}")
+print(f"PENDING_COUNT={len(pending)}")
+if not pending and not errors:
+    print("NO PENDING SQL MIGRATIONS")
+if errors:
+    raise SystemExit("ERROR: migration ledger differs from this checkout; "
+                     "do not automatically reconcile or deploy")
+PY_PLAN
+}
+
 on_exit() {
   local status="$?"
   trap - EXIT
@@ -204,7 +298,7 @@ esac
 
 [[ -x "$COMPOSE" && -f "$DEPLOY_JSON" ]] || fail "Missing nas-compose or deploy.json under $NAS_TOOLS"
 [[ -f "$BUILD_SCRIPT" ]] || fail "Missing $BUILD_SCRIPT"
-[[ -f "$ROOT/scripts/migrate.py" && -f "$EXPECTED_SQL" ]] || fail 'Migration entrypoint or 091_ai_usage.sql is missing in this checkout'
+[[ -f "$ROOT/scripts/migrate.py" && -d "$ROOT/migrations" ]] || fail 'Migration entrypoint or SQL directory missing in this checkout'
 [[ -f "$ROOT/backend/Dockerfile" && -f "$ROOT/frontend/Dockerfile" ]] || fail 'Not a complete WealthSail source checkout'
 command -v python3 >/dev/null || fail 'python3 is required on NAS'
 command -v sudo >/dev/null || fail 'sudo is required on NAS'
@@ -235,8 +329,17 @@ PG_DB_CHECK="$(sudo docker exec "$EXPECTED_PG_CONTAINER" psql -X -q -t -A \
 [[ "$PG_DB_CHECK" == "$EXPECTED_PG_DB" ]] || fail 'PostgreSQL database/admin connection check failed'
 printf 'OK: shared PostgreSQL database %s responds to admin locally\n' "$EXPECTED_PG_DB"
 
+log '[SQL] Compare local SQL migrations with the live PostgreSQL ledger (read-only)'
+if ! LOCAL_PLAN="$(show_migration_plan)"; then
+  printf '%s\n' "$LOCAL_PLAN" >&2
+  fail 'Read-only migration comparison failed'
+fi
+printf '%s\n' "$LOCAL_PLAN"
+LOCAL_PENDING_COUNT="$(printf '%s\n' "$LOCAL_PLAN" | sed -n 's/^PENDING_COUNT=//p' | tail -1)"
+[[ "$LOCAL_PENDING_COUNT" =~ ^[0-9]+$ ]] || fail 'Failed to determine local migration count'
+
 if [[ "$MODE" == check ]]; then
-  echo 'CHECK COMPLETE: No image built, SQL executed, backup created, or service stopped.'
+  echo 'CHECK COMPLETE: migration plan displayed; no image built, SQL migration executed, backup created, or service stopped.'
   exit 0
 fi
 
@@ -296,10 +399,23 @@ PLAN_LOG="$(mktemp)"
 run_migrations --dry-run 2>&1 | tee "$PLAN_LOG"
 grep -q '^TARGET environment=production database=postgres:5432/wealthsail dry_run=True' "$PLAN_LOG" \
   || fail 'Migration dry-run did not verify the expected production target'
-grep -Eq '^(PLAN|SKIP) 091_ai_usage\.sql' "$PLAN_LOG" \
-  || fail 'Migration 091 was not found in the plan/ledger'
+IMAGE_PENDING_COUNT="$(grep -c '^PLAN ' "$PLAN_LOG" || true)"
+[[ "$IMAGE_PENDING_COUNT" == "$LOCAL_PENDING_COUNT" ]] \
+  || fail "Built-image migration plan differs from local source (source=$LOCAL_PENDING_COUNT image=$IMAGE_PENDING_COUNT)"
+LOCAL_PLAN_FILES="$(printf '%s\n' "$LOCAL_PLAN" | sed -n 's/^PLAN \([^ ]*\).*/\1/p' | sort)"
+IMAGE_PLAN_FILES="$(sed -n 's/^PLAN \([^ ]*\).*/\1/p' "$PLAN_LOG" | sort)"
+[[ "$LOCAL_PLAN_FILES" == "$IMAGE_PLAN_FILES" ]] \
+  || fail 'Built-image planned migration filenames differ from source SQL files'
+if ((IMAGE_PENDING_COUNT == 0)); then
+  log '[4/7] No pending SQL: leave database online and deploy new images only'
+  PG_ADMIN_PASSWORD=''
+  unset PG_ADMIN_PASSWORD
+  bash "$BUILD_SCRIPT" --deploy-only
+  printf '\nSUCCESS: no pending SQL; code-only deployment complete (no database downtime).\n'
+  exit 0
+fi
 
-printf '\nIMPORTANT: all PLAN versions above (not just 091) will be applied.\n'
+printf '\nIMPORTANT: every PLAN version above will be applied.\n'
 printf 'API/Worker downtime begins after confirmation. No automatic SQL rollback.\n'
 printf 'Type APPLY wealthsail to continue: ' > /dev/tty
 IFS= read -r confirmation < /dev/tty || fail 'Unable to read approval'
@@ -343,8 +459,14 @@ MIGRATION_ATTEMPTED=1
 APPLY_LOG="$(mktemp)"
 run_migrations 2>&1 | tee "$APPLY_LOG"
 grep -q '^READBACK OK:' "$APPLY_LOG" || fail 'Migration ended without READBACK OK'
-grep -Eq '^(APPLIED|SKIP) 091_ai_usage\.sql' "$APPLY_LOG" \
-  || fail 'Migration 091 is not applied/verified by ledger'
+# Cross-check the real ledger and current SQL files after the migration.
+if ! POST_PLAN="$(show_migration_plan)"; then
+  printf '%s\n' "$POST_PLAN" >&2
+  fail 'Post-migration ledger checksum validation failed'
+fi
+printf '%s\n' "$POST_PLAN"
+grep -qx 'PENDING_COUNT=0' <<< "$POST_PLAN" \
+  || fail 'Some SQL migrations remain unapplied after migration'
 MIGRATION_SUCCESS=1
 # The migration and future processes no longer need the administrator password.
 PG_ADMIN_PASSWORD=''
