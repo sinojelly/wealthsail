@@ -185,15 +185,15 @@ async def account(settings) -> dict:
     """Read metadata at the actual runtime; failures never block AI business."""
     private = _private()
     try:
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(25):
             if getattr(settings, "codex_runner_url", ""):
-                result = await _request_json(settings, "GET", "/v1/account", timeout=9)
+                result = await _request_json(settings, "GET", "/v1/account", timeout=23)
                 return private.safe_account_snapshot(result)
             path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
             executable = codex_research.resolve_codex_executable(path)
             if executable is None:
                 return private.unavailable_account("CODEX_NOT_CONFIGURED")
-            return await private.read_account(executable, timeout=8)
+            return await private.read_account(executable, timeout=15)
     except Exception:
         return private.unavailable_account()
 

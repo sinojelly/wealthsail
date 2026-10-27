@@ -343,7 +343,7 @@ def create_app(
         from backend.integrations.codex_private import read_account
 
         # Inspection never consumes an inference slot or starts a model turn.
-        return await read_account(executable, environment=child_environment, timeout=8)
+        return await read_account(executable, environment=child_environment, timeout=15)
 
     @app.post("/v1/completions", dependencies=[Depends(authorize)])
     async def completion(request: PromptRequest, connection: Request):
