@@ -7,12 +7,15 @@ both enforce this; the check gives a clean FORBIDDEN before hitting the DB.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+import asyncpg
 
 from backend.common.database import Pool, tenant_transaction
 from backend.common.tenancy import TenantContext
+from backend.config import Settings
 from backend.dependencies import (
     get_pool,
     get_request_id,
+    get_settings_dep,
     get_tenant_context,
     now_shanghai,
     write_audit,
@@ -21,6 +24,65 @@ from backend.errors import DataUnavailableError, ValidationError_, ok
 from backend.operations import repository
 
 router = APIRouter(prefix="/operations", tags=["operations"])
+
+
+@router.get("/ai-usage")
+async def operations_ai_usage(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    settings: Settings = Depends(get_settings_dep),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    from backend.ai_usage import repository as usage_repository
+    from backend.integrations import codex_client
+
+    _require_owner_admin(ctx)
+    limitations = ["ACCOUNT_DELTA_ESTIMATE", "HISTORY_FROM_INSTALLATION"]
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        platform = bool(
+            await conn.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM identity.platform_roles
+            WHERE user_id::text=$1 AND role='PLATFORM_ADMIN' AND status='ACTIVE')""",
+                ctx.user_id,
+            )
+        )
+        # A missing migration is actionable and never implies zero usage.
+        try:
+            async with conn.transaction():
+                data = await usage_repository.list_tasks(
+                    conn,
+                    ctx.tenant_id,
+                    include_global=platform,
+                    limit=limit,
+                    offset=offset,
+                )
+        except asyncpg.UndefinedTableError:
+            data = {"tasks": [], "total": 0, "limit": limit, "offset": offset}
+            limitations.append("USAGE_LEDGER_NOT_MIGRATED")
+    account = {
+        "status": "RESTRICTED",
+        "provider": "codex",
+        "email": None,
+        "planType": None,
+        "authType": None,
+        "observedAt": None,
+        "windows": [],
+        "credits": None,
+        "limitations": ["PLATFORM_ADMIN_REQUIRED"],
+    }
+    if platform:
+        try:
+            raw = await codex_client.account(settings)
+            account = {key: raw.get(key, default) for key, default in account.items()}
+        except Exception:
+            account.update(status="UNAVAILABLE", limitations=["ACCOUNT_READ_FAILED"])
+    return ok(
+        {**data, "account": account, "limitations": limitations},
+        request_id=request_id,
+        as_of=now_shanghai(),
+    )
 
 
 def _require_owner_admin(ctx: TenantContext) -> None:
@@ -111,7 +173,9 @@ async def operations_run_fund_estimate(
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         status = await repository.fund_estimate_status(conn, ctx.tenant_id)
         if not status["canRun"]:
-            raise ValidationError_("今天不是交易日，无需生成盘中估值；当前使用最近官方净值")
+            raise ValidationError_(
+                "今天不是交易日，无需生成盘中估值；当前使用最近官方净值"
+            )
         result = await repository.enqueue_manual_fund_estimate(conn, ctx.tenant_id)
         if result["reason"] == "JOB_NOT_CONFIGURED":
             raise DataUnavailableError("当前租户尚未启用基金 14:30 标准任务")
