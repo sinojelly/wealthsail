@@ -33,6 +33,21 @@ def auth():
 
 
 @pytest.mark.asyncio
+async def test_stream_timeout_sends_uncertain_inference_metadata_without_private_error(monkeypatch):
+    async def stream(*args, **kwargs):
+        yield "partial"
+        raise TimeoutError("private process detail")
+
+    monkeypatch.setattr(runner(), "stream_private", stream)
+    async with client_for() as (client, _):
+        response = await client.post("/v1/chat/stream", headers=auth(), json={"system_prompt": "facts", "user_prompt": "request"})
+    events = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+    failure = next(event for event in events if "error" in event)
+    assert failure["inferenceUncertain"] is True
+    assert "private process detail" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_health_is_process_only_and_other_routes_require_token(monkeypatch):
     mod = runner()
     preflight = AsyncMock()

@@ -83,13 +83,17 @@ def _check_input(payload):
 
 def _failure_metadata(error, source):
     if isinstance(source, dict):
+        uncertain = source.get("inferenceUncertain") is True
         succeeded = source.get("inferenceSucceeded")
         usage, model = source.get("usage"), source.get("model")
     else:
+        uncertain = getattr(source, "inference_uncertain", False) or isinstance(source, (TimeoutError, httpx.ReadError, httpx.WriteError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError))
         succeeded = getattr(source, "inference_succeeded", None)
         usage, model = getattr(source, "usage", None), getattr(source, "model", None)
     if type(succeeded) is bool:
         codex_research.with_telemetry(error, usage=usage, model=model if isinstance(model, str) and 1 <= len(model) <= 120 else None, inference_succeeded=succeeded)
+    if uncertain:
+        error.inference_uncertain = True
     return error
 
 
@@ -132,6 +136,8 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         except (ValueError, UnicodeError):
                             body = {}
                         error = TimeoutError("Codex research outcome is uncertain") if uncertain and response.status_code == 504 else CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
+                        if response.status_code == 504:
+                            error.inference_uncertain = True
                         raise _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None)
                     result = json.loads(b"".join(chunks))
                     if not isinstance(result, dict):
@@ -143,7 +149,7 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
             httpx.WriteTimeout, httpx.RemoteProtocolError, TimeoutError) as exc:
         if uncertain:
             raise _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc) from exc
-        raise CodexCallError("Codex runner request failed") from exc
+        raise _failure_metadata(CodexCallError("Codex runner request failed"), exc) from exc
     except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
         raise CodexCallError("Codex runner request failed") from exc
 
@@ -298,7 +304,7 @@ async def _stream_chat(
                     "POST", base + "/v1/chat/stream", json=payload, headers=headers
                 ) as response:
                     if response.status_code != 200:
-                        raise CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
+                        raise _failure_metadata(CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})"), {"inferenceUncertain": response.status_code == 504})
                     async for line in _sse_lines(response):
                         if not line.startswith("data:"):
                             continue

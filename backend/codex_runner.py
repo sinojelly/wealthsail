@@ -415,8 +415,10 @@ def create_app(
                 yield "data: " + _json_bytes(terminal).decode("utf-8") + "\n\n"
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 failure = {"error": "Codex conversation unavailable"}
+                if isinstance(exc, TimeoutError) or getattr(exc, "inference_uncertain", False):
+                    failure["inferenceUncertain"] = True
                 if usage:
                     failure.update(usage=usage, model=selected or "codex", inferenceSucceeded=False)
                 yield "data: " + _json_bytes(failure).decode("utf-8") + "\n\n"

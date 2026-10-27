@@ -167,7 +167,8 @@ async def observe(settings, model, call_type):
                 status="SUCCEEDED"
                 if getattr(exc, "inference_succeeded", False)
                 else "UNCERTAIN"
-                if isinstance(
+                if getattr(exc, "inference_uncertain", False)
+                or isinstance(
                     exc, (TimeoutError, asyncio.CancelledError, GeneratorExit)
                 )
                 else "FAILED",
