@@ -21,6 +21,7 @@ import asyncpg
 from backend.common.database import Pool, system_connection
 from backend.common.tenancy import TenantContext
 from backend.config import Settings
+from backend.jobs.session_switches import REPORT_SESSION_SWITCHES, session_enabled
 from backend.market import service as market_service
 from backend.reports import intraday
 from backend.reports import pre_market_personalized
@@ -104,6 +105,16 @@ def worker_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def _run_enabled(settings: Settings, session: str, key: str) -> bool:
+    # Manual fund requests use the recovery queue as their only consumer.
+    # An automatic-task switch must not strand an accepted explicit request.
+    explicit_fund = session == "FUND_1430" and (
+        key.startswith("manual:FUND_1430:")
+        or _debug_fund_delivery_user(key) is not None
+    )
+    return session_enabled(settings, session) or explicit_fund
+
+
 async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
     """Make expired RUNNING leases recoverable without inventing a new job key."""
     del settings  # the authoritative expiry is persisted in lease_until
@@ -156,21 +167,31 @@ async def run_recoverable_jobs(
                    now() - make_interval(mins => $1)
                AND jr.attempt_count < $2
                AND j.is_enabled = TRUE
-               AND ($4::boolean OR j.report_session <> 'INTRADAY')
+               AND (
+                   NOT (j.report_session = ANY($4::text[]))
+                   OR (j.report_session = 'FUND_1430' AND (
+                       jr.job_key LIKE 'manual:FUND_1430:%'
+                       OR jr.job_key LIKE 'debug:FUND_1430:%'
+                   ))
+               )
              ORDER BY COALESCE(jr.next_retry_at, jr.started_at), jr.id
              LIMIT $3
             """,
             settings.job_recovery_window_minutes,
             settings.job_recovery_max_attempts,
             limit,
-            settings.intraday_tracking_enabled,
+            [
+                session
+                for session in REPORT_SESSION_SWITCHES
+                if not session_enabled(settings, session)
+            ],
         )
 
     outcomes: dict[str, str] = {}
     for job in rows:
         key = str(job["job_key"])
         session = str(job["report_session"])
-        if session == "INTRADAY" and not settings.intraday_tracking_enabled:
+        if not _run_enabled(settings, session, key):
             continue
         try:
             outcomes[key] = await _execute_with_lease(pool, settings, job, key, session)
@@ -300,7 +321,7 @@ async def run_session(
     member; each member's failure is isolated so one empty/blocked member does
     not abort the rest.
     """
-    if phase == "INTRADAY" and not settings.intraday_tracking_enabled:
+    if not session_enabled(settings, phase):
         return {}
     public_session = PUBLIC_SESSION_BY_PHASE.get(phase, phase)
     async with system_connection(pool) as conn:
@@ -350,8 +371,8 @@ async def _execute_with_lease(
     key: str,
     public_session: str,
 ) -> str:
-    if public_session == "INTRADAY" and not settings.intraday_tracking_enabled:
-        return "SKIPPED:INTRADAY_DISABLED"
+    if not _run_enabled(settings, public_session, key):
+        return f"SKIPPED:{public_session}_DISABLED"
     lease = await claim_job_run(
         pool,
         job,

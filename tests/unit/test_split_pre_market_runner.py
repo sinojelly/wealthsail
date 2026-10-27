@@ -122,7 +122,10 @@ async def test_macro_phase_runs_once_per_tenant_via_public_session(
     now = datetime(2026, 9, 2, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     outcomes = await run_session(
-        pool, Settings(_env_file=None), "PRE_MARKET_MACRO", now
+        pool,
+        Settings(_env_file=None, daily_research_enabled=True),
+        "PRE_MARKET_MACRO",
+        now,
     )
 
     assert outcomes == {"tenant-1": "COMPLETED:report=report-1"}
@@ -160,7 +163,10 @@ async def test_personalized_phase_fans_out_per_active_member_and_isolates_failur
     now = datetime(2026, 9, 2, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     outcomes = await run_session(
-        pool, Settings(_env_file=None), "PRE_MARKET_PERSONALIZED", now
+        pool,
+        Settings(_env_file=None, daily_research_enabled=True),
+        "PRE_MARKET_PERSONALIZED",
+        now,
     )
 
     assert outcomes == {
@@ -196,7 +202,10 @@ async def test_personalized_phase_skips_members_without_personal_context(
     now = datetime(2026, 9, 2, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     outcomes = await run_session(
-        pool, Settings(_env_file=None), "PRE_MARKET_PERSONALIZED", now
+        pool,
+        Settings(_env_file=None, daily_research_enabled=True),
+        "PRE_MARKET_PERSONALIZED",
+        now,
     )
 
     assert outcomes == {"tenant-1:user-1": "SKIPPED:NO_PERSONAL_CONTEXT"}
@@ -224,7 +233,10 @@ async def test_already_terminal_key_returns_skip_without_generating(
     now = datetime(2026, 9, 2, 8, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     outcomes = await run_session(
-        pool, Settings(_env_file=None), "PRE_MARKET_PERSONALIZED", now
+        pool,
+        Settings(_env_file=None, daily_research_enabled=True),
+        "PRE_MARKET_PERSONALIZED",
+        now,
     )
 
     assert outcomes == {"tenant-1:user-1": "SKIPPED:already-running-or-terminal"}

@@ -1057,6 +1057,10 @@ async def sync_alpha_opportunities(
 ):
     stamp = _local(now if now is not None else now_provider())
     result = {"morning": {"status": "DISABLED"}, "fund1430": {"status": "DISABLED"}}
+    daily_enabled = getattr(settings, "daily_research_enabled", False)
+    fund_enabled = getattr(settings, "fund_1430_enabled", False)
+    if not daily_enabled and not fund_enabled:
+        return result
     scope = _scope(settings)
     if (
         scope is None
@@ -1064,8 +1068,9 @@ async def sync_alpha_opportunities(
         or not getattr(settings, "wecom_opportunity_webhook_url", "")
     ):
         return result
-    result["morning"] = {"status": "NOT_READY"}
-    if stamp.time() >= time(8, 30):
+    if daily_enabled:
+        result["morning"] = {"status": "NOT_READY"}
+    if daily_enabled and stamp.time() >= time(8, 30):
         report = await _today_report(pool, stamp)
         if report:
 
@@ -1089,6 +1094,8 @@ async def sync_alpha_opportunities(
             result["morning"] = await _run_slot(
                 pool, scope, stamp.date(), "MORNING", stamp, morning, now_provider
             )
+    if not fund_enabled:
+        return result
     result["fund1430"] = {"status": "NOT_DUE"}
     if not time(14, 30) <= stamp.time() < time(15):
         return result

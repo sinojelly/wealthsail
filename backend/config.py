@@ -102,8 +102,10 @@ class Settings(BaseSettings):
         # Templates intentionally leave these blank to use the account default.
         return (value.strip() or None) if isinstance(value, str) else value
 
-    # Separate, opt-in daily public research using the user's local Codex login.
+    # Opt-in daily public research, pre-market reports and morning digest.
     daily_research_enabled: bool = Field(default=False)
+    fund_1430_enabled: bool = Field(default=False)
+    post_market_review_enabled: bool = Field(default=False)
     # Independent opt-in for the five-minute holdings anomaly check/alert.
     intraday_tracking_enabled: bool = Field(default=False)
     daily_research_debug_enabled: bool = Field(default=False)

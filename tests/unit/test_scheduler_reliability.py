@@ -73,7 +73,7 @@ async def test_scheduler_skips_a_calendar_holiday_even_when_cron_is_due() -> Non
         return False
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, fund_1430_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -97,7 +97,7 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, daily_research_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -136,7 +136,7 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes(
     }
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, post_market_review_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: datetime(2026, 8, 27, 15, 30, tzinfo=shanghai),
@@ -146,7 +146,7 @@ async def test_scheduler_dispatches_report_sessions_and_global_source_refreshes(
 
     dispatched.clear()
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, post_market_review_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: datetime(2026, 8, 27, 18, 0, tzinfo=shanghai),
@@ -174,7 +174,9 @@ async def test_simultaneous_sessions_start_independently() -> None:
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None, intraday_tracking_enabled=True),
+        Settings(
+            _env_file=None, intraday_tracking_enabled=True, fund_1430_enabled=True
+        ),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -279,7 +281,7 @@ async def test_recovery_scan_executes_due_report_run_with_original_key(
 
     monkeypatch.setattr(runner, "_execute_with_lease", execute)
     outcomes = await runner.run_recoverable_jobs(
-        _Pool(conn), Settings(_env_file=None), limit=10
+        _Pool(conn), Settings(_env_file=None, daily_research_enabled=True), limit=10
     )
 
     assert "jr.status IN ('PENDING', 'FAILED')" in conn.sql
@@ -325,7 +327,7 @@ async def test_both_pre_market_phases_skip_exchange_holidays() -> None:
         return False
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, daily_research_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,

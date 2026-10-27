@@ -23,6 +23,7 @@ from backend.common.database import create_pool, verify_runtime_login_boundary
 from backend.config import get_settings, validate_runtime_settings
 from backend.dependencies import now_shanghai
 from backend.jobs import runner
+from backend.jobs.session_switches import session_enabled
 from backend.jobs.data_tasks import DataTaskConsumer
 from backend.jobs.corporate_actions_sync import sync_corporate_actions
 from backend.jobs.fund_nav_sync import sync_fund_nav_history
@@ -39,6 +40,8 @@ logger = logging.getLogger("wealthsail.worker")
 
 
 async def _execute_session(pool, settings, session: str, now: datetime) -> None:
+    if not session_enabled(settings, session):
+        return
     if session == "INVESTMENT_RESEARCH_REFRESH":
         from backend.jobs.investment_research import sync_research
 

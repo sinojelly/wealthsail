@@ -17,6 +17,7 @@ def test_local_explicitly_enables_research_with_native_executable_only(
     from backend.integrations import codex_research
 
     monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setenv("DAILY_RESEARCH_ENABLED", "true")
     monkeypatch.setattr(
         codex_research,
         "resolve_codex_executable",
@@ -33,6 +34,7 @@ def test_api_display_uses_enabled_flag_without_cli_or_worker_authority(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setenv("DAILY_RESEARCH_ENABLED", "true")
     local_dev.configure(SimpleNamespace(web_port=5173, db_port=55432))
     content = (tmp_path / "api.env").read_text("utf-8")
     assert "DAILY_RESEARCH_ENABLED=true" in content

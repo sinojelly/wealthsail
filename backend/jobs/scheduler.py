@@ -17,6 +17,7 @@ from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
 
 from backend.config import Settings
+from backend.jobs.session_switches import session_enabled
 
 logger = logging.getLogger("wealthsail.scheduler")
 
@@ -259,10 +260,7 @@ class Scheduler:
             schedule
             for schedule in SCHEDULES
             if is_due(schedule, now)
-            and (
-                schedule.phase != "INTRADAY"
-                or self._settings.intraday_tracking_enabled
-            )
+            and session_enabled(self._settings, schedule.phase)
         ]
         if not due:
             return

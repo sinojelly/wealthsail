@@ -42,7 +42,9 @@ async def test_disabled_intraday_does_not_dispatch_but_1430_still_runs(
         seen.append(phase)
 
     scheduler = Scheduler(
-        Settings(_env_file=None, intraday_tracking_enabled=enabled),
+        Settings(
+            _env_file=None, intraday_tracking_enabled=enabled, fund_1430_enabled=True
+        ),
         execute,
         now_provider=lambda: datetime(
             2026, 10, 27, 14, 30, tzinfo=ZoneInfo("Asia/Shanghai")
@@ -104,8 +106,9 @@ async def test_disabled_recovery_ignores_old_intraday_but_keeps_other_sessions(
 ):
     class Connection:
         async def fetch(self, sql, *args):
-            assert "j.report_session <> 'INTRADAY'" in sql
-            assert args[-1] is False
+            assert "ANY($4::text[])" in sql
+            assert "INTRADAY" in args[-1]
+            assert "FUND_1430" not in args[-1]
             return [
                 {"report_session": "INTRADAY", "job_key": "old-intraday"},
                 {"report_session": "FUND_1430", "job_key": "fund"},
@@ -124,7 +127,9 @@ async def test_disabled_recovery_ignores_old_intraday_but_keeps_other_sessions(
 
     execute = AsyncMock(return_value="COMPLETED")
     monkeypatch.setattr(runner, "_execute_with_lease", execute)
-    result = await runner.run_recoverable_jobs(Pool(), Settings(_env_file=None))
+    result = await runner.run_recoverable_jobs(
+        Pool(), Settings(_env_file=None, fund_1430_enabled=True)
+    )
     assert result == {"fund": "COMPLETED"}
     assert execute.await_args.args[-1] == "FUND_1430"
     assert execute.await_count == 1

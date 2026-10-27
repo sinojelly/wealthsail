@@ -8,6 +8,13 @@ import pytest
 
 from scripts import local_dev
 
+AUTOMATIC_SWITCHES = (
+    "DAILY_RESEARCH_ENABLED",
+    "FUND_1430_ENABLED",
+    "POST_MARKET_REVIEW_ENABLED",
+    "INTRADAY_TRACKING_ENABLED",
+)
+
 
 def args(**changes):
     values = {"web_port": 5173, "api_port": 8000, "db_port": 55432, "skip_macro": False}
@@ -45,6 +52,39 @@ def test_macro_configuration_preserves_existing_secrets_and_separates_api_author
     assert not keys.intersection(
         ("DATABASE_URL", "JWT_SECRET", "WECOM_CORP_SECRET", "MODEL_API_KEY")
     )
+
+
+@pytest.mark.parametrize(
+    "switch,value",
+    [(None, None)]
+    + [(name, value) for name in AUTOMATIC_SWITCHES for value in ("true", "false")],
+)
+def test_generated_local_automatic_switches_default_off_and_follow_launch_environment(
+    tmp_path, monkeypatch, switch, value
+):
+    from dotenv import dotenv_values
+    from backend.integrations import codex_research
+
+    monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setattr(codex_research, "resolve_codex_executable", lambda *_: None)
+    for name in AUTOMATIC_SWITCHES:
+        monkeypatch.delenv(name, raising=False)
+    if switch is not None:
+        monkeypatch.setenv(switch, value)
+    # Generated automatic flags follow this launch, rather than retaining
+    # an old automatic opt-in from either service's previous environment file.
+    previous = "\n".join(f"{name}=true" for name in AUTOMATIC_SWITCHES) + "\n"
+    for service in ("api", "macro"):
+        (tmp_path / f"{service}.env").write_text(previous, encoding="utf-8")
+
+    local_dev.configure(args())
+
+    expected = {name: "false" for name in AUTOMATIC_SWITCHES}
+    if switch is not None:
+        expected[switch] = value
+    for service in ("api", "macro"):
+        actual = dotenv_values(tmp_path / f"{service}.env")
+        assert {name: actual.get(name) for name in AUTOMATIC_SWITCHES} == expected
 
 
 def test_default_local_services_include_only_macro_collector_and_not_report_worker():

@@ -129,7 +129,7 @@ async def test_daily_research_catch_up_ends_before_existing_pre_market_phases():
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, daily_research_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -162,7 +162,11 @@ async def test_slow_research_at_0829_does_not_block_0830_pre_market_tick():
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None, scheduler_tick_seconds=0.001),
+        Settings(
+            _env_file=None,
+            scheduler_tick_seconds=0.001,
+            daily_research_enabled=True,
+        ),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -266,7 +270,7 @@ async def test_report_dispatch_keeps_existing_await_completion_semantics():
         await release.wait()
 
     scheduler = Scheduler(
-        Settings(_env_file=None),
+        Settings(_env_file=None, daily_research_enabled=True),
         execute,
         now_provider=lambda: datetime(2026, 10, 13, 8, 30, tzinfo=SHANGHAI),
     )
@@ -323,7 +327,11 @@ async def test_failed_background_research_does_not_repeat_or_block_reports(caplo
         if session == "INVESTMENT_RESEARCH_REFRESH":
             raise RuntimeError("fixture provider unavailable")
 
-    scheduler = Scheduler(Settings(_env_file=None), execute, now_provider=lambda: now)
+    scheduler = Scheduler(
+        Settings(_env_file=None, daily_research_enabled=True),
+        execute,
+        now_provider=lambda: now,
+    )
     try:
         await scheduler._tick()
         await scheduler._tick()

@@ -121,6 +121,8 @@ def generate_configuration(
         "TIANTIAN_IMPORT_ENABLED": "true",
         "AUTH_DEV_MODE": "false",
         "DAILY_RESEARCH_ENABLED": "false",
+        "FUND_1430_ENABLED": "false",
+        "POST_MARKET_REVIEW_ENABLED": "false",
         "INTRADAY_TRACKING_ENABLED": "false",
         **codex_client,
     }
@@ -138,6 +140,8 @@ def generate_configuration(
         "OUTBOX_DELIVERY_CONCURRENCY": "2",
         "INTRADAY_TRACKING_ENABLED": "false",
         "DAILY_RESEARCH_ENABLED": "false",
+        "FUND_1430_ENABLED": "false",
+        "POST_MARKET_REVIEW_ENABLED": "false",
         "AUTH_DEV_MODE": "false",
         **codex_client,
     }
