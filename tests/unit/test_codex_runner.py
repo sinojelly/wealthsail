@@ -66,6 +66,88 @@ async def test_preflight_returns_only_safe_metadata_and_sanitized_environment(mo
 
 
 @pytest.mark.asyncio
+async def test_account_endpoint_requires_runner_auth_and_does_not_invoke_inference(monkeypatch):
+    mod = runner()
+    from backend.integrations import codex_private
+
+    metadata = codex_private.account_snapshot(
+        {"account": {"type": "chatgpt", "email": "operator@example.test", "planType": "pro"}},
+        {"rateLimits": {"primary": {"usedPercent": 10, "windowDurationMins": 300, "resetsAt": 1800000000}}},
+    )
+    read = AsyncMock(return_value=metadata)
+    monkeypatch.setattr(codex_private, "read_account", read)
+    inference = AsyncMock(side_effect=AssertionError("account inspection must not infer"))
+    monkeypatch.setattr(mod, "complete_private", inference)
+    async with client_for(environment={"CODEX_HOME": "fixture-auth", "DATABASE_URL": "secret"}) as (client, app):
+        assert (await client.get("/v1/account")).status_code == 401
+        response = await client.get("/v1/account", headers=auth())
+    assert response.status_code == 200 and response.json() == metadata
+    assert "DATABASE_URL" not in read.await_args.kwargs["environment"]
+    assert app.state.capacity.active == 0
+
+
+@pytest.mark.asyncio
+async def test_runner_preserves_cached_completion_and_research_usage(monkeypatch):
+    mod = runner()
+    from backend.integrations.codex_research import ResearchResult
+
+    usage = {"prompt_tokens": 100, "cached_input_tokens": 60, "completion_tokens": 8, "total_tokens": 108}
+    monkeypatch.setattr(mod, "complete_private", AsyncMock(return_value={"content": "{}", "model": "fixture", "usage": usage}))
+    monkeypatch.setattr(mod, "run_codex_research", AsyncMock(return_value=ResearchResult({"summary": "public"}, usage=usage, model="fixture")))
+    async with client_for() as (client, _):
+        completion = await client.post("/v1/completions", headers=auth(), json={"system_prompt": "scope", "user_prompt": "report"})
+        research = await client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {"type": "object"}})
+    assert completion.json()["usage"] == usage
+    assert research.json() == {"report": {"summary": "public"}, "usage": usage, "model": "fixture"}
+
+
+@pytest.mark.asyncio
+async def test_runner_stream_done_contains_usage_without_sending_hidden_text(monkeypatch):
+    mod = runner()
+
+    async def stream(*args, **kwargs):
+        kwargs["usage_callback"]({"prompt_tokens": 50, "cached_input_tokens": 25, "completion_tokens": 5, "total_tokens": 55})
+        yield "answer"
+
+    monkeypatch.setattr(mod, "stream_private", stream)
+    async with client_for() as (client, _):
+        response = await client.post("/v1/chat/stream", headers=auth(), json={"system_prompt": "scope", "user_prompt": "chat"})
+    events = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+    assert events == [{"delta": "answer"}, {"done": True, "usage": {"prompt_tokens": 50, "cached_input_tokens": 25, "completion_tokens": 5, "total_tokens": 55}, "model": "codex"}]
+
+
+@pytest.mark.asyncio
+async def test_runner_output_failure_keeps_safe_telemetry_without_raw_error(monkeypatch):
+    mod = runner()
+    from backend.integrations.codex_research import CodexOutputError, with_telemetry
+
+    failure = with_telemetry(CodexOutputError("private response text"), usage={"prompt_tokens": 12, "completion_tokens": 2}, model="fixture", inference_succeeded=True)
+    monkeypatch.setattr(mod, "complete_private", AsyncMock(side_effect=failure))
+    async with client_for() as (client, _):
+        response = await client.post("/v1/completions", headers=auth(), json={"system_prompt": "scope", "user_prompt": "report"})
+    assert response.status_code == 502
+    assert response.json()["detail"] == {"message": "Codex execution failed", "usage": {"prompt_tokens": 12, "completion_tokens": 2}, "model": "fixture", "inferenceSucceeded": True}
+    assert "private response text" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_failed_runner_stream_returns_observed_usage_with_safe_error(monkeypatch):
+    mod = runner()
+
+    async def stream(*args, **kwargs):
+        kwargs["usage_callback"]({"prompt_tokens": 40, "completion_tokens": 3, "total_tokens": 43})
+        yield "partial"
+        raise RuntimeError("private error detail")
+
+    monkeypatch.setattr(mod, "stream_private", stream)
+    async with client_for() as (client, _):
+        response = await client.post("/v1/chat/stream", headers=auth(), json={"system_prompt": "scope", "user_prompt": "chat"})
+    events = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+    assert events[1] == {"error": "Codex conversation unavailable", "usage": {"prompt_tokens": 40, "completion_tokens": 3, "total_tokens": 43}, "model": "codex", "inferenceSucceeded": False}
+    assert "private error detail" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_completion_forwards_one_private_call_and_bounds_the_model(monkeypatch):
     mod = runner()
     execute = AsyncMock(return_value={"content": "answer", "model": "allowed", "usage": {}, "cost_cny": "0.0000", "debug": "must-not-return"})

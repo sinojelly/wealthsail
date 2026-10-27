@@ -23,6 +23,15 @@ async def test_report_gateway_uses_codex_without_any_model_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gateway_preserves_cached_tokens_without_counting_them_twice(monkeypatch):
+    monkeypatch.setattr(codex_client, "completion", AsyncMock(return_value={
+        "content": "{}", "model": "fixture", "usage": {"prompt_tokens": 100, "cached_input_tokens": 75, "completion_tokens": 9, "total_tokens": 109},
+    }))
+    result = await model_gateway.chat_completion(settings=SimpleNamespace(), system_prompt="facts", user_prompt="report")
+    assert result.usage == {"prompt_tokens": 100, "cached_input_tokens": 75, "completion_tokens": 9, "total_tokens": 109}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("error,expected", [(codex_client.CodexNotConfiguredError("safe"), model_gateway.ModelNotConfiguredError), (codex_client.CodexCallError("safe"), model_gateway.ModelCallError)])
 async def test_report_gateway_maps_safe_errors_without_provider_retry(monkeypatch, error, expected):
     call = AsyncMock(side_effect=error)

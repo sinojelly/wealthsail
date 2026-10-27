@@ -25,6 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from backend.integrations.codex_research import (
     CodexUnavailableError,
+    ResearchResult,
+    normalize_usage,
     preflight_codex,
     public_environment,
     run_codex_research,
@@ -191,14 +193,7 @@ def _safe_completion(result):
     usage = result.get("usage", {})
     if not isinstance(usage, dict):
         raise ValueError("invalid Codex usage")
-    usage = {
-        name: int(value)
-        for name, value in usage.items()
-        if name in {"prompt_tokens", "completion_tokens"}
-        and isinstance(value, int)
-        and not isinstance(value, bool)
-        and 0 <= value <= 1_000_000_000
-    }
+    usage = normalize_usage(usage)
     try:
         cost = Decimal(str(result.get("cost_cny", "0")))
         if not cost.is_finite() or cost < 0:
@@ -208,6 +203,17 @@ def _safe_completion(result):
     safe = {"content": result["content"], "model": model, "usage": usage, "cost_cny": str(cost)}
     _bounded_output(safe)
     return safe
+
+
+def _error_detail(error, message):
+    if not hasattr(error, "inference_succeeded"):
+        return message
+    model = getattr(error, "model", None)
+    return {
+        "message": message, "usage": normalize_usage(getattr(error, "usage", None)),
+        "model": model if isinstance(model, str) and 1 <= len(model) <= 120 else "codex",
+        "inferenceSucceeded": getattr(error, "inference_succeeded", False) is True,
+    }
 
 
 class ManagedStream(StreamingResponse):
@@ -309,13 +315,13 @@ def create_app(
         except HTTPException:
             raise
         except TimeoutError as exc:
-            raise HTTPException(504, "Codex execution timed out") from exc
+            raise HTTPException(504, _error_detail(exc, "Codex execution timed out")) from exc
         except CodexUnavailableError as exc:
             raise HTTPException(503, "Codex authentication or runtime unavailable") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise HTTPException(502, "Codex execution failed") from exc
+            raise HTTPException(502, _error_detail(exc, "Codex execution failed")) from exc
         finally:
             with anyio.CancelScope(shield=True):
                 for task in (execution, disconnect):
@@ -331,6 +337,13 @@ def create_app(
     async def preflight(connection: Request):
         result = await invoke(lambda: preflight_codex(executable, environment=child_environment), 75, connection)
         return {name: result.get(name) for name in ("executable", "version", "selectedModel")}
+
+    @app.get("/v1/account", dependencies=[Depends(authorize)])
+    async def account():
+        from backend.integrations.codex_private import read_account
+
+        # Inspection never consumes an inference slot or starts a model turn.
+        return await read_account(executable, environment=child_environment, timeout=8)
 
     @app.post("/v1/completions", dependencies=[Depends(authorize)])
     async def completion(request: PromptRequest, connection: Request):
@@ -355,6 +368,8 @@ def create_app(
         )
         if not isinstance(result, dict):
             raise HTTPException(502, "Invalid Codex research response")
+        if isinstance(result, ResearchResult):
+            return {"report": dict(result), "usage": result.usage, "model": result.model}
         return result
 
     @app.post("/v1/chat/stream", dependencies=[Depends(authorize)])
@@ -363,7 +378,13 @@ def create_app(
         await capacity.acquire()
 
         async def events() -> AsyncIterator[str]:
-            iterator = stream_private(executable, request.system_prompt, request.user_prompt, timeout=chat_timeout, environment=child_environment, model=selected).__aiter__()
+            usage = {}
+
+            def record_usage(value):
+                usage.clear()
+                usage.update(normalize_usage(value))
+
+            iterator = stream_private(executable, request.system_prompt, request.user_prompt, timeout=chat_timeout, environment=child_environment, model=selected, usage_callback=record_usage).__aiter__()
             pending = None
             size = 0
             try:
@@ -388,11 +409,17 @@ def create_app(
                             raise ValueError("assistant output limit")
                         if delta:
                             yield "data: " + _json_bytes({"delta": delta}).decode("utf-8") + "\n\n"
-                yield 'data: {"done":true}\n\n'
+                terminal = {"done": True}
+                if usage:
+                    terminal.update(usage=usage, model=selected or "codex")
+                yield "data: " + _json_bytes(terminal).decode("utf-8") + "\n\n"
             except asyncio.CancelledError:
                 raise
             except Exception:
-                yield 'data: {"error":"Codex conversation unavailable"}\n\n'
+                failure = {"error": "Codex conversation unavailable"}
+                if usage:
+                    failure.update(usage=usage, model=selected or "codex", inferenceSucceeded=False)
+                yield "data: " + _json_bytes(failure).decode("utf-8") + "\n\n"
                 yield 'data: {"done":true}\n\n'
             finally:
                 with anyio.CancelScope(shield=True):

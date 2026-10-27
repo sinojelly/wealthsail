@@ -18,6 +18,22 @@ def adapter():
     return import_module("backend.integrations.codex_research")
 
 
+@pytest.mark.asyncio
+async def test_public_research_keeps_usage_outside_the_strict_report_payload(monkeypatch):
+    mod = adapter()
+
+    async def execute(args, **kwargs):
+        Path(args[args.index("--output-last-message") + 1]).write_text('{"summary":"public"}', encoding="utf-8")
+        return 0, b'{"type":"turn.completed","usage":{"input_tokens":30,"cached_input_tokens":10,"output_tokens":7}}\n', b""
+
+    monkeypatch.setattr(mod, "_run", execute)
+    result = await mod.run_codex_research("native-codex", "public", {"type": "object"}, model="fixture", environment={})
+    assert result == {"summary": "public"}
+    assert getattr(result, "usage", None) == {"prompt_tokens": 30, "cached_input_tokens": 10, "completion_tokens": 7, "total_tokens": 37}
+    assert result.model == "fixture"
+    assert json.dumps(result) == '{"summary": "public"}'
+
+
 def test_linux_native_codex_is_found_on_path(monkeypatch, tmp_path):
     mod = adapter()
     executable = tmp_path / "codex"

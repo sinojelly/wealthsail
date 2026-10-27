@@ -7,6 +7,7 @@ research retains its existing local discovery and single-dispatch policy.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 import json
 from typing import AsyncIterator
 from urllib.parse import urlsplit
@@ -80,6 +81,18 @@ def _check_input(payload):
         raise CodexCallError("Codex input exceeds the configured limit")
 
 
+def _failure_metadata(error, source):
+    if isinstance(source, dict):
+        succeeded = source.get("inferenceSucceeded")
+        usage, model = source.get("usage"), source.get("model")
+    else:
+        succeeded = getattr(source, "inference_succeeded", None)
+        usage, model = getattr(source, "usage", None), getattr(source, "model", None)
+    if type(succeeded) is bool:
+        codex_research.with_telemetry(error, usage=usage, model=model if isinstance(model, str) and 1 <= len(model) <= 120 else None, inference_succeeded=succeeded)
+    return error
+
+
 async def _sse_lines(response):
     """Apply the byte budget before an unterminated SSE line can accumulate."""
     pending, size = b"", 0
@@ -107,16 +120,19 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                 async with client.stream(
                     method, base + endpoint, json=payload, headers=headers
                 ) as response:
-                    if uncertain and response.status_code == 504:
-                        raise TimeoutError("Codex research outcome is uncertain")
-                    if response.status_code != 200:
-                        raise CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
                     chunks, size = [], 0
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
                         if size > _MAX_OUTPUT_BYTES:
                             raise CodexCallError("Codex output exceeds the configured limit")
                         chunks.append(chunk)
+                    if response.status_code != 200:
+                        try:
+                            body = json.loads(b"".join(chunks))
+                        except (ValueError, UnicodeError):
+                            body = {}
+                        error = TimeoutError("Codex research outcome is uncertain") if uncertain and response.status_code == 504 else CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
+                        raise _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None)
                     result = json.loads(b"".join(chunks))
                     if not isinstance(result, dict):
                         raise CodexCallError("Codex runner returned an invalid response")
@@ -126,7 +142,7 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
     except (httpx.ReadError, httpx.WriteError, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.RemoteProtocolError, TimeoutError) as exc:
         if uncertain:
-            raise TimeoutError("Codex research outcome is uncertain") from exc
+            raise _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc) from exc
         raise CodexCallError("Codex runner request failed") from exc
     except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
         raise CodexCallError("Codex runner request failed") from exc
@@ -159,7 +175,36 @@ async def preflight(settings) -> dict:
     return await _preflight_local(settings, public=True)
 
 
+async def account(settings) -> dict:
+    """Read metadata at the actual runtime; failures never block AI business."""
+    private = _private()
+    try:
+        async with asyncio.timeout(10):
+            if getattr(settings, "codex_runner_url", ""):
+                result = await _request_json(settings, "GET", "/v1/account", timeout=9)
+                return private.safe_account_snapshot(result)
+            path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
+            executable = codex_research.resolve_codex_executable(path)
+            if executable is None:
+                return private.unavailable_account("CODEX_NOT_CONFIGURED")
+            return await private.read_account(executable, timeout=8)
+    except Exception:
+        return private.unavailable_account()
+
+
 async def completion(
+    settings, *, system_prompt: str, user_prompt: str,
+    json_mode: bool = True, model=None,
+) -> dict:
+    from backend.ai_usage.tracker import trace_inference
+
+    return await trace_inference(
+        settings, model=model or getattr(settings, "codex_model", None), call_type="completion",
+        operation=lambda: _completion(settings, system_prompt=system_prompt, user_prompt=user_prompt, json_mode=json_mode, model=model),
+    )
+
+
+async def _completion(
     settings, *, system_prompt: str, user_prompt: str,
     json_mode: bool = True, model=None,
 ) -> dict:
@@ -187,7 +232,7 @@ async def completion(
         except CodexClientError:
             raise
         except Exception as exc:
-            raise CodexCallError("Codex completion failed") from exc
+            raise _failure_metadata(CodexCallError("Codex completion failed"), exc) from exc
     if (
         not isinstance(result, dict) or not isinstance(result.get("content"), str)
         or len(result["content"].encode("utf-8")) > _MAX_OUTPUT_BYTES
@@ -199,19 +244,36 @@ async def completion(
 async def stream_chat(
     settings, *, system_prompt: str, user_prompt: str, model=None,
 ) -> AsyncIterator[dict]:
+    from backend.ai_usage.tracker import trace_stream
+
+    operation = _stream_chat(settings, system_prompt=system_prompt, user_prompt=user_prompt, model=model)
+    stream = trace_stream(settings, model=model or getattr(settings, "codex_model", None), operation_iterator=operation)
+    async with aclosing(operation), aclosing(stream):
+        async for event in stream:
+            yield event
+
+
+async def _stream_chat(
+    settings, *, system_prompt: str, user_prompt: str, model=None,
+) -> AsyncIterator[dict]:
     if not is_configured(settings):
         raise CodexNotConfiguredError("Codex has not been configured")
     selected = _model(settings, model)
     payload = {"system_prompt": system_prompt, "user_prompt": user_prompt, "model": selected}
     _check_input(payload)
     timeout = getattr(settings, "codex_chat_timeout_seconds", 900)
+    usage = {}
     try:
         async with asyncio.timeout(timeout):
             if not getattr(settings, "codex_runner_url", ""):
                 cli = await _preflight_local(settings)
+                def record_usage(value):
+                    usage.clear()
+                    usage.update(codex_research.normalize_usage(value))
+
                 stream = _private().stream_chat(
                     cli["executable"], system_prompt, user_prompt,
-                    model=selected, timeout=timeout,
+                    model=selected, timeout=timeout, usage_callback=record_usage,
                 )
                 size = 0
                 try:
@@ -225,7 +287,10 @@ async def stream_chat(
                             yield {"delta": text}
                 finally:
                     await stream.aclose()
-                yield {"done": True}
+                terminal = {"done": True}
+                if usage:
+                    terminal.update(usage=usage, model=selected or "codex")
+                yield terminal
                 return
             base, headers = _remote(settings)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
@@ -238,10 +303,16 @@ async def stream_chat(
                         if not line.startswith("data:"):
                             continue
                         event = json.loads(line[5:].strip())
-                        if not isinstance(event, dict) or "error" in event:
+                        if not isinstance(event, dict):
                             raise CodexCallError("Codex chat failed")
+                        if "error" in event:
+                            raise _failure_metadata(CodexCallError("Codex chat failed"), event)
                         if event.get("done") is True:
-                            yield {"done": True}
+                            terminal = {"done": True}
+                            usage = codex_research.normalize_usage(event.get("usage"))
+                            if usage:
+                                terminal.update(usage=usage, model=_model(settings, event.get("model")) or "codex")
+                            yield terminal
                             return
                         if isinstance(event.get("delta"), str) and event["delta"]:
                             yield {"delta": event["delta"]}
@@ -249,18 +320,33 @@ async def stream_chat(
     except CodexClientError:
         raise
     except Exception as exc:
-        raise CodexCallError("Codex chat request failed") from exc
+        error = _failure_metadata(CodexCallError("Codex chat request failed"), exc)
+        if usage and not hasattr(error, "inference_succeeded"):
+            codex_research.with_telemetry(error, usage=usage, model=selected, inference_succeeded=False)
+        raise error from exc
 
 
 async def research(settings, prompt, schema, *, timeout=900, model=None) -> dict:
+    from backend.ai_usage.tracker import trace_inference
+
+    return await trace_inference(
+        settings, model=model or getattr(settings, "daily_research_model", None) or getattr(settings, "codex_model", None),
+        call_type="research", operation=lambda: _research(settings, prompt, schema, timeout=timeout, model=model),
+    )
+
+
+async def _research(settings, prompt, schema, *, timeout=900, model=None) -> dict:
     """Run exactly one public research invocation; this transport never retries."""
     payload = {"prompt": prompt, "schema": schema, "model": model, "timeout": timeout}
     _check_input(payload)
     if getattr(settings, "codex_runner_url", ""):
-        return await _request_json(
+        result = await _request_json(
             settings, "POST", "/v1/research", payload=payload,
             timeout=timeout + 30, uncertain=True,
         )
+        if set(result) == {"report", "usage", "model"} and isinstance(result.get("report"), dict):
+            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]))
+        return codex_research.ResearchResult(result, model=model)
     path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
     executable = codex_research.resolve_codex_executable(path)
     if executable is None:
@@ -272,4 +358,4 @@ async def research(settings, prompt, schema, *, timeout=900, model=None) -> dict
     except TimeoutError:
         raise
     except Exception as exc:
-        raise CodexCallError("Codex public research failed") from exc
+        raise _failure_metadata(CodexCallError("Codex public research failed"), exc) from exc

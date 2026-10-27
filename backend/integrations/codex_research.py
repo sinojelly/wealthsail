@@ -22,6 +22,60 @@ class CodexOutputError(Exception):
     pass
 
 
+def normalize_usage(source, *, compute_total=False):
+    """Whitelist measured token counters; cached tokens are part of the input."""
+    if not isinstance(source, dict):
+        return {}
+    result = {}
+    aliases = {
+        "prompt_tokens": ("prompt_tokens", "input_tokens", "inputTokens"),
+        "completion_tokens": ("completion_tokens", "output_tokens", "outputTokens"),
+        "cached_input_tokens": ("cached_input_tokens", "cachedInputTokens"),
+        "reasoning_output_tokens": ("reasoning_output_tokens", "reasoningOutputTokens"),
+    }
+    for key, names in aliases.items():
+        value = next((source[name] for name in names if name in source), None)
+        if type(value) is int and 0 <= value <= 1_000_000_000_000:
+            result[key] = value
+    if result.get("cached_input_tokens", 0) > result.get("prompt_tokens", 0):
+        result.pop("cached_input_tokens", None)
+    if "prompt_tokens" in result and "completion_tokens" in result and (
+        compute_total or "total_tokens" in source or "totalTokens" in source
+    ):
+        result["total_tokens"] = result["prompt_tokens"] + result["completion_tokens"]
+    return result
+
+
+def exec_usage(stdout):
+    """Read the terminal CLI event without retaining prompts, text or tool data."""
+    usage, completed = {}, False
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if isinstance(event, dict) and event.get("type") == "turn.completed":
+            completed = True
+            usage = normalize_usage(event.get("usage"), compute_total=True)
+    return usage, completed
+
+
+def with_telemetry(error, *, usage, model, inference_succeeded):
+    error.usage = normalize_usage(usage)
+    error.model = model or "codex"
+    error.inference_succeeded = inference_succeeded
+    return error
+
+
+class ResearchResult(dict):
+    """Keep provider metadata outside the report's strict business schema."""
+
+    def __init__(self, report, *, usage=None, model=None):
+        super().__init__(report)
+        self.usage = normalize_usage(usage)
+        self.model = model or "codex"
+
+
 _DISABLED_FEATURES = ("shell_tool", "apps", "plugins", "multi_agent")
 _PUBLIC_RESEARCH_INSTRUCTIONS = (
     "Use only the supplied public research packet and public web sources for this research. "
@@ -283,7 +337,7 @@ async def run_codex_research(
         if model:
             args.extend(["--model", model])
         args.append("-")
-        code, _, _ = await _run(
+        code, stdout, _ = await _run(
             args,
             cwd=directory,
             env=public_environment(
@@ -292,8 +346,12 @@ async def run_codex_research(
             input_data=prompt.encode("utf-8"),
             timeout=timeout,
         )
-        if code:
-            raise CodexExecutionError("CLI did not complete")
-        if not output_path.is_file() or output_path.stat().st_size > 2 * 1024 * 1024:
-            raise CodexOutputError("missing or oversized report")
-        return decode_report(output_path.read_text("utf-8"))
+        usage, completed = exec_usage(stdout)
+        try:
+            if code:
+                raise CodexExecutionError("CLI did not complete")
+            if not output_path.is_file() or output_path.stat().st_size > 2 * 1024 * 1024:
+                raise CodexOutputError("missing or oversized report")
+            return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model)
+        except (CodexExecutionError, CodexOutputError, OSError, UnicodeError) as exc:
+            raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed)

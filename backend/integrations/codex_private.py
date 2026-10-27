@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import math
 import os
@@ -24,7 +27,10 @@ from backend.integrations.codex_research import (
     _run,
     configured_model,
     decode_report,
+    exec_usage,
+    normalize_usage,
     public_environment,
+    with_telemetry,
 )
 
 
@@ -74,29 +80,7 @@ def _policy_arguments() -> list[str]:
 
 
 def _usage(stdout: bytes) -> dict[str, int]:
-    usage = {}
-    for line in stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except (ValueError, UnicodeError):
-            continue
-        if not isinstance(event, dict) or event.get("type") != "turn.completed":
-            continue
-        source = event.get("usage")
-        if not isinstance(source, dict):
-            continue
-        usage = {}
-        for raw, normalized in (
-            ("input_tokens", "prompt_tokens"),
-            ("output_tokens", "completion_tokens"),
-            ("cached_input_tokens", "cached_input_tokens"),
-        ):
-            value = source.get(raw)
-            if type(value) is int and value >= 0:
-                usage[normalized] = value
-        if "prompt_tokens" in usage and "completion_tokens" in usage:
-            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-    return usage
+    return exec_usage(stdout)[0]
 
 
 async def complete(
@@ -143,25 +127,25 @@ async def complete(
             input_data=prompt,
             timeout=timeout,
         )
-        if code:
-            raise CodexExecutionError("Codex private completion failed")
-        if not output.is_file() or output.stat().st_size > _MAX_OUTPUT_BYTES:
-            raise CodexOutputError("missing or oversized Codex completion")
+        usage, completed = exec_usage(stdout)
         try:
+            if code:
+                raise CodexExecutionError("Codex private completion failed")
+            if not output.is_file() or output.stat().st_size > _MAX_OUTPUT_BYTES:
+                raise CodexOutputError("missing or oversized Codex completion")
             content = output.read_text("utf-8").strip()
+            if not content:
+                raise CodexOutputError("empty Codex completion")
+            if json_mode:
+                decode_report(content)
+        except (CodexExecutionError, CodexOutputError) as exc:
+            raise with_telemetry(exc, usage=usage, model=selected_model, inference_succeeded=completed)
         except (OSError, UnicodeError) as exc:
-            raise CodexOutputError("invalid Codex completion") from exc
-        if not content:
-            raise CodexOutputError("empty Codex completion")
-        if json_mode:
-            # A generic {type: object} output-schema would be rejected by some
-            # strict-schema models; validate an object here, then let each
-            # existing report validator enforce its actual domain structure.
-            decode_report(content)
+            raise with_telemetry(CodexOutputError("invalid Codex completion"), usage=usage, model=selected_model, inference_succeeded=completed) from exc
         return {
             "content": content,
             "model": selected_model or "codex",
-            "usage": _usage(stdout),
+            "usage": usage,
             "cost_cny": "0.0000",
         }
 
@@ -292,6 +276,162 @@ def _identifier(value: object) -> str:
     return value
 
 
+def _safe_text(value, limit=120):
+    if isinstance(value, str) and 0 < len(value) <= limit and not any(ord(char) < 32 for char in value):
+        return value
+    return None
+
+
+def unavailable_account(reason="ACCOUNT_UNAVAILABLE"):
+    return {
+        "status": "UNAVAILABLE", "provider": "codex", "email": None,
+        "planType": None, "authType": None, "accountFingerprint": None,
+        "observedAt": datetime.now(timezone.utc).isoformat(), "windows": [],
+        "credits": None, "limitations": [reason],
+    }
+
+
+def account_snapshot(account_response, limits_response, *, limitations=()):
+    """Convert RPC metadata into a bounded, credential-free operator DTO."""
+    result = unavailable_account()
+    source = account_response.get("account") if isinstance(account_response, dict) else None
+    if not isinstance(source, dict):
+        result.update(status="UNAUTHENTICATED", limitations=["ACCOUNT_UNAUTHENTICATED"])
+        return result
+    auth_type = source.get("type")
+    if auth_type not in {"chatgpt", "apiKey", "amazonBedrock"}:
+        return result
+    email = _safe_text(source.get("email"), 320) if auth_type == "chatgpt" else None
+    result.update(
+        status="READY", email=email, authType=auth_type,
+        planType=_safe_text(source.get("planType"), 80), limitations=list(limitations),
+        accountFingerprint=hashlib.sha256((auth_type + ":" + email.strip().lower()).encode()).hexdigest() if email else None,
+    )
+    limits_response = limits_response if isinstance(limits_response, dict) else {}
+    buckets = limits_response.get("rateLimitsByLimitId")
+    if not isinstance(buckets, dict) or not buckets:
+        fallback = limits_response.get("rateLimits")
+        buckets = {"codex": fallback} if isinstance(fallback, dict) else {}
+    for bucket_key, bucket in list(buckets.items())[:30]:
+        if not isinstance(bucket, dict):
+            continue
+        key = _safe_text(bucket.get("limitId")) or _safe_text(bucket_key)
+        if not key:
+            continue
+        label = _safe_text(bucket.get("limitName")) or key
+        if result["planType"] is None:
+            result["planType"] = _safe_text(bucket.get("planType"), 80)
+        for window_name in ("primary", "secondary"):
+            window = bucket.get(window_name)
+            if not isinstance(window, dict):
+                continue
+            used = window.get("usedPercent")
+            if type(used) not in (int, float) or not 0 <= used <= 100 or not math.isfinite(used):
+                continue
+            minutes, reset = window.get("windowDurationMins"), window.get("resetsAt")
+            result["windows"].append({
+                "key": f"{key}:{window_name}", "label": f"{label} · {window_name}",
+                "usedPercent": used, "remainingPercent": 100 - used,
+                "windowMinutes": minutes if type(minutes) is int and 0 < minutes <= 5_256_000 else None,
+                "resetsAt": reset if type(reset) is int and 0 < reset < 2**63 else None,
+            })
+        credits = bucket.get("credits")
+        if result["credits"] is None and isinstance(credits, dict):
+            balance = None
+            raw = credits.get("balance")
+            if isinstance(raw, str) and len(raw) <= 100:
+                try:
+                    value = Decimal(raw)
+                    if value.is_finite() and 0 <= value <= Decimal("1e20"):
+                        balance = str(value)
+                except InvalidOperation:
+                    pass
+            result["credits"] = {
+                "balance": balance,
+                "hasCredits": credits.get("hasCredits") if type(credits.get("hasCredits")) is bool else None,
+                "unlimited": credits.get("unlimited") if type(credits.get("unlimited")) is bool else None,
+            }
+    if not result["windows"]:
+        result["limitations"].append("QUOTA_UNAVAILABLE")
+    if result["credits"] is None:
+        result["limitations"].append("CREDITS_UNAVAILABLE")
+    if not email:
+        result["limitations"].append("ACCOUNT_IDENTITY_UNAVAILABLE")
+    return result
+
+
+def safe_account_snapshot(value):
+    """Apply the same whitelist to account DTOs received across runner HTTP."""
+    if not isinstance(value, dict) or value.get("status") not in {"READY", "UNAVAILABLE", "UNAUTHENTICATED"}:
+        return unavailable_account()
+    if value["status"] != "READY":
+        result = unavailable_account()
+        if value["status"] == "UNAUTHENTICATED":
+            result.update(status="UNAUTHENTICATED", limitations=["ACCOUNT_UNAUTHENTICATED"])
+        return result
+    buckets = {}
+    windows = value.get("windows")
+    for window in windows[:60] if isinstance(windows, list) else ():
+        if not isinstance(window, dict) or not _safe_text(window.get("key"), 140):
+            continue
+        key, separator, name = window["key"].rpartition(":")
+        if not separator or name not in {"primary", "secondary"}:
+            continue
+        label = _safe_text(window.get("label"), 140) or key
+        bucket = buckets.setdefault(key, {"limitId": key, "limitName": label.removesuffix(f" · {name}")})
+        bucket[name] = {"usedPercent": window.get("usedPercent"), "windowDurationMins": window.get("windowMinutes"), "resetsAt": window.get("resetsAt")}
+    if not buckets:
+        buckets["codex"] = {"limitId": "codex"}
+    next(iter(buckets.values()))["credits"] = value.get("credits")
+    limitations = value.get("limitations")
+    limitations = [code for code in limitations[:20] if _safe_text(code, 64) and code.replace("_", "").isalnum() and code.upper() == code] if isinstance(limitations, list) else []
+    result = account_snapshot(
+        {"account": {"type": value.get("authType"), "email": value.get("email"), "planType": value.get("planType")}},
+        {"rateLimitsByLimitId": buckets}, limitations=limitations,
+    )
+    result["limitations"] = list(dict.fromkeys(result["limitations"]))
+    try:
+        observed = datetime.fromisoformat(value.get("observedAt"))
+        if observed.tzinfo is None:
+            return unavailable_account()
+        result["observedAt"] = observed.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError):
+        return unavailable_account()
+    return result
+
+
+async def read_account(executable, *, environment=None, timeout=8):
+    """Read account/limits with no thread, inference, login or token-file access."""
+    source = os.environ if environment is None else environment
+    try:
+        timeout = min(_timeout(timeout), 15)
+        async with asyncio.timeout(timeout):
+            with tempfile.TemporaryDirectory(prefix="wealthsail-codex-account-") as directory:
+                options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                process = await asyncio.create_subprocess_exec(
+                    executable, *_policy_arguments(), "app-server",
+                    cwd=directory, env=public_environment(source, directory),
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE, limit=_MAX_OUTPUT_BYTES + 1, **options,
+                )
+                stderr_task = asyncio.create_task(_drain_stderr(process.stderr))
+                server = _AppServer(process, stderr_task, asyncio.get_running_loop().time() + timeout)
+                try:
+                    await server.rpc(1, "initialize", {"clientInfo": {"name": "wealthsail", "version": "0.1.0"}, "capabilities": {"experimentalApi": False}})
+                    await server.send({"method": "initialized", "params": {}})
+                    account = await server.rpc(2, "account/read", {"refreshToken": False})
+                    limits, limitations = {}, []
+                    try:
+                        limits = await server.rpc(3, "account/rateLimits/read", {})
+                    except CodexExecutionError:
+                        limitations.append("QUOTA_UNAVAILABLE")
+                    return account_snapshot(account, limits, limitations=limitations)
+                finally:
+                    await _stop_process(process, stderr_task)
+    except Exception:
+        return unavailable_account()
+
+
 async def stream_chat(
     executable: str,
     system_prompt: str,
@@ -300,6 +440,7 @@ async def stream_chat(
     timeout: float = 900,
     environment: dict[str, str] | None = None,
     model: str | None = None,
+    usage_callback=None,
 ) -> AsyncIterator[str]:
     """Yield only actual assistant deltas from an isolated app-server turn."""
     timeout = _timeout(timeout)
@@ -377,7 +518,12 @@ async def stream_chat(
                 if not isinstance(params, dict) or params.get("threadId") != thread_id:
                     continue
                 method = packet.get("method")
-                if (
+                if method == "thread/tokenUsage/updated" and params.get("turnId") == turn_id:
+                    tokens = params.get("tokenUsage")
+                    usage = normalize_usage(tokens.get("total") if isinstance(tokens, dict) else None, compute_total=True)
+                    if usage and usage_callback is not None:
+                        usage_callback(usage)
+                elif (
                     method == "item/agentMessage/delta"
                     and params.get("turnId") == turn_id
                 ):

@@ -156,6 +156,78 @@ async def test_preflight_and_research_use_separate_public_endpoints(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_remote_research_envelope_preserves_strict_report_and_usage(monkeypatch):
+    transport(monkeypatch, lambda request: httpx.Response(200, json={
+        "report": {"summary": "public"}, "usage": {"prompt_tokens": 80, "cached_input_tokens": 60, "completion_tokens": 9, "total_tokens": 89}, "model": "fixture",
+    }))
+    result = await codex_client.research(settings(), "public", {"type": "object"})
+    assert result == {"summary": "public"}
+    assert result.usage == {"prompt_tokens": 80, "cached_input_tokens": 60, "completion_tokens": 9, "total_tokens": 89}
+    assert result.model == "fixture"
+
+
+@pytest.mark.asyncio
+async def test_remote_stream_retains_observed_usage_on_terminal_event(monkeypatch):
+    transport(monkeypatch, lambda request: httpx.Response(200, text='data: {"delta":"answer"}\n\ndata: {"done":true,"usage":{"prompt_tokens":20,"cached_input_tokens":10,"completion_tokens":4,"total_tokens":24},"model":"fixture"}\n\n'))
+    result = [event async for event in codex_client.stream_chat(settings(), system_prompt="scope", user_prompt="chat")]
+    assert result[-1] == {"done": True, "usage": {"prompt_tokens": 20, "cached_input_tokens": 10, "completion_tokens": 4, "total_tokens": 24}, "model": "fixture"}
+
+
+@pytest.mark.asyncio
+async def test_account_reads_runner_metadata_and_degrades_safely_when_unavailable(monkeypatch):
+    assert callable(getattr(codex_client, "account", None)), "client account telemetry missing"
+    transport(monkeypatch, lambda request: httpx.Response(503, text="private runner error"))
+    result = await codex_client.account(settings())
+    assert result["status"] == "UNAVAILABLE" and result["windows"] == []
+    assert "private runner error" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_remote_output_failure_retains_successful_inference_usage(monkeypatch):
+    transport(monkeypatch, lambda request: httpx.Response(502, json={"detail": {
+        "message": "safe output failure", "usage": {"prompt_tokens": 18, "cached_input_tokens": 9, "completion_tokens": 2, "total_tokens": 20},
+        "model": "fixture", "inferenceSucceeded": True, "private": "must-not-propagate",
+    }}))
+    with pytest.raises(codex_client.CodexCallError) as failure:
+        await codex_client.completion(settings(), system_prompt="facts", user_prompt="report")
+    assert getattr(failure.value, "usage", None) == {"prompt_tokens": 18, "cached_input_tokens": 9, "completion_tokens": 2, "total_tokens": 20}
+    assert failure.value.inference_succeeded is True
+    assert failure.value.model == "fixture"
+    assert "must-not-propagate" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_failed_local_stream_keeps_usage_already_observed(monkeypatch):
+    from backend.integrations.codex_research import CodexExecutionError
+
+    async def stream(*args, **kwargs):
+        kwargs["usage_callback"]({"prompt_tokens": 40, "cached_input_tokens": 20, "completion_tokens": 3, "total_tokens": 43})
+        yield "partial"
+        raise CodexExecutionError("private response detail")
+
+    monkeypatch.setattr(codex_client, "_private", lambda: SimpleNamespace(stream_chat=stream))
+    monkeypatch.setattr(codex_client, "_preflight_local", AsyncMock(return_value={"executable": "fixture"}))
+    with pytest.raises(codex_client.CodexCallError) as failure:
+        _ = [event async for event in codex_client.stream_chat(settings(codex_runner_url="", codex_path="fixture"), system_prompt="scope", user_prompt="chat")]
+    assert getattr(failure.value, "usage", None) == {"prompt_tokens": 40, "cached_input_tokens": 20, "completion_tokens": 3, "total_tokens": 43}
+    assert failure.value.inference_succeeded is False
+
+
+@pytest.mark.asyncio
+async def test_account_success_strips_nested_unexpected_metadata(monkeypatch):
+    transport(monkeypatch, lambda request: httpx.Response(200, json={
+        "status": "READY", "provider": "codex", "authType": "chatgpt", "email": "operator@example.test", "planType": "pro", "observedAt": "2026-10-27T00:00:00+00:00",
+        "windows": [{"key": "codex:primary", "label": "5h", "usedPercent": 12, "remainingPercent": 88, "windowMinutes": 300, "resetsAt": 1800000000, "accessToken": "must-not-return"}],
+        "credits": {"balance": "20", "hasCredits": True, "unlimited": False, "accessToken": "must-not-return"},
+        "limitations": [], "accessToken": "must-not-return",
+    }))
+    result = await codex_client.account(settings())
+    assert result["email"] == "operator@example.test"
+    assert result["windows"][0]["remainingPercent"] == 88
+    assert "must-not-return" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
 async def test_cancellation_closes_remote_stream(monkeypatch):
     started = asyncio.Event()
     closed = asyncio.Event()

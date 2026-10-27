@@ -7,6 +7,7 @@ from decimal import Decimal, DecimalException
 
 from backend.config import Settings
 from backend.integrations import codex_client
+from backend.integrations.codex_research import normalize_usage
 
 
 class ModelNotConfiguredError(Exception):
@@ -46,10 +47,7 @@ async def chat_completion(
         usage = body.get("usage") or {}
         return ModelResult(
             content=body["content"], model=body.get("model") or "codex",
-            usage={
-                "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0))),
-                "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0))),
-            },
+            usage=normalize_usage(usage),
             cost_cny=Decimal(str(body.get("cost_cny", "0.0000"))),
         )
     except codex_client.CodexNotConfiguredError as exc:

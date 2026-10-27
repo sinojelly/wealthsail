@@ -356,6 +356,113 @@ async def test_completion_accepts_plain_text_when_json_mode_is_disabled(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_account_reads_only_safe_account_rpc_without_starting_a_turn(monkeypatch):
+    mod = adapter()
+
+    class AccountProcess(ScriptedProcess):
+        def reply(self, request):
+            if request.get("method") == "account/read":
+                self.emit({"id": request["id"], "result": {
+                    "account": {"type": "chatgpt", "email": "operator@example.test", "planType": "plus", "accessToken": "must-not-return"},
+                    "requiresOpenaiAuth": True,
+                }})
+            elif request.get("method") == "account/rateLimits/read":
+                self.emit({"id": request["id"], "result": {"rateLimits": {
+                    "limitId": "codex", "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1800000000},
+                    "credits": {"balance": "23.4500", "hasCredits": True, "unlimited": False},
+                }}})
+            else:
+                super().reply(request)
+
+    process = AccountProcess()
+    factory = AsyncMock(return_value=process)
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", factory)
+    assert callable(getattr(mod, "read_account", None)), "account telemetry is missing"
+    result = await mod.read_account("native-codex", environment={"CODEX_HOME": "fixture", "DATABASE_URL": "secret"})
+    assert result["status"] == "READY"
+    assert result["email"] == "operator@example.test" and result["planType"] == "plus"
+    assert result["windows"] == [{"key": "codex:primary", "label": "codex · primary", "usedPercent": 12, "remainingPercent": 88, "windowMinutes": 300, "resetsAt": 1800000000}]
+    assert result["credits"] == {"balance": "23.4500", "hasCredits": True, "unlimited": False}
+    assert "must-not-return" not in json.dumps(result)
+    assert [packet["method"] for packet in process.sent if "method" in packet] == ["initialize", "initialized", "account/read", "account/rateLimits/read"]
+    assert "DATABASE_URL" not in factory.await_args.kwargs["env"]
+    assert process.terminated and process.stdin.closed
+
+
+@pytest.mark.parametrize("percent", [-1, 101, True, float("nan"), "20"])
+def test_account_discards_invalid_quota_without_inventing_a_zero(percent):
+    mod = adapter()
+    assert callable(getattr(mod, "account_snapshot", None)), "account sanitizer missing"
+    result = mod.account_snapshot(
+        {"account": {"type": "chatgpt", "email": "fixture@example.test", "planType": "pro"}},
+        {"rateLimits": {"primary": {"usedPercent": percent}, "credits": {"balance": "NaN", "hasCredits": True, "unlimited": False}}},
+    )
+    assert result["windows"] == []
+    assert result["credits"]["balance"] is None
+    assert "QUOTA_UNAVAILABLE" in result["limitations"]
+
+
+@pytest.mark.asyncio
+async def test_account_protocol_failure_is_sanitized_and_bounded(monkeypatch):
+    mod = adapter()
+    process = ScriptedProcess(mode="hang")
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    assert callable(getattr(mod, "read_account", None)), "account telemetry missing"
+    result = await mod.read_account("native-codex", environment={}, timeout=0.01)
+    assert result["status"] == "UNAVAILABLE" and result["windows"] == []
+    assert result["email"] is None and result["credits"] is None
+    assert process.terminated and process.stdin.closed
+
+
+@pytest.mark.asyncio
+async def test_stream_preserves_total_usage_for_current_thread_and_turn(monkeypatch):
+    mod = adapter()
+
+    class UsageProcess(ScriptedProcess):
+        def emit(self, data):
+            if data.get("method") == "turn/completed":
+                for thread in ("thread", "other-thread"):
+                    super().emit({"method": "thread/tokenUsage/updated", "params": {
+                        "threadId": thread, "turnId": "turn", "tokenUsage": {
+                            "total": {"inputTokens": 100 if thread == "thread" else 999, "cachedInputTokens": 40, "outputTokens": 20, "totalTokens": 120},
+                            "last": {"inputTokens": 3, "cachedInputTokens": 0, "outputTokens": 1, "totalTokens": 4},
+                        },
+                    }})
+            super().emit(data)
+
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=UsageProcess()))
+    recorded = []
+    chunks = [text async for text in mod.stream_chat("native-codex", "scope", "question", environment={}, usage_callback=recorded.append)]
+    assert chunks == ["first real ", "second delta"]
+    assert recorded[-1] == {"prompt_tokens": 100, "cached_input_tokens": 40, "completion_tokens": 20, "total_tokens": 120}
+
+
+@pytest.mark.asyncio
+async def test_invalid_completion_keeps_observed_usage_and_inference_success(monkeypatch):
+    mod = adapter()
+
+    async def execute(args, **kwargs):
+        Path(args[args.index("--output-last-message") + 1]).write_text("[]", encoding="utf-8")
+        return 0, b'{"type":"turn.completed","usage":{"input_tokens":8,"cached_input_tokens":4,"output_tokens":3}}\n', b""
+
+    monkeypatch.setattr(mod, "_run", execute)
+    with pytest.raises(mod.CodexOutputError) as failure:
+        await mod.complete("native-codex", "scope", "question", model="fixture", environment={})
+    assert failure.value.usage == {"prompt_tokens": 8, "cached_input_tokens": 4, "completion_tokens": 3, "total_tokens": 11}
+    assert failure.value.inference_succeeded is True and failure.value.model == "fixture"
+
+
+@pytest.mark.asyncio
+async def test_terminal_inference_success_survives_a_later_cli_exit_failure(monkeypatch):
+    mod = adapter()
+    monkeypatch.setattr(mod, "_run", AsyncMock(return_value=(1, b'{"type":"turn.completed","usage":{"input_tokens":8,"output_tokens":3}}\n', b"")))
+    with pytest.raises(mod.CodexExecutionError) as failure:
+        await mod.complete("native-codex", "scope", "question", environment={})
+    assert getattr(failure.value, "inference_succeeded", None) is True
+    assert failure.value.usage["total_tokens"] == 11
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["not-json", '{"x":1,"x":2}', ""])
 async def test_completion_rejects_invalid_duplicate_or_empty_content(monkeypatch, text):
     mod = adapter()
