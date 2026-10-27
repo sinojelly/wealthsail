@@ -75,7 +75,11 @@ def parse_business_job_key(key: str) -> tuple[str, str | None]:
     if len(parts) < 4 or parts[0] != "job":
         raise ValueError(f"invalid business job key: {key}")
     phase = parts[3]
-    audience_user_id = parts[4] if len(parts) >= 5 else None
+    # INTRADAY inserts the five-minute bucket before the optional audience.
+    # Legacy tenant-wide intraday keys contain only the bucket; they must
+    # retain the owner fallback instead of treating e.g. "1400" as a UUID.
+    audience_index = 5 if phase == "INTRADAY" else 4
+    audience_user_id = parts[audience_index] if len(parts) > audience_index else None
     return phase, audience_user_id
 
 

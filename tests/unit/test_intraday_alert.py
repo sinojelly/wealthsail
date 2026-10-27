@@ -367,6 +367,11 @@ async def test_intraday_phase_fans_out_per_member_and_skips_without_alert(
         "tenant-1:user-2": "SKIPPED:INTRADAY_NO_ALERT",
     }
     assert alerts.await_count == 2
+    # The bucket (1400) is part of the idempotency key, never a member UUID.
+    assert [call.args[1].user_id for call in alerts.await_args_list] == [
+        "user-1",
+        "user-2",
+    ]
     # No generic per-tenant generation for INTRADAY.
     captured["generate"].assert_not_awaited()
 
@@ -392,3 +397,45 @@ async def test_intraday_phase_completes_when_alert_fires(monkeypatch) -> None:
     keys = {call.args[2] for call in runner.claim_job_run.call_args_list}
     assert "job:job-1:2026-09-02:INTRADAY:1400:user-1" in keys
     assert "job:job-1:2026-09-02:INTRADAY:1400:user-2" in keys
+
+
+@pytest.mark.parametrize(
+    ("key", "user_id"),
+    [
+        ("job:job-1:2026-09-02:INTRADAY:0930:user-1", "user-1"),
+        ("job:job-1:2026-09-02:INTRADAY:1400:user-2", "user-2"),
+        ("job:job-1:2026-09-02:INTRADAY:0930", None),
+    ],
+)
+def test_intraday_business_key_separates_bucket_from_audience(key, user_id) -> None:
+    assert runner.parse_business_job_key(key) == ("INTRADAY", user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audience", ["user-2", None])
+async def test_intraday_recovery_preserves_member_or_legacy_owner(
+    monkeypatch, audience
+) -> None:
+    _, install = _harness()
+    install(monkeypatch)
+    alerts = AsyncMock(return_value=None)
+    monkeypatch.setattr(runner.intraday, "maybe_generate_intraday_alert", alerts)
+    key = "job:job-1:2026-09-02:INTRADAY:1400"
+    if audience is not None:
+        key += f":{audience}"
+    pool = _RunnerPool(
+        [
+            {
+                "id": "job-1",
+                "tenant_id": "tenant-1",
+                "job_name": "intraday",
+                "report_session": "INTRADAY",
+                "job_key": key,
+            }
+        ]
+    )
+
+    outcomes = await runner.run_recoverable_jobs(pool, Settings(_env_file=None))
+
+    assert outcomes == {key: "SKIPPED:INTRADAY_NO_ALERT"}
+    assert alerts.await_args.args[1].user_id == (audience or "owner-1")
