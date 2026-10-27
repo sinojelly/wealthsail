@@ -49,13 +49,63 @@ it("loads AI usage only when selected and expands each inference while keeping b
   expect(within(row).getByText("部分成功")).toBeInTheDocument();
   expect(within(row).getByText("成功")).toBeInTheDocument();
   expect(within(row).getByText("1,300")).toBeInTheDocument();
-  expect(within(row).getByText(/2 百分点/)).toBeInTheDocument();
+  expect(within(row).getAllByText(/快照不完整，无法估算/)).toHaveLength(2);
+  expect(within(row).queryByText(/2 百分点/)).not.toBeInTheDocument();
   expect(within(row).getByText("2026/10/27 15:30:00")).toBeInTheDocument();
   expect(screen.queryByText("TimeoutError")).not.toBeInTheDocument();
   await user.click(within(row).getByRole("button", { name: /展开.*2 次推理/ }));
   expect(screen.getByText("TimeoutError")).toBeInTheDocument();
+  expect(screen.getByText("2 百分点（估算）")).toBeInTheDocument();
   expect(screen.getByText(/缓存输入已包含在输入/)).toBeInTheDocument();
 });
+
+it.each([
+  ["DAILY_RESEARCH", "research", "日常投研", "研究推理"],
+  ["REPORT", "completion", "研报生成", "文本生成"],
+  ["CHAT", "chat", "智能问答", "对话推理"],
+  ["UNKNOWN_TASK", "unknown_call", "未知任务类型", "未知调用类型"],
+])(
+  "renders %s tasks and %s calls in Chinese while preserving source codes in titles",
+  async (taskType, callType, taskLabel, callLabel) => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          ...aiUsageFixture,
+          tasks: [
+            {
+              ...aiUsageFixture.tasks[0],
+              taskType,
+              calls: aiUsageFixture.tasks[0].calls.map((call) => ({
+                ...call,
+                callType,
+              })),
+            },
+          ],
+        }),
+      ),
+    );
+    renderWithSession(<OperationsPage />);
+    await user.click(screen.getByRole("tab", { name: "AI 用量" }));
+    await screen.findByText("基金机会日报");
+    const row = screen.getByRole("row", {
+      name: /基金机会日报/,
+    });
+    expect(within(row).getByText(taskLabel)).toHaveAttribute("title", taskType);
+    expect(within(row).queryByText(taskType)).not.toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: /展开/ }));
+    const details = screen.getByRole("region", {
+      name: "基金机会日报推理详情",
+    });
+    expect(within(details).getAllByText(callLabel)).toHaveLength(2);
+    expect(within(details).getAllByText(callLabel)[0]).toHaveAttribute(
+      "title",
+      callType,
+    );
+    expect(within(details).queryByText(callType)).not.toBeInTheDocument();
+  },
+);
 
 it("paginates by task and refreshes the selected page", async () => {
   const user = userEvent.setup();

@@ -19,6 +19,16 @@ const statuses: Record<string, { label: string; tone: string }> = {
   DEGRADED: { label: "降级完成", tone: "warning" },
   CANCELLED: { label: "已取消", tone: "neutral" },
 };
+const taskTypeLabels: Record<string, string> = {
+  DAILY_RESEARCH: "日常投研",
+  REPORT: "研报生成",
+  CHAT: "智能问答",
+};
+const callTypeLabels: Record<string, string> = {
+  research: "研究推理",
+  completion: "文本生成",
+  chat: "对话推理",
+};
 const quotaReasons: Record<string, string> = {
   UNKNOWN: "未知",
   RESET_OR_TOPUP: "重置或充值，无法估算",
@@ -217,7 +227,9 @@ function Task({ task }: { task: AiUsageTask }) {
       <tr>
         <td>
           <strong>{task.taskName}</strong>
-          <small>{task.taskType}</small>
+          <small title={task.taskType}>
+            {taskTypeLabels[task.taskType] ?? "未知任务类型"}
+          </small>
           <small className="mono" title={task.id}>
             {task.id.slice(0, 8)}
           </small>
@@ -281,7 +293,9 @@ function Task({ task }: { task: AiUsageTask }) {
                       <tr key={call.id}>
                         <td>
                           <strong>{call.model}</strong>
-                          <small>{call.callType}</small>
+                          <small title={call.callType}>
+                            {callTypeLabels[call.callType] ?? "未知调用类型"}
+                          </small>
                         </td>
                         <td className="ai-time">
                           {formatShanghaiTime(call.startedAt)}

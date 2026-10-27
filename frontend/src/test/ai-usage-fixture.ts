@@ -22,7 +22,7 @@ export const aiUsageFixture = {
   tasks: [
     {
       id: "task-1",
-      taskType: "research",
+      taskType: "DAILY_RESEARCH",
       taskName: "基金机会日报",
       startedAt: "2026-10-27T07:30:00Z",
       finishedAt: "2026-10-27T07:32:00Z",
@@ -39,17 +39,17 @@ export const aiUsageFixture = {
           {
             key: "primary",
             label: "5 小时额度",
-            consumedPercent: 2,
-            status: "ESTIMATED",
+            consumedPercent: null,
+            status: "INCOMPLETE",
           },
         ],
-        credits: { consumed: null, status: "UNKNOWN" },
+        credits: { consumed: null, status: "INCOMPLETE" },
       },
       calls: [
         {
           id: "call-1",
           model: "gpt-5",
-          callType: "fund_research",
+          callType: "research",
           startedAt: "2026-10-27T07:30:00Z",
           finishedAt: "2026-10-27T07:31:00Z",
           status: "FAILED",
@@ -66,7 +66,7 @@ export const aiUsageFixture = {
         {
           id: "call-2",
           model: "gpt-5",
-          callType: "fund_research",
+          callType: "research",
           startedAt: "2026-10-27T07:31:00Z",
           finishedAt: "2026-10-27T07:32:00Z",
           status: "SUCCEEDED",
