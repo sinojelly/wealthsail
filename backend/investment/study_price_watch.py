@@ -571,7 +571,7 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
         except (KeyError, TypeError, ValueError):
             pass
     if not ids:
-        return [{**item, "priceWatch": None} for item in items]
+        return [{**item, "expiresOn": None, "priceWatch": None} for item in items]
     if versions is None:
         rows = await conn.fetch(
             """SELECT DISTINCT ON(v.track_id) v.* FROM research.study_versions v
@@ -585,7 +585,7 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
             now,
         )
         versions = {str(row["track_id"]): dict(row) for row in rows}
-    frozen = {}
+    frozen, expiries = {}, {}
     for item in items:
         version = versions.get(str(item.get("id"))) or {}
         if (
@@ -596,6 +596,8 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
         ):
             continue
         snapshot = _object(version.get("snapshot"))
+        expiry = _day(snapshot.get("expiresOn"))
+        expiries[str(item["id"])] = expiry.isoformat() if expiry else None
         plan = snapshot.get("actionablePlan")
         if (
             isinstance(plan, dict)
@@ -603,6 +605,7 @@ async def enrich_tracks(conn, tenant, actor, items, now, *, versions=None):
             and plan.get("fundCode")
         ):
             frozen[str(item["id"])] = plan
+    items = [{**item, "expiresOn": expiries.get(str(item.get("id")))} for item in items]
     if not frozen:
         return [{**item, "priceWatch": None} for item in items]
     histories = await _cached_histories(

@@ -226,7 +226,11 @@ async def test_both_service_surfaces_return_the_frozen_price_watch(
         "track_id": track,
         "generation": 1,
         "created_at": NOW - timedelta(days=1),
-        "snapshot": {"actionablePlan": plan(), "scope": {}},
+        "snapshot": {
+            "actionablePlan": plan(),
+            "scope": {},
+            "expiresOn": "2026-11-18",
+        },
     }
     conn = AsyncMock()
     conn.fetch.side_effect = (
@@ -241,12 +245,14 @@ async def test_both_service_surfaces_return_the_frozen_price_watch(
     )
     if surface == "list":
         data = await service.list_studies(conn, tenant, actor, NOW)
+        assert data["items"][0]["expiresOn"] == "2026-11-18"
         result = data["items"][0]["priceWatch"]
     else:
         data = await service.get_detail(
             conn, tenant, actor, track, NOW, observations=[]
         )
         result = data["priceWatch"]
+        assert data["track"]["expiresOn"] == "2026-11-18"
         assert data["track"]["priceWatch"] == result
     assert result["frozenPlan"]["tracks"][0]["entryZoneMin"] == "1.05"
     assert result["state"] == "UNKNOWN"
