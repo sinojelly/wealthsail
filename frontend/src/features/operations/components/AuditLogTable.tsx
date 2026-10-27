@@ -1,5 +1,6 @@
 import { ExternalLink, Fingerprint } from "lucide-react";
 import type { AuditRow } from "../../../api/types";
+import { formatShanghaiTime } from "../format-time";
 
 export default function AuditLogTable({ rows }: { rows: AuditRow[] }) {
   return (
@@ -7,7 +8,7 @@ export default function AuditLogTable({ rows }: { rows: AuditRow[] }) {
       <table className="data-table audit-table">
         <thead>
           <tr>
-            <th>时间</th>
+            <th>时间（北京时间）</th>
             <th>动作</th>
             <th>执行主体</th>
             <th>目标</th>
@@ -18,16 +19,16 @@ export default function AuditLogTable({ rows }: { rows: AuditRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td className="mono">
-                {row.createdAt.replace("T", " ").slice(0, 19)}
-              </td>
+              <td className="mono">{formatShanghaiTime(row.createdAt)}</td>
               <td>
                 <strong className="mono">{row.action}</strong>
                 <small className="mono">{row.id.slice(0, 8)}</small>
               </td>
               <td>
                 <Fingerprint size={11} />
-                {row.actorType === "USER" ? row.actorId.slice(0, 8) : row.actorId}
+                {row.actorType === "USER"
+                  ? row.actorId.slice(0, 8)
+                  : row.actorId}
               </td>
               <td className="mono">
                 {row.resourceType}/{row.resourceId.slice(0, 8)}

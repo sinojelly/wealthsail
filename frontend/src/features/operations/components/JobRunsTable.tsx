@@ -1,5 +1,6 @@
 import { CheckCircle2, Clock3, RotateCcw, TriangleAlert } from "lucide-react";
 import type { OpsJobRun } from "../../../api/types";
+import { formatShanghaiTime } from "../format-time";
 
 const STATUS_META: Record<string, { label: string; tone: string }> = {
   COMPLETED: { label: "SUCCESS", tone: "success" },
@@ -7,13 +8,19 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
   ABSTAINED: { label: "ABSTAINED", tone: "warning" },
   RUNNING: { label: "RUNNING", tone: "warning" },
   PENDING: { label: "PENDING", tone: "warning" },
+  SKIPPED: { label: "未触发", tone: "neutral" },
 };
 
 export default function JobRunsTable({
   jobs,
   runs,
 }: {
-  jobs: { id: string; jobName: string; cronExpr: string; reportSession: string | null }[];
+  jobs: {
+    id: string;
+    jobName: string;
+    cronExpr: string;
+    reportSession: string | null;
+  }[];
   runs: OpsJobRun[];
 }) {
   const jobName = (run: OpsJobRun) =>
@@ -28,7 +35,7 @@ export default function JobRunsTable({
           <tr>
             <th>任务 / 运行 ID</th>
             <th>调度</th>
-            <th>开始时间</th>
+            <th>开始时间（北京时间）</th>
             <th className="numeric">耗时</th>
             <th>结果</th>
             <th>摘要</th>
@@ -48,12 +55,11 @@ export default function JobRunsTable({
                   <small className="mono">{run.id.slice(0, 8)}</small>
                 </td>
                 <td>
-                  {jobs.find((job) => job.id === run.jobId)?.cronExpr ??
-                    "—"}
+                  {jobs.find((job) => job.id === run.jobId)?.cronExpr ?? "—"}
                 </td>
                 <td className="mono">
                   <Clock3 size={11} />
-                  {run.startedAt.replace("T", " ").slice(0, 19)}
+                  {formatShanghaiTime(run.startedAt)}
                 </td>
                 <td className="mono numeric">
                   {run.durationSeconds !== null
@@ -71,9 +77,19 @@ export default function JobRunsTable({
                     {run.errorClass ? ` · ${run.errorClass}` : ""}
                   </span>
                 </td>
-                <td>{run.status === "FAILED" ? "运行失败，可重跑" : run.status.toLowerCase()}</td>
                 <td>
-                  <button className="btn-ghost">
+                  {run.status === "FAILED"
+                    ? "运行失败，需检查错误类别"
+                    : jobName(run) === "intraday_tracking"
+                      ? "盘中持仓波动核对；未达阈值不调用 AI"
+                      : run.status.toLowerCase()}
+                </td>
+                <td>
+                  <button
+                    className="btn-ghost"
+                    disabled
+                    title="手动作业重跑接口尚未接入"
+                  >
                     <RotateCcw size={12} />
                     重跑
                   </button>
