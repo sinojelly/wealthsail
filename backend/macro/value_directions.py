@@ -97,9 +97,22 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
             if not matches:
                 raise ValueError("quantitative fund must belong to this direction plan")
             base = matches[0]
-            if any(
-                row.get(key) != base.get(key)
-                for key in ("asOf", "currentPrice", "tracks")
+            # Report ranking adds derived scores to plan tracks after evidence
+            # is projected. Compare the same public price/technical facts so a
+            # valid report remains followable without weakening price checks.
+            evidence_facts = _public_actionable_plan(
+                row, row.get("subjectId"), now, subject_kind=row.get("subjectKind")
+            )
+            plan_facts = _public_actionable_plan(
+                base, base.get("subjectId"), now, subject_kind=base.get("subjectKind")
+            )
+            if (
+                evidence_facts is None
+                or plan_facts is None
+                or any(
+                    evidence_facts.get(key) != plan_facts.get(key)
+                    for key in ("asOf", "currentPrice", "tracks")
+                )
             ):
                 raise ValueError("quantitative facts differ from selected server plan")
         else:

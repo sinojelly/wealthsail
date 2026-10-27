@@ -230,7 +230,91 @@ async def test_pure_quantitative_direction_freezes_original_scan_without_fake_ne
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("problem", ["wrong_price", "future", "missing", "unrelated"])
+@pytest.mark.parametrize("source_ids", [["s1"], []])
+@pytest.mark.parametrize("complete_prices", [True, False])
+async def test_generated_scored_direction_can_be_frozen_from_its_original_report(
+    source_ids,
+    complete_prices,
+):
+    from backend.macro.daily_research import validate_report
+    from test_daily_research import report as raw_report
+    from test_value_directions import direction, quantitative_packet
+
+    packet = {
+        **quantitative_packet(),
+        "directions": [{"id": "a-share:broad"}],
+        "discoveryUniverse": [],
+    }
+    if complete_prices:
+        for item in [
+            *packet["discoveryActionableZones"],
+            *packet["quantitativeScan"]["items"],
+        ]:
+            item["tracks"][0].update(
+                priceState="READY", stopLossPrice="1.0000", takeProfitT2="1.6000"
+            )
+    original = validate_report(
+        {
+            **raw_report(),
+            "macroCycle": "行业与真实净值研究。",
+            "actionablePlans": [],
+            "valueDirections": [
+                direction(
+                    sourceIds=source_ids,
+                    macroCodes=[],
+                    quantitativeFundCodes=["005112"],
+                )
+            ],
+        },
+        packet,
+        {},
+        completed_at=NOW,
+    )
+    selected = deepcopy(original["valueDirections"][0]["plans"][0])
+    conn = AsyncMock()
+    run = uuid4()
+    conn.fetchrow.return_value = {
+        "run_id": run,
+        "recorded_at": NOW,
+        "payload": original,
+    }
+
+    origin = await repo.daily_direction_origin(
+        conn,
+        run,
+        "healthcare-recovery",
+        "nav",
+        "005112",
+        "LEFT_VALUE",
+        NOW + timedelta(days=30),
+    )
+    snapshot = study.freeze_hypothesis(origin, now=NOW + timedelta(days=30))
+
+    assert snapshot["actionablePlan"] == selected
+    if complete_prices:
+        assert snapshot["actionablePlan"]["tracks"][0]["opportunityScore"] > 0
+    assert snapshot["actionablePlan"]["tracks"][0]["entryZoneMin"] == "1.1000"
+    assert (
+        snapshot["valueDirection"]["quantitativeEvidence"][0]["currentPrice"]
+        == "1.2500"
+    )
+    assert snapshot["origin"]["reportRunId"] == str(run)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "wrong_price",
+        "future",
+        "missing",
+        "unrelated",
+        "wrong_entry",
+        "wrong_stop",
+        "wrong_target",
+        "wrong_state",
+    ],
+)
 async def test_direction_freeze_rejects_changed_or_unrelated_quantitative_facts(
     problem,
 ):
@@ -245,6 +329,15 @@ async def test_direction_freeze_rejects_changed_or_unrelated_quantitative_facts(
         proof["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
     elif problem == "missing":
         original["valueDirections"][0]["quantitativeEvidence"] = []
+    elif problem.startswith("wrong_"):
+        field, value = {
+            "wrong_entry": ("entryZoneMin", "0.9800"),
+            "wrong_stop": ("stopLossPrice", "0.9500"),
+            "wrong_target": ("takeProfitT1", "1.0400"),
+            "wrong_state": ("state", "WATCH"),
+        }[problem]
+        proof["tracks"] = deepcopy(proof["tracks"])
+        proof["tracks"][0][field] = value
     else:
         proof["subjectId"] = "another"
     conn = AsyncMock()
@@ -309,6 +402,36 @@ async def test_report_direction_rejects_missing_ambiguous_or_unavailable_plan(pr
     with pytest.raises((NotFoundError, ValidationError_)):
         await repo.daily_direction_origin(
             conn, uuid4(), "healthcare-recovery", "nav", "000001", "LEFT_VALUE", NOW
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["plan_date", "plan_retrieval", "source_retrieval"])
+async def test_historical_direction_rejects_facts_unavailable_at_report_time(problem):
+    payload = report()
+    selected = payload["valueDirections"][0]["plans"][0]
+    if problem == "plan_date":
+        selected["asOf"] = (NOW + timedelta(days=1)).date().isoformat()
+    elif problem == "plan_retrieval":
+        selected["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    else:
+        payload["sources"][0]["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "run_id": uuid4(),
+        "recorded_at": NOW,
+        "payload": payload,
+    }
+
+    with pytest.raises(ValidationError_):
+        await repo.daily_direction_origin(
+            conn,
+            uuid4(),
+            "healthcare-recovery",
+            "nav",
+            "000001",
+            "LEFT_VALUE",
+            NOW + timedelta(days=30),
         )
 
 

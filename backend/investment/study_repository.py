@@ -104,7 +104,7 @@ async def daily_direction_origin(
         if len(plans) != 1:
             raise ValueError("missing or ambiguous plan")
         plan = plans[0]
-        _program_plan(plan, plan_track, now, require_theme=False)
+        _program_plan(plan, plan_track, stamp, require_theme=False)
         refs = set(direction.get("sourceIds") or [])
         sources = [
             source
@@ -112,7 +112,7 @@ async def daily_direction_origin(
             if isinstance(source, dict) and source.get("id") in refs
         ]
         if {source["id"] for source in sources} != refs or any(
-            not _visible(source, now) for source in sources
+            not _visible(source, stamp) for source in sources
         ):
             raise ValueError("missing direction sources")
         macro_evidence = (
