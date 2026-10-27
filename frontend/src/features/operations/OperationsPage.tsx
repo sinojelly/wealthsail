@@ -99,166 +99,159 @@ export default function OperationsPage() {
           </div>
         </div>
       ) : null}
-      {tab !== "ai-usage" ? (
-        <>
-          <section className="panel fund-estimate-ops-card">
-            <div className="fund-estimate-ops-heading">
-              <span className="ops-icon good">
-                <Calculator size={17} />
-              </span>
-              <div>
-                <h2>场外基金盘中估值</h2>
-                <p>
-                  Worker 使用最近官方净值和基金披露成分计算；API
-                  不直接访问行情供应商。
-                </p>
-              </div>
-              <button
-                className="btn-primary"
-                type="button"
-                disabled={
-                  !estimateStatus?.canRun ||
-                  estimateRunBusy ||
-                  runFundEstimate.isPending
-                }
-                onClick={() => void requestFundEstimate()}
-              >
-                <RefreshCw
-                  size={14}
-                  className={estimateRunBusy ? "spin" : undefined}
-                />
-                {runFundEstimate.isPending || estimateRunBusy
-                  ? "基金估值处理中"
-                  : "立即计算基金估值"}
-              </button>
-            </div>
-            <div className="fund-estimate-ops-summary">
-              <div>
-                <span>估值覆盖</span>
-                <strong>
-                  {estimateStatus
-                    ? `${estimateStatus.coverage.estimatedCount} / ${estimateStatus.coverage.heldFundCount} 只已生成`
-                    : "—"}
-                </strong>
-                <small>
-                  {estimateStatus
-                    ? `${estimateStatus.coverage.unavailableCount} 只因覆盖不足而弃权`
-                    : "正在读取状态"}
-                </small>
-              </div>
-              <div>
-                <span>最近手动任务</span>
-                <strong>{estimateStatus?.run?.status ?? "尚未运行"}</strong>
-                <small>
-                  {estimateStatus?.run?.errorClass
-                    ? `错误：${estimateStatus.run.errorClass}`
-                    : estimateStatus?.coverage.latestAsOf
-                      ? `最近估值 ${formatShanghaiTime(estimateStatus.coverage.latestAsOf)}`
-                      : "暂无盘中估值快照"}
-                </small>
-              </div>
-              <div>
-                <span>交易日状态</span>
-                <strong>
-                  {estimateStatus?.calendar.isTradingDay
-                    ? "交易日"
-                    : "非交易日"}
-                </strong>
-                <small>
-                  最近交易日{" "}
-                  {estimateStatus?.calendar.latestTradingDate ?? "待确认"}
-                </small>
-              </div>
-            </div>
-            {estimateStatus?.calendar.status !== "READY" ? (
-              <div className="fund-estimate-calendar-warning" role="status">
-                <ShieldAlert size={14} />
-                <span>
-                  交易日历尚未补齐；当前已按已落库的最新官方净值日安全兜底，Worker
-                  会在启动时自动重试补齐。
-                </span>
-              </div>
-            ) : null}
-            {estimateStatus && !estimateStatus.canRun ? (
-              <p className="fund-estimate-nontrading-note">
-                今天不是交易日，无需生成盘中估值；持仓继续使用最近官方净值。
-              </p>
-            ) : null}
-          </section>
-          <section className="ops-metrics">
-            <div className="panel">
-              <span className="ops-icon good">
-                <CheckCircle2 size={17} />
-              </span>
-              <div>
-                <span>作业成功率</span>
-                <strong className="mono">
-                  {successRate === "—" ? "—" : `${successRate}%`}
-                </strong>
-                <small>
-                  {completed} / {runs.length} 次成功
-                </small>
-              </div>
-            </div>
-            <div className="panel">
-              <span className="ops-icon">
-                <Clock3 size={17} />
-              </span>
-              <div>
-                <span>最近作业耗时</span>
-                <strong className="mono">
-                  {runs[0]?.durationSeconds !== null &&
-                  runs[0]?.durationSeconds !== undefined
-                    ? `${runs[0].durationSeconds}s`
-                    : "—"}
-                </strong>
-                <small>按最近一次运行</small>
-              </div>
-            </div>
-            <div className="panel">
-              <span className="ops-icon good">
-                <DatabaseZap size={17} />
-              </span>
-              <div>
-                <span>净值快照新鲜度</span>
-                <strong className="mono">
-                  {navFresh ? formatShanghaiTime(navFresh) : "—"}
-                </strong>
-                <small>
-                  FRESH {freshness.data?.nav?.freshCount ?? 0} /{" "}
-                  {freshness.data?.nav?.total ?? 0}
-                </small>
-              </div>
-            </div>
-            <div className="panel">
-              <span
-                className={`ops-icon ${deliveryNeedsAttention > 0 ? "warning" : "good"}`}
-              >
-                <RadioTower size={17} />
-              </span>
-              <div>
-                <span>消息待投递</span>
-                <strong className="mono">{pendingMessages}</strong>
-                <small>
-                  已投递 {outbox.data?.counts.sent ?? 0} · UNKNOWN{" "}
-                  {unknownMessages} · DEAD {deadMessages} · CANCELLED{" "}
-                  {cancelledMessages}
-                </small>
-              </div>
-            </div>
-          </section>
-          <div className="alert alert-warning">
-            <ShieldAlert size={16} />
-            <div>
-              <strong>运维视图为脱敏数据</strong>
-              <p>
-                作业错误类别、消息队列状态与审计动作由 Domain API 清洗后返回，
-                payload 与审计详情不经过浏览器。
-              </p>
-            </div>
+      <section className="panel fund-estimate-ops-card">
+        <div className="fund-estimate-ops-heading">
+          <span className="ops-icon good">
+            <Calculator size={17} />
+          </span>
+          <div>
+            <h2>场外基金盘中估值</h2>
+            <p>
+              Worker 使用最近官方净值和基金披露成分计算；API
+              不直接访问行情供应商。
+            </p>
           </div>
-        </>
-      ) : null}
+          <button
+            className="btn-primary"
+            type="button"
+            disabled={
+              !estimateStatus?.canRun ||
+              estimateRunBusy ||
+              runFundEstimate.isPending
+            }
+            onClick={() => void requestFundEstimate()}
+          >
+            <RefreshCw
+              size={14}
+              className={estimateRunBusy ? "spin" : undefined}
+            />
+            {runFundEstimate.isPending || estimateRunBusy
+              ? "基金估值处理中"
+              : "立即计算基金估值"}
+          </button>
+        </div>
+        <div className="fund-estimate-ops-summary">
+          <div>
+            <span>估值覆盖</span>
+            <strong>
+              {estimateStatus
+                ? `${estimateStatus.coverage.estimatedCount} / ${estimateStatus.coverage.heldFundCount} 只已生成`
+                : "—"}
+            </strong>
+            <small>
+              {estimateStatus
+                ? `${estimateStatus.coverage.unavailableCount} 只因覆盖不足而弃权`
+                : "正在读取状态"}
+            </small>
+          </div>
+          <div>
+            <span>最近手动任务</span>
+            <strong>{estimateStatus?.run?.status ?? "尚未运行"}</strong>
+            <small>
+              {estimateStatus?.run?.errorClass
+                ? `错误：${estimateStatus.run.errorClass}`
+                : estimateStatus?.coverage.latestAsOf
+                  ? `最近估值 ${formatShanghaiTime(estimateStatus.coverage.latestAsOf)}`
+                  : "暂无盘中估值快照"}
+            </small>
+          </div>
+          <div>
+            <span>交易日状态</span>
+            <strong>
+              {estimateStatus?.calendar.isTradingDay ? "交易日" : "非交易日"}
+            </strong>
+            <small>
+              最近交易日{" "}
+              {estimateStatus?.calendar.latestTradingDate ?? "待确认"}
+            </small>
+          </div>
+        </div>
+        {estimateStatus?.calendar.status !== "READY" ? (
+          <div className="fund-estimate-calendar-warning" role="status">
+            <ShieldAlert size={14} />
+            <span>
+              交易日历尚未补齐；当前已按已落库的最新官方净值日安全兜底，Worker
+              会在启动时自动重试补齐。
+            </span>
+          </div>
+        ) : null}
+        {estimateStatus && !estimateStatus.canRun ? (
+          <p className="fund-estimate-nontrading-note">
+            今天不是交易日，无需生成盘中估值；持仓继续使用最近官方净值。
+          </p>
+        ) : null}
+      </section>
+      <section className="ops-metrics">
+        <div className="panel">
+          <span className="ops-icon good">
+            <CheckCircle2 size={17} />
+          </span>
+          <div>
+            <span>作业成功率</span>
+            <strong className="mono">
+              {successRate === "—" ? "—" : `${successRate}%`}
+            </strong>
+            <small>
+              {completed} / {runs.length} 次成功
+            </small>
+          </div>
+        </div>
+        <div className="panel">
+          <span className="ops-icon">
+            <Clock3 size={17} />
+          </span>
+          <div>
+            <span>最近作业耗时</span>
+            <strong className="mono">
+              {runs[0]?.durationSeconds !== null &&
+              runs[0]?.durationSeconds !== undefined
+                ? `${runs[0].durationSeconds}s`
+                : "—"}
+            </strong>
+            <small>按最近一次运行</small>
+          </div>
+        </div>
+        <div className="panel">
+          <span className="ops-icon good">
+            <DatabaseZap size={17} />
+          </span>
+          <div>
+            <span>净值快照新鲜度</span>
+            <strong className="mono">
+              {navFresh ? formatShanghaiTime(navFresh) : "—"}
+            </strong>
+            <small>
+              FRESH {freshness.data?.nav?.freshCount ?? 0} /{" "}
+              {freshness.data?.nav?.total ?? 0}
+            </small>
+          </div>
+        </div>
+        <div className="panel">
+          <span
+            className={`ops-icon ${deliveryNeedsAttention > 0 ? "warning" : "good"}`}
+          >
+            <RadioTower size={17} />
+          </span>
+          <div>
+            <span>消息待投递</span>
+            <strong className="mono">{pendingMessages}</strong>
+            <small>
+              已投递 {outbox.data?.counts.sent ?? 0} · UNKNOWN {unknownMessages}{" "}
+              · DEAD {deadMessages} · CANCELLED {cancelledMessages}
+            </small>
+          </div>
+        </div>
+      </section>
+      <div className="alert alert-warning">
+        <ShieldAlert size={16} />
+        <div>
+          <strong>运维视图为脱敏数据</strong>
+          <p>
+            作业错误类别、消息队列状态与审计动作由 Domain API 清洗后返回，
+            payload 与审计详情不经过浏览器。
+          </p>
+        </div>
+      </div>
       <section className="panel operations-panel">
         <div className="ops-tabs" role="tablist" aria-label="运维视图">
           <button

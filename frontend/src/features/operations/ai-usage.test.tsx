@@ -11,6 +11,8 @@ import {
   opsOutboxFixture,
 } from "../../test/fixtures";
 
+const runFundEstimate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock("../../api/hooks", () => ({
   useOpsJobs: () => ({ data: opsJobsFixture, error: null }),
   useOpsFreshness: () => ({ data: opsFreshnessFixture, error: null }),
@@ -18,7 +20,7 @@ vi.mock("../../api/hooks", () => ({
   useOpsAudit: () => ({ data: auditFixture, error: null }),
   useOpsFundEstimate: () => ({ data: opsFundEstimateFixture, error: null }),
   useRunFundEstimate: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: runFundEstimate,
     isPending: false,
     error: null,
   }),
@@ -32,6 +34,47 @@ function response(data: unknown, status = 200) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("keeps the fund estimate and shared health overview while switching every operations tab", async () => {
+  const user = userEvent.setup();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(aiUsageFixture)));
+  renderWithSession(<OperationsPage />);
+
+  for (const name of ["AI 用量", "审计日志", "作业运行"]) {
+    await user.click(screen.getByRole("tab", { name }));
+    expect(screen.getByRole("tab", { name })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.getByRole("heading", { name: "场外基金盘中估值" }),
+    ).toBeVisible();
+    expect(screen.getByText("8 / 12 只已生成")).toBeVisible();
+    expect(screen.getByText("作业成功率")).toBeVisible();
+    expect(screen.getByText("100.0%")).toBeVisible();
+    expect(screen.getByText("最近作业耗时")).toBeVisible();
+    expect(screen.getByText("42.8s", { selector: "strong" })).toBeVisible();
+    expect(screen.getByText("净值快照新鲜度")).toBeVisible();
+    expect(screen.getByText("2026/08/23 16:00:08")).toBeVisible();
+    expect(screen.getByText("消息待投递")).toBeVisible();
+    expect(screen.getByText(/UNKNOWN\s+2/)).toBeVisible();
+    expect(screen.getByText("运维视图为脱敏数据")).toBeVisible();
+    if (name === "AI 用量") {
+      expect(await screen.findByText("a***@example.com")).toBeVisible();
+      await user.click(
+        screen.getByRole("button", { name: "立即计算基金估值" }),
+      );
+      expect(runFundEstimate).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole("button", { name: "刷新 AI 用量" }),
+      ).toBeEnabled();
+    } else if (name === "审计日志") {
+      expect(screen.getByText("policy.confirm")).toBeVisible();
+    } else {
+      expect(screen.getByText("report.postmarket.generate")).toBeVisible();
+    }
+  }
+});
 
 it("loads AI usage only when selected and expands each inference while keeping business outcome separate", async () => {
   const user = userEvent.setup();
@@ -223,8 +266,15 @@ it("offers retry after request failure and renders an empty history without inve
   expect(
     await screen.findByRole("alert", { name: "AI 用量加载失败" }),
   ).toHaveTextContent("额度服务暂不可用");
+  expect(
+    screen.getByRole("heading", { name: "场外基金盘中估值" }),
+  ).toBeVisible();
+  expect(screen.getByText("作业成功率")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "重试 AI 用量" }));
   expect(await screen.findByText(/尚无 AI 用量记录/)).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "立即计算基金估值" }),
+  ).toBeEnabled();
   expect(screen.getByText(/旧任务没有采集数据时不回填/)).toBeInTheDocument();
 });
 
@@ -235,7 +285,13 @@ it("shows an explicit loading state before account data arrives", async () => {
   );
   renderWithSession(<OperationsPage />);
   await userEvent.click(screen.getByRole("tab", { name: "AI 用量" }));
-  expect(screen.getByRole("status")).toHaveTextContent("正在读取 AI 用量");
+  expect(
+    screen.getByRole("status", { name: "AI 用量加载中" }),
+  ).toHaveTextContent("正在读取 AI 用量");
+  expect(
+    screen.getByRole("heading", { name: "场外基金盘中估值" }),
+  ).toBeVisible();
+  expect(screen.getByText("作业成功率")).toBeVisible();
 });
 
 it("never displays negative or out-of-range balance values as valid consumption", async () => {
