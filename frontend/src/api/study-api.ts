@@ -67,6 +67,7 @@ export interface StudySnapshot {
 }
 export interface StudyTrack {
   priceWatch?: StudyPriceWatch | null;
+  expiresOn?: string | null;
   id: string;
   title: string;
   enabled: boolean;
@@ -291,8 +292,23 @@ async function write(path: string, body: unknown) {
     })
   ).data;
 }
-export const getStudyTracks = (signal?: AbortSignal) =>
-  read<{ items: StudyTrack[]; total: number }>("", signal);
+export async function getStudyTracks(signal?: AbortSignal) {
+  let page = await read<{ items: StudyTrack[]; total: number }>("", signal);
+  const items = [...page.items];
+  let offset = page.items.length;
+  while (offset < page.total && page.items.length) {
+    page = await read<{ items: StudyTrack[]; total: number }>(
+      `?limit=50&offset=${offset}`,
+      signal,
+    );
+    items.push(...page.items);
+    offset += page.items.length;
+  }
+  return {
+    items: [...new Map(items.map((item) => [item.id, item])).values()],
+    total: page.total,
+  };
+}
 export const getStudyDetail = (id: string, signal?: AbortSignal, offset = 0) =>
   read<StudyDetail>(
     `/${encodeURIComponent(id)}?limit=50&offset=${offset}`,

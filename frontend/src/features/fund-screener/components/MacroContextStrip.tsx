@@ -180,6 +180,7 @@ export default function MacroContextStrip({
   selectedDirection,
   selectedIndexId,
   renderStudyTracking,
+  renderTrackedFunds,
   renderResearchRefresh,
   onStudyDirection,
   onStudyQuantScan,
@@ -195,6 +196,7 @@ export default function MacroContextStrip({
   selectedIndexId?: string;
   scopeKey?: string;
   renderStudyTracking?: () => ReactNode;
+  renderTrackedFunds?: () => ReactNode;
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
@@ -325,6 +327,7 @@ export default function MacroContextStrip({
             {tab === "events" && (
               <>
                 {ready && <MacroOverview data={ready} />}
+                {renderTrackedFunds?.()}
                 <ValueDirections
                   key={ready?.dailyResearch?.reportRunId ?? "no-report"}
                   data={ready?.dailyResearch}

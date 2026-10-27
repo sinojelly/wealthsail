@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { useNavigate } from "react-router-dom";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
+import * as study from "../../api/study-api";
+import TrackedFundWatch from "./components/TrackedFundWatch";
 
 vi.mock("../../api/study-api", () => ({
   getStudyTracks: vi.fn().mockResolvedValue({ items: [], total: 0 }),
@@ -192,6 +194,7 @@ const fund = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(study.getStudyTracks).mockResolvedValue({ items: [], total: 0 });
   api.directions.mockResolvedValue([
     {
       id: "a-share:broad",
@@ -603,4 +606,267 @@ it("shows actual unit-NAV changes separately from unknown reinvested fund return
   ).toBeVisible();
   expect(screen.getByText(/单位净值变动不含分红再投/)).toBeVisible();
   expect(screen.getByText(/63观察日收益：—%/)).toBeVisible();
+});
+
+function trackedFund(
+  id: string,
+  overrides: Partial<study.StudyTrack> = {},
+): study.StudyTrack {
+  return {
+    id,
+    title: `${id} 冻结研究`,
+    enabled: true,
+    generation: 1,
+    status: "OBSERVING",
+    createdAt: "2026-10-20",
+    updatedAt: "2026-10-27",
+    unreadCount: 0,
+    scope: { fundCode: "012733", fundMarket: "FUND_CN" },
+    priceWatch: {
+      frozenPlan: {
+        methodVersion: "actionable-zones-v3",
+        subjectKind: "nav",
+        subjectId: "012733",
+        fundCode: "012733",
+        label: "人工智能联接基金",
+        priceBasis: "UNIT_NAV",
+        unit: "CNY/份",
+        asOf: "2026-10-20",
+        sourceUri: null,
+        currentPrice: "1.0000",
+        indicators: {},
+        selectedTrack: "LEFT_VALUE",
+        tracks: [
+          {
+            track: "LEFT_VALUE",
+            state: "CANDIDATE",
+            priceState: "READY",
+            entryZoneMin: "0.9800",
+            entryZoneMax: "1.0200",
+            stopLossPrice: "0.9000",
+            takeProfitT1: "1.1200",
+            takeProfitT2: "1.2000",
+            reasons: [],
+          },
+        ],
+      },
+      confirmedNav: { value: "1.0100", asOf: "2026-10-26", usable: true },
+      estimate1430: null,
+      holding: { state: "NONE" },
+      state: "ENTRY_ZONE",
+      basis: "CONFIRMED_NAV",
+      asOf: "2026-10-26",
+      reason: "确认净值进入冻结买入区间",
+    },
+    ...overrides,
+  };
+}
+
+it("keeps my tracked fund prices in today's focus without a daily report and opens its review", async () => {
+  const tracked = trackedFund("ai");
+  vi.mocked(study.getStudyTracks).mockResolvedValue({
+    items: [tracked],
+    total: 1,
+  });
+  vi.mocked(study.getStudyDetail).mockRejectedValue(new Error("详情暂不可用"));
+  renderWithSession(<FundScreenerPage />, "/fund-screener?macroMonths=60");
+  const region = await screen.findByRole("region", {
+    name: "我的持续跟踪基金",
+  });
+  expect(await within(region).findByText("🎯已入买入击球区")).toBeVisible();
+  expect(region).toHaveTextContent("冻结买入区间：0.9800–1.0200");
+  expect(region).toHaveTextContent("最新确认净值：1.0100");
+  expect(
+    screen.queryByRole("region", { name: "研究主题跟踪与复盘" }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(
+    within(region).getByRole("button", { name: "查看 ai 冻结研究 与复盘" }),
+  );
+  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await waitFor(() =>
+    expect(study.getStudyDetail).toHaveBeenCalledWith(
+      "ai",
+      expect.anything(),
+      0,
+    ),
+  );
+  await userEvent.click(screen.getByRole("tab", { name: "今日重点" }));
+  expect(
+    await screen.findByRole("region", { name: "我的持续跟踪基金" }),
+  ).toHaveTextContent("1.0100");
+});
+
+it("groups repeated fund identities while keeping each active frozen plan and review state", async () => {
+  const waiting = trackedFund("right", {
+    status: "INVALIDATED",
+    unreadCount: 2,
+  });
+  waiting.priceWatch!.frozenPlan!.tracks[0].state = "WATCH";
+  waiting.priceWatch!.state = "OBSERVING";
+  const tracks = [
+    trackedFund("left"),
+    waiting,
+    trackedFund("stopped", { enabled: false, status: "ENDED" }),
+    trackedFund("ended", { status: "ENDED" }),
+    trackedFund("index", { scope: { indexId: "hs300" }, priceWatch: null }),
+    trackedFund("missing", {
+      scope: { instrumentId: "unpriced" },
+      priceWatch: null,
+    }),
+  ];
+  vi.mocked(study.getStudyTracks).mockResolvedValue({
+    items: tracks,
+    total: tracks.length,
+  });
+  renderWithSession(<FundScreenerPage />);
+  const region = await screen.findByRole("region", {
+    name: "我的持续跟踪基金",
+  });
+  await within(region).findByRole("button", {
+    name: "查看 left 冻结研究 与复盘",
+  });
+  expect(within(region).getAllByRole("article")).toHaveLength(2);
+  expect(
+    within(region).getByRole("button", { name: "查看 right 冻结研究 与复盘" }),
+  ).toBeVisible();
+  expect(region).toHaveTextContent("预设失效条件触发");
+  expect(region).toHaveTextContent("2项未读变化");
+  expect(region).toHaveTextContent("区间观察中");
+  expect(region).toHaveTextContent("行情与冻结价位待核对");
+  expect(
+    within(region).queryByRole("button", { name: /stopped|ended|index/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("lets a failed personal tracking list retry without hiding today's research", async () => {
+  vi.mocked(study.getStudyTracks)
+    .mockRejectedValueOnce(new Error("暂不可用"))
+    .mockResolvedValue({ items: [trackedFund("retry")], total: 1 });
+  renderWithSession(<FundScreenerPage />);
+  const region = await screen.findByRole("region", {
+    name: "我的持续跟踪基金",
+  });
+  await userEvent.click(
+    await within(region).findByRole("button", { name: "重试持续跟踪基金" }),
+  );
+  expect(
+    await within(region).findByRole("button", {
+      name: "查看 retry 冻结研究 与复盘",
+    }),
+  ).toBeVisible();
+  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("keeps the expiry day active until Shanghai midnight and hides expired fund studies", async () => {
+  const clock = vi
+    .spyOn(Date, "now")
+    .mockReturnValue(Date.parse("2026-10-27T16:01:00Z"));
+  try {
+    const tracks = [
+      trackedFund("expired", { expiresOn: "2026-10-27" }),
+      trackedFund("today", { expiresOn: "2026-10-28" }),
+      trackedFund("legacy", { expiresOn: null }),
+    ];
+    vi.mocked(study.getStudyTracks).mockResolvedValue({
+      items: tracks,
+      total: 3,
+    });
+    renderWithSession(<FundScreenerPage />);
+    const region = await screen.findByRole("region", {
+      name: "我的持续跟踪基金",
+    });
+    expect(
+      await within(region).findByRole("button", {
+        name: "查看 today 冻结研究 与复盘",
+      }),
+    ).toBeVisible();
+    expect(
+      within(region).getByRole("button", {
+        name: "查看 legacy 冻结研究 与复盘",
+      }),
+    ).toBeVisible();
+    expect(
+      within(region).queryByRole("button", {
+        name: "查看 expired 冻结研究 与复盘",
+      }),
+    ).not.toBeInTheDocument();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it("refreshes cached tracking independently and keeps unavailable current prices explicit", async () => {
+  const active = trackedFund("refresh");
+  vi.mocked(study.getStudyTracks).mockResolvedValue({
+    items: [active],
+    total: 1,
+  });
+  renderWithSession(<FundScreenerPage />);
+  const region = await screen.findByRole("region", {
+    name: "我的持续跟踪基金",
+  });
+  await within(region).findByText("🎯已入买入击球区");
+  const refresh = await within(region).findByRole("button", {
+    name: "刷新跟踪行情",
+  });
+  await waitFor(() => expect(refresh).toBeEnabled());
+  vi.mocked(study.getStudyTracks).mockResolvedValue({
+    items: [
+      {
+        ...active,
+        priceWatch: {
+          ...active.priceWatch!,
+          state: "UNKNOWN",
+          basis: null,
+          confirmedNav: { value: "1.0100", asOf: "2026-10-20", usable: false },
+          reason: "确认净值已过期，等待同口径当前行情",
+        },
+      },
+    ],
+    total: 1,
+  });
+  await userEvent.click(refresh);
+  expect(
+    await within(region).findByText("行情待更新", { selector: "strong" }),
+  ).toBeVisible();
+  expect(region).toHaveTextContent("仅保留历史记录，不用于当前触发。");
+  expect(
+    within(region).queryByText("🎯已入买入击球区"),
+  ).not.toBeInTheDocument();
+});
+
+it("removes an expired fund at Shanghai midnight while the page stays open", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-27T15:59:59Z"));
+  try {
+    const tracks = [trackedFund("midnight", { expiresOn: "2026-10-27" })];
+    vi.mocked(study.getStudyTracks).mockResolvedValue({
+      items: tracks,
+      total: 1,
+    });
+    renderWithSession(<TrackedFundWatch actor="midnight-test" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(
+      screen.getByRole("button", { name: "查看 midnight 冻结研究 与复盘" }),
+    ).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(
+      screen.queryByRole("button", { name: "查看 midnight 冻结研究 与复盘" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "我的持续跟踪基金" }),
+    ).toHaveTextContent("暂无持续跟踪基金");
+  } finally {
+    vi.useRealTimers();
+  }
 });

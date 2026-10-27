@@ -20,6 +20,7 @@ import FundResultsTable from "./components/FundResultsTable";
 import ActionablePlan from "./components/ActionablePlan";
 import { metricValue, timeLabel } from "./macro-display";
 import StudyTracking from "./components/StudyTracking";
+import TrackedFundWatch from "./components/TrackedFundWatch";
 import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
 import "./opportunities.css";
@@ -391,6 +392,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       </header>
       <MacroContextStrip
         data={radarData}
+        renderTrackedFunds={() => <TrackedFundWatch actor={subject} />}
         renderResearchRefresh={() => <DailyResearchRefresh actor={subject} />}
         renderStudyTracking={() => (
           <StudyTracking

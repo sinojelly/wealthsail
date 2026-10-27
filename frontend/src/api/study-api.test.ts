@@ -8,6 +8,27 @@ beforeEach(() => {
     meta: {},
   } as never);
 });
+it("includes older tracked funds beyond the first page and keeps cancellation on every page", async () => {
+  const signal = new AbortController().signal;
+  vi.mocked(request)
+    .mockResolvedValueOnce({
+      data: { items: [{ id: "stopped", enabled: false }], total: 2 },
+      meta: {},
+    } as never)
+    .mockResolvedValueOnce({
+      data: { items: [{ id: "older-active", enabled: true }], total: 2 },
+      meta: {},
+    } as never);
+  const result = await api.getStudyTracks(signal);
+  expect(result.items.map((item) => item.id)).toEqual([
+    "stopped",
+    "older-active",
+  ]);
+  expect(request).toHaveBeenLastCalledWith(
+    "/v1/investment/study-tracks?limit=50&offset=1",
+    { signal },
+  );
+});
 it("keeps study paths, abort signals and version guards separate from the old condition monitors", async () => {
   const signal = new AbortController().signal;
   await api.getStudyTracks(signal);

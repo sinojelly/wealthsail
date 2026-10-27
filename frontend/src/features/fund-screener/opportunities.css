@@ -2175,6 +2175,28 @@
   color: #64748b;
   margin-left: 5px;
 }
+.op-tracked-funds > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.op-tracked-fund-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+}
+.op-tracked-fund-grid > article {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.op-tracked-fund-grid h4 {
+  margin: 0 0 8px;
+}
 @media print {
   .op-macro-expand {
     display: none;
