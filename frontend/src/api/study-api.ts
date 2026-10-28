@@ -114,6 +114,7 @@ export interface StudyPriceWatch {
     changePct?: string | null;
     methodVersion?: string | null;
     explanation?: string | null;
+    afterClose?: boolean;
   } | null;
   holding: { state: "CONFIRMED" | "UNKNOWN" | "NONE"; asOf?: string | null };
   state:

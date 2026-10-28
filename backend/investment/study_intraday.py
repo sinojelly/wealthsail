@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from datetime import time
 from decimal import Decimal
 import logging
 import re
@@ -10,6 +11,7 @@ from uuid import UUID
 from backend.dependencies import now_shanghai
 from backend.investment.study_price_watch import (
     _number,
+    _UNITS,
     _source_uri,
     _stamp,
     _trading_time,
@@ -84,12 +86,13 @@ def _current_quote(observation, plan, now):
         or observation.subject_type != "FUND"
         or observation.field_code != "ESTIMATED_NAV"
         or observation.quality_status != "ESTIMATED"
+        or observation.unit not in _UNITS
         or _number(observation.value) is None
         or not _source_uri(observation.origin_uri)
     ):
         return None
     stamp = _stamp(observation.as_of)
-    if stamp is None:
+    if stamp is None or stamp > now or stamp.date() != now.date():
         return None
     metadata = observation.metadata or {}
     base = _number(metadata.get("confirmedNav"))
@@ -115,19 +118,33 @@ def _current_quote(observation, plan, now):
         "explanation": metadata.get("explanation")
         or "同基金盘中估算净值，最终以基金公司披露净值为准。",
     }
-    return quote if _usable(quote, plan, now, intraday=True) else None
+    if _usable(quote, plan, now, intraday=True):
+        return quote
+    # Closing estimates may carry a 16:04 (or later) provider timestamp. They
+    # remain visible with that actual date, never becoming a trading trigger
+    # or a confirmed fund-company NAV merely because the market has closed.
+    if now.time() >= time(15) and stamp.time() >= time(9, 30):
+        quote["usable"] = False
+        quote["afterClose"] = True
+        quote["explanation"] = "同基金收盘后估算净值，仅供参考，以基金公司最终披露净值为准。"
+        return quote
+    return None
+
+
+def _refresh_time(now):
+    return _trading_time(now) or now.time() >= time(15)
 
 
 async def refresh_tracks(
     items, now, *, trading_day, loader=None, now_provider=now_shanghai
 ):
-    """Each page read refreshes in a proven open SSE session, as one bounded batch.
+    """Refresh open-session and after-close display estimates in one bounded batch.
 
     Inputs already passed actor RLS. No portfolio, plan, scheduled check or
     historical 14:30 snapshot is written by this presentation-only refresh.
     """
     now = _stamp(now)
-    if now is None or trading_day is not True or not _trading_time(now):
+    if now is None or trading_day is not True or not _refresh_time(now):
         return items
     targets = {}
     for index, item in enumerate(items):
@@ -157,9 +174,12 @@ async def refresh_tracks(
     if not targets:
         return items
     if loader is None:
-        from backend.integrations.market_data import fetch_fund_intraday_estimates
+        from backend.funds.latest_quotes import latest_quote_cache
 
-        loader = fetch_fund_intraday_estimates
+        async def cached(codes):
+            return latest_quote_cache.cached_estimates(codes, now)
+
+        loader = cached
     try:
         observations = await asyncio.wait_for(
             loader(sorted({plan["fundCode"] for _, plan, _ in targets.values()})),
@@ -173,7 +193,7 @@ async def refresh_tracks(
         finished is None
         or finished.date() != now.date()
         or finished < now
-        or not _trading_time(finished)
+        or not _refresh_time(finished)
     ):
         return items
     by_code = {observation.symbol: observation for observation in observations}

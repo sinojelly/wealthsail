@@ -1,4 +1,24 @@
 import { request } from "./client";
+import type { StudyPriceWatch } from "./study-api";
+
+export interface LatestFundQuote {
+  fundCode: string;
+  confirmedNav: StudyPriceWatch["confirmedNav"];
+  currentEstimate: StudyPriceWatch["currentEstimate"];
+}
+export interface LatestFundQuotes {
+  items: LatestFundQuote[];
+  asOf: string;
+}
+export async function getLatestFundQuotes(
+  codes: string[],
+): Promise<LatestFundQuotes> {
+  return (
+    await request<LatestFundQuotes>(
+      `/v1/funds/quotes?codes=${encodeURIComponent([...new Set(codes)].sort().join(","))}`,
+    )
+  ).data;
+}
 
 /** reference.fund_nav_ranges 缓存行的可用形态。 */
 export interface FundNavRange {

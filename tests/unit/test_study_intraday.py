@@ -99,7 +99,6 @@ async def test_page_open_refreshes_morning_estimate_and_keeps_1430_history_separ
         (9, 29, True),
         (11, 31, True),
         (12, 30, True),
-        (15, 0, True),
         (10, 30, False),
         (10, 30, None),
     ],
@@ -119,6 +118,32 @@ async def test_closed_or_unverified_sessions_never_call_estimate_provider(
     )
     loader.assert_not_awaited()
     assert result == [item]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hour,minute", [(15, 0), (16, 4), (20, 30)])
+async def test_after_close_page_refresh_shows_latest_estimate_without_triggering(
+    hour, minute
+):
+    from backend.investment.study_intraday import refresh_tracks
+
+    now = NOW.replace(hour=hour, minute=minute)
+    stamp = now - timedelta(minutes=1)
+    item = tracked()
+    before = deepcopy(item)
+    loader = AsyncMock(return_value=[estimate(as_of=stamp)])
+    result = await refresh_tracks(
+        [item], now, trading_day=True, loader=loader, now_provider=lambda: now
+    )
+    loader.assert_awaited_once_with(["004069"])
+    watch = result[0]["priceWatch"]
+    assert watch["currentEstimate"]["value"] == "1.08"
+    assert watch["currentEstimate"]["asOf"] == stamp.isoformat()
+    assert watch["currentEstimate"]["usable"] is False
+    assert watch["currentEstimate"]["afterClose"] is True
+    assert watch["basis"] == "CONFIRMED_NAV"
+    assert watch["frozenPlan"] == before["priceWatch"]["frozenPlan"]
+    assert item == before
 
 
 @pytest.mark.asyncio

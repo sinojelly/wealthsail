@@ -2176,21 +2176,32 @@ async def _fetch_fund_nav(client: httpx.AsyncClient, symbol: str) -> Observation
         return None
     try:
         published = date.fromisoformat(nav_date)
-    except ValueError:
-        published = None
+    except (ValueError, TypeError):
+        return None
+    try:
+        nav_value = _decimal(nav)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not nav_value.is_finite() or nav_value <= 0:
+        return None
     quality = Q_FRESH if published == date.today() else Q_STALE
     return Observation(
         symbol=symbol,
         subject_type="FUND",
         field_code=F_NAV,
-        value=_decimal(nav),
+        value=nav_value,
         as_of=datetime.combine(
-            published or date.today(), time.min, tzinfo=timezone.utc
+            published, time.min, tzinfo=timezone.utc
         ),
         quality_status=quality,
         unit="元/份",
         method_version="eastmoney/f10-lsjz",
         origin_uri="https://fundf10.eastmoney.com",
+        metadata={
+            "officialUnitNav": True,
+            **({"returnPct": _optional_decimal_text(row.get("JZZZL"))}
+               if _optional_decimal_text(row.get("JZZZL")) is not None else {}),
+        },
     )
 
 

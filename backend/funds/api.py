@@ -21,6 +21,26 @@ from backend.funds import service
 router = APIRouter(prefix="/funds", tags=["funds"])
 
 
+@router.get("/quotes")
+async def latest_fund_quotes(
+    codes: str = Query(pattern=r"^[0-9]{6}(,[0-9]{6}){0,31}$", max_length=223),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Refresh display quotes separately; no research-plan mutation or provider I/O in RLS."""
+    from backend.funds.latest_quotes import latest_quote_cache
+
+    now = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        trading_day = await conn.fetchval(
+            "SELECT is_trading_day FROM reference.trading_calendars WHERE market='SSE' AND calendar_date=$1",
+            now.date(),
+        )
+    data = await latest_quote_cache.get(codes.split(","), now, trading_day=trading_day)
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
 @router.get("/search")
 async def search_funds(
     keyword: str = Query(min_length=1, max_length=100),

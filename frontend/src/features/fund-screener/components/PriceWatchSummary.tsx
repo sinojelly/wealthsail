@@ -3,6 +3,7 @@ import { fundDisplayName, planPrice } from "../plan-display";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText } from "../research-reading";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
+import { useLatestFundQuote } from "../latest-quote-resource";
 
 export function FundWatchQuote({
   row,
@@ -43,7 +44,13 @@ export function FundWatchQuote({
       <span className="op-watch-quote-time">
         （{row?.asOf ? timeLabel(row.asOf) : "时间未确认"}）
       </span>
-      {row?.usable === false && <small>仅保留历史记录，不用于当前触发。</small>}
+      {row?.usable === false && (
+        <small>
+          {estimate && row.afterClose
+            ? "估算值仅供参考，不用于当前触发。"
+            : "仅保留历史记录，不用于当前触发。"}
+        </small>
+      )}
       {row?.explanation && <small>{row.explanation}</small>}
       {sourceHref(row?.sourceUri) && (
         <a href={sourceHref(row?.sourceUri)} target="_blank" rel="noreferrer">
@@ -58,6 +65,11 @@ export default function PriceWatchSummary({
 }: {
   watch?: StudyPriceWatch | null;
 }) {
+  const latest = useLatestFundQuote(
+    watch?.frozenPlan?.priceBasis === "UNIT_NAV"
+      ? watch.frozenPlan.fundCode ?? undefined
+      : undefined,
+  );
   if (!watch) return null;
   const plan = watch.frozenPlan;
   const selected = plan?.selectedTrack ?? plan?.track;
@@ -68,7 +80,14 @@ export default function PriceWatchSummary({
     watch.state === "HOLDING" && watch.holding.state !== "CONFIRMED"
       ? "UNKNOWN"
       : watch.state;
-  const estimate = currentFundEstimate(watch);
+  const estimate = latest.data?.currentEstimate ?? currentFundEstimate(watch);
+  const currentConfirmed = latest.data?.confirmedNav;
+  const confirmed =
+    currentConfirmed?.value &&
+    currentConfirmed.asOf &&
+    currentConfirmed.asOf >= (watch.confirmedNav?.asOf ?? "")
+      ? currentConfirmed
+      : watch.confirmedNav;
   const observation = (
     row: StudyPriceWatch["confirmedNav"] | StudyPriceWatch["estimate1430"],
     label: string,
@@ -112,7 +131,7 @@ export default function PriceWatchSummary({
       ) : (
         <p>冻结价位尚无完整依据。</p>
       )}
-      {observation(watch.confirmedNav, "最新确认净值")}
+      {observation(confirmed, "最新确认净值")}
       <FundWatchQuote row={estimate} label="基金估算净值" estimate />
       {estimate?.checkedAt && (
         <small>估值核对时间：{timeLabel(estimate.checkedAt)}</small>

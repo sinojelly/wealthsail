@@ -13,6 +13,11 @@ import { fundDisplayName, planPrice } from "../plan-display";
 import { studyStates } from "./study-display";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
+import { useStudyQuoteRefresh } from "../use-study-tracking";
+import {
+  refreshLatestFundQuotes,
+  useLatestFundQuote,
+} from "../latest-quote-resource";
 
 const shanghaiDate = (time: number) =>
   new Intl.DateTimeFormat("sv-SE", {
@@ -40,6 +45,21 @@ function newest<T extends { asOf: string | null; value: string | null }>(
         : latest,
     null,
   );
+}
+function LiveFundWatchQuote({
+  code,
+  row,
+  estimate = false,
+}: {
+  code?: string;
+  row: StudyPriceWatch["currentEstimate"];
+  estimate?: boolean;
+}) {
+  const latest = useLatestFundQuote(code);
+  const current = estimate
+    ? latest.data?.currentEstimate
+    : latest.data?.confirmedNav;
+  return <FundWatchQuote row={newest([current, row])} estimate={estimate} />;
 }
 function FrozenPlan({ track }: { track: StudyTrack }) {
   const plan = track.priceWatch?.frozenPlan;
@@ -70,6 +90,7 @@ function FrozenPlan({ track }: { track: StudyTrack }) {
   );
 }
 export default function TrackedFundWatch({ actor }: { actor: string }) {
+  useStudyQuoteRefresh(actor);
   const [, setParams] = useSearchParams();
   const client = useQueryClient();
   const [today, setToday] = useState(() => shanghaiDate(Date.now()));
@@ -212,13 +233,16 @@ export default function TrackedFundWatch({ actor }: { actor: string }) {
         <button
           type="button"
           disabled={list.isFetching}
-          onClick={() => void list.refetch()}
+          onClick={() => {
+            refreshLatestFundQuotes();
+            void list.refetch();
+          }}
         >
           刷新跟踪行情
         </button>
       </header>
       <p>
-        包含手动跟踪与已导入的持仓基金；交易时段打开页面会更新估值。估值仅供参考，条件触发后请核对证据与持仓。
+        包含手动跟踪与已导入的持仓基金；打开页面会更新行情，收盘后保留最新估值及其时间。估值仅供参考，条件触发后请核对证据与持仓。
       </p>
       {list.isPending && <p role="status">正在读取持续跟踪基金…</p>}
       {list.isError && (
@@ -280,10 +304,17 @@ export default function TrackedFundWatch({ actor }: { actor: string }) {
                       </div>
                     </th>
                     <td>
-                      <FundWatchQuote row={confirmed} />
+                      <LiveFundWatchQuote
+                        code={row.market === "FUND_CN" ? row.code : undefined}
+                        row={confirmed}
+                      />
                     </td>
                     <td>
-                      <FundWatchQuote row={estimate} estimate />
+                      <LiveFundWatchQuote
+                        code={row.market === "FUND_CN" ? row.code : undefined}
+                        row={estimate}
+                        estimate
+                      />
                     </td>
                     <td>
                       {row.tracks.length ? (
