@@ -12,6 +12,7 @@ from contextlib import aclosing, asynccontextmanager
 from decimal import Decimal, InvalidOperation
 import hmac
 import json
+import logging
 import math
 import os
 import tempfile
@@ -447,6 +448,12 @@ def create_app(
 def main() -> None:
     import uvicorn
 
+    # Uvicorn configures only its own loggers. Account RPC stage diagnostics use
+    # application loggers and otherwise disappear at root's default WARNING.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     uvicorn.run(create_app(), host="0.0.0.0", port=8090, access_log=False)
 
 

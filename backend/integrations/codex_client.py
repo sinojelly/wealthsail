@@ -218,7 +218,7 @@ async def account(settings, *, fresh=False, refresh=False) -> dict:
                     endpoint += "?refresh=true"
                 result = await _request_json(settings, "GET", endpoint, timeout=23)
                 result = private.safe_account_snapshot(result)
-                account_diagnostic("transport", started)
+                account_diagnostic("transport", started, status=result["status"])
                 result = history.accept(sequence, result)
                 if fresh and result["status"] == "STALE":
                     return private.unavailable_account("ACCOUNT_STALE")

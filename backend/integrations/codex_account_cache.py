@@ -19,12 +19,16 @@ from backend.integrations.codex_private import safe_account_snapshot, unavailabl
 logger = logging.getLogger(__name__)
 
 
-def account_diagnostic(stage, started, error=None):
-    """Only fixed stages, exception classes and durations enter diagnostic logs."""
+def account_diagnostic(stage, started, error=None, *, status=None):
+    """Only fixed stages, status codes, classes and durations enter logs."""
+    safe_status = status if isinstance(status, str) and status in {
+        "READY", "STALE", "UNAVAILABLE", "UNAUTHENTICATED",
+    } else "UNKNOWN"
     logger.info(
-        "Codex account stage=%s error=%s elapsed_ms=%.1f",
+        "Codex account stage=%s error=%s elapsed_ms=%.1f status=%s",
         stage, type(error).__name__ if error is not None else "NONE",
         (time.monotonic() - started) * 1000,
+        safe_status,
     )
 
 
@@ -124,7 +128,7 @@ class AccountMetadataCache:
             account_diagnostic("cache_fetch", started, error)
             result = unavailable_account()
         else:
-            account_diagnostic("cache_fetch", started)
+            account_diagnostic("cache_fetch", started, status=result["status"])
         self._sync_auth()
         if auth_generation != self._auth_generation:
             return unavailable_account("ACCOUNT_AUTH_CHANGED")
