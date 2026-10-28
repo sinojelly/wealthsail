@@ -46,30 +46,66 @@ def tokens(raw):
     return result
 
 
+def snapshot_diagnostic(snapshot):
+    """Public capture metadata contains no identity or arbitrary error text."""
+    diagnostic = snapshot.get("diagnostic") or {}
+    diagnostic = diagnostic if isinstance(diagnostic, dict) else {}
+    reason = diagnostic.get("reason")
+    if not isinstance(reason, str) or reason not in {
+        "TIMEOUT",
+        "UNAVAILABLE",
+        "NOT_FRESH",
+        "ERROR",
+        "CANCELLED",
+    }:
+        reason = None
+    status = "READY"
+    if not snapshot:
+        status, reason = "MISSING", "MISSING"
+    elif reason or snapshot.get("status", "READY") != "READY":
+        status = "UNAVAILABLE"
+        reason = reason or (
+            "NOT_FRESH" if snapshot.get("status") == "STALE" else "UNAVAILABLE"
+        )
+    observed = stamp(snapshot.get("observedAt")) if status == "READY" else None
+    elapsed = diagnostic.get("elapsedMs")
+    return {
+        "status": status,
+        "reason": reason,
+        "observedAt": observed.isoformat() if observed else None,
+        "elapsedMs": elapsed
+        if type(elapsed) is int and 0 <= elapsed <= 10**9
+        else None,
+    }
+
+
 def quota_delta(before, after, *, concurrent=False):
     before, after = before or {}, after or {}
     start, end = stamp(before.get("observedAt")), stamp(after.get("observedAt"))
-    common = None
+    snapshots = {
+        "before": snapshot_diagnostic(before),
+        "after": snapshot_diagnostic(after),
+    }
+    common, common_reason = None, None
     if concurrent:
         common = "CONCURRENT"
-    elif (
-        not before.get("accountFingerprint")
-        or not after.get("accountFingerprint")
-        or start is None
-        or end is None
-        or end <= start
-        or before.get("status", "READY") != "READY"
-        or after.get("status", "READY") != "READY"
-        or (
-            (before.get("observationId") or after.get("observationId"))
-            and (
-                not before.get("observationId")
-                or not after.get("observationId")
-                or before["observationId"] == after["observationId"]
-            )
+    elif not before and not after:
+        common, common_reason = "UNKNOWN", "BOTH_MISSING"
+    elif any(row["status"] != "READY" for row in snapshots.values()):
+        stage, capture = next(
+            (stage, row) for stage, row in snapshots.items() if row["status"] != "READY"
         )
+        common, common_reason = "UNKNOWN", f"{stage.upper()}_{capture['reason']}"
+    elif not before.get("accountFingerprint") or not after.get("accountFingerprint"):
+        common, common_reason = "UNKNOWN", "IDENTITY_MISSING"
+    elif start is None or end is None or end <= start:
+        common, common_reason = "UNKNOWN", "OBSERVATION_TIME_INVALID"
+    elif (before.get("observationId") or after.get("observationId")) and (
+        not before.get("observationId")
+        or not after.get("observationId")
+        or before["observationId"] == after["observationId"]
     ):
-        common = "UNKNOWN"
+        common, common_reason = "UNKNOWN", "OBSERVATION_REUSED"
     elif (
         before["accountFingerprint"],
         before.get("planType"),
@@ -104,20 +140,16 @@ def quota_delta(before, after, *, concurrent=False):
     )
     for key in sorted(previous.keys() | current.keys()):
         old, new = previous.get(key, {}), current.get(key, {})
-        status = common
+        status, reason = common, common_reason
         low, high = number(old.get("usedPercent")), number(new.get("usedPercent"))
         reset = number(old.get("resetsAt"))
         if status is None:
-            if (
-                not old
-                or not new
-                or low is None
-                or high is None
-                or low > 100
-                or high > 100
-                or reset is None
+            if not old or not new:
+                status, reason = "UNKNOWN", "WINDOW_MISSING"
+            elif (
+                low is None or high is None or low > 100 or high > 100 or reset is None
             ):
-                status = "UNKNOWN"
+                status, reason = "UNKNOWN", "WINDOW_VALUE_INVALID"
             elif (
                 (old.get("windowMinutes"), old.get("resetsAt"))
                 != (new.get("windowMinutes"), new.get("resetsAt"))
@@ -133,11 +165,12 @@ def quota_delta(before, after, *, concurrent=False):
                 "label": new.get("label") or old.get("label") or key,
                 "consumedPercent": float(high - low) if status is None else None,
                 "status": status or "ESTIMATED",
+                **({"reason": reason} if reason else {}),
             }
         )
     old, new = before.get("credits") or {}, after.get("credits") or {}
     low, high = number(old.get("balance")), number(new.get("balance"))
-    status = common
+    status, reason = common, common_reason
     if status is None:
         if (
             low is None
@@ -145,7 +178,7 @@ def quota_delta(before, after, *, concurrent=False):
             or old.get("unlimited") is not False
             or new.get("unlimited") is not False
         ):
-            status = "UNKNOWN"
+            status, reason = "UNKNOWN", "CREDITS_UNAVAILABLE"
         elif high > low:
             status = "RESET_OR_TOPUP"
     return {
@@ -153,9 +186,31 @@ def quota_delta(before, after, *, concurrent=False):
         "credits": {
             "consumed": str(low - high) if status is None else None,
             "status": status or "ESTIMATED",
+            **({"reason": reason} if reason else {}),
         },
         "periods": periods,
+        "snapshots": snapshots,
     }
+
+
+def aggregate_quota_status(rows, *, complete, same_period):
+    """Keep a shared precise cause; mixed/missing calls require expansion."""
+    if complete:
+        return {"status": "ESTIMATED"}
+    if any(row.get("status") == "CONCURRENT" for row in rows):
+        return {"status": "CONCURRENT"}
+    states = {row.get("status") for row in rows}
+    reasons = {row.get("reason") for row in rows}
+    if (
+        len(states) == 1
+        and len(reasons) == 1
+        and states <= {"UNKNOWN", "ACCOUNT_CHANGED", "PERIOD_CHANGED", "RESET_OR_TOPUP"}
+    ):
+        reason = next(iter(reasons))
+        return {"status": next(iter(states)), **({"reason": reason} if reason else {})}
+    if states == {"ESTIMATED"} and not same_period:
+        return {"status": "PERIOD_CHANGED"}
+    return {"status": "INCOMPLETE"}
 
 
 def aggregate_task(task, calls):
@@ -199,13 +254,6 @@ def aggregate_task(task, calls):
             len({call["quota"].get("periods", {}).get(key) for call in calls}) == 1
         )
         complete = complete and same_period
-        status = (
-            "ESTIMATED"
-            if complete
-            else "CONCURRENT"
-            if any(row.get("status") == "CONCURRENT" for row in rows)
-            else "INCOMPLETE"
-        )
         windows.append(
             {
                 "key": key,
@@ -213,21 +261,27 @@ def aggregate_task(task, calls):
                 "consumedPercent": sum(row["consumedPercent"] for row in rows)
                 if complete
                 else None,
-                "status": status,
+                **aggregate_quota_status(
+                    rows, complete=complete, same_period=same_period
+                ),
             }
         )
     credits = [number(call["quota"]["credits"].get("consumed")) for call in calls]
+    same_period = (
+        len({call["quota"].get("periods", {}).get("credits") for call in calls}) == 1
+    )
     complete = (
-        bool(credits)
-        and all(value is not None for value in credits)
-        and len({call["quota"].get("periods", {}).get("credits") for call in calls})
-        == 1
+        bool(credits) and all(value is not None for value in credits) and same_period
     )
     result["quota"] = {
         "windows": windows,
         "credits": {
             "consumed": str(sum(credits)) if complete else None,
-            "status": "ESTIMATED" if complete else "INCOMPLETE",
+            **aggregate_quota_status(
+                [call["quota"]["credits"] for call in calls],
+                complete=complete,
+                same_period=same_period,
+            ),
         },
     }
     return result

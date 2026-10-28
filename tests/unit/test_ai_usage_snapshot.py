@@ -35,6 +35,15 @@ def snapshot(*, observed_at=None, observation_id="before", **changes):
     }
 
 
+def assert_failure_diagnostic(value, reason):
+    assert set(value) == {"status", "diagnostic"}
+    assert value["status"] == "UNAVAILABLE"
+    assert set(value["diagnostic"]) == {"reason", "elapsedMs"}
+    assert value["diagnostic"]["reason"] == reason
+    assert type(value["diagnostic"]["elapsedMs"]) is int
+    assert value["diagnostic"]["elapsedMs"] >= 0
+
+
 @pytest.mark.parametrize("same", ["observedAt", "observationId"])
 def test_reused_observation_is_unknown_even_when_balance_did_not_change(same):
     before = snapshot(observed_at=datetime.now(timezone.utc) - timedelta(seconds=1))
@@ -43,7 +52,8 @@ def test_reused_observation_is_unknown_even_when_balance_did_not_change(same):
     result = quota_delta(before, after)
     assert result["windows"][0]["status"] == "UNKNOWN"
     assert result["windows"][0]["consumedPercent"] is None
-    assert result["credits"] == {"consumed": None, "status": "UNKNOWN"}
+    assert result["credits"]["consumed"] is None
+    assert result["credits"]["status"] == "UNKNOWN"
 
 
 def test_independent_fresh_observations_can_measure_a_real_zero():
@@ -88,6 +98,9 @@ async def test_tracker_requests_new_live_observations_and_keeps_only_safe_fields
     assert result["observationId"] == "before"
     assert result["authGeneration"] == "fixture-auth"
     assert "email" not in result and "raw" not in result
+    assert result["diagnostic"]["reason"] is None
+    assert type(result["diagnostic"]["elapsedMs"]) is int
+    assert result["diagnostic"]["elapsedMs"] >= 0
 
 
 @pytest.mark.asyncio
@@ -115,7 +128,10 @@ async def test_tracker_rejects_stale_or_invalid_observation_time(monkeypatch, pr
         return raw
 
     monkeypatch.setattr(codex_client, "account", account)
-    assert await tracker.account_snapshot(SimpleNamespace()) == {}
+    assert_failure_diagnostic(
+        await tracker.account_snapshot(SimpleNamespace()),
+        "NOT_FRESH",
+    )
 
 
 @pytest.mark.asyncio
@@ -148,7 +164,9 @@ async def test_snapshot_timeout_is_diagnosed_without_private_error_text(
         raise TimeoutError("private@example.test token secret provider response")
 
     monkeypatch.setattr(codex_client, "account", account)
-    assert await tracker.account_snapshot(SimpleNamespace(), stage="before") == {}
+    assert_failure_diagnostic(
+        await tracker.account_snapshot(SimpleNamespace(), stage="before"), "TIMEOUT"
+    )
     assert "stage=before" in caplog.text
     assert "error_class=TimeoutError" in caplog.text
     assert "elapsed_ms=" in caplog.text
@@ -174,7 +192,10 @@ async def test_snapshot_diagnostics_distinguish_unavailable_and_invalid_observat
         return snapshot(**changes)
 
     monkeypatch.setattr(codex_client, "account", account)
-    assert await tracker.account_snapshot(SimpleNamespace(), stage="after") == {}
+    assert_failure_diagnostic(
+        await tracker.account_snapshot(SimpleNamespace(), stage="after"),
+        "UNAVAILABLE" if changes.get("status") == "UNAVAILABLE" else "NOT_FRESH",
+    )
     assert "stage=after" in caplog.text
     assert f"error_class={error_class}" in caplog.text
     assert "elapsed_ms=" in caplog.text
@@ -217,7 +238,8 @@ async def test_hanging_snapshot_cannot_erase_successful_inference_tokens(monkeyp
     assert record["status"] == "SUCCEEDED"
     assert monotonic() - started < 0.5
     assert record["tokens"]["totalTokens"] == 120
-    assert record["before"] == record["after"] == {}
+    assert_failure_diagnostic(record["before"], "TIMEOUT")
+    assert_failure_diagnostic(record["after"], "TIMEOUT")
     assert quota_delta(record["before"], record["after"])["credits"]["consumed"] is None
 
 
@@ -256,7 +278,7 @@ async def test_before_and_after_share_a_finite_telemetry_budget(monkeypatch):
         )
     record = next(data for event, data in events if event == "finish_call")
     assert record["before"]["status"] == "READY"
-    assert record["after"] == {}
+    assert_failure_diagnostic(record["after"], "TIMEOUT")
     assert record["tokens"]["totalTokens"] == 120
     assert quota_delta(record["before"], record["after"])["credits"]["consumed"] is None
 
@@ -335,5 +357,85 @@ async def test_cancelling_after_snapshot_keeps_tokens_and_propagates_cancellatio
     record = next(data for event, data in events if event == "finish_call")
     assert record["status"] == "SUCCEEDED"
     assert record["tokens"]["totalTokens"] == 120
-    assert record["after"] == {}
+    assert_failure_diagnostic(record["after"], "CANCELLED")
+    assert events[-1][1]["businessStatus"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "error", "unavailable"])
+async def test_snapshot_persists_safe_fixed_reason_and_elapsed_without_error_text(
+    monkeypatch,
+    outcome,
+):
+    clock = [100.0]
+
+    async def account(_settings, **_kwargs):
+        clock[0] += 0.123
+        if outcome == "error":
+            raise RuntimeError(
+                "private@example.test access_token raw-provider-response"
+            )
+        if outcome == "unavailable":
+            # A swallowed lower-level timeout is only known as unavailable here.
+            return {"status": "UNAVAILABLE", "error": "private raw response"}
+        return snapshot(email="private@example.test", raw="raw-provider-response")
+
+    monkeypatch.setattr(codex_client, "account", account)
+    monkeypatch.setattr(tracker, "monotonic", lambda: clock[0])
+    result = await tracker.account_snapshot(SimpleNamespace())
+    assert result["diagnostic"] == {
+        "reason": None
+        if outcome == "success"
+        else "ERROR"
+        if outcome == "error"
+        else "UNAVAILABLE",
+        "elapsedMs": 123,
+    }
+    if outcome != "success":
+        assert set(result) == {"status", "diagnostic"}
+    assert "private@example.test" not in str(result)
+    assert "access_token" not in str(result)
+    assert "raw-provider-response" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_before_snapshot_is_diagnosed_and_still_propagates(
+    monkeypatch,
+):
+    events, requests = [], []
+
+    async def persist(_pool, _tenant, _user, event, data):
+        events.append((event, deepcopy(data)))
+
+    async def account(_settings, *, fresh=False):
+        requests.append(fresh)
+        if len(requests) == 1:
+            raise asyncio.CancelledError()
+        return snapshot()
+
+    async def infer():
+        pytest.fail("cancellation must stop inference dispatch")
+
+    monkeypatch.setattr(repository, "persist", persist)
+    monkeypatch.setattr(codex_client, "account", account)
+    with pytest.raises(asyncio.CancelledError):
+        async with tracker.usage_task(
+            object(),
+            SimpleNamespace(),
+            tenant_id=None,
+            user_id=None,
+            task_type="TEST",
+            task_name="fixture",
+        ):
+            await tracker.trace_inference(
+                SimpleNamespace(),
+                model="fixture",
+                call_type="completion",
+                operation=infer,
+            )
+    record = next(data for event, data in events if event == "finish_call")
+    assert_failure_diagnostic(record["before"], "CANCELLED")
+    assert record["after"]["status"] == "READY"
+    assert record["status"] == "UNCERTAIN"
+    assert record["tokens"]["totalTokens"] is None
     assert events[-1][1]["businessStatus"] == "CANCELLED"

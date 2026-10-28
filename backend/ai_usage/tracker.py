@@ -32,6 +32,21 @@ class AccountSnapshotNotFresh(ValueError):
     """The metadata read cannot prove a new observation at this boundary."""
 
 
+def _snapshot_diagnostic(reason, started):
+    return {
+        "reason": reason,
+        "elapsedMs": max(0, round((monotonic() - started) * 1000)),
+    }
+
+
+def _failed_snapshot(reason, started):
+    # Fixed diagnostic codes are the only failure material persisted in history.
+    return {
+        "status": "UNAVAILABLE",
+        "diagnostic": _snapshot_diagnostic(reason, started),
+    }
+
+
 def now():
     return datetime.now(timezone.utc)
 
@@ -145,6 +160,8 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
             # Page metadata may be cached or STALE. Attribution always asks for
             # a new independent observation, including a separate App Server read.
             raw = await codex_client.account(settings, fresh=True)
+        if raw.get("status") == "STALE":
+            raise AccountSnapshotNotFresh()
         if raw.get("status") != "READY":
             raise AccountSnapshotUnavailable()
         observed_at = stamp(raw.get("observedAt"))
@@ -157,7 +174,7 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
         ):
             raise AccountSnapshotNotFresh()
         # Never retain email, auth material or arbitrary provider output in history.
-        return {
+        result = {
             key: raw.get(key)
             for key in (
                 "status",
@@ -170,6 +187,8 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
                 "credits",
             )
         }
+        result["diagnostic"] = _snapshot_diagnostic(None, started)
+        return result
     except asyncio.CancelledError:
         logger.info(
             "ai_usage_snapshot_cancelled stage=%s error_class=CancelledError elapsed_ms=%.0f",
@@ -184,7 +203,16 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
             type(exc).__name__,
             (monotonic() - started) * 1000,
         )
-        return {}
+        reason = (
+            "TIMEOUT"
+            if isinstance(exc, TimeoutError)
+            else "UNAVAILABLE"
+            if isinstance(exc, AccountSnapshotUnavailable)
+            else "NOT_FRESH"
+            if isinstance(exc, AccountSnapshotNotFresh)
+            else "ERROR"
+        )
+        return _failed_snapshot(reason, started)
 
 
 @asynccontextmanager
@@ -208,6 +236,9 @@ async def observe(settings, model, call_type):
         snapshot_started = monotonic()
         try:
             record["before"] = await account_snapshot(settings, stage="before")
+        except asyncio.CancelledError:
+            record["before"] = _failed_snapshot("CANCELLED", snapshot_started)
+            raise
         finally:
             before_elapsed = monotonic() - snapshot_started
         yield record
@@ -235,17 +266,20 @@ async def observe(settings, model, call_type):
         raise
     finally:
         cancelled = None
+        after_started = monotonic()
         try:
             with anyio.CancelScope(shield=True):
                 record["after"] = await account_snapshot(
                     settings,
                     stage="after",
-                    timeout_seconds=max(0, SNAPSHOT_TOTAL_BUDGET_SECONDS - before_elapsed),
+                    timeout_seconds=max(
+                        0, SNAPSHOT_TOTAL_BUDGET_SECONDS - before_elapsed
+                    ),
                 )
         except asyncio.CancelledError as exc:
             # asyncio cancellation can interrupt an AnyIO shield. Commit the
             # inference evidence before passing cancellation to the business task.
-            record["after"] = {}
+            record["after"] = _failed_snapshot("CANCELLED", after_started)
             cancelled = exc
         if record["status"] == "RUNNING":
             record["status"] = "UNCERTAIN"
