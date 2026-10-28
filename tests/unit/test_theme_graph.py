@@ -93,6 +93,29 @@ def test_nav_history_produces_same_fund_risk_plan_without_fabricated_atr():
     assert plan["historyQuality"] == "READY"
 
 
+def test_discovery_plan_preserves_published_nav_change_through_public_projection():
+    from backend.investment.discovery import discovery_packet
+
+    history = nav_history()
+    history["points"][-1].update(close="0.9500", returnPct="1.25")
+    plan = graph.nav_plan(history, now=NOW)
+    public = discovery_packet(
+        [
+            {
+                "subjectKind": "nav",
+                "subjectId": "008281",
+                "fundCode": "008281",
+                "market": "FUND_CN",
+                "label": "芯片基金",
+            },
+        ],
+        [plan],
+        {},
+        NOW,
+    )
+    assert public["discoveryActionableZones"][0]["currentChangePct"] == "1.25"
+
+
 @pytest.mark.asyncio
 async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirements(
     monkeypatch,
@@ -119,6 +142,7 @@ async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirement
                 value=Decimal("1.2500"),
                 as_of=NOW.replace(day=16, hour=15),
                 quality_status="FRESH",
+                metadata={"returnPct": "1.25"},
             )
         ]
 
@@ -139,6 +163,7 @@ async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirement
     assert [row["fundCode"] for row in result["fundHistories"]] == ["000001", "008281"]
     assert result["fundHistories"][0]["overseasCalendarRequired"] is True
     assert result["fundHistories"][1]["overseasCalendarRequired"] is False
+    assert result["fundHistories"][0]["points"][-1]["returnPct"] == "1.25"
 
 
 @pytest.mark.asyncio

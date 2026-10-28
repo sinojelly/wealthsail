@@ -309,6 +309,11 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
                 {
                     "date": stamp.isoformat(),
                     "close": format(_coordinate(point["close"]), "f"),
+                    **(
+                        {"returnPct": point["returnPct"]}
+                        if "returnPct" in point
+                        else {}
+                    ),
                 }
             )
             previous = stamp
@@ -456,6 +461,11 @@ async def collect_theme_nav_histories(
                             by_day[stamp.date()] = {
                                 "date": stamp.date().isoformat(),
                                 "close": str(value),
+                                **(
+                                    {"returnPct": obs.metadata["returnPct"]}
+                                    if (obs.metadata or {}).get("returnPct") is not None
+                                    else {}
+                                ),
                             }
                     points = [by_day[day] for day in sorted(by_day)][-500:]
                     if not points:

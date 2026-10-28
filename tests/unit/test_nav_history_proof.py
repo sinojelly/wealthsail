@@ -38,6 +38,24 @@ async def fetch(responses):
 
 
 @pytest.mark.asyncio
+async def test_nav_history_retains_published_daily_return_including_distribution_days():
+    rows = await fetch(
+        [
+            response(
+                1,
+                [
+                    {**nav(16, "0.95"), "JZZZL": "1.25"},
+                    {**nav(15, "1"), "JZZZL": "0.00"},
+                ],
+                total=2,
+            ),
+        ]
+    )
+    assert rows[-1].metadata.get("returnPct") == "1.25"
+    assert rows[0].metadata.get("returnPct") == "0.00"
+
+
+@pytest.mark.asyncio
 async def test_complete_paginated_nav_response_proves_exact_returned_coordinates():
     rows = await fetch(
         [response(1, [nav(16, "1.0200"), nav(15, "1.01")]), response(2, [nav(14, "1")])]

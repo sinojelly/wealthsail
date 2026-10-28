@@ -312,6 +312,16 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
         return str(raw)
 
     result["currentPrice"] = price(value.get("currentPrice"))
+    change = value.get("currentChangePct")
+    result["currentChangePct"] = (
+        str(change)
+        if result["currentPrice"] is not None
+        and value.get("priceBasis") == "UNIT_NAV"
+        and not isinstance(change, bool)
+        and _finite(change) is not None
+        and _finite(change) > -100
+        else None
+    )
     result["parameters"] = _pick(
         value.get("parameters") or {},
         (

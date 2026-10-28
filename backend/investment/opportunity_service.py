@@ -311,6 +311,11 @@ async def get_context(
     daily = await read_daily_research(
         conn, now, enabled=get_settings().daily_research_enabled
     )
+    from backend.investment.nav_change import report_with_nav_changes
+
+    daily["report"] = report_with_nav_changes(
+        daily.get("report"), alpha_public.get("fundHistories"), now
+    )
     if fund_code and (fund_market == "FUND_CN" or identity is not None):
         from backend.investment.decision import evaluate
 

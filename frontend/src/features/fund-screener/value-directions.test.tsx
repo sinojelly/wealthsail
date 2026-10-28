@@ -182,6 +182,48 @@ it("opens with macro, discovered directions and plans before compact news withou
   ).not.toBeVisible();
 });
 
+it.each([
+  ["1.23", "+1.23%", "up"],
+  ["-2.5", "-2.50%", "down"],
+  ["0", "0.00%", "flat"],
+])(
+  "shows the confirmed NAV daily change %s with its direction",
+  async (value, label, tone) => {
+    const data = context();
+    Object.assign(data.dailyResearch.report.valueDirections[0].plans[0], {
+      currentChangePct: value,
+    });
+    mocks.context.mockResolvedValue(data);
+    renderWithSession(<FundScreenerPage />);
+    const card = await screen.findByRole("article", {
+      name: "医药研究基金006000买卖计划",
+    });
+    const change = within(card).getByLabelText("净值当日涨跌幅");
+    expect(change).toHaveTextContent(label);
+    expect(change).toHaveClass(`op-nav-change-${tone}`);
+    expect(change.closest(".op-value-current")).toHaveTextContent("2.1108");
+    expect(change.closest(".op-value-current")).toHaveTextContent("(10.16)");
+  },
+);
+
+it.each([undefined, null, "", "NaN", "Infinity"])(
+  "keeps unavailable confirmed NAV daily change %s absent instead of fabricating zero",
+  async (value) => {
+    const data = context();
+    Object.assign(data.dailyResearch.report.valueDirections[0].plans[0], {
+      currentChangePct: value,
+    });
+    mocks.context.mockResolvedValue(data);
+    renderWithSession(<FundScreenerPage />);
+    const card = await screen.findByRole("article", {
+      name: "医药研究基金006000买卖计划",
+    });
+    expect(
+      within(card).queryByLabelText("净值当日涨跌幅"),
+    ).not.toBeInTheDocument();
+  },
+);
+
 it("freezes each direction and fund directly without prices or confirmation and retains the daily list", async () => {
   renderWithSession(<FundScreenerPage />);
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });

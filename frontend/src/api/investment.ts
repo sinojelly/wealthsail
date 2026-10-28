@@ -386,6 +386,8 @@ export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
   asOf: string | null;
   sourceUri: string | null;
   currentPrice: PlanPrice;
+  /** Percent return for currentPrice/asOf; 1.23 means 1.23%. */
+  currentChangePct?: PlanPrice;
   indicators: Record<string, PlanPrice>;
   tracks: ActionableZoneTrack[];
   selectedTrack?: PlanTrack;

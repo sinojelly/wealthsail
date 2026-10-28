@@ -84,6 +84,28 @@ def _price(value, places=4):
     return format(value, "f") if value is not None else None
 
 
+def nav_daily_change_pct(points):
+    """Use the disclosed daily return before the raw unit-NAV price change."""
+    if not points:
+        return None
+    change = _number(points[-1].get("returnPct"))
+    if change is None and len(points) >= 2:
+        previous, current = (_number(point.get("close")) for point in points[-2:])
+        if (
+            current is not None
+            and previous is not None
+            and current > 0
+            and previous > 0
+        ):
+            change = (current / previous - 1) * 100
+    if change is None or change <= -100:
+        return None
+    with localcontext() as context:
+        context.prec = max(28, change.adjusted() + 4)
+        rounded = change.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return format(rounded.copy_abs() if rounded == 0 else rounded, "f")
+
+
 def _zone(kind, values, close, *, places, nav_scale=False):
     result = {
         "entryZoneMin": None,
@@ -535,6 +557,7 @@ def compute_actionable_price_plan(
             or price_basis in {"INDEX_POINTS", "INDEX_PRICE"}
             else 4,
         ),
+        "currentChangePct": nav_daily_change_pct(suffix) if nav_basis else None,
         "orderPriceAvailable": close is not None
         and str(subject_kind).lower() in {"fund", "etf"}
         and price_basis in {"ETF_RAW", "RAW_PRICE"}

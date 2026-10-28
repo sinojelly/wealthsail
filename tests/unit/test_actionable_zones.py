@@ -34,6 +34,67 @@ def calculate(rows, **kwargs):
     )
 
 
+def test_nav_daily_change_prefers_reported_return_on_the_same_nav_date():
+    rows = [
+        {"date": "2026-10-15", "close": "1.0000", "returnPct": "-0.25"},
+        {"date": "2026-10-16", "close": "0.9500", "returnPct": "1.25"},
+        {"date": "2026-10-19", "close": "1.1000", "returnPct": "15.79"},
+    ]
+    plan = engine().compute_actionable_price_plan(
+        rows,
+        subject_kind="nav",
+        subject_id="008281",
+        price_basis="UNIT_NAV",
+        as_of="2026-10-16",
+    )
+    assert plan["asOf"] == "2026-10-16"
+    assert plan["currentPrice"] == "0.9500"
+    # A distribution may lower unit NAV despite a positive published return.
+    assert plan["currentChangePct"] == "1.25"
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (
+            [
+                {"date": "2026-10-15", "close": "2"},
+                {"date": "2026-10-16", "close": "1.95"},
+            ],
+            "-2.50",
+        ),
+        (
+            [
+                {"date": "2026-10-15", "close": "2"},
+                {"date": "2026-10-16", "close": "2"},
+            ],
+            "0.00",
+        ),
+        ([{"date": "2026-10-16", "close": "2"}], None),
+        ([{"date": "2026-10-16", "close": "2", "returnPct": "0"}], "0.00"),
+        (
+            [
+                {"date": "2026-10-15", "close": None},
+                {"date": "2026-10-16", "close": "2"},
+            ],
+            None,
+        ),
+        (
+            [
+                {"date": "2026-10-16", "close": "2"},
+                {"date": "2026-10-15", "close": "1.95"},
+            ],
+            None,
+        ),
+    ],
+)
+def test_nav_daily_change_uses_only_usable_same_series_observations(rows, expected):
+    result = engine().compute_actionable_price_plan(
+        rows, subject_kind="nav", subject_id="008281", price_basis="UNIT_NAV"
+    )
+    assert result["currentChangePct"] == expected
+
+
 def track(plan, kind):
     return next(row for row in plan["tracks"] if row["track"] == kind)
 

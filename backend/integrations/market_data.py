@@ -2004,7 +2004,14 @@ async def fetch_fund_nav_history(
                     unit="CNY/share",
                     method_version="eastmoney/f10-lsjz-history/v1",
                     origin_uri="https://fundf10.eastmoney.com",
-                    metadata={"officialUnitNav": True},
+                    metadata={
+                        "officialUnitNav": True,
+                        **(
+                            {"returnPct": _optional_decimal_text(raw.get("JZZZL"))}
+                            if _optional_decimal_text(raw.get("JZZZL")) is not None
+                            else {}
+                        ),
+                    },
                 ),
             )
         if required_pages is not None and page_index >= required_pages:

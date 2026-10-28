@@ -1988,6 +1988,20 @@
   display: inline-block;
   white-space: nowrap;
 }
+.op-nav-change {
+  margin-left: 6px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.op-nav-change-up {
+  color: #b4232d;
+}
+.op-nav-change-down {
+  color: #087f5b;
+}
+.op-nav-change-flat {
+  color: #64748b;
+}
 .op-macro-expand {
   border: 0;
   padding: 4px 0;

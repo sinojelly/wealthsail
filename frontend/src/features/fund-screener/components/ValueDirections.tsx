@@ -166,6 +166,14 @@ function FundPlan({
     track.entryZoneMax != null;
   const code = plan.fundCode || plan.subjectId;
   const navDay = plan.asOf?.match(/^\d{4}-(\d{2})-(\d{2})(?:$|T)/);
+  const dailyChange =
+    plan.priceBasis === "UNIT_NAV" &&
+    plan.currentPrice != null &&
+    plan.currentChangePct != null &&
+    String(plan.currentChangePct).trim() !== "" &&
+    Number.isFinite(Number(plan.currentChangePct))
+      ? Number(plan.currentChangePct)
+      : null;
   async function save() {
     if (!canTrack || !reportRunId || !onTrack || !selected || state !== "idle")
       return;
@@ -206,6 +214,16 @@ function FundPlan({
             {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
             <span className="op-price-amount">
               <strong>{price(plan.currentPrice)}</strong> {planUnit(plan.unit)}
+              {dailyChange !== null && (
+                <span
+                  className={`op-nav-change op-nav-change-${dailyChange > 0 ? "up" : dailyChange < 0 ? "down" : "flat"}`}
+                  aria-label="净值当日涨跌幅"
+                  title="对应所示净值日期的当日涨跌幅"
+                >
+                  {dailyChange > 0 ? "+" : ""}
+                  {dailyChange.toFixed(2)}%
+                </span>
+              )}
               {plan.priceBasis === "UNIT_NAV" && navDay && (
                 <>
                   {" "}
