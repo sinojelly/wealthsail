@@ -117,6 +117,208 @@ it("loads AI usage only when selected and expands each inference while keeping b
 });
 
 it.each([
+  ["BEFORE_MISSING", "推理前额度快照缺失，无法估算"],
+  ["AFTER_MISSING", "推理后额度快照缺失，无法估算"],
+  ["BOTH_MISSING", "推理前后额度快照均缺失，无法估算"],
+  ["BEFORE_TIMEOUT", "推理前额度采集超时，无法估算"],
+  ["AFTER_TIMEOUT", "推理后额度采集超时，无法估算"],
+  ["BEFORE_UNAVAILABLE", "推理前账户信息不可用，无法估算"],
+  ["AFTER_UNAVAILABLE", "推理后账户信息不可用，无法估算"],
+  ["BEFORE_NOT_FRESH", "推理前快照不是新鲜观测，无法估算"],
+  ["AFTER_NOT_FRESH", "推理后快照不是新鲜观测，无法估算"],
+  ["BEFORE_ERROR", "推理前额度采集异常，无法估算"],
+  ["AFTER_ERROR", "推理后额度采集异常，无法估算"],
+  ["BEFORE_CANCELLED", "推理前额度采集已取消，无法估算"],
+  ["AFTER_CANCELLED", "推理后额度采集已取消，无法估算"],
+  ["IDENTITY_MISSING", "账户标识缺失，无法归因"],
+  ["OBSERVATION_TIME_INVALID", "观测时间缺失或顺序无效，无法估算"],
+  ["OBSERVATION_REUSED", "前后快照重复使用同一次观测，无法估算"],
+  ["SNAPSHOT_NOT_READY", "额度快照尚不可用，无法估算"],
+  ["WINDOW_MISSING", "额度窗口缺失，无法估算"],
+  ["WINDOW_VALUE_INVALID", "额度窗口数值无效，无法估算"],
+])(
+  "explains UNKNOWN quota reason %s without confusing missing credits with missing windows",
+  async (reason, message) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({
+          ...aiUsageFixture,
+          tasks: [
+            {
+              ...aiUsageFixture.tasks[0],
+              quota: {
+                windows: [
+                  {
+                    key: "primary",
+                    label: "5 小时额度",
+                    consumedPercent: null,
+                    status: "UNKNOWN",
+                    reason,
+                  },
+                ],
+                credits: {
+                  consumed: null,
+                  status: "UNKNOWN",
+                  reason: "CREDITS_UNAVAILABLE",
+                },
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    renderWithSession(<OperationsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "AI 用量" }));
+    const row = await screen.findByRole("row", { name: /基金机会日报/ });
+    expect(within(row).getByText(message)).toBeVisible();
+    expect(
+      within(row).getByText("供应商未提供 credits 余额，无法估算"),
+    ).toBeVisible();
+    expect(within(row).getByText("1,300")).toBeVisible();
+    expect(
+      within(row).queryByText("0 credits（估算）"),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it("shows independent before and after snapshot diagnostics when an inference cannot be attributed", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      response({
+        ...aiUsageFixture,
+        tasks: [
+          {
+            ...aiUsageFixture.tasks[0],
+            quota: {
+              ...aiUsageFixture.tasks[0].quota,
+              windows: [
+                {
+                  ...aiUsageFixture.tasks[0].quota.windows[0],
+                  reason: "IDENTITY_MISSING",
+                },
+              ],
+            },
+            calls: [
+              {
+                ...aiUsageFixture.tasks[0].calls[1],
+                quota: {
+                  windows: [
+                    {
+                      key: "primary",
+                      label: "5 小时额度",
+                      consumedPercent: null,
+                      status: "UNKNOWN",
+                      reason: "IDENTITY_MISSING",
+                    },
+                  ],
+                  credits: {
+                    consumed: null,
+                    status: "UNKNOWN",
+                    reason: "CREDITS_UNAVAILABLE",
+                  },
+                  snapshots: {
+                    before: {
+                      status: "READY",
+                      reason: null,
+                      observedAt: "2026-10-27T07:30:00Z",
+                      elapsedMs: 12000,
+                    },
+                    after: {
+                      status: "READY",
+                      reason: null,
+                      observedAt: "2026-10-27T07:32:00Z",
+                      elapsedMs: 15000,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+  renderWithSession(<OperationsPage />);
+  await userEvent.click(screen.getByRole("tab", { name: "AI 用量" }));
+  const row = await screen.findByRole("row", { name: /基金机会日报/ });
+  expect(within(row).getAllByText("快照不完整，无法估算")).toHaveLength(2);
+  expect(
+    within(row).queryByText("账户标识缺失，无法归因"),
+  ).not.toBeInTheDocument();
+  await userEvent.click(within(row).getByRole("button", { name: /展开/ }));
+  const details = screen.getByRole("region", { name: "基金机会日报推理详情" });
+  expect(within(details).getByText("账户标识缺失，无法归因")).toBeVisible();
+  const before = within(details).getByRole("group", { name: "推理前额度采集" });
+  const after = within(details).getByRole("group", { name: "推理后额度采集" });
+  expect(within(before).getByText("推理前采集：已读取")).toBeVisible();
+  expect(
+    within(before).getByText("成功观测时间 2026/10/27 15:30:00 · 北京时间"),
+  ).toBeVisible();
+  expect(within(before).getByText("采集耗时 12,000 毫秒")).toBeVisible();
+  expect(
+    within(after).getByText("成功观测时间 2026/10/27 15:32:00 · 北京时间"),
+  ).toBeVisible();
+  expect(within(after).getByText("采集耗时 15,000 毫秒")).toBeVisible();
+});
+
+it("explains a timed out snapshot and never invents its missing observation time or duration", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      response({
+        ...aiUsageFixture,
+        tasks: [
+          {
+            ...aiUsageFixture.tasks[0],
+            calls: [
+              {
+                ...aiUsageFixture.tasks[0].calls[0],
+                quota: {
+                  windows: [],
+                  credits: {
+                    consumed: null,
+                    status: "UNKNOWN",
+                    reason: "BEFORE_TIMEOUT",
+                  },
+                  snapshots: {
+                    before: {
+                      status: "UNAVAILABLE",
+                      reason: "TIMEOUT",
+                      observedAt: null,
+                      elapsedMs: 26000,
+                    },
+                    after: {
+                      status: "MISSING",
+                      reason: "MISSING",
+                      observedAt: null,
+                      elapsedMs: null,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+  renderWithSession(<OperationsPage />);
+  await userEvent.click(screen.getByRole("tab", { name: "AI 用量" }));
+  const row = await screen.findByRole("row", { name: /基金机会日报/ });
+  await userEvent.click(within(row).getByRole("button", { name: /展开/ }));
+  const before = screen.getByRole("group", { name: "推理前额度采集" });
+  const after = screen.getByRole("group", { name: "推理后额度采集" });
+  expect(within(before).getByText("推理前采集：采集超时")).toBeVisible();
+  expect(within(before).getByText("成功观测时间 未记录")).toBeVisible();
+  expect(within(before).getByText("采集耗时 26,000 毫秒")).toBeVisible();
+  expect(within(after).getByText("推理后采集：未采集")).toBeVisible();
+  expect(within(after).getByText("成功观测时间 未记录")).toBeVisible();
+  expect(within(after).queryByText(/采集耗时/)).not.toBeInTheDocument();
+});
+
+it.each([
   ["DAILY_RESEARCH", "research", "日常投研", "研究推理"],
   ["REPORT", "completion", "研报生成", "文本生成"],
   ["CHAT", "chat", "智能问答", "对话推理"],

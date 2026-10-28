@@ -2,14 +2,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { privateQueryKey, useAuthSession } from "../app/auth-session";
 import { HttpError, request } from "./client";
 
+export interface AiQuotaSnapshot {
+  status: string;
+  reason?: string | null;
+  observedAt: string | null;
+  elapsedMs?: number | null;
+}
+
 export interface AiQuota {
   windows: {
     key: string;
     label: string;
     consumedPercent: number | null;
     status: string;
+    reason?: string;
   }[];
-  credits: { consumed: string | null; status: string };
+  credits: { consumed: string | null; status: string; reason?: string };
+  snapshots?: { before: AiQuotaSnapshot; after: AiQuotaSnapshot };
 }
 
 export interface AiTokens {

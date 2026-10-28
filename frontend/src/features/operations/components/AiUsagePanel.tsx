@@ -5,6 +5,7 @@ import {
   useAiAccount,
   type AiAccount,
   type AiQuota,
+  type AiQuotaSnapshot,
   type AiTokens,
   type AiUsageTask,
 } from "../../../api/ai-usage";
@@ -38,6 +39,41 @@ const quotaReasons: Record<string, string> = {
   ACCOUNT_CHANGED: "账户变化，无法估算",
   CONCURRENT: "并发调用，无法归因",
   INCOMPLETE: "快照不完整，无法估算",
+};
+const unknownQuotaReasons: Record<string, string> = {
+  BEFORE_MISSING: "推理前额度快照缺失，无法估算",
+  AFTER_MISSING: "推理后额度快照缺失，无法估算",
+  BOTH_MISSING: "推理前后额度快照均缺失，无法估算",
+  BEFORE_TIMEOUT: "推理前额度采集超时，无法估算",
+  AFTER_TIMEOUT: "推理后额度采集超时，无法估算",
+  BEFORE_UNAVAILABLE: "推理前账户信息不可用，无法估算",
+  AFTER_UNAVAILABLE: "推理后账户信息不可用，无法估算",
+  BEFORE_NOT_FRESH: "推理前快照不是新鲜观测，无法估算",
+  AFTER_NOT_FRESH: "推理后快照不是新鲜观测，无法估算",
+  BEFORE_ERROR: "推理前额度采集异常，无法估算",
+  AFTER_ERROR: "推理后额度采集异常，无法估算",
+  BEFORE_CANCELLED: "推理前额度采集已取消，无法估算",
+  AFTER_CANCELLED: "推理后额度采集已取消，无法估算",
+  IDENTITY_MISSING: "账户标识缺失，无法归因",
+  OBSERVATION_TIME_INVALID: "观测时间缺失或顺序无效，无法估算",
+  OBSERVATION_REUSED: "前后快照重复使用同一次观测，无法估算",
+  SNAPSHOT_NOT_READY: "额度快照尚不可用，无法估算",
+  WINDOW_MISSING: "额度窗口缺失，无法估算",
+  WINDOW_VALUE_INVALID: "额度窗口数值无效，无法估算",
+  CREDITS_UNAVAILABLE: "供应商未提供 credits 余额，无法估算",
+};
+const snapshotReasons: Record<string, string> = {
+  TIMEOUT: "采集超时",
+  NOT_FRESH: "未取得新鲜观测",
+  UNAVAILABLE: "账户信息不可用",
+  ERROR: "采集异常",
+  CANCELLED: "采集已取消",
+  MISSING: "未采集",
+};
+const snapshotStatuses: Record<string, string> = {
+  READY: "已读取",
+  MISSING: "未采集",
+  UNAVAILABLE: "不可用",
 };
 const accountMessages: Record<string, string> = {
   READY: "账户可用",
@@ -112,6 +148,39 @@ function Tokens({ row }: { row: AiTokens }) {
   );
 }
 
+function quotaMessage(status: string, reason?: string) {
+  return (
+    (status === "UNKNOWN" && reason && unknownQuotaReasons[reason]) ||
+    quotaReasons[status] ||
+    "未知"
+  );
+}
+
+function Snapshot({ label, value }: { label: string; value: AiQuotaSnapshot }) {
+  const status =
+    (value.reason && snapshotReasons[value.reason]) ||
+    snapshotStatuses[value.status] ||
+    "未知";
+  const observedAt =
+    value.status === "READY" ? formatShanghaiTime(value.observedAt) : "未知";
+  const elapsedMs = value.elapsedMs ?? null;
+  return (
+    <div role="group" aria-label={`${label}额度采集`}>
+      <strong>
+        {label}采集：{status}
+      </strong>
+      <span>
+        {observedAt === "未知"
+          ? "成功观测时间 未记录"
+          : `成功观测时间 ${observedAt} · 北京时间`}
+      </span>
+      {nonnegative(elapsedMs) ? (
+        <span>采集耗时 {elapsedMs.toLocaleString("zh-CN")} 毫秒</span>
+      ) : null}
+    </div>
+  );
+}
+
 function Quota({ value }: { value: AiQuota }) {
   return (
     <div className="ai-quota">
@@ -123,7 +192,7 @@ function Quota({ value }: { value: AiQuota }) {
             nonnegative(window.consumedPercent) &&
             window.consumedPercent <= 100
               ? `${window.consumedPercent} 百分点（估算）`
-              : (quotaReasons[window.status] ?? "未知")}
+              : quotaMessage(window.status, window.reason)}
           </strong>
         </div>
       ))}
@@ -133,9 +202,15 @@ function Quota({ value }: { value: AiQuota }) {
           {value.credits.status === "ESTIMATED" &&
           credits(value.credits.consumed) !== null
             ? `${value.credits.consumed} credits（估算）`
-            : (quotaReasons[value.credits.status] ?? "未知")}
+            : quotaMessage(value.credits.status, value.credits.reason)}
         </strong>
       </div>
+      {value.snapshots ? (
+        <>
+          <Snapshot label="推理前" value={value.snapshots.before} />
+          <Snapshot label="推理后" value={value.snapshots.after} />
+        </>
+      ) : null}
     </div>
   );
 }
