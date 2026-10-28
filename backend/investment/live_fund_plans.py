@@ -1,0 +1,417 @@
+"""Reprice response copies from local public NAV, leaving research versions intact."""
+
+from copy import deepcopy
+from datetime import date
+from decimal import Decimal, InvalidOperation
+import re
+from uuid import UUID
+
+from backend.funds.nav_history import (
+    full_history_proven,
+    local,
+    obj,
+    recently_checked,
+    select_history_view,
+    valid_points,
+)
+from backend.indicators.actionable_zones import VERSION, compute_actionable_price_plan
+from backend.funds.nav_window import NAV_RESEARCH_MAX_SAMPLES, NAV_RESEARCH_MIN_SAMPLES
+from backend.investment.opportunity_scoring import SCORE_FIELDS
+from backend.investment.theme_graph import _disclosed_nav_quality, _history_quality
+from backend.macro.daily_research import apply_entry_guards
+
+_UNITS = {"CNY", "CNY/份", "元/份", "CNY/unit"}
+_PLAN_ARRAYS = (
+    "actionablePlans",
+    "actionableZones",
+    "themeActionableZones",
+    "discoveryActionableZones",
+)
+_PRICES = (
+    "entryZoneMin",
+    "entryZoneMax",
+    "stopLossPrice",
+    "takeProfitT1",
+    "takeProfitT2",
+    "sellZoneMin",
+    "sellZoneMax",
+    "estimatedProfitMinPct",
+    "estimatedProfitMaxPct",
+    "currentToSellMaxPct",
+)
+_STATUS = (
+    "technicalTriggered",
+    "inBuyZone",
+    "entryReady",
+    "entryBlocked",
+    "entryBlockReason",
+    "entryStatus",
+    "entryStatusTone",
+    "inSellZone",
+    "buyZoneAnchor",
+)
+_STALE = (
+    *_PRICES,
+    *_STATUS,
+    *SCORE_FIELDS,
+    "signals",
+    "priceRevisionStatus",
+    "priceRevisionNote",
+    "priceRevisionBasis",
+    "priceRevisionSourceIds",
+    "rewardRiskRatio",
+)
+
+
+def _code(plan):
+    if not isinstance(plan, dict) or plan.get("priceBasis") != "UNIT_NAV":
+        return None
+    kind, subject = plan.get("subjectKind"), plan.get("subjectId")
+    code = plan.get("fundCode") or (subject if kind == "nav" else None)
+    if (
+        kind not in {"nav", "fund"}
+        or not isinstance(code, str)
+        or re.fullmatch(r"[0-9]{6}", code) is None
+        or plan.get("unit") not in _UNITS
+        or plan.get("currency", "CNY") != "CNY"
+        or plan.get("market") not in {None, "FUND_CN"}
+        or re.search(r"美元|港币|港元|外币|现汇|现钞", str(plan.get("label") or ""))
+    ):
+        return None
+    if kind == "nav":
+        return code if subject == code else None
+    try:
+        UUID(str(subject))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return code if plan.get("market") == "FUND_CN" else None
+
+
+def _plans(report):
+    for field in _PLAN_ARRAYS:
+        yield from (row for row in report.get(field, []) if isinstance(row, dict))
+    for direction in report.get("valueDirections", []):
+        if isinstance(direction, dict):
+            for field in ("plans", "quantitativeEvidence"):
+                yield from (
+                    row for row in direction.get(field, []) if isinstance(row, dict)
+                )
+    yield from (
+        row
+        for row in (report.get("quantitativeScan") or {}).get("items", [])
+        if isinstance(row, dict)
+    )
+
+
+def _histories(value):
+    if isinstance(value, list):
+        for row in value:
+            history = obj(row)
+            if history:
+                yield history
+    elif isinstance(value, dict):
+        if "fundCode" in value:
+            yield value
+        else:
+            for rows in value.values():
+                yield from _histories(rows)
+
+
+def _safe_history(history):
+    return (
+        history.get("currency", "CNY") == "CNY"
+        and history.get("unit", "CNY") in _UNITS
+        and not re.search(
+            r"美元|港币|港元|外币|现汇|现钞",
+            str(history.get("fundName") or history.get("label") or ""),
+        )
+    )
+
+
+async def _local_histories(conn, codes, now):
+    # Match the chart's latest eight retrievals from each source exactly.
+    rows = await conn.fetch(
+        """WITH chart AS (
+          SELECT fund_code,payload,
+            row_number() OVER(PARTITION BY fund_code ORDER BY retrieved_at DESC,id DESC) AS recent_rank
+          FROM market.fund_nav_chart_histories WHERE fund_code=ANY($1::text[])
+            AND retrieved_at<=$2 AND available_at<=$2
+        ), research AS (
+          SELECT fund_code,payload,
+            row_number() OVER(PARTITION BY fund_code ORDER BY retrieved_at DESC,id DESC) AS recent_rank
+          FROM market.fund_research_nav_histories WHERE fund_code=ANY($1::text[])
+            AND retrieved_at<=$2 AND available_at<=$2
+        ) SELECT fund_code,payload FROM chart WHERE recent_rank<=8
+          UNION ALL SELECT fund_code,payload FROM research WHERE recent_rank<=8""",
+        codes,
+        now,
+    )
+    for row in rows:
+        history = obj(row.get("payload"))
+        if (
+            history.get("fundCode") in codes
+            and row.get("fund_code") == history["fundCode"]
+        ):
+            yield history
+
+
+def _chart_points(view, histories, now):
+    points = [{"date": row["date"], "close": row["unitNav"]} for row in view["points"]]
+    # A distribution can change raw unit NAV while the provider's disclosed
+    # daily return stays positive; use its return only for this exact source.
+    for history in histories:
+        if history.get("sourceUri") != view.get("sourceUri") or history.get(
+            "retrievedAt"
+        ) != view.get("retrievedAt"):
+            continue
+        if not valid_points(history, view["fundCode"], now):
+            continue
+        raw = {
+            row.get("date"): row
+            for row in history.get("points", [])
+            if isinstance(row, dict)
+        }
+        if not points or history.get("asOf", points[-1]["date"]) != view.get("asOf"):
+            continue
+        for point in points:
+            source = raw.get(point["date"], {})
+            try:
+                if (
+                    Decimal(str(source.get("close"))) == Decimal(point["close"])
+                    and "returnPct" in source
+                ):
+                    point["returnPct"] = source["returnPct"]
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+        break
+    return points
+
+
+def _continuity_proven(code, view, histories, now):
+    for history in histories:
+        if history.get("sourceUri") != view.get("sourceUri") or history.get(
+            "retrievedAt"
+        ) != view.get("retrievedAt"):
+            continue
+        points = valid_points(history, code, now)
+        if not points or points[-1]["date"] != view.get("asOf"):
+            continue
+        coordinates = {row["date"]: Decimal(row["close"]) for row in points}
+        if any(
+            coordinates.get(row["date"]) != Decimal(row["unitNav"])
+            for row in view["points"]
+        ):
+            continue
+        # Match disclosed-NAV freshness limits before accepting any proof:
+        # a complete source can still have no recent NAV disclosure.
+        nav_age = now.date() - date.fromisoformat(points[-1]["date"])
+        if nav_age.days > 10 or not recently_checked(history, now):
+            return False
+        if full_history_proven(history, points, now):
+            return True
+        if _disclosed_nav_quality(history, points, now)[0] == "READY":
+            return True
+        if _history_quality(history, points, now)[0] == "READY":
+            return True
+        return False
+    return False
+
+
+def _signals(plan):
+    current = plan.get("currentPrice")
+    signals = []
+    for track in plan.get("tracks", []):
+        try:
+            price, low, high = (
+                Decimal(str(raw))
+                for raw in (current, track["entryZoneMin"], track["entryZoneMax"])
+            )
+            if not 0 < low <= high or price <= 0:
+                continue
+        except (KeyError, InvalidOperation, ValueError, TypeError):
+            continue
+        in_zone = low <= price <= high
+        distance = (
+            (low - price) / price
+            if price < low
+            else (price - high) / price
+            if price > high
+            else Decimal(0)
+        )
+        ready = (
+            track.get("state") == "CANDIDATE"
+            and track.get("priceState") == "READY"
+            and in_zone
+            and track.get("entryReady") is not False
+            and not any(
+                row.get("entryBlocked") is True
+                or row.get("inSellZone") is True
+                or row.get("subscriptionRestricted") is True
+                for row in (plan, track)
+            )
+        )
+        signals.append(
+            {
+                "track": track["track"],
+                "triggerState": track["state"],
+                "candidate": track["state"] == "CANDIDATE",
+                "inEntryZone": in_zone,
+                "entryReady": ready,
+                "distanceToEntryPct": round(float(distance * 100), 4),
+                **{
+                    field: deepcopy(track[field]) for field in _STATUS if field in track
+                },
+            }
+        )
+        signals[-1]["entryReady"] = ready
+    return signals
+
+
+async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet=None):
+    """Update response-only CNY fund coordinates without provider I/O or DB writes."""
+    if not isinstance(report, dict):
+        return report
+    now, result = local(now), deepcopy(report)
+    plans = [(plan, code) for plan in _plans(result) if (code := _code(plan))]
+    if not plans:
+        return result
+    codes = list(dict.fromkeys(code for _, code in plans))
+    candidates = {code: [] for code in codes}
+    supplied = [
+        *_histories(histories),
+        *_histories((packet or {}).get("fundHistories", [])),
+    ]
+    for offset in range(0, len(codes), 46):
+        supplied.extend(
+            [
+                row
+                async for row in _local_histories(
+                    conn, codes[offset : offset + 46], now
+                )
+            ]
+        )
+    for history in supplied:
+        if history.get("fundCode") in candidates and _safe_history(history):
+            candidates[history["fundCode"]].append(history)
+    calculated = {}
+    for code in codes:
+        view = select_history_view(code, code, "2y", candidates[code], now)
+        points = _chart_points(view, candidates[code], now)
+        enough = len(points) >= NAV_RESEARCH_MIN_SAMPLES
+        plan = compute_actionable_price_plan(
+            points if enough else [],
+            subject_kind="nav",
+            subject_id=code,
+            label=code,
+            price_basis="UNIT_NAV",
+            unit="CNY/份",
+            market="FUND_CN",
+            source_uri=view.get("sourceUri") if enough else None,
+        )
+        state = (
+            "UNAVAILABLE"
+            if not enough
+            else "READY"
+            if view["state"] == "READY"
+            else "PARTIAL"
+        )
+        reason = (
+            "LOCAL_NAV_HISTORY_INSUFFICIENT"
+            if points and not enough
+            else "LOCAL_NAV_HISTORY_UNAVAILABLE"
+            if not points
+            else view["coverage"].get("reason")
+        )
+        if state == "READY" and not _continuity_proven(
+            code, view, candidates[code], now
+        ):
+            state, reason = "PARTIAL", "LOCAL_NAV_CONTINUITY_UNVERIFIED"
+        if state == "READY" and not any(
+            track.get("priceState") == "READY" for track in plan["tracks"]
+        ):
+            state, reason = "PARTIAL", "LOCAL_PRICE_INTERVAL_UNAVAILABLE"
+        if state != "READY":
+            for track in plan["tracks"]:
+                track.update(entryReady=False, inBuyZone=False)
+                if state == "PARTIAL" and track["priceState"] == "READY":
+                    track["priceState"] = "PARTIAL"
+                if reason:
+                    track["reasons"].append(reason)
+        plan.update(
+            historyQuality=state,
+            historySampleCount=len(points),
+            historyTargetSamples=NAV_RESEARCH_MAX_SAMPLES,
+            retrievedAt=view.get("retrievedAt") if enough else None,
+            availableAt=next(
+                (
+                    history.get("availableAt")
+                    for history in candidates[code]
+                    if enough
+                    and history.get("sourceUri") == view.get("sourceUri")
+                    and history.get("retrievedAt") == view.get("retrievedAt")
+                    and history.get("asOf", view.get("asOf")) == view.get("asOf")
+                ),
+                None,
+            ),
+            historyCoverage="SUFFICIENT" if enough else "SHORT_HISTORY",
+            priceRefresh={
+                "state": state,
+                "calculatedAt": now.isoformat(),
+                "navAsOf": plan["asOf"],
+                "methodVersion": VERSION,
+                **({"reason": reason} if reason else {}),
+            },
+        )
+        calculated[code] = plan
+    for original, code in plans:
+        previous_as_of, previous_method, previous_source = (
+            original.get("asOf"),
+            original.get("methodVersion"),
+            original.get("sourceUri"),
+        )
+        identity = {
+            key: deepcopy(original[key])
+            for key in ("subjectKind", "subjectId", "label", "unit")
+            if key in original
+        }
+        for key in _STALE:
+            original.pop(key, None)
+        updated = calculated.get(code)
+        if updated is None:
+            continue
+        original.update(deepcopy(updated))
+        original.update(identity, fundCode=code)
+        original.setdefault("researchAsOf", previous_as_of)
+        original.setdefault("researchMethodVersion", previous_method)
+        original.setdefault("researchSourceUri", previous_source)
+        selected = original.get("selectedTrack", original.get("track"))
+        track = next(
+            (row for row in original["tracks"] if row["track"] == selected), None
+        )
+        if track:
+            original.update(
+                {
+                    key: deepcopy(track[key])
+                    for key in (*_STATUS, *_PRICES)
+                    if key in track
+                }
+            )
+        original["signals"] = _signals(original)
+    if isinstance(result.get("quantitativeScan"), dict):
+        scan = result["quantitativeScan"]
+        scan.setdefault("researchAsOf", scan.get("asOf"))
+        scan.update(
+            asOf=now.isoformat(),
+            methodVersion="fund-quant-scan-v2",
+            minimumHistorySamples=NAV_RESEARCH_MIN_SAMPLES,
+        )
+    result = apply_entry_guards(result, packet or {}, now)
+    if isinstance(result.get("quantitativeScan"), dict):
+        from backend.investment.quantitative_scan import public_quantitative_scan
+
+        scan = result["quantitativeScan"]
+        try:
+            scan["coverage"] = public_quantitative_scan(scan, now)["coverage"]
+        except (TypeError, ValueError):
+            scan["coverage"] = {"pricedFundCount": 0, "targetHistoryFundCount": 0}
+    return result

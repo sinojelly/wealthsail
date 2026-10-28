@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import timedelta
 import json
 import os
+from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -23,6 +24,17 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def isolate_direction_history_from_live_prices(monkeypatch):
+    monkeypatch.setattr(
+        repo,
+        "_refresh_origin_plan",
+        AsyncMock(
+            side_effect=lambda _conn, selected, *_args, **_kwargs: deepcopy(selected)
+        ),
+    )
+
+
 async def test_direction_creation_freezes_exact_report_and_repeated_reports_do_not_overwrite(
     monkeypatch,
 ):
@@ -39,7 +51,8 @@ async def test_direction_creation_freezes_exact_report_and_repeated_reports_do_n
             "/wealthsail_review08_validation_v1",
             "/wealthsail_review09_validation_v1",
             "/wealthsail_review44_validation_v1",
-            "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
+            "/wealthsail_review45_validation_v1",
+            "/wealthsail_review48_validation_v1",
         }
     )
     conn = await asyncpg.connect(DSN)
@@ -160,7 +173,8 @@ async def test_direction_registered_fund_scope_requires_exact_catalog_and_market
             "/wealthsail_review08_validation_v1",
             "/wealthsail_review09_validation_v1",
             "/wealthsail_review44_validation_v1",
-            "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
+            "/wealthsail_review45_validation_v1",
+            "/wealthsail_review48_validation_v1",
         }
     )
     conn = await asyncpg.connect(DSN)

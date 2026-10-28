@@ -432,6 +432,11 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
             }
         )
     if data["originType"] in {"DAILY_DIRECTION", "DAILY_QUANT_SCAN"}:
+        coordinate = repository.live_plan_coordinate(origin["actionablePlan"])
+        if coordinate is not None:
+            origin_key = semantic_hash(
+                {"originKey": origin_key, "priceCoordinate": coordinate}
+            )
         # The shared asset lock serializes cross-entry deduplication before each
         # origin's independent stable-key lock. It never broadens actor scope.
         asset = (

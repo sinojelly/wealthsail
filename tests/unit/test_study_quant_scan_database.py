@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import timedelta
 import json
 import os
+from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ import pytest
 
 from backend.errors import NotFoundError
 from backend.investment import study_service as service
+from backend.investment import study_repository as repo
 from backend.investment.study_schemas import CreateStudyRequest
 from backend.macro.daily_repository import read_daily_research
 from test_quantitative_scan import NOW, scan, scan_plan
@@ -27,13 +29,28 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def isolate_scan_history_from_live_prices(monkeypatch):
+    monkeypatch.setattr(
+        repo,
+        "_refresh_origin_plan",
+        AsyncMock(
+            side_effect=lambda _conn, selected, *_args, **_kwargs: deepcopy(selected)
+        ),
+    )
+
+
 def guard():
     url = urlsplit(DSN)
     assert (
         url.hostname == "127.0.0.1"
         and url.port in {55434, 55436}
         and url.path
-        in {"/wealthsail_review44_validation_v1", "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1"}
+        in {
+            "/wealthsail_review44_validation_v1",
+            "/wealthsail_review45_validation_v1",
+            "/wealthsail_review48_validation_v1",
+        }
     )
 
 

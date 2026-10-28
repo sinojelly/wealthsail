@@ -126,8 +126,10 @@ _READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
  WHERE r.slot_date<=$1 AND r.dispatched_at<=$2"""
 
 
-async def read_daily_research(conn, now, *, enabled=True):
+async def read_daily_research(conn, now, *, enabled=True, histories=None):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
+    from backend.investment.live_fund_plans import refresh_report_fund_plans
+    from backend.common.timing import trace_stage
 
     stamp = local(now)
     latest = await conn.fetchrow(
@@ -172,6 +174,17 @@ async def read_daily_research(conn, now, *, enabled=True):
         )
     if not enabled:
         state = "DISABLED"
+    packet = _object(report_row.get("public_packet")) if report_row else None
+    report = (
+        report_with_quantitative_scan(_object(report_row.get("payload")), packet, stamp)
+        if report_row
+        else None
+    )
+    if report is not None:
+        with trace_stage("context.live_nav_prices"):
+            report = await refresh_report_fund_plans(
+                conn, report, stamp, histories=histories, packet=packet
+            )
     return {
         "methodVersion": METHOD,
         "state": state,
@@ -195,13 +208,7 @@ async def read_daily_research(conn, now, *, enabled=True):
         if report_row and report_row.get("source_batch_id")
         else None,
         "promptVersion": report_row.get("prompt_version") if report_row else None,
-        "report": report_with_quantitative_scan(
-            _object(report_row.get("payload")),
-            _object(report_row.get("public_packet")),
-            stamp,
-        )
-        if report_row
-        else None,
+        "report": report,
     }
 
 

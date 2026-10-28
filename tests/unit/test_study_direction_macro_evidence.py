@@ -31,7 +31,15 @@ def macro_proof(**changes):
 
 
 @pytest.mark.asyncio
-async def test_direction_macro_proof_preserves_report_values_and_excludes_private_fields():
+async def test_direction_macro_proof_preserves_report_values_and_excludes_private_fields(
+    monkeypatch,
+):
+    # This case checks macro proof at the report clock. Live NAV histories are
+    # exercised separately by test_study_live_fund_plans.py.
+    refresh = AsyncMock(
+        side_effect=lambda _conn, selected, *_args, **_kwargs: deepcopy(selected)
+    )
+    monkeypatch.setattr(repo, "_refresh_origin_plan", refresh)
     payload = report()
     evidence = macro_proof(private="PRIVATE note", accountId="PRIVATE account")
     payload["valueDirections"][0]["macroEvidence"] = [evidence]
@@ -42,6 +50,7 @@ async def test_direction_macro_proof_preserves_report_values_and_excludes_privat
     origin = await repo.daily_direction_origin(
         conn, run, "healthcare-recovery", "nav", "000001", "LEFT_VALUE", later
     )
+    refresh.assert_awaited_once()
     origin["observations"] = [
         {"metric": "M1_YOY", "value": "9.99", "asOf": later.date().isoformat()}
     ]

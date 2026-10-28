@@ -23,6 +23,71 @@ def dump(value):
     return json.dumps(value, ensure_ascii=False, default=str, allow_nan=False)
 
 
+_LIVE_TRACK_PRICES = (
+    "track",
+    "entryZoneMin",
+    "entryZoneMax",
+    "stopLossPrice",
+    "takeProfitT1",
+    "takeProfitT2",
+    "sellZoneMin",
+    "sellZoneMax",
+    "estimatedProfitMinPct",
+    "estimatedProfitMaxPct",
+    "currentToSellMaxPct",
+)
+
+
+def live_plan_coordinate(plan):
+    """Stable price identity excludes request-clock refresh metadata."""
+    if not isinstance(plan.get("priceRefresh"), dict):
+        return None
+    selected = plan.get("selectedTrack", plan.get("track"))
+    tracks = [row for row in plan.get("tracks", []) if row.get("track") == selected]
+    if len(tracks) != 1:
+        raise ValidationError_("当前基金价格轨道不唯一，无法冻结")
+    return {
+        "methodVersion": plan.get("methodVersion"),
+        "asOf": plan.get("asOf"),
+        "currentPrice": plan.get("currentPrice"),
+        "track": {
+            key: deepcopy(tracks[0][key])
+            for key in _LIVE_TRACK_PRICES
+            if key in tracks[0]
+        },
+    }
+
+
+async def _refresh_origin_plan(conn, plan, plan_track, now, *, packet=None):
+    """Reprice a newly selected CNY fund after authenticating its report facts."""
+    from backend.investment.live_fund_plans import _code, refresh_report_fund_plans
+    from backend.macro.alpha_research import _program_plan
+    from backend.macro.alpha_repository import read_alpha_public
+
+    # New follows retain the original scope's explicit-market requirement;
+    # the display helper may infer a missing market for a chart-only NAV row.
+    if plan.get("market") != "FUND_CN" or _code(plan) is None:
+        return deepcopy(plan)
+    public = await read_alpha_public(conn, now)
+    refreshed = await refresh_report_fund_plans(
+        conn,
+        {"actionablePlans": [{**deepcopy(plan), "selectedTrack": plan_track}]},
+        now,
+        histories=public.get("fundHistories"),
+        packet=packet,
+    )
+    current = refreshed["actionablePlans"][0]
+    if (current.get("priceRefresh") or {}).get("state") != "READY":
+        raise ValidationError_("本地基金净值历史不可用或不完整，请更新净值后再跟踪")
+    try:
+        _program_plan(current, plan_track, now, require_theme=False)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValidationError_(
+            "本地基金净值尚不能形成所选轨道的研究价格，请更新后再跟踪"
+        ) from exc
+    return current
+
+
 async def daily_origin(conn, run_id, event_id, now):
     row = await conn.fetchrow(
         """SELECT r.run_id,t.payload,t.recorded_at FROM research.daily_research_runs r
@@ -56,14 +121,14 @@ async def daily_origin(conn, run_id, event_id, now):
 async def daily_direction_origin(
     conn, run_id, direction_key, subject_kind, subject_id, plan_track, now
 ):
-    """Select the exact immutable public report plan; never recalculate prices."""
+    """Authenticate original research, then freeze current local fund prices."""
     from backend.macro.alpha_research import _program_plan
     from backend.macro.daily_research import _visible
     from backend.investment.study import direction_macro_evidence
     from backend.macro.value_directions import direction_quantitative_evidence
 
     row = await conn.fetchrow(
-        """SELECT r.run_id,t.payload,t.recorded_at FROM research.daily_research_runs r
+        """SELECT r.run_id,r.public_packet,t.payload,t.recorded_at FROM research.daily_research_runs r
         JOIN research.daily_research_results t USING(run_id)
         WHERE r.run_id=$1 AND t.status='READY' AND t.recorded_at<=$2 AND r.dispatched_at<=$2""",
         run_id,
@@ -132,6 +197,9 @@ async def daily_direction_origin(
             raise ValueError("missing direction evidence")
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError_("该日报方向或标的计划无效，无法冻结") from exc
+    plan = await _refresh_origin_plan(
+        conn, plan, plan_track, now, packet=decode(row.get("public_packet"))
+    )
     frozen_direction = {
         key: deepcopy(direction[key])
         for key in (
@@ -275,6 +343,10 @@ async def daily_quant_scan_origin(
         _program_plan(plan, plan_track, stamp, require_theme=False)
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError_("该日报的基金量化扫描或轨道无效，无法冻结") from exc
+    original_plan = deepcopy(plan)
+    plan = await _refresh_origin_plan(
+        conn, plan, plan_track, now, packet=decode(row.get("public_packet"))
+    )
     plan = {**deepcopy(plan), "selectedTrack": plan_track}
     return {
         "originType": "DAILY_QUANT_SCAN",
@@ -290,8 +362,8 @@ async def daily_quant_scan_origin(
             {
                 "id": "quant-scan:" + plan["fundCode"],
                 "title": plan["label"] + "真实净值历史",
-                "url": plan["sourceUri"],
-                "retrievedAt": plan.get("retrievedAt"),
+                "url": original_plan["sourceUri"],
+                "retrievedAt": original_plan.get("retrievedAt"),
             }
         ],
         "actionablePlan": plan,
@@ -308,6 +380,21 @@ async def matching_report_plan_track(conn, tenant_id, user_id, origin, now):
         if origin["originType"] == "DAILY_QUANT_SCAN"
         else "DAILY_QUANT_SCAN"
     )
+    coordinate = live_plan_coordinate(plan)
+    current_price_filter = ""
+    if coordinate is not None:
+        current_price_filter = """
+          AND jsonb_build_object(
+            'methodVersion',v.snapshot#>'{actionablePlan,methodVersion}',
+            'asOf',v.snapshot#>'{actionablePlan,asOf}',
+            'currentPrice',v.snapshot#>'{actionablePlan,currentPrice}',
+            'track',(SELECT jsonb_object_agg(entry.key,entry.value)
+              FROM jsonb_array_elements(CASE
+                WHEN jsonb_typeof(v.snapshot#>'{actionablePlan,tracks}')='array'
+                THEN v.snapshot#>'{actionablePlan,tracks}' ELSE '[]'::jsonb END) selected
+              CROSS JOIN LATERAL jsonb_each(selected) entry
+              WHERE selected->>'track'=$7 AND entry.key=ANY($10::text[]))
+          )=$9::jsonb"""
     return await conn.fetchval(
         """SELECT t.id FROM research.study_tracks t
         JOIN LATERAL(SELECT snapshot FROM research.study_versions v
@@ -319,7 +406,9 @@ async def matching_report_plan_track(conn, tenant_id, user_id, origin, now):
           AND v.snapshot#>>'{actionablePlan,subjectKind}'=$5
           AND v.snapshot#>>'{actionablePlan,subjectId}'=$6
           AND COALESCE(v.snapshot#>>'{actionablePlan,selectedTrack}',v.snapshot#>>'{actionablePlan,track}')=$7
-        ORDER BY t.created_at,t.id LIMIT 1""",
+        """
+        + current_price_filter
+        + " ORDER BY t.created_at,t.id LIMIT 1",
         tenant_id,
         user_id,
         now,
@@ -328,6 +417,11 @@ async def matching_report_plan_track(conn, tenant_id, user_id, origin, now):
         plan["subjectId"],
         plan.get("selectedTrack", plan.get("track")),
         opposite,
+        *(
+            (dump(coordinate), list(_LIVE_TRACK_PRICES))
+            if coordinate is not None
+            else ()
+        ),
     )
 
 

@@ -20,6 +20,18 @@ from backend.investment.study_schemas import CreateStudyRequest
 NOW = datetime(2026, 10, 18, 9, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
+@pytest.fixture(autouse=True)
+def isolate_direction_evidence_from_live_prices(monkeypatch):
+    """These fixtures authenticate old research; live pricing has integration tests."""
+    monkeypatch.setattr(
+        repo,
+        "_refresh_origin_plan",
+        AsyncMock(
+            side_effect=lambda _conn, selected, *_args, **_kwargs: deepcopy(selected)
+        ),
+    )
+
+
 def request(**changes):
     return {
         "originType": "DAILY_DIRECTION",

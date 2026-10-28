@@ -295,8 +295,16 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "historyCoverage",
             "overseasCalendarRequired",
             "isDelayedNav",
+            "researchAsOf",
+            "researchMethodVersion",
+            "researchSourceUri",
         ),
     )
+    if isinstance(value.get("priceRefresh"), dict):
+        result["priceRefresh"] = _pick(
+            value["priceRefresh"],
+            ("state", "calculatedAt", "navAsOf", "methodVersion", "reason"),
+        )
     if isinstance(value.get("historicalPriceWindow"), dict):
         result["historicalPriceWindow"] = _pick(
             value["historicalPriceWindow"],
@@ -359,6 +367,14 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "sellZoneLowerPricePercentile",
             "sellZoneUpperPricePercentile",
             "navRewardRiskBasis",
+            "middleHighPriceSpanRatio",
+            "maximumHighBuyPricePercentile",
+            "maximumLowBuyPricePercentile",
+            "maximumHighBuyPriceSpanRatio",
+            "maximumLowBuyPriceSpanRatio",
+            "minimumSellPriceSpanRatio",
+            "minimumTargetProfitRatio",
+            "historicalPeakSellCapRatio",
         ),
     )
     history_window = (value.get("parameters") or {}).get("historicalPriceWindow")
@@ -389,6 +405,12 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "p85",
             "p95",
             "peakHigh",
+            "p30",
+            "p45",
+            "p75",
+            "p92",
+            "troughLow",
+            "priceSpan",
         ),
     )
     if "indicatorStates" in value:
@@ -429,6 +451,17 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
                 **{
                     key: price(row[key])
                     for key in ("sellZoneMin", "sellZoneMax")
+                    if key in row
+                },
+                **{
+                    key: str(row[key])
+                    if not isinstance(row[key], bool) and _finite(row[key]) is not None
+                    else None
+                    for key in (
+                        "estimatedProfitMinPct",
+                        "estimatedProfitMaxPct",
+                        "currentToSellMaxPct",
+                    )
                     if key in row
                 },
                 "reasons": _texts(row.get("reasons")),

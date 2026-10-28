@@ -14,6 +14,18 @@ from backend.investment.study_schemas import CreateStudyRequest
 from test_quantitative_scan import NOW, scan, scan_plan
 
 
+@pytest.fixture(autouse=True)
+def isolate_scan_authentication_from_live_prices(monkeypatch):
+    """Keep original scan identity/evidence checks independent of local NAV data."""
+    monkeypatch.setattr(
+        repo,
+        "_refresh_origin_plan",
+        AsyncMock(
+            side_effect=lambda _conn, selected, *_args, **_kwargs: deepcopy(selected)
+        ),
+    )
+
+
 def scan_request(**updates):
     return {
         "originType": "DAILY_QUANT_SCAN",

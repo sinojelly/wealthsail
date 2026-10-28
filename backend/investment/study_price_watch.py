@@ -288,7 +288,8 @@ async def current_entry_safety(conn, plans, now):
             # into this read. An old frozen verdict is never a permanent veto.
             sell = (
                 current
-                and value.get("methodVersion") == "actionable-zones-v5"
+                and value.get("methodVersion")
+                in {"actionable-zones-v5", "actionable-zones-v6"}
                 and row.get("inSellZone") is True
             )
             sell_fields = {
