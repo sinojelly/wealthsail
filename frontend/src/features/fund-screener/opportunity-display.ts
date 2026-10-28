@@ -85,10 +85,25 @@ export function buyZoneStatus(
   signal?: EntryGuard,
 ): {
   text: string;
-  tone: "left" | "right" | "wait" | "away" | "high";
+  tone: "left" | "right" | "wait" | "away" | "high" | "rose";
   warning?: boolean;
   position?: boolean;
 } {
+  const sellRows = [plan, signal, track].filter(
+    (row) => row?.inSellZone === true,
+  );
+  const sellStatus =
+    sellRows.find(
+      (row) => row?.entryStatusTone === "rose" && row.entryStatus,
+    ) ?? sellRows[0];
+  if (sellStatus)
+    return {
+      text:
+        (sellStatus.entryStatusTone === "rose" && sellStatus.entryStatus) ||
+        "🔥 已入建议卖出区间·持仓宜止盈/空仓勿追高",
+      tone: "rose",
+      warning: true,
+    };
   // Keep the server's checked risk status before geometric and score projections.
   if (
     [plan, signal, track].some((row) => row?.entryStatus || row?.entryBlocked)

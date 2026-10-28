@@ -6,6 +6,9 @@ import type {
 } from "../../api/investment";
 import QuantitativeScan from "./components/QuantitativeScan";
 import ValueDirections from "./components/ValueDirections";
+import ActionablePlan, {
+  ActionablePlanEvidence,
+} from "./components/ActionablePlan";
 
 function plan(): ActionableZoneResult {
   return {
@@ -159,4 +162,102 @@ it("shows subscription restrictions beside the fund name on cards and the scan",
   expect(labels).toHaveLength(2);
   for (const label of labels)
     expect(label).toHaveClass("op-subscription-restricted");
+});
+
+it("prioritizes the server sell status and shows paired buy/sell ranges with a clear action", () => {
+  const row = plan();
+  row.currentPrice = "2.2500";
+  Object.assign(row, {
+    inSellZone: true,
+    entryStatus: "⚠️ 处于近1年高位区(98%分位)·勿追高",
+    entryStatusTone: "amber",
+    entryBlocked: true,
+  });
+  Object.assign(row.tracks[0], {
+    inSellZone: true,
+    entryStatus: "🔥 已入建议卖出区间(98%分位)·持仓宜止盈/空仓勿追高",
+    entryStatusTone: "rose",
+    sellZoneMin: "2.1800",
+    sellZoneMax: "2.3200",
+  });
+  renderBoth(report(row));
+  const card = screen.getByRole("article", { name: "易方达原油买卖计划" });
+  const sellStatus = within(card).getByText(row.tracks[0].entryStatus!);
+  expect(sellStatus).toHaveClass("tone-rose");
+  expect(within(card).queryByText(row.entryStatus!)).not.toBeInTheDocument();
+  expect(within(card).getByText("建议买入区间")).toBeInTheDocument();
+  expect(within(card).getByText("建议卖出区间")).toBeInTheDocument();
+  expect(within(card).getByText("2.1800–2.3200")).toHaveClass(
+    "op-sell-zone-active",
+  );
+  expect(within(card).getByText("T1 / T2 分批止盈")).toBeInTheDocument();
+  expect(
+    within(card).getByText(
+      "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。",
+    ),
+  ).toBeInTheDocument();
+});
+
+it("shows the frozen server sell conclusion in the full actionable plan and falls back to legacy T1/T2 prices", () => {
+  const row = plan();
+  Object.assign(row, { inSellZone: true, entryStatusTone: "rose" });
+  render(<ActionablePlan result={row} frozen />);
+  const right = screen.getByRole("article", { name: "右侧趋势" });
+  expect(within(right).getByText("建议买入区间")).toBeInTheDocument();
+  expect(within(right).getByText("建议卖出区间")).toBeInTheDocument();
+  expect(within(right).getByText("2.2000–2.3000")).toHaveClass(
+    "op-sell-zone-active",
+  );
+  expect(
+    within(right).getByText(
+      "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。",
+    ),
+  ).toBeInTheDocument();
+});
+
+it("explains historical support/resistance inputs with their exact Chinese labels", () => {
+  const row = plan();
+  row.indicators = {
+    p35: "1.4200",
+    p40: "1.4800",
+    p50: "1.5300",
+    p55: "1.5800",
+    p60: "1.6100",
+    p65: "1.6500",
+    p85: "1.8200",
+    p95: "1.9000",
+    peakHigh: "2.0000",
+  };
+  row.parameters = {
+    historicalPriceWindow: [220, 500],
+    historicalPercentileMethod: "LINEAR_INTERPOLATION",
+    middleHighNavPercentile: 70,
+    maximumTrendBuyPricePercentile: 65,
+    sellZoneLowerPricePercentile: 85,
+    sellZoneUpperPricePercentile: 95,
+    navRewardRiskBasis: "HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR",
+  };
+  row.historicalPriceWindow = {
+    state: "READY",
+    requiredSamples: 220,
+    sampleCount: 500,
+    start: "2024-10-20",
+    end: "2026-10-19",
+  };
+  render(<ActionablePlanEvidence result={row} />);
+  expect(screen.getByText(/历史35%分位价格/)).toHaveTextContent("1.4200");
+  expect(screen.getByText(/历史中位价格/)).toHaveTextContent("1.5300");
+  expect(screen.getByText(/历史周期高点/)).toHaveTextContent("2.0000");
+  expect(screen.getByText(/历史价格锚点/)).toHaveTextContent(
+    "500个有效交易样本",
+  );
+  expect(screen.getByText(/参数：/)).toHaveTextContent(
+    "历史价格分位算法=线性插值",
+  );
+  expect(screen.getByText(/参数：/)).toHaveTextContent(
+    "净值买卖区间依据=历史支撑与阻力，不按现价抬高目标",
+  );
+  expect(
+    screen.queryByText(/其他算法观察|其他策略参数/),
+  ).not.toBeInTheDocument();
 });

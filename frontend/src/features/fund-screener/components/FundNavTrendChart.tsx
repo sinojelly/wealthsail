@@ -44,13 +44,17 @@ function Trend({
   const low = number(track?.entryZoneMin),
     high = number(track?.entryZoneMax),
     stop = number(track?.stopLossPrice),
-    first = number(track?.takeProfitT1);
+    sellLow = number(track?.sellZoneMin ?? track?.takeProfitT1),
+    sellHigh = number(track?.sellZoneMax ?? track?.takeProfitT2);
   const completeBand = low != null && high != null && low <= high;
+  const completeSellBand =
+    sellLow != null && sellHigh != null && sellLow <= sellHigh;
   const values = [
     ...points.map((point) => point.value),
     ...(completeBand ? [low!, high!] : []),
     ...(stop != null ? [stop] : []),
-    ...(first != null ? [first] : []),
+    ...(sellLow != null ? [sellLow] : []),
+    ...(sellHigh != null ? [sellHigh] : []),
   ];
   const minimum = values.length ? Math.min(...values) : 0,
     maximum = values.length ? Math.max(...values) : 1;
@@ -124,6 +128,15 @@ function Trend({
                     strokeOpacity={0}
                   />
                 )}
+                {completeSellBand && (
+                  <ReferenceArea
+                    y1={sellLow!}
+                    y2={sellHigh!}
+                    fill="#f97316"
+                    fillOpacity={0.18}
+                    strokeOpacity={0}
+                  />
+                )}
                 {stop != null && (
                   <ReferenceLine
                     y={stop}
@@ -131,9 +144,16 @@ function Trend({
                     strokeDasharray="5 4"
                   />
                 )}
-                {first != null && (
+                {!completeSellBand && sellLow != null && (
                   <ReferenceLine
-                    y={first}
+                    y={sellLow}
+                    stroke="#d97706"
+                    strokeDasharray="5 4"
+                  />
+                )}
+                {!completeSellBand && sellHigh != null && (
+                  <ReferenceLine
+                    y={sellHigh}
                     stroke="#d97706"
                     strokeDasharray="5 4"
                   />
@@ -154,7 +174,13 @@ function Trend({
           <div className="op-nav-legend">
             {completeBand && <span className="buy">建议买入区间</span>}
             {stop != null && <span className="stop">止损参考</span>}
-            {first != null && <span className="target">止盈目标一</span>}
+            {completeSellBand && <span className="sell">建议卖出区间</span>}
+            {!completeSellBand && sellLow != null && (
+              <span className="target">卖出参考下沿（T1）</span>
+            )}
+            {!completeSellBand && sellHigh != null && (
+              <span className="target">卖出参考上沿（T2）</span>
+            )}
           </div>
           <p className="op-nav-summary">
             区间最低 {price(data?.summary.minimumNav)} · 最高{" "}

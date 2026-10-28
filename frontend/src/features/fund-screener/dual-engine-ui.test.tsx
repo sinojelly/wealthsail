@@ -152,7 +152,7 @@ it("shows eight directions with two complete plans each and resets opened detail
   );
   const { rerender } = render(<ValueDirections data={data} />);
   expect(screen.getAllByText("建议买入区间")).toHaveLength(16);
-  expect(screen.getAllByText("止盈目标二")).toHaveLength(16);
+  expect(screen.getAllByText("建议卖出区间")).toHaveLength(16);
   const summaries = screen.getAllByText("综合依据与后续观察");
   for (const summary of summaries)
     expect(summary.closest("details")).not.toHaveAttribute("open");

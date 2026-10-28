@@ -35,6 +35,11 @@ const parameterLabel = (key: string) =>
       oversoldRSI: "超卖强弱阈值",
       bollingerProximity: "布林接近倍数",
       maximumTrendRSI: "趋势强弱上限",
+      navPercentileWindow: "净值分位观察样本数",
+      maximumNavPercentile: "高位净值分位阈值",
+      maximumHighNavMA20Ratio: "高位净值与20期均线比值上限",
+      trendEntryLowScale: "趋势买区下沿波动倍数",
+      trendEntryHighScale: "趋势买区上沿波动倍数",
       navAbsoluteChangeWindow: "净值绝对变化窗口",
       navAbsoluteChangeMultiplier: "净值绝对变化倍数",
       navStdWindow: "净值标准差窗口",
@@ -43,6 +48,13 @@ const parameterLabel = (key: string) =>
       minimumRewardRiskT1: "目标一最低风险收益比",
       minimumRewardRiskT2: "目标二最低风险收益比",
       rewardRiskBasis: "风险基准",
+      historicalPriceWindow: "历史价格样本窗口",
+      historicalPercentileMethod: "历史价格分位算法",
+      middleHighNavPercentile: "中高位净值分位阈值",
+      maximumTrendBuyPricePercentile: "趋势买区历史价格分位上限",
+      sellZoneLowerPricePercentile: "卖区下沿历史价格分位",
+      sellZoneUpperPricePercentile: "卖区上沿历史价格分位",
+      navRewardRiskBasis: "净值买卖区间依据",
     }) as Record<string, string>
   )[key] ?? "其他策略参数";
 
@@ -74,6 +86,16 @@ export function ActionablePlanEvidence({
     bollMiddle: "布林中轨",
     bollLower: "布林下轨",
     momentum20: "20期动量",
+    navPercentile1y: "近1年净值分位（%）",
+    p35: "历史35%分位价格",
+    p40: "历史40%分位价格",
+    p50: "历史中位价格",
+    p55: "历史55%分位价格",
+    p60: "历史60%分位价格",
+    p65: "历史65%分位价格",
+    p85: "历史85%分位价格",
+    p95: "历史95%分位价格",
+    peakHigh: "历史周期高点",
   };
   const numeric = (value: number | string | null, digits = 4) =>
     value == null || !Number.isFinite(Number(value))
@@ -81,9 +103,12 @@ export function ActionablePlanEvidence({
       : Number(value).toFixed(digits);
   const parameter = (value: number | string) =>
     typeof value === "string"
-      ? value === "DISPLAYED_ENTRY_MID_AND_STOP"
-        ? "显示买区中点与止损"
-        : readingText(value, 100)
+      ? ({
+          DISPLAYED_ENTRY_MID_AND_STOP: "显示买区中点与止损",
+          LINEAR_INTERPOLATION: "线性插值",
+          HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR:
+            "历史支撑与阻力，不按现价抬高目标",
+        }[value] ?? readingText(value, 100))
       : Number.isFinite(value)
         ? String(Number(value.toFixed(4)))
         : "—";
@@ -106,6 +131,19 @@ export function ActionablePlanEvidence({
               <p>
                 {planTrackLabel(track.track)} · {states[track.state]}
               </p>
+              {track.buyZoneAnchor && (
+                <p>
+                  买区锚点：
+                  {
+                    {
+                      MA60_HISTORICAL_SUPPORT: "60期均线与历史中位支撑区",
+                      MA20_CAPPED_P65: "20期均线，受历史65%分位价格约束",
+                      SHORT_HISTORY_REFERENCE: "短期历史参考，长期样本待补齐",
+                      LEFT_BOLLINGER_SUPPORT: "布林下轨支撑与历史价格上限",
+                    }[track.buyZoneAnchor]
+                  }
+                </p>
+              )}
               {track.priceState === "PARTIAL" && (
                 <p>部分价格依据：缺少完整输入，止损或目标可能尚未计算。</p>
               )}
@@ -150,12 +188,29 @@ export function ActionablePlanEvidence({
             .join("；")}
         </p>
       )}
+      {result.historicalPriceWindow && (
+        <p>
+          历史价格锚点：{result.historicalPriceWindow.sampleCount}个有效交易样本
+          {result.historicalPriceWindow.start &&
+          result.historicalPriceWindow.end
+            ? `（${timeLabel(result.historicalPriceWindow.start)}至${timeLabel(result.historicalPriceWindow.end)}）`
+            : ""}
+          {result.historicalPriceWindow.sampleCount <
+          result.historicalPriceWindow.requiredSamples
+            ? "，样本不足，历史买卖区间依据待补齐。"
+            : "。"}
+        </p>
+      )}
       {Object.entries(result.indicators).map(([name, value]) => (
         <p key={name}>
           {indicatorLabels[name] ?? "其他算法观察"}：
           {numeric(
             value,
-            name === "rsi14" ? 2 : result.subjectKind === "index" ? 2 : 4,
+            name === "rsi14" || name === "navPercentile1y"
+              ? 2
+              : result.subjectKind === "index"
+                ? 2
+                : 4,
           )}
         </p>
       ))}
@@ -232,15 +287,39 @@ export default function ActionablePlan({
               {planTrackLabel(track.track)}{" "}
               <span className="op-badge">{states[track.state]}</span>
             </h4>
-            <p>
-              入场区间：{price(track.entryZoneMin)}–{price(track.entryZoneMax)}{" "}
-              {unit}
-            </p>
-            <p>
-              止损：{price(track.stopLossPrice)} · 目标一：
-              {price(track.takeProfitT1)} · 目标二：{price(track.takeProfitT2)}{" "}
-              {unit}
-            </p>
+            <dl className="op-value-prices">
+              <div>
+                <dt>建议买入区间</dt>
+                <dd>
+                  {price(track.entryZoneMin)}–{price(track.entryZoneMax)} {unit}
+                </dd>
+              </div>
+              <div>
+                <dt>建议卖出区间</dt>
+                <dd
+                  className={
+                    result.inSellZone === true || track.inSellZone === true
+                      ? "op-sell-zone-active"
+                      : undefined
+                  }
+                >
+                  {price(track.sellZoneMin ?? track.takeProfitT1)}–
+                  {price(track.sellZoneMax ?? track.takeProfitT2)}
+                </dd>
+                <small>T1 / T2 分批止盈</small>
+              </div>
+              <div className="op-value-stop">
+                <dt>止损参考</dt>
+                <dd>
+                  {price(track.stopLossPrice)} {unit}
+                </dd>
+              </div>
+            </dl>
+            {(result.inSellZone === true || track.inSellZone === true) && (
+              <p className="op-sell-zone-conclusion">
+                当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。
+              </p>
+            )}
             {track.priceState === "PARTIAL" && (
               <p>部分价格依据：缺少完整输入，止损或目标可能尚未计算。</p>
             )}

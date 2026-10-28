@@ -136,6 +136,33 @@ it("uses a newer official disclosed quote without revising the research coordina
   expect(card).toHaveTextContent("1.0764–1.0918");
 });
 
+it("dates a historical sell conclusion when a newer confirmed NAV has left its sell band", async () => {
+  const data = report();
+  const plan = data.report!.valueDirections![0].plans[0];
+  plan.subjectId = plan.fundCode = "008297";
+  plan.methodVersion = "actionable-zones-v5";
+  plan.currentPrice = "1.7500";
+  plan.tracks[0].inSellZone = true;
+  plan.tracks[0].takeProfitT1 = "1.7200";
+  plan.tracks[0].takeProfitT2 = "1.8000";
+  vi.mocked(funds.getLatestFundQuotes).mockResolvedValue({
+    items: [
+      {
+        fundCode: "008297",
+        currentEstimate: null,
+        confirmedNav: { value: "1.5000", asOf: "2026-10-28", usable: true },
+      },
+    ],
+    asOf: "2026-10-28T21:00:00+08:00",
+  });
+  render(<ValueDirections data={data} />);
+  const card = screen.getByRole("article", { name: /证券联接A.*买卖计划/ });
+  await waitFor(() => expect(card).toHaveTextContent("最新确认净值：1.5000"));
+  expect(card).not.toHaveTextContent("当前净值已进入建议卖出区间");
+  expect(card).toHaveTextContent("研究时已进入建议卖出区间");
+  expect(card).toHaveTextContent("最新净值已更新，请按当前价格重新评估");
+});
+
 it("refreshes the server judgment once new quotes fill the server cache after the initial table read", async () => {
   const plan = {
     ...report().report!.valueDirections![0].plans[0],

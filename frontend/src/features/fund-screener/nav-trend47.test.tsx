@@ -71,7 +71,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("defaults to two-year real NAV and draws the frozen buy band, stop and T1 with period statistics", async () => {
+it("defaults to two-year real NAV and draws frozen buy and sell bands, including T2 above historical highs", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url) => {
@@ -91,12 +91,33 @@ it("defaults to two-year real NAV and draws the frozen buy band, stop and T1 wit
   const graph = screen.getByRole("img", { name: "100101单位净值走势" });
   expect(graph).toBeInTheDocument();
   await waitFor(() =>
-    expect(graph.querySelectorAll(".recharts-reference-line")).toHaveLength(2),
+    expect(graph.querySelectorAll(".recharts-reference-line")).toHaveLength(1),
   );
-  expect(graph.querySelector(".recharts-reference-area")).toBeInTheDocument();
+  expect(graph.querySelectorAll(".recharts-reference-area")).toHaveLength(2);
   expect(screen.getByText("建议买入区间")).toBeInTheDocument();
   expect(screen.getByText("止损参考")).toBeInTheDocument();
-  expect(screen.getByText("止盈目标一")).toBeInTheDocument();
+  expect(screen.getByText("建议卖出区间")).toBeInTheDocument();
+});
+
+it("keeps a legacy single target as a line without fabricating a sell range", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => response(history("100113"))),
+  );
+  render(
+    <FundNavTrendChart
+      fundCode="100113"
+      track={{ ...track, takeProfitT2: null }}
+    />,
+  );
+  await screen.findByText(/区间最低/);
+  const graph = screen.getByRole("img", { name: "100113单位净值走势" });
+  await waitFor(() =>
+    expect(graph.querySelectorAll(".recharts-reference-line")).toHaveLength(2),
+  );
+  expect(graph.querySelectorAll(".recharts-reference-area")).toHaveLength(1);
+  expect(screen.queryByText("建议卖出区间")).not.toBeInTheDocument();
+  expect(screen.getByText("卖出参考下沿（T1）")).toBeInTheDocument();
 });
 
 it("switches to full disclosed history without claiming an invented inception date", async () => {

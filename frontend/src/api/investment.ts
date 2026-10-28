@@ -361,6 +361,7 @@ export interface EntrySafety {
   entryBlocked?: boolean;
   entryReady?: boolean;
   inBuyZone?: boolean;
+  inSellZone?: boolean;
 }
 export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   track: PlanTrack;
@@ -371,6 +372,13 @@ export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   stopLossPrice: PlanPrice;
   takeProfitT1: PlanPrice;
   takeProfitT2: PlanPrice;
+  sellZoneMin?: PlanPrice;
+  sellZoneMax?: PlanPrice;
+  buyZoneAnchor?:
+    | "MA60_HISTORICAL_SUPPORT"
+    | "MA20_CAPPED_P65"
+    | "SHORT_HISTORY_REFERENCE"
+    | "LEFT_BOLLINGER_SUPPORT";
   reasons: string[];
   priceState: string;
   missingEvidence?: string[];
@@ -389,6 +397,13 @@ export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
   /** Percent return for currentPrice/asOf; 1.23 means 1.23%. */
   currentChangePct?: PlanPrice;
   indicators: Record<string, PlanPrice>;
+  historicalPriceWindow?: {
+    state: string;
+    requiredSamples: number;
+    sampleCount: number;
+    start: string | null;
+    end: string | null;
+  };
   tracks: ActionableZoneTrack[];
   selectedTrack?: PlanTrack;
   parameters?: Record<string, number | number[] | string>;

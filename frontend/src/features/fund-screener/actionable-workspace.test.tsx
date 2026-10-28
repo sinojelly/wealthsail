@@ -313,7 +313,7 @@ it("keeps missing prices empty and labels NAV coordinates without implying a liv
   const panel = await screen.findByRole("tabpanel");
   await waitFor(() => expect(panel).toHaveTextContent(/净值.*不可.*挂单/));
   expect(panel).toHaveTextContent("实际观察：—");
-  expect(panel).toHaveTextContent("入场区间：—–—");
+  expect(panel).toHaveTextContent(/建议买入区间\s*—–—/);
   expect(
     within(panel).queryByRole("button", { name: "跟踪左侧低吸计划" }),
   ).not.toBeInTheDocument();
@@ -349,6 +349,6 @@ it("keeps a candidate with partial ATR prices and formats the supplied decimal s
   expect(await within(panel).findByText(/1\.2345–1\.2355/)).toBeInTheDocument();
   expect(panel).toHaveTextContent("候选条件成立");
   expect(panel).toHaveTextContent("部分价格依据");
-  expect(panel).toHaveTextContent("止损：—");
+  expect(panel).toHaveTextContent(/止损参考\s*—/);
   expect(panel).toHaveTextContent("待补充：真实ATR14");
 });

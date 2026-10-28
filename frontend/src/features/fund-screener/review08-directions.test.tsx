@@ -107,7 +107,7 @@ it("keeps one price table per fund and independently opens technical evidence wi
     expect(details.querySelector("details")).toBeNull();
     expect(details.querySelector("dl")).toBeNull();
     expect(within(card).getAllByText("建议买入区间")).toHaveLength(1);
-    expect(within(card).getAllByText("止盈目标一")).toHaveLength(1);
+    expect(within(card).getAllByText("建议卖出区间")).toHaveLength(1);
     expect(within(card).getAllByText("2.0724–2.1404")).toHaveLength(1);
     expect(card).not.toHaveTextContent("入场区间：");
     expect(

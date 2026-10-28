@@ -167,7 +167,7 @@ it("shows the frozen track prices, date and method from the selected study versi
   expect(frozen).toHaveTextContent("冻结轨道：右侧趋势");
   expect(frozen).toHaveTextContent("3700.13–3750.13 指数点");
   expect(frozen).toHaveTextContent("2026年10月10日");
-  expect(frozen).toHaveTextContent("止损：—");
+  expect(frozen).toHaveTextContent(/止损参考\s*—/);
   expect(frozen).toHaveTextContent("frozen-zones-v1");
   expect(within(frozen).queryByRole("button")).not.toBeInTheDocument();
 });

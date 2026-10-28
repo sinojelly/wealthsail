@@ -2033,6 +2033,22 @@
 .op-value-prices .op-value-stop {
   color: #b4232d;
 }
+.op-value-prices small {
+  color: #64748b;
+  font-size: 11px;
+}
+.op-value-prices .op-sell-zone-active {
+  color: #c2410c;
+}
+.op-sell-zone-conclusion {
+  padding: 9px 11px;
+  border-left: 3px solid #ea580c;
+  border-radius: 4px;
+  background: #fff1e8;
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.65;
+}
 .op-value-fund > button {
   border: 1px solid #8db8af;
   background: #effbf6;
@@ -2682,6 +2698,11 @@
   background: #f1f4f7;
   color: #526477;
 }
+.op-buy-zone-status.tone-rose {
+  background: #fff0e7;
+  color: #bd3b15;
+  border: 1px solid #f5b49b;
+}
 .op-nav-trend {
   min-width: 0;
   width: 100%;
@@ -2753,6 +2774,10 @@
 }
 .op-nav-legend .buy::before {
   background: #8edbcc;
+  height: 8px;
+}
+.op-nav-legend .sell::before {
+  background: #fdba8c;
   height: 8px;
 }
 .op-nav-legend .stop::before {

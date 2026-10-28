@@ -158,6 +158,7 @@ function FundPlan({
   const price = (value: number | string | null | undefined) =>
     planPrice(value, plan);
   const status = buyZoneStatus(plan, track);
+  const inSellZone = plan.inSellZone === true || track?.inSellZone === true;
   const canTrack =
     !!reportRunId &&
     !!onTrack &&
@@ -179,6 +180,11 @@ function FundPlan({
       : null;
   const displayedPrice = confirmed?.value ?? plan.currentPrice;
   const displayedAsOf = confirmed?.asOf ?? plan.asOf;
+  const updatedConfirmed =
+    !!confirmed &&
+    (confirmed.asOf!.slice(0, 10) > (plan.asOf?.slice(0, 10) ?? "") ||
+      Number(confirmed.value) !== Number(plan.currentPrice));
+  const updatedEstimate = !!latest.data?.currentEstimate;
   const displayedChange = confirmed
     ? confirmed.changePct
     : plan.currentChangePct;
@@ -279,17 +285,17 @@ function FundPlan({
                   {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
                 </dd>
               </div>
+              <div>
+                <dt>建议卖出区间</dt>
+                <dd className={inSellZone ? "op-sell-zone-active" : undefined}>
+                  {price(track.sellZoneMin ?? track.takeProfitT1)}–
+                  {price(track.sellZoneMax ?? track.takeProfitT2)}
+                </dd>
+                <small>T1 / T2 分批止盈</small>
+              </div>
               <div className="op-value-stop">
                 <dt>止损参考</dt>
                 <dd>{price(track.stopLossPrice)}</dd>
-              </div>
-              <div>
-                <dt>止盈目标一</dt>
-                <dd>{price(track.takeProfitT1)}</dd>
-              </div>
-              <div>
-                <dt>止盈目标二</dt>
-                <dd>{price(track.takeProfitT2)}</dd>
               </div>
             </dl>
           ) : (
@@ -304,6 +310,20 @@ function FundPlan({
             <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
           )}
           <PlanRevision plan={plan} />
+          {track?.priceState === "PARTIAL" && (
+            <p className="op-plan-time-basis">
+              买卖依据尚未完整，当前区间仅供观察，请等待历史样本与风险尺度补齐。
+            </p>
+          )}
+          {inSellZone && (
+            <p className="op-sell-zone-conclusion">
+              {updatedConfirmed
+                ? "研究时已进入建议卖出区间；最新净值已更新，请按当前价格重新评估。"
+                : updatedEstimate
+                  ? "研究时已进入建议卖出区间；当前估值仅供参考，请核对最新行情后重新评估。"
+                  : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
+            </p>
+          )}
           {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
             <p>复盘校准：{readingText(plan.calibrationNote, 140)}</p>
           )}
