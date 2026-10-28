@@ -275,7 +275,7 @@ def create_app(
     async def inspect_account():
         from backend.integrations.codex_private import read_account
 
-        return await read_account(executable, environment=child_environment, timeout=15)
+        return await read_account(executable, environment=child_environment)
 
     account_cache = AccountMetadataCache(
         inspect_account, generation=lambda: auth_file_generation(child_environment),

@@ -231,7 +231,7 @@ async def account(settings, *, fresh=False, refresh=False) -> dict:
             key = (executable, os.environ.get("CODEX_HOME", ""))
             if key not in caches:
                 async def inspect():
-                    return await private.read_account(executable, timeout=15)
+                    return await private.read_account(executable)
 
                 if len(caches) >= 8:
                     caches.pop(next(iter(caches)))

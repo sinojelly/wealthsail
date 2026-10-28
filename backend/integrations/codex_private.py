@@ -38,6 +38,9 @@ from backend.integrations.codex_research import (
 
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 _STOP_TIMEOUT_SECONDS = 5
+# NAS account RPCs commonly take 12-14 seconds. Retain room for bounded process
+# cleanup below the internal HTTP deadline (23s) and client deadline (25s).
+ACCOUNT_READ_TIMEOUT_SECONDS = 20
 _ACCOUNT_LIMITATIONS = frozenset({
     "ACCOUNT_UNAVAILABLE", "ACCOUNT_UNAUTHENTICATED", "ACCOUNT_AUTH_CHANGED",
     "ACCOUNT_STALE", "ACCOUNT_IDENTITY_UNAVAILABLE", "CODEX_NOT_CONFIGURED",
@@ -440,11 +443,11 @@ async def _account_stage(stage):
         account_diagnostic(stage, started)
 
 
-async def read_account(executable, *, environment=None, timeout=15):
+async def read_account(executable, *, environment=None, timeout=ACCOUNT_READ_TIMEOUT_SECONDS):
     """Read account/limits with no thread, inference, login or token-file access."""
     source = os.environ if environment is None else environment
     try:
-        timeout = min(_timeout(timeout), 15)
+        timeout = min(_timeout(timeout), ACCOUNT_READ_TIMEOUT_SECONDS)
         async with _account_stage("snapshot"):
             async with asyncio.timeout(timeout):
                 with tempfile.TemporaryDirectory(prefix="wealthsail-codex-account-") as directory:

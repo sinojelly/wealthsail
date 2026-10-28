@@ -17,7 +17,7 @@ from backend.ai_usage.calculation import stamp, tokens
 
 logger = logging.getLogger(__name__)
 _current = ContextVar("ai_usage_task", default=None)
-# One client call has a 25 second outer limit (HTTP 23s / Runner read 15s).
+# One client call has a 25 second outer limit (HTTP 23s / Runner read 20s).
 # Telemetry gets no retries, and its two independent reads share a finite budget.
 SNAPSHOT_TIMEOUT_SECONDS = 26.0
 SNAPSHOT_TOTAL_BUDGET_SECONDS = 52.0
