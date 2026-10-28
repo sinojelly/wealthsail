@@ -31,6 +31,8 @@ import { studyMetricLabel } from "./study-display";
 import PlanRevision from "./PlanRevision";
 import { useLatestFundQuote } from "../latest-quote-resource";
 import { FundWatchQuote } from "./PriceWatchSummary";
+import EstimatedProfitRange from "./EstimatedProfitRange";
+import PlanPriceRefresh from "./PlanPriceRefresh";
 
 export interface DirectionTrackInput {
   reportRunId: string;
@@ -297,15 +299,23 @@ function FundPlan({
                 <dt>止损参考</dt>
                 <dd>{price(track.stopLossPrice)}</dd>
               </div>
+              <EstimatedProfitRange
+                track={track}
+                priceRefresh={plan.priceRefresh}
+              />
             </dl>
           ) : (
             <p>等待真实价格依据</p>
           )}
-          <small>
-            {timeLabel(plan.asOf)} ·{" "}
-            {selected === "LEFT_VALUE" ? "左侧" : "右侧"}
-            研究坐标
-          </small>
+          {plan.priceRefresh ? (
+            <PlanPriceRefresh plan={plan} />
+          ) : (
+            <small>
+              {timeLabel(plan.asOf)} ·{" "}
+              {selected === "LEFT_VALUE" ? "左侧" : "右侧"}
+              研究坐标
+            </small>
+          )}
           {planTimeBasisNote(plan) && (
             <p className="op-plan-time-basis">{planTimeBasisNote(plan)}</p>
           )}
@@ -317,11 +327,13 @@ function FundPlan({
           )}
           {inSellZone && (
             <p className="op-sell-zone-conclusion">
-              {updatedConfirmed
-                ? "研究时已进入建议卖出区间；最新净值已更新，请按当前价格重新评估。"
-                : updatedEstimate
-                  ? "研究时已进入建议卖出区间；当前估值仅供参考，请核对最新行情后重新评估。"
-                  : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
+              {plan.priceRefresh && plan.priceRefresh.state !== "READY"
+                ? "已触发卖出观察条件；当前买卖区间依据尚未完整，仅供参考，请核对最新净值与价格依据后再评估。"
+                : updatedConfirmed
+                  ? "研究时已进入建议卖出区间；最新净值已更新，请按当前价格重新评估。"
+                  : updatedEstimate
+                    ? "研究时已进入建议卖出区间；当前估值仅供参考，请核对最新行情后重新评估。"
+                    : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
             </p>
           )}
           {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
@@ -474,7 +486,7 @@ export default function ValueDirections({
       ) : (
         <>
           <p>
-            此份历史格式报告未生成综合方向，保留原始研究计划。需要重新采集并分析以查看新版方向与买卖点；历史原价不会回算。
+            此份报告未生成综合方向，以下展示研究价格计划；最新买卖区间以价格依据中的计算日期与算法版本为准。
           </p>
           {report.actionablePlans?.map((plan) => (
             <ActionablePlan

@@ -374,11 +374,16 @@ export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   takeProfitT2: PlanPrice;
   sellZoneMin?: PlanPrice;
   sellZoneMax?: PlanPrice;
+  estimatedProfitMinPct?: PlanPrice;
+  estimatedProfitMaxPct?: PlanPrice;
+  currentToSellMaxPct?: PlanPrice;
   buyZoneAnchor?:
     | "MA60_HISTORICAL_SUPPORT"
     | "MA20_CAPPED_P65"
     | "SHORT_HISTORY_REFERENCE"
-    | "LEFT_BOLLINGER_SUPPORT";
+    | "LEFT_BOLLINGER_SUPPORT"
+    | "TWO_YEAR_LOWER_SUPPORT"
+    | "TWO_YEAR_LOW_SUPPORT";
   reasons: string[];
   priceState: string;
   missingEvidence?: string[];
@@ -394,6 +399,16 @@ export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
   asOf: string | null;
   sourceUri: string | null;
   currentPrice: PlanPrice;
+  researchAsOf?: string | null;
+  researchMethodVersion?: string | null;
+  researchSourceUri?: string | null;
+  priceRefresh?: {
+    state: "READY" | "PARTIAL" | "UNAVAILABLE";
+    calculatedAt?: string | null;
+    navAsOf: string | null;
+    methodVersion: string;
+    reason?: string | null;
+  };
   /** Percent return for currentPrice/asOf; 1.23 means 1.23%. */
   currentChangePct?: PlanPrice;
   indicators: Record<string, PlanPrice>;

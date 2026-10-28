@@ -14,6 +14,8 @@ import {
 } from "../plan-display";
 import { readingText } from "../research-reading";
 import PlanRevision from "./PlanRevision";
+import EstimatedProfitRange from "./EstimatedProfitRange";
+import PlanPriceRefresh from "./PlanPriceRefresh";
 
 const planTrackLabel = (track: PlanTrack) =>
   track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势";
@@ -51,9 +53,17 @@ const parameterLabel = (key: string) =>
       historicalPriceWindow: "历史价格样本窗口",
       historicalPercentileMethod: "历史价格分位算法",
       middleHighNavPercentile: "中高位净值分位阈值",
+      middleHighPriceSpanRatio: "中高位周期跨度比例阈值",
+      maximumHighBuyPricePercentile: "中高位买区历史分位上限",
+      maximumLowBuyPricePercentile: "中低位买区历史分位上限",
+      maximumHighBuyPriceSpanRatio: "中高位买区周期跨度比例上限",
+      maximumLowBuyPriceSpanRatio: "中低位买区周期跨度比例上限",
       maximumTrendBuyPricePercentile: "趋势买区历史价格分位上限",
       sellZoneLowerPricePercentile: "卖区下沿历史价格分位",
       sellZoneUpperPricePercentile: "卖区上沿历史价格分位",
+      minimumSellPriceSpanRatio: "卖区下沿周期跨度比例下限",
+      minimumTargetProfitRatio: "最低目标价差比例",
+      historicalPeakSellCapRatio: "历史高点卖区封顶比例",
       navRewardRiskBasis: "净值买卖区间依据",
     }) as Record<string, string>
   )[key] ?? "其他策略参数";
@@ -87,15 +97,21 @@ export function ActionablePlanEvidence({
     bollLower: "布林下轨",
     momentum20: "20期动量",
     navPercentile1y: "近1年净值分位（%）",
+    p30: "历史30%分位价格",
     p35: "历史35%分位价格",
     p40: "历史40%分位价格",
+    p45: "历史45%分位价格",
     p50: "历史中位价格",
     p55: "历史55%分位价格",
     p60: "历史60%分位价格",
     p65: "历史65%分位价格",
+    p75: "历史75%分位价格",
     p85: "历史85%分位价格",
+    p92: "历史92%分位价格",
     p95: "历史95%分位价格",
+    troughLow: "历史周期低点",
     peakHigh: "历史周期高点",
+    priceSpan: "历史周期高低跨度",
   };
   const numeric = (value: number | string | null, digits = 4) =>
     value == null || !Number.isFinite(Number(value))
@@ -108,6 +124,8 @@ export function ActionablePlanEvidence({
           LINEAR_INTERPOLATION: "线性插值",
           HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR:
             "历史支撑与阻力，不按现价抬高目标",
+          TWO_YEAR_SPAN_SUPPORT_RESISTANCE_PEAK_CAPPED:
+            "近2年高低跨度支撑与阻力，卖区受历史高点约束",
         }[value] ?? readingText(value, 100))
       : Number.isFinite(value)
         ? String(Number(value.toFixed(4)))
@@ -140,6 +158,9 @@ export function ActionablePlanEvidence({
                       MA20_CAPPED_P65: "20期均线，受历史65%分位价格约束",
                       SHORT_HISTORY_REFERENCE: "短期历史参考，长期样本待补齐",
                       LEFT_BOLLINGER_SUPPORT: "布林下轨支撑与历史价格上限",
+                      TWO_YEAR_LOWER_SUPPORT:
+                        "近2年下半区支撑带与60期、200期均线",
+                      TWO_YEAR_LOW_SUPPORT: "当前低位与近2年下半区支撑带",
                     }[track.buyZoneAnchor]
                   }
                 </p>
@@ -270,6 +291,7 @@ export default function ActionablePlan({
           <span className={buyZoneClassName(status)}>{status.text}</span>
         )}
       </p>
+      <PlanPriceRefresh plan={result} />
       {planTimeBasisNote(result) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(result)}</p>
       )}
@@ -314,10 +336,16 @@ export default function ActionablePlan({
                   {price(track.stopLossPrice)} {unit}
                 </dd>
               </div>
+              <EstimatedProfitRange
+                track={track}
+                priceRefresh={result.priceRefresh}
+              />
             </dl>
             {(result.inSellZone === true || track.inSellZone === true) && (
               <p className="op-sell-zone-conclusion">
-                当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。
+                {result.priceRefresh && result.priceRefresh.state !== "READY"
+                  ? "已触发卖出观察条件；当前买卖区间依据尚未完整，仅供参考，请核对最新净值与价格依据后再评估。"
+                  : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
               </p>
             )}
             {track.priceState === "PARTIAL" && (

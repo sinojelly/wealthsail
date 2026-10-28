@@ -2040,6 +2040,21 @@
 .op-value-prices .op-sell-zone-active {
   color: #c2410c;
 }
+.op-value-prices .op-value-profit {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: #ecfdf5;
+}
+.op-value-prices .op-value-profit dd {
+  color: #047857;
+}
+.op-value-prices .op-value-profit small {
+  display: block;
+  margin-top: 3px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .op-sell-zone-conclusion {
   padding: 9px 11px;
   border-left: 3px solid #ea580c;

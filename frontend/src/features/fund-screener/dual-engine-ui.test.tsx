@@ -188,6 +188,185 @@ it("shows disclosed QDII prices with publication delay context on compact and fu
   expect(JSON.stringify(data)).toBe(original);
 });
 
+it.each([
+  ["12", "29.1666", "+12.00% ~ +29.17%"],
+  ["-1.25", 0, "-1.25% ~ 0.00%"],
+])(
+  "shows server-calculated profit bounds on compact and full plans without malformed signs",
+  (minimum, maximum, expected) => {
+    const data = daily();
+    const result = plan();
+    result.priceBasis = "ADJUSTED_PRICE";
+    Object.assign(result.tracks[0], {
+      estimatedProfitMinPct: minimum,
+      estimatedProfitMaxPct: maximum,
+      currentToSellMaxPct: "17.458",
+    });
+    data.report!.valueDirections![0].plans = [result];
+    const original = JSON.stringify(result);
+    render(
+      <>
+        <ValueDirections data={data} />
+        <ActionablePlan result={result} />
+      </>,
+    );
+    expect(screen.getAllByText("预估盈利区间")).toHaveLength(2);
+    expect(screen.getAllByText(expected)).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "按买区上沿→卖区下沿(保守) 至 买区下沿→卖区上沿(理想) 测算",
+      ),
+    ).toHaveLength(2);
+    expect(screen.getAllByText("当前至卖区上沿：+17.46%")).toHaveLength(2);
+    expect(document.body).not.toHaveTextContent(/\+-|NaN|Infinity/);
+    expect(JSON.stringify(result)).toBe(original);
+  },
+);
+
+it.each([undefined, null, "", "NaN", "Infinity"])(
+  "does not invent profit bounds for absent or invalid old-snapshot values %s",
+  (value) => {
+    const data = daily();
+    const result = plan();
+    result.priceBasis = "ADJUSTED_PRICE";
+    Object.assign(result.tracks[0], {
+      estimatedProfitMinPct: value,
+      estimatedProfitMaxPct: value,
+      currentToSellMaxPct: value,
+    });
+    data.report!.valueDirections![0].plans = [result];
+    render(
+      <>
+        <ValueDirections data={data} />
+        <ActionablePlan result={result} />
+      </>,
+    );
+    expect(screen.queryByText("预估盈利区间")).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前至卖区上沿/)).not.toBeInTheDocument();
+  },
+);
+
+it("explains two-year span anchors and v6 price caps in Chinese", async () => {
+  const result = plan();
+  result.priceBasis = "ADJUSTED_PRICE";
+  result.indicators = {
+    p30: "1.2000",
+    p45: "1.3500",
+    p75: "1.6000",
+    p92: "1.7500",
+    troughLow: "1.0000",
+    peakHigh: "1.9000",
+    priceSpan: "0.9000",
+  };
+  result.parameters = {
+    historicalPriceWindow: [120, 500],
+    middleHighPriceSpanRatio: 0.6,
+    maximumHighBuyPricePercentile: 45,
+    maximumLowBuyPricePercentile: 40,
+    maximumHighBuyPriceSpanRatio: 0.45,
+    maximumLowBuyPriceSpanRatio: 0.35,
+    minimumSellPriceSpanRatio: 0.6,
+    minimumTargetProfitRatio: 0.12,
+    historicalPeakSellCapRatio: 0.992,
+    navRewardRiskBasis: "TWO_YEAR_SPAN_SUPPORT_RESISTANCE_PEAK_CAPPED",
+  };
+  render(<ActionablePlan result={result} />);
+  await userEvent.click(screen.getByText("价格依据与算法"));
+  expect(screen.getByText("历史30%分位价格：1.2000")).toBeVisible();
+  expect(screen.getByText("历史45%分位价格：1.3500")).toBeVisible();
+  expect(screen.getByText("历史75%分位价格：1.6000")).toBeVisible();
+  expect(screen.getByText("历史92%分位价格：1.7500")).toBeVisible();
+  expect(screen.getByText("历史周期低点：1.0000")).toBeVisible();
+  expect(screen.getByText("历史周期高低跨度：0.9000")).toBeVisible();
+  expect(screen.getByText(/历史价格样本窗口=120, 500/)).toBeVisible();
+  expect(screen.getByText(/最低目标价差比例=0.12/)).toBeVisible();
+  expect(screen.getByText(/历史高点卖区封顶比例=0.992/)).toBeVisible();
+  expect(
+    screen.getByText(/近2年高低跨度支撑与阻力，卖区受历史高点约束/),
+  ).toBeVisible();
+  expect(document.body).not.toHaveTextContent(/其他策略参数|其他算法观察/);
+});
+
+it("separates old v4 research dates from backend-refreshed v6 prices and profit bounds", () => {
+  const data = daily();
+  const result = plan();
+  result.priceBasis = "ADJUSTED_PRICE";
+  Object.assign(result, {
+    methodVersion: "actionable-zones-v6",
+    asOf: "2026-10-28",
+    currentPrice: "1.7675",
+    researchAsOf: "2026-10-23",
+    researchMethodVersion: "actionable-zones-v4",
+    priceRefresh: {
+      state: "READY",
+      calculatedAt: "2026-10-28T19:00:00+08:00",
+      navAsOf: "2026-10-28",
+      methodVersion: "actionable-zones-v6",
+    },
+  });
+  Object.assign(result.tracks[0], {
+    estimatedProfitMinPct: "16.12",
+    estimatedProfitMaxPct: "33.45",
+  });
+  data.report!.asOf = "2026-10-23";
+  data.report!.valueDirections![0].plans = [result];
+  const original = JSON.stringify(result);
+  render(
+    <>
+      <ValueDirections data={data} />
+      <ActionablePlan result={result} />
+    </>,
+  );
+  expect(
+    screen.getAllByText("价位更新：净值日期2026年10月28日 · v6"),
+  ).toHaveLength(2);
+  expect(screen.getAllByText("研究日期：2026年10月23日 · v4")).toHaveLength(2);
+  expect(screen.getAllByText("+16.12% ~ +33.45%")).toHaveLength(2);
+  expect(
+    screen.queryByText(/2026年10月28日 · 左侧研究坐标/),
+  ).not.toBeInTheDocument();
+  expect(JSON.stringify(result)).toBe(original);
+});
+
+it.each([
+  ["PARTIAL", "价位依据不足"],
+  ["UNAVAILABLE", "价位暂不可用"],
+])(
+  "marks %s price refreshes and hides previous profit fields",
+  (state, text) => {
+    const data = daily();
+    const result = plan();
+    result.priceBasis = "ADJUSTED_PRICE";
+    Object.assign(result, {
+      inSellZone: true,
+      researchAsOf: "2026-10-23",
+      priceRefresh: {
+        state,
+        methodVersion: "actionable-zones-v6",
+        navAsOf: null,
+      },
+    });
+    Object.assign(result.tracks[0], {
+      estimatedProfitMinPct: "16.12",
+      estimatedProfitMaxPct: "33.45",
+    });
+    data.report!.valueDirections![0].plans = [result];
+    render(
+      <>
+        <ValueDirections data={data} />
+        <ActionablePlan result={result} />
+      </>,
+    );
+    expect(screen.getAllByText(new RegExp(text))).toHaveLength(2);
+    expect(screen.queryByText("预估盈利区间")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("16.12%");
+    expect(
+      screen.getAllByText(/已触发卖出观察条件；当前买卖区间依据尚未完整/),
+    ).toHaveLength(2);
+    expect(document.body).not.toHaveTextContent("持仓可分批止盈兑现");
+  },
+);
+
 it("keeps equally important media events in report order and reads source states in Chinese", async () => {
   const data = daily();
   data.report!.sources = data.report!.sources.slice(0, 2);
