@@ -66,6 +66,22 @@ def test_midrank_uses_observations_rather_than_min_max_position():
     }
 
 
+def test_two_year_chart_window_matches_latest_nav_anchored_research_samples():
+    from backend.funds.nav_window import two_year_nav_points
+
+    row = history()
+    row["points"] = [
+        {"date": (NOW.date() - timedelta(days=i + 3)).isoformat(), "close": str(i + 1)}
+        for i in reversed(range(900))
+    ]
+    result = module().history_view("008281", "芯片联接A", "2y", row, NOW)
+    expected = two_year_nav_points(row["points"])
+    assert len(expected) == len(result["points"]) == 500
+    assert result["points"][0]["date"] == expected[0]["date"]
+    assert result["points"][-1]["date"] == expected[-1]["date"]
+    assert result["coverage"]["requestedStartDate"] == "2024-10-17"
+
+
 def test_constant_series_is_fifty_and_month_subtraction_handles_leap_day():
     row = history()
     for p in row["points"]:

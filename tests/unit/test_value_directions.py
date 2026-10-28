@@ -289,6 +289,37 @@ def test_real_nav_quantitative_scan_can_supply_independent_direction_evidence(so
     assert actual["quantitativeEvidence"][0]["currentPrice"] == "1.2500"
 
 
+@pytest.mark.parametrize("minimum", [120, 220])
+def test_quantitative_direction_accepts_v6_120_sample_and_legacy_220_contracts(minimum):
+    public = quantitative_packet()
+    if minimum == 120:
+        public["quantitativeScan"].update(
+            methodVersion="fund-quant-scan-v2", minimumHistorySamples=120
+        )
+        for plan in [
+            *public["discoveryActionableZones"],
+            *public["quantitativeScan"]["items"],
+        ]:
+            plan.update(methodVersion="actionable-zones-v6", historySampleCount=150)
+    actual = validate(
+        [direction(sourceIds=[], macroCodes=[], quantitativeFundCodes=["005112"])],
+        public,
+    )[0]
+    assert actual["quantitativeEvidence"][0]["fundCode"] == "005112"
+
+
+def test_legacy_prices_cannot_claim_v6_shorter_history_contract():
+    public = quantitative_packet()
+    public["quantitativeScan"].update(
+        methodVersion="fund-quant-scan-v2", minimumHistorySamples=120
+    )
+    with pytest.raises(ValueError, match="missing current quantitative scan"):
+        validate(
+            [direction(sourceIds=[], macroCodes=[], quantitativeFundCodes=["005112"])],
+            public,
+        )
+
+
 @pytest.mark.parametrize(
     "problem",
     [

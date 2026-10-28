@@ -364,6 +364,16 @@ def discovery_packet(universe, anchors, previous, now):
 
 def _quantitative_scan(public, now):
     """Independent server scan; a qualifying condition is not an in-zone price."""
+    from backend.funds.nav_window import NAV_RESEARCH_MIN_SAMPLES
+
+    minimum_samples = (
+        NAV_RESEARCH_MIN_SAMPLES
+        if all(
+            plan.get("methodVersion") == "actionable-zones-v6"
+            for plan in public["discoveryActionableZones"]
+        )
+        else 220
+    )
     items = []
     sectors = {
         row["fundCode"]: row.get("discoverySector")
@@ -437,12 +447,12 @@ def _quantitative_scan(public, now):
     return {
         "methodVersion": "fund-quant-scan-v2",
         "asOf": now.isoformat(),
-        "minimumHistorySamples": 220,
+        "minimumHistorySamples": minimum_samples,
         "items": items,
         "coverage": {
             "pricedFundCount": len(items),
             "targetHistoryFundCount": sum(
-                item.get("historySampleCount", 0) >= 220 for item in items
+                item.get("historySampleCount", 0) >= minimum_samples for item in items
             ),
         },
     }
@@ -592,6 +602,10 @@ def _cohort_rank(history, now):
 
 
 async def collect_discovery_nav_histories(pool, now, *, catalysts=None):
+    from backend.funds.nav_window import (
+        NAV_HISTORY_FETCH_CALENDAR_DAYS,
+        NAV_SYNC_TARGET_SAMPLES,
+    )
     from backend.investment.discovery_master import ensure_discovery_fund_master
     from backend.investment.theme_graph import (
         read_themes,
@@ -634,8 +648,12 @@ async def collect_discovery_nav_histories(pool, now, *, catalysts=None):
             same_day
             and _disclosed_nav_quality(history, history.get("points", []), now)[0]
             == "READY"
+            and (history.get("providerHistoryProof") or {}).get("queryStart", "9999")
+            <= (
+                now.date() - timedelta(days=NAV_HISTORY_FETCH_CALENDAR_DAYS)
+            ).isoformat()
         )
-        if len(history.get("points", [])) >= 120 or complete_short:
+        if len(history.get("points", [])) >= NAV_SYNC_TARGET_SAMPLES or complete_short:
             if not _current_calendar(history, now):
                 async with system_connection(pool) as conn:
                     history["calendarProof"] = await _calendar_proof(conn, history, now)
@@ -658,7 +676,7 @@ async def collect_discovery_nav_histories(pool, now, *, catalysts=None):
         for row in needed
     ]
     collected = await collect_theme_nav_histories(
-        pool, now, asset_rows=rows, minimum_points=220
+        pool, now, asset_rows=rows, minimum_points=NAV_SYNC_TARGET_SAMPLES
     )
     async with system_connection(pool) as conn:
         for history in collected["fundHistories"]:

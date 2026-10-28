@@ -77,16 +77,17 @@ def test_short_nav_reference_keeps_legacy_risk_floor_without_claiming_history(
 def test_historical_nav_sell_band_supersedes_legacy_risk_target_floor(index):
     result = calculate([1] * 220)
     item = result["tracks"][index]
-    assert (item["takeProfitT1"], item["takeProfitT2"]) == ("1.0300", "1.0444")
+    # A flat historical peak cannot support a 12% exit above the entry.
+    assert (item["takeProfitT1"], item["takeProfitT2"]) == (None, None)
     assert item["sellZoneMin"] == item["takeProfitT1"]
     assert item["sellZoneMax"] == item["takeProfitT2"]
     assert (
         result["parameters"]["navRewardRiskBasis"]
-        == "HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR"
+        == "TWO_YEAR_SPAN_SUPPORT_RESISTANCE_PEAK_CAPPED"
     )
-    middle = (Decimal(item["entryZoneMin"]) + Decimal(item["entryZoneMax"])) / 2
-    risk = middle - Decimal(item["stopLossPrice"])
-    assert Decimal(item["takeProfitT1"]) - middle < Decimal("1.5") * risk
+    assert item["priceState"] == "PARTIAL"
+    assert item["estimatedProfitMinPct"] is item["estimatedProfitMaxPct"] is None
+    assert item["entryReady"] is False
 
 
 def test_index_targets_apply_the_same_floor_at_their_display_precision():

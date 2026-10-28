@@ -118,6 +118,82 @@ def test_discovery_plan_preserves_published_nav_change_through_public_projection
     assert public["discoveryActionableZones"][0]["currentChangePct"] == "1.25"
 
 
+def test_plan_accepts_550_stored_points_and_computes_same_two_year_chart_window():
+    from backend.funds.nav_history import history_view
+    from backend.funds.nav_window import two_year_nav_points
+
+    days = []
+    current = date(2026, 10, 16)
+    while len(days) < 550:
+        if current.weekday() < 5:
+            days.append(current)
+        current -= timedelta(days=1)
+    points = [
+        {"date": day.isoformat(), "close": str(Decimal("1") + Decimal(i) / 1000)}
+        for i, day in enumerate(reversed(days))
+    ]
+    history = nav_history(points=points, calendarProof=None)
+    plan = graph.nav_plan(history, now=NOW)
+    assert plan is not None
+    assert plan["historyStoredSampleCount"] == 550
+    expected = two_year_nav_points(points)
+    chart = history_view("008281", "芯片联接A", "2y", history, NOW)
+    assert plan["historySampleCount"] == len(chart["points"]) == len(expected)
+    assert plan["historicalPriceWindow"]["sampleCount"] == len(expected)
+
+
+@pytest.mark.asyncio
+async def test_deep_collection_keeps_550_points_and_matching_complete_disclosure_proof(
+    monkeypatch,
+):
+    from backend.integrations.fund_nav_fallback import _observations
+
+    @asynccontextmanager
+    async def acquire(pool):
+        yield type("Conn", (), {"fetch": AsyncMock(return_value=[])})()
+
+    monkeypatch.setattr(graph, "system_connection", acquire)
+
+    async def fetcher(code, start, end, client, **kwargs):
+        assert (end - start).days == 900
+        rows = _observations(
+            {
+                "adapter": "fund_open_fund_info_em",
+                "sourceUri": f"https://fund.eastmoney.com/pingzhongdata/{code}.js",
+                "complete": True,
+                "rows": [
+                    {
+                        "date": (end - timedelta(days=600 - i)).isoformat(),
+                        "close": "1.2",
+                    }
+                    for i in range(600)
+                ],
+            },
+            code,
+            start,
+            end,
+        )
+        rows[0].metadata["providerHistoryProof"]["retrievedAt"] = NOW.isoformat()
+        return rows
+
+    result = await graph.collect_theme_nav_histories(
+        object(),
+        NOW,
+        fetcher=fetcher,
+        now_provider=lambda: NOW,
+        asset_rows=[{"asset_code": "008281", "overseas_calendar_required": True}],
+        minimum_points=550,
+    )
+    history = result["fundHistories"][0]
+    assert (
+        len(history["points"]) == history["providerHistoryProof"]["pointCount"] == 550
+    )
+    plan = graph.nav_plan(history, now=NOW)
+    assert plan["historyQuality"] == "READY"
+    assert plan["historyStoredSampleCount"] == 550
+    assert plan["historySampleCount"] == 500
+
+
 @pytest.mark.asyncio
 async def test_injected_discovery_assets_keep_own_codes_and_overseas_requirements(
     monkeypatch,

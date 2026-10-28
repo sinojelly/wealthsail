@@ -12,12 +12,12 @@ from backend.integrations.market_data import Observation
 from backend.jobs.data_tasks import NavPersistenceStats
 
 
-def test_initial_history_window_starts_at_the_sixtieth_latest_trading_day() -> None:
-    """A new held fund receives the requested 60 trading-day official NAV backfill."""
+def test_initial_history_window_leaves_disclosure_room_beyond_550_samples() -> None:
+    """Initial coverage includes ten exchange sessions of disclosure room."""
     from backend.jobs.fund_nav_sync import nav_history_window
 
     end = date(2026, 9, 9)
-    trading_days = [end - timedelta(days=index) for index in range(60)]
+    trading_days = [end - timedelta(days=index) for index in range(560)]
 
     start, resolved_end = nav_history_window(
         latest_nav_on=None,
@@ -25,7 +25,7 @@ def test_initial_history_window_starts_at_the_sixtieth_latest_trading_day() -> N
         as_of=end,
     )
 
-    assert start == date(2026, 7, 12)
+    assert start == trading_days[-1]
     assert resolved_end == end
 
 
@@ -35,11 +35,67 @@ def test_incremental_history_window_rechecks_a_short_overlap_for_revisions() -> 
 
     start, end = nav_history_window(
         latest_nav_on=date(2026, 9, 7),
+        history_sample_count=550,
         trading_days=[date(2026, 9, 9)],
         as_of=date(2026, 9, 9),
     )
 
     assert (start, end) == (date(2026, 8, 31), date(2026, 9, 9))
+
+
+def test_existing_shallow_history_is_backfilled_even_with_recent_nav() -> None:
+    from backend.jobs.fund_nav_sync import nav_history_window
+
+    today = date(2026, 10, 28)
+    sessions = [today - timedelta(days=i) for i in range(560)]
+    start, end = nav_history_window(
+        latest_nav_on=today - timedelta(days=1),
+        history_sample_count=220,
+        trading_days=sessions,
+        as_of=today,
+    )
+    assert (start, end) == (sessions[-1], today)
+
+
+@pytest.mark.parametrize("unpublished_sessions", [1, 10])
+def test_backfill_covers_550_published_sessions_before_latest_nav_disclosure(
+    unpublished_sessions,
+):
+    from backend.jobs.fund_nav_sync import nav_history_window
+
+    today = date(2026, 10, 28)
+    sessions = []
+    cursor = today
+    while len(sessions) < 560:
+        if cursor.weekday() < 5:
+            sessions.append(cursor)
+        cursor -= timedelta(days=1)
+    latest_published = sessions[unpublished_sessions]
+    start, end = nav_history_window(
+        latest_nav_on=latest_published,
+        history_sample_count=220,
+        trading_days=sessions,
+        as_of=today,
+    )
+    published = [day for day in sessions if start <= day <= latest_published]
+    assert end == today
+    assert len(published) >= 550, "one deep request must not stop at 549 disclosed NAVs"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_exchange_calendar_uses_holiday_safe_backfill_window():
+    from backend.jobs.fund_nav_sync import _load_recent_trading_days, nav_history_window
+
+    class Conn:
+        async def fetch(self, _query, *_args):
+            return [{"calendar_date": date(2026, 10, 28)}]
+
+    today = date(2026, 10, 28)
+    sessions = await _load_recent_trading_days(Conn(), today)
+    start, end = nav_history_window(
+        latest_nav_on=None, trading_days=sessions, as_of=today
+    )
+    assert (end - start).days == 900
 
 
 class _SyncConnection:
@@ -76,7 +132,9 @@ async def _connection(conn):
 
 
 @pytest.mark.asyncio
-async def test_global_sync_deduplicates_shared_fund_before_fetching_and_persisting() -> None:
+async def test_global_sync_deduplicates_shared_fund_before_fetching_and_persisting() -> (
+    None
+):
     """One globally shared fund creates one provider request and one NAV write."""
     from backend.jobs.fund_nav_sync import sync_fund_nav_history
 

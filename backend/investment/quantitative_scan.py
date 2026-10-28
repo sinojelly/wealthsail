@@ -6,6 +6,24 @@ import re
 from uuid import UUID
 
 
+def scan_minimum_history_samples(value):
+    """V6 supports 120 samples; frozen earlier producers keep their 220 rule."""
+    from backend.funds.nav_window import NAV_RESEARCH_MIN_SAMPLES
+
+    rows = value.get("items")
+    return (
+        NAV_RESEARCH_MIN_SAMPLES
+        if value.get("methodVersion") == "fund-quant-scan-v2"
+        and value.get("minimumHistorySamples") == NAV_RESEARCH_MIN_SAMPLES
+        and isinstance(rows, list)
+        and all(
+            isinstance(row, dict) and row.get("methodVersion") == "actionable-zones-v6"
+            for row in rows
+        )
+        else 220
+    )
+
+
 def public_quantitative_scan(value, now):
     """Copy only complete original coordinates; never recalculate their prices."""
     from backend.macro.alpha_research import _price, _program_plan
@@ -25,6 +43,7 @@ def public_quantitative_scan(value, now):
         or len(rows) > 46
     ):
         raise ValueError("invalid quantitative scan version or time")
+    minimum_samples = scan_minimum_history_samples(value)
     items, seen, identities = [], set(), set()
     for row in rows:
         if not isinstance(row, dict):
@@ -165,14 +184,14 @@ def public_quantitative_scan(value, now):
     return {
         "methodVersion": value["methodVersion"],
         "asOf": value["asOf"],
-        "minimumHistorySamples": 220,
+        "minimumHistorySamples": minimum_samples,
         "items": items,
         "coverage": {
             "pricedFundCount": len(items),
             "targetHistoryFundCount": sum(
                 isinstance(item.get("historySampleCount"), int)
                 and not isinstance(item.get("historySampleCount"), bool)
-                and item["historySampleCount"] >= 220
+                and item["historySampleCount"] >= minimum_samples
                 for item in items
             ),
         },

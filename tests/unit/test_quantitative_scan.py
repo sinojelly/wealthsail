@@ -110,6 +110,30 @@ def test_public_scan_omits_private_fields_and_unusable_prices():
     assert "never publish" not in str(clean)
 
 
+@pytest.mark.parametrize(
+    "scan_version,plan_version,minimum,expected",
+    [
+        ("fund-quant-scan-v2", "actionable-zones-v6", 120, 120),
+        ("fund-quant-scan-v2", "actionable-zones-v3", 220, 220),
+        ("fund-quant-scan-v1", "actionable-zones-v3", 220, 220),
+    ],
+)
+def test_public_scan_sample_coverage_preserves_v6_and_legacy_contracts(
+    scan_version, plan_version, minimum, expected
+):
+    from backend.investment.quantitative_scan import public_quantitative_scan
+
+    raw = scan(1)
+    raw.update(methodVersion=scan_version, minimumHistorySamples=minimum)
+    item = raw["items"][0]
+    item.update(methodVersion=plan_version, historySampleCount=150)
+    if scan_version == "fund-quant-scan-v2":
+        item["signals"][0].update(candidate=False, entryReady=False)
+    clean = public_quantitative_scan(raw, NOW)
+    assert clean["minimumHistorySamples"] == expected
+    assert clean["coverage"]["targetHistoryFundCount"] == int(150 >= expected)
+
+
 def test_public_scan_does_not_trust_forged_signal_or_duplicate_identity():
     from backend.investment.quantitative_scan import public_quantitative_scan
 

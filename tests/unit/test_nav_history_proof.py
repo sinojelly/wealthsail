@@ -147,7 +147,7 @@ def test_digest_rejects_invalid_unit_nav(bad):
 
 
 @pytest.mark.asyncio
-async def test_history_proof_binds_the_retained_500_points_without_inventing_more_history():
+async def test_history_proof_binds_the_retained_550_points_without_inventing_more_history():
     start = date(2024, 1, 1)
     raw = [
         {
@@ -169,10 +169,10 @@ async def test_history_proof_binds_the_retained_500_points_without_inventing_mor
         )
     proof = rows[-1].metadata["providerHistoryProof"]
     assert len(rows) == proof["uniquePointCount"] == 600
-    assert proof["pointCount"] == 500
-    assert proof["firstDate"] == (start + timedelta(days=100)).isoformat()
+    assert proof["pointCount"] == 550
+    assert proof["firstDate"] == (start + timedelta(days=50)).isoformat()
     from backend.integrations.nav_history_proof import nav_points_digest
 
     assert proof["pointsDigest"] == nav_points_digest(
-        [{"date": r.as_of.date().isoformat(), "close": r.value} for r in rows[-500:]]
+        [{"date": r.as_of.date().isoformat(), "close": r.value} for r in rows[-550:]]
     )

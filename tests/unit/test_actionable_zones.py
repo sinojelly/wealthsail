@@ -485,16 +485,19 @@ def test_rounding_cannot_hide_an_inverted_original_reference_range():
 def test_right_pullback_zone_does_not_expand_to_a_rising_latest_nav(ohlc):
     plan = nav_calculate(points([1 + i * 0.001 for i in range(200)], ohlc=ohlc))
     right = track(plan, "RIGHT_TREND")
-    # The NAV-only risk floor is 0.0144; real OHLC here has ATR=2.
+    # At 200 observations v6 already uses real history, even without a full
+    # yearly percentile. The unusually large fixture OHLC must not lift prices.
+    assert right["entryZoneMax"] == "1.0896"
+    assert right.get("inBuyZone") is False
+    assert right.get("entryReady") is False
     if not ohlc:
-        assert right["entryZoneMin"] == "1.1816"
-        assert right["entryZoneMax"] == "1.1931"
-        assert right.get("inBuyZone") is False
-        assert right.get("entryReady") is False
-        assert right.get("entryStatus") == "🚀 高于买区 0.49%·等待回踩均线"
+        assert right["entryZoneMin"] == "1.0597"
+        assert right["inSellZone"] is True
+        assert Decimal(right["sellZoneMax"]) <= Decimal("1.199") * Decimal("0.992")
     else:
-        assert right["entryZoneMin"] == "0.0895"
-        assert right["entryZoneMax"] == "1.6895"
+        assert right["entryZoneMin"] == "1.0000"
+        assert right["priceState"] == "PARTIAL"
+        assert right["sellZoneMin"] is right["sellZoneMax"] is None
 
 
 def test_right_pullback_without_risk_scale_is_ma20_only_even_above_it():

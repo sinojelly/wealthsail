@@ -8,6 +8,7 @@ import re
 from zoneinfo import ZoneInfo
 
 from backend.errors import ValidationError_
+from backend.funds.nav_window import two_year_nav_points, two_year_nav_start
 from backend.integrations.nav_history_proof import nav_points_digest
 from backend.macro.research_debug_repository import active_operator
 
@@ -165,12 +166,20 @@ def history_view(code, name, period, history, now):
     now = local(now)
     start = period_start(period, now)
     points = valid_points(history, code, now)
+    if period == "2y" and points:
+        start = two_year_nav_start(date.fromisoformat(points[-1]["date"]))
     full = full_history_proven(history or {}, points, now)
     checked = recently_checked(history or {}, now)
     covered = checked and (full or interval_proven(history or {}, points, start))
-    selected = [
-        point for point in points if start is None or point["date"] >= start.isoformat()
-    ]
+    selected = (
+        two_year_nav_points(points)
+        if period == "2y"
+        else [
+            point
+            for point in points
+            if start is None or point["date"] >= start.isoformat()
+        ]
+    )
     values = [Decimal(point["close"]) for point in selected]
     summary = {
         "minimumNav": None,
@@ -279,6 +288,33 @@ async def _refresh_state(conn, code, tenant_id, user_id, now):
     }
 
 
+def select_history_view(code, name, period, histories, now):
+    """Share chart source selection with live plan repricing without HTTP I/O."""
+    candidates = [
+        history_view(code, name, period, obj(history), now) for history in histories
+    ]
+    result = max(
+        candidates,
+        key=lambda item: (
+            item["state"] == "READY",
+            item["coverage"]["fullHistory"] if period in {"2y", "all"} else False,
+            item.get("asOf") or "",
+            item["coverage"]["sampleCount"],
+            item.get("retrievedAt") or "",
+        ),
+        default=history_view(code, name, period, {}, now),
+    )
+    latest_known = max((item.get("asOf") or "" for item in candidates), default="")
+    if result.get("asOf") and result["asOf"] < latest_known:
+        result["state"] = "PARTIAL"
+        result["coverage"].update(
+            fullHistory=False,
+            reason="NEWER_CONFIRMED_NAV_AVAILABLE",
+            latestKnownNavDate=latest_known,
+        )
+    return result
+
+
 async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, now):
     now = local(now)
     if (
@@ -307,31 +343,13 @@ async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, n
         fund_code,
         now,
     )
-    candidates = [
-        history_view(
-            fund_code, identities[0]["fund_name"], period, obj(row["payload"]), now
-        )
-        for row in rows
-    ]
-    result = max(
-        candidates,
-        key=lambda item: (
-            item["state"] == "READY",
-            item["coverage"]["fullHistory"] if period in {"2y", "all"} else False,
-            item.get("asOf") or "",
-            item["coverage"]["sampleCount"],
-            item.get("retrievedAt") or "",
-        ),
-        default=history_view(fund_code, identities[0]["fund_name"], period, {}, now),
+    result = select_history_view(
+        fund_code,
+        identities[0]["fund_name"],
+        period,
+        [row["payload"] for row in rows],
+        now,
     )
-    latest_known = max((item.get("asOf") or "" for item in candidates), default="")
-    if result.get("asOf") and result["asOf"] < latest_known:
-        result["state"] = "PARTIAL"
-        result["coverage"].update(
-            fullHistory=False,
-            reason="NEWER_CONFIRMED_NAV_AVAILABLE",
-            latestKnownNavDate=latest_known,
-        )
     if not result["points"] and result["coverage"]["fullHistory"]:
         result["state"] = "UNAVAILABLE"
         if result["coverage"].get("reason") != "SOURCE_RECHECK_DUE":

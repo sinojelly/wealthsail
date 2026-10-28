@@ -43,7 +43,7 @@ def test_qdii_complete_disclosed_series_has_full_research_prices_without_claimin
     assert result["orderPriceAvailable"] is False
     assert result["asOf"] == history["asOf"]
     assert result["historySampleCount"] == len(history["points"])
-    assert result["historyTargetSamples"] == 220
+    assert result["historyTargetSamples"] == 500
     assert result["historyCoverage"] == "SHORT_HISTORY"
     for track in result["tracks"]:
         assert all(
@@ -114,7 +114,7 @@ def test_quantitative_scan_keeps_technical_trigger_distinct_from_inside_entry_zo
     public = discovery.discovery_packet([asset], [plan], {}, NOW)
     scan = public["quantitativeScan"]
     assert scan["methodVersion"] == "fund-quant-scan-v2"
-    assert scan["minimumHistorySamples"] == 220
+    assert scan["minimumHistorySamples"] == 120
     row = scan["items"][0]
     assert (
         row["fundCode"] == "162411" and row["priceTimeBasis"] == "LATEST_DISCLOSED_NAV"

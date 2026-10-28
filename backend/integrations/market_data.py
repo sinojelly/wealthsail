@@ -2028,7 +2028,7 @@ async def fetch_fund_nav_history(
 
         retained = [
             {"date": row.as_of.date().isoformat(), "close": row.value}
-            for row in result[-500:]
+            for row in result[-550:]
         ]
         proof = {
             "methodVersion": "eastmoney-nav-history-v1",

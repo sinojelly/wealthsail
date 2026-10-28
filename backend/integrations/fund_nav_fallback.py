@@ -254,7 +254,7 @@ def _observations(payload, symbol, start, end):
     ]
     if not points:
         return []
-    retained = points[-500:]
+    retained = points[-550:]
     proof = {
         "methodVersion": "akshare-unit-nav-history-v1",
         "fundCode": symbol,
@@ -329,7 +329,7 @@ def _complete_history(rows, symbol, start, end):
             proof["receivedRowCount"] != proof["totalCount"]
             or proof["totalCount"] < len(rows)
             or proof["uniquePointCount"] != len(rows)
-            or proof["pointCount"] != min(500, len(rows))
+            or proof["pointCount"] != min(550, len(rows))
             or proof["pageCount"] != proof["requiredPages"]
         ):
             return False
@@ -353,7 +353,7 @@ def _complete_history(rows, symbol, start, end):
                 return False
             points.append({"date": day.isoformat(), "close": row.value})
             previous = day
-        retained = points[-500:]
+        retained = points[-550:]
         retrieved = datetime.fromisoformat(proof["retrievedAt"])
         current = datetime.now(timezone.utc)
         return (
@@ -376,7 +376,7 @@ async def fetch_fund_nav_history_with_fallback(
     *,
     page_size=100,
     max_pages=200,
-    minimum_points=220,
+    minimum_points=550,
     timeout_seconds=30,
 ):
     """Use AKShare when primary data cannot prove its complete unit-NAV response."""

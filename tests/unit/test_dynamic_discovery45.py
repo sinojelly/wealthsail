@@ -103,7 +103,7 @@ def catalog(code, name, keyword="卫星", **changes):
 
 
 def complete_history(code="008281", count=120):
-    first = date(2025, 1, 1)
+    first = date(2023, 1, 1)
     days = [first + timedelta(days=i) for i in range((NOW.date() - first).days + 1)]
     points = [day for day in days if day.weekday() < 5][-count:]
     proof = {
@@ -332,10 +332,10 @@ async def test_missing_core_identity_is_reported_without_synthesizing_a_mapping(
 
 
 @pytest.mark.asyncio
-async def test_latest_completed_nav_with_120_samples_is_reused_across_calendar_days(
+async def test_latest_completed_nav_with_550_samples_is_reused_across_calendar_days(
     monkeypatch,
 ):
-    history = complete_history()
+    history = complete_history(count=550)
     before = deepcopy(history)
     conn = AsyncMock()
     conn.fetch.return_value = [{"fund_code": "008281", "payload": history}]
@@ -362,6 +362,32 @@ async def test_latest_completed_nav_with_120_samples_is_reused_across_calendar_d
     assert result["fundHistories"][0]["points"] == before["points"]
     assert history == before
     assert not conn.execute.await_args_list, "cache reuse must not mutate observations"
+
+
+@pytest.mark.asyncio
+async def test_current_220_sample_cache_is_deepened_before_reuse(monkeypatch):
+    history = complete_history(count=220)
+    conn = AsyncMock()
+    conn.fetch.return_value = [{"fund_code": "008281", "payload": history}]
+
+    @asynccontextmanager
+    async def acquire(pool):
+        yield conn
+
+    monkeypatch.setattr(discovery, "system_connection", acquire)
+    monkeypatch.setattr(theme_graph, "read_themes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        discovery, "read_discovery_assets", AsyncMock(return_value=[asset("008281")])
+    )
+    collector = AsyncMock(
+        return_value={"fundHistories": [], "themeNavSourceResults": {}}
+    )
+    monkeypatch.setattr(theme_graph, "collect_theme_nav_histories", collector)
+    await discovery.collect_discovery_nav_histories(object(), NOW)
+    assert collector.await_args.kwargs["minimum_points"] == 550
+    assert collector.await_args.kwargs["asset_rows"] == [
+        {"asset_code": "008281", "overseas_calendar_required": False}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -703,13 +729,14 @@ def test_scanner_v2_does_not_call_watch_right_track_an_entered_buy_signal():
     plan = theme_graph.nav_plan(history, now=NOW)
     plan["historyQuality"] = "READY"
     right = next(row for row in plan["tracks"] if row["track"] == "RIGHT_TREND")
-    # Isolate technical readiness from the v5 high-percentile exit veto.
+    # Isolate scanner technical readiness from historical cap/space guards.
     right.update(
         state="WATCH",
         entryZoneMin="1.1900",
         entryZoneMax="1.2500",
         inSellZone=False,
         entryBlocked=False,
+        priceState="READY",
     )
     result = discovery._quantitative_scan(
         {
@@ -737,3 +764,13 @@ def test_scanner_v2_does_not_call_watch_right_track_an_entered_buy_signal():
         if row["track"] == "RIGHT_TREND"
     )
     assert signal["entryReady"] is True
+
+
+def test_v6_scanner_coverage_uses_120_sample_history_floor():
+    plan = theme_graph.nav_plan(complete_history(count=150), now=NOW)
+    scan = discovery._quantitative_scan(
+        {"discoveryUniverse": [asset("008281")], "discoveryActionableZones": [plan]},
+        NOW,
+    )
+    assert scan["minimumHistorySamples"] == 120
+    assert scan["coverage"] == {"pricedFundCount": 1, "targetHistoryFundCount": 1}

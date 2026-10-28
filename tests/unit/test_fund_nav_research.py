@@ -83,12 +83,12 @@ async def test_real_unit_nav_refresh_is_bounded_and_append_only_after_http(monke
     job = _job()
     store = Store()
     _connection(monkeypatch, job, store)
-    points = _history(520)["points"]
+    points = _history(580)["points"]
 
     async def fetch(code, start, end, client, *, page_size, max_pages):
         assert store.active == 0
         assert code == "110022" and end == NOW.date()
-        assert (end - start).days == 730
+        assert (end - start).days >= 900
         assert page_size == 100 and max_pages == 32
         return [
             Observation(
@@ -111,7 +111,7 @@ async def test_real_unit_nav_refresh_is_bounded_and_append_only_after_http(monke
         fetcher=fetch,
         now_provider=lambda: NOW + timedelta(seconds=2),
     )
-    assert len(result["points"]) == 500
+    assert len(result["points"]) == 550
     assert result["priceBasis"] == "UNIT_NAV"
     assert result["asOf"] == "2026-10-16"
     assert result["availableAt"] == "2026-10-18T09:00:02+08:00"

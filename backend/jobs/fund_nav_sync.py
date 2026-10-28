@@ -17,14 +17,27 @@ import httpx
 
 from backend.common.database import Pool, system_connection
 from backend.config import Settings
-from backend.integrations.market_data import FUNDSOURCE_NAME, Observation, fetch_fund_nav_history
+from backend.funds.nav_window import (
+    NAV_HISTORY_FETCH_CALENDAR_DAYS,
+    NAV_SYNC_TARGET_SAMPLES,
+)
+from backend.integrations.market_data import (
+    FUNDSOURCE_NAME,
+    Observation,
+    fetch_fund_nav_history,
+)
 from backend.jobs.data_tasks import NavPersistenceStats, persist_nav_observations
 
 logger = logging.getLogger("wealthsail.fund_nav_sync")
 
-_INITIAL_HISTORY_TRADING_DAYS = 60
+# Query past the storage target so a not-yet-disclosed current NAV (or a
+# delayed overseas disclosure) does not leave the first backfill at 549 rows.
+_DISCLOSURE_BUFFER_TRADING_DAYS = 10
+_INITIAL_HISTORY_TRADING_DAYS = (
+    NAV_SYNC_TARGET_SAMPLES + _DISCLOSURE_BUFFER_TRADING_DAYS
+)
 _INCREMENTAL_OVERLAP_DAYS = 7
-_CALENDAR_FALLBACK_DAYS = 90
+_CALENDAR_FALLBACK_DAYS = NAV_HISTORY_FETCH_CALENDAR_DAYS
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +47,7 @@ class HeldFund:
     instrument_id: str
     symbol: str
     latest_nav_on: date | None
+    history_sample_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +62,9 @@ class FundNavHistorySyncStats:
     failed_instruments: int
 
 
-NavFetcher = Callable[[str, date, date, httpx.AsyncClient], Awaitable[list[Observation]]]
+NavFetcher = Callable[
+    [str, date, date, httpx.AsyncClient], Awaitable[list[Observation]]
+]
 NavPersister = Callable[[Pool, str, list[Observation]], Awaitable[NavPersistenceStats]]
 
 
@@ -57,15 +73,16 @@ def nav_history_window(
     latest_nav_on: date | None,
     trading_days: Sequence[date],
     as_of: date,
+    history_sample_count: int = 0,
 ) -> tuple[date, date]:
     """Return an inclusive fetch window for one fund.
 
-    A fund with no official NAV uses the 60th most recent trading day as the
-    beginning of its initial backfill.  Existing funds only re-read seven
-    calendar days so a late provider correction can replace a prior revision.
+    A new or shallow fund requests 560 exchange sessions to leave disclosure
+    room beyond the 550 stored-sample target. Complete histories only re-read
+    seven calendar days so a late provider correction can replace a revision.
     """
 
-    if latest_nav_on is not None:
+    if latest_nav_on is not None and history_sample_count >= NAV_SYNC_TARGET_SAMPLES:
         return latest_nav_on - timedelta(days=_INCREMENTAL_OVERLAP_DAYS), as_of
 
     normalized_days = sorted(
@@ -75,7 +92,7 @@ def nav_history_window(
         return normalized_days[_INITIAL_HISTORY_TRADING_DAYS - 1], as_of
     # The Worker bootstraps the exchange calendar before the scheduler starts.
     # This fallback keeps a cold or temporarily incomplete calendar from
-    # preventing the first truthful NAV import; it covers at least 60 weekdays.
+    # preventing the first truthful NAV import; 900 days includes holiday room.
     return as_of - timedelta(days=_CALENDAR_FALLBACK_DAYS), as_of
 
 
@@ -105,6 +122,7 @@ async def sync_fund_nav_history(
         return FundNavHistorySyncStats(0, 0, 0, 0, 0, 0)
 
     if fetcher is None:
+
         async def nav_fetcher(
             symbol: str, start: date, end: date, client: httpx.AsyncClient
         ) -> list[Observation]:
@@ -126,6 +144,7 @@ async def sync_fund_nav_history(
         for fund in funds:
             start, end = nav_history_window(
                 latest_nav_on=fund.latest_nav_on,
+                history_sample_count=fund.history_sample_count,
                 trading_days=trading_days,
                 as_of=as_of,
             )
@@ -209,7 +228,7 @@ async def _load_held_funds(conn) -> list[HeldFund]:
         )
         SELECT instrument.id AS instrument_id,
                alias.alias_value AS symbol,
-               latest_nav.latest_nav_on
+               latest_nav.latest_nav_on, latest_nav.history_sample_count
           FROM held_funds held
           JOIN reference.instruments instrument ON instrument.id = held.instrument_id
           JOIN LATERAL (
@@ -226,8 +245,10 @@ async def _load_held_funds(conn) -> list[HeldFund]:
                LIMIT 1
           ) alias ON TRUE
           LEFT JOIN LATERAL (
-              SELECT (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date
-                         AS latest_nav_on
+              SELECT max((observation.as_of AT TIME ZONE 'Asia/Shanghai')::date)
+                         AS latest_nav_on,
+                     count(DISTINCT (observation.as_of AT TIME ZONE 'Asia/Shanghai')::date)
+                         AS history_sample_count
                 FROM market.market_observations observation
                 JOIN reference.data_sources source ON source.id = observation.source_id
                WHERE observation.subject_type = 'FUND'
@@ -236,8 +257,6 @@ async def _load_held_funds(conn) -> list[HeldFund]:
                  AND observation.value IS NOT NULL
                  AND observation.value > 0
                  AND source.name = $1
-               ORDER BY observation.as_of DESC, observation.revision DESC
-               LIMIT 1
           ) latest_nav ON TRUE
          WHERE instrument.asset_type = 'OFF_EXCHANGE_FUND'
            AND instrument.lifecycle_status = 'ACTIVE'
@@ -250,6 +269,7 @@ async def _load_held_funds(conn) -> list[HeldFund]:
             instrument_id=str(row["instrument_id"]),
             symbol=str(row["symbol"]).strip().zfill(6),
             latest_nav_on=row["latest_nav_on"],
+            history_sample_count=int(row.get("history_sample_count") or 0),
         )
         for row in rows
     ]
@@ -273,12 +293,6 @@ async def _load_recent_trading_days(conn, as_of: date) -> list[date]:
     if len(days) >= _INITIAL_HISTORY_TRADING_DAYS:
         return days
 
-    # The scheduler has weekday fallback semantics when the exchange calendar
-    # is empty. Mirror that behavior solely for the first backfill window.
-    fallback: list[date] = []
-    cursor = as_of
-    while len(fallback) < _INITIAL_HISTORY_TRADING_DAYS:
-        if cursor.weekday() < 5:
-            fallback.append(cursor)
-        cursor -= timedelta(days=1)
-    return fallback
+    # Synthesizing 550 weekdays misses exchange holidays and would still yield
+    # fewer than 550 NAV samples. Let the window use the 900-day safety margin.
+    return []

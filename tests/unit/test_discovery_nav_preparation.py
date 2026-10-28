@@ -43,7 +43,7 @@ async def test_automatic_discovery_collects_long_missing_history_and_appends_sha
         "INSERT INTO market.fund_research_nav_histories" in call.args[0]
         for call in conn.execute.await_args_list
     )
-    assert collected.await_args.kwargs["minimum_points"] == 220
+    assert collected.await_args.kwargs["minimum_points"] == 550
 
 
 @pytest.mark.asyncio
@@ -132,8 +132,14 @@ async def test_complete_short_history_is_reused_without_repeated_impossible_back
     monkeypatch,
 ):
     from test_disclosed_nav_opportunities import disclosed_history
+    from datetime import timedelta
 
     history = disclosed_history()
+    # A complete short result can be reused only after searching the full
+    # deep-sync interval, rather than proving just its old one-month query.
+    history["providerHistoryProof"]["queryStart"] = (
+        NOW.date() - timedelta(days=900)
+    ).isoformat()
     conn = AsyncMock()
     conn.fetch.return_value = [{"fund_code": "162411", "payload": history}]
 
@@ -161,3 +167,35 @@ async def test_complete_short_history_is_reused_without_repeated_impossible_back
     assert result["fundHistories"][0]["fundCode"] == "162411"
     assert collector.await_args.kwargs["asset_rows"] == []
     assert result["themeNavSourceResults"]["162411"]["records"] < 220
+
+
+@pytest.mark.asyncio
+async def test_complete_but_shallow_query_is_not_a_deep_backfill_proof(monkeypatch):
+    from test_disclosed_nav_opportunities import disclosed_history
+
+    history = disclosed_history()  # Complete only within a one-month interval.
+    conn = AsyncMock()
+    conn.fetch.return_value = [{"fund_code": "162411", "payload": history}]
+
+    @asynccontextmanager
+    async def acquire(pool):
+        yield conn
+
+    monkeypatch.setattr(discovery, "system_connection", acquire)
+    monkeypatch.setattr(theme_graph, "read_themes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        discovery,
+        "read_discovery_assets",
+        AsyncMock(
+            return_value=[{"fundCode": "162411", "overseasCalendarRequired": True}]
+        ),
+    )
+    collector = AsyncMock(
+        return_value={"fundHistories": [], "themeNavSourceResults": {}}
+    )
+    monkeypatch.setattr(theme_graph, "collect_theme_nav_histories", collector)
+    await discovery.collect_discovery_nav_histories(object(), NOW)
+    assert collector.await_args.kwargs["minimum_points"] == 550
+    assert collector.await_args.kwargs["asset_rows"] == [
+        {"asset_code": "162411", "overseas_calendar_required": True}
+    ]

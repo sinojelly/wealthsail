@@ -112,6 +112,32 @@ async def test_failed_primary_uses_verified_unit_nav_fallback_with_source_proof(
     assert all(r.field_code == "NAV" for r in rows)
 
 
+def test_fallback_proof_retains_all_550_sync_samples():
+    from backend.integrations.nav_history_proof import nav_points_digest
+
+    m = adapter()
+    start = date(2024, 1, 1)
+    end = start + timedelta(days=599)
+    payload = {
+        "adapter": "fund_open_fund_info_em",
+        "sourceUri": "https://fund.eastmoney.com/pingzhongdata/162411.js",
+        "complete": True,
+        "rows": [
+            {
+                "date": (start + timedelta(days=i)).isoformat(),
+                "close": str(1 + Decimal(i) / 10000),
+            }
+            for i in range(600)
+        ],
+    }
+    rows = m._observations(payload, "162411", start, end)
+    proof = rows[0].metadata["providerHistoryProof"]
+    assert proof["pointCount"] == 550
+    assert proof["firstDate"] == (start + timedelta(days=50)).isoformat()
+    assert proof["pointsDigest"] == nav_points_digest(payload["rows"][-550:])
+    assert m._complete_history(rows, "162411", start, end) is True
+
+
 @pytest.mark.asyncio
 async def test_insufficient_primary_keeps_longer_valid_response_if_fallback_fails(
     monkeypatch,

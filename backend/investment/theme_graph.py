@@ -15,6 +15,13 @@ import httpx
 
 from backend.common.database import system_connection
 from backend.dependencies import now_shanghai
+from backend.funds.nav_window import (
+    NAV_HISTORY_FETCH_CALENDAR_DAYS,
+    NAV_RESEARCH_MAX_SAMPLES,
+    NAV_RESEARCH_MIN_SAMPLES,
+    NAV_SYNC_TARGET_SAMPLES,
+    two_year_nav_points,
+)
 from backend.indicators.actionable_zones import compute_actionable_price_plan
 
 THEMES = {
@@ -297,7 +304,7 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         if subject_kind == "fund":
             UUID(str(subject_id))
         raw = history.get("points")
-        if not isinstance(raw, list) or not raw or len(raw) > 500:
+        if not isinstance(raw, list) or not raw or len(raw) > NAV_SYNC_TARGET_SAMPLES:
             return None
         points = []
         previous = None
@@ -321,8 +328,12 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
             return None
     except (KeyError, ValueError, TypeError, InvalidOperation):
         return None
+    # Validate the full stored sequence against its provenance before slicing;
+    # provider digests bind the retained samples, not the research subset.
+    quality, reason = _history_quality(history, points, now)
+    research_points = two_year_nav_points(points)
     plan = compute_actionable_price_plan(
-        points,
+        research_points,
         subject_kind=subject_kind,
         subject_id=subject_id or code,
         label=label or code,
@@ -332,7 +343,6 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         source_uri=history["sourceUri"],
         market="FUND_CN",
     )
-    quality, reason = _history_quality(history, points, now)
     plan.update(
         fundCode=code,
         retrievedAt=retrieved.isoformat(),
@@ -340,9 +350,12 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         publishedAt=None,
         timeBasis="PROVIDER_NAV_DATE",
         historyQuality=quality,
-        historySampleCount=len(points),
-        historyTargetSamples=220,
-        historyCoverage="SUFFICIENT" if len(points) >= 220 else "SHORT_HISTORY",
+        historySampleCount=len(research_points),
+        historyStoredSampleCount=len(points),
+        historyTargetSamples=NAV_RESEARCH_MAX_SAMPLES,
+        historyCoverage="SUFFICIENT"
+        if len(research_points) >= NAV_RESEARCH_MIN_SAMPLES
+        else "SHORT_HISTORY",
         orderPriceAvailable=False,
     )
     if quality == "READY" and (
@@ -367,6 +380,9 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
                 stopLossPrice=None,
                 takeProfitT1=None,
                 takeProfitT2=None,
+                estimatedProfitMinPct=None,
+                estimatedProfitMaxPct=None,
+                currentToSellMaxPct=None,
                 **(
                     {"sellZoneMin": None, "sellZoneMax": None, "inSellZone": False}
                     if "inSellZone" in track
@@ -439,11 +455,17 @@ async def collect_theme_nav_histories(
                     observations = await asyncio.wait_for(
                         (fetcher or fetch_fund_nav_history)(
                             code,
-                            now.date() - timedelta(days=730 if minimum_points else 370),
+                            now.date()
+                            - timedelta(days=NAV_HISTORY_FETCH_CALENDAR_DAYS),
                             now.date(),
                             client,
                             page_size=100,
-                            max_pages=32 if minimum_points else 20,
+                            max_pages=32,
+                            **(
+                                {"minimum_points": minimum_points}
+                                if minimum_points and fetcher is None
+                                else {}
+                            ),
                         ),
                         timeout=min(45, remaining),
                     )
@@ -474,7 +496,9 @@ async def collect_theme_nav_histories(
                                     else {}
                                 ),
                             }
-                    points = [by_day[day] for day in sorted(by_day)][-500:]
+                    points = [by_day[day] for day in sorted(by_day)][
+                        -NAV_SYNC_TARGET_SAMPLES:
+                    ]
                     if not points:
                         return None, {"status": "UNAVAILABLE", "records": 0}
                     finished = max(now, now_provider())

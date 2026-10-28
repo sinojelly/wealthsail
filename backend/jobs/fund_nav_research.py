@@ -13,6 +13,10 @@ import httpx
 from backend.common.database import system_connection
 from backend.dependencies import now_shanghai
 from backend.errors import DataUnavailableError
+from backend.funds.nav_window import (
+    NAV_HISTORY_FETCH_CALENDAR_DAYS,
+    NAV_SYNC_TARGET_SAMPLES,
+)
 from backend.integrations.market_data import fetch_fund_nav_history
 
 
@@ -25,7 +29,7 @@ async def refresh_fund_nav_history(
     now = now or now_shanghai()
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("fund NAV requires an aware clock")
-    start = now.date() - timedelta(days=730)
+    start = now.date() - timedelta(days=NAV_HISTORY_FETCH_CALENDAR_DAYS)
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         observations = await asyncio.wait_for(
             (fetcher or fetch_fund_nav_history)(
@@ -56,7 +60,7 @@ async def refresh_fund_nav_history(
         by_day.setdefault(
             stamp.date(), {"date": stamp.date().isoformat(), "close": str(value)}
         )
-    points = [by_day[day] for day in sorted(by_day)][-500:]
+    points = [by_day[day] for day in sorted(by_day)][-NAV_SYNC_TARGET_SAMPLES:]
     if not points:
         raise DataUnavailableError("来源没有有效的已披露单位净值")
     finished = max(now, (now_provider or now_shanghai)())

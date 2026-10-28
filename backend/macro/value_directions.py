@@ -387,13 +387,18 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             )
         quantitative = []
         if direction["quantitativeFundCodes"]:
+            from backend.investment.quantitative_scan import (
+                scan_minimum_history_samples,
+            )
             from backend.macro.daily_research import _visible
 
             scan = packet.get("quantitativeScan") or {}
             if (
                 scan.get("methodVersion")
                 not in {"fund-quant-scan-v1", "fund-quant-scan-v2"}
-                or scan.get("minimumHistorySamples") != 220
+                or scan.get("minimumHistorySamples") not in {120, 220}
+                or scan.get("minimumHistorySamples")
+                != scan_minimum_history_samples(scan)
                 or not _visible(scan, now)
             ):
                 raise ValueError("missing current quantitative scan")
