@@ -143,6 +143,9 @@ async def test_scan_origin_rejects_unavailable_or_ambiguous_original_coordinate(
 async def test_scan_service_uses_original_origin_and_stable_cross_report_key(
     monkeypatch,
 ):
+    from backend.investment import fund_watch
+
+    monkeypatch.setattr(fund_watch, "resume_existing_study", AsyncMock())
     row = scan_row()
     conn = AsyncMock()
     conn.fetchrow.return_value = row
@@ -183,6 +186,9 @@ async def test_scan_service_uses_original_origin_and_stable_cross_report_key(
 async def test_scan_service_reuses_direction_track_only_for_same_report_plan(
     monkeypatch,
 ):
+    from backend.investment import fund_watch
+
+    monkeypatch.setattr(fund_watch, "resume_existing_study", AsyncMock())
     conn = AsyncMock()
     row = scan_row()
     conn.fetchrow.return_value = row

@@ -2196,20 +2196,139 @@
   gap: 12px;
   flex-wrap: wrap;
 }
-.op-tracked-fund-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap: 12px;
-}
-.op-tracked-fund-grid > article {
+.op-tracked-funds {
   min-width: 0;
-  padding: 12px;
+}
+.op-watch-table-scroll {
+  width: 100%;
+  overflow-x: auto;
   border: 1px solid #dce5ef;
   border-radius: 10px;
-  overflow-wrap: anywhere;
 }
-.op-tracked-fund-grid h4 {
-  margin: 0 0 8px;
+.op-watch-table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.op-watch-table th,
+.op-watch-table td {
+  padding: 14px 12px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid #e2e8f0;
+}
+.op-watch-table thead th {
+  background: #f1f6f9;
+  color: #334155;
+  font-weight: 600;
+}
+.op-watch-table th:nth-child(1) {
+  width: 19%;
+}
+.op-watch-table th:nth-child(2) {
+  width: 14%;
+}
+.op-watch-table th:nth-child(3) {
+  width: 18%;
+}
+.op-watch-table th:nth-child(4) {
+  width: 21%;
+}
+.op-watch-table th:nth-child(5) {
+  width: 19%;
+}
+.op-watch-table th:nth-child(6) {
+  width: 9%;
+}
+.op-watch-table tbody th {
+  font-weight: 400;
+}
+.op-watch-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.op-watch-table tbody tr:hover {
+  background: #f8fafc;
+}
+.op-watch-code,
+.op-watch-quote-time,
+.op-watch-quote small,
+.op-watch-study small,
+.op-watch-plan > * {
+  display: block;
+}
+.op-watch-code,
+.op-watch-quote-time,
+.op-watch-quote small,
+.op-watch-study small,
+.op-watch-plan small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+}
+.op-watch-origins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.op-watch-origins span {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e8f5ef;
+  color: #17634f;
+  font-size: 11px;
+}
+.op-watch-quote strong {
+  font-size: 15px;
+}
+.op-watch-change {
+  margin-left: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.op-watch-change.positive {
+  color: #c62828;
+}
+.op-watch-change.negative {
+  color: #16804a;
+}
+.op-watch-quote a {
+  font-size: 12px;
+  margin-left: 4px;
+}
+.op-watch-plan + .op-watch-plan,
+.op-watch-study + .op-watch-study {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #cbd5e1;
+}
+.op-watch-table button {
+  padding: 5px 7px;
+  margin-top: 6px;
+  border: 1px solid #b5cdc5;
+  border-radius: 5px;
+  color: #075c4b;
+  background: #f5fbf8;
+  font-size: 12px;
+}
+.op-watch-table button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  .op-watch-table {
+    min-width: 960px;
+    font-size: 12px;
+  }
+  .op-watch-table th,
+  .op-watch-table td {
+    padding: 10px 8px;
+  }
 }
 @media print {
   .op-macro-expand {

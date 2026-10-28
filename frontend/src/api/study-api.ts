@@ -67,6 +67,7 @@ export interface StudySnapshot {
 }
 export interface StudyTrack {
   priceWatch?: StudyPriceWatch | null;
+  currentEstimate?: StudyPriceWatch["currentEstimate"];
   expiresOn?: string | null;
   id: string;
   title: string;
@@ -89,6 +90,7 @@ export interface StudyPriceWatch {
     priceBasis?: string | null;
     quality?: string | null;
     usable?: boolean;
+    changePct?: string | null;
   } | null;
   estimate1430: {
     value: string | null;
@@ -101,6 +103,18 @@ export interface StudyPriceWatch {
     runDate?: string | null;
     usable?: boolean;
   } | null;
+  currentEstimate?: {
+    value: string | null;
+    asOf: string | null;
+    checkedAt?: string | null;
+    sourceUri?: string | null;
+    unit?: string | null;
+    priceBasis?: string | null;
+    usable?: boolean;
+    changePct?: string | null;
+    methodVersion?: string | null;
+    explanation?: string | null;
+  } | null;
   holding: { state: "CONFIRMED" | "UNKNOWN" | "NONE"; asOf?: string | null };
   state:
     | "ENTRY_ZONE"
@@ -109,7 +123,7 @@ export interface StudyPriceWatch {
     | "TAKE_PROFIT"
     | "OBSERVING"
     | "UNKNOWN";
-  basis: "CONFIRMED_NAV" | "ESTIMATE_1430" | null;
+  basis: "CONFIRMED_NAV" | "ESTIMATE_1430" | "ESTIMATE_INTRADAY" | null;
   asOf: string | null;
   reason: string;
 }
@@ -280,6 +294,33 @@ export interface StudyNoteRequest {
   checkId?: string;
 }
 const base = "/v1/investment/study-tracks";
+export interface HeldFundWatch {
+  fundCode: string | null;
+  fundMarket: string;
+  instrumentId: string;
+  label: string;
+  confirmedNav: StudyPriceWatch["confirmedNav"];
+  currentEstimate?: StudyPriceWatch["currentEstimate"];
+}
+export interface StudyTrackList {
+  items: StudyTrack[];
+  total: number;
+  heldFunds?: HeldFundWatch[];
+  suppressedFundKeys?: string[];
+}
+export async function setFundWatchStatus(input: {
+  fundCode?: string;
+  instrumentId?: string;
+  fundMarket: string;
+  enabled: boolean;
+}) {
+  return (
+    await request<{ enabled: boolean }>("/v1/investment/fund-watch/status", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  ).data;
+}
 async function read<T>(path: string, signal?: AbortSignal) {
   return (await request<T>(base + path, { signal })).data;
 }
@@ -292,21 +333,33 @@ async function write(path: string, body: unknown) {
     })
   ).data;
 }
-export async function getStudyTracks(signal?: AbortSignal) {
-  let page = await read<{ items: StudyTrack[]; total: number }>("", signal);
+export async function getStudyTracks(
+  signal?: AbortSignal,
+): Promise<StudyTrackList> {
+  let page = await read<StudyTrackList>("", signal);
   const items = [...page.items];
+  const heldFunds = [...(page.heldFunds ?? [])];
+  const suppressed = new Set(page.suppressedFundKeys ?? []);
   let offset = page.items.length;
   while (offset < page.total && page.items.length) {
-    page = await read<{ items: StudyTrack[]; total: number }>(
-      `?limit=50&offset=${offset}`,
-      signal,
-    );
+    page = await read<StudyTrackList>(`?limit=50&offset=${offset}`, signal);
     items.push(...page.items);
+    heldFunds.push(...(page.heldFunds ?? []));
+    page.suppressedFundKeys?.forEach((key) => suppressed.add(key));
     offset += page.items.length;
   }
   return {
     items: [...new Map(items.map((item) => [item.id, item])).values()],
     total: page.total,
+    heldFunds: [
+      ...new Map(
+        heldFunds.map((row) => [
+          `${row.fundMarket}:${row.fundCode ?? `instrument:${row.instrumentId}`}`,
+          row,
+        ]),
+      ).values(),
+    ],
+    suppressedFundKeys: [...suppressed],
   };
 }
 export const getStudyDetail = (id: string, signal?: AbortSignal, offset = 0) =>

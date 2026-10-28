@@ -103,7 +103,13 @@ def _track(frozen):
     return row if stop < low <= high < first < second else None
 
 
-def _usable(quote, frozen, now, *, estimate=False):
+def _trading_time(stamp):
+    return time(9, 30) <= stamp.time() <= time(11, 30) or time(
+        13
+    ) <= stamp.time() < time(15)
+
+
+def _usable(quote, frozen, now, *, estimate=False, intraday=False):
     if not isinstance(quote, dict) or quote.get("usable") is not True:
         return False
     retrieved, day = _stamp(quote.get("retrievedAt")), _day(quote.get("asOf"))
@@ -126,9 +132,21 @@ def _usable(quote, frozen, now, *, estimate=False):
         or not _source_uri(quote.get("sourceUri"))
     ):
         return False
-    if not estimate:
+    if not estimate and not intraday:
         return quote.get("quality") == "READY" and (now.date() - day).days <= 10
     stamp, checked = _stamp(quote.get("asOf")), _stamp(quote.get("checkedAt"))
+    if intraday:
+        return (
+            quote.get("quality") == "ESTIMATED"
+            and quote.get("tradingDayConfirmed") is True
+            and stamp is not None
+            and checked is not None
+            and stamp <= checked <= now
+            and stamp.date() == now.date()
+            and _trading_time(stamp)
+            and _trading_time(now)
+            and now - stamp <= timedelta(minutes=30)
+        )
     return (
         quote.get("quality") == "ESTIMATED"
         and stamp is not None
@@ -386,7 +404,14 @@ async def current_entry_safety(conn, plans, now):
 
 
 def price_watch(
-    frozen, *, confirmed=None, estimate=None, holding=None, now, entry_safety=None
+    frozen,
+    *,
+    confirmed=None,
+    estimate=None,
+    current_estimate=None,
+    holding=None,
+    now,
+    entry_safety=None,
 ):
     """A reference-line hit never asserts a purchase, execution or realized profit."""
     now = _stamp(now)
@@ -396,6 +421,7 @@ def price_watch(
         "frozenPlan": deepcopy(frozen),
         "confirmedNav": deepcopy(confirmed),
         "estimate1430": deepcopy(estimate),
+        "currentEstimate": deepcopy(current_estimate),
         "holding": deepcopy(holding or {"state": "UNKNOWN"}),
         "state": "UNKNOWN",
         "basis": None,
@@ -406,13 +432,31 @@ def price_watch(
     if track is None:
         result["reason"] = "未冻结完整的单一价格轨道，暂不判定到价。"
         return result
+    safety = _entry_safety_summary(frozen, track, entry_safety)
+    # Retain the current selected-track context even when all historical vetoes
+    # were cleared, so a later page estimate cannot resurrect an old veto.
+    result["entrySafety"] = {
+        **safety,
+        "tracks": [{"track": track["track"], **deepcopy(safety)}],
+    }
     confirmed_ok = _usable(confirmed, frozen, now)
     estimate_ok = _usable(estimate, frozen, now, estimate=True)
+    current_ok = _usable(current_estimate, frozen, now, intraday=True)
     if result["confirmedNav"] is not None:
         result["confirmedNav"]["usable"] = confirmed_ok
     if result["estimate1430"] is not None:
         result["estimate1430"]["usable"] = estimate_ok
-    candidate = estimate if estimate_ok else confirmed if confirmed_ok else None
+    if result["currentEstimate"] is not None:
+        result["currentEstimate"]["usable"] = current_ok
+    candidate = (
+        current_estimate
+        if current_ok
+        else estimate
+        if estimate_ok
+        else confirmed
+        if confirmed_ok
+        else None
+    )
     if candidate is None:
         return result
     value = _number(candidate["value"])
@@ -420,7 +464,11 @@ def price_watch(
     technical_candidate = track.get("state") == "CANDIDATE"
     allowed = entry_permitted(frozen, track, entry_safety)
     result.update(
-        basis="ESTIMATE_1430" if estimate_ok else "CONFIRMED_NAV",
+        basis="ESTIMATE_INTRADAY"
+        if current_ok
+        else "ESTIMATE_1430"
+        if estimate_ok
+        else "CONFIRMED_NAV",
         asOf=candidate["asOf"],
         inEntryZone=in_zone,
         technicalCandidate=technical_candidate,
@@ -437,7 +485,9 @@ def price_watch(
         else "OBSERVING"
     )
     result["reason"] = (
-        "按14:30估算值核对冻结参考线，申赎成交净值尚未确认。"
+        "按当前基金估算净值核对冻结参考线，申赎成交净值尚未确认。"
+        if current_ok
+        else "按14:30估算值核对冻结参考线，申赎成交净值尚未确认。"
         if estimate_ok
         else "按最新已确认披露净值核对冻结参考线。"
     )
@@ -445,7 +495,6 @@ def price_watch(
         result["reason"] += "价格位于参考区间内，冻结轨道的技术条件待触发。"
     if not allowed:
         safety = _entry_safety_summary(frozen, track, entry_safety)
-        result["entrySafety"] = safety
         label = (
             safety.get("subscriptionLabel")
             or safety.get("entryStatus")

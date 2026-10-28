@@ -445,6 +445,9 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
             conn, tenant_id, user_id, origin, now
         )
         if matching:
+            from backend.investment.fund_watch import resume_existing_study
+
+            await resume_existing_study(conn, tenant_id, user_id, matching, now)
             return await get_detail(conn, tenant_id, user_id, matching, now)
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtext($1))",
@@ -457,7 +460,13 @@ async def create_study(conn, tenant_id, user_id, request, now, *, idempotency_ke
         origin_key,
     )
     if existing:
+        from backend.investment.fund_watch import resume_existing_study
+
+        await resume_existing_study(conn, tenant_id, user_id, existing, now)
         return await get_detail(conn, tenant_id, user_id, existing, now)
+    from backend.investment.fund_watch import clear_suppression
+
+    await clear_suppression(conn, tenant_id, user_id, scope, now)
     observations = await load_observations(conn, scope, now)
     origin["observations"] = observations
     snapshot = freeze_hypothesis(
@@ -580,6 +589,12 @@ async def set_status(
         raise VersionConflictError("研究主题已更新，请刷新后重试")
     if track["enabled"] != data["enabled"]:
         track = await repository.advance(conn, track, now, enabled=data["enabled"])
+    if data["enabled"]:
+        from backend.investment.fund_watch import clear_suppression
+
+        await clear_suppression(
+            conn, tenant_id, user_id, repository.decode(track["scope"]), now
+        )
     version = await repository.latest_version(conn, tenant_id, user_id, track_id)
     await repository.add_note(
         conn,

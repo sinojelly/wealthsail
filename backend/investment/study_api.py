@@ -13,6 +13,11 @@ from backend.dependencies import (
 )
 from backend.errors import ok
 from backend.investment import study_service as service
+from backend.investment.study_intraday import (
+    refresh_tracks,
+    refresh_watch_context,
+    resolve_fund_scopes,
+)
 from backend.investment.study_schemas import (
     CreateStudyRequest,
     VersionRequest,
@@ -38,7 +43,16 @@ async def list_tracks(
         data = await service.list_studies(
             conn, ctx.tenant_id, ctx.user_id, now, limit=limit, offset=offset
         )
-    return ok(data, request_id=request_id, as_of=now)
+        data["items"] = await resolve_fund_scopes(conn, data["items"], now)
+        from backend.investment.fund_watch import list_watch_context
+
+        data.update(await list_watch_context(conn, ctx.tenant_id, ctx.user_id, now))
+        trading_day = await conn.fetchval(
+            "SELECT is_trading_day FROM reference.trading_calendars WHERE market='SSE' AND calendar_date=$1",
+            now.date(),
+        )
+    data = await refresh_watch_context(data, now, trading_day=trading_day)
+    return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
 @router.post("")
@@ -71,7 +85,16 @@ async def get_track(
         data = await service.get_detail(
             conn, ctx.tenant_id, ctx.user_id, track_id, now, limit=limit, offset=offset
         )
-    return ok(data, request_id=request_id, as_of=now)
+        data["track"] = (await resolve_fund_scopes(conn, [data["track"]], now))[0]
+        trading_day = await conn.fetchval(
+            "SELECT is_trading_day FROM reference.trading_calendars WHERE market='SSE' AND calendar_date=$1",
+            now.date(),
+        )
+    data["track"] = (
+        await refresh_tracks([data["track"]], now, trading_day=trading_day)
+    )[0]
+    data["priceWatch"] = data["track"].get("priceWatch")
+    return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
 @router.post("/{track_id}/versions")

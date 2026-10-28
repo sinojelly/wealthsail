@@ -310,7 +310,7 @@ it("displays separate frozen, confirmed and estimated prices in the tracking lis
     expect(region).toHaveTextContent("止损 0.9000");
     expect(region).toHaveTextContent("T1 1.1200 / T2 1.2000");
     expect(region).toHaveTextContent("最新确认净值：1.0100");
-    expect(region).toHaveTextContent("14:30估算净值：1.0150");
+    expect(region).toHaveTextContent("基金估算净值：1.0150");
     expect(region).not.toHaveTextContent("持仓观察中");
   }
 });
@@ -379,7 +379,7 @@ it.each([
       within(region).getByText(label, { selector: "strong" }),
     ).toBeVisible();
     expect(region).toHaveTextContent("最新确认净值：—");
-    expect(region).toHaveTextContent("14:30估算净值：—");
+    expect(region).toHaveTextContent("基金估算净值：----");
   },
 );
 

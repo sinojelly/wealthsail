@@ -675,7 +675,10 @@ it("keeps my tracked fund prices in today's focus without a daily report and ope
   });
   expect(await within(region).findByText("🎯已入买入击球区")).toBeVisible();
   expect(region).toHaveTextContent("冻结买入区间：0.9800–1.0200");
-  expect(region).toHaveTextContent("最新确认净值：1.0100");
+  expect(
+    within(region).getByRole("columnheader", { name: "最新确认净值" }),
+  ).toBeVisible();
+  expect(within(region).getByRole("cell", { name: /1.0100/ })).toBeVisible();
   expect(
     screen.queryByRole("region", { name: "研究主题跟踪与复盘" }),
   ).not.toBeInTheDocument();
@@ -728,7 +731,9 @@ it("groups repeated fund identities while keeping each active frozen plan and re
   await within(region).findByRole("button", {
     name: "查看 left 冻结研究 与复盘",
   });
-  expect(within(region).getAllByRole("article")).toHaveLength(2);
+  expect(
+    within(within(region).getByRole("table")).getAllByRole("row"),
+  ).toHaveLength(3);
   expect(
     within(region).getByRole("button", { name: "查看 right 冻结研究 与复盘" }),
   ).toBeVisible();

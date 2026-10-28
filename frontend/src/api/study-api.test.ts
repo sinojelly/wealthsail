@@ -8,6 +8,43 @@ beforeEach(() => {
     meta: {},
   } as never);
 });
+it("keeps complete held-fund identities and suppression preferences while combining study pages", async () => {
+  const held = {
+    fundCode: null,
+    fundMarket: "FUND_CN",
+    instrumentId: "one",
+    label: "未编号持仓",
+    confirmedNav: null,
+  };
+  vi.mocked(request)
+    .mockResolvedValueOnce({
+      data: {
+        items: [{ id: "first" }],
+        total: 2,
+        heldFunds: [held],
+        suppressedFundKeys: ["FUND_CN:004069"],
+      },
+      meta: {},
+    } as never)
+    .mockResolvedValueOnce({
+      data: {
+        items: [{ id: "second" }],
+        total: 2,
+        heldFunds: [held, { ...held, instrumentId: "two" }],
+        suppressedFundKeys: ["FUND_CN:instrument:two"],
+      },
+      meta: {},
+    } as never);
+  const result = await api.getStudyTracks();
+  expect(result.heldFunds?.map((fund) => fund.instrumentId)).toEqual([
+    "one",
+    "two",
+  ]);
+  expect(result.suppressedFundKeys).toEqual([
+    "FUND_CN:004069",
+    "FUND_CN:instrument:two",
+  ]);
+});
 it("includes older tracked funds beyond the first page and keeps cancellation on every page", async () => {
   const signal = new AbortController().signal;
   vi.mocked(request)
