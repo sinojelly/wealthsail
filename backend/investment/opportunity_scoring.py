@@ -103,9 +103,9 @@ def _current(row, now, *, media=False):
         return False
 
 
-def _evidence(plan, packet, now):
-    topics = _topics(plan.get("label", ""))
-    parents, sources, urls = set(), [], set()
+def _prepare_evidence(packet, now):
+    """Validate and classify each public source once, scoped to this report."""
+    catalysts, shares = [], []
     for row in (packet.get("alphaPublic") or {}).get("catalysts", [])[:300]:
         if (
             not isinstance(row, dict)
@@ -114,23 +114,16 @@ def _evidence(plan, packet, now):
         ):
             continue
         text = " ".join(str(row.get(k) or "") for k in ("title", "content", "summary"))
-        if (
-            not topics.intersection(_topics(text))
-            or not _POSITIVE.search(text)
-            or _NEGATIVE.search(text)
-        ):
+        if not _POSITIVE.search(text) or _NEGATIVE.search(text):
             continue
-        # Digest siblings and duplicate URLs remain one independent parent.
-        parent = row.get("parentSourceId") or row["sourceUri"]
-        canonical = urlsplit(row["sourceUri"])._replace(query="", fragment="").geturl()
-        if parent in parents or canonical in urls:
-            continue
-        parents.add(parent)
-        urls.add(canonical)
-        if row["sourceUri"] not in sources:
-            sources.append(row["sourceUri"])
-    catalyst = min(20, 10 + 5 * (len(parents) - 1)) if parents else 0
-    share = 0
+        catalysts.append(
+            (
+                _topics(text),
+                row.get("parentSourceId") or row["sourceUri"],
+                urlsplit(row["sourceUri"])._replace(query="", fragment="").geturl(),
+                row["sourceUri"],
+            )
+        )
     for row in (packet.get("institutionalSignals") or {}).get("etfFlows", [])[:40]:
         if (
             isinstance(row, dict)
@@ -146,12 +139,33 @@ def _evidence(plan, packet, now):
             and _number(row.get("previousShares")) >= 0
             and _number(row.get("currentShares")) - _number(row.get("previousShares"))
             == _number(row.get("value"))
-            and topics.intersection(_topics(row.get("fundName", "")))
             and (_number(row.get("value")) or Decimal(0)) > 0
         ):
+            shares.append((_topics(row.get("fundName", "")), row["sourceUri"]))
+    return catalysts, shares
+
+
+def _evidence(plan, packet, now, *, prepared=None):
+    topics = _topics(plan.get("label", ""))
+    catalysts, shares = (
+        _prepare_evidence(packet, now) if prepared is None else prepared
+    )
+    parents, sources, urls = set(), [], set()
+    for related, parent, canonical, uri in catalysts:
+        if not topics.intersection(related) or parent in parents or canonical in urls:
+            continue
+        # Digest siblings and duplicate URLs remain one independent parent.
+        parents.add(parent)
+        urls.add(canonical)
+        if uri not in sources:
+            sources.append(uri)
+    catalyst = min(20, 10 + 5 * (len(parents) - 1)) if parents else 0
+    share = 0
+    for related, uri in shares:
+        if topics.intersection(related):
             share = 15
-            if row["sourceUri"] not in sources:
-                sources.append(row["sourceUri"])
+            if uri not in sources:
+                sources.append(uri)
             break
     return catalyst, share, sources
 
@@ -204,14 +218,16 @@ def _ready(plan, track):
     )
 
 
-def score_plan(plan, packet, now):
+def score_plan(plan, packet, now, *, prepared_evidence=None):
     result = deepcopy(plan)
     for key in SCORE_FIELDS:
         result.pop(key, None)
     for track in result.get("tracks", []):
         for key in SCORE_FIELDS:
             track.pop(key, None)
-    catalyst, share, sources = _evidence(result, packet, now)
+    catalyst, share, sources = _evidence(
+        result, packet, now, prepared=prepared_evidence
+    )
     for track in result.get("tracks", []):
         current, low, high, stop, t1 = [
             _number(value)
@@ -324,14 +340,17 @@ def rank_report(report, packet):
     now = _stamp(packet.get("asOf")) or _stamp(report.get("asOf"))
     if now is None:
         return result
+    evidence = _prepare_evidence(packet, now)
+
+    def score(plan):
+        return score_plan(plan, packet, now, prepared_evidence=evidence)
+
     scan = result.get("quantitativeScan")
     if isinstance(scan, dict):
-        scan["items"] = [
-            score_plan(plan, packet, now) for plan in scan.get("items", [])
-        ]
+        scan["items"] = [score(plan) for plan in scan.get("items", [])]
     for direction in result.get("valueDirections", []):
         direction["plans"] = [
-            score_plan(plan, packet, now) for plan in direction.get("plans", [])
+            score(plan) for plan in direction.get("plans", [])
         ]
 
     def direction_key(direction):
@@ -359,6 +378,6 @@ def rank_report(report, packet):
         result["valueDirections"] = sorted(result["valueDirections"], key=direction_key)
     if "actionablePlans" in result:
         result["actionablePlans"] = [
-            score_plan(plan, packet, now) for plan in result["actionablePlans"]
+            score(plan) for plan in result["actionablePlans"]
         ]
     return result

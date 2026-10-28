@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
 from backend.common.database import Pool, create_pool, verify_runtime_login_boundary
+from backend.common.timing import request_trace
 from backend.config import Settings, get_settings, validate_runtime_settings
 from backend.debug.api import router as debug_router
 from backend.errors import MoneyJSONResponse, register_exception_handlers, request_id_of
@@ -91,7 +92,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Request-Id"],
+        expose_headers=["X-Request-Id", "X-Request-Time-Ms", "Server-Timing"],
     )
 
     @app.middleware("http")
@@ -104,7 +105,9 @@ def create_app() -> FastAPI:
             value = request.headers.get(name, "-")
             return value.replace("\r", " ").replace("\n", " ")[:160] or "-"
 
-        def log_request(status: int, *, allow: str = "-", location: str = "-") -> None:
+        def log_request(
+            trace, status: int, *, allow: str = "-", location: str = "-"
+        ) -> None:
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
             # Deliberately exclude query strings, bodies, filenames, cookies,
             # and authorization headers. Import packages contain financial data.
@@ -113,7 +116,7 @@ def create_app() -> FastAPI:
                 (
                     "http_request method=%s path=%s status=%s request_id=%s "
                     "duration_ms=%s allow=%s host=%s forwarded_proto=%s "
-                    "forwarded_host=%s location=%s"
+                    "forwarded_host=%s location=%s db_queries=%s db_ms=%.1f pool_wait_ms=%.1f"
                 ),
                 request.method,
                 request.url.path,
@@ -125,23 +128,34 @@ def create_app() -> FastAPI:
                 safe_header("X-Forwarded-Proto"),
                 safe_header("X-Forwarded-Host"),
                 location,
+                trace.sql_count,
+                trace.sql_ms,
+                trace.stages.get("db.pool_wait", 0),
             )
 
-        try:
-            response = await call_next(request)
-        except Exception:
-            # The outer exception handler will produce the canonical envelope;
-            # still retain one safe HTTP-boundary record for the failed request.
-            log_request(500)
-            raise
+        with request_trace(request_id) as trace:
+            http_logger.info(
+                "http_request_start method=%s path=%s request_id=%s",
+                request.method,
+                request.url.path,
+                trace.request_id,
+            )
+            try:
+                response = await call_next(request)
+            except Exception:
+                log_request(trace, 500)
+                raise
 
-        duration_ms = round((time.perf_counter() - start) * 1000, 1)
-        response.headers["X-Request-Id"] = request_id
-        response.headers["X-Request-Time-Ms"] = str(duration_ms)
-        allow = response.headers.get("Allow", "-")[:80] or "-"
-        location = response.headers.get("Location", "-").split("?", 1)[0][:240] or "-"
-        log_request(response.status_code, allow=allow, location=location)
-        return response
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            response.headers["X-Request-Id"] = request_id
+            response.headers["X-Request-Time-Ms"] = str(duration_ms)
+            response.headers["Server-Timing"] = trace.server_timing(duration_ms)
+            allow = response.headers.get("Allow", "-")[:80] or "-"
+            location = (
+                response.headers.get("Location", "-").split("?", 1)[0][:240] or "-"
+            )
+            log_request(trace, response.status_code, allow=allow, location=location)
+            return response
 
     register_exception_handlers(app)
 

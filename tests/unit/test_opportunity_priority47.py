@@ -81,6 +81,40 @@ def test_priority_uses_independent_parent_sources_and_actual_primary_share_growt
     assert scored["tracks"][0]["opportunityScore"] == 87.5
 
 
+def test_report_classifies_each_public_source_once_for_all_fund_plans(monkeypatch):
+    """The same report news must not be reparsed for every displayed fund."""
+    mod = import_module("backend.investment.opportunity_scoring")
+    packet = evidence()
+    plans = [plan(f"{number:06d}") for number in range(46)]
+    expected = [mod.score_plan(row, packet, NOW) for row in plans]
+    classify = mod._topics
+    calls = []
+
+    def counted(text):
+        calls.append(text)
+        return classify(text)
+
+    monkeypatch.setattr(mod, "_topics", counted)
+    result = mod.rank_report(
+        {"asOf": NOW.isoformat(), "actionablePlans": plans}, packet
+    )
+    assert result["actionablePlans"] == expected
+    sources = len(packet["alphaPublic"]["catalysts"]) + len(
+        packet["institutionalSignals"]["etfFlows"]
+    )
+    assert len(calls) <= len(plans) + sources
+
+
+def test_report_prepared_evidence_does_not_survive_into_another_request():
+    mod = import_module("backend.investment.opportunity_scoring")
+    report = {"asOf": NOW.isoformat(), "actionablePlans": [plan()]}
+    first = mod.rank_report(report, evidence())
+    empty = mod.rank_report(report, {"asOf": NOW.isoformat()})
+    assert first["actionablePlans"][0]["scoreBreakdown"]["catalyst"] == 15
+    assert empty["actionablePlans"][0]["scoreBreakdown"]["catalyst"] == 0
+    assert empty["actionablePlans"][0]["scoreBreakdown"]["sourceUris"] == []
+
+
 @pytest.mark.parametrize(
     "change", ["secondary", "old", "future", "negative", "other-sector", "bad-source"]
 )

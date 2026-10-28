@@ -4,13 +4,18 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { AppRoutes } from "./app/router";
 import { queryClient } from "./app/query-client";
 import { bootstrapSession } from "./app/auth-session";
+import { recordFrontendTiming } from "./app/performance";
 
 export default function App() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let mounted = true;
+    const started = performance.now();
     void bootstrapSession().finally(() => {
-      if (mounted) setReady(true);
+      if (mounted) {
+        recordFrontendTiming("auth_ready", performance.now() - started);
+        setReady(true);
+      }
     });
     return () => {
       mounted = false;
@@ -18,7 +23,11 @@ export default function App() {
   }, []);
 
   if (!ready) {
-    return <div className="page-loading" role="status">正在恢复安全会话…</div>;
+    return (
+      <div className="page-loading" role="status">
+        正在恢复安全会话…
+      </div>
+    );
   }
   return (
     <QueryClientProvider client={queryClient}>

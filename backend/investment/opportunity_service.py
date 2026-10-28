@@ -1,6 +1,7 @@
 """Read-only decision context with explicit market selection and actor scope."""
 
 from backend.dependencies import now_shanghai
+from backend.common.timing import trace_stage
 from backend.errors import NotFoundError, ValidationError_
 from backend.investment import repository
 from backend.investment.decision import decision_context
@@ -248,24 +249,29 @@ async def get_context(
                 )
             ]
     # A fund code alone cannot establish a market or a verified index mapping.
-    base = await market_context(conn, months, now=now)
-    permissions = await market_repository.read_permissions(conn)
-    collected = await market_repository.read_collection(conn, now)
-    series = market_repository.series_context(
-        await market_repository.read_series(conn, now),
-        now,
-        permissions=permissions,
-        source_results=collected.get("sourceResults", {}),
-    )
+    with trace_stage("context.market_context"):
+        base = await market_context(conn, months, now=now)
+    with trace_stage("context.market_series"):
+        permissions = await market_repository.read_permissions(conn)
+        collected = await market_repository.read_collection(conn, now)
+        series = market_repository.series_context(
+            await market_repository.read_series(conn, now),
+            now,
+            permissions=permissions,
+            source_results=collected.get("sourceResults", {}),
+        )
     from backend.macro.alpha_repository import read_alpha_public, merge_alpha_series
     from backend.investment.theme_graph import read_themes, cached_nav_analysis
 
-    alpha_public = await read_alpha_public(conn, now)
-    series = merge_alpha_series(series, alpha_public, now)
-    themes = await read_themes(conn, now, theme_code)
+    with trace_stage("context.alpha_public"):
+        alpha_public = await read_alpha_public(conn, now)
+        series = merge_alpha_series(series, alpha_public, now)
+    with trace_stage("context.themes"):
+        themes = await read_themes(conn, now, theme_code)
     evidence = []
     for index in selected[:5]:
-        result = await analysis(conn, "index", index["id"])
+        with trace_stage("context.index_analysis"):
+            result = await analysis(conn, "index", index["id"])
         retrieved = market_repository._stamp(result.get("retrievedAt"))
         if (
             retrieved
@@ -294,38 +300,42 @@ async def get_context(
         model.setdefault("requiredEvidence", []).append("FUND_MAPPING")
         model.setdefault("missingRequiredEvidence", []).insert(0, "FUND_MAPPING")
         model["missingEvidence"].insert(0, "基金指数/方向归属尚待唯一核查")
-    personal = await decision_context(
-        conn,
-        tenant_id,
-        user_id,
-        direction_id=direction_id,
-        index_id=index_id,
-        evaluated_index_id=evaluated_index_id,
-        instrument_id=instrument_id,
-        fund_code=fund_code,
-        fund_market=fund_market,
-        market_evidence=evidence,
-        direction_model=model,
-        now=now,
-    )
-    daily = await read_daily_research(
-        conn, now, enabled=get_settings().daily_research_enabled
-    )
+    with trace_stage("context.personal"):
+        personal = await decision_context(
+            conn,
+            tenant_id,
+            user_id,
+            direction_id=direction_id,
+            index_id=index_id,
+            evaluated_index_id=evaluated_index_id,
+            instrument_id=instrument_id,
+            fund_code=fund_code,
+            fund_market=fund_market,
+            market_evidence=evidence,
+            direction_model=model,
+            now=now,
+        )
+    with trace_stage("context.daily_research"):
+        daily = await read_daily_research(
+            conn, now, enabled=get_settings().daily_research_enabled
+        )
     from backend.investment.nav_change import report_with_nav_changes
 
-    daily["report"] = report_with_nav_changes(
-        daily.get("report"), alpha_public.get("fundHistories"), now
-    )
+    with trace_stage("context.nav_projection"):
+        daily["report"] = report_with_nav_changes(
+            daily.get("report"), alpha_public.get("fundHistories"), now
+        )
     if fund_code and (fund_market == "FUND_CN" or identity is not None):
         from backend.investment.decision import evaluate
 
-        nav = await cached_nav_analysis(
-            conn,
-            fund_code,
-            now,
-            subject_kind="fund" if identity else "nav",
-            subject_id=str(identity) if identity else fund_code,
-        )
+        with trace_stage("context.selected_fund"):
+            nav = await cached_nav_analysis(
+                conn,
+                fund_code,
+                now,
+                subject_kind="fund" if identity else "nav",
+                subject_id=str(identity) if identity else fund_code,
+            )
         if nav:
             portfolio = personal.get("portfolio") or {}
             personal["decision"] = evaluate(
@@ -347,7 +357,8 @@ async def get_context(
         plans.append(selected_plan)
     from backend.investment.sell_risk import sell_risk_alerts
 
-    sell_alerts = await sell_risk_alerts(conn, tenant_id, user_id, now, daily=daily)
+    with trace_stage("context.sell_risk"):
+        sell_alerts = await sell_risk_alerts(conn, tenant_id, user_id, now, daily=daily)
     return {
         **base,
         **personal,

@@ -68,3 +68,25 @@ def test_avatar_proxy_allows_only_generated_webp_object_names() -> None:
     denied = _location_body(source, "location /static/avatars/")
     assert "return 404;" in denied
     assert "location ^~ /static/avatars/" not in source
+
+
+def test_hashed_frontend_assets_are_compressed_without_buffering_chat() -> None:
+    source = _config()
+    assets = _location_body(source, "location ^~ /assets/")
+    assert "gzip on;" in assets
+    assert "gzip_vary on;" in assets
+    assert "application/javascript" in assets
+    assert "text/css" in assets
+    assert "gzip on;" not in _location_body(source, "location = /api/v1/chat/stream")
+
+
+def test_json_api_is_compressed_without_compressing_sse() -> None:
+    source = _config()
+    api = _location_body(source, "location /api/")
+    assert "gzip on;" in api
+    assert "gzip_vary on;" in api
+    assert "gzip_proxied any;" in api
+    assert "gzip_types application/json;" in api
+    stream = _location_body(source, "location = /api/v1/chat/stream")
+    assert "gzip on;" not in stream
+    assert "proxy_buffering off;" in stream

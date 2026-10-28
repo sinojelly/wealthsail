@@ -1,8 +1,9 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
 import { canViewOperations, useAuthSession } from "./auth-session";
 import { loginRedirectPath } from "./navigation";
+import { recordFrontendTiming } from "./performance";
 
 const DashboardPage = lazy(() => import("../features/dashboard/DashboardPage"));
 const OnboardingPage = lazy(
@@ -22,6 +23,14 @@ const FundScreenerPage = lazy(
 );
 const LoginPage = lazy(() => import("../features/login/LoginPage"));
 
+function PageReady({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  useEffect(() => {
+    recordFrontendTiming("route_ready");
+  }, [location.pathname]);
+  return <>{children}</>;
+}
+
 function LazyPage({ children }: { children: ReactNode }) {
   return (
     <Suspense
@@ -31,7 +40,7 @@ function LazyPage({ children }: { children: ReactNode }) {
         </div>
       }
     >
-      {children}
+      <PageReady>{children}</PageReady>
     </Suspense>
   );
 }
@@ -75,7 +84,14 @@ function RequireOperationsRole({ children }: { children: ReactNode }) {
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/login"
+        element={
+          <LazyPage>
+            <LoginPage />
+          </LazyPage>
+        }
+      />
       <Route
         element={
           <RequireSession>

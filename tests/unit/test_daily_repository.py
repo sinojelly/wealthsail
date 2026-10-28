@@ -42,6 +42,19 @@ async def test_read_empty_is_not_run_with_next_shanghai_slot():
 
 
 @pytest.mark.asyncio
+async def test_latest_ready_report_is_not_downloaded_twice():
+    latest = run(
+        status="READY", recorded_at=NOW, payload={"summary": "ready"}
+    )
+    conn = AsyncMock()
+    conn.fetchrow.return_value = latest
+    result = await repository().read_daily_research(conn, NOW)
+    assert result["report"] == {"summary": "ready"}
+    assert result["reportRunId"] == "run-1"
+    assert conn.fetchrow.await_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("age,state", [(5, "RUNNING"), (21, "UNCERTAIN")])
 async def test_dispatched_run_without_terminal_is_never_assumed_completed(age, state):
     conn = AsyncMock()

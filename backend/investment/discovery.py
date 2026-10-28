@@ -430,6 +430,8 @@ def _quantitative_scan(public, now):
 
 
 async def _cached_histories(conn, codes, now):
+    from backend.investment.theme_graph import nav_plan
+
     if not codes:
         return {}
     rows = await conn.fetch(
@@ -459,8 +461,8 @@ async def _cached_histories(conn, codes, now):
             and row.get("fund_code", payload.get("fundCode")) == payload["fundCode"]
         ):
             if _eligible_history(payload, now):
-                candidates.setdefault(payload["fundCode"], []).append(deepcopy(payload))
-    result = {}
+                candidates.setdefault(payload["fundCode"], []).append(payload)
+    result, ranks = {}, {}
     proofs = await _cohort_calendar_proofs(conn, candidates, now)
     for code, histories in candidates.items():
         # One present-day calendar read covers every cohort of this fund. A bad
@@ -471,12 +473,16 @@ async def _cached_histories(conn, codes, now):
             candidate = deepcopy(history)
             if proof is not None:
                 candidate["calendarProof"] = proof
-            if not _eligible_history(candidate, now):
+            plan = nav_plan(candidate, now=now)
+            if not _eligible_history_plan(candidate, plan, now):
                 continue
-            if code not in result or _cohort_rank(candidate, now) > _cohort_rank(
-                result[code], now
-            ):
+            # The same validated plan supplies quality and rank. Re-running the
+            # full indicator calculation for both cohorts made reads scale with
+            # four calculations per candidate rather than one per proof state.
+            rank = plan.get("historyQuality") == "READY", *_history_rank(candidate)
+            if code not in result or rank > ranks[code]:
                 result[code] = candidate
+                ranks[code] = rank
     return result
 
 
@@ -537,6 +543,10 @@ def _eligible_history(history, now):
     from backend.investment.theme_graph import nav_plan
 
     plan = nav_plan(history, now=now)
+    return _eligible_history_plan(history, plan, now)
+
+
+def _eligible_history_plan(history, plan, now):
     if plan is None or plan.get("historyQuality") == "CONFLICT":
         return False
     overseas = history.get("overseasCalendarRequired") is True or (

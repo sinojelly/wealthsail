@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import json
 import logging
+from time import perf_counter
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import asyncpg
 from asyncpg.pool import Pool
+from backend.common.timing import record_timing, trace_queries, trace_stage
 
 # The browser-facing Supabase ``authenticated`` role is deliberately read-only.
 # Domain commands run as a separate NOLOGIN role that deployment login roles
@@ -239,10 +241,13 @@ async def tenant_transaction(
     transaction only, so pooled connections are never left in a privileged or
     cross-tenant state.
     """
+    waiting = perf_counter()
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            await apply_tenant_context(conn, user_id, tenant_id, role=role)
-            yield conn
+        record_timing("db.pool_wait", (perf_counter() - waiting) * 1000)
+        with trace_queries(conn), trace_stage("db.transaction"):
+            async with conn.transaction():
+                await apply_tenant_context(conn, user_id, tenant_id, role=role)
+                yield conn
 
 
 async def apply_tenant_context(
@@ -283,10 +288,13 @@ async def api_system_transaction(pool: Pool) -> AsyncIterator[asyncpg.Connection
     to ``wealthsail_api`` only, so every identity/session operation must run
     under that role explicitly.
     """
+    waiting = perf_counter()
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SET LOCAL ROLE wealthsail_api;")
-            yield conn
+        record_timing("db.pool_wait", (perf_counter() - waiting) * 1000)
+        with trace_queries(conn), trace_stage("db.transaction"):
+            async with conn.transaction():
+                await conn.execute("SET LOCAL ROLE wealthsail_api;")
+                yield conn
 
 
 @asynccontextmanager
@@ -296,5 +304,8 @@ async def system_connection(pool: Pool) -> AsyncIterator[asyncpg.Connection]:
     Intended for the Worker (BYPASSRLS login role) and read-only bootstrap
     queries. Never use for tenant-scoped API reads.
     """
+    waiting = perf_counter()
     async with pool.acquire() as conn:
-        yield conn
+        record_timing("db.pool_wait", (perf_counter() - waiting) * 1000)
+        with trace_queries(conn):
+            yield conn

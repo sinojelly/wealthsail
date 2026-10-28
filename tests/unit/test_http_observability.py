@@ -36,7 +36,7 @@ def test_method_mismatch_logs_proxy_context_without_query_secrets(caplog) -> Non
     messages = [
         record.getMessage()
         for record in caplog.records
-        if record.name == "wealthsail.http"
+        if record.name == "wealthsail.http" and record.getMessage().startswith("http_request ")
     ]
     assert len(messages) == 1
     message = messages[0]

@@ -5,9 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f172a" />
     <title>WealthSail 投研助手</title>
+    <style>
+      .boot-loading {
+        min-height: 100vh;
+        display: grid;
+        place-content: center;
+        gap: 12px;
+        margin: 0;
+        padding: 24px;
+        color: #f6f2e8;
+        background: #121212;
+        font:
+          16px/1.6 system-ui,
+          "Microsoft YaHei",
+          sans-serif;
+        text-align: center;
+      }
+      .boot-loading small {
+        color: #b0b0b0;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-loading" role="status" aria-live="polite">
+        <strong>正在加载投研工作台…</strong>
+        <small>正在获取页面资源，请稍候。</small>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

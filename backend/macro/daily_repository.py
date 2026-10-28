@@ -135,13 +135,16 @@ async def read_daily_research(conn, now, *, enabled=True):
         stamp.date(),
         stamp,
     )
-    previous = await conn.fetchrow(
-        _READ
-        + " AND t.status='READY' ORDER BY r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC LIMIT 1",
-        stamp.date(),
-        stamp,
-    )
-    report_row = latest if latest and latest.get("status") == "READY" else previous
+    # A READY latest dispatch is also the newest READY dispatch. Its public
+    # packet can be megabytes; do not transfer that same report twice.
+    report_row = latest if latest and latest.get("status") == "READY" else None
+    if latest and report_row is None:
+        report_row = await conn.fetchrow(
+            _READ
+            + " AND t.status='READY' ORDER BY r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC LIMIT 1",
+            stamp.date(),
+            stamp,
+        )
     today = latest and latest["slot_date"] == stamp.date()
     scheduled_consumed = bool(
         latest

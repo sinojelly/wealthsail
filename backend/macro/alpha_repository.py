@@ -65,9 +65,12 @@ def empty_public():
 def _object(value):
     if isinstance(value, str):
         try:
-            value = json.loads(value)
+            decoded = json.loads(value)
         except ValueError:
             return {}
+        # asyncpg JSON text is already decoded into a new, request-owned tree.
+        # Copying all 46 fund histories again adds CPU without isolating state.
+        return decoded if isinstance(decoded, dict) else {}
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
@@ -112,7 +115,9 @@ async def read_alpha_public(conn, now, *, debug_request_id=None):
         else (stamp.date(), stamp)
     )
     latest = await conn.fetchrow(
-        """SELECT * FROM market.alpha_public_batches
+        """SELECT id,run_date,claimed_at,completed_at,status,
+        CASE WHEN status='FAILED' THEN jsonb_build_object('errorClass',payload->'errorClass')
+          ELSE NULL END AS payload FROM market.alpha_public_batches
         WHERE run_date<=$1 AND claimed_at<=$2"""
         + exact
         + " ORDER BY run_date DESC,claimed_at DESC,id DESC LIMIT 1",

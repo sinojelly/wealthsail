@@ -507,6 +507,36 @@ async def test_later_retrieval_of_older_series_does_not_lower_valid_nav_watermar
 
 
 @pytest.mark.asyncio
+async def test_history_cohorts_do_not_recompute_the_same_nav_plan_for_ranking(
+    monkeypatch,
+):
+    history = complete_history(count=220)
+    originals = [deepcopy(history) for _ in range(4)]
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"fund_code": "008281", "payload": row} for row in originals
+    ]
+    monkeypatch.setattr(
+        discovery,
+        "_cohort_calendar_proofs",
+        AsyncMock(return_value={"008281": history["calendarProof"]}),
+    )
+    original_plan = theme_graph.nav_plan
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original_plan(*args, **kwargs)
+
+    monkeypatch.setattr(theme_graph, "nav_plan", counted)
+    result = await discovery._cached_histories(conn, ["008281"], NOW)
+    assert result["008281"]["points"] == history["points"]
+    assert len(calls) <= 2 * len(originals)
+    result["008281"]["points"][0]["close"] = "999"
+    assert all(row == history for row in originals)
+
+
+@pytest.mark.asyncio
 async def test_bad_bundle_cohort_cannot_replace_valid_cached_nav_in_packet(monkeypatch):
     fresh = complete_history(count=220)
     bad = deepcopy(fresh)

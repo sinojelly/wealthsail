@@ -6,6 +6,33 @@ let refreshAccessToken: (() => Promise<string | null>) | null = null;
 let authFailureHandler: (() => Promise<void> | void) | null = null;
 let refreshInFlight: Promise<string | null> | null = null;
 
+function logRequestTiming(
+  path: string,
+  init: RequestInit,
+  started: number,
+  headersAt: number,
+  bodyAt: number,
+  parsedAt: number,
+  response?: Response,
+) {
+  if (new URLSearchParams(window.location.search).get("perf") !== "1") return;
+  const server = response?.headers.get("X-Request-Time-Ms");
+  const ms = (value: number) => Math.round(value * 10) / 10;
+  console.info("frontend_performance", {
+    phase: "api",
+    path: path.split(/[?#]/, 1)[0],
+    method: init.method ?? "GET",
+    status: response?.status ?? 0,
+    requestId: response?.headers.get("X-Request-Id") ?? null,
+    headersMs: ms(headersAt - started),
+    bodyMs: ms(bodyAt - headersAt),
+    parseMs: ms(parsedAt - bodyAt),
+    durationMs: ms(parsedAt - started),
+    serverMs: server && Number.isFinite(Number(server)) ? Number(server) : null,
+    serverTiming: response?.headers.get("Server-Timing") ?? null,
+  });
+}
+
 export class HttpError extends Error {
   constructor(
     message: string,
@@ -57,12 +84,22 @@ async function requestOnce<T>(
   }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  const started = performance.now();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  } catch (failure) {
+    const failedAt = performance.now();
+    logRequestTiming(path, init, started, failedAt, failedAt, failedAt);
+    throw failure;
+  }
+  const headersAt = performance.now();
   const responseText = await response.text();
+  const bodyAt = performance.now();
   let body: {
     data?: T;
     meta?: ApiMeta;
@@ -75,6 +112,15 @@ async function requestOnce<T>(
   } catch {
     body = {};
   }
+  logRequestTiming(
+    path,
+    init,
+    started,
+    headersAt,
+    bodyAt,
+    performance.now(),
+    response,
+  );
   if (
     response.status === 401 &&
     !hasRetriedAuth &&
