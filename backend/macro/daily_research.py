@@ -297,6 +297,11 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "isDelayedNav",
         ),
     )
+    if isinstance(value.get("historicalPriceWindow"), dict):
+        result["historicalPriceWindow"] = _pick(
+            value["historicalPriceWindow"],
+            ("state", "sampleCount", "requiredSamples", "start", "end"),
+        )
     result["orderPriceAvailable"] = False
     price_keys = (
         "entryZoneMin",
@@ -347,8 +352,20 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "maximumHighNavMA20Ratio",
             "trendEntryLowScale",
             "trendEntryHighScale",
+            "historicalPriceWindow",
+            "historicalPercentileMethod",
+            "middleHighNavPercentile",
+            "maximumTrendBuyPricePercentile",
+            "sellZoneLowerPricePercentile",
+            "sellZoneUpperPricePercentile",
+            "navRewardRiskBasis",
         ),
     )
+    history_window = (value.get("parameters") or {}).get("historicalPriceWindow")
+    if isinstance(history_window, list) and len(history_window) == 2:
+        result["parameters"]["historicalPriceWindow"] = [
+            _public_value(item) for item in history_window
+        ]
     result["indicators"] = _pick(
         value.get("indicators") or {},
         (
@@ -363,8 +380,23 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
             "bollUpper",
             "momentum20",
             "navPercentile1y",
+            "p35",
+            "p40",
+            "p50",
+            "p55",
+            "p60",
+            "p65",
+            "p85",
+            "p95",
+            "peakHigh",
         ),
     )
+    if "indicatorStates" in value:
+        result["indicatorStates"] = {
+            key: _pick(state, ("state", "sampleCount", "requiredSamples"))
+            for key, state in (value.get("indicatorStates") or {}).items()
+            if key in result["indicators"] and isinstance(state, dict)
+        }
     result["tracks"] = []
     for row in value.get("tracks", [])[:2]:
         if (
@@ -389,9 +421,16 @@ def _public_actionable_plan(value, index_id, now, *, subject_kind="index"):
                         "entryBlockReason",
                         "entryStatus",
                         "entryStatusTone",
+                        "inSellZone",
+                        "buyZoneAnchor",
                     ),
                 ),
                 **{key: price(row.get(key)) for key in price_keys},
+                **{
+                    key: price(row[key])
+                    for key in ("sellZoneMin", "sellZoneMax")
+                    if key in row
+                },
                 "reasons": _texts(row.get("reasons")),
             }
         )
@@ -576,7 +615,11 @@ def apply_entry_guards(value, packet, now):
             _finite(indicators.get("ma20")),
             _finite(row.get("currentPrice")),
         )
-        warning = None
+        warning = (
+            ("SUBSCRIPTION_RESTRICTED", subscription["label"])
+            if subscription is not None and subscription["restricted"]
+            else None
+        )
         if (
             percentile is not None
             and percentile >= 85
@@ -617,6 +660,7 @@ def apply_entry_guards(value, packet, now):
                             "entryBlockReason",
                             "entryStatus",
                             "entryStatusTone",
+                            "inSellZone",
                         ),
                     )
                 )
@@ -632,22 +676,40 @@ def apply_entry_guards(value, packet, now):
                             "entryBlockReason",
                             "entryStatus",
                             "entryStatusTone",
+                            "inSellZone",
                         ),
                     )
                 )
-        if warning:
+        if not selected:
+            sell_track = next(
+                (
+                    track
+                    for track in row.get("tracks", [])
+                    if track.get("inSellZone") is True
+                ),
+                None,
+            )
+            if sell_track is not None:
+                row.update(
+                    _pick(
+                        sell_track,
+                        ("inSellZone", "entryStatus", "entryStatusTone"),
+                    )
+                )
+        sell_zone = row.get("inSellZone") is True
+        if warning or sell_zone:
             fields = {
                 "entryBlocked": True,
-                "entryBlockReason": warning[0],
-                "entryStatus": warning[1],
-                "entryStatusTone": "amber",
+                "entryBlockReason": warning[0] if warning else "IN_SELL_ZONE",
                 "entryReady": False,
                 "inBuyZone": False,
                 "preferredEntryEligible": False,
             }
-            row.update(fields)
-            for track in [*row.get("tracks", []), *row.get("signals", [])]:
-                track.update(fields)
+            for target in [row, *row.get("tracks", []), *row.get("signals", [])]:
+                target.update(fields)
+                # A purchase veto does not erase the separate exit advice.
+                if warning and target.get("inSellZone") is not True:
+                    target.update(entryStatus=warning[1], entryStatusTone="amber")
         return row
 
     for field in (
@@ -669,7 +731,7 @@ def apply_entry_guards(value, packet, now):
         direction["plans"] = [
             row
             for row in direction.get("plans", [])
-            if not row.get("subscriptionRestricted")
+            if not row.get("subscriptionRestricted") or row.get("inSellZone") is True
         ]
         if direction.get("signal") in {"LEFT_VALUE", "RIGHT_TREND"} and not any(
             not row.get("entryBlocked")
@@ -686,7 +748,7 @@ def apply_entry_guards(value, packet, now):
         result["actionablePlans"] = [
             row
             for row in result["actionablePlans"]
-            if not row.get("subscriptionRestricted")
+            if not row.get("subscriptionRestricted") or row.get("inSellZone") is True
         ]
     return result
 
@@ -1159,7 +1221,8 @@ def build_prompt(packet):
         "采用量化信号+产业催化双引擎：主动逐项扫描quantitativeScan的全赛道基金技术位置、双轨区间、inEntryZone和distanceToEntryPct，技术条件CANDIDATE与当前已进入买入区分开表述。将扫描与AI算力/半导体、稀土有色、金融政策、机器人智驾、医药临床、黄金地缘能源、航天军工及宽基等当前真实催化匹配，不将举例写成今天已发生事实。\n"
         "每只基金可选价格轨道取quantitativeScan.items[].signals，WATCH也选择其中已有完整价格的轨道；技术state与当前inEntryZone分开表述；某轨因PB等依据不足不可用时，保留该基金并选择另一有效轨道，不将缺一条轨道扩大为整只基金无价格。\n"
         "扫描包含40核心底座和最多6只按本轮新闻从全市场主数据新增的热点基金；优先匹配真实事件，不受旧30限制。entryReady才表示技术条件成立且价格入区；右轨WATCH即使inEntryZone=true，也只能说价格近均线、待趋势触发，不能称已入右侧买区。全部净值/买区/止损/T1/T2/备选轨/技术依据由Python在输出后按所选标的和轨道复制，不输出或重抄数值，不编短历史。\n"
-        "硬约束：entryBlocked=true或entryReady=false不得写已入买区；右轨RSI14>60不得触发，价格高于围绕MA20的买区等待回踩。近1年分位>=85且偏离MA20超过2%时勿追高；QDII净值滞后且对应外盘当日急跌至少2%时暂缓入场。subscriptionRestricted=true表示暂停申购或单日限购不超过100元，不得作为首选建仓基金写入plans，优先选择未受限的相关替代；没有替代用WATCH与plans=[]，保留方向研究。\n"
+        "新版基金计划买卖分开：买区由中期均线MA60与历史分位支撑锚定，中高位不得用短期MA20附近的浅回调冒充安全买点；卖区sellZoneMin/sellZoneMax对应T1/T2，由历史阻力锚定。inSellZone=true时优先说明持仓可分批止盈、空仓勿追高，不得作为买入信号；高分位也可触发退出评估，即使现价尚未越过卖区下沿，应如实区分高位触发与价格已入卖区。买区、卖区和inSellZone均由服务器确定，模型禁止改价或将历史净值计划伪装为当前成交指令；历史样本不足时不得补造坐标或买入触发。\n"
+        "硬约束：entryBlocked=true或entryReady=false不得写已入买区；右轨RSI14>60不得触发，价格高于服务器买区时等待回落并重新核验。近1年分位>=85时以服务器卖区状态优先评估止盈；QDII净值滞后且对应外盘当日急跌至少2%时暂缓入场。subscriptionRestricted=true表示暂停申购或单日限购不超过100元，不得作为首选建仓基金写入plans，优先选择未受限的相关替代；没有替代用WATCH与plans=[]，保留方向研究。明确inSellZone=true的基金仍可保留在plans评估持仓退出，申购受限不等于无法止盈，不得因此隐藏卖出提示。\n"
         "dynamicNavSourceResults保留本轮逐基金采集样本数、缓存复用和失败原因；SUCCESS只表示取得真实记录，五条短历史不等于可定价READY，最终以quantitativeScan中的完整价格锚点为准。\n"
         "valueDirections目标6至8项，优先覆盖不同产业或驱动因素，证据不足可更少或空，不凑数；每项key沿用previousValueDirections的同一投资逻辑稳定key，不按单条新闻分方向。title/thesis用简明中文，先给机会逻辑，不打印内部主题代码/状态/长浮点或虚构置信分。sourceIds引用当前来源，macroCodes引用实际宏观码，quantitativeFundCodes最多2只且只选本轮quantitativeScan中与plans相同的基金。至少两项不同来源、或一项来源加宏观事实、或一项来源加真实净值量化证据；有实际技术条件的纯量化方向允许sourceIds=[]，必须选择本轮有效量化基金及对应计划，清楚说明技术研究性质、不编新闻。\n"
         "每方向catalysts和risks各最多2项，每项为{summary,sourceIds}，summary最多240字；用简短催化解释机会，用关键风险提示排雷，来源必须属于本方向sourceIds。只归纳资料支持的相关风险，个股解禁说明关联与潜在压力，不推定基金持仓或基金损失。\n"

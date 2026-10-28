@@ -158,7 +158,12 @@ async def test_current_subscription_overlay_protects_old_frozen_plans_without_ch
     )[0]
     assert guarded["subscriptionRestricted"] is True
     assert not watch.entry_permitted(frozen, frozen["tracks"][0], guarded)
-    assert guarded["tracks"] == before["tracks"]
+    assert [
+        {key: track[key] for key in original}
+        for track, original in zip(guarded["tracks"], before["tracks"], strict=True)
+    ] == before["tracks"]
+    assert guarded["tracks"][0]["entryBlocked"] is True
+    assert guarded["tracks"][0]["entryBlockReason"] == "SUBSCRIPTION_RESTRICTED"
     assert frozen == before
     assert guarded["currentPrice"] == "1.5"
 

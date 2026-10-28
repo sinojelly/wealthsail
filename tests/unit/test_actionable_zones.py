@@ -330,14 +330,14 @@ def nav_calculate(rows):
     )
 
 
-def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
+def test_twenty_confirmed_navs_get_partial_reference_without_inventing_history_or_atr():
     plan = nav_calculate(points([1] * 20, ohlc=False))
     assert plan["indicators"]["atr14"] is None
     assert plan["indicatorStates"]["atr14"]["state"] == "MISSING_OHLC"
     assert plan["indicators"]["navVolatility14"] == pytest.approx(0.012)
     assert plan["volatilityMethod"] == "NAV_ABS_CHANGE_STD_V1"
     left = track(plan, "LEFT_VALUE")
-    assert left["priceState"] == "READY"
+    assert left["priceState"] == "PARTIAL"
     assert [
         left[key]
         for key in (
@@ -358,7 +358,7 @@ def test_twenty_confirmed_navs_get_risk_prices_without_inventing_atr():
             "takeProfitT1",
             "takeProfitT2",
         )
-    ] == ["0.9934", "1.0030", "0.9760", "1.0315", "1.0540"]
+    ] == ["0.9934", "1.0030", "0.9760", "1.0315", "1.0515"]
 
 
 @pytest.mark.parametrize(
@@ -378,7 +378,7 @@ def test_nav_targets_stay_ordered_after_a_drop_with_a_high_ma60():
     left = track(plan, "LEFT_VALUE")
     assert left["takeProfitT1"] == "3.6667"
     assert left["takeProfitT2"] == "3.6787"
-    assert left["priceState"] == "READY"
+    assert left["priceState"] == "PARTIAL"
 
 
 @pytest.mark.parametrize("count", [0, 1, 14, 15, 19])
@@ -528,9 +528,12 @@ def test_yearly_high_nav_blocks_trend_despite_moderate_rsi():
     right = track(plan, "RIGHT_TREND")
     assert right["state"] == "WATCH"
     assert right.get("entryBlocked") is True
-    assert right.get("entryBlockReason") == "HIGH_NAV_PERCENTILE"
-    assert right.get("entryStatus") == "⚠️ 处于近1年高位区(100%分位)·勿追高"
-    assert right.get("entryStatusTone") == "amber"
+    assert right.get("entryBlockReason") == "IN_SELL_ZONE"
+    assert (
+        right.get("entryStatus")
+        == "🔥 已入建议卖出区间(100%分位)·持仓宜止盈/空仓勿追高"
+    )
+    assert right.get("entryStatusTone") == "rose"
     assert right.get("entryReady") is False
 
 
@@ -548,12 +551,13 @@ def test_yearly_percentile_requires_220_contiguous_samples_and_ignores_older_poi
     assert nav_calculate(broken)["indicators"].get("navPercentile1y") is None
 
 
-def test_high_percentile_close_to_ma20_does_not_block_normal_pullback():
+def test_high_percentile_alone_blocks_entry_even_close_to_ma20():
     plan = nav_calculate(points([1] * 220, ohlc=False))
     assert plan["indicators"].get("navPercentile1y") == 100
     right = track(plan, "RIGHT_TREND")
-    assert right.get("entryBlocked") is False
-    assert right.get("inBuyZone") is True
+    assert right.get("entryBlocked") is True
+    assert right.get("inSellZone") is True
+    assert right.get("inBuyZone") is False
 
 
 @pytest.mark.parametrize("earlier_highs,blocked", [(33, True), (34, False)])
@@ -571,11 +575,11 @@ def test_nav_high_position_guard_includes_eighty_fifth_percentile(
     assert right["state"] == ("WATCH" if blocked else "CANDIDATE")
 
 
-def test_nav_high_position_guard_requires_strictly_more_than_two_percent_above_ma20():
+def test_nav_sell_zone_guard_no_longer_requires_more_than_two_percent_above_ma20():
     plan = nav_calculate(points([0.9] * 200 + [1] * 18 + [0.98, 1.02], ohlc=False))
     assert plan["indicators"]["ma20"] == 1
     assert plan["indicators"]["navPercentile1y"] == 100
-    assert track(plan, "RIGHT_TREND").get("entryBlocked") is False
+    assert track(plan, "RIGHT_TREND").get("entryBlocked") is True
 
 
 def test_yearly_percentile_respects_explicit_cutoff_before_a_future_high():

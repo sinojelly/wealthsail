@@ -88,7 +88,9 @@ def test_nav_history_produces_same_fund_risk_plan_without_fabricated_atr():
     assert plan["indicators"]["atr14"] is None
     assert plan["volatilityMethod"] == "NAV_ABS_CHANGE_STD_V1"
     assert plan["indicators"]["navVolatility14"] > 0
-    assert plan["tracks"][1]["priceState"] == "READY"
+    assert plan["tracks"][1]["priceState"] == "PARTIAL"
+    assert plan["historicalPriceWindow"]["state"] == "INSUFFICIENT"
+    assert plan["tracks"][1]["entryReady"] is False
     assert plan["currentPrice"] == "1.2500"
     assert plan["historyQuality"] == "READY"
 

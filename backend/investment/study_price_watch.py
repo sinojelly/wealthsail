@@ -160,6 +160,7 @@ def _usable(quote, frozen, now, *, estimate=False, intraday=False):
 
 
 _ENTRY_SAFETY_FIELDS = (
+    "inSellZone",
     "entryBlocked",
     "entryBlockReason",
     "entryStatus",
@@ -185,6 +186,7 @@ def entry_permitted(frozen, track, entry_safety=None):
     )
     return not any(
         row.get("entryBlocked") is True
+        or row.get("inSellZone") is True
         or row.get("subscriptionRestricted") is True
         or row.get("preferredEntryEligible") is False
         for row in (current, selected)
@@ -222,7 +224,7 @@ def _entry_safety_summary(frozen, track, entry_safety=None):
         )
         if protected is not None:
             result[field] = deepcopy(protected)
-    for key in ("entryBlocked", "subscriptionRestricted"):
+    for key in ("entryBlocked", "subscriptionRestricted", "inSellZone"):
         if any(row.get(key) is True for row in (current, selected)):
             result[key] = True
     if any(row.get("preferredEntryEligible") is False for row in (current, selected)):
@@ -279,11 +281,27 @@ async def current_entry_safety(conn, plans, now):
     )
     transient = (*_ENTRY_SAFETY_FIELDS, "entryReady", "inBuyZone")
 
-    def clear_historical(value):
+    def clear_historical(value, *, current=False):
         result = deepcopy(value)
         for row in (result, *result.get("tracks", []), *result.get("signals", [])):
+            # Only a current public v5 assessment may carry its sell verdict
+            # into this read. An old frozen verdict is never a permanent veto.
+            sell = (
+                current
+                and value.get("methodVersion") == "actionable-zones-v5"
+                and row.get("inSellZone") is True
+            )
+            sell_fields = {
+                field: deepcopy(row[field])
+                for field in ("inSellZone", "entryStatus", "entryStatusTone")
+                if sell and field in row
+            }
             for field in transient:
                 row.pop(field, None)
+            if sell:
+                row.update(
+                    sell_fields, entryBlocked=True, entryReady=False, inBuyZone=False
+                )
         return result
 
     def metadata(value):
@@ -331,7 +349,13 @@ async def current_entry_safety(conn, plans, now):
             if isinstance(row, dict)
         )
     checked_public = apply_entry_guards(
-        {"actionableZones": [clear_historical(row) for row in public]}, packet, now
+        {
+            "actionableZones": [
+                clear_historical(row, current=current_public) for row in public
+            ]
+        },
+        packet,
+        now,
     )["actionableZones"]
     for original, result in zip(plans, guarded, strict=True):
         relevant = [
@@ -463,6 +487,7 @@ def price_watch(
     in_zone = _number(track["entryZoneMin"]) <= value <= _number(track["entryZoneMax"])
     technical_candidate = track.get("state") == "CANDIDATE"
     allowed = entry_permitted(frozen, track, entry_safety)
+    current_sell = isinstance(entry_safety, dict) and safety.get("inSellZone") is True
     result.update(
         basis="ESTIMATE_INTRADAY"
         if current_ok
@@ -477,7 +502,7 @@ def price_watch(
         "STOP_LOSS"
         if value <= _number(track["stopLossPrice"])
         else "TAKE_PROFIT"
-        if value >= _number(track["takeProfitT1"])
+        if value >= _number(track["takeProfitT1"]) or current_sell
         else "ENTRY_ZONE"
         if in_zone and technical_candidate and allowed
         else "HOLDING"
@@ -491,6 +516,10 @@ def price_watch(
         if estimate_ok
         else "按最新已确认披露净值核对冻结参考线。"
     )
+    if current_sell and result["state"] == "TAKE_PROFIT":
+        result["reason"] += (
+            "当前公开研究已触发卖出观察条件；持仓可分批止盈，空仓勿追高。"
+        )
     if in_zone and not technical_candidate:
         result["reason"] += "价格位于参考区间内，冻结轨道的技术条件待触发。"
     if not allowed:

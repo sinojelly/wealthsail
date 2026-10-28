@@ -113,7 +113,13 @@ def public_quantitative_scan(value, now):
             ready = (
                 candidate
                 and in_zone
-                and not any(item.get("entryBlocked") is True for item in (row, track))
+                and not any(
+                    item.get("entryReady") is False
+                    or item.get("entryBlocked") is True
+                    or item.get("inSellZone") is True
+                    or item.get("subscriptionRestricted") is True
+                    for item in (row, track)
+                )
             )
             if value["methodVersion"] == "fund-quant-scan-v2" and (
                 type(signal.get("candidate")) is not bool
@@ -134,6 +140,16 @@ def public_quantitative_scan(value, now):
                         {"candidate": candidate, "entryReady": ready}
                         if value["methodVersion"] == "fund-quant-scan-v2"
                         else {}
+                    ),
+                    **_pick(
+                        track,
+                        (
+                            "inSellZone",
+                            "entryBlocked",
+                            "entryBlockReason",
+                            "entryStatus",
+                            "entryStatusTone",
+                        ),
                     ),
                 }
             )

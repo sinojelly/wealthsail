@@ -367,7 +367,14 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
                 stopLossPrice=None,
                 takeProfitT1=None,
                 takeProfitT2=None,
+                **(
+                    {"sellZoneMin": None, "sellZoneMax": None, "inSellZone": False}
+                    if "inSellZone" in track
+                    else {}
+                ),
             )
+            for field in ("entryStatus", "entryStatusTone", "entryBlockReason"):
+                track.pop(field, None)
             track["reasons"].append(reason)
     return plan
 

@@ -404,8 +404,27 @@ def _quantitative_scan(public, now):
                     "candidate": track["state"] == "CANDIDATE",
                     "inEntryZone": low <= current <= high,
                     "entryReady": track["state"] == "CANDIDATE"
-                    and low <= current <= high,
+                    and track.get("priceState") == "READY"
+                    and low <= current <= high
+                    and not any(
+                        row.get("entryReady") is False
+                        or row.get("entryBlocked") is True
+                        or row.get("inSellZone") is True
+                        or row.get("subscriptionRestricted") is True
+                        for row in (plan, track)
+                    ),
                     "distanceToEntryPct": round(distance * 100, 4),
+                    **{
+                        field: deepcopy(track[field])
+                        for field in (
+                            "inSellZone",
+                            "entryBlocked",
+                            "entryBlockReason",
+                            "entryStatus",
+                            "entryStatusTone",
+                        )
+                        if field in track
+                    },
                 }
             )
         if not signals:

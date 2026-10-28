@@ -11,7 +11,7 @@ from decimal import (
 import math
 from statistics import pstdev
 
-VERSION = "actionable-zones-v4"
+VERSION = "actionable-zones-v5"
 PARAMETERS = {
     "ma": [20, 60, 200],
     "rsi": 14,
@@ -26,6 +26,13 @@ PARAMETERS = {
     "navPercentileWindow": 220,
     "maximumNavPercentile": 85,
     "maximumHighNavMA20Ratio": 1.02,
+    "historicalPriceWindow": [220, 500],
+    "historicalPercentileMethod": "LINEAR_INTERPOLATION",
+    "middleHighNavPercentile": 70,
+    "maximumTrendBuyPricePercentile": 65,
+    "sellZoneLowerPricePercentile": 85,
+    "sellZoneUpperPricePercentile": 95,
+    "navRewardRiskBasis": "HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR",
     "trendEntryLowScale": 0.55,
     "trendEntryHighScale": 0.25,
     "navAbsoluteChangeWindow": 14,
@@ -37,6 +44,25 @@ PARAMETERS = {
     "minimumRewardRiskT2": 2.4,
     "rewardRiskBasis": "DISPLAYED_ENTRY_MID_AND_STOP",
 }
+
+HISTORICAL_PERCENTILES = (35, 40, 50, 55, 60, 65, 85, 95)
+
+
+def _historical_nav_anchors(points):
+    """Linear percentiles of the real ordered suffix, never a synthetic year."""
+    if len(points) < 220:
+        return {}
+    prices = sorted(_number(point["close"]) for point in points[-500:])
+    anchors = {}
+    for percentile in HISTORICAL_PERCENTILES:
+        index = Decimal(len(prices) - 1) * Decimal(percentile) / 100
+        lower_index = int(index)
+        upper_index = min(lower_index + 1, len(prices) - 1)
+        anchors[f"p{percentile}"] = prices[lower_index] + (
+            prices[upper_index] - prices[lower_index]
+        ) * (index - lower_index)
+    anchors["peakHigh"] = prices[-1]
+    return anchors
 
 
 def _number(value):
@@ -106,13 +132,18 @@ def nav_daily_change_pct(points):
     return format(rounded.copy_abs() if rounded == 0 else rounded, "f")
 
 
-def _zone(kind, values, close, *, places, nav_scale=False):
+def _zone(
+    kind, values, close, *, places, nav_scale=False, nav_basis=False, nav_history=None
+):
     result = {
         "entryZoneMin": None,
         "entryZoneMax": None,
         "stopLossPrice": None,
         "takeProfitT1": None,
         "takeProfitT2": None,
+        "sellZoneMin": None,
+        "sellZoneMax": None,
+        "buyZoneAnchor": None,
         "priceState": "INSUFFICIENT",
     }
     reasons = []
@@ -120,9 +151,48 @@ def _zone(kind, values, close, *, places, nav_scale=False):
         _number(values.get(key)) for key in ("ma20", "bollLower", "atr14")
     )
     scale = _number(values.get("navVolatility14")) if nav_scale else atr
+    historical = bool(nav_history) and scale is not None
     if close is None or ma20 is None or lower is None:
         return result, ["入场参考区间缺少有效收盘、MA20或布林带。"]
-    if scale is None:
+    if historical:
+        ma60 = _number(values.get("ma60"))
+        middle_high = (
+            values.get("navPercentile1y") is not None
+            and values["navPercentile1y"] >= 70
+        ) or close > nav_history["p65"]
+        if middle_high:
+            maximum = min(ma60 + Decimal("0.25") * scale, nav_history["p55"])
+            minimum = min(
+                ma60 - Decimal("0.55") * scale,
+                nav_history["p40"],
+                maximum - Decimal("0.6") * scale,
+            )
+            result["buyZoneAnchor"] = "MA60_HISTORICAL_SUPPORT"
+            reasons.append("中高位买区锚定MA60与历史35%–55%支撑区，不随MA20追高。")
+        elif kind == "RIGHT_TREND":
+            maximum = min(ma20 + Decimal("0.25") * scale, nav_history["p65"])
+            minimum = min(
+                ma20 - Decimal("0.55") * scale, maximum - Decimal("0.6") * scale
+            )
+            result["buyZoneAnchor"] = "MA20_CAPPED_P65"
+            reasons.append("右侧买区采用MA20参考且上沿不超过真实历史65%分位价格。")
+        else:
+            maximum = min(ma20, close + Decimal("0.3") * scale, nav_history["p65"])
+            minimum = min(
+                lower, close - Decimal("0.8") * scale, maximum - Decimal("0.6") * scale
+            )
+            result["buyZoneAnchor"] = "LEFT_BOLLINGER_SUPPORT"
+        result["priceState"] = "READY"
+    elif nav_history and scale is None:
+        ma60 = _number(values.get("ma60"))
+        maximum = min(ma60, nav_history["p55"])
+        minimum = min(ma60, nav_history["p40"], maximum)
+        result["buyZoneAnchor"] = "MA60_HISTORICAL_SUPPORT"
+        result["priceState"] = "PARTIAL"
+        reasons.append(
+            "缺少可用风险尺度，仅保留中期均线与真实历史支撑参考；不计算止损和卖区。"
+        )
+    elif scale is None:
         minimum, maximum = (
             (lower, min(close, ma20)) if kind == "LEFT_VALUE" else (ma20, ma20)
         )
@@ -160,16 +230,31 @@ def _zone(kind, values, close, *, places, nav_scale=False):
     )
     if scale is not None:
         ma60, ma200 = (_number(values.get(key)) for key in ("ma60", "ma200"))
-        if nav_scale:
+        if historical:
+            stop = minimum - 2 * scale
+            first = max(maximum + Decimal("2.5") * scale, nav_history["p85"])
+            second = max(
+                first + Decimal("1.2") * scale,
+                min(
+                    nav_history["peakHigh"],
+                    _number(values.get("bollUpper")) or nav_history["peakHigh"],
+                ),
+                nav_history["p95"],
+            )
+            reasons.append(
+                "卖区锚定历史85%/95%分位及周期高点、布林阻力，不以现价加成抬高目标。"
+            )
+            reasons.append(
+                "历史支撑/阻力分支不套用旧1.5R/2.4R目标下限；止损独立低于买区。"
+            )
+        elif nav_scale:
             stop = (minimum if kind == "LEFT_VALUE" else ma20) - 2 * scale
             first = max(
                 ma60 or maximum + 2 * scale,
-                close + Decimal("2.5") * scale,
                 maximum + 2 * scale,
             )
             second = max(
                 _number(values.get("bollUpper")) or first + scale,
-                close + Decimal("4.5") * scale,
                 first + scale,
             )
             reasons.append(
@@ -184,6 +269,9 @@ def _zone(kind, values, close, *, places, nav_scale=False):
         )
         if stop is not None and stop < rounded_minimum:
             result["stopLossPrice"] = _price(stop, places)
+        else:
+            reasons.append("止损在舍入后非正或未低于入场区，止损不可用。")
+        if stop is not None and stop < rounded_minimum and not historical:
             middle = (rounded_minimum + rounded_maximum) / 2
             risk = middle - stop
             # Round each lower bound upward so the displayed coordinates still
@@ -200,8 +288,6 @@ def _zone(kind, values, close, *, places, nav_scale=False):
             first = max(first, first_floor) if first is not None else first_floor
             second = max(second, second_floor) if second is not None else second_floor
             reasons.append("目标参考至少满足入场区间中点至止损的1.5倍/2.4倍风险空间。")
-        else:
-            reasons.append("止损在舍入后非正或未低于入场区，止损不可用。")
         if first is not None and first > rounded_maximum:
             result["takeProfitT1"] = _price(first, places)
             if second is not None and second > first:
@@ -213,6 +299,15 @@ def _zone(kind, values, close, *, places, nav_scale=False):
             for key in ("stopLossPrice", "takeProfitT1", "takeProfitT2")
         ):
             result["priceState"] = "PARTIAL"
+    if nav_basis and not nav_history:
+        if result["priceState"] == "READY":
+            result["priceState"] = "PARTIAL"
+        result["buyZoneAnchor"] = "SHORT_HISTORY_REFERENCE"
+        reasons.append(
+            "不足220个连续有效交易样本，历史买卖锚点不足；现有短窗价格仅作参考，不构成入场条件。"
+        )
+    result["sellZoneMin"] = result["takeProfitT1"]
+    result["sellZoneMax"] = result["takeProfitT2"]
     return result, reasons
 
 
@@ -262,6 +357,23 @@ def compute_actionable_price_plan(
         "nav",
         "fund",
     }
+    historical_points = suffix[-500:] if nav_basis else []
+    nav_history = _historical_nav_anchors(historical_points) if nav_basis else {}
+    for key in [
+        *(f"p{percentile}" for percentile in HISTORICAL_PERCENTILES),
+        "peakHigh",
+    ]:
+        value = nav_history.get(key)
+        values[key] = float(value) if value is not None else None
+        states[key] = {
+            "state": "READY"
+            if value is not None
+            else "INSUFFICIENT"
+            if nav_basis
+            else "NOT_APPLICABLE",
+            "sampleCount": len(historical_points),
+            "requiredSamples": 220,
+        }
     # A short series cannot stand in for a year of trading observations. Use
     # the same valid suffix and observation cutoff as every other indicator.
     values["navPercentile1y"] = (
@@ -475,10 +587,22 @@ def compute_actionable_price_plan(
             or price_basis in {"INDEX_POINTS", "INDEX_PRICE"}
             else 4,
             nav_scale=values["navVolatility14"] is not None,
+            nav_basis=nav_basis,
+            nav_history=nav_history,
         )
         missing = [name for name, value in conditions if value is None]
         low, high = (_number(zone[key]) for key in ("entryZoneMin", "entryZoneMax"))
-        blocked = kind == "RIGHT_TREND" and high_nav
+        sell_minimum = _number(zone["sellZoneMin"])
+        in_sell_zone = nav_basis and (
+            close is not None
+            and sell_minimum is not None
+            and close >= sell_minimum
+            or values["navPercentile1y"] is not None
+            and values["navPercentile1y"] >= 85
+        )
+        blocked = in_sell_zone or kind == "RIGHT_TREND" and high_nav
+        if in_sell_zone and state == "CANDIDATE":
+            state = "WATCH"
         in_zone = (
             close is not None
             and low is not None
@@ -493,8 +617,25 @@ def compute_actionable_price_plan(
             and zone["priceState"] == "READY"
             and not blocked,
             "entryBlocked": blocked,
+            "inSellZone": in_sell_zone,
         }
-        if blocked:
+        if in_sell_zone:
+            percentile = values["navPercentile1y"]
+            percentile_label = (
+                f"{percentile:.0f}%分位" if percentile is not None else "分位未知"
+            )
+            entry.update(
+                entryBlockReason="IN_SELL_ZONE",
+                entryStatus=f"🔥 已入建议卖出区间({percentile_label})·持仓宜止盈/空仓勿追高",
+                entryStatusTone="rose",
+            )
+            if percentile is not None and percentile >= 85:
+                reasons.append(
+                    "近1年净值分位达到85%，触发卖出观察条件；该分位条件不等同于现价已落在价格带内。"
+                )
+            if close is not None and sell_minimum is not None and close >= sell_minimum:
+                reasons.append("当前净值已达到建议卖出区间下沿。")
+        elif blocked:
             entry.update(
                 entryBlockReason="HIGH_NAV_PERCENTILE",
                 entryStatus=f"⚠️ 处于近1年高位区({values['navPercentile1y']:.0f}%分位)·勿追高",
@@ -508,7 +649,9 @@ def compute_actionable_price_plan(
             and close > high
         ):
             entry.update(
-                entryStatus=f"🚀 高于买区 {(close / high - 1) * 100:.2f}%·等待回踩均线",
+                entryStatus=f"🚀 高于买区 {(close / high - 1) * 100:.2f}%·等待回落买区"
+                if nav_history
+                else f"🚀 高于买区 {(close / high - 1) * 100:.2f}%·等待回踩均线",
                 entryStatusTone="amber",
             )
         tracks.append(
@@ -568,6 +711,23 @@ def compute_actionable_price_plan(
             "start": _day(suffix[0]["date"]).isoformat() if suffix else None,
             "end": _day(suffix[-1]["date"]).isoformat() if suffix else None,
             "sampleCount": len(suffix),
+        },
+        "historicalPriceWindow": {
+            "state": "CONFLICT"
+            if order_conflict
+            else "READY"
+            if nav_history
+            else "INSUFFICIENT"
+            if nav_basis
+            else "NOT_APPLICABLE",
+            "sampleCount": len(historical_points),
+            "requiredSamples": 220,
+            "start": _day(historical_points[0]["date"]).isoformat()
+            if historical_points
+            else None,
+            "end": _day(historical_points[-1]["date"]).isoformat()
+            if historical_points
+            else None,
         },
         "indicators": values,
         "indicatorStates": states,

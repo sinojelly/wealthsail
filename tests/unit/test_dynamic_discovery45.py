@@ -703,7 +703,14 @@ def test_scanner_v2_does_not_call_watch_right_track_an_entered_buy_signal():
     plan = theme_graph.nav_plan(history, now=NOW)
     plan["historyQuality"] = "READY"
     right = next(row for row in plan["tracks"] if row["track"] == "RIGHT_TREND")
-    right.update(state="WATCH", entryZoneMin="1.1900", entryZoneMax="1.2500")
+    # Isolate technical readiness from the v5 high-percentile exit veto.
+    right.update(
+        state="WATCH",
+        entryZoneMin="1.1900",
+        entryZoneMax="1.2500",
+        inSellZone=False,
+        entryBlocked=False,
+    )
     result = discovery._quantitative_scan(
         {
             "discoveryUniverse": [asset("008281")],
@@ -717,7 +724,7 @@ def test_scanner_v2_does_not_call_watch_right_track_an_entered_buy_signal():
     )
     assert signal["inEntryZone"] is True
     assert signal["candidate"] is False and signal["entryReady"] is False
-    right["state"] = "CANDIDATE"
+    right.update(state="CANDIDATE", entryReady=True)
     signal = next(
         row
         for row in discovery._quantitative_scan(

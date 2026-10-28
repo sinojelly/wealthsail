@@ -269,6 +269,14 @@ async def test_analysis_valuation_validity_only_controls_its_own_left_branch(
     plan = result["actionableZones"]
     pe_usable = problem in {None, "pb_only_stale"}
     assert (plan["indicators"]["pePercentile"] is not None) is pe_usable
-    assert plan["tracks"][0]["state"] == (
-        "CANDIDATE" if oversold or pe_usable else "INSUFFICIENT"
+    left = plan["tracks"][0]
+    # A usable cheap-PE branch remains evidence, but v5 gives an exit veto
+    # priority when this rising-price fixture has already crossed its sell band.
+    assert left["state"] == (
+        "CANDIDATE" if oversold else "WATCH" if pe_usable else "INSUFFICIENT"
     )
+    if not oversold and pe_usable:
+        assert any(reason == "PE历史分位不高于40%：满足" for reason in left["reasons"])
+        assert left["inSellZone"] is True
+        assert left["entryBlocked"] is True
+        assert left["entryReady"] is False

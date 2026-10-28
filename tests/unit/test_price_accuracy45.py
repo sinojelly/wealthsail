@@ -38,22 +38,55 @@ def test_flat_nav_near_ma20_is_not_a_triggered_right_candidate():
 
 
 def test_real_positive_momentum_and_acceptable_rsi_mark_right_candidate():
-    plan = calculate([1 + 0.0005 * i + (0.03 if i % 2 else 0) for i in range(220)])
+    # Earlier higher prices keep the trend fixture below the new exit percentile.
+    plan = calculate(
+        [2] * 40 + [1 + 0.0005 * i + (0.03 if i % 2 else 0) for i in range(180)]
+    )
+    assert plan["indicators"]["navPercentile1y"] < 85
     assert plan["tracks"][1]["state"] == "CANDIDATE"
     assert plan["tracks"][1].get("candidate") is True
 
 
+def test_high_position_exit_veto_wins_over_positive_momentum_and_acceptable_rsi():
+    plan = calculate([1 + 0.0005 * i + (0.03 if i % 2 else 0) for i in range(220)])
+    assert plan["indicators"]["momentum20"] > 0
+    assert plan["indicators"]["rsi14"] <= 60
+    right = plan["tracks"][1]
+    assert right["inSellZone"] is True
+    assert right["state"] == "WATCH"
+    assert right["candidate"] is right["entryReady"] is False
+
+
 @pytest.mark.parametrize(
     "index,expected",
-    [(0, ("1.0384", "1.0644")), (1, ("1.0315", "1.0540"))],
+    [(0, ("1.0384", "1.0644")), (1, ("1.0315", "1.0515"))],
 )
-def test_nav_targets_protect_displayed_minimum_reward_to_risk(index, expected):
-    item = calculate([1] * 220)["tracks"][index]
+def test_short_nav_reference_keeps_legacy_risk_floor_without_claiming_history(
+    index, expected
+):
+    item = calculate([1] * 20)["tracks"][index]
+    assert item["priceState"] == "PARTIAL"
     assert (item["takeProfitT1"], item["takeProfitT2"]) == expected
     mid = (Decimal(item["entryZoneMin"]) + Decimal(item["entryZoneMax"])) / 2
     risk = mid - Decimal(item["stopLossPrice"])
     assert Decimal(item["takeProfitT1"]) - mid >= Decimal("1.5") * risk
     assert Decimal(item["takeProfitT2"]) - mid >= Decimal("2.4") * risk
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_historical_nav_sell_band_supersedes_legacy_risk_target_floor(index):
+    result = calculate([1] * 220)
+    item = result["tracks"][index]
+    assert (item["takeProfitT1"], item["takeProfitT2"]) == ("1.0300", "1.0444")
+    assert item["sellZoneMin"] == item["takeProfitT1"]
+    assert item["sellZoneMax"] == item["takeProfitT2"]
+    assert (
+        result["parameters"]["navRewardRiskBasis"]
+        == "HISTORICAL_SUPPORT_RESISTANCE_NO_RR_FLOOR"
+    )
+    middle = (Decimal(item["entryZoneMin"]) + Decimal(item["entryZoneMax"])) / 2
+    risk = middle - Decimal(item["stopLossPrice"])
+    assert Decimal(item["takeProfitT1"]) - middle < Decimal("1.5") * risk
 
 
 def test_index_targets_apply_the_same_floor_at_their_display_precision():
