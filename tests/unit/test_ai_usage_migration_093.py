@@ -19,8 +19,16 @@ def test_migration_093_file_exists_and_replaces_overlap_function():
     assert "pg_has_role(SESSION_USER, 'wealthsail_worker', 'USAGE')" in sql
     assert "pg_has_role(SESSION_USER, 'wealthsail_worker', 'MEMBER')" in sql
 
-    # Verify NULLIF on request.jwt.claims is used to avoid invalid input syntax for type json on empty string
-    assert "NULLIF(current_setting('request.jwt.claims', true), '')" in sql
+    # Verify safe_jwt_claim helper function is defined and granted
+    assert "CREATE OR REPLACE FUNCTION research.safe_jwt_claim(claim_key TEXT)" in sql
+    assert "GRANT EXECUTE ON FUNCTION research.safe_jwt_claim(TEXT) TO wealthsail_api,wealthsail_worker;" in sql
+
+    # Verify partial index for active running calls
+    assert "CREATE INDEX IF NOT EXISTS ai_usage_calls_running" in sql
+    assert "WHERE status = 'RUNNING'" in sql
+
+    # Verify RLS policies use safe_jwt_claim
+    assert "research.safe_jwt_claim('tenant_id')" in sql
     assert "42501" in sql
 
     # Verify grants

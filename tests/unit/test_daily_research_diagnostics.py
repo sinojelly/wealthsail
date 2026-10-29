@@ -64,3 +64,63 @@ async def test_model_execution_failure_logs_model_execution_stage(monkeypatch, c
         in caplog.text
     )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "SOURCE_REFERENCE_INVALID",
+        "SOURCE_DATE_INVALID",
+        "DIRECTION_VALIDATION_FAILED",
+        "FUND_PLAN_INVALID",
+        "SCHEMA_VALIDATION_FAILED",
+        "SCHEDULE_DATE_INVALID",
+    ],
+)
+async def test_fine_grained_validation_failure_logs_specific_reason_code(monkeypatch, caplog, reason_code):
+    """Specific ResearchValidationError logs error_class=ResearchValidationError and exact reason_code."""
+    from backend.macro.daily_research import ResearchValidationError
+
+    mod, state = isolate(monkeypatch)
+
+    def failing_validate(*args, **kwargs):
+        raise ResearchValidationError(reason_code, f"Detail for {reason_code}")
+
+    monkeypatch.setattr(mod, "validate_report", failing_validate)
+
+    with caplog.at_level("WARNING"):
+        outcome = await mod.sync_daily_research(object(), settings(), NOW)
+
+    assert outcome["status"] == "FAILED"
+    expected = (
+        f"daily_research_failed error_class=ResearchValidationError stage=REPORT_VALIDATION reason_code={reason_code}"
+    )
+    assert expected in caplog.text
+
+
+def test_canonical_reason_code_mapping():
+    """Unit test _canonical_reason_code direct mappings."""
+    import json
+    from backend.jobs.daily_research import _canonical_reason_code
+    from backend.macro.daily_research import ResearchValidationError
+
+    # Custom reason_code attribute takes precedence
+    err = ResearchValidationError("SOURCE_REFERENCE_INVALID", "broken ref")
+    assert _canonical_reason_code(err) == "SOURCE_REFERENCE_INVALID"
+
+    # Timeouts
+    assert _canonical_reason_code(TimeoutError("slow")) == "TIMEOUT"
+
+    # Network
+    assert _canonical_reason_code(ConnectionResetError("reset")) == "NETWORK_UNAVAILABLE"
+
+    # JSON / Schema
+    try:
+        json.loads("invalid json")
+    except Exception as exc:
+        assert _canonical_reason_code(exc) == "SCHEMA_VALIDATION_FAILED"
+
+    # Generic ValueError fallback
+    assert _canonical_reason_code(ValueError("unknown issue")) == "PAYLOAD_VALIDATION_FAILED"
+
+

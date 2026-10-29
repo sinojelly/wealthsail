@@ -263,11 +263,15 @@ def _macro_codes(packet, now):
 
 
 def validate_value_directions(proposals, packet, now, source_aliases):
+    from backend.macro.daily_research import ResearchValidationError, _TZ
+
     anchors = {}
     for plan in packet.get("discoveryActionableZones", []):
         identity = plan_identity(plan)
         if identity in anchors and anchors[identity] != plan:
-            raise ValueError("ambiguous discovery anchor")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "ambiguous discovery anchor"
+            )
         anchors[identity] = plan
     previous = index_previous_plans(
         [
@@ -283,26 +287,42 @@ def validate_value_directions(proposals, packet, now, source_aliases):
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
     if len(proposals) > MAX_VALUE_DIRECTIONS:
-        raise ValueError("too many value directions")
+        raise ResearchValidationError(
+            "DIRECTION_VALIDATION_FAILED", "too many value directions"
+        )
     for raw in proposals:
-        direction = ValueDirectionProposal.model_validate(raw).model_dump()
+        try:
+            direction = ValueDirectionProposal.model_validate(raw).model_dump()
+        except Exception as exc:
+            raise ResearchValidationError(
+                "SCHEMA_VALIDATION_FAILED", f"invalid direction proposal: {exc}"
+            ) from exc
         key = direction["key"]
         if key in seen:
-            raise ValueError("duplicate value direction")
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED", "duplicate value direction"
+            )
         seen.add(key)
         if any(ref not in source_aliases for ref in direction["sourceIds"]):
-            raise ValueError("unknown direction source")
+            raise ResearchValidationError(
+                "SOURCE_REFERENCE_INVALID", "unknown direction source"
+            )
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
         macros = sorted(set(direction["macroCodes"]))
         if any(code not in macro_codes for code in macros):
-            raise ValueError("unknown direction macro fact")
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED", "unknown direction macro fact"
+            )
         for field in ("catalysts", "risks"):
             for note in direction[field]:
                 if any(
                     ref not in source_aliases or source_aliases[ref] not in refs
                     for ref in note["sourceIds"]
                 ):
-                    raise ValueError("direction note needs related current sources")
+                    raise ResearchValidationError(
+                        "SOURCE_REFERENCE_INVALID",
+                        "direction note needs related current sources",
+                    )
                 note["sourceIds"] = sorted(
                     {source_aliases[ref] for ref in note["sourceIds"]}
                 )
@@ -311,22 +331,26 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             identity = plan_identity(proposal)
             pair = (*identity, proposal["track"])
             if pair in used:
-                raise ValueError("duplicate direction product track")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "duplicate direction product track"
+                )
             used.add(pair)
             anchor = anchors.get(identity)
             if not anchor:
-                raise ValueError("unknown discovery product or price")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "unknown discovery product or price"
+                )
             day, current, track = _program_plan(
                 anchor, proposal["track"], now, require_theme=False
             )
-            from backend.macro.daily_research import _TZ
-
             if (
                 anchor.get("historyQuality")
                 in {"STALE", "CONFLICT", "UNVERIFIED", "UNAVAILABLE", "INSUFFICIENT"}
                 or (now.astimezone(_TZ).date() - day).days > 10
             ):
-                raise ValueError("current direction price is stale or unverified")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "current direction price is stale or unverified"
+                )
             old = previous_plan(previous, anchor, proposal["track"])
             revision = proposal["priceRevisionStatus"]
             old_track = None
@@ -335,7 +359,9 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                     old, proposal["track"], now, require_theme=False
                 )
                 if old_day > day:
-                    raise ValueError("direction previous plan is later than current")
+                    raise ResearchValidationError(
+                        "FUND_PLAN_INVALID", "direction previous plan is later than current"
+                    )
             if revision == "TAKE_PROFIT_ALERT":
                 if not (
                     old is not None
@@ -345,7 +371,9 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                     and old.get("sourceUri") == anchor.get("sourceUri")
                     and current >= _price(old_track.get("takeProfitT1"))
                 ):
-                    raise ValueError("direction profit alert lacks observed target")
+                    raise ResearchValidationError(
+                        "FUND_PLAN_INVALID", "direction profit alert lacks observed target"
+                    )
             note_field = "catalysts" if revision == "UPGRADED" else "risks"
             note_refs = {
                 ref for note in direction[note_field] for ref in note["sourceIds"]

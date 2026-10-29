@@ -143,8 +143,10 @@ async def list_tasks(conn, tenant_id, *, include_global=False, limit=20, offset=
 async def reconcile_stale_calls(conn, *, limit: int = 100) -> str:
     """Reconcile orphaned RUNNING calls whose parent tasks have already terminated.
 
-    Applies a 30-second grace period for tasks with finished_at to prevent racing
-    with in-flight call finish handlers, and limits the batch size to prevent long locks.
+    Applies a 30-second grace period for tasks with finished_at, locks target rows
+    with FOR UPDATE SKIP LOCKED, orders deterministically by started_at and id, and
+    re-checks target.status = 'RUNNING' in the UPDATE to eliminate concurrency race
+    conditions with in-flight finish_call operations.
 
     Args:
         conn: asyncpg connection with research schema update privileges.
@@ -164,7 +166,9 @@ async def reconcile_stale_calls(conn, *, limit: int = 100) -> str:
                    t.finished_at <= statement_timestamp() - INTERVAL '30 seconds'
                    OR (t.finished_at IS NULL AND t.business_status <> 'RUNNING')
                )
+             ORDER BY c.started_at, c.id
              LIMIT $1
+             FOR UPDATE OF c SKIP LOCKED
         )
         UPDATE research.ai_usage_calls target
            SET status = 'UNCERTAIN',
@@ -172,6 +176,7 @@ async def reconcile_stale_calls(conn, *, limit: int = 100) -> str:
                error_class = COALESCE(target.error_class, 'ZombieCallRecovered')
           FROM stale
          WHERE target.id = stale.id
+           AND target.status = 'RUNNING'
         """,
         limit,
     )

@@ -27,39 +27,51 @@ class MockConnContext:
 
 
 @pytest.mark.asyncio
-async def test_claim_stale_runs_reconciles_zombie_calls_in_scope(caplog):
-    """claim_stale_runs must reconcile zombie calls within the connection scope."""
+async def test_claim_stale_runs_reconciles_zombie_calls(caplog):
+    """claim_stale_runs must invoke zombie call reconciliation on startup."""
     conn = AsyncMock()
-    conn.execute = AsyncMock(side_effect=["UPDATE 1", "UPDATE 3"])
+    conn.execute = AsyncMock(return_value="UPDATE 1")
     pool = MockPool(conn)
     settings = Settings(_env_file=None)
 
     with patch("backend.jobs.runner.system_connection", return_value=MockConnContext(conn)), \
-         patch("backend.ai_usage.repository.reconcile_stale_calls", new=AsyncMock(return_value="UPDATE 3")) as mock_reconcile:
-        with caplog.at_level("WARNING"):
-            recovered = await runner.claim_stale_runs(pool, settings)
+         patch("backend.jobs.runner.reconcile_zombie_ai_usage_calls", new=AsyncMock(return_value=3)) as mock_reconcile:
+        recovered = await runner.claim_stale_runs(pool, settings)
 
     assert recovered == 1
-    mock_reconcile.assert_awaited_once_with(conn)
-    assert "reconciled 3 zombie ai usage calls" in caplog.text
+    mock_reconcile.assert_awaited_once_with(pool)
 
 
 @pytest.mark.asyncio
-async def test_run_recoverable_jobs_reconciles_zombie_calls_in_scope(caplog):
-    """run_recoverable_jobs must invoke periodic zombie call reconciliation."""
+async def test_run_recoverable_jobs_is_decoupled_from_ai_usage(caplog):
+    """run_recoverable_jobs queries workflow.job_runs without being coupled to AI usage calls."""
     conn = AsyncMock()
     conn.fetch = AsyncMock(return_value=[])
     pool = MockPool(conn)
     settings = Settings(_env_file=None)
 
     with patch("backend.jobs.runner.system_connection", return_value=MockConnContext(conn)), \
-         patch("backend.ai_usage.repository.reconcile_stale_calls", new=AsyncMock(return_value="UPDATE 5")) as mock_reconcile:
-        with caplog.at_level("WARNING"):
-            outcomes = await runner.run_recoverable_jobs(pool, settings)
+         patch("backend.ai_usage.repository.reconcile_stale_calls") as mock_reconcile:
+        outcomes = await runner.run_recoverable_jobs(pool, settings)
 
     assert outcomes == {}
-    mock_reconcile.assert_awaited_once_with(conn)
-    assert "reconciled 5 zombie ai usage calls" in caplog.text
+    mock_reconcile.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_zombie_ai_usage_calls_executes_independently(caplog):
+    """reconcile_zombie_ai_usage_calls executes in its own connection and logs count."""
+    conn = AsyncMock()
+    pool = MockPool(conn)
+
+    with patch("backend.jobs.runner.system_connection", return_value=MockConnContext(conn)), \
+         patch("backend.ai_usage.repository.reconcile_stale_calls", new=AsyncMock(return_value="UPDATE 4")) as mock_reconcile:
+        with caplog.at_level("WARNING"):
+            zombies = await runner.reconcile_zombie_ai_usage_calls(pool, limit=50)
+
+    assert zombies == 4
+    mock_reconcile.assert_awaited_once_with(conn, limit=50)
+    assert "reconciled 4 zombie ai usage calls" in caplog.text
 
 
 @pytest.mark.asyncio

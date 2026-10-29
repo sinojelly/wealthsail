@@ -68,4 +68,7 @@ async def test_reconcile_stale_calls_executes_expected_sql():
     assert "c.status = 'RUNNING'" in sql
     assert "INTERVAL '30 seconds'" in sql
     assert "LIMIT $1" in sql
+    assert "ORDER BY c.started_at, c.id" in sql
+    assert "FOR UPDATE OF c SKIP LOCKED" in sql
+    assert "target.status = 'RUNNING'" in sql
     assert conn.execute.call_args[0][1] == 50

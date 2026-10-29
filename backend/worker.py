@@ -158,6 +158,12 @@ async def _recovery_loop(pool, settings) -> None:
             raise
         except Exception:  # noqa: BLE001 -- keep the independent loop alive
             logger.exception("job recovery scan failed")
+        try:
+            await runner.reconcile_zombie_ai_usage_calls(pool)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- usage reconciliation failure must not break recovery
+            logger.exception("periodic zombie ai usage call reconciliation failed")
         await asyncio.sleep(interval)
 
 

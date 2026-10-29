@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
@@ -322,3 +322,56 @@ async def test_real_worker_can_record_global_usage_without_api_global_write(usag
             task_id,
         )
     assert row["business_status"] == "SUCCEEDED" and row["status"] == "SUCCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_safe_jwt_claim_resilience(usage_db):
+    """Test safe_jwt_claim handles null, empty, invalid JSON, and valid JSON gracefully."""
+    pool = usage_db[0]
+    async with pool.acquire() as conn:
+        # 1. Null claims
+        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+        assert res is None
+
+        # 2. Empty string claims
+        await conn.execute("SET LOCAL request.jwt.claims = ''")
+        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+        assert res is None
+
+        # 3. Malformed JSON returns NULL without error
+        await conn.execute("SET LOCAL request.jwt.claims = 'not valid json {{{'")
+        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+        assert res is None
+
+        # 4. Valid JSON extracts claim
+        await conn.execute(
+            "SET LOCAL request.jwt.claims = '{\"tenant_id\": \"11111111-1111-1111-1111-111111111111\"}'"
+        )
+        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+        assert res == "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_calls_race_condition_safe(usage_db):
+    """Test concurrent finish_call and reconcile_stale_calls prevents overwriting SUCCEEDED."""
+    pool = usage_db[0]
+    task = await start_task(usage_db)
+    call = await start_call(usage_db, task, offset=-60)
+
+    async def finish():
+        await repository.persist(
+            pool, task[1], task[2], "finish_call", finish_call(call)
+        )
+
+    async def reconcile():
+        await repository.reconcile_stale_calls(pool, limit=10)
+
+    await asyncio.gather(finish(), reconcile())
+
+    async with pool.acquire() as conn:
+        status = await conn.fetchval(
+            "SELECT status FROM research.ai_usage_calls WHERE id = $1",
+            UUID(call["id"]),
+        )
+    assert status == "SUCCEEDED"
+

@@ -9,6 +9,7 @@
 | 参数及其子目录 | 容器内目标 | 使用方与权限 |
 |---|---|---|
 | `${NAS_VOLUME_WEALTH_SAIL}/avatars` | `/app/backend/static/avatars` | WealthSail API，可写；目录应由 UID/GID `10001:10001` 使用 |
+| `${NAS_VOLUME_WEALTH_SAIL}/research-audit` | `/app/data/research-audit` | WealthSail Worker 投研完整提示词/输入输出审计快照，可写；目录应由 UID/GID `10001:10001` 使用，建议权限 `0750` |
 | `${NAS_VOLUME_CODEX}/wealthsail/auth` | `/home/appuser/.codex` | 仅 WealthSail Runner 和一次性认证工具，可写以刷新认证；UID/GID `10001:10001`、目录 `0700` |
 | `${NAS_VOLUME_STUDY_OS}` | `/app/data` | StudyOS 业务数据，可写；按当前 StudyOS 镜像的运行身份设置权限 |
 | `${NAS_VOLUME_CODEX}/studyos/runtime` | `/root/.codex` | 仅 StudyOS，可写认证和运行状态；当前基础镜像使用 root，目录 `0700` |
@@ -22,6 +23,8 @@ Cloudflared 的父目录由 NAS 管理员保管并设为 `0700`，不把整段�
 ## 2. 首次启用前的目录检查
 
 先只读检查 NAS 上的每个实际目标：确认绝对路径、解析符号链接后的真实位置、目录 owner/mode、剩余空间，以及目录是否已经承载其他服务。不要将 `/`、系统目录、源码根目录或整个共享盘作为数据目标。创建子目录前确认它仍位于用户指定的数据根目录之内。
+对于 `${NAS_VOLUME_WEALTH_SAIL}/research-audit`，若宿主机目录尚不存在需预先创建，并将其宿主属主设为 `10001:10001`（`chown 10001:10001 ...`，权限 `0750`），同时在 NAS 实际生效的 `worker.env` 中显式指定 `DAILY_RESEARCH_AUDIT_DIR=/app/data/research-audit`，确保 Worker 进程具备写权限且容器重启或重建后审计数据得以保留。
+
 
 首次空目录的 owner/mode 可以按上表准备；目录已存在且有数据时先保留，核对其用途及当前容器映射。不要对已有根目录执行递归 `chown`、递归删除或清空操作。这里的文件只描述挂载，不会替你创建、修改或删除 NAS 目录。
 

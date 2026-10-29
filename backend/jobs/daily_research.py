@@ -48,6 +48,8 @@ def _canonical_reason_code(exc: Exception) -> str:
     """Map an exception to a sanitized, bounded diagnostic reason code.
 
     Avoids leaking prompt text, sensitive URLs, or unparsed model payloads into logs.
+    If the exception provides a structured `reason_code` (e.g. ResearchValidationError),
+    it is returned directly to pinpoint the validation failure rule.
 
     Args:
         exc: Exception raised during research execution.
@@ -55,14 +57,21 @@ def _canonical_reason_code(exc: Exception) -> str:
     Returns:
         Canonical string token representing failure category.
     """
+    code = getattr(exc, "reason_code", None)
+    if code and isinstance(code, str):
+        return code
+
     name = type(exc).__name__
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return "TIMEOUT"
     if isinstance(exc, (ConnectionError, OSError)):
         return "NETWORK_UNAVAILABLE"
-    if "JSON" in name or isinstance(exc, ValueError):
+    if "JSON" in name or "ValidationError" in name:
+        return "SCHEMA_VALIDATION_FAILED"
+    if isinstance(exc, ValueError):
         return "PAYLOAD_VALIDATION_FAILED"
     return name
+
 
 
 async def load_public_packet(conn, now, external, *, debug_request_id=None):

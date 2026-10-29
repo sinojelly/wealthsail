@@ -31,6 +31,17 @@ PROMPT_VERSION = "daily-research-value-directions-v9"
 MAX_REPORT_SOURCES = 24
 
 
+class ResearchValidationError(ValueError):
+    """Validation failure during research report checking.
+
+    Carries a canonical reason_code that is safe for telemetry and logs.
+    """
+
+    def __init__(self, reason_code: str, message: str = ""):
+        super().__init__(message or reason_code)
+        self.reason_code = reason_code
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -1282,13 +1293,23 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     if _now(packet.get("asOf")) > completed_at:
         raise ValueError("completion predates public input")
     if isinstance(raw, str):
-        raw = json.loads(raw, object_pairs_hook=_unique_object)
+        try:
+            raw = json.loads(raw, object_pairs_hook=_unique_object)
+        except Exception as exc:
+            raise ResearchValidationError(
+                "SCHEMA_VALIDATION_FAILED", f"invalid JSON: {exc}"
+            ) from exc
     if "themeActionableZones" not in packet:
         # Compatibility for pre-Phase2 packets only, never a new model request.
         raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
     if "discoveryUniverse" not in packet:
         raw = {"valueDirections": [], **raw}
-    report = _Report.model_validate(raw).model_dump()
+    try:
+        report = _Report.model_validate(raw).model_dump()
+    except Exception as exc:
+        raise ResearchValidationError(
+            "SCHEMA_VALIDATION_FAILED", f"schema validation error: {exc}"
+        ) from exc
     _safe_narrative(report)
     report = readable_fund_codes(
         report,
@@ -1300,7 +1321,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     for row in report["sources"]:
         uri = _url(row["url"])
         if row["id"] in original and original[row["id"]] != uri:
-            raise ValueError("ambiguous source identity")
+            raise ResearchValidationError(
+                "SOURCE_REFERENCE_INVALID", "ambiguous source identity"
+            )
         original[row["id"]] = uri
         _validate_publication(row, completed_at)
         identity = _identity("source", uri)
@@ -1385,16 +1408,16 @@ def validate_report(raw, packet, source_checks, *, completed_at):
             or row["scheduledDate"]
             and (day is None or str(day) != row["scheduledDate"])
         ):
-            raise ValueError("invalid planned date")
+            raise ResearchValidationError("SCHEDULE_DATE_INVALID", "invalid planned date")
         if stamp and day and stamp.astimezone(_TZ).date() != day:
-            raise ValueError("conflicting planned date")
+            raise ResearchValidationError("SCHEDULE_DATE_INVALID", "conflicting planned date")
         if (
             stamp
             and stamp <= completed_at
             or day
             and day < completed_at.astimezone(_TZ).date()
         ):
-            raise ValueError("past schedule is not upcoming")
+            raise ResearchValidationError("SCHEDULE_DATE_INVALID", "past schedule is not upcoming")
         identity = _identity(
             "planned",
             sorted(sources[ref]["url"] for ref in refs),
@@ -1474,10 +1497,14 @@ def _safe_narrative(value):
 
 def _validate_publication(row, now):
     if not _visible(row, now):
-        raise ValueError("future or invalid source publication")
+        raise ResearchValidationError(
+            "SOURCE_DATE_INVALID", "future or invalid source publication"
+        )
     day = row.get("publishedDate")
     if day and (_day(day) is None or str(_day(day)) != day):
-        raise ValueError("invalid publication date")
+        raise ResearchValidationError(
+            "SOURCE_DATE_INVALID", "invalid publication date"
+        )
 
 
 def _identity(kind, *values):
@@ -1492,9 +1519,13 @@ def _identity(kind, *values):
 
 def _references(row, aliases, directions):
     if any(key not in aliases for key in row["sourceIds"]):
-        raise ValueError("unknown research source reference")
+        raise ResearchValidationError(
+            "SOURCE_REFERENCE_INVALID", "unknown research source reference"
+        )
     if any(key not in directions for key in row["affectedDirectionIds"]):
-        raise ValueError("unknown research direction reference")
+        raise ResearchValidationError(
+            "DIRECTION_VALIDATION_FAILED", "unknown research direction reference"
+        )
     return sorted({aliases[key] for key in row["sourceIds"]})
 
 
