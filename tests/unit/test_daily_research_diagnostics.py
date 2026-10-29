@@ -124,3 +124,48 @@ def test_canonical_reason_code_mapping():
     assert _canonical_reason_code(ValueError("unknown issue")) == "PAYLOAD_VALIDATION_FAILED"
 
 
+@pytest.mark.asyncio
+async def test_real_validate_report_failure_logs_diagnostic_reason(monkeypatch, caplog):
+    """When real validate_report encounters bad JSON from model, it logs SCHEMA_VALIDATION_FAILED."""
+    from backend.macro.daily_research import validate_report as real_validate_report
+
+    mod, state = isolate(monkeypatch)
+    monkeypatch.setattr(mod, "validate_report", real_validate_report)
+
+    async def bad_json_run(*args, **kwargs):
+        return "{not valid json"
+
+    monkeypatch.setattr(mod, "run_codex_research", bad_json_run)
+
+    with caplog.at_level("WARNING"):
+        outcome = await mod.sync_daily_research(object(), settings(), NOW)
+
+    assert outcome["status"] == "FAILED"
+    assert "stage=REPORT_VALIDATION reason_code=SCHEMA_VALIDATION_FAILED" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_real_validate_report_with_bad_source_url_logs_source_reference_invalid(monkeypatch, caplog):
+    """When model generates an unsafe source URL, real validate_report logs SOURCE_REFERENCE_INVALID."""
+    from backend.macro.daily_research import validate_report as real_validate_report
+    from tests.unit.test_daily_research import report
+
+    mod, state = isolate(monkeypatch)
+    monkeypatch.setattr(mod, "validate_report", real_validate_report)
+
+    bad_report = report()
+    bad_report["sources"][0]["url"] = "http://127.0.0.1:8080/private"
+
+    async def bad_source_run(*args, **kwargs):
+        return bad_report
+
+    monkeypatch.setattr(mod, "run_codex_research", bad_source_run)
+
+    with caplog.at_level("WARNING"):
+        outcome = await mod.sync_daily_research(object(), settings(), NOW)
+
+    assert outcome["status"] == "FAILED"
+    assert "stage=REPORT_VALIDATION reason_code=SOURCE_REFERENCE_INVALID" in caplog.text
+
+
+

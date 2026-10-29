@@ -114,6 +114,8 @@ def _program_plan(plan, track_name, now, *, require_theme=True):
 
 
 def validate_actionable_plans(proposals, packet, now):
+    from backend.macro.daily_research import ResearchValidationError
+
     anchors = {_identity(row): row for row in packet.get("themeActionableZones", [])}
     rules = {row["key"]: row for row in packet.get("strategyMemoryRules", [])}
     previous = index_previous_plans(
@@ -124,23 +126,29 @@ def validate_actionable_plans(proposals, packet, now):
         row = ActionableProposal.model_validate(raw).model_dump()
         key = (*_identity(row), row["track"])
         if key in seen:
-            raise ValueError("duplicate model plan")
+            raise ResearchValidationError("FUND_PLAN_INVALID", "duplicate model plan")
         seen.add(key)
         anchor = anchors.get(_identity(row))
         if not anchor:
-            raise ValueError("unknown or future price anchor")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "unknown or future price anchor"
+            )
         day, current, track = _program_plan(anchor, row["track"], now)
         if any(
             key not in rules or rules[key].get("themeCode") != row["themeCode"]
             for key in row["calibrationRuleKeys"]
         ):
-            raise ValueError("unknown calibration rule")
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED", "unknown calibration rule"
+            )
         old = previous_plan(previous, anchor, row["track"])
         old_track = None
         if same_coordinate(anchor, old):
             old_day, _, old_track = _program_plan(old, row["track"], now)
             if old_day > day:
-                raise ValueError("previous price anchor is later than current")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "previous price anchor is later than current"
+                )
         if row["priceRevisionStatus"] == "TAKE_PROFIT_ALERT":
             try:
                 proven = (
@@ -154,7 +162,10 @@ def validate_actionable_plans(proposals, packet, now):
             except (KeyError, ValueError, InvalidOperation, TypeError):
                 proven = False
             if not proven:
-                raise ValueError("take profit lacks same-basis observed price proof")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID",
+                    "take profit lacks same-basis observed price proof",
+                )
         normalize_price_revision(row, anchor, track, old, old_track)
         output.append(
             {

@@ -492,3 +492,36 @@ def test_direction_notes_cannot_attach_unrelated_or_unknown_sources(field, sourc
 def test_direction_structured_notes_are_bounded(field, notes):
     with pytest.raises(ValueError):
         validate([direction(**{field: notes})])
+
+
+def test_validation_raises_specific_research_validation_errors():
+    """Verify validate_value_directions raises ResearchValidationError with canonical reason codes."""
+    from backend.macro.daily_research import ResearchValidationError
+
+    # 1. DIRECTION_VALIDATION_FAILED on invalid calibration rule
+    raw_bad_rule = direction()
+    raw_bad_rule["plans"][0]["calibrationRuleKeys"] = ["UNKNOWN_CALIBRATION_RULE"]
+    with pytest.raises(ResearchValidationError) as exc_info:
+        validate([raw_bad_rule])
+    assert exc_info.value.reason_code == "DIRECTION_VALIDATION_FAILED"
+
+    # 2. SOURCE_REFERENCE_INVALID on unknown direction source
+    raw_bad_src = direction(sourceIds=["unknown_source_id"])
+    with pytest.raises(ResearchValidationError) as exc_info:
+        validate([raw_bad_src])
+    assert exc_info.value.reason_code == "SOURCE_REFERENCE_INVALID"
+
+    # 3. FUND_PLAN_INVALID on unknown discovery product anchor
+    raw_bad_anchor = direction()
+    raw_bad_anchor["plans"][0]["subjectId"] = "999999"
+    with pytest.raises(ResearchValidationError) as exc_info:
+        validate([raw_bad_anchor])
+    assert exc_info.value.reason_code == "FUND_PLAN_INVALID"
+
+    # 4. FUND_PLAN_INVALID on missing quantitative scan
+    raw_quant = direction(sourceIds=[], macroCodes=[], quantitativeFundCodes=["005112"])
+    public_no_scan = {**quantitative_packet(), "quantitativeScan": None}
+    with pytest.raises(ResearchValidationError) as exc_info:
+        validate([raw_quant], public_no_scan)
+    assert exc_info.value.reason_code == "FUND_PLAN_INVALID"
+

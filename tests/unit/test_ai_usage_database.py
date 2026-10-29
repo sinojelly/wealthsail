@@ -326,52 +326,124 @@ async def test_real_worker_can_record_global_usage_without_api_global_write(usag
 
 @pytest.mark.asyncio
 async def test_safe_jwt_claim_resilience(usage_db):
-    """Test safe_jwt_claim handles null, empty, invalid JSON, and valid JSON gracefully."""
+    """Test safe_jwt_claim and safe_jwt_uid handle null, empty, invalid JSON, and invalid UUID gracefully."""
     pool = usage_db[0]
     async with pool.acquire() as conn:
-        # 1. Null claims
-        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
-        assert res is None
+        # 1. Null claims (isolated transaction)
+        async with conn.transaction():
+            res_claim = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+            res_uid = await conn.fetchval("SELECT research.safe_jwt_uid()")
+            assert res_claim is None
+            assert res_uid is None
 
-        # 2. Empty string claims
-        await conn.execute("SET LOCAL request.jwt.claims = ''")
-        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
-        assert res is None
+        # 2. Empty string claims (isolated transaction)
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('request.jwt.claims', $1, true)", "")
+            res_claim = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+            res_uid = await conn.fetchval("SELECT research.safe_jwt_uid()")
+            assert res_claim is None
+            assert res_uid is None
 
-        # 3. Malformed JSON returns NULL without error
-        await conn.execute("SET LOCAL request.jwt.claims = 'not valid json {{{'")
-        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
-        assert res is None
+        # 3. Malformed JSON returns NULL without error (isolated transaction)
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('request.jwt.claims', $1, true)", "not valid json {{{")
+            res_claim = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+            res_uid = await conn.fetchval("SELECT research.safe_jwt_uid()")
+            assert res_claim is None
+            assert res_uid is None
 
-        # 4. Valid JSON extracts claim
-        await conn.execute(
-            "SET LOCAL request.jwt.claims = '{\"tenant_id\": \"11111111-1111-1111-1111-111111111111\"}'"
-        )
-        res = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
-        assert res == "11111111-1111-1111-1111-111111111111"
+        # 4. Valid JSON with malformed UUID sub returns claim but NULL uid without throwing 22P02
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('request.jwt.claims', $1, true)",
+                '{"tenant_id": "11111111-1111-1111-1111-111111111111", "sub": "not-a-valid-uuid"}',
+            )
+            res_claim = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+            res_uid = await conn.fetchval("SELECT research.safe_jwt_uid()")
+            assert res_claim == "11111111-1111-1111-1111-111111111111"
+            assert res_uid is None
+
+        # 5. Valid JSON with valid sub returns both claim and UUID
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('request.jwt.claims', $1, true)",
+                '{"tenant_id": "11111111-1111-1111-1111-111111111111", "sub": "22222222-2222-2222-2222-222222222222"}',
+            )
+            res_claim = await conn.fetchval("SELECT research.safe_jwt_claim('tenant_id')")
+            res_uid = await conn.fetchval("SELECT research.safe_jwt_uid()")
+            assert res_claim == "11111111-1111-1111-1111-111111111111"
+            assert res_uid == UUID("22222222-2222-2222-2222-222222222222")
 
 
 @pytest.mark.asyncio
 async def test_reconcile_stale_calls_race_condition_safe(usage_db):
-    """Test concurrent finish_call and reconcile_stale_calls prevents overwriting SUCCEEDED."""
+    """Test concurrent finish_call and reconcile_stale_calls with row locks prevents overwriting SUCCEEDED."""
     pool = usage_db[0]
     task = await start_task(usage_db)
-    call = await start_call(usage_db, task, offset=-60)
+    # Start two calls: one will be completed concurrently, the other is an unhandled zombie
+    call_finishing = await start_call(usage_db, task, offset=-60)
+    call_zombie = await start_call(usage_db, task, offset=-60)
 
-    async def finish():
-        await repository.persist(
-            pool, task[1], task[2], "finish_call", finish_call(call)
-        )
+    # Place task into terminal SUCCEEDED status so its running calls qualify as stale
+    await repository.persist(
+        pool,
+        task[1],
+        task[2],
+        "finish_task",
+        {
+            "id": str(task[0]),
+            "finishedAt": datetime.now(timezone.utc),
+            "businessStatus": "SUCCEEDED",
+        },
+    )
 
-    async def reconcile():
-        await repository.reconcile_stale_calls(pool, limit=10)
+    lock_acquired = asyncio.Event()
+    reconcile_done = asyncio.Event()
 
-    await asyncio.gather(finish(), reconcile())
+    async def in_flight_finish():
+        # Connection A acquires row-level lock on call_finishing simulating active finish_call transaction
+        async with pool.acquire() as conn_a:
+            async with conn_a.transaction():
+                row = await conn_a.fetchrow(
+                    "SELECT id FROM research.ai_usage_calls WHERE id = $1 FOR UPDATE",
+                    UUID(call_finishing["id"]),
+                )
+                assert row is not None
+                lock_acquired.set()
+                # Wait for reconciliation attempt to run in parallel
+                await reconcile_done.wait()
+                # Complete the call within the transaction
+                await conn_a.execute(
+                    "UPDATE research.ai_usage_calls SET status = 'SUCCEEDED', finished_at = now() WHERE id = $1",
+                    UUID(call_finishing["id"]),
+                )
 
+    async def concurrent_reconcile():
+        # Wait until Connection A holds row lock
+        await lock_acquired.wait()
+        # Connection B runs reconcile_stale_calls. Due to SKIP LOCKED, it skips call_finishing,
+        # but must reconcile call_zombie to UNCERTAIN.
+        reconciled = await repository.reconcile_stale_calls(pool, limit=10)
+        assert reconciled == 1, "Must reconcile only call_zombie; call_finishing is locked and skipped"
+        reconcile_done.set()
+
+    await asyncio.gather(in_flight_finish(), concurrent_reconcile())
+
+    # Verify final states in database
     async with pool.acquire() as conn:
-        status = await conn.fetchval(
+        status_finishing = await conn.fetchval(
             "SELECT status FROM research.ai_usage_calls WHERE id = $1",
-            UUID(call["id"]),
+            UUID(call_finishing["id"]),
         )
-    assert status == "SUCCEEDED"
+        status_zombie = await conn.fetchval(
+            "SELECT status FROM research.ai_usage_calls WHERE id = $1",
+            UUID(call_zombie["id"]),
+        )
+    assert status_finishing == "SUCCEEDED", "In-flight finished call must remain SUCCEEDED"
+    assert status_zombie == "UNCERTAIN", "True zombie call must be marked UNCERTAIN"
+
+    # Second reconciliation run: idempotent, nothing further to reconcile
+    reconciled_again = await repository.reconcile_stale_calls(pool, limit=10)
+    assert reconciled_again == 0
+
 

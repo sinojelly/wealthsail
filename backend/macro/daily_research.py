@@ -1319,7 +1319,12 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     directions = {row["id"] for row in packet.get("directions", [])}
     sources, aliases, original = {}, {}, {}
     for row in report["sources"]:
-        uri = _url(row["url"])
+        try:
+            uri = _url(row["url"])
+        except ValueError as exc:
+            raise ResearchValidationError(
+                "SOURCE_REFERENCE_INVALID", f"invalid source URL: {exc}"
+            ) from exc
         if row["id"] in original and original[row["id"]] != uri:
             raise ResearchValidationError(
                 "SOURCE_REFERENCE_INVALID", "ambiguous source identity"
@@ -1431,7 +1436,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         if _visible(row, completed_at)
     }
     if any(code not in energy for code in report["energy"]):
-        raise ValueError("unknown energy observation")
+        raise ResearchValidationError(
+            "DIRECTION_VALIDATION_FAILED", "unknown energy observation"
+        )
     legacy_plans = validate_actionable_plans(
         report["actionablePlans"], packet, completed_at
     )
@@ -1470,7 +1477,9 @@ def _unique_object(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("duplicate JSON field")
+            raise ResearchValidationError(
+                "SCHEMA_VALIDATION_FAILED", "duplicate JSON field"
+            )
         result[key] = value
     return result
 
@@ -1492,7 +1501,10 @@ def _safe_narrative(value):
             _safe_narrative(child)
     elif isinstance(value, str):
         if len(value) > 2000 or _UNSAFE_MARKUP.search(value):
-            raise ValueError("unsupported research instruction or claim")
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "unsupported research instruction or claim",
+            )
 
 
 def _validate_publication(row, now):

@@ -306,8 +306,9 @@ async def sync_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "SOURCE_VERIFICATION"
+        sources = raw.get("sources", []) if isinstance(raw, dict) else []
         checks = await verify_research_sources(
-            raw.get("sources", []), now=local(now_shanghai())
+            sources, now=local(now_shanghai())
         )
         write_research_audit(
             settings,

@@ -23,14 +23,20 @@ def test_migration_093_file_exists_and_replaces_overlap_function():
     assert "CREATE OR REPLACE FUNCTION research.safe_jwt_claim(claim_key TEXT)" in sql
     assert "GRANT EXECUTE ON FUNCTION research.safe_jwt_claim(TEXT) TO wealthsail_api,wealthsail_worker;" in sql
 
+    # Verify safe_jwt_uid helper function is defined and granted
+    assert "CREATE OR REPLACE FUNCTION research.safe_jwt_uid()" in sql
+    assert "GRANT EXECUTE ON FUNCTION research.safe_jwt_uid() TO wealthsail_api,wealthsail_worker;" in sql
+
     # Verify partial index for active running calls
     assert "CREATE INDEX IF NOT EXISTS ai_usage_calls_running" in sql
     assert "WHERE status = 'RUNNING'" in sql
 
-    # Verify RLS policies use safe_jwt_claim
+    # Verify RLS policies use safe_jwt_claim and safe_jwt_uid
     assert "research.safe_jwt_claim('tenant_id')" in sql
+    assert "research.safe_jwt_uid()" in sql
     assert "42501" in sql
 
     # Verify grants
     assert "REVOKE ALL ON FUNCTION research.mark_ai_usage_overlap(UUID) FROM PUBLIC,authenticated;" in sql
     assert "GRANT EXECUTE ON FUNCTION research.mark_ai_usage_overlap(UUID) TO wealthsail_api,wealthsail_worker;" in sql
+

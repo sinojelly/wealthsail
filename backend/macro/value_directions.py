@@ -62,6 +62,7 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
         _public_actionable_plan,
         _pick,
         _finite,
+        ResearchValidationError,
     )
 
     import re
@@ -76,17 +77,23 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
         )
         or not isinstance(rows, list)
     ):
-        raise ValueError("invalid quantitative fund references")
+        raise ResearchValidationError(
+            "FUND_PLAN_INVALID", "invalid quantitative fund references"
+        )
     output = []
     for code in codes:
         matches = [
             row for row in rows if isinstance(row, dict) and row.get("fundCode") == code
         ]
         if len(matches) != 1:
-            raise ValueError("missing or ambiguous quantitative fund")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "missing or ambiguous quantitative fund"
+            )
         row = matches[0]
         if row.get("historyQuality") != "READY" or not _visible(row, now):
-            raise ValueError("unavailable quantitative history")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "unavailable quantitative history"
+            )
         if plans is not None:
             matches = [
                 plan
@@ -95,7 +102,10 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
                 and plan_identity(plan) == plan_identity(row)
             ]
             if not matches:
-                raise ValueError("quantitative fund must belong to this direction plan")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID",
+                    "quantitative fund must belong to this direction plan",
+                )
             base = matches[0]
             # Report ranking adds derived scores to plan tracks after evidence
             # is projected. Compare the same public price/technical facts so a
@@ -114,12 +124,17 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
                     for key in ("asOf", "currentPrice", "tracks")
                 )
             ):
-                raise ValueError("quantitative facts differ from selected server plan")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID",
+                    "quantitative facts differ from selected server plan",
+                )
         else:
             base = row
         kind, subject = plan_identity(base)
         if kind not in {"nav", "fund"} or base.get("priceBasis") != "UNIT_NAV":
-            raise ValueError("quantitative evidence requires the same fund NAV")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "quantitative evidence requires the same fund NAV"
+            )
         selected = base.get("selectedTrack", base.get("track"))
         valid_tracks = [
             track
@@ -130,10 +145,15 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
             selected = valid_tracks[0]["track"]
         day, _, _ = _program_plan(base, selected, now, require_theme=False)
         if (now.date() - day).days > 10:
-            raise ValueError("quantitative evidence predates the current study")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID",
+                "quantitative evidence predates the current study",
+            )
         clean = _public_actionable_plan(base, subject, now, subject_kind=kind)
         if clean is None:
-            raise ValueError("invalid quantitative coordinate")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "invalid quantitative coordinate"
+            )
         clean["historyQuality"] = "READY"
         clean.update(
             _pick(
@@ -160,17 +180,23 @@ def direction_quantitative_evidence(rows, codes, now, *, plans=None):
                 not in {"CANDIDATE", "WATCH", "INSUFFICIENT"}
                 or type(signal.get("inEntryZone")) is not bool
             ):
-                raise ValueError("invalid quantitative signal")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "invalid quantitative signal"
+                )
             distance = signal.get("distanceToEntryPct")
             if distance is not None and _finite(distance) is None:
-                raise ValueError("invalid quantitative distance")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "invalid quantitative distance"
+                )
             matching = [
                 item
                 for item in base.get("tracks", [])
                 if item.get("track") == signal["track"]
             ]
             if len(matching) != 1:
-                raise ValueError("ambiguous quantitative technical track")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "ambiguous quantitative technical track"
+                )
             technical = matching[0]
             candidate = technical.get("state") == "CANDIDATE"
             in_zone = (
@@ -402,7 +428,9 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 rule not in rules or rules[rule].get("themeCode") not in allowed_rules
                 for rule in proposal["calibrationRuleKeys"]
             ):
-                raise ValueError("unknown direction calibration rule")
+                raise ResearchValidationError(
+                    "DIRECTION_VALIDATION_FAILED", "unknown direction calibration rule"
+                )
             plans.append(
                 {
                     **deepcopy(anchor),
@@ -429,7 +457,9 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 != scan_minimum_history_samples(scan)
                 or not _visible(scan, now)
             ):
-                raise ValueError("missing current quantitative scan")
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "missing current quantitative scan"
+                )
             quantitative = direction_quantitative_evidence(
                 scan.get("items"), direction["quantitativeFundCodes"], now, plans=plans
             )
@@ -442,11 +472,15 @@ def validate_value_directions(proposals, packet, now, source_aliases):
         )
         if not refs:
             if not quantitative or not qualifying_track:
-                raise ValueError(
-                    "pure quantitative direction needs a triggered fund plan"
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID",
+                    "pure quantitative direction needs a triggered fund plan",
                 )
         elif len(refs) + len(macros) + len(quantitative) < 2:
-            raise ValueError("direction needs multiple available evidence")
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "direction needs multiple available evidence",
+            )
         if direction["signal"] in {"LEFT_VALUE", "RIGHT_TREND"} and not any(
             plan["selectedTrack"] == direction["signal"]
             and next(
@@ -455,11 +489,15 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             == "CANDIDATE"
             for plan in plans
         ):
-            raise ValueError("buy signal lacks a qualifying program track")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "buy signal lacks a qualifying program track"
+            )
         if direction["signal"] == "TAKE_PROFIT" and not any(
             plan["priceRevisionStatus"] == "TAKE_PROFIT_ALERT" for plan in plans
         ):
-            raise ValueError("profit signal lacks observed target")
+            raise ResearchValidationError(
+                "FUND_PLAN_INVALID", "profit signal lacks observed target"
+            )
         output.append(
             {
                 **direction,
