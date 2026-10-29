@@ -223,3 +223,29 @@ def test_local_audit_override_and_explicit_disable_survive_generated_restart(
     monkeypatch.delenv("DAILY_RESEARCH_AUDIT_DIR")
     local_dev.configure_macro({"worker_password": "fixture"}, 55434)
     assert dotenv_values(tmp_path / "macro.env")["DAILY_RESEARCH_AUDIT_DIR"] == ""
+
+
+def test_audit_prunes_old_files_beyond_retention_limit(tmp_path):
+    import os
+
+    m = writer()
+    settings = SimpleNamespace(daily_research_audit_dir=str(tmp_path))
+    # Pre-create 65 mock audit files with ordered timestamps
+    for i in range(65):
+        file = tmp_path / f"00000000-0000-0000-0000-{i:012x}.json"
+        file.write_text("{}", encoding="utf-8")
+        os.utime(file, (1000 + i, 1000 + i))
+
+    # Writing another audit entry triggers pruning down to 60
+    new_id = uuid4()
+    assert m.write_research_audit(
+        settings,
+        new_id,
+        raw={"summary": "latest"},
+        stage="MODEL_RETURNED",
+        completed_at=NOW,
+    )
+    json_files = list(tmp_path.glob("*.json"))
+    assert len(json_files) == 60
+    assert (tmp_path / f"{new_id}.json").exists()
+

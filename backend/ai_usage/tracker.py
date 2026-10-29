@@ -62,6 +62,34 @@ def mark_business(status):
         task.business_status = status
 
 
+_TRANSIENT_SQLSTATES = {
+    "40001",  # serialization_failure
+    "40P01",  # deadlock_detected
+    "53300",  # too_many_connections
+    "57P01",  # admin_shutdown
+    "57P02",  # crash_shutdown
+    "57P03",  # cannot_connect_now
+    "08000",  # connection_exception
+    "08003",  # connection_does_not_exist
+    "08006",  # connection_failure
+}
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Determine whether an error encountered during usage write is transient and retryable.
+
+    Args:
+        exc: Exception raised during repository persistence.
+
+    Returns:
+        True if the exception indicates a transient network or lock failure, False otherwise.
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    return str(sqlstate) in _TRANSIENT_SQLSTATES
+
+
 class Task:
     def __init__(self, pool, settings, tenant_id, user_id, task_type, task_name):
         self.pool, self.settings = pool, settings
@@ -91,7 +119,7 @@ class Task:
                 return
             except Exception as exc:
                 sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
-                if attempt + 1 < max_attempts:
+                if attempt + 1 < max_attempts and _is_transient_error(exc):
                     logger.warning(
                         "ai_usage_write_retry event=%s attempt=%d error_class=%s sqlstate=%s",
                         event,
@@ -114,6 +142,7 @@ class Task:
                         event,
                         type(exc).__name__,
                     )
+                break
 
     async def start(self):
         async with self.lock:

@@ -140,25 +140,39 @@ async def list_tasks(conn, tenant_id, *, include_global=False, limit=20, offset=
     return {"tasks": items, "total": total, "limit": limit, "offset": offset}
 
 
-async def reconcile_stale_calls(conn) -> str:
+async def reconcile_stale_calls(conn, *, limit: int = 100) -> str:
     """Reconcile orphaned RUNNING calls whose parent tasks have already terminated.
+
+    Applies a 30-second grace period for tasks with finished_at to prevent racing
+    with in-flight call finish handlers, and limits the batch size to prevent long locks.
 
     Args:
         conn: asyncpg connection with research schema update privileges.
+        limit: Maximum number of stale calls to reconcile in a single batch.
 
     Returns:
         Status string from asyncpg execute (e.g. 'UPDATE 2').
     """
     return await conn.execute(
         """
-        UPDATE research.ai_usage_calls c
+        WITH stale AS (
+            SELECT c.id, t.finished_at
+              FROM research.ai_usage_calls c
+              JOIN research.ai_usage_tasks t ON t.id = c.task_id
+             WHERE c.status = 'RUNNING'
+               AND (
+                   t.finished_at <= statement_timestamp() - INTERVAL '30 seconds'
+                   OR (t.finished_at IS NULL AND t.business_status <> 'RUNNING')
+               )
+             LIMIT $1
+        )
+        UPDATE research.ai_usage_calls target
            SET status = 'UNCERTAIN',
-               finished_at = COALESCE(t.finished_at, statement_timestamp()),
-               error_class = COALESCE(c.error_class, 'ZombieCallRecovered')
-          FROM research.ai_usage_tasks t
-         WHERE c.task_id = t.id
-           AND c.status = 'RUNNING'
-           AND (t.finished_at IS NOT NULL OR t.business_status <> 'RUNNING')
-        """
+               finished_at = COALESCE(stale.finished_at, statement_timestamp()),
+               error_class = COALESCE(target.error_class, 'ZombieCallRecovered')
+          FROM stale
+         WHERE target.id = stale.id
+        """,
+        limit,
     )
 

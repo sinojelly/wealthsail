@@ -61,6 +61,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    volumes:
+      - research_audit_data:/app/data/research-audit
     networks:
       - wealthsail
       - codex
@@ -137,6 +139,7 @@ services:
 volumes:
   avatar_data:
   codex_auth:
+  research_audit_data:
 
 networks:
   wealthsail:

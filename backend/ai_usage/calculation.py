@@ -224,13 +224,23 @@ def aggregate_task(task, calls):
         Dict representing aggregated task DTO with normalized inference status.
     """
     task_finished = task.get("finishedAt") is not None or task.get("businessStatus") not in (None, "RUNNING")
-    states = {
-        ("UNCERTAIN" if call.get("status") == "RUNNING" and task_finished else call.get("status"))
-        for call in calls
-    }
+    normalized_calls = []
+    for call in calls:
+        if task_finished and call.get("status") == "RUNNING":
+            normalized_calls.append(
+                {
+                    **call,
+                    "status": "UNCERTAIN",
+                    "errorClass": call.get("errorClass") or "ZombieCallRecovered",
+                }
+            )
+        else:
+            normalized_calls.append(call)
+
+    states = {call.get("status") for call in normalized_calls}
     state = (
         "NONE"
-        if not calls
+        if not normalized_calls
         else "RUNNING"
         if "RUNNING" in states
         else "UNCERTAIN"
@@ -244,27 +254,27 @@ def aggregate_task(task, calls):
     result = {
         **task,
         "inferenceStatus": state,
-        "callCount": len(calls),
-        "models": sorted({call["model"] for call in calls}),
-        "calls": calls,
+        "callCount": len(normalized_calls),
+        "models": sorted({call["model"] for call in normalized_calls}),
+        "calls": normalized_calls,
     }
     for key in ("inputTokens", "cachedTokens", "outputTokens", "totalTokens"):
-        values = [call.get(key) for call in calls]
+        values = [call.get(key) for call in normalized_calls]
         result[key] = (
             sum(values)
             if values and all(value is not None for value in values)
             else None
         )
-    keys = {window["key"] for call in calls for window in call["quota"]["windows"]}
+    keys = {window["key"] for call in normalized_calls for window in call["quota"]["windows"]}
     windows = []
     for key in sorted(keys):
         rows = [
             next((row for row in call["quota"]["windows"] if row["key"] == key), {})
-            for call in calls
+            for call in normalized_calls
         ]
         complete = all(row.get("consumedPercent") is not None for row in rows)
         same_period = (
-            len({call["quota"].get("periods", {}).get(key) for call in calls}) == 1
+            len({call["quota"].get("periods", {}).get(key) for call in normalized_calls}) == 1
         )
         complete = complete and same_period
         windows.append(
@@ -279,9 +289,9 @@ def aggregate_task(task, calls):
                 ),
             }
         )
-    credits = [number(call["quota"]["credits"].get("consumed")) for call in calls]
+    credits = [number(call["quota"]["credits"].get("consumed")) for call in normalized_calls]
     same_period = (
-        len({call["quota"].get("periods", {}).get("credits") for call in calls}) == 1
+        len({call["quota"].get("periods", {}).get("credits") for call in normalized_calls}) == 1
     )
     complete = (
         bool(credits) and all(value is not None for value in credits) and same_period
@@ -291,7 +301,7 @@ def aggregate_task(task, calls):
         "credits": {
             "consumed": str(sum(credits)) if complete else None,
             **aggregate_quota_status(
-                [call["quota"]["credits"] for call in calls],
+                [call["quota"]["credits"] for call in normalized_calls],
                 complete=complete,
                 same_period=same_period,
             ),

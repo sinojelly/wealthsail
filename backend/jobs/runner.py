@@ -118,6 +118,7 @@ def _run_enabled(settings: Settings, session: str, key: str) -> bool:
 async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
     """Make expired RUNNING leases recoverable without inventing a new job key."""
     del settings  # the authoritative expiry is persisted in lease_until
+    recovered = 0
     async with system_connection(pool) as conn:
         result = await conn.execute(
             """
@@ -133,18 +134,18 @@ async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
                AND lease_until < now()
             """
         )
-    recovered = int(result.split()[-1]) if result else 0
-    if recovered:
-        logger.warning("made %d expired job leases recoverable", recovered)
-    try:
-        from backend.ai_usage.repository import reconcile_stale_calls
+        recovered = int(result.split()[-1]) if result else 0
+        if recovered:
+            logger.warning("made %d expired job leases recoverable", recovered)
+        try:
+            from backend.ai_usage.repository import reconcile_stale_calls
 
-        usage_res = await reconcile_stale_calls(conn)
-        zombies = int(usage_res.split()[-1]) if usage_res else 0
-        if zombies:
-            logger.warning("reconciled %d zombie ai usage calls", zombies)
-    except Exception:  # noqa: BLE001 -- usage reconciliation failure must not break job recovery
-        logger.exception("zombie ai usage call reconciliation failed")
+            usage_res = await reconcile_stale_calls(conn)
+            zombies = int(usage_res.split()[-1]) if usage_res else 0
+            if zombies:
+                logger.warning("reconciled %d zombie ai usage calls", zombies)
+        except Exception:  # noqa: BLE001 -- usage reconciliation failure must not break job recovery
+            logger.exception("zombie ai usage call reconciliation failed")
     return recovered
 
 
@@ -163,6 +164,15 @@ async def run_recoverable_jobs(
     published hours later without an operator decision.
     """
     async with system_connection(pool) as conn:
+        try:
+            from backend.ai_usage.repository import reconcile_stale_calls
+
+            usage_res = await reconcile_stale_calls(conn)
+            zombies = int(usage_res.split()[-1]) if usage_res else 0
+            if zombies:
+                logger.warning("reconciled %d zombie ai usage calls", zombies)
+        except Exception:  # noqa: BLE001
+            logger.exception("periodic zombie ai usage call reconciliation failed")
         rows = await conn.fetch(
             """
             SELECT j.id, j.tenant_id, j.job_name, j.report_session, jr.job_key

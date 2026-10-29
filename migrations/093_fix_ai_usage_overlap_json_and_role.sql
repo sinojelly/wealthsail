@@ -45,8 +45,11 @@ DECLARE
 BEGIN
     v_is_worker := (
         current_setting('role', true) = 'wealthsail_worker'
-        OR SESSION_USER = 'wealthsail_worker'
-        OR pg_has_role(SESSION_USER, 'wealthsail_worker', 'MEMBER')
+        AND (
+            SESSION_USER = 'wealthsail_worker'
+            OR pg_has_role(SESSION_USER, 'wealthsail_worker', 'USAGE')
+            OR pg_has_role(SESSION_USER, 'wealthsail_worker', 'MEMBER')
+        )
     );
 
     IF NOT v_is_worker THEN

@@ -44,17 +44,25 @@ from backend.jobs.research_inputs import prepare_research_inputs, research_catal
 logger = logging.getLogger("wealthsail.daily_research")
 
 
-def _safe_failure_reason(exc: Exception) -> str:
-    """Format a safe, single-line diagnostic summary without raw sensitive content.
+def _canonical_reason_code(exc: Exception) -> str:
+    """Map an exception to a sanitized, bounded diagnostic reason code.
+
+    Avoids leaking prompt text, sensitive URLs, or unparsed model payloads into logs.
 
     Args:
-        exc: Caught exception during research pipeline.
+        exc: Exception raised during research execution.
 
     Returns:
-        Bounded string describing failure reason or error type.
+        Canonical string token representing failure category.
     """
-    msg = str(exc).strip().replace("\n", " ")
-    return msg[:120] if msg else type(exc).__name__
+    name = type(exc).__name__
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "TIMEOUT"
+    if isinstance(exc, (ConnectionError, OSError)):
+        return "NETWORK_UNAVAILABLE"
+    if "JSON" in name or isinstance(exc, ValueError):
+        return "PAYLOAD_VALIDATION_FAILED"
+    return name
 
 
 async def load_public_packet(conn, now, external, *, debug_request_id=None):
@@ -261,6 +269,7 @@ async def sync_daily_research(
     result = {"status": "FAILED", "runId": str(run_id)}
     payload, error = None, unavailable
     raw, checks, audit_error = None, None, None
+    current_stage = "MODEL_EXECUTION"
     try:
         if unavailable:
             return result
@@ -287,6 +296,7 @@ async def sync_daily_research(
             stage="MODEL_RETURNED",
             completed_at=local(now_shanghai()),
         )
+        current_stage = "SOURCE_VERIFICATION"
         checks = await verify_research_sources(
             raw.get("sources", []), now=local(now_shanghai())
         )
@@ -298,6 +308,7 @@ async def sync_daily_research(
             stage="SOURCES_CHECKED",
             completed_at=local(now_shanghai()),
         )
+        current_stage = "REPORT_VALIDATION"
         payload = validate_report(
             raw, packet, checks, completed_at=local(now_shanghai())
         )
@@ -309,16 +320,22 @@ async def sync_daily_research(
     except TimeoutError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
+        reason_code = _canonical_reason_code(exc)
+        logger.warning(
+            "daily_research_failed error_class=%s stage=%s reason_code=%s",
+            error,
+            current_stage,
+            reason_code,
+        )
     except Exception as exc:  # noqa: BLE001
         audit_error = exc
         error = type(exc).__name__
-        stage = "VALIDATION_FAILED" if checks is not None else "SOURCE_CHECK_FAILED"
-        reason = _safe_failure_reason(exc)
+        reason_code = _canonical_reason_code(exc)
         logger.warning(
-            "daily_research_failed error_class=%s stage=%s reason=%s",
+            "daily_research_failed error_class=%s stage=%s reason_code=%s",
             error,
-            stage,
-            reason,
+            current_stage,
+            reason_code,
         )
     finally:
         if raw is not None:

@@ -13,6 +13,25 @@ logger = logging.getLogger("wealthsail.research_audit")
 _MAX_BYTES = 2 * 1024 * 1024
 
 
+def _prune_audit_directory(directory: Path, *, max_files: int = 60) -> None:
+    """Retain only the most recent audit files to prevent unbounded disk growth.
+
+    Args:
+        directory: Path to the audit storage directory.
+        max_files: Maximum number of JSON audit logs to keep.
+    """
+    try:
+        files = sorted(
+            [p for p in directory.glob("*.json") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old_file in files[max_files:]:
+            old_file.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 -- pruning failure should not fail audit
+        logger.warning("research_audit_prune_failed error_class=%s", type(exc).__name__)
+
+
 def write_research_audit(
     settings,
     run_id,
@@ -75,6 +94,7 @@ def write_research_audit(
             handle.write(encoded)
         os.replace(temporary, destination)
         temporary = None
+        _prune_audit_directory(directory)
         return True
     except Exception as exc:  # noqa: BLE001 -- optional diagnostics cannot fail research
         logger.warning("research_audit_failed error_class=%s", type(exc).__name__)

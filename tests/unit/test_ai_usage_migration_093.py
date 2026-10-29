@@ -16,6 +16,7 @@ def test_migration_093_file_exists_and_replaces_overlap_function():
     # Verify worker check separates current_setting('role'), SESSION_USER and pg_has_role
     assert "current_setting('role', true) = 'wealthsail_worker'" in sql
     assert "SESSION_USER = 'wealthsail_worker'" in sql
+    assert "pg_has_role(SESSION_USER, 'wealthsail_worker', 'USAGE')" in sql
     assert "pg_has_role(SESSION_USER, 'wealthsail_worker', 'MEMBER')" in sql
 
     # Verify NULLIF on request.jwt.claims is used to avoid invalid input syntax for type json on empty string
