@@ -31,9 +31,10 @@ def test_migration_093_file_exists_and_replaces_overlap_function():
     assert "CREATE INDEX IF NOT EXISTS ai_usage_calls_running" in sql
     assert "WHERE status = 'RUNNING'" in sql
 
-    # Verify RLS policies use safe_jwt_claim and safe_jwt_uid
+    # Verify RLS policies use safe_jwt_claim and safe_jwt_uid, avoiding auth.uid() 22P02 crashes
     assert "research.safe_jwt_claim('tenant_id')" in sql
     assert "research.safe_jwt_uid()" in sql
+    assert "auth.uid()" not in sql
     assert "42501" in sql
 
     # Verify grants

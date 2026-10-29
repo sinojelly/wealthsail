@@ -168,4 +168,17 @@ async def test_real_validate_report_with_bad_source_url_logs_source_reference_in
     assert "stage=REPORT_VALIDATION reason_code=SOURCE_REFERENCE_INVALID" in caplog.text
 
 
+def test_validate_report_non_dict_raises_schema_validation_failed():
+    """Passing a non-dict payload (e.g. list, None, int) raises SCHEMA_VALIDATION_FAILED directly."""
+    from backend.macro.daily_research import ResearchValidationError, validate_report
+
+    packet = {"asOf": NOW.isoformat()}
+    for non_dict in ([1, 2, 3], "[]", None, 123):
+        with pytest.raises(ResearchValidationError) as exc_info:
+            validate_report(non_dict, packet, {}, completed_at=NOW)
+        assert exc_info.value.reason_code == "SCHEMA_VALIDATION_FAILED"
+
+
+
+
 

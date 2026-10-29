@@ -1299,6 +1299,11 @@ def validate_report(raw, packet, source_checks, *, completed_at):
             raise ResearchValidationError(
                 "SCHEMA_VALIDATION_FAILED", f"invalid JSON: {exc}"
             ) from exc
+    if not isinstance(raw, dict):
+        raise ResearchValidationError(
+            "SCHEMA_VALIDATION_FAILED",
+            "research report must be an object",
+        )
     if "themeActionableZones" not in packet:
         # Compatibility for pre-Phase2 packets only, never a new model request.
         raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
