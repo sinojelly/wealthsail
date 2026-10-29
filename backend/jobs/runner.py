@@ -136,6 +136,15 @@ async def claim_stale_runs(pool: Pool, settings: Settings) -> int:
     recovered = int(result.split()[-1]) if result else 0
     if recovered:
         logger.warning("made %d expired job leases recoverable", recovered)
+    try:
+        from backend.ai_usage.repository import reconcile_stale_calls
+
+        usage_res = await reconcile_stale_calls(conn)
+        zombies = int(usage_res.split()[-1]) if usage_res else 0
+        if zombies:
+            logger.warning("reconciled %d zombie ai usage calls", zombies)
+    except Exception:  # noqa: BLE001 -- usage reconciliation failure must not break job recovery
+        logger.exception("zombie ai usage call reconciliation failed")
     return recovered
 
 

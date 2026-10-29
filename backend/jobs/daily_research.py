@@ -44,6 +44,19 @@ from backend.jobs.research_inputs import prepare_research_inputs, research_catal
 logger = logging.getLogger("wealthsail.daily_research")
 
 
+def _safe_failure_reason(exc: Exception) -> str:
+    """Format a safe, single-line diagnostic summary without raw sensitive content.
+
+    Args:
+        exc: Caught exception during research pipeline.
+
+    Returns:
+        Bounded string describing failure reason or error type.
+    """
+    msg = str(exc).strip().replace("\n", " ")
+    return msg[:120] if msg else type(exc).__name__
+
+
 async def load_public_packet(conn, now, external, *, debug_request_id=None):
     """Only shared research queries; never assemble an actor/portfolio context."""
     from backend.investment import repository
@@ -296,10 +309,17 @@ async def sync_daily_research(
     except TimeoutError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
-    except Exception as exc:  # noqa: BLE001 -- normal logs expose only error classes
+    except Exception as exc:  # noqa: BLE001
         audit_error = exc
         error = type(exc).__name__
-        logger.warning("daily_research_failed error_class=%s", error)
+        stage = "VALIDATION_FAILED" if checks is not None else "SOURCE_CHECK_FAILED"
+        reason = _safe_failure_reason(exc)
+        logger.warning(
+            "daily_research_failed error_class=%s stage=%s reason=%s",
+            error,
+            stage,
+            reason,
+        )
     finally:
         if raw is not None:
             write_research_audit(

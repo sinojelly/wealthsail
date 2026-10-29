@@ -74,18 +74,46 @@ class Task:
         self.lock = asyncio.Lock()
 
     async def write(self, event, data):
-        try:
-            with anyio.CancelScope(shield=True):
-                async with asyncio.timeout(5):
-                    await repository.persist(
-                        self.pool, self.tenant_id, self.user_id, event, data
+        """Persist an AI usage ledger event independently with bounded retry.
+
+        Args:
+            event: Name of the telemetry event ('start_task', 'start_call', 'finish_call', 'finish_task').
+            data: Payload dictionary for the event.
+        """
+        max_attempts = 2 if event in {"finish_call", "finish_task"} else 1
+        for attempt in range(max_attempts):
+            try:
+                with anyio.CancelScope(shield=True):
+                    async with asyncio.timeout(5):
+                        await repository.persist(
+                            self.pool, self.tenant_id, self.user_id, event, data
+                        )
+                return
+            except Exception as exc:
+                sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+                if attempt + 1 < max_attempts:
+                    logger.warning(
+                        "ai_usage_write_retry event=%s attempt=%d error_class=%s sqlstate=%s",
+                        event,
+                        attempt + 1,
+                        type(exc).__name__,
+                        sqlstate,
                     )
-        except Exception as exc:
-            logger.warning(
-                "ai_usage_write_failed event=%s error_class=%s",
-                event,
-                type(exc).__name__,
-            )
+                    await asyncio.sleep(0.5)
+                    continue
+                if sqlstate is not None:
+                    logger.warning(
+                        "ai_usage_write_failed event=%s error_class=%s sqlstate=%s",
+                        event,
+                        type(exc).__name__,
+                        sqlstate,
+                    )
+                else:
+                    logger.warning(
+                        "ai_usage_write_failed event=%s error_class=%s",
+                        event,
+                        type(exc).__name__,
+                    )
 
     async def start(self):
         async with self.lock:

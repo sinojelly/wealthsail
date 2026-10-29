@@ -214,7 +214,20 @@ def aggregate_quota_status(rows, *, complete, same_period):
 
 
 def aggregate_task(task, calls):
-    states = {call["status"] for call in calls}
+    """Aggregate multi-call telemetry and quota attribution into a task DTO.
+
+    Args:
+        task: Dict containing task metadata (id, businessStatus, finishedAt, etc.).
+        calls: List of call DTOs belonging to the task.
+
+    Returns:
+        Dict representing aggregated task DTO with normalized inference status.
+    """
+    task_finished = task.get("finishedAt") is not None or task.get("businessStatus") not in (None, "RUNNING")
+    states = {
+        ("UNCERTAIN" if call.get("status") == "RUNNING" and task_finished else call.get("status"))
+        for call in calls
+    }
     state = (
         "NONE"
         if not calls

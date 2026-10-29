@@ -138,3 +138,27 @@ async def list_tasks(conn, tenant_id, *, include_global=False, limit=20, offset=
             call["quota"].pop("periods", None)
         items.append(result)
     return {"tasks": items, "total": total, "limit": limit, "offset": offset}
+
+
+async def reconcile_stale_calls(conn) -> str:
+    """Reconcile orphaned RUNNING calls whose parent tasks have already terminated.
+
+    Args:
+        conn: asyncpg connection with research schema update privileges.
+
+    Returns:
+        Status string from asyncpg execute (e.g. 'UPDATE 2').
+    """
+    return await conn.execute(
+        """
+        UPDATE research.ai_usage_calls c
+           SET status = 'UNCERTAIN',
+               finished_at = COALESCE(t.finished_at, statement_timestamp()),
+               error_class = COALESCE(c.error_class, 'ZombieCallRecovered')
+          FROM research.ai_usage_tasks t
+         WHERE c.task_id = t.id
+           AND c.status = 'RUNNING'
+           AND (t.finished_at IS NOT NULL OR t.business_status <> 'RUNNING')
+        """
+    )
+
