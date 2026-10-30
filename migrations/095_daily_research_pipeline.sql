@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE research.daily_research_pipelines (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
  slot_date DATE NOT NULL UNIQUE,
@@ -27,6 +25,4 @@ REVOKE ALL ON research.daily_research_pipelines FROM PUBLIC,authenticated;
 GRANT SELECT ON research.daily_research_pipelines TO wealthsail_api,wealthsail_worker;
 GRANT INSERT,UPDATE ON research.daily_research_pipelines TO wealthsail_worker;
 COMMENT ON TABLE research.daily_research_pipelines IS
- 'One owned weekday research pipeline per Shanghai date. Source collection precedes the immutable model cost barrier; public status contains no prompt or credentials.';
-
-COMMIT;
+ 'One owned research pipeline per scheduled Shanghai date. Source collection precedes the immutable model cost barrier; public status contains no prompt or credentials.';
