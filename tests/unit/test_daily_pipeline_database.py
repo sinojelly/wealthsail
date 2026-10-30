@@ -515,3 +515,222 @@ async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_
                 )
         finally:
             await admin.close()
+
+
+@pytest.mark.parametrize("stage", ["COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"])
+@pytest.mark.parametrize("guard", [None, "live_lease", "model_slot", "model_fk"])
+async def test_previous_day_archival_only_closes_expired_pre_model_work(stage, guard):
+    from backend.macro.alpha_repository import claim_alpha_batch
+    from backend.macro.daily_pipeline_repository import archive_prior_pipelines
+    from backend.macro.daily_repository import claim_daily_run
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        started = clock().replace(hour=23, minute=59)
+        now = started + timedelta(minutes=31)
+        batch = await claim_alpha_batch(conn, started)
+        owned = await claim_pipeline(conn, started, schedule_time="23:59")
+        assert await advance_pipeline(
+            conn, owned, started, stage=stage, source_batch_id=batch["id"]
+        )
+        run = None
+        if guard == "live_lease":
+            await conn.execute(
+                "UPDATE research.daily_research_pipelines SET lease_until=$2 WHERE id=$1",
+                owned["id"],
+                now + timedelta(minutes=1),
+            )
+        elif guard in {"model_slot", "model_fk"}:
+            # An independent same-day slot protects even a NULL cached FK.
+            # A FK alone protects as well; its row is deliberately on another
+            # date so the two cost-barrier predicates are tested independently.
+            run = await claim_daily_run(
+                conn,
+                started - timedelta(days=1) if guard == "model_fk" else started,
+                {},
+                input_hash="a" * 64,
+                prompt_version="fixture",
+            )
+            if guard == "model_fk":
+                await conn.execute(
+                    "UPDATE research.daily_research_pipelines SET research_run_id=$2 WHERE id=$1",
+                    owned["id"],
+                    run["run_id"],
+                )
+        before = await conn.fetchrow(
+            "SELECT * FROM research.daily_research_pipelines WHERE id=$1", owned["id"]
+        )
+        assert await archive_prior_pipelines(conn, now) is (guard == "live_lease")
+        stored = await conn.fetchrow(
+            "SELECT * FROM research.daily_research_pipelines WHERE id=$1", owned["id"]
+        )
+        expected = (
+            "RUNNING" if guard == "live_lease" else "UNCERTAIN" if guard else "MISSED"
+        )
+        assert stored["state"] == expected
+        assert stored["error_class"] == (
+            before["error_class"]
+            if guard == "live_lease"
+            else "PipelineLeaseExpired"
+            if guard
+            else "PipelineDayExpired"
+        )
+        for field in (
+            "lease_token",
+            "lease_until",
+            "source_batch_id",
+            "research_run_id",
+            "scheduled_for",
+            "started_at",
+            "start_window_ends_at",
+            "runtime_deadline_at",
+        ):
+            assert stored[field] == before[field]
+        assert dict(
+            await conn.fetchrow(
+                "SELECT * FROM market.alpha_public_batches WHERE id=$1", batch["id"]
+            )
+        ) == dict(batch)
+        if run:
+            assert dict(
+                await conn.fetchrow(
+                    "SELECT * FROM research.daily_research_runs WHERE run_id=$1",
+                    run["run_id"],
+                )
+            ) == dict(run)
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM research.daily_research_results WHERE run_id=$1",
+                    run["run_id"],
+                )
+                == 0
+            )
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("stage", ["MODEL_RUNNING", "VERIFYING_OUTPUT", "PERSISTING"])
+async def test_previous_day_post_model_stage_is_never_archived_as_missed(stage):
+    from backend.macro.daily_pipeline_repository import archive_prior_pipelines
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        started = clock().replace(hour=23, minute=59)
+        owned = await claim_pipeline(conn, started, schedule_time="23:59")
+        assert await advance_pipeline(conn, owned, started, stage=stage)
+        await archive_prior_pipelines(conn, started + timedelta(minutes=30))
+        stored = await conn.fetchrow(
+            "SELECT state,error_class FROM research.daily_research_pipelines WHERE id=$1",
+            owned["id"],
+        )
+        assert dict(stored) == {
+            "state": "UNCERTAIN",
+            "error_class": "PipelineLeaseExpired",
+        }
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+async def test_api_finds_previous_day_owner_and_uses_its_own_model_barrier():
+    from backend.macro.daily_repository import claim_daily_run
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        started = clock().replace(hour=23, minute=59)
+        owned = await claim_pipeline(conn, started, schedule_time="23:59")
+        assert await advance_pipeline(conn, owned, started, stage="WAITING_SOURCES")
+        await claim_daily_run(
+            conn, started, {}, input_hash="a" * 64, prompt_version="fixture"
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_api")
+        result = await read_pipeline(conn, started + timedelta(minutes=11))
+        assert result is not None
+        assert result["id"] == str(owned["id"])
+        assert result["state"] == "UNCERTAIN"
+        assert result["errorClass"] == "PipelineLeaseExpired"
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("today", ["pipeline", "model_slot"])
+async def test_previous_day_pipeline_does_not_hide_todays_pipeline_or_consumed_slot(
+    today,
+):
+    from backend.macro.daily_repository import claim_daily_run
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        started = clock().replace(hour=23, minute=59)
+        await claim_pipeline(conn, started, schedule_time="23:59")
+        now = started + timedelta(minutes=11)
+        if today == "pipeline":
+            current = await claim_pipeline(conn, now, schedule_time="00:00")
+        else:
+            await claim_daily_run(
+                conn,
+                now,
+                {},
+                input_hash="a" * 64,
+                prompt_version="fixture",
+                schedule_time="00:00",
+            )
+        await conn.execute("SET LOCAL ROLE wealthsail_api")
+        result = await read_pipeline(conn, now)
+        if today == "pipeline":
+            assert result["id"] == str(current["id"])
+        else:
+            assert result is None
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+async def test_previous_day_archival_leaves_current_day_and_terminal_history_unchanged():
+    from backend.macro.daily_pipeline_repository import archive_prior_pipelines
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        started = clock().replace(hour=23, minute=59)
+        old = await claim_pipeline(conn, started, schedule_time="23:59")
+        assert await advance_pipeline(
+            conn, old, started, stage="COLLECTING", state="FAILED"
+        )
+        now = started + timedelta(minutes=31)
+        current = await claim_pipeline(conn, now, schedule_time="00:00")
+        # An expired current-day lease belongs to current-day recovery logic.
+        await conn.execute(
+            "UPDATE research.daily_research_pipelines SET lease_until=$2 WHERE id=$1",
+            current["id"],
+            now,
+        )
+        before = await conn.fetch(
+            "SELECT * FROM research.daily_research_pipelines WHERE id=ANY($1::uuid[]) ORDER BY id",
+            [old["id"], current["id"]],
+        )
+        assert await archive_prior_pipelines(conn, now) is False
+        after = await conn.fetch(
+            "SELECT * FROM research.daily_research_pipelines WHERE id=ANY($1::uuid[]) ORDER BY id",
+            [old["id"], current["id"]],
+        )
+        assert after == before
+    finally:
+        await transaction.rollback()
+        await conn.close()

@@ -12,7 +12,7 @@ const stateLabels: Record<string, string> = {
   UNCERTAIN: "执行异常 · 待核实",
   UNKNOWN: "执行状态未知",
   DISABLED: "自动研究已关闭",
-  MISSED: "今日已错过启动时段",
+  MISSED: "本次研究时段已结束",
 };
 const stageLabels: Record<string, string> = {
   COLLECTING: "正在采集公共数据",

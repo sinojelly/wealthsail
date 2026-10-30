@@ -316,7 +316,13 @@ async def _pipeline_stage(pool, claim, *, stage, state="RUNNING", **fields):
     else "基金机会研究（自动）",
 )
 async def sync_daily_research(
-    pool, settings, now, *, debug_request_id=None, source_batch_id=None
+    pool,
+    settings,
+    now,
+    *,
+    debug_request_id=None,
+    source_batch_id=None,
+    observe_only=False,
 ):
     if debug_request_id is not None:
         return await _execute_daily_research(
@@ -330,12 +336,17 @@ async def sync_daily_research(
         return {"status": "DISABLED"}
     stamp = local(now)
     schedule = _schedule(settings)
-    from backend.macro.daily_pipeline_repository import claim_pipeline, read_pipeline
+    from backend.macro.daily_pipeline_repository import (
+        archive_prior_pipelines,
+        claim_pipeline,
+        read_pipeline,
+    )
 
     # Existing work keeps the plan it was born with. Changing worker.env may
     # change tomorrow's schedule, but must not shorten today's recovery window
     # or exclude a Saturday task originally started under DAILY mode.
     async with system_connection(pool) as conn:
+        await archive_prior_pipelines(conn, stamp)
         existing = await read_pipeline(conn, stamp)
         if await consumed(conn, stamp):
             return {"status": "SKIPPED"}
@@ -351,6 +362,10 @@ async def sync_daily_research(
         if due
         else scheduled_for(stamp, schedule_time=schedule["schedule_time"])
     )
+    if existing and due.date() < stamp.date():
+        # Yesterday's live owner may finish, but its batch can never be used to
+        # start today's model. Expired old work was archived above.
+        return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": existing["id"]}
     if stamp < due:
         return {"status": "NOT_DUE"}
     window_end = (
@@ -382,6 +397,15 @@ async def sync_daily_research(
         ):
             return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": pending["id"]}
         return {"status": "MISSED"}
+    if observe_only:
+        # CATCH_UP=false prevents restart recovery, not observation of an
+        # existing owner through completion or the frozen window's closure.
+        if existing and (
+            existing["state"] == "RUNNING"
+            or existing.get("errorClass") == "PipelineLeaseExpired"
+        ):
+            return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": existing["id"]}
+        return {"status": "SKIPPED"}
     async with system_connection(pool) as conn:
         claim = await claim_pipeline(
             conn,
@@ -641,6 +665,8 @@ async def _execute_daily_research(
     if unavailable:
         return {"status": "FAILED", "errorClass": unavailable}
     dispatched = local(now_shanghai())
+    if not debug and dispatched.date() != stamp.date():
+        return {"status": "MISSED", "errorClass": "SourcePreparationCrossedDay"}
     schedule = _schedule(settings)
     due = pipeline.get("scheduled_for") if pipeline else None
     if isinstance(due, str):
@@ -880,9 +906,13 @@ async def run_daily_research_service(
     stop_event = stop_event or asyncio.Event()
     current = local(now_provider())
     schedule = _schedule(settings)
-    from backend.macro.daily_pipeline_repository import read_pipeline
+    from backend.macro.daily_pipeline_repository import (
+        archive_prior_pipelines,
+        read_pipeline,
+    )
 
     async with system_connection(pool) as conn:
+        await archive_prior_pipelines(conn, current)
         existing = await read_pipeline(conn, current)
     due = existing.get("scheduledFor") if existing else None
     if isinstance(due, str):
@@ -896,16 +926,34 @@ async def run_daily_research_service(
         current, schedule_mode=schedule["schedule_mode"]
     ):
         due = next_run(current, **schedule)
-    if current > due and not settings.daily_research_catch_up:
+    observe_only = bool(
+        existing and current > due and not settings.daily_research_catch_up
+    )
+    if not existing and current > due and not settings.daily_research_catch_up:
         due = next_run(current, **schedule)
     while not stop_event.is_set():
         current = local(now_provider())
+        try:
+            async with system_connection(pool) as conn:
+                prior_pending = await archive_prior_pipelines(conn, current)
+        except Exception as exc:  # noqa: BLE001 -- keep the original due time on observation failure
+            logger.warning(
+                "daily_research_observation_failed error_class=%s retry_seconds=60",
+                type(exc).__name__,
+            )
+            await wait(stop_event, 60)
+            continue
         delay = (due - current).total_seconds()
         if delay > 0:
-            await wait(stop_event, delay)
+            await wait(stop_event, min(delay, 60) if prior_pending else delay)
             continue
         try:
-            outcome = await sync_daily_research(pool, settings, current)
+            outcome = await sync_daily_research(
+                pool,
+                settings,
+                current,
+                **({"observe_only": True} if observe_only else {}),
+            )
             if outcome.get("status") in {
                 "WAITING_PUBLIC_DATA",
                 "WAITING_PIPELINE_OWNER",
@@ -916,6 +964,7 @@ async def run_daily_research_service(
             logger.warning(
                 "daily_research_service_failed error_class=%s", type(exc).__name__
             )
+        observe_only = False
         due = next_run(local(now_provider()), **schedule)
 
 

@@ -177,6 +177,14 @@ async def read_daily_research(
             stamp,
         )
     today = latest and latest["slot_date"] == stamp.date()
+    if (
+        pipeline
+        and pipeline.get("scheduledFor")
+        and local(pipeline["scheduledFor"]).date() < stamp.date()
+        and today
+    ):
+        # Keep today's explicit research result ahead of an older live owner.
+        pipeline = None
     scheduled_consumed = bool(
         latest
         and latest.get(
@@ -185,19 +193,26 @@ async def read_daily_research(
         )
     )
     today_slot = scheduled_for(stamp, schedule_time)
-    if pipeline and pipeline.get("scheduledFor"):
+    pipeline_today = bool(
+        pipeline
+        and (
+            not pipeline.get("scheduledFor")
+            or local(pipeline["scheduledFor"]).date() == stamp.date()
+        )
+    )
+    if pipeline_today and pipeline.get("scheduledFor"):
         today_slot = local(pipeline["scheduledFor"])
     scheduled_day = is_scheduled_day(stamp, schedule_mode)
     window_end = (
         pipeline.get("startWindowEndsAt")
-        if pipeline
+        if pipeline_today
         else today_slot + timedelta(minutes=start_window_minutes)
     )
     schedule_state = (
         "DISABLED"
         if not enabled
         else "DISPATCHED"
-        if scheduled_consumed or pipeline
+        if scheduled_consumed or pipeline_today
         else "NON_WORKDAY"
         if not scheduled_day
         else "NOT_DUE"
@@ -217,7 +232,7 @@ async def read_daily_research(
         # read_pipeline projects the frozen-window/lease/model-slot boundary.
         # Do not reclassify existing work using the current env configuration.
         state = pipeline["state"]
-        if state == "MISSED" and enabled:
+        if state == "MISSED" and enabled and pipeline_today:
             schedule_state = "MISSED"
     elif not today and enabled and scheduled_day and stamp >= window_end:
         state = "MISSED"
@@ -245,7 +260,7 @@ async def read_daily_research(
         },
         "scheduleState": schedule_state,
         "todayScheduledFor": (pipeline.get("scheduledFor") or today_slot)
-        if pipeline
+        if pipeline_today
         else today_slot
         if scheduled_day
         else None,

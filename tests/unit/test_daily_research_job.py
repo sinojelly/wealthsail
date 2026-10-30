@@ -142,6 +142,9 @@ def isolate(monkeypatch):
     )
     monkeypatch.setattr(pipeline, "source_quality", lambda *_: {"allowed": True})
     monkeypatch.setattr(pipeline, "read_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        pipeline, "archive_prior_pipelines", AsyncMock(return_value=False)
+    )
     monkeypatch.setattr(pipeline, "advance_pipeline", AsyncMock(return_value=True))
     monkeypatch.setattr(
         alpha_repository, "read_alpha_public", AsyncMock(return_value={})

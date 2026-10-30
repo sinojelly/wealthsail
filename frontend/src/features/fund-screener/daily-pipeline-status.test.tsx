@@ -52,6 +52,37 @@ it("labels a scheduled trigger as planned rather than an actual start", () => {
   expect(screen.queryByText(/（触发：/)).not.toBeInTheDocument();
 });
 
+it("does not call today's plan missed when an older preparation was archived", async () => {
+  render(
+    <DailyResearchReport
+      data={daily({
+        state: "MISSED",
+        scheduleState: "NOT_DUE",
+        todayScheduledFor: "2026-10-31T15:59:00Z",
+        nextRunAt: "2026-10-31T15:59:00Z",
+        pipeline: {
+          id: "yesterday-pipeline",
+          state: "MISSED",
+          stage: "VALIDATING_INPUT",
+          startedAt: "2026-10-30T15:59:00Z",
+          finishedAt: "2026-10-30T16:10:00Z",
+        },
+      })}
+    />,
+  );
+  await userEvent.click(screen.getByText("执行与报告状态"));
+  expect(
+    screen.getByText(
+      "本次研究时段已结束（触发：2026年10月30日 23:59 北京时间）",
+    ),
+  ).toBeVisible();
+  expect(screen.getByText(/计划触发：2026年10月31日 23:59/)).toBeVisible();
+  expect(
+    screen.getByText(/下次计划：2026年10月31日 23:59 北京时间/),
+  ).toBeVisible();
+  expect(screen.queryByText(/今日已错过/)).not.toBeInTheDocument();
+});
+
 it("does not invent a trigger from an old report's scheduled timestamp", () => {
   render(
     <DailyResearchStatus
@@ -170,7 +201,7 @@ it.each([
 
 it.each([
   ["NON_WORKDAY", "非工作日，不安排自动研究"],
-  ["MISSED", "今日已错过启动时段"],
+  ["MISSED", "本次研究时段已结束"],
   ["DISABLED", "自动研究已关闭"],
 ])("explains an inactive %s schedule", (scheduleState, expected) => {
   render(<DailyResearchStatus state="NOT_RUN" scheduleState={scheduleState} />);

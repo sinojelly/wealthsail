@@ -38,7 +38,13 @@ def dto(row, now):
         and not row.get("scheduled_model_consumed")
     )
     window_end = _stamp(row.get("start_window_ends_at"))
-    missed = expired and pre_model and window_end is not None and window_end <= stamp
+    slot_date = _day(row.get("slot_date"))
+    prior_day = slot_date is not None and slot_date < stamp.date()
+    missed = (
+        expired
+        and pre_model
+        and (prior_day or window_end is not None and window_end <= stamp)
+    )
     uncertain = (
         expired and not missed and (row["stage"] != "WAITING_SOURCES" or not pre_model)
     )
@@ -58,7 +64,9 @@ def dto(row, now):
         "researchRunId": str(row["research_run_id"])
         if row.get("research_run_id")
         else None,
-        "errorClass": "SourceWaitWindowExpired"
+        "errorClass": "PipelineDayExpired"
+        if missed and prior_day
+        else "SourceWaitWindowExpired"
         if missed
         else "PipelineLeaseExpired"
         if uncertain
@@ -72,11 +80,49 @@ async def read_pipeline(conn, now):
         """SELECT to_jsonb(p) || jsonb_build_object('scheduled_model_consumed',
           EXISTS(SELECT 1 FROM research.daily_research_runs r
             WHERE r.slot_date=p.slot_date AND r.run_mode='SCHEDULED'))
-        FROM research.daily_research_pipelines p WHERE slot_date=$1 AND started_at<=$2""",
+        FROM research.daily_research_pipelines p WHERE started_at<=$2
+          AND (slot_date=$1 OR (slot_date<$1 AND state='RUNNING' AND NOT EXISTS(
+            SELECT 1 FROM research.daily_research_runs r
+            WHERE r.slot_date=$1 AND r.run_mode='SCHEDULED')))
+        ORDER BY (slot_date=$1) DESC,slot_date DESC LIMIT 1""",
         local(now).date(),
         local(now),
     )
     return dto(row, now)
+
+
+async def archive_prior_pipelines(conn, now):
+    """Observe prior-day owners, never resume work using a previous-day batch.
+
+    A live lease may still be finishing owned work. After expiry, only a
+    pipeline with no model cost barrier is safely MISSED; dispatched work must
+    remain UNCERTAIN. Neither path changes its source batch or model records.
+    Return whether an earlier owner still needs periodic observation.
+    """
+    stamp = local(now)
+    await conn.execute(
+        """UPDATE research.daily_research_pipelines p SET
+        state=CASE WHEN stage IN ('COLLECTING','WAITING_SOURCES','VALIDATING_INPUT')
+          AND research_run_id IS NULL AND NOT EXISTS(
+            SELECT 1 FROM research.daily_research_runs r
+            WHERE r.slot_date=p.slot_date AND r.run_mode='SCHEDULED')
+          THEN 'MISSED' ELSE 'UNCERTAIN' END,
+        error_class=CASE WHEN stage IN ('COLLECTING','WAITING_SOURCES','VALIDATING_INPUT')
+          AND research_run_id IS NULL AND NOT EXISTS(
+            SELECT 1 FROM research.daily_research_runs r
+            WHERE r.slot_date=p.slot_date AND r.run_mode='SCHEDULED')
+          THEN 'PipelineDayExpired' ELSE 'PipelineLeaseExpired' END,
+        finished_at=$2,updated_at=$2
+        WHERE slot_date<$1 AND state='RUNNING' AND lease_until<=$2 AND started_at<=$2""",
+        stamp.date(),
+        stamp,
+    )
+    return await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM research.daily_research_pipelines
+        WHERE slot_date<$1 AND state='RUNNING' AND started_at<=$2)""",
+        stamp.date(),
+        stamp,
+    )
 
 
 async def claim_pipeline(

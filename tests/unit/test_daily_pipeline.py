@@ -309,6 +309,7 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
     monkeypatch.setattr(job, "now_shanghai", lambda: NOW)
     monkeypatch.setattr(job, "_pipeline_stage", stage)
     monkeypatch.setattr(repo, "read_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr(repo, "archive_prior_pipelines", AsyncMock(return_value=False))
     monkeypatch.setattr(
         repo,
         "claim_pipeline",
