@@ -403,7 +403,9 @@ export default function ValueDirections({
             ? "今日价值方向与买卖计划"
             : "历史价值方向与买卖计划"}
         </h3>
-        <small>08:30综合研究 · 交易日14:30核对场外基金</small>
+        <small>
+          工作日07:00启动AI研究 · 交易日14:30独立核对场外基金（北京时间）
+        </small>
       </header>
       {directions?.length ? (
         directions.map((direction) => (

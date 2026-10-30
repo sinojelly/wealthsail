@@ -371,7 +371,7 @@ it("exposes today's due-but-undispatched state without inferring that the servic
   );
   const runtime = screen.getByText("执行与报告状态").closest("details")!;
   expect(
-    within(runtime).getByText(/今日到期，尚未登记派发/),
+    within(runtime).getByText(/已到计划时间 · 尚未启动/),
   ).toBeInTheDocument();
   expect(
     screen.queryByText(/服务已停止|服务离线|服务正在运行/),
@@ -394,9 +394,9 @@ it("lets the shared status distinguish an absent READY report while retaining hi
   const view = render(<DailyResearchStatus state="STALE" hasReport={false} />);
   expect(screen.getByText("暂无有效日报")).toBeInTheDocument();
   view.rerender(<DailyResearchStatus state="STALE" hasReport />);
-  expect(screen.getByText("历史日报")).toBeInTheDocument();
+  expect(screen.getByText("今日未完成 · 显示历史报告")).toBeInTheDocument();
   view.rerender(<DailyResearchStatus state="STALE" />);
-  expect(screen.getByText("历史日报")).toBeInTheDocument();
+  expect(screen.getByText("今日未完成 · 显示历史报告")).toBeInTheDocument();
 });
 
 const snapshot: api.StudySnapshot = {

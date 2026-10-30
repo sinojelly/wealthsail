@@ -252,11 +252,7 @@ export default function MacroContextStrip({
           <span>{expanded ? "收起研究" : "展开研究"}</span>
         </button>
         <p className="op-observation-meta">
-          <DailyResearchStatus
-            state={ready?.dailyResearch?.state}
-            scheduleState={ready?.dailyResearch?.scheduleState}
-            hasReport={!!ready?.dailyResearch?.report}
-          />
+          <DailyResearchStatus data={ready?.dailyResearch} />
         </p>
         {ready?.dailyResearch?.nextRunAt && (
           <small className="op-observation-next-run">

@@ -1041,6 +1041,11 @@
   color: var(--op-muted);
   font-size: 11px;
 }
+.op-daily-run {
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
 .op-daily-expanded button,
 .op-daily-expanded a {
   overflow-wrap: anywhere;
@@ -1318,8 +1323,41 @@
   gap: 6px 10px;
   padding: 0 20px;
   color: var(--op-muted);
-  font-size: 12px;
+  font-size: 13px;
   min-width: 0;
+}
+.op-research-status {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.op-research-status[data-state="READY"] {
+  color: #047857;
+}
+.op-research-status[data-state="RUNNING"] {
+  color: #0f766e;
+}
+.op-research-status[data-state="FAILED"],
+.op-research-status[data-state="UNCERTAIN"] {
+  color: #b45309;
+}
+.op-research-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-left: 20px;
+  margin: 12px 0;
+  color: var(--op-muted);
+}
+.op-research-stages li {
+  padding-right: 8px;
+}
+.op-research-stages [data-progress="complete"] {
+  color: #047857;
+}
+.op-research-stages [data-progress="current"] {
+  color: #0f766e;
+  font-weight: 600;
 }
 .op-observation-meta .op-badge {
   white-space: normal;

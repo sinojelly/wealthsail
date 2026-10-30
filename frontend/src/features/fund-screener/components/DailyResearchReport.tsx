@@ -3,14 +3,31 @@ import type { DailyResearch, Direction } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 const stateLabels: Record<string, string> = {
-  NOT_RUN: "今日尚未研究",
-  RUNNING: "已登记每日研究",
-  READY: "日报已完成",
-  STALE: "历史日报",
-  FAILED: "今日研究失败",
-  UNCERTAIN: "执行结果待确认",
-  DISABLED: "每日研究未启用",
+  NOT_RUN: "今日尚未启动",
+  RUNNING: "研究正在执行",
+  READY: "研究成功 · 报告已生成",
+  STALE: "今日未完成 · 显示历史报告",
+  FAILED: "研究失败",
+  UNCERTAIN: "执行异常 · 待核实",
+  UNKNOWN: "执行状态未知",
+  DISABLED: "自动研究已关闭",
+  MISSED: "今日已错过启动时段",
 };
+const stageLabels: Record<string, string> = {
+  COLLECTING: "正在采集公共数据",
+  WAITING_SOURCES: "等待公共数据",
+  VALIDATING_INPUT: "正在检查研究输入",
+  MODEL_RUNNING: "AI研究中",
+  VERIFYING_OUTPUT: "正在核验报告",
+  PERSISTING: "正在保存报告",
+};
+const stages = [
+  ["COLLECTING", "采集公共数据"],
+  ["VALIDATING_INPUT", "检查输入"],
+  ["MODEL_RUNNING", "AI研究"],
+  ["VERIFYING_OUTPUT", "核验报告"],
+  ["PERSISTING", "保存报告"],
+] as const;
 const phases: Record<string, string> = {
   PLANNED: "计划中",
   ANNOUNCED: "已宣布",
@@ -34,32 +51,68 @@ const energyUnit = (unit: string) =>
     : unit === "USD/gallon"
       ? "美元/加仑"
       : unit;
-const dailyStateLabel = (state?: string, hasReport?: boolean) =>
-  state === "STALE" && hasReport === false
-    ? "暂无有效日报"
-    : (stateLabels[state ?? ""] ?? "已有事实观察");
-const scheduleLabels: Record<string, string> = {
-  NOT_DUE: "尚未到今日计划时间",
-  DUE_NOT_DISPATCHED: "今日到期，尚未登记派发",
-  DISPATCHED: "今日已登记派发",
-  DISABLED: "每日研究未启用",
-};
+function executionState(data?: DailyResearch | null, state?: string) {
+  return data?.pipeline?.state ?? data?.state ?? state;
+}
+function triggerTime(data?: DailyResearch | null) {
+  const actual = data?.pipeline?.startedAt ?? data?.startedAt;
+  if (actual && timeLabel(actual) !== "未确认")
+    return `（触发：${timeLabel(actual)} 北京时间）`;
+  if (data?.state === "DISABLED" || data?.scheduleState === "DISABLED")
+    return "";
+  if (data?.scheduleState === "NON_WORKDAY") {
+    return data.nextRunAt && timeLabel(data.nextRunAt) !== "未确认"
+      ? `（下次计划触发：${timeLabel(data.nextRunAt)} 北京时间）`
+      : "";
+  }
+  const planned = data?.todayScheduledFor;
+  return planned && timeLabel(planned) !== "未确认"
+    ? `（计划触发：${timeLabel(planned)} 北京时间）`
+    : "";
+}
+function statusLabel(
+  state?: string,
+  scheduleState?: string,
+  hasReport?: boolean,
+  stage?: string,
+) {
+  if (state === "DISABLED" || scheduleState === "DISABLED")
+    return stateLabels.DISABLED;
+  if (!state || state === "NOT_RUN" || state === "STALE") {
+    if (scheduleState === "NON_WORKDAY") return "非工作日，不安排自动研究";
+    if (scheduleState === "MISSED") return stateLabels.MISSED;
+    if (scheduleState === "DUE_NOT_DISPATCHED")
+      return "已到计划时间 · 尚未启动";
+  }
+  if (state === "RUNNING")
+    return stageLabels[stage ?? ""] ?? stateLabels.RUNNING;
+  if (state === "STALE" && hasReport === false) return "暂无有效日报";
+  if (state === "READY" && hasReport === false) return "研究完成，报告暂不可用";
+  return stateLabels[state ?? ""] ?? "执行状态未知";
+}
 export function DailyResearchStatus({
+  data,
   state,
   scheduleState,
   hasReport,
 }: {
+  data?: DailyResearch | null;
   state?: string;
   scheduleState?: string;
   hasReport?: boolean;
 }) {
+  const currentState = executionState(data, state);
+  const label = statusLabel(
+    currentState,
+    data?.scheduleState ?? scheduleState,
+    data ? !!data.report : hasReport,
+    data?.pipeline?.stage,
+  );
   return (
-    <>
-      {dailyStateLabel(state, hasReport)}
-      {scheduleState && scheduleLabels[scheduleState]
-        ? ` · ${scheduleLabels[scheduleState]}`
-        : ""}
-    </>
+    <span className="op-research-status" data-state={currentState}>
+      {label}
+      {triggerTime(data)}
+    </span>
   );
 }
 export function EnergyObservations({
@@ -156,10 +209,19 @@ function DailyResearchContent({
       (event, index, rows) =>
         rows.findIndex((row) => row.id === event.id) === index,
     ) ?? [];
+  const errorClass = data?.pipeline?.errorClass ?? data?.errorClass;
   const safeErrorClass =
-    data?.errorClass && /^[A-Za-z][A-Za-z0-9_.]{0,79}$/.test(data.errorClass)
-      ? data.errorClass
+    errorClass && /^[A-Za-z][A-Za-z0-9_.]{0,79}$/.test(errorClass)
+      ? errorClass
       : "未分类错误";
+  const currentState = executionState(data);
+  const currentStage =
+    data?.pipeline?.stage === "WAITING_SOURCES"
+      ? "COLLECTING"
+      : data?.pipeline?.stage;
+  const currentStageIndex = stages.findIndex(
+    ([stage]) => stage === currentStage,
+  );
   function related(ids: string[]) {
     return [...new Set(ids)].flatMap((id) => {
       const direction = directions.find((row) => row.id === id);
@@ -306,7 +368,7 @@ function DailyResearchContent({
         </>
       ) : (
         <>
-          {data?.state !== "READY" && (
+          {currentState !== "READY" && (
             <p role="status">
               当前显示历史报告及原始日期，不代表今日已完成研究。
             </p>
@@ -487,32 +549,82 @@ function DailyResearchContent({
         <details className="op-daily-run">
           <summary>执行与报告状态</summary>
           <p>
-            本次任务：{data.runId ?? "未登记"} ·{" "}
-            <DailyResearchStatus
-              state={data.state}
-              scheduleState={data.scheduleState}
-              hasReport={!!report}
-            />
+            <DailyResearchStatus data={data} />
           </p>
+          <p>本次任务：{data.pipeline?.id ?? data.runId ?? "尚未启动"}</p>
           <p>
-            本次计划：{timeLabel(data.scheduledFor)} · 实际开始：
-            {timeLabel(data.startedAt)} · 结束：{timeLabel(data.completedAt)}
+            计划触发：{timeLabel(data.todayScheduledFor ?? data.scheduledFor)} ·
+            实际开始：
+            {timeLabel(data.pipeline?.startedAt ?? data.startedAt)} · 结束：
+            {timeLabel(data.pipeline?.finishedAt ?? data.completedAt)} 北京时间
           </p>
-          {(data.state === "FAILED" || data.state === "UNCERTAIN") && (
+          {data.pipeline && (
+            <>
+              <ol className="op-research-stages" aria-label="研究执行阶段">
+                {stages.map(([stage, label], index) => (
+                  <li
+                    key={stage}
+                    data-progress={
+                      currentState === "READY" || index < currentStageIndex
+                        ? "complete"
+                        : index === currentStageIndex
+                          ? "current"
+                          : "pending"
+                    }
+                  >
+                    <span
+                      aria-current={
+                        stage === currentStage && currentState !== "READY"
+                          ? "step"
+                          : undefined
+                      }
+                    >
+                      {label}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {data.pipeline.updatedAt && (
+                <p>最近进展：{timeLabel(data.pipeline.updatedAt)} 北京时间</p>
+              )}
+              {data.pipeline.quality && (
+                <p>
+                  输入检查：
+                  {data.pipeline.quality.allowed
+                    ? "关键数据已满足研究要求"
+                    : "关键数据不足，未调用AI"}
+                  {data.pipeline.quality.status === "PARTIAL" &&
+                  data.pipeline.quality.allowed
+                    ? "（部分来源暂缺）"
+                    : ""}
+                </p>
+              )}
+              {data.pipeline.sourceBatchId && (
+                <p>数据批次：{data.pipeline.sourceBatchId}</p>
+              )}
+              {data.pipeline.researchRunId && (
+                <p>AI执行记录：{data.pipeline.researchRunId}</p>
+              )}
+            </>
+          )}
+          {(currentState === "FAILED" || currentState === "UNCERTAIN") && (
             <p>
               安全错误类：<span>{safeErrorClass}</span>
             </p>
           )}
           {report && (
             <p>
-              当前有效报告：{data.reportRunId ?? "身份未记录"} · 完成：
-              {timeLabel(data.reportCompletedAt)} · 证据：
+              当前展示报告：{data.reportRunId ?? "身份未记录"} · 报告完成：
+              {timeLabel(data.reportCompletedAt)} · 研究证据：
               {timeLabel(report.asOf ?? data.asOf)}
             </p>
           )}
           <small>
-            下次计划：{timeLabel(data.nextRunAt)}
-            ；计划与执行登记不代表研究服务此刻在线。
+            工作日07:00启动（北京时间），完成时间取决于采集与研究耗时。
+            {data.nextRunAt
+              ? ` 下次计划：${timeLabel(data.nextRunAt)} 北京时间。`
+              : ""}
+            计划时间不代表研究服务此刻在线。
           </small>
         </details>
       )}

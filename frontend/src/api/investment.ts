@@ -588,7 +588,13 @@ export interface DailyResearch {
   runMode?: "SCHEDULED" | "DEBUG" | null;
   reportRunMode?: "SCHEDULED" | "DEBUG" | null;
   methodVersion: string;
-  scheduleState?: "NOT_DUE" | "DUE_NOT_DISPATCHED" | "DISPATCHED" | "DISABLED";
+  scheduleState?:
+    | "NOT_DUE"
+    | "DUE_NOT_DISPATCHED"
+    | "DISPATCHED"
+    | "DISABLED"
+    | "NON_WORKDAY"
+    | "MISSED";
   todayScheduledFor?: string | null;
   state:
     | "NOT_RUN"
@@ -597,7 +603,28 @@ export interface DailyResearch {
     | "STALE"
     | "FAILED"
     | "UNCERTAIN"
-    | "DISABLED";
+    | "DISABLED"
+    | "MISSED";
+  pipeline?: {
+    id: string;
+    state: "RUNNING" | "READY" | "FAILED" | "UNCERTAIN" | "MISSED";
+    stage: string;
+    startedAt?: string | null;
+    updatedAt?: string | null;
+    finishedAt?: string | null;
+    sourceBatchId?: string | null;
+    researchRunId?: string | null;
+    errorClass?: string | null;
+    quality?: {
+      allowed: boolean;
+      status: "READY" | "PARTIAL" | "BLOCKED";
+      reason: string;
+      macroCount: number;
+      catalystCount: number;
+      reliableNavCount: number;
+      failedSources: string[];
+    } | null;
+  } | null;
   runId: string | null;
   reportRunId?: string | null;
   reportCompletedAt?: string | null;
