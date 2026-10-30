@@ -66,11 +66,17 @@ async def test_claim_batch_is_one_atomic_update_returning_lease() -> None:
     """Two workers must compete on one UPDATE, not a lock-free SELECT then UPDATE."""
     pool = _Pool()
 
-    rows = await claim_batch(pool, worker_id="worker-a", limit=20, lease_seconds=300)
+    rows = await claim_batch(
+        pool,
+        worker_id="worker-a",
+        limit=20,
+        lease_seconds=300,
+        settings=Settings(_env_file=None),
+    )
 
     assert rows[0]["claim_token"] == "lease-1"
     sql = " ".join(pool.conn.sql.split()).upper()
-    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "FOR UPDATE OF O SKIP LOCKED" in sql
     assert "UPDATE WORKFLOW.OUTBOX" in sql
     assert "RETURNING" in sql
 
@@ -205,7 +211,7 @@ async def test_report_delivery_renders_a_clickable_internal_markdown_link(
             "message_type": "markdown",
             "link_path": "/reports?reportId=report-1",
             "content": (
-                "盘后报告 <font color=\"warning\">+1.23%</font> "
+                '盘后报告 <font color="warning">+1.23%</font> '
                 "[外部链接](https://attacker.example) 已经生成。"
             ),
         },

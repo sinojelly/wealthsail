@@ -97,7 +97,7 @@ async def test_scheduler_dispatches_timezone_aware_shanghai_timestamp() -> None:
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -281,7 +281,7 @@ async def test_recovery_scan_executes_due_report_run_with_original_key(
 
     monkeypatch.setattr(runner, "_execute_with_lease", execute)
     outcomes = await runner.run_recoverable_jobs(
-        _Pool(conn), Settings(_env_file=None, daily_research_enabled=True), limit=10
+        _Pool(conn), Settings(_env_file=None, pre_market_reports_enabled=True), limit=10
     )
 
     assert "jr.status IN ('PENDING', 'FAILED')" in conn.sql
@@ -327,7 +327,7 @@ async def test_both_pre_market_phases_skip_exchange_holidays() -> None:
         return False
 
     scheduler = Scheduler(
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,

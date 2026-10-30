@@ -63,6 +63,29 @@ def _payload_dict(row: Mapping[str, Any]) -> dict[str, Any]:
     return dict(raw) if isinstance(raw, Mapping) else {}
 
 
+def notification_enabled(row: Mapping[str, Any], settings: Settings) -> bool:
+    """Gate legacy report notifications independently of daily AI research."""
+    if row.get("topic") != "REPORT_PUBLISHED":
+        return True
+    payload = _payload_dict(row)
+    phases = {"PRE_MARKET", "PRE_MARKET_MACRO", "PRE_MARKET_PERSONALIZED"}
+    legacy = any(
+        isinstance(value, str) and value in phases
+        for value in (
+            payload.get("session"),
+            payload.get("variant"),
+            payload.get("report_variant"),
+            row.get("report_session"),
+            row.get("report_variant"),
+        )
+    )
+    legacy = legacy or (
+        row.get("aggregate_type") == "reporting.reports"
+        and str(row.get("idempotency_key", "")).split(":", 1)[0] in phases
+    )
+    return not legacy or bool(getattr(settings, "pre_market_reports_enabled", False))
+
+
 def _default_content(row: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
     topic = row["topic"]
     if topic == "REPORT_PUBLISHED":
@@ -197,6 +220,7 @@ async def claim_batch(
     worker_id: str,
     limit: int,
     lease_seconds: int,
+    settings: Settings,
 ) -> list[Any]:
     """Atomically lease due PENDING rows in one short transaction."""
     async with pool.acquire() as conn:
@@ -205,14 +229,27 @@ async def claim_batch(
                 await conn.fetch(
                     """
                     WITH candidates AS (
-                        SELECT id
-                        FROM workflow.outbox
-                        WHERE status = 'PENDING'
-                          AND available_at <= now()
-                          AND (lease_until IS NULL OR lease_until < now())
-                        ORDER BY created_at ASC
+                        SELECT o.id
+                        FROM workflow.outbox o
+                        WHERE o.status = 'PENDING'
+                          AND o.available_at <= now()
+                          AND (o.lease_until IS NULL OR o.lease_until < now())
+                          AND ($4::boolean OR NOT (
+                            o.topic = 'REPORT_PUBLISHED' AND (
+                              COALESCE(o.payload->>'session','') IN
+                                ('PRE_MARKET','PRE_MARKET_MACRO','PRE_MARKET_PERSONALIZED')
+                              OR COALESCE(o.payload->>'variant','') IN
+                                ('PRE_MARKET','PRE_MARKET_MACRO','PRE_MARKET_PERSONALIZED')
+                              OR COALESCE(o.payload->>'report_variant','') IN
+                                ('PRE_MARKET_MACRO','PRE_MARKET_PERSONALIZED')
+                              OR (o.aggregate_type = 'reporting.reports' AND
+                                split_part(o.idempotency_key,':',1) IN
+                                ('PRE_MARKET','PRE_MARKET_MACRO','PRE_MARKET_PERSONALIZED'))
+                            )
+                          ))
+                        ORDER BY o.created_at ASC
                         LIMIT $1
-                        FOR UPDATE SKIP LOCKED
+                        FOR UPDATE OF o SKIP LOCKED
                     )
                     UPDATE workflow.outbox AS o
                        SET status = 'SENDING',
@@ -225,11 +262,12 @@ async def claim_batch(
                      WHERE o.id = c.id
                     RETURNING o.id, o.tenant_id, o.topic, o.payload,
                               o.channel_binding_id, o.attempt_count,
-                              o.claim_token
+                              o.claim_token, o.aggregate_type, o.idempotency_key
                     """,
                     limit,
                     worker_id,
                     lease_seconds,
+                    bool(getattr(settings, "pre_market_reports_enabled", False)),
                 )
             )
 
@@ -343,6 +381,20 @@ async def _cas_retry_or_dead(
         )
 
 
+async def _cas_suppressed(pool: Pool, row: Mapping[str, Any]) -> None:
+    """Keep an unattempted message for audit while returning its unused lease."""
+    async with system_connection(pool) as conn:
+        await conn.execute(
+            """UPDATE workflow.outbox
+               SET status='PENDING', last_error_class='NotificationDisabled',
+                   locked_at=NULL, locked_by=NULL, claim_token=NULL, lease_until=NULL,
+                   attempt_count=GREATEST(0,attempt_count-1)
+             WHERE id=$1 AND claim_token=$2 AND status='SENDING'""",
+            row["id"],
+            row["claim_token"],
+        )
+
+
 async def deliver_batch(pool: Pool, settings: Settings, limit: int = 20) -> int:
     """Claim, release the DB connection, then deliver a bounded batch."""
     if not settings.wecom_enabled:
@@ -353,16 +405,23 @@ async def deliver_batch(pool: Pool, settings: Settings, limit: int = 20) -> int:
         worker_id="worker:outbox",
         limit=limit,
         lease_seconds=settings.outbox_lease_seconds,
+        settings=settings,
     )
     semaphore = asyncio.Semaphore(settings.outbox_delivery_concurrency)
 
     async def deliver_one(row: Mapping[str, Any]) -> None:
         async with semaphore:
             try:
+                if not notification_enabled(row, settings):
+                    await _cas_suppressed(pool, row)
+                    return
                 binding = await _load_binding(pool, row)
                 command = build_delivery_command(
                     row, binding, routing_key=settings.routing_encryption_key
                 )
+                if not notification_enabled(row, settings):
+                    await _cas_suppressed(pool, row)
+                    return
                 receipt = await _send(command, settings)
                 await _cas_sent(pool, row, receipt)
             except DeliveryUnknownError as exc:

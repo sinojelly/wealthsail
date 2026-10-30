@@ -118,7 +118,10 @@ async def test_research_catch_up_ticks_dispatch_once_per_calendar_day():
 
 
 @pytest.mark.asyncio
-async def test_daily_research_catch_up_ends_before_existing_pre_market_phases():
+@pytest.mark.parametrize("pre_market_enabled", [False, True])
+async def test_source_refresh_catch_up_ends_before_independently_enabled_pre_market_phases(
+    pre_market_enabled,
+):
     now = datetime(2026, 10, 13, 8, 30, tzinfo=SHANGHAI)
     dispatched = []
 
@@ -129,7 +132,11 @@ async def test_daily_research_catch_up_ends_before_existing_pre_market_phases():
         return True
 
     scheduler = Scheduler(
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(
+            _env_file=None,
+            daily_research_enabled=True,
+            pre_market_reports_enabled=pre_market_enabled,
+        ),
         execute,
         trading_day_check=trading_day,
         now_provider=lambda: now,
@@ -137,7 +144,9 @@ async def test_daily_research_catch_up_ends_before_existing_pre_market_phases():
     await scheduler._tick()
     now = datetime(2026, 10, 13, 8, 35, tzinfo=SHANGHAI)
     await scheduler._tick()
-    assert dispatched == ["PRE_MARKET_MACRO", "PRE_MARKET_PERSONALIZED"]
+    assert dispatched == (
+        ["PRE_MARKET_MACRO", "PRE_MARKET_PERSONALIZED"] if pre_market_enabled else []
+    )
 
 
 @pytest.mark.asyncio
@@ -166,6 +175,7 @@ async def test_slow_research_at_0829_does_not_block_0830_pre_market_tick():
             _env_file=None,
             scheduler_tick_seconds=0.001,
             daily_research_enabled=True,
+            pre_market_reports_enabled=True,
         ),
         execute,
         trading_day_check=trading_day,
@@ -270,7 +280,7 @@ async def test_report_dispatch_keeps_existing_await_completion_semantics():
         await release.wait()
 
     scheduler = Scheduler(
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         execute,
         now_provider=lambda: datetime(2026, 10, 13, 8, 30, tzinfo=SHANGHAI),
     )
@@ -328,7 +338,7 @@ async def test_failed_background_research_does_not_repeat_or_block_reports(caplo
             raise RuntimeError("fixture provider unavailable")
 
     scheduler = Scheduler(
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         execute,
         now_provider=lambda: now,
     )

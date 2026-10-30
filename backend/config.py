@@ -102,8 +102,12 @@ class Settings(BaseSettings):
         # Templates intentionally leave these blank to use the account default.
         return (value.strip() or None) if isinstance(value, str) else value
 
-    # Opt-in daily public research, pre-market reports and morning digest.
+    # One opt-in weekday 07:00 public-data -> AI research pipeline.
     daily_research_enabled: bool = Field(default=False)
+    daily_research_start_window_minutes: int = Field(default=120, ge=30, le=360)
+    # Legacy 08:30/08:35 reports and AI-result pushes are separate opt-ins.
+    pre_market_reports_enabled: bool = Field(default=False)
+    morning_opportunity_push_enabled: bool = Field(default=False)
     fund_1430_enabled: bool = Field(default=False)
     post_market_review_enabled: bool = Field(default=False)
     # Independent opt-in for the five-minute holdings anomaly check/alert.

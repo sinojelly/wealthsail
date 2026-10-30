@@ -3,7 +3,7 @@
 from backend.config import Settings
 
 REPORT_SESSION_SWITCHES = {
-    "PRE_MARKET": "daily_research_enabled",
+    "PRE_MARKET": "pre_market_reports_enabled",
     "INTRADAY": "intraday_tracking_enabled",
     "FUND_1430": "fund_1430_enabled",
     "POST_MARKET": "post_market_review_enabled",

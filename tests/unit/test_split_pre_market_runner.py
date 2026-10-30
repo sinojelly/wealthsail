@@ -123,7 +123,7 @@ async def test_macro_phase_runs_once_per_tenant_via_public_session(
 
     outcomes = await run_session(
         pool,
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         "PRE_MARKET_MACRO",
         now,
     )
@@ -164,7 +164,7 @@ async def test_personalized_phase_fans_out_per_active_member_and_isolates_failur
 
     outcomes = await run_session(
         pool,
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         "PRE_MARKET_PERSONALIZED",
         now,
     )
@@ -203,7 +203,7 @@ async def test_personalized_phase_skips_members_without_personal_context(
 
     outcomes = await run_session(
         pool,
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         "PRE_MARKET_PERSONALIZED",
         now,
     )
@@ -234,7 +234,7 @@ async def test_already_terminal_key_returns_skip_without_generating(
 
     outcomes = await run_session(
         pool,
-        Settings(_env_file=None, daily_research_enabled=True),
+        Settings(_env_file=None, pre_market_reports_enabled=True),
         "PRE_MARKET_PERSONALIZED",
         now,
     )

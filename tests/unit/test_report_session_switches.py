@@ -14,12 +14,14 @@ from backend import worker
 
 SWITCHES = (
     "daily_research_enabled",
+    "pre_market_reports_enabled",
+    "morning_opportunity_push_enabled",
     "fund_1430_enabled",
     "post_market_review_enabled",
 )
 PHASES = (
-    ("PRE_MARKET_MACRO", "PRE_MARKET", "daily_research_enabled", 8, 30),
-    ("PRE_MARKET_PERSONALIZED", "PRE_MARKET", "daily_research_enabled", 8, 35),
+    ("PRE_MARKET_MACRO", "PRE_MARKET", "pre_market_reports_enabled", 8, 30),
+    ("PRE_MARKET_PERSONALIZED", "PRE_MARKET", "pre_market_reports_enabled", 8, 35),
     ("FUND_1430", "FUND_1430", "fund_1430_enabled", 14, 30),
     ("POST_MARKET", "POST_MARKET", "post_market_review_enabled", 15, 30),
 )
@@ -152,6 +154,7 @@ async def test_opportunity_switches_are_independent(monkeypatch, daily, fund):
         Settings(
             _env_file=None,
             daily_research_enabled=daily,
+            morning_opportunity_push_enabled=daily,
             fund_1430_enabled=fund,
             opportunity_tenant_id="00000000-0000-0000-0000-000000000001",
             opportunity_user_id="00000000-0000-0000-0000-000000000002",

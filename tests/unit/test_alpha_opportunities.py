@@ -29,6 +29,7 @@ def settings(**changes):
         **{
             "alpha_opportunity_enabled": True,
             "daily_research_enabled": True,
+            "morning_opportunity_push_enabled": True,
             "fund_1430_enabled": True,
             "wecom_opportunity_webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fixture",
             "opportunity_tenant_id": str(TENANT),

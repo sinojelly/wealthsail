@@ -570,7 +570,7 @@ def _morning_message(payload, day):
         )
     return _bounded_lines(
         [
-            f"### 08:30 每日机会研究 · {day}",
+            f"### 07:00 每日机会研究 · {day}",
             "宏观周期：" + _text(payload.get("macroCycle") or "待核对", 500),
             _text(payload.get("summary"), 500),
             *plans,
@@ -1057,7 +1057,10 @@ async def sync_alpha_opportunities(
 ):
     stamp = _local(now if now is not None else now_provider())
     result = {"morning": {"status": "DISABLED"}, "fund1430": {"status": "DISABLED"}}
-    daily_enabled = getattr(settings, "daily_research_enabled", False)
+    daily_enabled = bool(
+        getattr(settings, "daily_research_enabled", False)
+        and getattr(settings, "morning_opportunity_push_enabled", False)
+    )
     fund_enabled = getattr(settings, "fund_1430_enabled", False)
     if not daily_enabled and not fund_enabled:
         return result
@@ -1070,7 +1073,7 @@ async def sync_alpha_opportunities(
         return result
     if daily_enabled:
         result["morning"] = {"status": "NOT_READY"}
-    if daily_enabled and stamp.time() >= time(8, 30):
+    if daily_enabled and stamp.weekday() < 5 and stamp.time() >= time(7):
         report = await _today_report(pool, stamp)
         if report:
 
@@ -1080,7 +1083,13 @@ async def sync_alpha_opportunities(
                     pool, payload, stamp, funds_only=False
                 )
                 active = await _active(pool, scope)
-                if _local(now_provider()).date() != stamp.date() or not active:
+                if (
+                    _local(now_provider()).date() != stamp.date()
+                    or not active
+                    or not getattr(settings, "daily_research_enabled", False)
+                    or not getattr(settings, "morning_opportunity_push_enabled", False)
+                    or not getattr(settings, "alpha_opportunity_enabled", False)
+                ):
                     return "EXPIRED", {}
                 await send_opportunity_webhook(
                     settings,
