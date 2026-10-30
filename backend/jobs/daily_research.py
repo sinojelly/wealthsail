@@ -4,9 +4,11 @@ import argparse
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
+import errno
 import hashlib
 import json
 import logging
+import socket
 from time import monotonic
 
 from backend.ai_usage.tracker import trace_inference, track_task
@@ -205,6 +207,50 @@ class SourceCollectionTimeout(TimeoutError):
     pass
 
 
+class SchedulerDatabaseUnavailable(RuntimeError):
+    """Retry permission for database scheduling work, never model execution."""
+
+    def __init__(self, error):
+        self.error_class = type(error).__name__
+        super().__init__(self.error_class)
+
+
+@asynccontextmanager
+async def _scheduler_database_connection(pool):
+    # Use only before a pipeline owner starts work. A DB error after model use
+    # must not become permission to repeat research or terminal persistence.
+    try:
+        async with system_connection(pool) as conn:
+            yield conn
+    except Exception as exc:
+        temporary_network = (
+            isinstance(exc, socket.gaierror) and exc.errno == socket.EAI_AGAIN
+        ) or (
+            isinstance(exc, OSError)
+            and exc.errno in {errno.ENETDOWN, errno.ENETUNREACH, errno.EHOSTUNREACH}
+        )
+        if (
+            isinstance(exc, (ConnectionError, TimeoutError))
+            or temporary_network
+            or getattr(exc, "sqlstate", None)
+            in {
+                "08000",
+                "08001",
+                "08003",
+                "08006",  # connection unavailable/lost
+                "53300",
+                "57P01",
+                "57P02",
+                "57P03",  # capacity/restart
+                "40001",
+                "40P01",
+                "55P03",  # serialization/deadlock/lock conflict
+            }
+        ):
+            raise SchedulerDatabaseUnavailable(exc) from exc
+        raise
+
+
 def _schedule(settings):
     return {
         "schedule_mode": getattr(settings, "daily_research_schedule_mode", "DAILY"),
@@ -345,7 +391,7 @@ async def sync_daily_research(
     # Existing work keeps the plan it was born with. Changing worker.env may
     # change tomorrow's schedule, but must not shorten today's recovery window
     # or exclude a Saturday task originally started under DAILY mode.
-    async with system_connection(pool) as conn:
+    async with _scheduler_database_connection(pool) as conn:
         await archive_prior_pipelines(conn, stamp)
         existing = await read_pipeline(conn, stamp)
         if await consumed(conn, stamp):
@@ -381,7 +427,7 @@ async def sync_daily_research(
     if stamp >= local(window_end):
         from backend.macro.daily_pipeline_repository import finish_source_wait_window
 
-        async with system_connection(pool) as conn:
+        async with _scheduler_database_connection(pool) as conn:
             await finish_source_wait_window(conn, stamp)
             if await consumed(conn, stamp):
                 return {"status": "SKIPPED"}
@@ -406,7 +452,7 @@ async def sync_daily_research(
         ):
             return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": existing["id"]}
         return {"status": "SKIPPED"}
-    async with system_connection(pool) as conn:
+    async with _scheduler_database_connection(pool) as conn:
         claim = await claim_pipeline(
             conn,
             stamp,
@@ -911,9 +957,23 @@ async def run_daily_research_service(
         read_pipeline,
     )
 
-    async with system_connection(pool) as conn:
-        await archive_prior_pipelines(conn, current)
-        existing = await read_pipeline(conn, current)
+    # Preserve the startup schedule decision even if reconnecting spans its due
+    # time. CATCH_UP=false must not turn an on-time service into a late restart.
+    while not stop_event.is_set():
+        try:
+            observed_at = local(now_provider())
+            async with _scheduler_database_connection(pool) as conn:
+                await archive_prior_pipelines(conn, observed_at)
+                existing = await read_pipeline(conn, observed_at)
+            break
+        except SchedulerDatabaseUnavailable as exc:
+            logger.warning(
+                "daily_research_database_retry phase=initialize error_class=%s retry_seconds=60",
+                exc.error_class,
+            )
+            await wait(stop_event, 60)
+    else:
+        return
     due = existing.get("scheduledFor") if existing else None
     if isinstance(due, str):
         due = datetime.fromisoformat(due)
@@ -960,6 +1020,13 @@ async def run_daily_research_service(
             }:
                 due = local(now_provider()) + timedelta(seconds=60)
                 continue
+        except SchedulerDatabaseUnavailable as exc:
+            logger.warning(
+                "daily_research_database_retry phase=preclaim error_class=%s retry_seconds=60",
+                exc.error_class,
+            )
+            await wait(stop_event, 60)
+            continue
         except Exception as exc:  # noqa: BLE001 -- daily failures do not stop other services
             logger.warning(
                 "daily_research_service_failed error_class=%s", type(exc).__name__
