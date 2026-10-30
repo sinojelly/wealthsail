@@ -69,6 +69,11 @@ services:
     # The shared image's HTTP healthcheck belongs to the API process.
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Only this process holds the refreshable Codex login. It has no database,
   # browser-session or messaging credentials and no published host port.

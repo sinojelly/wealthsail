@@ -1,5 +1,3 @@
-BEGIN;
-
 -- Replace indirect auth.uid() membership checks with
 -- safe JWT identity checks for AI usage tasks.
 
@@ -57,5 +55,3 @@ WITH CHECK (
           AND tm.status = 'ACTIVE'
     )
 );
-
-COMMIT;

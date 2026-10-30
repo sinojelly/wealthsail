@@ -32,8 +32,10 @@ def test_094_only_replaces_two_expected_policies():
     """094 must be a narrow, forward-only RLS change."""
     sql = sql_without_comments(M094)
 
-    assert sql.strip().startswith("BEGIN;")
-    assert sql.strip().endswith("COMMIT;")
+    assert not re.search(
+    r"(?im)^\s*(?:BEGIN|COMMIT|ROLLBACK)\s*;",
+    sql,
+    ), "Migration 094 must not manage its own transaction"
 
     created = re.findall(
         r"\bCREATE\s+POLICY\s+(\w+)", sql, re.IGNORECASE
@@ -93,7 +95,7 @@ def test_094_insert_policy_rejects_invalid_identity():
 
     insert_policy = sql.split(
         "CREATE POLICY ai_usage_task_insert", 1
-    )[1].split("COMMIT;", 1)[0]
+    )[1]
 
     assert "FOR INSERT TO wealthsail_api" in insert_policy
     assert "WITH CHECK" in insert_policy

@@ -217,6 +217,11 @@ async def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    
+    # Suppress verbose HTTP request logs; keep warnings and errors.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    
     pool = await create_pool(
         settings.worker_database_url,
         min_size=settings.db_pool_min_size,
