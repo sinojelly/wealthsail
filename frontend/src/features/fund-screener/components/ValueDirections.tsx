@@ -26,6 +26,7 @@ import {
   planUnit,
 } from "../plan-display";
 import { readingText, sourceTitle } from "../research-reading";
+import { researchScheduleLabel } from "../research-schedule-display";
 import ActionablePlan, { ActionablePlanEvidence } from "./ActionablePlan";
 import { studyMetricLabel } from "./study-display";
 import PlanRevision from "./PlanRevision";
@@ -404,7 +405,8 @@ export default function ValueDirections({
             : "历史价值方向与买卖计划"}
         </h3>
         <small>
-          工作日07:00启动AI研究 · 交易日14:30独立核对场外基金（北京时间）
+          {researchScheduleLabel(data?.schedule)} ·
+          交易日14:30独立核对场外基金（北京时间）
         </small>
       </header>
       {directions?.length ? (

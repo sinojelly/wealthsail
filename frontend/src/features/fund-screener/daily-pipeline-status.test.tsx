@@ -6,6 +6,7 @@ import DailyResearchReport, {
   DailyResearchStatus,
 } from "./components/DailyResearchReport";
 import MacroContextStrip from "./components/MacroContextStrip";
+import ValueDirections from "./components/ValueDirections";
 
 const daily = (overrides: Partial<DailyResearch> = {}): DailyResearch => ({
   methodVersion: "daily-research-v1",
@@ -224,5 +225,121 @@ it("shows a compact execution-stage timeline without exposing unsafe errors", as
     "step",
   );
   expect(screen.queryByText(/token=secret/)).not.toBeInTheDocument();
-  expect(screen.getByText(/工作日07:00启动/)).toBeVisible();
+  expect(screen.getByText(/自动研究计划以服务配置为准/)).toBeVisible();
+  expect(
+    screen.queryByText(/工作日07:00|周一至周五07:00/),
+  ).not.toBeInTheDocument();
+});
+
+it.each([
+  ["DAILY", "07:00", "每天07:00启动AI研究（北京时间）"],
+  ["DAILY", "08:15", "每天08:15启动AI研究（北京时间）"],
+  ["WEEKDAYS", "08:15", "周一至周五08:15启动AI研究（北京时间）"],
+] as const)(
+  "uses the configured %s %s schedule in both report details and value directions",
+  async (mode, time, label) => {
+    const data = daily({
+      schedule: {
+        mode,
+        time,
+        timezone: "Asia/Shanghai",
+        startWindowMinutes: 120,
+      },
+      report: {
+        summary: "研究摘要",
+        coverage: [],
+        sources: [],
+        events: [],
+        upcoming: [],
+        energy: [],
+      },
+    });
+    render(
+      <>
+        <DailyResearchReport data={data} />
+        <ValueDirections data={data} />
+      </>,
+    );
+    await userEvent.click(screen.getByText("执行与报告状态"));
+    expect(
+      screen.getAllByText(new RegExp(label.replace(/[()]/g, "\\$&"))),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText(/工作日07:00|自动研究计划以服务配置为准/),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it("keeps a Saturday planned trigger when the service is configured for every day", async () => {
+  render(
+    <DailyResearchReport
+      data={daily({
+        schedule: {
+          mode: "DAILY",
+          time: "07:00",
+          timezone: "Asia/Shanghai",
+          startWindowMinutes: 120,
+        },
+        todayScheduledFor: "2026-10-30T23:00:00Z",
+        nextRunAt: "2026-10-31T23:00:00Z",
+      })}
+    />,
+  );
+  await userEvent.click(screen.getByText("执行与报告状态"));
+  expect(
+    screen.getByText("今日尚未启动（计划触发：2026年10月31日 07:00 北京时间）"),
+  ).toBeVisible();
+  expect(screen.getByText(/每天07:00启动AI研究（北京时间）/)).toBeVisible();
+  expect(
+    screen.getByText(/下次计划：2026年11月1日 07:00 北京时间/),
+  ).toBeVisible();
+  expect(screen.queryByText(/非工作日/)).not.toBeInTheDocument();
+});
+
+it("explains a configured weekday schedule and uses the service's next Monday trigger", async () => {
+  render(
+    <DailyResearchReport
+      data={daily({
+        schedule: {
+          mode: "WEEKDAYS",
+          time: "08:15",
+          timezone: "Asia/Shanghai",
+          startWindowMinutes: 120,
+        },
+        scheduleState: "NON_WORKDAY",
+        todayScheduledFor: null,
+        nextRunAt: "2026-11-02T00:15:00Z",
+      })}
+    />,
+  );
+  await userEvent.click(screen.getByText("执行与报告状态"));
+  expect(
+    screen.getByText(
+      "非工作日，不安排自动研究（下次计划触发：2026年11月2日 08:15 北京时间）",
+    ),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/周一至周五08:15启动AI研究（北京时间）/),
+  ).toBeVisible();
+});
+
+it("keeps the plan neutral in a legacy report with no schedule metadata", () => {
+  render(
+    <ValueDirections
+      data={daily({
+        report: {
+          summary: "历史摘要",
+          coverage: [],
+          sources: [],
+          events: [],
+          upcoming: [],
+          energy: [],
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText(/自动研究计划以服务配置为准/)).toBeVisible();
+  expect(
+    screen.queryByText(/每天07:00|工作日07:00|周一至周五/),
+  ).not.toBeInTheDocument();
 });

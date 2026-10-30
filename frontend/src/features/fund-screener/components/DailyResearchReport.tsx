@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import type { DailyResearch, Direction } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
+import { researchScheduleLabel } from "../research-schedule-display";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未启动",
   RUNNING: "研究正在执行",
@@ -620,7 +621,8 @@ function DailyResearchContent({
             </p>
           )}
           <small>
-            工作日07:00启动（北京时间），完成时间取决于采集与研究耗时。
+            {researchScheduleLabel(data.schedule)}
+            ，完成时间取决于采集与研究耗时。
             {data.nextRunAt
               ? ` 下次计划：${timeLabel(data.nextRunAt)} 北京时间。`
               : ""}

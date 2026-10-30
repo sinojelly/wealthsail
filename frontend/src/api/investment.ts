@@ -585,6 +585,12 @@ export interface OpportunityContext extends MacroContext {
   notices?: ConditionNotice[];
 }
 export interface DailyResearch {
+  schedule?: {
+    mode: "DAILY" | "WEEKDAYS";
+    time: string;
+    timezone: "Asia/Shanghai";
+    startWindowMinutes: number;
+  };
   runMode?: "SCHEDULED" | "DEBUG" | null;
   reportRunMode?: "SCHEDULED" | "DEBUG" | null;
   methodVersion: string;
