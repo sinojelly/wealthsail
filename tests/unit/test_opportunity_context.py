@@ -141,6 +141,26 @@ async def test_context_keeps_actor_and_original_unresolved_fund_scope(monkeypatc
     assert "researchBoard" not in result and "radar" not in result
 
 
+@pytest.mark.asyncio
+async def test_context_uses_configured_daily_pipeline_window_for_status(monkeypatch):
+    from backend.config import Settings
+
+    module = dependencies(monkeypatch)
+    configured = Settings(
+        _env_file=None,
+        daily_research_enabled=True,
+        daily_research_start_window_minutes=90,
+    )
+    monkeypatch.setattr(module, "get_settings", lambda: configured)
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    await module.get_context(
+        conn, "tenant-a", "user-a", fund_code="000001", fund_market="HK", now=NOW
+    )
+    assert module.read_daily_research.await_args.kwargs["enabled"] is True
+    assert module.read_daily_research.await_args.kwargs["start_window_minutes"] == 90
+
+
 def test_new_opportunity_route_is_authenticated_and_passes_full_selection(monkeypatch):
     module = service()
     api = import_module("backend.investment.radar_api")

@@ -582,6 +582,42 @@ async def test_bad_bundle_cohort_cannot_replace_valid_cached_nav_in_packet(monke
 
 
 @pytest.mark.asyncio
+async def test_scheduled_frozen_batch_never_loads_a_different_nav_cache_or_missing_fund_fallback(
+    monkeypatch,
+):
+    from backend.investment import service
+
+    frozen = complete_history(count=220)
+    newer = deepcopy(frozen)
+    newer["points"][-1]["close"] = "9.9999"
+    cache = AsyncMock(return_value={"008281": newer})
+    fallback = AsyncMock(side_effect=AssertionError("unrelated saved fund plan"))
+    monkeypatch.setattr(discovery, "_cached_histories", cache)
+    monkeypatch.setattr(service, "analysis", fallback)
+    monkeypatch.setattr(
+        discovery,
+        "read_discovery_assets",
+        AsyncMock(
+            return_value=[
+                asset("008281"),
+                {**asset("000051"), "subjectKind": "fund", "subjectId": str(uuid4())},
+            ]
+        ),
+    )
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    result = await discovery.build_discovery_packet(
+        conn, {}, {"fundHistories": [newer]}, [], {}, NOW, frozen_histories=[frozen]
+    )
+    assert Decimal(result["discoveryActionableZones"][0]["currentPrice"]) == Decimal(
+        frozen["points"][-1]["close"]
+    )
+    assert result["discoveryCoverage"]["historyFundCodes"] == ["008281"]
+    cache.assert_not_awaited()
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_newer_gapped_bundle_cannot_replace_complete_cached_same_nav_day(
     monkeypatch,
 ):

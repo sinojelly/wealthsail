@@ -94,3 +94,41 @@ async def test_missing_calendar_day_does_not_guess_etf_comparison_dates():
             ]
 
     assert await completed_etf_dates(Conn(), NOW) == []
+
+
+@pytest.mark.asyncio
+async def test_frozen_scheduled_batch_reuses_its_nav_without_an_extra_collection(
+    monkeypatch,
+):
+    from backend.jobs import research_inputs as mod
+    from backend.investment import discovery
+    from backend.integrations import etf_flows
+
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+
+    @asynccontextmanager
+    async def connection(pool):
+        yield conn
+
+    read = AsyncMock(
+        return_value={
+            "fundHistories": [{"fundCode": "008298"}],
+            "themeNavSourceResults": {"008298": {"status": "SUCCESS", "records": 500}},
+        }
+    )
+    nav = AsyncMock(side_effect=AssertionError("must use frozen batch"))
+    monkeypatch.setattr(mod, "system_connection", connection)
+    monkeypatch.setattr(mod, "read_alpha_public", read)
+    monkeypatch.setattr(discovery, "collect_discovery_nav_histories", nav)
+    monkeypatch.setattr(
+        etf_flows,
+        "fetch_etf_flow_signals",
+        AsyncMock(return_value={"signals": [], "sourceResults": {}}),
+    )
+    result = await mod.prepare_research_inputs(
+        object(), NOW, {}, source_batch_id="frozen-batch"
+    )
+    assert read.await_args.kwargs["source_batch_id"] == "frozen-batch"
+    assert result["dynamicNavSourceResults"]["008298"]["records"] == 500
+    nav.assert_not_awaited()

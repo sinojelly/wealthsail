@@ -4,7 +4,7 @@ Startup checks complete recent histories. Every day at 06:30 Asia/Shanghai the
 full five-year window is fetched; incomplete attempts retry an hour after they
 finish. --once always fetches and exits nonzero for PARTIAL/UNAVAILABLE results.
 Independent index research checks its exchange calendar. Opt-in public Codex
-research runs once at 08:30; no report delivery, outbox or trading loop starts.
+research starts at 07:00 on weekdays; no report delivery, outbox or trading loop starts.
 """
 
 from __future__ import annotations

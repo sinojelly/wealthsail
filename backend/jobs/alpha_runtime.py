@@ -25,7 +25,9 @@ async def run_alpha_runtime(
                 await run_debug_research_service(pool, settings, stop_event=stop_event)
 
             services.append(debug)
-        if getattr(settings, "alpha_public_enabled", False):
+        if getattr(settings, "alpha_public_enabled", False) and not getattr(
+            settings, "daily_research_enabled", False
+        ):
             services.append(run_alpha_public_service)
         if getattr(settings, "alpha_opportunity_enabled", False):
 

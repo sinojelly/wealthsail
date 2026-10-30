@@ -35,17 +35,15 @@ async def test_read_empty_is_not_run_with_next_shanghai_slot():
     conn = AsyncMock()
     conn.fetchrow.side_effect = [None, None]
     result = await repository().read_daily_research(conn, NOW)
-    assert result["state"] == "NOT_RUN"
+    assert result["state"] == "MISSED"
     assert result["report"] is None
-    assert result["nextRunAt"] == NOW.replace(hour=8, minute=30) + timedelta(days=1)
+    assert result["nextRunAt"] == NOW.replace(hour=7, minute=0) + timedelta(days=3)
     conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_latest_ready_report_is_not_downloaded_twice():
-    latest = run(
-        status="READY", recorded_at=NOW, payload={"summary": "ready"}
-    )
+    latest = run(status="READY", recorded_at=NOW, payload={"summary": "ready"})
     conn = AsyncMock()
     conn.fetchrow.return_value = latest
     result = await repository().read_daily_research(conn, NOW)
@@ -115,7 +113,7 @@ async def test_effective_report_identity_never_uses_latest_failed_or_pending_run
 
 @pytest.mark.asyncio
 async def test_utc_input_uses_shanghai_calendar_and_disabled_does_not_hide_report():
-    stamp = datetime(2026, 10, 15, 23, tzinfo=timezone.utc)
+    stamp = datetime(2026, 10, 15, 22, tzinfo=timezone.utc)
     conn = AsyncMock()
     conn.fetchrow.side_effect = [
         run(status="READY", recorded_at=stamp, payload={"summary": "public"}),
@@ -123,7 +121,7 @@ async def test_utc_input_uses_shanghai_calendar_and_disabled_does_not_hide_repor
     ]
     result = await repository().read_daily_research(conn, stamp, enabled=False)
     assert result["state"] == "DISABLED"
-    assert result["nextRunAt"] == stamp.astimezone(SHANGHAI).replace(hour=8, minute=30)
+    assert result["nextRunAt"] == stamp.astimezone(SHANGHAI).replace(hour=7, minute=0)
     assert result["report"] == {"summary": "public"}
 
 
@@ -147,9 +145,9 @@ def test_daily_settings_default_off_and_migration_has_unique_dispatch_and_no_run
 @pytest.mark.parametrize(
     "hour,minute,latest,enabled,want",
     [
-        (8, 29, None, True, "NOT_DUE"),
-        (8, 30, None, True, "DUE_NOT_DISPATCHED"),
-        (9, 0, None, True, "DUE_NOT_DISPATCHED"),
+        (6, 59, None, True, "NOT_DUE"),
+        (7, 0, None, True, "DUE_NOT_DISPATCHED"),
+        (9, 0, None, True, "MISSED"),
         (9, 0, run(), True, "DISPATCHED"),
         (9, 0, run(status="FAILED", recorded_at=NOW), True, "DISPATCHED"),
         (9, 0, run(status="UNCERTAIN", recorded_at=NOW), True, "DISPATCHED"),
@@ -165,13 +163,15 @@ async def test_today_schedule_distinguishes_due_time_dispatch_and_disabled(
         conn, NOW.replace(hour=hour, minute=minute), enabled=enabled
     )
     assert result["scheduleState"] == want
-    assert result["todayScheduledFor"] == NOW.replace(hour=8, minute=30)
+    assert result["todayScheduledFor"] == NOW.replace(hour=7, minute=0)
     assert result["report"] is None
     conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hour,want", [(7, "NOT_DUE"), (9, "DUE_NOT_DISPATCHED")])
+@pytest.mark.parametrize(
+    "hour,want", [(6, "NOT_DUE"), (8, "DUE_NOT_DISPATCHED"), (9, "MISSED")]
+)
 async def test_old_success_does_not_hide_missing_today_dispatch(hour, want):
     yesterday = NOW - timedelta(days=1)
     old = run(
@@ -185,8 +185,11 @@ async def test_old_success_does_not_hide_missing_today_dispatch(hour, want):
     conn = AsyncMock()
     conn.fetchrow.side_effect = [old, old]
     result = await repository().read_daily_research(conn, NOW.replace(hour=hour))
-    assert result["state"] == "STALE" and result["scheduleState"] == want
-    assert result["todayScheduledFor"] == NOW.replace(hour=8, minute=30)
+    assert (
+        result["state"] == ("MISSED" if hour == 9 else "STALE")
+        and result["scheduleState"] == want
+    )
+    assert result["todayScheduledFor"] == NOW.replace(hour=7, minute=0)
     assert result["scheduledFor"] == yesterday.replace(hour=8, minute=30)
     assert result["reportCompletedAt"] == yesterday
     assert result["reportSlotDate"] == yesterday.date()
@@ -206,6 +209,20 @@ async def test_schedule_uses_shanghai_day_after_utc_midnight_and_preserves_faile
     conn.fetchrow.side_effect = [failed, None]
     result = await repository().read_daily_research(conn, stamp)
     assert result["scheduleState"] == "DISPATCHED"
-    assert result["todayScheduledFor"] == stamp
+    assert result["todayScheduledFor"] == stamp.astimezone(SHANGHAI).replace(
+        hour=7, minute=0
+    )
     assert result["state"] == "FAILED" and result["errorClass"] == "ValueError"
     assert result["reportRunId"] is None and result["reportCompletedAt"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("day", [31, 1])
+async def test_non_workday_has_no_today_trigger_and_next_plan_is_monday(day):
+    stamp = datetime(2026, 10 if day == 31 else 11, day, 8, tzinfo=SHANGHAI)
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None
+    result = await repository().read_daily_research(conn, stamp)
+    assert result["scheduleState"] == "NON_WORKDAY"
+    assert result["todayScheduledFor"] is None
+    assert result["nextRunAt"] == datetime(2026, 11, 2, 7, tzinfo=SHANGHAI)

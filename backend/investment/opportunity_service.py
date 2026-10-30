@@ -316,10 +316,12 @@ async def get_context(
             now=now,
         )
     with trace_stage("context.daily_research"):
+        research_settings = get_settings()
         daily = await read_daily_research(
             conn,
             now,
-            enabled=get_settings().daily_research_enabled,
+            enabled=research_settings.daily_research_enabled,
+            start_window_minutes=research_settings.daily_research_start_window_minutes,
             histories=alpha_public.get("fundHistories"),
         )
     from backend.investment.nav_change import report_with_nav_changes

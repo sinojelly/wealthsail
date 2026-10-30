@@ -700,7 +700,15 @@ async def collect_discovery_nav_histories(pool, now, *, catalysts=None):
 
 
 async def build_discovery_packet(
-    conn, packet, bundle, themes, previous, now, *, catalysts=None
+    conn,
+    packet,
+    bundle,
+    themes,
+    previous,
+    now,
+    *,
+    catalysts=None,
+    frozen_histories=None,
 ):
     from copy import deepcopy
     from backend.investment.theme_graph import nav_plan, _calendar_proof
@@ -722,10 +730,16 @@ async def build_discovery_packet(
         }
         for asset in universe
     ]
-    histories = await _cached_histories(
-        conn, [row["fundCode"] for row in universe], now
+    histories = (
+        await _cached_histories(conn, [row["fundCode"] for row in universe], now)
+        if frozen_histories is None
+        else {}
     )
-    for history in bundle.get("fundHistories", []):
+    for history in (
+        bundle.get("fundHistories", [])
+        if frozen_histories is None
+        else frozen_histories
+    ):
         if not isinstance(history, dict) or not _eligible_history(history, now):
             continue
         code = history.get("fundCode")
@@ -756,6 +770,8 @@ async def build_discovery_packet(
     for asset in universe:
         history = histories.get(asset["fundCode"])
         if not history:
+            if frozen_histories is not None:
+                continue
             if asset["subjectKind"] == "fund":
                 stored = await service.analysis(conn, "fund", asset["subjectId"])
                 candidate = (

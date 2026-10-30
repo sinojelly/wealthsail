@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-NOW = datetime(2026, 10, 17, 9, tzinfo=SHANGHAI)  # Saturday
+NOW = datetime(2026, 10, 16, 8, tzinfo=SHANGHAI)  # Friday, inside the start window
 
 
 def job():
@@ -42,11 +42,20 @@ def isolate(monkeypatch):
     )
     mod, state = job(), {"consumed": False, "active": 0, "terminal": []}
 
+    class Conn:
+        @asynccontextmanager
+        async def transaction(self):
+            state["in_transaction"] = True
+            try:
+                yield
+            finally:
+                state["in_transaction"] = False
+
     @asynccontextmanager
     async def connection(pool):
         state["active"] += 1
         try:
-            yield object()
+            yield Conn()
         finally:
             state["active"] -= 1
 
@@ -58,6 +67,9 @@ def isolate(monkeypatch):
 
     async def finished(conn, run_id, stamp, **kwargs):
         state["terminal"].append(kwargs)
+        state.setdefault("terminal_in_transactions", []).append(
+            state.get("in_transaction", False)
+        )
 
     async def provider(*args, **kwargs):
         assert state["active"] == 0, "no provider runs inside a DB connection"
@@ -93,7 +105,93 @@ def isolate(monkeypatch):
     monkeypatch.setattr(mod, "build_prompt", lambda packet: "one prompt")
     monkeypatch.setattr(mod, "validate_report", lambda raw, *_, **__: raw)
     monkeypatch.setattr(mod, "now_shanghai", lambda: NOW)
+    from backend.macro import daily_pipeline_repository as pipeline, alpha_repository
+    from backend.jobs import alpha_public
+
+    monkeypatch.setattr(
+        pipeline,
+        "claim_pipeline",
+        AsyncMock(
+            side_effect=lambda *_: None
+            if state["consumed"] or state.get("pipeline_closed")
+            else {"id": "pipeline", "lease_token": "lease", "stage": "COLLECTING"}
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "scheduled_source_batch",
+        AsyncMock(
+            return_value={
+                "id": "source-batch",
+                "run_date": NOW.date(),
+                "status": "READY",
+                "completed_at": NOW,
+            }
+        ),
+    )
+    monkeypatch.setattr(pipeline, "source_quality", lambda *_: {"allowed": True})
+    monkeypatch.setattr(pipeline, "advance_pipeline", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        alpha_repository, "read_alpha_public", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        alpha_public, "sync_alpha_public", AsyncMock(return_value={"status": "READY"})
+    )
+
+    async def stage(pool, claim, **fields):
+        state.setdefault("pipeline_events", []).append(fields)
+        claim["stage"] = fields["stage"]
+        if fields.get("state", "RUNNING") != "RUNNING":
+            state["pipeline_closed"] = True
+
+    monkeypatch.setattr(mod, "_pipeline_stage", stage)
     return mod, state
+
+
+@pytest.mark.asyncio
+async def test_report_terminal_and_pipeline_terminal_commit_together(monkeypatch):
+    from backend.macro import daily_pipeline_repository as pipeline
+
+    mod, state = isolate(monkeypatch)
+    assert (await mod.sync_daily_research(object(), settings(), NOW))[
+        "status"
+    ] == "READY"
+    assert state["terminal_in_transactions"] == [True]
+    assert any(
+        call.kwargs.get("state") == "READY"
+        for call in pipeline.advance_pipeline.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_started_before_window_end_can_finish_after_nine(monkeypatch):
+    mod, state = isolate(monkeypatch)
+    current = NOW.replace(hour=8, minute=59)
+    monkeypatch.setattr(mod, "now_shanghai", lambda: current)
+
+    async def model(*args, **kwargs):
+        nonlocal current
+        current = NOW.replace(hour=9, minute=10)
+        return {"summary": "public", "sources": []}
+
+    mod.run_codex_research.side_effect = model
+    assert (await mod.sync_daily_research(object(), settings(), current))[
+        "status"
+    ] == "READY"
+    assert state["terminal"][0]["status"] == "READY"
+
+
+@pytest.mark.asyncio
+async def test_expired_owner_cannot_consume_the_model_slot(monkeypatch):
+    from backend.macro import daily_pipeline_repository as pipeline
+
+    mod, state = isolate(monkeypatch)
+    monkeypatch.setattr(pipeline, "advance_pipeline", AsyncMock(return_value=False))
+    assert (await mod.sync_daily_research(object(), settings(), NOW))[
+        "status"
+    ] == "UNCERTAIN"
+    assert state["consumed"] is False
+    mod.run_codex_research.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -116,6 +214,21 @@ async def test_daily_waits_for_concurrent_public_batch_before_consuming_model_sl
     monkeypatch.setattr(
         alpha_public, "sync_alpha_public", AsyncMock(return_value={"status": "SKIPPED"})
     )
+    from backend.macro import daily_pipeline_repository
+
+    monkeypatch.setattr(
+        daily_pipeline_repository,
+        "scheduled_source_batch",
+        AsyncMock(
+            return_value={
+                "id": "batch",
+                "run_date": NOW.date(),
+                "status": "CLAIMED",
+                "claimed_at": NOW - timedelta(minutes=20),
+                "completed_at": None,
+            }
+        ),
+    )
     result = await mod.sync_daily_research(
         object(), settings(alpha_public_enabled=True), NOW
     )
@@ -125,13 +238,13 @@ async def test_daily_waits_for_concurrent_public_batch_before_consuming_model_sl
 
 
 @pytest.mark.asyncio
-async def test_late_start_catches_up_once_on_weekend_and_restart_does_not_dispatch(
+async def test_late_start_catches_up_once_on_weekday_and_restart_does_not_dispatch(
     monkeypatch,
 ):
     mod, state = isolate(monkeypatch)
     first = await mod.sync_daily_research(object(), settings(), NOW)
     second = await mod.sync_daily_research(
-        object(), settings(), NOW + timedelta(hours=3)
+        object(), settings(), NOW + timedelta(minutes=30)
     )
     assert first["status"] == "READY" and second["status"] == "SKIPPED"
     assert state["consumed"]
@@ -144,13 +257,19 @@ async def test_remote_codex_keeps_one_daily_slot_without_local_auth(monkeypatch)
     from backend.integrations import codex_client
 
     mod, state = isolate(monkeypatch)
-    preflight = AsyncMock(return_value={"executable": "remote", "version": "codex-cli fixture"})
+    preflight = AsyncMock(
+        return_value={"executable": "remote", "version": "codex-cli fixture"}
+    )
     research = AsyncMock(return_value={"summary": "public", "sources": []})
     monkeypatch.setattr(codex_client, "preflight", preflight)
     monkeypatch.setattr(codex_client, "research", research)
     configured = settings(codex_runner_url="http://codex-runner:8090")
-    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "READY"
-    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "SKIPPED"
+    assert (await mod.sync_daily_research(object(), configured, NOW))[
+        "status"
+    ] == "READY"
+    assert (await mod.sync_daily_research(object(), configured, NOW))[
+        "status"
+    ] == "SKIPPED"
     research.assert_awaited_once()
     mod.preflight_codex.assert_not_awaited()
     mod.run_codex_research.assert_not_awaited()
@@ -162,18 +281,26 @@ async def test_remote_dispatch_timeout_is_uncertain_and_never_retried(monkeypatc
     from backend.integrations import codex_client
 
     mod, state = isolate(monkeypatch)
-    monkeypatch.setattr(codex_client, "preflight", AsyncMock(return_value={"version": "codex-cli fixture"}))
+    monkeypatch.setattr(
+        codex_client,
+        "preflight",
+        AsyncMock(return_value={"version": "codex-cli fixture"}),
+    )
     research = AsyncMock(side_effect=TimeoutError())
     monkeypatch.setattr(codex_client, "research", research)
     configured = settings(codex_runner_url="http://codex-runner:8090")
-    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "UNCERTAIN"
-    assert (await mod.sync_daily_research(object(), configured, NOW))["status"] == "SKIPPED"
+    assert (await mod.sync_daily_research(object(), configured, NOW))[
+        "status"
+    ] == "UNCERTAIN"
+    assert (await mod.sync_daily_research(object(), configured, NOW))[
+        "status"
+    ] == "SKIPPED"
     assert state["terminal"][0]["status"] == "UNCERTAIN"
     research.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_disabled_or_before_0830_never_collects_or_dispatches(monkeypatch):
+async def test_disabled_or_before_0700_never_collects_or_dispatches(monkeypatch):
     mod, _ = isolate(monkeypatch)
     assert (
         await mod.sync_daily_research(
@@ -182,7 +309,7 @@ async def test_disabled_or_before_0830_never_collects_or_dispatches(monkeypatch)
     )["status"] == "DISABLED"
     assert (
         await mod.sync_daily_research(
-            object(), settings(), NOW.replace(hour=8, minute=29)
+            object(), settings(), NOW.replace(hour=6, minute=59)
         )
     )["status"] == "NOT_DUE"
     mod.collect_daily_sources.assert_not_awaited()
@@ -211,6 +338,10 @@ async def test_failed_or_cancelled_model_keeps_consumed_slot(
             "status"
         ] == status
     assert state["terminal"][0]["status"] == status
+    from backend.macro import daily_pipeline_repository as pipeline
+
+    assert pipeline.advance_pipeline.await_args.kwargs["stage"] == "MODEL_RUNNING"
+    assert pipeline.advance_pipeline.await_args.kwargs["state"] == status
     assert (await mod.sync_daily_research(object(), settings(), NOW))[
         "status"
     ] == "SKIPPED"
@@ -226,9 +357,9 @@ async def test_cli_unavailable_is_terminal_and_does_not_fallback_or_retry(monkey
     assert (await mod.sync_daily_research(object(), settings(), NOW))[
         "status"
     ] == "FAILED"
-    assert state["consumed"]
+    assert state["consumed"] is False
     mod.run_codex_research.assert_not_awaited()
-    assert state["terminal"][0]["error_class"] == "CodexUnavailableError"
+    assert state["terminal"] == []
 
 
 @pytest.mark.asyncio
@@ -263,6 +394,9 @@ async def test_public_model_result_is_audited_before_validation_without_retry(
     assert records[-1]["source_checks"] == {"summary": "public", "sources": []}
     assert isinstance(records[-1].get("error"), ValueError) is invalid
     assert state["terminal"][0]["error_class"] == ("ValueError" if invalid else None)
+    assert state["pipeline_events"][-1]["stage"] == (
+        "VERIFYING_OUTPUT" if invalid else "PERSISTING"
+    )
     assert (await mod.sync_daily_research(object(), settings(), NOW))[
         "status"
     ] == "SKIPPED"
@@ -270,25 +404,23 @@ async def test_public_model_result_is_audited_before_validation_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_collection_crossing_midnight_does_not_dispatch_before_next_0830(
+async def test_collection_crossing_midnight_does_not_dispatch_before_next_0700(
     monkeypatch,
 ):
     mod, state = isolate(monkeypatch)
     monkeypatch.setattr(
         mod, "now_shanghai", lambda: NOW.replace(day=18, hour=0, minute=1)
     )
-    assert (
-        await mod.sync_daily_research(
-            object(), settings(), NOW.replace(hour=23, minute=59)
-        )
-    )["status"] == "SKIPPED"
+    assert (await mod.sync_daily_research(object(), settings(), NOW))[
+        "status"
+    ] == "MISSED"
     assert not state["consumed"]
     mod.run_codex_research.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "catchup,expected", [(True, NOW), (False, NOW.replace(day=18, hour=8, minute=30))]
+    "catchup,expected", [(True, NOW), (False, NOW.replace(day=19, hour=7, minute=0))]
 )
 async def test_service_catchup_policy_and_next_shanghai_day(
     monkeypatch, catchup, expected

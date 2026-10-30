@@ -106,12 +106,24 @@ async def finish_alpha_batch(conn, identity, now, status, payload):
     )
 
 
-async def read_alpha_public(conn, now, *, debug_request_id=None):
+async def read_alpha_public(conn, now, *, debug_request_id=None, source_batch_id=None):
     stamp = local(now)
-    exact = " AND debug_request_id=$3" if debug_request_id is not None else ""
-    arguments = (
-        (stamp.date(), stamp, debug_request_id)
+    if debug_request_id is not None and source_batch_id is not None:
+        raise ValueError("select an exact debug request or source batch")
+    exact = (
+        " AND id=$3 AND run_mode='SCHEDULED'"
+        if source_batch_id is not None
+        else " AND debug_request_id=$3"
         if debug_request_id is not None
+        else ""
+    )
+    arguments = (
+        (
+            stamp.date(),
+            stamp,
+            source_batch_id if source_batch_id is not None else debug_request_id,
+        )
+        if debug_request_id is not None or source_batch_id is not None
         else (stamp.date(), stamp)
     )
     latest = await conn.fetchrow(

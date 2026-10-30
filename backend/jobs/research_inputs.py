@@ -38,7 +38,9 @@ async def completed_etf_dates(conn, now):
     return sorted(day for day, trading in facts.items() if trading)[-2:]
 
 
-async def prepare_research_inputs(pool, now, external, *, debug_request_id=None):
+async def prepare_research_inputs(
+    pool, now, external, *, debug_request_id=None, source_batch_id=None
+):
     from backend.investment.discovery import collect_discovery_nav_histories
     from backend.integrations.etf_flows import fetch_etf_flow_signals
 
@@ -47,15 +49,29 @@ async def prepare_research_inputs(pool, now, external, *, debug_request_id=None)
             conn,
             now,
             **(
+                {"source_batch_id": source_batch_id}
+                if source_batch_id is not None
+                else {}
+            ),
+            **(
                 {"debug_request_id": debug_request_id}
                 if debug_request_id is not None
                 else {}
             ),
         )
         dates = await completed_etf_dates(conn, now)
+
     # Never hold a DB connection while a public supplier is queried.
+    async def frozen_nav():
+        return {
+            "fundHistories": bundle.get("fundHistories", []),
+            "themeNavSourceResults": bundle.get("themeNavSourceResults", {}),
+        }
+
     nav, flows = await asyncio.gather(
-        collect_discovery_nav_histories(
+        frozen_nav()
+        if source_batch_id is not None
+        else collect_discovery_nav_histories(
             pool, now, catalysts=research_catalysts(bundle, external)
         ),
         fetch_etf_flow_signals(now, trading_dates=dates),

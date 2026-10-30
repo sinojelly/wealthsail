@@ -17,12 +17,16 @@ def local(now):
 
 
 def scheduled_for(now):
-    return datetime.combine(local(now).date(), time(8, 30), SHANGHAI)
+    return datetime.combine(local(now).date(), time(7), SHANGHAI)
 
 
 def next_run(now):
     slot = scheduled_for(now)
-    return slot if local(now) < slot else slot + timedelta(days=1)
+    if local(now) >= slot:
+        slot += timedelta(days=1)
+    while slot.weekday() >= 5:
+        slot += timedelta(days=1)
+    return slot
 
 
 def _object(value):
@@ -126,12 +130,16 @@ _READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
  WHERE r.slot_date<=$1 AND r.dispatched_at<=$2"""
 
 
-async def read_daily_research(conn, now, *, enabled=True, histories=None):
+async def read_daily_research(
+    conn, now, *, enabled=True, histories=None, start_window_minutes=120
+):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
     from backend.investment.live_fund_plans import refresh_report_fund_plans
     from backend.common.timing import trace_stage
+    from backend.macro.daily_pipeline_repository import read_pipeline
 
     stamp = local(now)
+    pipeline = await read_pipeline(conn, stamp)
     latest = await conn.fetchrow(
         _READ + " ORDER BY r.dispatched_at DESC,r.run_id DESC LIMIT 1",
         stamp.date(),
@@ -156,13 +164,18 @@ async def read_daily_research(conn, now, *, enabled=True, histories=None):
         )
     )
     today_slot = scheduled_for(stamp)
+    window_end = today_slot + timedelta(minutes=start_window_minutes)
     schedule_state = (
         "DISABLED"
         if not enabled
+        else "NON_WORKDAY"
+        if stamp.weekday() >= 5
         else "DISPATCHED"
-        if scheduled_consumed
+        if scheduled_consumed or pipeline
         else "NOT_DUE"
         if stamp < today_slot
+        else "MISSED"
+        if stamp >= window_end
         else "DUE_NOT_DISPATCHED"
     )
     state = "STALE" if latest else "NOT_RUN"
@@ -172,6 +185,18 @@ async def read_daily_research(conn, now, *, enabled=True, histories=None):
             if stamp - latest["dispatched_at"] > EXECUTION_WINDOW
             else "RUNNING"
         )
+    if pipeline:
+        if (
+            pipeline["state"] == "RUNNING"
+            and pipeline["stage"] == "WAITING_SOURCES"
+            and stamp >= window_end
+        ):
+            pipeline.update(state="MISSED", errorClass="SourceWaitWindowExpired")
+        state = pipeline["state"]
+        if state == "MISSED" and enabled:
+            schedule_state = "MISSED"
+    elif not today and enabled and stamp.weekday() < 5 and stamp >= window_end:
+        state = "MISSED"
     if not enabled:
         state = "DISABLED"
     packet = _object(report_row.get("public_packet")) if report_row else None
@@ -189,18 +214,43 @@ async def read_daily_research(conn, now, *, enabled=True, histories=None):
         "methodVersion": METHOD,
         "state": state,
         "scheduleState": schedule_state,
-        "todayScheduledFor": today_slot,
-        "runId": str(latest["run_id"]) if latest else None,
-        "scheduledFor": latest["scheduled_for"] if latest else scheduled_for(stamp),
-        "startedAt": latest["dispatched_at"] if latest else None,
-        "completedAt": latest.get("recorded_at") if latest else None,
+        "todayScheduledFor": today_slot if stamp.weekday() < 5 else None,
+        "pipeline": pipeline,
+        "runId": pipeline["researchRunId"]
+        if pipeline
+        else str(latest["run_id"])
+        if latest
+        else None,
+        "scheduledFor": today_slot
+        if pipeline
+        else latest["scheduled_for"]
+        if latest
+        else scheduled_for(stamp),
+        "startedAt": pipeline["startedAt"]
+        if pipeline
+        else latest["dispatched_at"]
+        if latest
+        else None,
+        "completedAt": pipeline["finishedAt"]
+        if pipeline
+        else latest.get("recorded_at")
+        if latest
+        else None,
         "asOf": report_row.get("recorded_at") if report_row else None,
         "reportRunId": str(report_row["run_id"]) if report_row else None,
         "reportCompletedAt": report_row.get("recorded_at") if report_row else None,
         "reportSlotDate": report_row.get("slot_date") if report_row else None,
         "nextRunAt": next_run(stamp),
-        "errorClass": latest.get("error_class") if latest else None,
-        "runMode": latest.get("run_mode", "SCHEDULED") if latest else None,
+        "errorClass": pipeline["errorClass"]
+        if pipeline
+        else latest.get("error_class")
+        if latest
+        else None,
+        "runMode": "SCHEDULED"
+        if pipeline
+        else latest.get("run_mode", "SCHEDULED")
+        if latest
+        else None,
         "reportRunMode": report_row.get("run_mode", "SCHEDULED")
         if report_row
         else None,

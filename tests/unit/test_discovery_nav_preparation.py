@@ -97,24 +97,38 @@ async def test_daily_model_prepares_core_nav_even_without_macro_collection_servi
 
 
 @pytest.mark.asyncio
-async def test_daily_rechecks_pool_after_consumed_alpha_slot_with_latest_clock(
+async def test_daily_freezes_completed_partial_batch_at_actual_clock_without_recollecting_nav(
     monkeypatch,
 ):
     from datetime import timedelta
     from backend.jobs import alpha_public
+    from backend.macro import daily_pipeline_repository, alpha_repository
+    from test_daily_pipeline import valid_partial_bundle
     from test_daily_research_job import isolate, settings, NOW as JOB_NOW
 
-    job, _ = isolate(monkeypatch)
-
-    @asynccontextmanager
-    async def acquire(pool):
-        conn = AsyncMock()
-        conn.fetchrow.return_value = {"status": "PARTIAL", "claimed_at": JOB_NOW}
-        yield conn
-
-    monkeypatch.setattr(job, "system_connection", acquire)
+    quality_gate = daily_pipeline_repository.source_quality
+    job, state = isolate(monkeypatch)
     after_collection = JOB_NOW + timedelta(minutes=3)
     monkeypatch.setattr(job, "now_shanghai", lambda: after_collection)
+    monkeypatch.setattr(daily_pipeline_repository, "source_quality", quality_gate)
+    monkeypatch.setattr(
+        daily_pipeline_repository,
+        "scheduled_source_batch",
+        AsyncMock(
+            return_value={
+                "id": "source-batch",
+                "run_date": JOB_NOW.date(),
+                "status": "PARTIAL",
+                "claimed_at": JOB_NOW,
+                "completed_at": after_collection,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        alpha_repository,
+        "read_alpha_public",
+        AsyncMock(return_value=valid_partial_bundle(after_collection)),
+    )
     monkeypatch.setattr(
         alpha_public, "sync_alpha_public", AsyncMock(return_value={"status": "SKIPPED"})
     )
@@ -125,6 +139,10 @@ async def test_daily_rechecks_pool_after_consumed_alpha_slot_with_latest_clock(
     )
     assert result["status"] == "READY"
     assert prepared.await_args.args[1] == after_collection
+    assert prepared.await_args.kwargs["source_batch_id"] == "source-batch"
+    assert job.load_public_packet.await_args.kwargs["source_batch_id"] == "source-batch"
+    assert state["terminal"][0]["payload"]["inputQuality"]["allowed"] is True
+    assert state["terminal"][0]["payload"]["inputQuality"]["status"] == "PARTIAL"
 
 
 @pytest.mark.asyncio
