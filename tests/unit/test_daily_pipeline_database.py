@@ -232,6 +232,208 @@ async def test_closing_start_window_does_not_interrupt_a_newly_reclaimed_live_ow
         await conn.close()
 
 
+async def test_first_claim_freezes_cutoffs_and_recovery_ignores_new_configuration():
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        due = clock()
+        started = due + timedelta(minutes=15)
+        original = await claim_pipeline(
+            conn,
+            started,
+            schedule_time="07:00",
+            start_window_minutes=120,
+            pipeline_timeout_seconds=7200,
+        )
+        assert original["start_window_ends_at"] == due + timedelta(hours=2)
+        assert original["runtime_deadline_at"] == started + timedelta(hours=2)
+        recovered = await claim_pipeline(
+            conn,
+            due + timedelta(minutes=95),
+            schedule_time="08:00",
+            start_window_minutes=30,
+            pipeline_timeout_seconds=60,
+        )
+        assert recovered is not None
+        for field in (
+            "scheduled_for",
+            "started_at",
+            "start_window_ends_at",
+            "runtime_deadline_at",
+        ):
+            assert recovered[field] == original[field]
+        assert recovered["lease_token"] != original["lease_token"]
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+async def test_enlarging_configuration_cannot_extend_an_existing_start_window():
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        now = clock()
+        await claim_pipeline(
+            conn,
+            now,
+            start_window_minutes=30,
+            pipeline_timeout_seconds=7200,
+        )
+        assert (
+            await claim_pipeline(
+                conn,
+                now + timedelta(minutes=31),
+                start_window_minutes=360,
+                pipeline_timeout_seconds=14400,
+            )
+            is None
+        )
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+async def test_runtime_expiry_can_be_owned_for_terminal_archival_without_extending_it():
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        now = clock()
+        original = await claim_pipeline(conn, now, pipeline_timeout_seconds=1800)
+        recovered = await claim_pipeline(
+            conn,
+            now + timedelta(minutes=31),
+            pipeline_timeout_seconds=14400,
+        )
+        assert recovered is not None
+        assert recovered["runtime_deadline_at"] == original["runtime_deadline_at"]
+        assert recovered["runtime_deadline_at"] < now + timedelta(minutes=31)
+        assert recovered["lease_token"] != original["lease_token"]
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("minutes", [-1, 120])
+async def test_new_pipeline_is_not_created_outside_its_start_window(minutes):
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        now = clock()
+        assert await claim_pipeline(conn, now + timedelta(minutes=minutes)) is None
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("stage", ["COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"])
+async def test_frozen_window_archives_each_expired_pre_model_stage_and_api_projects_it(
+    stage,
+):
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        now = clock()
+        owned = await claim_pipeline(conn, now)
+        assert await advance_pipeline(conn, owned, now, stage=stage)
+        # Window closure is persisted, not inferred from a new worker config.
+        await finish_source_wait_window(conn, now + timedelta(minutes=119))
+        assert (
+            await conn.fetchval(
+                "SELECT state FROM research.daily_research_pipelines WHERE id=$1",
+                owned["id"],
+            )
+            == "RUNNING"
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_api")
+        projected = await read_pipeline(conn, now + timedelta(minutes=120))
+        assert projected["state"] == "MISSED"
+        assert projected["startWindowEndsAt"] == now + timedelta(minutes=120)
+        assert projected["runtimeDeadlineAt"] == now + timedelta(seconds=7200)
+        assert (
+            await conn.fetchval(
+                "SELECT state FROM research.daily_research_pipelines WHERE id=$1",
+                owned["id"],
+            )
+            == "RUNNING"
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        await finish_source_wait_window(conn, now + timedelta(minutes=120))
+        stored = await conn.fetchrow(
+            "SELECT state,error_class FROM research.daily_research_pipelines WHERE id=$1",
+            owned["id"],
+        )
+        assert stored["state"] == "MISSED"
+        assert stored["error_class"] == "SourceWaitWindowExpired"
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("stage", ["COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"])
+@pytest.mark.parametrize("guard", ["live_lease", "model_slot"])
+async def test_window_closure_never_archives_a_live_owner_or_consumed_model(
+    stage, guard
+):
+    from backend.macro.daily_repository import claim_daily_run
+
+    conn = await asyncpg.connect(DSN)
+    transaction = conn.transaction()
+    await transaction.start()
+    try:
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        now = clock()
+        owned = await claim_pipeline(conn, now)
+        if guard == "live_lease":
+            assert await advance_pipeline(conn, owned, now, stage="WAITING_SOURCES")
+            owned = await claim_pipeline(conn, now + timedelta(minutes=119))
+            assert await advance_pipeline(
+                conn, owned, now + timedelta(minutes=119), stage=stage
+            )
+            if stage == "WAITING_SOURCES":
+                # A source wait deliberately releases its lease immediately;
+                # emulate a still-live owner waiting inside that stage.
+                await conn.execute(
+                    "UPDATE research.daily_research_pipelines SET lease_until=$2 WHERE id=$1",
+                    owned["id"],
+                    now + timedelta(minutes=121),
+                )
+        else:
+            assert await advance_pipeline(conn, owned, now, stage=stage)
+            await claim_daily_run(
+                conn,
+                now + timedelta(minutes=5),
+                {},
+                input_hash="a" * 64,
+                prompt_version="fixture",
+            )
+            # No cached FK: the independent scheduled model slot is decisive.
+            assert owned["research_run_id"] is None
+        await finish_source_wait_window(conn, now + timedelta(minutes=120))
+        assert (
+            await conn.fetchval(
+                "SELECT state FROM research.daily_research_pipelines WHERE id=$1",
+                owned["id"],
+            )
+            == "RUNNING"
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_api")
+        status = await read_pipeline(conn, now + timedelta(minutes=120))
+        assert status["state"] == ("RUNNING" if guard == "live_lease" else "UNCERTAIN")
+    finally:
+        await transaction.rollback()
+        await conn.close()
+
+
 @pytest.mark.parametrize("fail_persistence", [False, True])
 async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_atomically(
     monkeypatch, fail_persistence

@@ -188,7 +188,11 @@ async def read_daily_research(
     if pipeline and pipeline.get("scheduledFor"):
         today_slot = local(pipeline["scheduledFor"])
     scheduled_day = is_scheduled_day(stamp, schedule_mode)
-    window_end = today_slot + timedelta(minutes=start_window_minutes)
+    window_end = (
+        pipeline.get("startWindowEndsAt")
+        if pipeline
+        else today_slot + timedelta(minutes=start_window_minutes)
+    )
     schedule_state = (
         "DISABLED"
         if not enabled
@@ -210,12 +214,8 @@ async def read_daily_research(
             else "RUNNING"
         )
     if pipeline:
-        if (
-            pipeline["state"] == "RUNNING"
-            and pipeline["stage"] == "WAITING_SOURCES"
-            and stamp >= window_end
-        ):
-            pipeline.update(state="MISSED", errorClass="SourceWaitWindowExpired")
+        # read_pipeline projects the frozen-window/lease/model-slot boundary.
+        # Do not reclassify existing work using the current env configuration.
         state = pipeline["state"]
         if state == "MISSED" and enabled:
             schedule_state = "MISSED"

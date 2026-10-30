@@ -2,6 +2,8 @@ CREATE TABLE research.daily_research_pipelines (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
  slot_date DATE NOT NULL UNIQUE,
  scheduled_for TIMESTAMPTZ NOT NULL,
+ start_window_ends_at TIMESTAMPTZ NOT NULL,
+ runtime_deadline_at TIMESTAMPTZ NOT NULL,
  started_at TIMESTAMPTZ NOT NULL,
  updated_at TIMESTAMPTZ NOT NULL,
  finished_at TIMESTAMPTZ,
@@ -15,6 +17,8 @@ CREATE TABLE research.daily_research_pipelines (
  quality JSONB,
  CHECK (finished_at IS NULL OR finished_at>=started_at),
  CHECK (updated_at>=started_at),
+ CHECK (start_window_ends_at>scheduled_for),
+ CHECK (runtime_deadline_at>started_at),
  CHECK (quality IS NULL OR jsonb_typeof(quality)='object')
 );
 ALTER TABLE research.daily_research_pipelines ENABLE ROW LEVEL SECURITY;

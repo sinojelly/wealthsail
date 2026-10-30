@@ -114,7 +114,15 @@ def isolate(monkeypatch):
         AsyncMock(
             side_effect=lambda *_, **__: None
             if state["consumed"] or state.get("pipeline_closed")
-            else {"id": "pipeline", "lease_token": "lease", "stage": "COLLECTING"}
+            else {
+                "id": "pipeline",
+                "lease_token": "lease",
+                "stage": "COLLECTING",
+                "started_at": NOW,
+                "scheduled_for": NOW.replace(hour=7),
+                "start_window_ends_at": NOW.replace(hour=9),
+                "runtime_deadline_at": NOW + timedelta(hours=2),
+            }
         ),
     )
     monkeypatch.setattr(
@@ -264,6 +272,8 @@ async def test_recovery_uses_persisted_plan_window_instead_of_changed_environmen
         "state": "RUNNING",
         "stage": "WAITING_SOURCES",
         "scheduledFor": due,
+        "startWindowEndsAt": due + timedelta(hours=2),
+        "runtimeDeadlineAt": due + timedelta(hours=2),
     }
     pipeline.claim_pipeline.side_effect = None
     pipeline.claim_pipeline.return_value = {
@@ -272,6 +282,8 @@ async def test_recovery_uses_persisted_plan_window_instead_of_changed_environmen
         "stage": "COLLECTING",
         "started_at": due,
         "scheduled_for": due,
+        "start_window_ends_at": due + timedelta(hours=2),
+        "runtime_deadline_at": due + timedelta(hours=2),
     }
     pipeline.scheduled_source_batch.side_effect = None
     pipeline.scheduled_source_batch.return_value = {
@@ -307,6 +319,8 @@ async def test_service_restarts_existing_plan_before_waiting_for_changed_schedul
         "state": "RUNNING",
         "stage": "WAITING_SOURCES",
         "scheduledFor": now.replace(hour=8, minute=15),
+        "startWindowEndsAt": now.replace(hour=10, minute=15),
+        "runtimeDeadlineAt": now.replace(hour=10, minute=15),
     }
     stop = asyncio.Event()
     sync = AsyncMock(return_value={"status": "READY"})
@@ -346,6 +360,8 @@ async def test_service_polls_a_dead_pre_model_owner_until_lease_expiry_then_disp
         "state": "RUNNING",
         "stage": "COLLECTING",
         "scheduledFor": started,
+        "startWindowEndsAt": started + timedelta(hours=2),
+        "runtimeDeadlineAt": started + timedelta(hours=2),
         "researchRunId": None,
     }
 
@@ -359,6 +375,8 @@ async def test_service_polls_a_dead_pre_model_owner_until_lease_expiry_then_disp
             "stage": "COLLECTING",
             "started_at": started,
             "scheduled_for": started,
+            "start_window_ends_at": started + timedelta(hours=2),
+            "runtime_deadline_at": started + timedelta(hours=2),
         }
 
     pipeline.claim_pipeline.side_effect = claim
@@ -418,6 +436,8 @@ async def test_claim_conflicts_with_terminal_or_model_started_owner_never_poll_f
         "stage": stage,
         "researchRunId": run_id,
         "scheduledFor": NOW.replace(hour=7),
+        "startWindowEndsAt": NOW.replace(hour=9),
+        "runtimeDeadlineAt": NOW + timedelta(hours=2),
     }
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "SKIPPED"
@@ -438,6 +458,9 @@ async def test_concurrent_first_pipeline_claim_is_rechecked_and_waited_for(monke
             "state": "RUNNING",
             "stage": "COLLECTING",
             "researchRunId": None,
+            "scheduledFor": NOW.replace(hour=7),
+            "startWindowEndsAt": NOW.replace(hour=9),
+            "runtimeDeadlineAt": NOW + timedelta(hours=2),
         },
     ]
     assert await mod.sync_daily_research(object(), settings(), NOW) == {
@@ -465,11 +488,19 @@ async def test_waiting_for_pre_model_owner_stops_at_consumed_slot_or_start_windo
         "state": "RUNNING",
         "stage": "COLLECTING",
         "scheduledFor": started,
+        "startWindowEndsAt": started + timedelta(minutes=1),
+        "runtimeDeadlineAt": started + timedelta(hours=2),
         "researchRunId": None,
     }
     pipeline.claim_pipeline.side_effect = None
     pipeline.claim_pipeline.return_value = None
-    close_window = AsyncMock()
+
+    async def archive_expired_owner(*_):
+        # This scenario's lease has expired, so the real closure query would
+        # persist MISSED. A still-live owner is covered by the service regression.
+        pipeline.read_pipeline.return_value["state"] = "MISSED"
+
+    close_window = AsyncMock(side_effect=archive_expired_owner)
     monkeypatch.setattr(pipeline, "finish_source_wait_window", close_window)
 
     async def wait(event, seconds):
@@ -532,6 +563,8 @@ async def test_persisted_utc_plan_is_used_in_shanghai_time_when_env_time_changes
         "stage": "COLLECTING",
         "started_at": NOW,
         "scheduled_for": NOW.replace(hour=7).astimezone(timezone.utc),
+        "start_window_ends_at": NOW.replace(hour=9).astimezone(timezone.utc),
+        "runtime_deadline_at": (NOW + timedelta(hours=2)).astimezone(timezone.utc),
     }
     claim = AsyncMock(return_value={"run_id": "one"})
     monkeypatch.setattr(mod, "claim_daily_run", claim)
@@ -706,6 +739,9 @@ async def test_recovery_past_total_runtime_limit_never_collects_or_consumes_mode
         "lease_token": "lease",
         "stage": "COLLECTING",
         "started_at": NOW - timedelta(seconds=7201),
+        "scheduled_for": NOW.replace(hour=7),
+        "start_window_ends_at": NOW.replace(hour=9),
+        "runtime_deadline_at": NOW - timedelta(seconds=1),
     }
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "FAILED"

@@ -232,6 +232,9 @@ async def test_status_shows_pre_model_progress_expired_lease_and_missed_wait_wit
         "id": "pipeline",
         "state": "RUNNING",
         "stage": stage,
+        "scheduled_for": NOW.isoformat(),
+        "start_window_ends_at": (NOW + timedelta(hours=2)).isoformat(),
+        "runtime_deadline_at": (NOW + timedelta(hours=2)).isoformat(),
         "started_at": NOW.isoformat(),
         "updated_at": NOW.isoformat(),
         "finished_at": None,
@@ -314,6 +317,10 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
                 "id": "pipeline",
                 "lease_token": "token",
                 "stage": "COLLECTING",
+                "scheduled_for": NOW,
+                "started_at": NOW,
+                "start_window_ends_at": NOW + timedelta(hours=2),
+                "runtime_deadline_at": NOW + timedelta(hours=2),
             }
         ),
     )

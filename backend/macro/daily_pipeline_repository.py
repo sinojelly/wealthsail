@@ -19,6 +19,7 @@ STAGES = {
     "PERSISTING",
 }
 TERMINAL = {"READY", "FAILED", "UNCERTAIN", "MISSED"}
+PRE_MODEL_STAGES = {"COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"}
 
 
 def _decode(value):
@@ -29,16 +30,25 @@ def dto(row, now):
     row = _decode(row)
     if not isinstance(row, dict):
         return None
-    expired = (
-        row["state"] == "RUNNING"
-        and row["stage"] != "WAITING_SOURCES"
-        and _stamp(row["lease_until"]) < local(now)
+    stamp = local(now)
+    expired = row["state"] == "RUNNING" and _stamp(row["lease_until"]) <= stamp
+    pre_model = (
+        row["stage"] in PRE_MODEL_STAGES
+        and not row.get("research_run_id")
+        and not row.get("scheduled_model_consumed")
+    )
+    window_end = _stamp(row.get("start_window_ends_at"))
+    missed = expired and pre_model and window_end is not None and window_end <= stamp
+    uncertain = (
+        expired and not missed and (row["stage"] != "WAITING_SOURCES" or not pre_model)
     )
     return {
         "id": str(row["id"]),
-        "state": "UNCERTAIN" if expired else row["state"],
+        "state": "MISSED" if missed else "UNCERTAIN" if uncertain else row["state"],
         "stage": row["stage"],
         "scheduledFor": _stamp(row.get("scheduled_for")),
+        "startWindowEndsAt": window_end,
+        "runtimeDeadlineAt": _stamp(row.get("runtime_deadline_at")),
         "startedAt": _stamp(row["started_at"]),
         "updatedAt": _stamp(row["updated_at"]),
         "finishedAt": _stamp(row.get("finished_at")),
@@ -48,25 +58,43 @@ def dto(row, now):
         "researchRunId": str(row["research_run_id"])
         if row.get("research_run_id")
         else None,
-        "errorClass": "PipelineLeaseExpired" if expired else row.get("error_class"),
+        "errorClass": "SourceWaitWindowExpired"
+        if missed
+        else "PipelineLeaseExpired"
+        if uncertain
+        else row.get("error_class"),
         "quality": _decode(row.get("quality")),
     }
 
 
 async def read_pipeline(conn, now):
     row = await conn.fetchval(
-        "SELECT to_jsonb(p) FROM research.daily_research_pipelines p WHERE slot_date=$1 AND started_at<=$2",
+        """SELECT to_jsonb(p) || jsonb_build_object('scheduled_model_consumed',
+          EXISTS(SELECT 1 FROM research.daily_research_runs r
+            WHERE r.slot_date=p.slot_date AND r.run_mode='SCHEDULED'))
+        FROM research.daily_research_pipelines p WHERE slot_date=$1 AND started_at<=$2""",
         local(now).date(),
         local(now),
     )
     return dto(row, now)
 
 
-async def claim_pipeline(conn, now, *, schedule_time="07:00"):
+async def claim_pipeline(
+    conn,
+    now,
+    *,
+    schedule_time="07:00",
+    start_window_minutes=120,
+    pipeline_timeout_seconds=7200,
+):
     stamp, token = local(now), uuid4()
+    due = scheduled_for(stamp, schedule_time=schedule_time)
     # Only pre-model owners can be replaced. The immutable scheduled model slot
     # is checked separately from the cached FK: a crash between callers must
     # never turn a consumed model slot into permission to dispatch again.
+    # A recovered owner keeps both frozen deadlines. Even when runtime has run
+    # out it may take ownership inside the start window solely to archive FAILED;
+    # the job checks runtime before collecting sources or dispatching a model.
     await conn.execute(
         """UPDATE research.daily_research_pipelines SET state='UNCERTAIN',
         error_class='PipelineLeaseExpired',finished_at=$2,updated_at=$2
@@ -80,24 +108,30 @@ async def claim_pipeline(conn, now, *, schedule_time="07:00"):
     )
     return await conn.fetchrow(
         """INSERT INTO research.daily_research_pipelines
-        (slot_date,scheduled_for,started_at,updated_at,state,stage,lease_token,lease_until)
-        SELECT $1,$2,$3,$3,'RUNNING','COLLECTING',$4,$5
+        (slot_date,scheduled_for,started_at,updated_at,state,stage,lease_token,lease_until,
+          start_window_ends_at,runtime_deadline_at)
+        SELECT $1,$2,$3,$3,'RUNNING','COLLECTING',$4,$5,$6,$7
         WHERE NOT EXISTS(SELECT 1 FROM research.daily_research_runs r
           WHERE r.slot_date=$1 AND r.run_mode='SCHEDULED')
+          AND (($3::timestamptz>=$2::timestamptz AND $3::timestamptz<$6::timestamptz) OR EXISTS(
+            SELECT 1 FROM research.daily_research_pipelines p WHERE p.slot_date=$1))
         ON CONFLICT(slot_date) DO UPDATE SET lease_token=$4,lease_until=$5,updated_at=$3,
           stage='COLLECTING',error_class=NULL
         WHERE research.daily_research_pipelines.state='RUNNING'
           AND research.daily_research_pipelines.stage IN ('COLLECTING','WAITING_SOURCES','VALIDATING_INPUT')
           AND research.daily_research_pipelines.lease_until<=$3
+          AND research.daily_research_pipelines.start_window_ends_at>$3
           AND research.daily_research_pipelines.research_run_id IS NULL
           AND NOT EXISTS(SELECT 1 FROM research.daily_research_runs r
             WHERE r.slot_date=$1 AND r.run_mode='SCHEDULED')
         RETURNING *""",
         stamp.date(),
-        scheduled_for(stamp, schedule_time=schedule_time),
+        due,
         stamp,
         token,
         stamp + LEASE,
+        due + timedelta(minutes=start_window_minutes),
+        stamp + timedelta(seconds=pipeline_timeout_seconds),
     )
 
 
@@ -193,8 +227,12 @@ async def finish_source_wait_window(conn, now):
     await conn.execute(
         """UPDATE research.daily_research_pipelines SET state='MISSED',
         error_class='SourceWaitWindowExpired',finished_at=$2,updated_at=$2
-        WHERE slot_date=$1 AND state='RUNNING' AND stage='WAITING_SOURCES'
-          AND research_run_id IS NULL AND lease_until<=$2""",
+        WHERE slot_date=$1 AND state='RUNNING'
+          AND stage IN ('COLLECTING','WAITING_SOURCES','VALIDATING_INPUT')
+          AND start_window_ends_at<=$2 AND lease_until<=$2
+          AND research_run_id IS NULL AND NOT EXISTS(
+            SELECT 1 FROM research.daily_research_runs r
+            WHERE r.slot_date=$1 AND r.run_mode='SCHEDULED')""",
         stamp.date(),
         stamp,
     )

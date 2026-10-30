@@ -213,13 +213,12 @@ def _schedule(settings):
 
 
 def _remaining_runtime(claim, settings, now):
-    started = claim.get("started_at") or now
-    if isinstance(started, str):
-        started = datetime.fromisoformat(started)
-    return (
-        getattr(settings, "daily_research_pipeline_timeout_seconds", 7200)
-        - (local(now) - local(started)).total_seconds()
-    )
+    # The first owner freezes this absolute deadline. A restarted worker's
+    # current settings must neither shorten nor extend the original budget.
+    deadline = claim["runtime_deadline_at"]
+    if isinstance(deadline, str):
+        deadline = datetime.fromisoformat(deadline)
+    return (local(deadline) - local(now)).total_seconds()
 
 
 @asynccontextmanager
@@ -354,17 +353,46 @@ async def sync_daily_research(
     )
     if stamp < due:
         return {"status": "NOT_DUE"}
-    if stamp >= due + timedelta(
-        minutes=getattr(settings, "daily_research_start_window_minutes", 120)
-    ):
+    window_end = (
+        existing["startWindowEndsAt"]
+        if existing
+        else due
+        + timedelta(
+            minutes=getattr(settings, "daily_research_start_window_minutes", 120)
+        )
+    )
+    if isinstance(window_end, str):
+        window_end = datetime.fromisoformat(window_end)
+    if stamp >= local(window_end):
         from backend.macro.daily_pipeline_repository import finish_source_wait_window
 
         async with system_connection(pool) as conn:
             await finish_source_wait_window(conn, stamp)
+            if await consumed(conn, stamp):
+                return {"status": "SKIPPED"}
+            pending = await read_pipeline(conn, stamp)
+        # A live owner may legitimately finish after the start window. Keep
+        # polling for completion or lease expiry, without reclaiming any work.
+        if (
+            pending
+            and pending["state"] == "RUNNING"
+            and pending.get("researchRunId") is None
+            and pending["stage"]
+            in {"COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"}
+        ):
+            return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": pending["id"]}
         return {"status": "MISSED"}
     async with system_connection(pool) as conn:
         claim = await claim_pipeline(
-            conn, stamp, schedule_time=schedule["schedule_time"]
+            conn,
+            stamp,
+            schedule_time=schedule["schedule_time"],
+            start_window_minutes=getattr(
+                settings, "daily_research_start_window_minutes", 120
+            ),
+            pipeline_timeout_seconds=getattr(
+                settings, "daily_research_pipeline_timeout_seconds", 7200
+            ),
         )
         if claim is None:
             # A restarted worker can arrive before the dead owner's lease has
