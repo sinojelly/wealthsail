@@ -102,9 +102,14 @@ class Settings(BaseSettings):
         # Templates intentionally leave these blank to use the account default.
         return (value.strip() or None) if isinstance(value, str) else value
 
-    # One opt-in weekday 07:00 public-data -> AI research pipeline.
+    # One opt-in Beijing-time public-data -> AI research pipeline.
     daily_research_enabled: bool = Field(default=False)
+    daily_research_schedule_mode: Literal["DAILY", "WEEKDAYS"] = Field(default="DAILY")
+    daily_research_schedule_time: str = Field(
+        default="07:00", pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
     daily_research_start_window_minutes: int = Field(default=120, ge=30, le=360)
+    daily_research_pipeline_timeout_seconds: int = Field(default=7200, ge=600, le=14400)
     # Legacy 08:30/08:35 reports and AI-result pushes are separate opt-ins.
     pre_market_reports_enabled: bool = Field(default=False)
     morning_opportunity_push_enabled: bool = Field(default=False)

@@ -45,6 +45,10 @@ def test_codex_runner_has_only_narrow_shared_model_authority(tmp_path: Path) -> 
     assert api["CODEX_RUNNER_TOKEN"] == worker["CODEX_RUNNER_TOKEN"] == runner["CODEX_RUNNER_TOKEN"]
     assert runner["CODEX_RUNNER_TOKEN"] not in {api["JWT_SECRET"], api["ROUTING_ENCRYPTION_KEY"]}
     assert api["DAILY_RESEARCH_ENABLED"] == worker["DAILY_RESEARCH_ENABLED"] == "false"
+    for env in (api, worker):
+        assert env["DAILY_RESEARCH_SCHEDULE_MODE"] == "DAILY"
+        assert env["DAILY_RESEARCH_SCHEDULE_TIME"] == "07:00"
+        assert env["DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS"] == "7200"
     assert runner["CODEX_HOME"] == "/home/appuser/.codex"
     assert not {"DATABASE_URL", "WORKER_DATABASE_URL", "JWT_SECRET", "MODEL_API_KEY", "OPENAI_API_KEY"} & runner.keys()
 

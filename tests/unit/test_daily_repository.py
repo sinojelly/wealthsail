@@ -37,7 +37,7 @@ async def test_read_empty_is_not_run_with_next_shanghai_slot():
     result = await repository().read_daily_research(conn, NOW)
     assert result["state"] == "MISSED"
     assert result["report"] is None
-    assert result["nextRunAt"] == NOW.replace(hour=7, minute=0) + timedelta(days=3)
+    assert result["nextRunAt"] == NOW.replace(hour=7, minute=0) + timedelta(days=1)
     conn.execute.assert_not_awaited()
 
 
@@ -222,7 +222,7 @@ async def test_non_workday_has_no_today_trigger_and_next_plan_is_monday(day):
     stamp = datetime(2026, 10 if day == 31 else 11, day, 8, tzinfo=SHANGHAI)
     conn = AsyncMock()
     conn.fetchrow.return_value = None
-    result = await repository().read_daily_research(conn, stamp)
+    result = await repository().read_daily_research(conn, stamp, schedule_mode="WEEKDAYS")
     assert result["scheduleState"] == "NON_WORKDAY"
     assert result["todayScheduledFor"] is None
     assert result["nextRunAt"] == datetime(2026, 11, 2, 7, tzinfo=SHANGHAI)

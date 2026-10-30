@@ -16,15 +16,26 @@ def local(now):
     return now.astimezone(SHANGHAI)
 
 
-def scheduled_for(now):
-    return datetime.combine(local(now).date(), time(7), SHANGHAI)
+def scheduled_for(now, schedule_time="07:00"):
+    if not isinstance(schedule_time, str) or not re.fullmatch(
+        r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", schedule_time
+    ):
+        raise ValueError("research schedule time must be HH:MM")
+    hour, minute = map(int, schedule_time.split(":"))
+    return datetime.combine(local(now).date(), time(hour, minute), SHANGHAI)
 
 
-def next_run(now):
-    slot = scheduled_for(now)
+def is_scheduled_day(now, schedule_mode="DAILY"):
+    if schedule_mode not in {"DAILY", "WEEKDAYS"}:
+        raise ValueError("unsupported research schedule mode")
+    return schedule_mode == "DAILY" or local(now).weekday() < 5
+
+
+def next_run(now, schedule_mode="DAILY", schedule_time="07:00"):
+    slot = scheduled_for(now, schedule_time)
     if local(now) >= slot:
         slot += timedelta(days=1)
-    while slot.weekday() >= 5:
+    while not is_scheduled_day(slot, schedule_mode):
         slot += timedelta(days=1)
     return slot
 
@@ -45,9 +56,12 @@ async def claim_daily_run(
     cli_version=None,
     debug_request_id=None,
     source_batch_id=None,
+    schedule_time="07:00",
 ):
     stamp = local(now)
-    slot = stamp if debug_request_id is not None else scheduled_for(stamp)
+    slot = (
+        stamp if debug_request_id is not None else scheduled_for(stamp, schedule_time)
+    )
     if stamp < slot:
         return None
     if debug_request_id is not None:
@@ -131,7 +145,14 @@ _READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
 
 
 async def read_daily_research(
-    conn, now, *, enabled=True, histories=None, start_window_minutes=120
+    conn,
+    now,
+    *,
+    enabled=True,
+    histories=None,
+    start_window_minutes=120,
+    schedule_mode="DAILY",
+    schedule_time="07:00",
 ):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
     from backend.investment.live_fund_plans import refresh_report_fund_plans
@@ -163,15 +184,18 @@ async def read_daily_research(
             today and latest.get("run_mode", "SCHEDULED") == "SCHEDULED",
         )
     )
-    today_slot = scheduled_for(stamp)
+    today_slot = scheduled_for(stamp, schedule_time)
+    if pipeline and pipeline.get("scheduledFor"):
+        today_slot = local(pipeline["scheduledFor"])
+    scheduled_day = is_scheduled_day(stamp, schedule_mode)
     window_end = today_slot + timedelta(minutes=start_window_minutes)
     schedule_state = (
         "DISABLED"
         if not enabled
-        else "NON_WORKDAY"
-        if stamp.weekday() >= 5
         else "DISPATCHED"
         if scheduled_consumed or pipeline
+        else "NON_WORKDAY"
+        if not scheduled_day
         else "NOT_DUE"
         if stamp < today_slot
         else "MISSED"
@@ -195,7 +219,7 @@ async def read_daily_research(
         state = pipeline["state"]
         if state == "MISSED" and enabled:
             schedule_state = "MISSED"
-    elif not today and enabled and stamp.weekday() < 5 and stamp >= window_end:
+    elif not today and enabled and scheduled_day and stamp >= window_end:
         state = "MISSED"
     if not enabled:
         state = "DISABLED"
@@ -213,19 +237,29 @@ async def read_daily_research(
     return {
         "methodVersion": METHOD,
         "state": state,
+        "schedule": {
+            "mode": schedule_mode,
+            "time": schedule_time,
+            "timezone": "Asia/Shanghai",
+            "startWindowMinutes": start_window_minutes,
+        },
         "scheduleState": schedule_state,
-        "todayScheduledFor": today_slot if stamp.weekday() < 5 else None,
+        "todayScheduledFor": (pipeline.get("scheduledFor") or today_slot)
+        if pipeline
+        else today_slot
+        if scheduled_day
+        else None,
         "pipeline": pipeline,
         "runId": pipeline["researchRunId"]
         if pipeline
         else str(latest["run_id"])
         if latest
         else None,
-        "scheduledFor": today_slot
+        "scheduledFor": pipeline.get("scheduledFor") or today_slot
         if pipeline
         else latest["scheduled_for"]
         if latest
-        else scheduled_for(stamp),
+        else today_slot,
         "startedAt": pipeline["startedAt"]
         if pipeline
         else latest["dispatched_at"]
@@ -240,7 +274,7 @@ async def read_daily_research(
         "reportRunId": str(report_row["run_id"]) if report_row else None,
         "reportCompletedAt": report_row.get("recorded_at") if report_row else None,
         "reportSlotDate": report_row.get("slot_date") if report_row else None,
-        "nextRunAt": next_run(stamp),
+        "nextRunAt": next_run(stamp, schedule_mode, schedule_time),
         "errorClass": pipeline["errorClass"]
         if pipeline
         else latest.get("error_class")

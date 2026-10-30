@@ -322,6 +322,8 @@ async def get_context(
             now,
             enabled=research_settings.daily_research_enabled,
             start_window_minutes=research_settings.daily_research_start_window_minutes,
+            schedule_mode=getattr(research_settings, "daily_research_schedule_mode", "DAILY"),
+            schedule_time=getattr(research_settings, "daily_research_schedule_time", "07:00"),
             histories=alpha_public.get("fundHistories"),
         )
     from backend.investment.nav_change import report_with_nav_changes

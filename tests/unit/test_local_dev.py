@@ -7,6 +7,25 @@ from scripts.local_dev import child_environment, node_supported, validate_local_
 from scripts.local_postgres import extract_postgres
 
 
+def test_local_generated_api_and_worker_keep_the_selected_research_schedule(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from dotenv import dotenv_values
+    from scripts import local_dev
+    from backend.integrations import codex_research
+
+    monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setattr(codex_research, "resolve_codex_executable", lambda *_: None)
+    monkeypatch.setenv("DAILY_RESEARCH_SCHEDULE_MODE", "WEEKDAYS")
+    monkeypatch.setenv("DAILY_RESEARCH_SCHEDULE_TIME", "08:15")
+    monkeypatch.setenv("DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS", "9000")
+    local_dev.configure(SimpleNamespace(db_port=55432, web_port=5173))
+    for filename in ("api.env", "macro.env"):
+        settings = dotenv_values(tmp_path / filename)
+        assert settings["DAILY_RESEARCH_SCHEDULE_MODE"] == "WEEKDAYS"
+        assert settings["DAILY_RESEARCH_SCHEDULE_TIME"] == "08:15"
+        assert settings["DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS"] == "9000"
+
+
 def test_local_fixture_accepts_only_its_dedicated_loopback_database():
     validate_local_target("postgresql://postgres:secret@127.0.0.1:55432/wealthsail_local")
     for dsn in (

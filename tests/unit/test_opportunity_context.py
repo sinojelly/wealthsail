@@ -150,6 +150,8 @@ async def test_context_uses_configured_daily_pipeline_window_for_status(monkeypa
         _env_file=None,
         daily_research_enabled=True,
         daily_research_start_window_minutes=90,
+        daily_research_schedule_mode="WEEKDAYS",
+        daily_research_schedule_time="08:15",
     )
     monkeypatch.setattr(module, "get_settings", lambda: configured)
     conn = AsyncMock()
@@ -159,6 +161,8 @@ async def test_context_uses_configured_daily_pipeline_window_for_status(monkeypa
     )
     assert module.read_daily_research.await_args.kwargs["enabled"] is True
     assert module.read_daily_research.await_args.kwargs["start_window_minutes"] == 90
+    assert module.read_daily_research.await_args.kwargs["schedule_mode"] == "WEEKDAYS"
+    assert module.read_daily_research.await_args.kwargs["schedule_time"] == "08:15"
 
 
 def test_new_opportunity_route_is_authenticated_and_passes_full_selection(monkeypatch):

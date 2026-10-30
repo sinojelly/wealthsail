@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -31,6 +32,7 @@ from backend.macro.daily_repository import (
     read_previous_daily_research,
     read_recent_public_research,
     scheduled_for,
+    is_scheduled_day,
 )
 from backend.macro.daily_research import (
     PROMPT_VERSION,
@@ -43,6 +45,7 @@ from backend.macro.research_audit import write_research_audit
 from backend.jobs.research_inputs import prepare_research_inputs, research_catalysts
 
 logger = logging.getLogger("wealthsail.daily_research")
+PIPELINE_HEARTBEAT_SECONDS = 30
 
 
 def _canonical_reason_code(exc: Exception) -> str:
@@ -194,9 +197,94 @@ class PipelineOwnershipLost(RuntimeError):
     pass
 
 
+class PipelineRuntimeExpired(TimeoutError):
+    pass
+
+
+class SourceCollectionTimeout(TimeoutError):
+    pass
+
+
+def _schedule(settings):
+    return {
+        "schedule_mode": getattr(settings, "daily_research_schedule_mode", "DAILY"),
+        "schedule_time": getattr(settings, "daily_research_schedule_time", "07:00"),
+    }
+
+
+def _remaining_runtime(claim, settings, now):
+    started = claim.get("started_at") or now
+    if isinstance(started, str):
+        started = datetime.fromisoformat(started)
+    return (
+        getattr(settings, "daily_research_pipeline_timeout_seconds", 7200)
+        - (local(now) - local(started)).total_seconds()
+    )
+
+
+@asynccontextmanager
+async def _pipeline_heartbeat(pool, claim):
+    """Cancel this owner on lease loss; never renew an expired or foreign token."""
+    from backend.macro.daily_pipeline_repository import renew_pipeline_lease
+
+    owner = asyncio.current_task()
+    lost = False
+
+    async def heartbeat():
+        nonlocal lost
+        try:
+            while True:
+                await asyncio.sleep(PIPELINE_HEARTBEAT_SECONDS)
+                async with system_connection(pool) as conn:
+                    owned = await renew_pipeline_lease(
+                        conn, claim, local(now_shanghai())
+                    )
+                if not owned:
+                    raise PipelineOwnershipLost()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            lost = True
+            logger.warning(
+                "daily_pipeline_heartbeat_lost pipeline_id=%s error_class=%s",
+                claim["id"],
+                type(exc).__name__,
+            )
+            owner.cancel()
+
+    task = asyncio.create_task(heartbeat())
+
+    async def stop():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    claim["_stop_heartbeat"] = stop
+    try:
+        yield
+    except asyncio.CancelledError:
+        if lost:
+            raise PipelineOwnershipLost() from None
+        raise
+    finally:
+        claim.pop("_stop_heartbeat", None)
+        await stop()
+
+
+async def _stop_pipeline_heartbeat(claim):
+    # A terminal transaction changes RUNNING to a terminal state, so a renewal
+    # after COMMIT would correctly return false. Join the heartbeat first; the
+    # terminal write still checks the live lease token inside its transaction.
+    stop = claim.get("_stop_heartbeat")
+    if stop:
+        await stop()
+
+
 async def _pipeline_stage(pool, claim, *, stage, state="RUNNING", **fields):
     from backend.macro.daily_pipeline_repository import advance_pipeline
 
+    if state != "RUNNING" or stage == "WAITING_SOURCES":
+        await _stop_pipeline_heartbeat(claim)
     async with system_connection(pool) as conn:
         updated = await advance_pipeline(
             conn, claim, local(now_shanghai()), stage=stage, state=state, **fields
@@ -242,11 +330,31 @@ async def sync_daily_research(
     if not settings.daily_research_enabled:
         return {"status": "DISABLED"}
     stamp = local(now)
-    if stamp.weekday() >= 5:
+    schedule = _schedule(settings)
+    from backend.macro.daily_pipeline_repository import claim_pipeline, read_pipeline
+
+    # Existing work keeps the plan it was born with. Changing worker.env may
+    # change tomorrow's schedule, but must not shorten today's recovery window
+    # or exclude a Saturday task originally started under DAILY mode.
+    async with system_connection(pool) as conn:
+        existing = await read_pipeline(conn, stamp)
+        if await consumed(conn, stamp):
+            return {"status": "SKIPPED"}
+    if not existing and not is_scheduled_day(
+        stamp, schedule_mode=schedule["schedule_mode"]
+    ):
         return {"status": "NON_WORKDAY"}
-    if stamp < scheduled_for(stamp):
+    due = existing.get("scheduledFor") if existing else None
+    if isinstance(due, str):
+        due = datetime.fromisoformat(due)
+    due = (
+        local(due)
+        if due
+        else scheduled_for(stamp, schedule_time=schedule["schedule_time"])
+    )
+    if stamp < due:
         return {"status": "NOT_DUE"}
-    if stamp >= scheduled_for(stamp) + timedelta(
+    if stamp >= due + timedelta(
         minutes=getattr(settings, "daily_research_start_window_minutes", 120)
     ):
         from backend.macro.daily_pipeline_repository import finish_source_wait_window
@@ -254,120 +362,58 @@ async def sync_daily_research(
         async with system_connection(pool) as conn:
             await finish_source_wait_window(conn, stamp)
         return {"status": "MISSED"}
-    from backend.jobs.alpha_public import sync_alpha_public
-    from backend.macro.alpha_repository import read_alpha_public
-    from backend.macro.daily_pipeline_repository import (
-        claim_pipeline,
-        scheduled_source_batch,
-        source_quality,
-    )
-
     async with system_connection(pool) as conn:
-        if await consumed(conn, stamp):
+        claim = await claim_pipeline(
+            conn, stamp, schedule_time=schedule["schedule_time"]
+        )
+        if claim is None:
+            # A restarted worker can arrive before the dead owner's lease has
+            # expired. Recheck after the conflict (also covers a concurrent
+            # first INSERT) and poll only pre-model work, never a consumed slot.
+            if await consumed(conn, stamp):
+                return {"status": "SKIPPED"}
+            waiting = await read_pipeline(conn, stamp)
+            if (
+                waiting
+                and waiting.get("researchRunId") is None
+                and (
+                    waiting.get("state") == "RUNNING"
+                    or waiting.get("state") == "UNCERTAIN"
+                    and waiting.get("errorClass") == "PipelineLeaseExpired"
+                )
+                and waiting.get("stage")
+                in {"COLLECTING", "WAITING_SOURCES", "VALIDATING_INPUT"}
+            ):
+                return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": waiting["id"]}
             return {"status": "SKIPPED"}
-        claim = await claim_pipeline(conn, stamp)
-    if claim is None:
-        return {"status": "SKIPPED"}
     claim = dict(claim)
+    claim.setdefault("started_at", stamp)
     try:
-        await _pipeline_stage(pool, claim, stage="COLLECTING")
-        # This prerequisite is unconditional: ALPHA_PUBLIC_ENABLED controls only
-        # the legacy independent collector when the research pipeline is off.
-        async with asyncio.timeout(900):
-            await sync_alpha_public(pool, stamp)
-        current = local(now_shanghai())
-        if current.date() != stamp.date():
-            await _pipeline_stage(
-                pool,
-                claim,
-                stage="COLLECTING",
-                state="MISSED",
-                error_class="SourceCollectionCrossedDay",
-            )
-            return {"status": "MISSED", "errorClass": "SourceCollectionCrossedDay"}
-        async with system_connection(pool) as conn:
-            batch = await scheduled_source_batch(conn, current)
-        if batch is None:
-            raise ValueError("scheduled source batch is missing")
-        if batch.get("run_date") != stamp.date():
-            raise ValueError("scheduled source batch belongs to another date")
-        batch_id = batch["id"]
-        if (
-            batch["status"] == "CLAIMED"
-            or not batch.get("completed_at")
-            or batch["completed_at"] > current
-        ):
-            await _pipeline_stage(
-                pool, claim, stage="WAITING_SOURCES", source_batch_id=batch_id
-            )
-            return {"status": "WAITING_PUBLIC_DATA", "pipelineId": str(claim["id"])}
-        if batch["status"] not in {"READY", "PARTIAL"}:
-            await _pipeline_stage(
-                pool,
-                claim,
-                stage="VALIDATING_INPUT",
-                state="FAILED",
-                source_batch_id=batch_id,
-                error_class="SourceCollectionFailed",
-            )
-            return {"status": "FAILED", "errorClass": "SourceCollectionFailed"}
-        await _pipeline_stage(
-            pool, claim, stage="VALIDATING_INPUT", source_batch_id=batch_id
-        )
-        async with system_connection(pool) as conn:
-            bundle = await read_alpha_public(conn, current, source_batch_id=batch_id)
-        quality = source_quality(bundle, current)
-        await _pipeline_stage(pool, claim, stage="VALIDATING_INPUT", quality=quality)
-        if not quality["allowed"]:
-            await _pipeline_stage(
-                pool,
-                claim,
-                stage="VALIDATING_INPUT",
-                state="FAILED",
-                error_class="SourceQualityRejected",
-            )
-            return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
-        external = await collect_daily_sources(current)
-        external = await prepare_research_inputs(
-            pool, local(now_shanghai()), external, source_batch_id=batch_id
-        )
-        async with system_connection(pool) as conn:
-            packet = await load_public_packet(
-                conn, local(now_shanghai()), external, source_batch_id=batch_id
-            )
-        packet["sourceBatchId"] = str(batch_id)
-        packet["inputQuality"] = quality
-        result = await _execute_daily_research(
-            pool,
-            settings,
-            stamp,
-            source_batch_id=batch_id,
-            packet=packet,
-            pipeline=claim,
-        )
-        state = (
-            result["status"]
-            if result["status"] in {"READY", "FAILED", "UNCERTAIN", "MISSED"}
-            else "UNCERTAIN"
-        )
-        if not claim.get("_terminal_written"):
-            await _pipeline_stage(
-                pool,
-                claim,
-                stage=claim["stage"],
-                state=state,
-                error_class=result.get("errorClass"),
-            )
-        return result
+        remaining = _remaining_runtime(claim, settings, stamp)
+        if remaining <= 0:
+            raise PipelineRuntimeExpired()
+        claim["_runtime_deadline"] = monotonic() + remaining
+        async with asyncio.timeout(remaining), _pipeline_heartbeat(pool, claim):
+            return await _run_owned_pipeline(pool, settings, stamp, claim)
     except asyncio.CancelledError:
         if not claim.get("_terminal_written"):
-            await _pipeline_stage(
-                pool,
-                claim,
-                stage=claim["stage"],
-                state="UNCERTAIN",
-                error_class="CancelledError",
-            )
+            if claim.get("research_run_id"):
+                await _pipeline_stage(
+                    pool,
+                    claim,
+                    stage=claim["stage"],
+                    state="UNCERTAIN",
+                    error_class="CancelledError",
+                )
+            else:
+                from backend.macro.daily_pipeline_repository import (
+                    release_pipeline_before_model,
+                )
+
+                async with system_connection(pool) as conn:
+                    await release_pipeline_before_model(
+                        conn, claim, local(now_shanghai())
+                    )
         raise
     except Exception as exc:
         logger.warning(
@@ -376,20 +422,143 @@ async def sync_daily_research(
             claim["stage"],
             type(exc).__name__,
         )
-        if not isinstance(exc, PipelineOwnershipLost):
+        # A total-runtime timeout before dispatch is a known failed preparation.
+        # After a committed model slot it remains uncertain and is never retried.
+        state = (
+            "UNCERTAIN"
+            if isinstance(exc, PipelineOwnershipLost)
+            or (isinstance(exc, TimeoutError) and claim.get("research_run_id"))
+            else "FAILED"
+        )
+        error_class = (
+            "PipelineRuntimeExpired"
+            if type(exc) is TimeoutError
+            else type(exc).__name__
+        )
+        if not isinstance(exc, PipelineOwnershipLost) and not claim.get(
+            "_terminal_written"
+        ):
             await _pipeline_stage(
                 pool,
                 claim,
                 stage=claim["stage"],
-                state="UNCERTAIN" if isinstance(exc, TimeoutError) else "FAILED",
-                error_class=type(exc).__name__,
+                state=state,
+                error_class=error_class,
             )
         return {
-            "status": "UNCERTAIN"
-            if isinstance(exc, (TimeoutError, PipelineOwnershipLost))
-            else "FAILED",
-            "errorClass": type(exc).__name__,
+            "status": state,
+            "errorClass": error_class,
         }
+
+
+async def _run_owned_pipeline(pool, settings, stamp, claim):
+    from backend.jobs.alpha_public import sync_alpha_public
+    from backend.macro.alpha_repository import read_alpha_public
+    from backend.macro.daily_pipeline_repository import (
+        scheduled_source_batch,
+        source_quality,
+    )
+
+    await _pipeline_stage(pool, claim, stage="COLLECTING")
+    async with system_connection(pool) as conn:
+        batch = await scheduled_source_batch(conn, local(now_shanghai()))
+    # A restart must not launch another collector or overwrite a failed batch.
+    # Existing CLAIMED batches remain owned by their original collector; an
+    # orphaned collector therefore waits until the startup window closes.
+    if batch is None:
+        try:
+            async with asyncio.timeout(900):
+                await sync_alpha_public(pool, stamp)
+        except TimeoutError:
+            raise SourceCollectionTimeout() from None
+    current = local(now_shanghai())
+    if current.date() != stamp.date():
+        await _pipeline_stage(
+            pool,
+            claim,
+            stage="COLLECTING",
+            state="MISSED",
+            error_class="SourceCollectionCrossedDay",
+        )
+        return {"status": "MISSED", "errorClass": "SourceCollectionCrossedDay"}
+    if batch is None:
+        async with system_connection(pool) as conn:
+            batch = await scheduled_source_batch(conn, current)
+    if batch is None:
+        raise ValueError("scheduled source batch is missing")
+    if batch.get("run_date") != stamp.date():
+        raise ValueError("scheduled source batch belongs to another date")
+    batch_id = batch["id"]
+    if claim.get("source_batch_id") and str(claim["source_batch_id"]) != str(batch_id):
+        raise ValueError("pipeline source batch changed")
+    if (
+        batch["status"] == "CLAIMED"
+        or not batch.get("completed_at")
+        or batch["completed_at"] > current
+    ):
+        await _pipeline_stage(
+            pool, claim, stage="WAITING_SOURCES", source_batch_id=batch_id
+        )
+        return {"status": "WAITING_PUBLIC_DATA", "pipelineId": str(claim["id"])}
+    if batch["status"] not in {"READY", "PARTIAL"}:
+        await _pipeline_stage(
+            pool,
+            claim,
+            stage="VALIDATING_INPUT",
+            state="FAILED",
+            source_batch_id=batch_id,
+            error_class="SourceCollectionFailed",
+        )
+        return {"status": "FAILED", "errorClass": "SourceCollectionFailed"}
+    await _pipeline_stage(
+        pool, claim, stage="VALIDATING_INPUT", source_batch_id=batch_id
+    )
+    async with system_connection(pool) as conn:
+        bundle = await read_alpha_public(conn, current, source_batch_id=batch_id)
+    quality = source_quality(bundle, current)
+    await _pipeline_stage(pool, claim, stage="VALIDATING_INPUT", quality=quality)
+    if not quality["allowed"]:
+        await _pipeline_stage(
+            pool,
+            claim,
+            stage="VALIDATING_INPUT",
+            state="FAILED",
+            error_class="SourceQualityRejected",
+        )
+        return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
+    claim["_source_bundle"] = bundle
+    external = await collect_daily_sources(current)
+    external = await prepare_research_inputs(
+        pool, local(now_shanghai()), external, source_batch_id=batch_id
+    )
+    async with system_connection(pool) as conn:
+        packet = await load_public_packet(
+            conn, local(now_shanghai()), external, source_batch_id=batch_id
+        )
+    packet["sourceBatchId"] = str(batch_id)
+    packet["inputQuality"] = quality
+    result = await _execute_daily_research(
+        pool,
+        settings,
+        stamp,
+        source_batch_id=batch_id,
+        packet=packet,
+        pipeline=claim,
+    )
+    state = (
+        result["status"]
+        if result["status"] in {"READY", "FAILED", "UNCERTAIN", "MISSED"}
+        else "UNCERTAIN"
+    )
+    if not claim.get("_terminal_written"):
+        await _pipeline_stage(
+            pool,
+            claim,
+            stage=claim["stage"],
+            state=state,
+            error_class=result.get("errorClass"),
+        )
+    return result
 
 
 async def _execute_daily_research(
@@ -444,20 +613,41 @@ async def _execute_daily_research(
     if unavailable:
         return {"status": "FAILED", "errorClass": unavailable}
     dispatched = local(now_shanghai())
+    schedule = _schedule(settings)
+    due = pipeline.get("scheduled_for") if pipeline else None
+    if isinstance(due, str):
+        due = datetime.fromisoformat(due)
+    due = (
+        local(due)
+        if due
+        else scheduled_for(stamp, schedule_time=schedule["schedule_time"])
+    )
     packet_day = local(datetime.fromisoformat(packet["asOf"])).date()
     if (
         dispatched < stamp
         or packet_day != dispatched.date()
-        or (
-            not debug
-            and (dispatched.date() != stamp.date() or dispatched < scheduled_for(stamp))
-        )
+        or (not debug and (dispatched.date() != stamp.date() or dispatched < due))
     ):
         return {"status": "SKIPPED"}
-    if not debug and dispatched >= scheduled_for(dispatched) + timedelta(
-        minutes=getattr(settings, "daily_research_start_window_minutes", 120)
+    if (
+        not debug
+        and not pipeline
+        and dispatched
+        >= due
+        + timedelta(
+            minutes=getattr(settings, "daily_research_start_window_minutes", 120)
+        )
     ):
         return {"status": "MISSED", "errorClass": "StartWindowExpired"}
+    if pipeline:
+        from backend.macro.daily_pipeline_repository import source_quality
+
+        if _remaining_runtime(pipeline, settings, dispatched) <= 0:
+            raise PipelineRuntimeExpired()
+        if not source_quality(pipeline.get("_source_bundle", {}), dispatched)[
+            "allowed"
+        ]:
+            return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
     async with system_connection(pool) as conn:
 
         async def dispatch():
@@ -469,6 +659,7 @@ async def _execute_daily_research(
                 prompt_version=PROMPT_VERSION,
                 cli_version=cli.get("version"),
                 source_batch_id=source_batch_id,
+                **({"schedule_time": due.strftime("%H:%M")} if not debug else {}),
                 **({"debug_request_id": debug_request_id} if debug else {}),
             )
 
@@ -511,28 +702,29 @@ async def _execute_daily_research(
         if unavailable:
             return result
         model = settings.daily_research_model or getattr(settings, "codex_model", None)
-        if remote_codex:
-            raw = await codex_client.research(
-                settings,
-                prompt,
-                REPORT_SCHEMA,
-                timeout=settings.daily_research_timeout_seconds,
-                model=model,
-            )
-        else:
-            selected_model = model or cli.get("selectedModel")
-            raw = await trace_inference(
-                settings,
-                model=selected_model,
-                call_type="research",
-                operation=lambda: run_codex_research(
-                    cli["executable"],
+        async with asyncio.timeout(settings.daily_research_timeout_seconds):
+            if remote_codex:
+                raw = await codex_client.research(
+                    settings,
                     prompt,
                     REPORT_SCHEMA,
                     timeout=settings.daily_research_timeout_seconds,
+                    model=model,
+                )
+            else:
+                selected_model = model or cli.get("selectedModel")
+                raw = await trace_inference(
+                    settings,
                     model=selected_model,
-                ),
-            )
+                    call_type="research",
+                    operation=lambda: run_codex_research(
+                        cli["executable"],
+                        prompt,
+                        REPORT_SCHEMA,
+                        timeout=settings.daily_research_timeout_seconds,
+                        model=selected_model,
+                    ),
+                )
         write_research_audit(
             settings,
             run_id,
@@ -565,6 +757,8 @@ async def _execute_daily_research(
     except asyncio.CancelledError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "CancelledError"
+        if pipeline and monotonic() >= pipeline.get("_runtime_deadline", float("inf")):
+            error = "PipelineRuntimeExpired"
         raise
     except TimeoutError as exc:
         audit_error = exc
@@ -607,6 +801,8 @@ async def _execute_daily_research(
             )
         if pipeline and result["status"] == "READY":
             await _pipeline_stage(pool, pipeline, stage="PERSISTING")
+        if pipeline:
+            await _stop_pipeline_heartbeat(pipeline)
         async with system_connection(pool) as conn:
 
             async def persist_result():
@@ -655,11 +851,25 @@ async def run_daily_research_service(
         return
     stop_event = stop_event or asyncio.Event()
     current = local(now_provider())
-    due = scheduled_for(current)
-    if current.weekday() >= 5:
-        due = next_run(current)
+    schedule = _schedule(settings)
+    from backend.macro.daily_pipeline_repository import read_pipeline
+
+    async with system_connection(pool) as conn:
+        existing = await read_pipeline(conn, current)
+    due = existing.get("scheduledFor") if existing else None
+    if isinstance(due, str):
+        due = datetime.fromisoformat(due)
+    due = (
+        local(due)
+        if due
+        else scheduled_for(current, schedule_time=schedule["schedule_time"])
+    )
+    if not existing and not is_scheduled_day(
+        current, schedule_mode=schedule["schedule_mode"]
+    ):
+        due = next_run(current, **schedule)
     if current > due and not settings.daily_research_catch_up:
-        due = next_run(current)
+        due = next_run(current, **schedule)
     while not stop_event.is_set():
         current = local(now_provider())
         delay = (due - current).total_seconds()
@@ -668,14 +878,17 @@ async def run_daily_research_service(
             continue
         try:
             outcome = await sync_daily_research(pool, settings, current)
-            if outcome.get("status") == "WAITING_PUBLIC_DATA":
+            if outcome.get("status") in {
+                "WAITING_PUBLIC_DATA",
+                "WAITING_PIPELINE_OWNER",
+            }:
                 due = local(now_provider()) + timedelta(seconds=60)
                 continue
         except Exception as exc:  # noqa: BLE001 -- daily failures do not stop other services
             logger.warning(
                 "daily_research_service_failed error_class=%s", type(exc).__name__
             )
-        due = next_run(local(now_provider()))
+        due = next_run(local(now_provider()), **schedule)
 
 
 async def main(argv=None):

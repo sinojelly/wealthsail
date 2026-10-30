@@ -14,10 +14,13 @@ from backend.macro import daily_repository
 NOW = datetime(2026, 10, 30, 7, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
-def test_schedule_is_weekday_seven_am_and_skips_weekends():
+def test_schedule_defaults_to_daily_and_explicit_weekdays_skips_weekends():
     assert daily_repository.scheduled_for(NOW) == NOW
-    assert daily_repository.next_run(NOW) == NOW + timedelta(days=3)
-    assert daily_repository.next_run(NOW + timedelta(days=1)) == NOW + timedelta(days=3)
+    assert daily_repository.next_run(NOW) == NOW + timedelta(days=1)
+    assert daily_repository.next_run(NOW, "WEEKDAYS") == NOW + timedelta(days=3)
+    assert daily_repository.next_run(
+        NOW + timedelta(days=1), "WEEKDAYS"
+    ) == NOW + timedelta(days=3)
 
 
 def test_partial_source_quality_never_accepts_empty_or_unreliable_inputs():
@@ -302,6 +305,7 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
     monkeypatch.setattr(job, "consumed", AsyncMock(return_value=False))
     monkeypatch.setattr(job, "now_shanghai", lambda: NOW)
     monkeypatch.setattr(job, "_pipeline_stage", stage)
+    monkeypatch.setattr(repo, "read_pipeline", AsyncMock(return_value=None))
     monkeypatch.setattr(
         repo,
         "claim_pipeline",
@@ -317,13 +321,16 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
         repo,
         "scheduled_source_batch",
         AsyncMock(
-            return_value={
-                "id": "batch",
-                "run_date": NOW.date(),
-                "status": batch_state,
-                "claimed_at": NOW - timedelta(minutes=20),
-                "completed_at": None if batch_state == "CLAIMED" else NOW,
-            }
+            side_effect=[
+                None,
+                {
+                    "id": "batch",
+                    "run_date": NOW.date(),
+                    "status": batch_state,
+                    "claimed_at": NOW - timedelta(minutes=20),
+                    "completed_at": None if batch_state == "CLAIMED" else NOW,
+                },
+            ]
         ),
     )
     monkeypatch.setattr(repo, "source_quality", lambda *_: {"allowed": quality_allowed})
@@ -347,7 +354,11 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
     return (
         job,
         stages,
-        SimpleNamespace(daily_research_enabled=True, alpha_public_enabled=False),
+        SimpleNamespace(
+            daily_research_enabled=True,
+            alpha_public_enabled=False,
+            daily_research_schedule_mode="WEEKDAYS",
+        ),
     )
 
 
