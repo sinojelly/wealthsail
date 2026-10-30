@@ -219,7 +219,7 @@ async def test_same_day_debug_versions_do_not_consume_scheduled_slot_and_failed_
         )
         assert (
             dto["sourceBatchId"] == str(batch["id"])
-            and dto["scheduleState"] == "NOT_DUE"
+            and dto["scheduleState"] == "DUE_NOT_DISPATCHED"
         )
         assert await claim_alpha_batch(conn, NOW, debug_request_id=first_id) is None
         assert (

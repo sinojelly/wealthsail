@@ -84,33 +84,51 @@ async def test_current_migrations_pass_deploy_readback():
 
 @pytest.mark.asyncio
 async def test_refresh_enqueue_deduplicates_and_status_does_not_cross_tenants():
-    from backend.common.database import create_pool, tenant_transaction
+    from uuid import uuid4
+    from backend.common.database import apply_tenant_context
     from backend.investment.schemas import RefreshRequest
     from backend.investment.service import enqueue_refresh, refresh_status
     from backend.errors import NotFoundError
 
-    pool = await create_pool(database_url(), min_size=1, max_size=1)
-    user = "00000000-0000-0000-0000-00000000c101"
-    tenant = "00000000-0000-0000-0000-00000000c102"
+    conn = await asyncpg.connect(database_url())
+    user, tenant, other_tenant = uuid4(), uuid4(), uuid4()
+    transaction = conn.transaction()
+    await transaction.start()
     try:
-        async with tenant_transaction(pool, user, tenant) as conn:
-            first = await enqueue_refresh(
-                conn, tenant, RefreshRequest(kind="index", id="hs300")
+        # Seed the actor explicitly: a fresh isolated database must enforce the
+        # same member-only API write policy without fixtures from another test.
+        await conn.execute(
+            "INSERT INTO identity.profiles(id,nickname) VALUES($1,'refresh fixture')",
+            user,
+        )
+        for identity in (tenant, other_tenant):
+            await conn.execute(
+                "INSERT INTO identity.tenants(id,name) VALUES($1,'refresh fixture')",
+                identity,
             )
-            second = await enqueue_refresh(
-                conn, tenant, RefreshRequest(kind="index", id="hs300")
+            await conn.execute(
+                "INSERT INTO identity.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'OWNER')",
+                identity,
+                user,
             )
-            assert second["runId"] == first["runId"]
-            assert second["created"] is False
-            assert (await refresh_status(conn, tenant, first["runId"]))[
-                "status"
-            ] == "QUEUED"
-            with pytest.raises(NotFoundError):
-                await refresh_status(
-                    conn, "00000000-0000-0000-0000-000000000003", first["runId"]
-                )
+        await apply_tenant_context(conn, str(user), str(tenant))
+        assert await conn.fetchval("SELECT current_user") == "wealthsail_api"
+        first = await enqueue_refresh(
+            conn, tenant, RefreshRequest(kind="index", id="hs300")
+        )
+        second = await enqueue_refresh(
+            conn, tenant, RefreshRequest(kind="index", id="hs300")
+        )
+        assert second["runId"] == first["runId"]
+        assert second["created"] is False
+        assert (await refresh_status(conn, tenant, first["runId"]))[
+            "status"
+        ] == "QUEUED"
+        with pytest.raises(NotFoundError):
+            await refresh_status(conn, other_tenant, first["runId"])
     finally:
-        await pool.close()
+        await transaction.rollback()
+        await conn.close()
 
 
 @pytest.mark.asyncio

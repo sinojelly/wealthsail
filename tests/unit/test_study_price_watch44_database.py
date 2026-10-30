@@ -1,6 +1,6 @@
 """Price-watch SELECTs run as the real API role, only in the owned review44 DB."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
 import os
@@ -30,7 +30,8 @@ async def test_price_watch_real_actor_list_detail_and_existing_1430_facts(
     assert uri.hostname == "127.0.0.1" and uri.port in {55434, 55436}
     assert uri.path in {
         "/wealthsail_review44_validation_v1",
-        "/wealthsail_review45_validation_v1", "/wealthsail_review48_validation_v1",
+        "/wealthsail_review45_validation_v1",
+        "/wealthsail_review48_validation_v1",
     }
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()
@@ -63,13 +64,24 @@ async def test_price_watch_real_actor_list_detail_and_existing_1430_facts(
             clock.date() - timedelta(days=15),
         )
         latest = clock.date() - timedelta(days=1)
-        for i in range(16):
-            day = clock.date() - timedelta(days=i)
-            await conn.execute(
-                "INSERT INTO reference.trading_calendars(market,calendar_date,is_trading_day) VALUES('SSE',$1,$2) ON CONFLICT(market,calendar_date) DO UPDATE SET is_trading_day=excluded.is_trading_day",
-                day,
-                latest - timedelta(days=2) <= day <= latest,
-            )
+        # Creating a new study reprices its source plan from the same complete
+        # two-year NAV window as the chart. The price-watch assertions below
+        # exercise that real freeze path rather than bypassing current checks.
+        calendar = [
+            {
+                "date": str(day),
+                "isTradingDay": day <= latest
+                and (day.weekday() < 5 or day >= latest - timedelta(days=2)),
+            }
+            for day in (clock.date() - timedelta(days=i) for i in reversed(range(900)))
+        ]
+        await conn.executemany(
+            "INSERT INTO reference.trading_calendars(market,calendar_date,is_trading_day) VALUES('SSE',$1,$2) ON CONFLICT(market,calendar_date) DO UPDATE SET is_trading_day=excluded.is_trading_day",
+            [
+                (date.fromisoformat(row["date"]), row["isTradingDay"])
+                for row in calendar
+            ],
+        )
         for table, cols, values in (
             (
                 "position_snapshots",
@@ -93,27 +105,46 @@ async def test_price_watch_real_actor_list_detail_and_existing_1430_facts(
             "fundCode": "008281",
             "asOf": str(latest),
             "priceBasis": "UNIT_NAV",
+            "currency": "CNY",
+            "market": "FUND_CN",
+            "unit": "CNY/份",
             "sourceUri": "https://fund.eastmoney.com/008281.html",
             "retrievedAt": clock.isoformat(),
             "availableAt": clock.isoformat(),
             "points": [
                 {
-                    "date": str(latest - timedelta(days=2 - i)),
-                    "close": str(Decimal("1.00") + Decimal(i) / 100),
+                    "date": row["date"],
+                    "close": str(Decimal("1.00") + Decimal(i % 100) / 500),
                 }
-                for i in range(3)
+                for i, row in enumerate(
+                    [row for row in calendar if row["isTradingDay"]][-550:]
+                )
             ],
+            "calendarProof": {
+                "market": "SSE",
+                "checkedThrough": clock.date().isoformat(),
+                "days": calendar,
+            },
         }
-        if estimate != "holding_no_cache":
-            await conn.execute(
-                "INSERT INTO market.fund_research_nav_histories(fund_code,retrieved_at,available_at,payload) VALUES('008281',$1,$1,$2::jsonb)",
-                clock,
-                json.dumps(history),
-            )
+        history["points"][-1]["close"] = "1.02"
+        cache_id = await conn.fetchval(
+            "INSERT INTO market.fund_research_nav_histories(fund_code,retrieved_at,available_at,payload) VALUES('008281',$1,$1,$2::jsonb) RETURNING id",
+            clock,
+            json.dumps(history),
+        )
         await actor_role(conn, actor)
         created = await service.create_study(conn, tenant, actor, request(run), clock)
         track, version = created["track"]["id"], created["version"]["id"]
         frozen = created["version"]["snapshot"]["actionablePlan"]
+        if estimate == "holding_no_cache":
+            # No cache is a later read-model condition: the original study was
+            # validly frozen before its locally persisted NAV became unavailable.
+            await conn.execute("RESET ROLE")
+            await conn.execute(
+                "DELETE FROM market.fund_research_nav_histories WHERE id=$1",
+                cache_id,
+            )
+            await actor_role(conn, actor)
         if estimate:
             await conn.execute("RESET ROLE")
             check = {
