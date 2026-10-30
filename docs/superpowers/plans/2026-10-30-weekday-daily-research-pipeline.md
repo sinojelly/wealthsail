@@ -1,5 +1,7 @@
 # 工作日每日 AI 投研流水线 Implementation Plan
 
+历史实施记录：本计划当时按周一至周五07:00完成。2026-10-31用户最新需求与Review 61修订见[后续实施计划](2026-10-30-daily-research-review61.md)，当前默认已改为每天07:00，以下原始验证记录保留。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用工作日07:00的一条串行流水线生成可信AI研究，默认关闭旧简报和晨间消息，清晰展示状态与触发时间。
