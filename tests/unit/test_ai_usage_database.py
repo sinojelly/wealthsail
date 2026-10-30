@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 from backend.ai_usage import repository
+from backend.ai_usage.repository import decode, dump
 from backend.common.database import create_pool, tenant_transaction
 
 
@@ -402,21 +403,37 @@ async def test_reconcile_stale_calls_race_condition_safe(usage_db):
 
     async def in_flight_finish():
         # Connection A acquires row-level lock on call_finishing simulating active finish_call transaction
-        async with pool.acquire() as conn_a:
-            async with conn_a.transaction():
-                row = await conn_a.fetchrow(
-                    "SELECT id FROM research.ai_usage_calls WHERE id = $1 FOR UPDATE",
-                    UUID(call_finishing["id"]),
-                )
-                assert row is not None
-                lock_acquired.set()
-                # Wait for reconciliation attempt to run in parallel
-                await reconcile_done.wait()
-                # Complete the call within the transaction
+        async with tenant_transaction(pool, str(task[2]), str(task[1])) as conn_a:
+            row = await conn_a.fetchrow(
+                "SELECT id FROM research.ai_usage_calls WHERE id = $1 FOR UPDATE",
+                UUID(call_finishing["id"]),
+            )
+            assert row is not None
+            lock_acquired.set()
+            # Wait for reconciliation attempt to run in parallel
+            await reconcile_done.wait()
+            # Complete the call with full payload (tokens, quota snapshot, fingerprint) within transaction
+            finished_data = finish_call(call_finishing)
+            fingerprint = (finished_data.get("before") or {}).get("accountFingerprint")
+            if fingerprint:
                 await conn_a.execute(
-                    "UPDATE research.ai_usage_calls SET status = 'SUCCEEDED', finished_at = now() WHERE id = $1",
-                    UUID(call_finishing["id"]),
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    "ai-usage:" + fingerprint,
                 )
+            await conn_a.execute(
+                """UPDATE research.ai_usage_calls SET finished_at=$2,status=$3,model=$4,error_class=$5,
+                details=$6::jsonb,account_fingerprint=$7 WHERE id=$1""",
+                UUID(finished_data["id"]),
+                finished_data["finishedAt"],
+                finished_data["status"],
+                finished_data["model"],
+                finished_data.get("errorClass"),
+                dump({key: finished_data[key] for key in ("before", "after", "tokens")}),
+                fingerprint,
+            )
+            await conn_a.execute(
+                "SELECT research.mark_ai_usage_overlap($1)", UUID(finished_data["id"])
+            )
 
     async def concurrent_reconcile():
         # Wait until Connection A holds row lock
@@ -435,17 +452,23 @@ async def test_reconcile_stale_calls_race_condition_safe(usage_db):
         timeout=10.0,
     )
 
-    # Verify final states in database
+    # Verify final states and data integrity in database
     async with pool.acquire() as conn:
-        status_finishing = await conn.fetchval(
-            "SELECT status FROM research.ai_usage_calls WHERE id = $1",
+        row_finishing = await conn.fetchrow(
+            "SELECT status, details, account_fingerprint FROM research.ai_usage_calls WHERE id = $1",
             UUID(call_finishing["id"]),
         )
         status_zombie = await conn.fetchval(
             "SELECT status FROM research.ai_usage_calls WHERE id = $1",
             UUID(call_zombie["id"]),
         )
-    assert status_finishing == "SUCCEEDED", "In-flight finished call must remain SUCCEEDED"
+    assert row_finishing["status"] == "SUCCEEDED", "In-flight finished call must remain SUCCEEDED"
+    details = decode(row_finishing["details"])
+    assert details["tokens"]["totalTokens"] == 120
+    assert details["tokens"]["cachedTokens"] == 80
+    assert details["tokens"]["inputTokens"] == 100
+    assert details["tokens"]["outputTokens"] == 20
+    assert details["after"]["credits"]["balance"] == "12.40"
     assert status_zombie == "UNCERTAIN", "True zombie call must be marked UNCERTAIN"
 
     # Second reconciliation run: idempotent, nothing further to reconcile
@@ -455,30 +478,156 @@ async def test_reconcile_stale_calls_race_condition_safe(usage_db):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_stale_calls_with_real_persist_finish_call(usage_db):
+    """Test concurrent real repository.persist('finish_call') and reconcile_stale_calls.
+
+    Verifies that calling repository.persist concurrently with reconcile_stale_calls
+    preserves full token counts, quota snapshots, and SUCCEEDED status on the finished call
+    while marking the unhandled call UNCERTAIN.
+    """
+    pool = usage_db[0]
+    task = await start_task(usage_db)
+    call_finishing = await start_call(usage_db, task, offset=-60)
+    call_zombie = await start_call(usage_db, task, offset=-60)
+
+    # Place task into terminal SUCCEEDED status > 30s ago
+    await repository.persist(
+        pool,
+        task[1],
+        task[2],
+        "finish_task",
+        {
+            "id": str(task[0]),
+            "finishedAt": datetime.now(timezone.utc) - timedelta(seconds=60),
+            "businessStatus": "SUCCEEDED",
+        },
+    )
+
+    finish_payload = finish_call(call_finishing)
+
+    # Concurrently execute real repository.persist and reconcile_stale_calls
+    async def do_finish():
+        await repository.persist(
+            pool, task[1], task[2], "finish_call", finish_payload
+        )
+
+    async def do_reconcile():
+        async with pool.acquire() as conn_b:
+            return await repository.reconcile_stale_calls(conn_b, limit=10)
+
+    await asyncio.wait_for(
+        asyncio.gather(do_finish(), do_reconcile()),
+        timeout=10.0,
+    )
+
+    async with tenant_transaction(pool, str(task[2]), str(task[1])) as conn:
+        result = await repository.list_tasks(conn, str(task[1]))
+
+    task_dto = result["tasks"][0]
+    calls_map = {c["id"]: c for c in task_dto["calls"]}
+    call_res = calls_map[call_finishing["id"]]
+    zombie_res = calls_map[call_zombie["id"]]
+
+    assert call_res["status"] == "SUCCEEDED"
+    assert call_res["totalTokens"] == 120
+    assert call_res["cachedTokens"] == 80
+    assert call_res["quota"]["credits"]["consumed"] == "0.10"
+    assert zombie_res["status"] == "UNCERTAIN"
+
+
+@pytest.mark.asyncio
 async def test_real_usage_rls_with_malformed_and_cross_tenant_claims(usage_db):
-    """Test actual RLS SELECT and INSERT under wealthsail_api with invalid sub, malformed JSON, and cross-tenant."""
+    """Test actual RLS SELECT and INSERT under wealthsail_api with populated multi-tenant data.
+
+    Verifies tenant isolation, cross-tenant rejection, malformed JWT resilience,
+    INSERT checks, and Worker-to-API privilege demotion against actual rows.
+    """
     admin_pool, users, tenants, tasks = usage_db
+
+    # Pre-populate distinct tasks under trusted admin_pool
+    task_a_id = uuid4()
+    task_b_id = uuid4()
+    task_global_id = uuid4()
+    tasks.extend([task_a_id, task_b_id, task_global_id])
+
+    async with admin_pool.acquire() as trusted_conn:
+        await trusted_conn.execute(
+            """INSERT INTO research.ai_usage_tasks(id, tenant_id, user_id, task_type, task_name, started_at)
+            VALUES
+            ($1, $2, $3, 'RESEARCH_A', 'Tenant A Task', now()),
+            ($4, $5, $6, 'RESEARCH_B', 'Tenant B Task', now()),
+            ($7, NULL, NULL, 'GLOBAL_TASK', 'Global Worker Task', now())""",
+            task_a_id, tenants[0], users[0],
+            task_b_id, tenants[1], users[1],
+            task_global_id,
+        )
+
     api_pool = await create_pool(
         isolated_dsn(), runtime_role="wealthsail_api", min_size=1, max_size=1
     )
-    task_id = uuid4()
-    tasks.append(task_id)
+    test_ids = [task_a_id, task_b_id, task_global_id]
     try:
         async with api_pool.acquire() as conn:
-            # 1. Malformed JSON claims -> SELECT returns 0, does not throw
+            # 1. Legitimate Tenant A user -> sees ONLY Task A
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('request.jwt.claims', $1, true)",
+                    f'{{"tenant_id": "{tenants[0]}", "sub": "{users[0]}"}}',
+                )
+                rows = await conn.fetch(
+                    "SELECT id FROM research.ai_usage_tasks WHERE id = ANY($1::uuid[])",
+                    test_ids,
+                )
+                assert [r["id"] for r in rows] == [task_a_id]
+
+            # 2. Legitimate Tenant B user -> sees ONLY Task B
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('request.jwt.claims', $1, true)",
+                    f'{{"tenant_id": "{tenants[1]}", "sub": "{users[1]}"}}',
+                )
+                rows = await conn.fetch(
+                    "SELECT id FROM research.ai_usage_tasks WHERE id = ANY($1::uuid[])",
+                    test_ids,
+                )
+                assert [r["id"] for r in rows] == [task_b_id]
+
+            # 3. Cross-tenant tampering (User A presenting Tenant B) -> cannot read Task B or any task
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('request.jwt.claims', $1, true)",
+                    f'{{"tenant_id": "{tenants[1]}", "sub": "{users[0]}"}}',
+                )
+                rows = await conn.fetch(
+                    "SELECT id FROM research.ai_usage_tasks WHERE id = ANY($1::uuid[])",
+                    test_ids,
+                )
+                assert len(rows) == 0
+
+            # 4. Malformed JSON claims -> does not throw 22P02, returns 0 rows
             async with conn.transaction():
                 await conn.execute("SELECT set_config('request.jwt.claims', $1, true)", "invalid json {{{")
-                assert await conn.fetchval("SELECT count(*) FROM research.ai_usage_tasks") == 0
+                rows = await conn.fetch(
+                    "SELECT id FROM research.ai_usage_tasks WHERE id = ANY($1::uuid[])",
+                    test_ids,
+                )
+                assert len(rows) == 0
 
-            # 2. Malformed non-UUID sub -> SELECT returns 0, does not throw 22P02
+            # 5. Malformed non-UUID sub -> does not throw 22P02, returns 0 rows
             async with conn.transaction():
                 await conn.execute(
                     "SELECT set_config('request.jwt.claims', $1, true)",
                     f'{{"tenant_id": "{tenants[0]}", "sub": "not-a-valid-uuid"}}',
                 )
-                assert await conn.fetchval("SELECT count(*) FROM research.ai_usage_tasks") == 0
+                rows = await conn.fetch(
+                    "SELECT id FROM research.ai_usage_tasks WHERE id = ANY($1::uuid[])",
+                    test_ids,
+                )
+                assert len(rows) == 0
 
-            # 3. Malformed non-UUID sub -> INSERT fails RLS without 22P02 error
+            # 6. Illegal identity INSERT -> fails RLS with InsufficientPrivilegeError
+            task_illegal_sub = uuid4()
+            tasks.append(task_illegal_sub)
             async with conn.transaction():
                 await conn.execute(
                     "SELECT set_config('request.jwt.claims', $1, true)",
@@ -488,19 +637,44 @@ async def test_real_usage_rls_with_malformed_and_cross_tenant_claims(usage_db):
                     await conn.execute(
                         "INSERT INTO research.ai_usage_tasks(id,tenant_id,user_id,task_type,task_name,started_at) "
                         "VALUES($1,$2,$3,'TEST','test',now())",
-                        task_id,
+                        task_illegal_sub,
                         tenants[0],
                         users[0],
                     )
 
-            # 4. Cross-tenant attempt -> SELECT returns 0
-            foreign_tenant = uuid4()
+            task_cross_insert = uuid4()
+            tasks.append(task_cross_insert)
             async with conn.transaction():
                 await conn.execute(
                     "SELECT set_config('request.jwt.claims', $1, true)",
-                    f'{{"tenant_id": "{foreign_tenant}", "sub": "{users[0]}"}}',
+                    f'{{"tenant_id": "{tenants[1]}", "sub": "{users[0]}"}}',
                 )
-                assert await conn.fetchval("SELECT count(*) FROM research.ai_usage_tasks") == 0
+                with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                    await conn.execute(
+                        "INSERT INTO research.ai_usage_tasks(id,tenant_id,user_id,task_type,task_name,started_at) "
+                        "VALUES($1,$2,$3,'TEST','test',now())",
+                        task_cross_insert,
+                        tenants[1],
+                        users[0],
+                    )
+
+            # 7. Worker demoted to API role does not gain global Worker access
+            task_global_api_attempt = uuid4()
+            tasks.append(task_global_api_attempt)
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('request.jwt.claims', $1, true)",
+                    f'{{"tenant_id": "{tenants[0]}", "sub": "{users[0]}"}}',
+                )
+                with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                    await conn.execute(
+                        "INSERT INTO research.ai_usage_tasks(id,task_type,task_name,started_at) "
+                        "VALUES($1,'GLOBAL_FORBIDDEN','forbidden',now())",
+                        task_global_api_attempt,
+                    )
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                async with conn.transaction():
+                    await conn.execute("SELECT research.mark_ai_usage_overlap($1)", uuid4())
     finally:
         await api_pool.close()
 
