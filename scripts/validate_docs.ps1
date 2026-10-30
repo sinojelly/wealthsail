@@ -439,7 +439,9 @@ Write-Output "Failures: $($failures.Count)"
 
 if ($failures.Count -gt 0) {
     foreach ($failure in $failures) {
-        Write-Error $failure
+        # Keep diagnostics intact in redirected Windows PowerShell output.
+        # Write-Error prepends the long script path and wraps inside tokens.
+        [Console]::Error.WriteLine($failure)
     }
     exit 1
 }
