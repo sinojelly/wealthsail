@@ -111,7 +111,7 @@ it("does not advertise a pending trigger while automatic research is disabled", 
 });
 
 it.each([
-  ["WAITING_SOURCES", "等待公共数据"],
+  ["WAITING_SOURCES", "等待原公共数据采集任务完成"],
   ["VALIDATING_INPUT", "正在检查研究输入"],
   ["MODEL_RUNNING", "AI研究中"],
   ["VERIFYING_OUTPUT", "正在核验报告"],
@@ -127,6 +127,33 @@ it.each([
   );
   expect(screen.getByText(new RegExp(expected))).toBeVisible();
   expect(screen.queryByText(/研究成功|已生成/)).not.toBeInTheDocument();
+});
+
+it("identifies an existing collector wait in both the status and current stage", async () => {
+  render(
+    <DailyResearchReport
+      data={daily({
+        state: "RUNNING",
+        pipeline: {
+          id: "waiting-pipeline",
+          state: "RUNNING",
+          stage: "WAITING_SOURCES",
+          startedAt: "2026-10-29T23:00:00Z",
+        },
+      })}
+    />,
+  );
+  await userEvent.click(screen.getByText("执行与报告状态"));
+  expect(
+    screen.getByText(
+      "等待原公共数据采集任务完成（触发：2026年10月30日 07:00 北京时间）",
+    ),
+  ).toBeVisible();
+  const stages = screen.getByRole("list", { name: "研究执行阶段" });
+  expect(
+    within(stages).getByText("等待原公共数据采集任务完成"),
+  ).toHaveAttribute("aria-current", "step");
+  expect(screen.queryByText(/正在采集公共数据/)).not.toBeInTheDocument();
 });
 
 it.each([
@@ -229,6 +256,40 @@ it("shows a compact execution-stage timeline without exposing unsafe errors", as
   expect(
     screen.queryByText(/工作日07:00|周一至周五07:00/),
   ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(/本次启动\/恢复截止|本次运行截止/),
+  ).not.toBeInTheDocument();
+});
+
+it("shows the pipeline's frozen deadlines instead of deriving them from changed schedule settings", async () => {
+  render(
+    <DailyResearchReport
+      data={daily({
+        state: "RUNNING",
+        schedule: {
+          mode: "DAILY",
+          time: "08:00",
+          timezone: "Asia/Shanghai",
+          startWindowMinutes: 60,
+        },
+        pipeline: {
+          id: "frozen-pipeline",
+          state: "RUNNING",
+          stage: "VALIDATING_INPUT",
+          startedAt: "2026-10-29T23:01:00Z",
+          startWindowEndsAt: "2026-10-30T01:00:00Z",
+          runtimeDeadlineAt: "2026-10-30T01:01:00Z",
+        },
+      })}
+    />,
+  );
+  await userEvent.click(screen.getByText("执行与报告状态"));
+  expect(
+    screen.getByText("本次启动/恢复截止：2026年10月30日 09:00 北京时间"),
+  ).toBeVisible();
+  expect(
+    screen.getByText("本次运行截止：2026年10月30日 09:01 北京时间"),
+  ).toBeVisible();
 });
 
 it.each([

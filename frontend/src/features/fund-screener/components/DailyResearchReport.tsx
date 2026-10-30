@@ -16,7 +16,7 @@ const stateLabels: Record<string, string> = {
 };
 const stageLabels: Record<string, string> = {
   COLLECTING: "正在采集公共数据",
-  WAITING_SOURCES: "等待公共数据",
+  WAITING_SOURCES: "等待原公共数据采集任务完成",
   VALIDATING_INPUT: "正在检查研究输入",
   MODEL_RUNNING: "AI研究中",
   VERIFYING_OUTPUT: "正在核验报告",
@@ -561,6 +561,18 @@ function DailyResearchContent({
           </p>
           {data.pipeline && (
             <>
+              {data.pipeline.startWindowEndsAt && (
+                <p>
+                  本次启动/恢复截止：
+                  {timeLabel(data.pipeline.startWindowEndsAt)} 北京时间
+                </p>
+              )}
+              {data.pipeline.runtimeDeadlineAt && (
+                <p>
+                  本次运行截止：{timeLabel(data.pipeline.runtimeDeadlineAt)}{" "}
+                  北京时间
+                </p>
+              )}
               <ol className="op-research-stages" aria-label="研究执行阶段">
                 {stages.map(([stage, label], index) => (
                   <li
@@ -580,7 +592,10 @@ function DailyResearchContent({
                           : undefined
                       }
                     >
-                      {label}
+                      {stage === "COLLECTING" &&
+                      data.pipeline?.stage === "WAITING_SOURCES"
+                        ? stageLabels.WAITING_SOURCES
+                        : label}
                     </span>
                   </li>
                 ))}

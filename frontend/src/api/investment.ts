@@ -616,6 +616,8 @@ export interface DailyResearch {
     state: "RUNNING" | "READY" | "FAILED" | "UNCERTAIN" | "MISSED";
     stage: string;
     startedAt?: string | null;
+    startWindowEndsAt?: string | null;
+    runtimeDeadlineAt?: string | null;
     updatedAt?: string | null;
     finishedAt?: string | null;
     sourceBatchId?: string | null;
