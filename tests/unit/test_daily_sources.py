@@ -90,6 +90,36 @@ async def test_original_quote_check_does_not_invent_publication_hour_or_delivery
     assert "delivered" not in str(checked).lower()
 
 
+@pytest.mark.asyncio
+async def test_exchange_html_original_can_verify_profit_and_cash_without_relaxing_host_checks():
+    quote = "The current quarter reported profit growth and cash collected from paid customer orders."
+    source = {
+        "id": "earnings",
+        "url": "https://www.sse.com.cn/disclosure/earnings.html",
+        "quote": quote,
+        "publishedDate": "2026-10-15",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                text=(
+                    '<h1>Financial disclosure</h1><meta name="pubdate" content="2026-10-15">'
+                    f"<p>{quote}</p>"
+                ),
+            )
+        )
+    ) as client:
+        checked = await sources.verify_research_sources(
+            [source], now=NOW, client=client, clock=lambda: NOW
+        )
+    assert checked["earnings"]["verification"] == "SOURCE_CHECKED"
+    with pytest.raises(ValueError):
+        sources.official_url(
+            "https://www.sse.com.cn.evil.test/disclosure/earnings.html"
+        )
+
+
 @pytest.mark.parametrize(
     "change",
     [

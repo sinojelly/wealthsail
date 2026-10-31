@@ -46,6 +46,11 @@ def _plan(row):
             "entryReady",
             "inBuyZone",
             "inSellZone",
+            "discoverySector",
+            "industryCycle",
+            "industryRiskWarning",
+            "industryRiskAdjustment",
+            "relativeStrength",
         ),
     )
     result["indicators"] = _pick(
@@ -77,6 +82,9 @@ def _plan(row):
             "p85",
             "p95",
             "peakHigh",
+            "excessReturn20d",
+            "excessReturn60d",
+            "drawdown60d",
         ),
     )
     result["tracks"] = [
@@ -103,6 +111,8 @@ def _plan(row):
                 "entryReady",
                 "inBuyZone",
                 "inSellZone",
+                "industryRiskWarning",
+                "industryRiskAdjustment",
                 "entryBlocked",
                 "entryBlockReason",
                 "entryStatus",
@@ -176,6 +186,7 @@ def model_packet(packet):
             "institutionalSignals",
             "discoveryCoverage",
             "dynamicNavSourceResults",
+            "industryCycleResearch",
         ),
     )
     public = packet.get("alphaPublic") or {}
@@ -244,6 +255,7 @@ def model_packet(packet):
                 "watchFor",
                 "catalysts",
                 "risks",
+                "industryCycle",
             ),
         )
         for row in packet.get("previousValueDirections", [])[:8]

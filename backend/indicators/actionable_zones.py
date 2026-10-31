@@ -1,5 +1,6 @@
 """Versioned, deterministic research coordinates for two independent tracks."""
 
+from copy import deepcopy
 from datetime import date, datetime
 from decimal import (
     Decimal,
@@ -11,6 +12,8 @@ from decimal import (
 )
 import math
 from statistics import pstdev
+
+from backend.macro.industry_cycle import requires_left_discount
 
 VERSION = "actionable-zones-v6"
 PARAMETERS = {
@@ -51,7 +54,11 @@ PARAMETERS = {
     "minimumRewardRiskT1": 1.5,
     "minimumRewardRiskT2": 2.4,
     "rewardRiskBasis": "DISPLAYED_ENTRY_MID_AND_STOP",
+    "relativeWeaknessConfirmationDays": 3,
+    "industryLeftDiscountScale": 1.0,
 }
+
+INDUSTRY_RISK_WARNING = "⚠️ 行业去泡沫/等待订单期 · 谨防左侧接飞刀"
 
 HISTORICAL_PERCENTILES = (30, 35, 40, 45, 50, 55, 60, 65, 75, 85, 92, 95)
 
@@ -156,8 +163,170 @@ def nav_daily_change_pct(points):
     return format(rounded.copy_abs() if rounded == 0 else rounded, "f")
 
 
+def _ordered_price_suffix(points, cutoff=None):
+    rows, previous, conflict = [], None, False
+    for point in points or []:
+        day = _day(point.get("date"))
+        if cutoff and day and day > cutoff:
+            continue
+        if day is None or previous is not None and day <= previous:
+            conflict = True
+        previous = day
+        rows.append(point)
+    suffix = []
+    for point in reversed(rows):
+        value = _number(point.get("close"))
+        if (
+            value is None
+            or value <= 0
+            or float(value) <= 0
+            or point.get("isTradingDay") is False
+        ):
+            break
+        suffix.append(point)
+    suffix.reverse()
+    return ([] if conflict else suffix), conflict
+
+
+def _relative_strength(points, benchmark_points, cutoff=None):
+    """Return percentage-point excess only for complete matching trading dates."""
+    if points:
+        latest = _day(points[-1]["date"])
+        cutoff = min(cutoff, latest) if cutoff else latest
+    benchmark, conflict = _ordered_price_suffix(benchmark_points, cutoff)
+    result = {
+        "state": "INSUFFICIENT",
+        "benchmark": "沪深300",
+        "asOf": _day(points[-1]["date"]).isoformat() if points else None,
+        "excessReturn20d": None,
+        "excessReturn60d": None,
+        "excessReturnUnit": "PERCENTAGE_POINTS",
+        "drawdown60d": None,
+        "drawdownUnit": "PERCENT",
+        "breakdownDate": None,
+        "weakening": None,
+        "consecutiveWeakDays": None,
+        "sampleCount": len(points),
+        "benchmarkSampleCount": len(benchmark),
+        "reasons": [],
+        "missingEvidence": [],
+    }
+    prices = [_number(point["close"]) for point in points]
+    if len(prices) >= 60:
+        result["drawdown60d"] = float((1 - prices[-1] / max(prices[-60:])) * 100)
+    else:
+        result["missingEvidence"].append("近60日高点回落幅度需要60个连续有效样本。")
+    if not points or not benchmark or conflict:
+        result["missingEvidence"].append(
+            "缺少连续有效、日期有序的沪深300基准或基金价格。"
+        )
+        return result
+    fund_dates = [_day(point["date"]) for point in points]
+    benchmark_dates = [_day(point["date"]) for point in benchmark]
+    if fund_dates[-1] != benchmark_dates[-1]:
+        result["missingEvidence"].append(
+            "基金与沪深300最新交易日期不同，未对旧基准补值。"
+        )
+        return result
+    benchmark_by_day = {
+        day: _number(point["close"]) for day, point in zip(benchmark_dates, benchmark)
+    }
+
+    def aligned_at(index, period):
+        start = index - period
+        if start < 0:
+            return None
+        dates = fund_dates[start : index + 1]
+        matched = [day for day in benchmark_dates if dates[0] <= day <= dates[-1]]
+        if dates != matched:
+            return None
+        return (prices[index] / prices[start] - 1) * 100 - (
+            benchmark_by_day[dates[-1]] / benchmark_by_day[dates[0]] - 1
+        ) * 100
+
+    for period in (20, 60):
+        excess = aligned_at(len(prices) - 1, period)
+        numeric = _number(excess)
+        result[f"excessReturn{period}d"] = (
+            float(numeric) if numeric is not None else None
+        )
+        if excess is None:
+            result["missingEvidence"].append(
+                f"{period}日超额收益缺少{period + 1}个同日对齐的连续有效基金/沪深300样本。"
+            )
+        elif numeric is None:
+            result["missingEvidence"].append(f"{period}日超额收益超出可表示数值范围。")
+    if any(result[f"excessReturn{period}d"] is None for period in (20, 60)):
+        return result
+    if len(prices) < 63 or any(
+        aligned_at(index, 60) is None
+        for index in range(max(0, len(prices) - 3), len(prices))
+    ):
+        result["missingEvidence"].append("连续走弱确认需要至少63个同日对齐样本。")
+        return result
+    moving_averages = [
+        sum(prices[index - 59 : index + 1], Decimal(0)) / 60 if index >= 59 else None
+        for index in range(len(prices))
+    ]
+    consecutive = 0
+    for index in range(len(prices) - 1, 59, -1):
+        excess20, excess60 = aligned_at(index, 20), aligned_at(index, 60)
+        if (
+            excess20 is None
+            or excess60 is None
+            or excess20 >= 0
+            or excess60 >= 0
+            or prices[index] >= moving_averages[index]
+        ):
+            break
+        consecutive += 1
+    declining = all(
+        prices[index] < prices[index - 1]
+        and moving_averages[index] < moving_averages[index - 1]
+        for index in range(len(prices) - 2, len(prices))
+    )
+    result.update(
+        state="READY",
+        consecutiveWeakDays=consecutive,
+        weakening=consecutive >= 3 and declining,
+    )
+    if result["weakening"]:
+        # A recovered earlier crossing cannot be the start of the current leg.
+        for index in range(len(prices) - 1, 59, -1):
+            if (
+                prices[index] < moving_averages[index]
+                and prices[index - 1] >= moving_averages[index - 1]
+            ):
+                result["breakdownDate"] = fund_dates[index].isoformat()
+                break
+        result["reasons"].append(
+            "最近3个交易观察日20日/60日超额均为负、收盘均低于MA60，且收盘与MA60持续下行。"
+        )
+        if result["breakdownDate"]:
+            result["reasons"].append(
+                f"本轮走弱分水岭日期：{result['breakdownDate']}（真实收盘跌破MA60）。"
+            )
+        else:
+            result["missingEvidence"].append(
+                "当前连续样本未覆盖本轮跌破MA60的交叉，分水岭日期未知。"
+            )
+    else:
+        result["reasons"].append(
+            "尚未同时满足连续跑输沪深300、位于MA60下方且持续下行的3日确认条件。"
+        )
+    return result
+
+
 def _zone(
-    kind, values, close, *, places, nav_scale=False, nav_basis=False, nav_history=None
+    kind,
+    values,
+    close,
+    *,
+    places,
+    nav_scale=False,
+    nav_basis=False,
+    nav_history=None,
+    industry_discount=False,
 ):
     result = {
         "entryZoneMin": None,
@@ -262,6 +431,17 @@ def _zone(
             )
         )
         result["priceState"] = "READY"
+    if industry_discount and kind == "LEFT_VALUE":
+        if scale is None:
+            result["priceState"] = "PARTIAL"
+            return result, reasons + [
+                "行业降温但缺少有效风险尺度，未展示未经折价保护的左侧买区。"
+            ]
+        minimum -= scale
+        maximum -= scale
+        reasons.append(
+            "产业风险保护：左侧原支撑买区额外下移1.0倍风险尺度，止损与收益按折价后区间重新计算。"
+        )
     rounded_minimum, rounded_maximum = (
         _quantized(value, places) for value in (minimum, maximum)
     )
@@ -396,6 +576,299 @@ def _zone(
     return result, reasons
 
 
+_PRICE_FIELDS = (
+    "entryZoneMin",
+    "entryZoneMax",
+    "stopLossPrice",
+    "takeProfitT1",
+    "takeProfitT2",
+    "sellZoneMin",
+    "sellZoneMax",
+    "estimatedProfitMinPct",
+    "estimatedProfitMaxPct",
+    "currentToSellMaxPct",
+    "buyZoneAnchor",
+    "priceState",
+)
+_ENTRY_FIELDS = (
+    "technicalTriggered",
+    "inBuyZone",
+    "entryReady",
+    "entryBlocked",
+    "inSellZone",
+    "entryBlockReason",
+    "entryStatus",
+    "entryStatusTone",
+)
+
+
+def _refresh_signals_and_selected(plan):
+    """Keep already-projected scanner and selected-track coordinates consistent."""
+    top_guard = (
+        {
+            key: deepcopy(plan[key])
+            for key in (*_ENTRY_FIELDS, "preferredEntryEligible")
+            if key in plan
+        }
+        if plan.get("entryBlocked") is True
+        else {}
+    )
+    if "signals" in plan:
+        refreshed = []
+        current = _number(plan.get("currentPrice"))
+        for signal in plan.get("signals", []):
+            track = next(
+                (
+                    row
+                    for row in plan.get("tracks", [])
+                    if row.get("track") == signal.get("track")
+                ),
+                None,
+            )
+            if track is None:
+                continue
+            low, high = (
+                _number(track.get(key)) for key in ("entryZoneMin", "entryZoneMax")
+            )
+            if (
+                current is None
+                or low is None
+                or high is None
+                or not 0 < low <= high
+                or current <= 0
+            ):
+                continue
+            in_zone = low <= current <= high
+            distance = (
+                (low - current) / current
+                if current < low
+                else (current - high) / current
+                if current > high
+                else Decimal(0)
+            )
+            candidate = track.get("state") == "CANDIDATE"
+            ready = (
+                candidate
+                and in_zone
+                and track.get("priceState") == "READY"
+                and not any(
+                    row.get("entryReady") is False
+                    or row.get("entryBlocked") is True
+                    or row.get("inSellZone") is True
+                    or row.get("subscriptionRestricted") is True
+                    for row in (track,)
+                )
+                and not any(
+                    plan.get(key) is True
+                    for key in ("entryBlocked", "inSellZone", "subscriptionRestricted")
+                )
+            )
+            new_signal = deepcopy(signal)
+            for key in _ENTRY_FIELDS:
+                new_signal.pop(key, None)
+            new_signal.update(
+                {key: deepcopy(track[key]) for key in _ENTRY_FIELDS if key in track}
+            )
+            new_signal.update(
+                triggerState=track.get("state"),
+                candidate=candidate,
+                inEntryZone=in_zone,
+                entryReady=ready,
+                distanceToEntryPct=round(float(distance * 100), 4),
+            )
+            if top_guard:
+                new_signal.update(top_guard)
+                new_signal.update(entryReady=False, inBuyZone=False)
+            refreshed.append(new_signal)
+        plan["signals"] = refreshed
+    selected = plan.get("selectedTrack", plan.get("track"))
+    chosen = next(
+        (row for row in plan.get("tracks", []) if row.get("track") == selected), None
+    )
+    if chosen is not None:
+        for key in (
+            *_PRICE_FIELDS,
+            *_ENTRY_FIELDS,
+            "state",
+            "candidate",
+            "reasons",
+            "missingEvidence",
+        ):
+            plan.pop(key, None)
+            if key in chosen:
+                plan[key] = deepcopy(chosen[key])
+        plan.update(top_guard)
+
+
+def _external_left_guard(track, baseline):
+    fields = {}
+    if (
+        track.get("entryBlocked") is True
+        and track.get("entryBlockReason") != "IN_SELL_ZONE"
+        or track.get("subscriptionRestricted") is True
+        or track.get("preferredEntryEligible") is False
+        and track.get("entryBlockReason") != "IN_SELL_ZONE"
+    ):
+        fields = {
+            key: deepcopy(track[key])
+            for key in (*_ENTRY_FIELDS, "preferredEntryEligible")
+            if key in track
+        }
+        fields.update(entryBlocked=True, entryReady=False, inBuyZone=False)
+    if (
+        track.get("priceState") not in {None, "READY"}
+        and baseline.get("priceState") == "READY"
+    ):
+        fields.update(priceState=track["priceState"], entryReady=False)
+    return fields
+
+
+def apply_industry_cycle(plan, industry_cycle):
+    """Apply once from saved server anchors, never from an already reduced band."""
+    result = deepcopy(plan)
+    result["industryCycle"] = (
+        deepcopy(industry_cycle) if isinstance(industry_cycle, dict) else None
+    )
+    risk = requires_left_discount(industry_cycle)
+    base = result.get("industryAdjustmentBase")
+    current_left = next(
+        (row for row in result.get("tracks", []) if row.get("track") == "LEFT_VALUE"),
+        None,
+    )
+    external_guard = _external_left_guard(
+        current_left or {},
+        (base or {}).get("leftTrack", {}) if isinstance(base, dict) else {},
+    )
+    result["riskAdjustmentVersion"] = "industry-left-discount-v1"
+    result.pop("industryRiskWarning", None)
+    result.pop("industryRiskAdjustment", None)
+    if current_left is None:
+        return result
+    if not isinstance(base, dict) or not isinstance(base.get("leftTrack"), dict):
+        if not risk:
+            return result
+        # Historical snapshots without unrounded server anchors cannot safely
+        # be discounted or reused as today's actionable left-side reference.
+        adjusted = deepcopy(current_left)
+        for key in _PRICE_FIELDS:
+            adjusted[key] = None
+        adjusted.update(priceState="PARTIAL", inBuyZone=False, entryReady=False)
+        adjusted["reasons"] = list(
+            dict.fromkeys(
+                [
+                    *adjusted.get("reasons", []),
+                    "缺少原始服务器锚点，行业折价无法验证，暂不提供左侧入场价格。",
+                ]
+            )
+        )
+        applied = False
+    else:
+        adjusted = deepcopy(current_left)
+        baseline = base["leftTrack"]
+        for key in (
+            *_PRICE_FIELDS,
+            *_ENTRY_FIELDS,
+            "state",
+            "candidate",
+            "reasons",
+            "missingEvidence",
+        ):
+            adjusted.pop(key, None)
+            if key in baseline:
+                adjusted[key] = deepcopy(baseline[key])
+        if not risk:
+            adjusted.update(external_guard)
+            result["tracks"] = [
+                adjusted if row.get("track") == "LEFT_VALUE" else row
+                for row in result["tracks"]
+            ]
+            _refresh_signals_and_selected(result)
+            return result
+        close = _number(base.get("close"))
+        values = result.get("indicators") or {}
+        history = {
+            key: _number(value) for key, value in (base.get("navHistory") or {}).items()
+        }
+        zone, reasons = _zone(
+            "LEFT_VALUE",
+            values,
+            close,
+            places=base.get("places", 4),
+            nav_scale=base.get("navScale", False),
+            nav_basis=base.get("navBasis", False),
+            nav_history=history,
+            industry_discount=True,
+        )
+        adjusted.update(zone)
+        adjusted["reasons"] = [*base.get("conditionReasons", []), *reasons]
+        low, high, sell = (
+            _number(zone.get(key))
+            for key in ("entryZoneMin", "entryZoneMax", "sellZoneMin")
+        )
+        percentile = values.get("navPercentile1y")
+        in_sell = bool(
+            base.get("navBasis")
+            and (
+                close is not None
+                and sell is not None
+                and close >= sell
+                or percentile is not None
+                and percentile >= 85
+            )
+        )
+        candidate = base.get(
+            "technicalCandidate", baseline.get("technicalTriggered", False)
+        )
+        state = (
+            "WATCH"
+            if in_sell and candidate
+            else "CANDIDATE"
+            if candidate
+            else baseline.get("state", "INSUFFICIENT")
+        )
+        in_zone = (
+            close is not None
+            and low is not None
+            and high is not None
+            and low <= close <= high
+        )
+        adjusted.update(
+            state=state,
+            candidate=state == "CANDIDATE",
+            technicalTriggered=state == "CANDIDATE",
+            inBuyZone=in_zone and not in_sell,
+            entryReady=state == "CANDIDATE"
+            and in_zone
+            and zone["priceState"] == "READY"
+            and not in_sell,
+            inSellZone=in_sell,
+            entryBlocked=in_sell,
+        )
+        if in_sell:
+            adjusted["entryBlockReason"] = "IN_SELL_ZONE"
+        else:
+            adjusted.pop("entryBlockReason", None)
+        applied = (
+            low is not None
+            and high is not None
+            and _number(base.get("scale")) is not None
+        )
+    result["industryRiskWarning"] = INDUSTRY_RISK_WARNING
+    result["industryRiskAdjustment"] = {
+        "state": "APPLIED" if applied else "INSUFFICIENT",
+        "entryShiftScale": 1.0,
+        "scale": base.get("scale") if isinstance(base, dict) else None,
+    }
+    adjusted.update(entryStatus=INDUSTRY_RISK_WARNING, entryStatusTone="orange")
+    adjusted.update(external_guard)
+    result["tracks"] = [
+        adjusted if row.get("track") == "LEFT_VALUE" else row
+        for row in result["tracks"]
+    ]
+    _refresh_signals_and_selected(result)
+    return result
+
+
 def compute_actionable_price_plan(
     points,
     *,
@@ -408,33 +881,13 @@ def compute_actionable_price_plan(
     pe_percentile=None,
     source_uri=None,
     market=None,
+    benchmark_points=None,
+    industry_cycle=None,
 ):
     """Calculate from the ordered real suffix; never substitute another asset."""
     cutoff = _day(as_of) if as_of is not None else None
-    rows, previous, order_conflict = [], None, False
-    for point in points or []:
-        day = _day(point.get("date"))
-        if cutoff and day and day > cutoff:
-            continue
-        if day is None or previous is not None and day <= previous:
-            order_conflict = True
-        previous = day
-        rows.append(point)
     # An invalid observation breaks continuity; do not remove it and join days.
-    suffix = []
-    for point in reversed(rows):
-        value = _number(point.get("close"))
-        if (
-            value is None
-            or value <= 0
-            or float(value) <= 0
-            or point.get("isTradingDay") is False
-        ):
-            break
-        suffix.append(point)
-    suffix.reverse()
-    if order_conflict:
-        suffix = []
+    suffix, order_conflict = _ordered_price_suffix(points, cutoff)
     closes = [float(_number(point["close"])) for point in suffix]
     close = _number(suffix[-1]["close"]) if suffix else None
     values, states = {}, {}
@@ -595,6 +1048,18 @@ def compute_actionable_price_plan(
         "sampleCount": None,
         "requiredSamples": None,
     }
+    relative_strength = _relative_strength(suffix, benchmark_points, cutoff)
+    for key, samples in (
+        ("excessReturn20d", 21),
+        ("excessReturn60d", 61),
+        ("drawdown60d", 60),
+    ):
+        values[key] = relative_strength[key]
+        states[key] = {
+            "state": "READY" if values[key] is not None else "INSUFFICIENT",
+            "sampleCount": len(suffix),
+            "requiredSamples": samples,
+        }
     for key, value in values.items():
         if value is not None and not math.isfinite(value):
             values[key] = None
@@ -642,6 +1107,7 @@ def compute_actionable_price_plan(
         and close > Decimal(str(values["ma20"])) * Decimal("1.02")
     )
     tracks = []
+    left_base = None
     for kind, conditions in (
         ("LEFT_VALUE", left_conditions),
         ("RIGHT_TREND", right_conditions),
@@ -758,11 +1224,39 @@ def compute_actionable_price_plan(
                 "missingEvidence": missing,
             }
         )
+        if kind == "LEFT_VALUE":
+            left_base = {
+                "leftTrack": deepcopy(tracks[-1]),
+                "close": str(close) if close is not None else None,
+                "scale": str(
+                    _number(values.get("navVolatility14") or values.get("atr14"))
+                )
+                if values.get("navVolatility14") is not None
+                or values.get("atr14") is not None
+                else None,
+                "navScale": values["navVolatility14"] is not None,
+                "navBasis": nav_basis,
+                "navHistory": {key: str(value) for key, value in nav_history.items()},
+                "places": 2
+                if str(subject_kind).lower() == "index"
+                or price_basis in {"INDEX_POINTS", "INDEX_PRICE"}
+                else 4,
+                "technicalCandidate": candidate,
+                "conditionReasons": [
+                    name + ("：满足" if value else "：未触发")
+                    for name, value in conditions
+                    if value is not None
+                ]
+                + relative_strength["reasons"],
+            }
+        tracks[-1]["reasons"].extend(relative_strength["reasons"])
+        if left_base is not None and kind == "LEFT_VALUE":
+            left_base["leftTrack"] = deepcopy(tracks[-1])
     if order_conflict:
         for item in states.values():
             if item["state"] != "UNAVAILABLE":
                 item["state"] = "CONFLICT"
-    return {
+    result = {
         "methodVersion": VERSION,
         "parameters": dict(PARAMETERS),
         "volatilityMethod": "NAV_ABS_CHANGE_STD_V1"
@@ -818,5 +1312,8 @@ def compute_actionable_price_plan(
         },
         "indicators": values,
         "indicatorStates": states,
+        "relativeStrength": relative_strength,
+        "industryAdjustmentBase": left_base,
         "tracks": tracks,
     }
+    return apply_industry_cycle(result, industry_cycle)

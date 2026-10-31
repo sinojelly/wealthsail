@@ -249,6 +249,11 @@ async def read_daily_research(
             report = await refresh_report_fund_plans(
                 conn, report, stamp, histories=histories, packet=packet
             )
+            from backend.investment.opportunity_scoring import rank_report
+
+            # Live NAV refresh invalidates saved scores along with saved prices.
+            # Recompute with the visible evidence clock and the same cycle guard.
+            report = rank_report(report, {**(packet or {}), "asOf": stamp.isoformat()})
     return {
         "methodVersion": METHOD,
         "state": state,

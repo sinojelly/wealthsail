@@ -10,6 +10,9 @@ from backend.investment.service import (
     analysis,
     market_context,
     actionable_plan_for_analysis,
+    fund_risk_context,
+    protect_fund_plan,
+    read_fund_risk_context,
 )
 from backend.macro import market_repository
 from backend.macro.direction_models import direction_model
@@ -322,8 +325,12 @@ async def get_context(
             now,
             enabled=research_settings.daily_research_enabled,
             start_window_minutes=research_settings.daily_research_start_window_minutes,
-            schedule_mode=getattr(research_settings, "daily_research_schedule_mode", "DAILY"),
-            schedule_time=getattr(research_settings, "daily_research_schedule_time", "07:00"),
+            schedule_mode=getattr(
+                research_settings, "daily_research_schedule_mode", "DAILY"
+            ),
+            schedule_time=getattr(
+                research_settings, "daily_research_schedule_time", "07:00"
+            ),
             histories=alpha_public.get("fundHistories"),
         )
     from backend.investment.nav_change import report_with_nav_changes
@@ -335,6 +342,17 @@ async def get_context(
     if fund_code and (fund_market == "FUND_CN" or identity is not None):
         from backend.investment.decision import evaluate
 
+        from backend.macro.industry_cycle import merge_industry_cycles
+
+        risk_context = await read_fund_risk_context(conn, now)
+        displayed_risk = fund_risk_context(daily.get("report"), now)
+        for field in ("cyclesByFund", "cyclesBySubject"):
+            for identity_key, cycle in displayed_risk.get(field, {}).items():
+                risk_context.setdefault(field, {})[identity_key] = (
+                    merge_industry_cycles(
+                        risk_context.get(field, {}).get(identity_key), cycle
+                    )
+                )
         with trace_stage("context.selected_fund"):
             nav = await cached_nav_analysis(
                 conn,
@@ -342,6 +360,7 @@ async def get_context(
                 now,
                 subject_kind="fund" if identity else "nav",
                 subject_id=str(identity) if identity else fund_code,
+                fund_risk_context=risk_context,
             )
         if nav:
             portfolio = personal.get("portfolio") or {}
@@ -350,7 +369,9 @@ async def get_context(
                 portfolio=portfolio,
                 budget_violation=portfolio.get("budgetViolation") is True,
                 direction_model=model,
-                actionable_zones=nav["actionableZones"],
+                actionable_zones=protect_fund_plan(
+                    nav["actionableZones"], risk_context
+                ),
             )
     if theme_code and (personal.get("decision") or {}).get("actionableZones"):
         personal["decision"]["actionableZones"]["themeCode"] = theme_code

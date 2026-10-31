@@ -32,6 +32,70 @@ def _json(value):
     return json.loads(value) if isinstance(value, str) else value
 
 
+def relative_strength_benchmark(analysis, now):
+    """Freeze visible CSI300 observations; a missing benchmark stays unknown."""
+    from copy import deepcopy
+    from urllib.parse import urlsplit
+
+    now = _time(now)
+    unavailable = {
+        "state": "UNAVAILABLE",
+        "indexId": "hs300",
+        "label": "沪深300",
+        "points": [],
+        "reason": "CSI300_HISTORY_UNAVAILABLE_OR_UNVERIFIED",
+    }
+    if not isinstance(analysis, dict) or analysis.get("dataQuality") != "READY":
+        return unavailable
+    try:
+        retrieved = _time(analysis.get("retrievedAt"))
+        day = date.fromisoformat(str(analysis.get("asOf")))
+        source = urlsplit(analysis.get("source", ""))
+        points = analysis.get("points")
+        if (
+            retrieved > now
+            or not 0 <= (now.date() - day).days <= 10
+            or source.scheme != "https"
+            or not source.hostname
+            or source.username
+            or source.password
+            or source.port not in {None, 443}
+            or not isinstance(points, list)
+            or not points
+        ):
+            return unavailable
+        for field in ("availableAt", "publishedAt"):
+            if analysis.get(field) is not None and _time(analysis[field]) > now:
+                return unavailable
+        previous = None
+        for point in points:
+            observed = date.fromisoformat(str(point["date"]))
+            close = repository._number(point["close"])
+            if (
+                close is None
+                or close <= 0
+                or observed > day
+                or previous is not None
+                and observed <= previous
+                or point.get("isTradingDay") is False
+            ):
+                return unavailable
+            previous = observed
+        if previous != day:
+            return unavailable
+    except (ValueError, TypeError, KeyError):
+        return unavailable
+    return {
+        "state": "READY",
+        "indexId": "hs300",
+        "label": "沪深300",
+        "asOf": day.isoformat(),
+        "retrievedAt": retrieved.isoformat(),
+        "sourceUri": analysis["source"],
+        "points": deepcopy(points[-600:]),
+    }
+
+
 def normalize_subscription_status(value):
     """Project verified subscription facts and derive the small-limit guard."""
     if not isinstance(value, dict):

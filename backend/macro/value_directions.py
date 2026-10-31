@@ -6,6 +6,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.macro.alpha_research import _price, _program_plan
+from backend.macro.industry_cycle import (
+    IndustryCycleProposal,
+    merge_industry_cycles,
+    normalize_industry_cycle,
+)
 from backend.macro.price_revision import (
     PriceRevisionStatus,
     index_previous_plans,
@@ -48,6 +53,9 @@ class ValueDirectionProposal(BaseModel):
     watchFor: list[str] = Field(max_length=4)
     catalysts: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
     risks: list[DirectionEvidence] = Field(default_factory=list, max_length=2)
+    # Default supports stored reports; new requests require this in REPORT_SCHEMA.
+    industryCycle: IndustryCycleProposal | None = None
+    reviewIndustryIds: list[str] = Field(default_factory=list, max_length=8)
     plans: list[ValuePlanProposal] = Field(max_length=2)
 
 
@@ -288,7 +296,9 @@ def _macro_codes(packet, now):
     return {code: item[1] for code, item in facts.items()}
 
 
-def validate_value_directions(proposals, packet, now, source_aliases):
+def validate_value_directions(
+    proposals, packet, now, source_aliases, *, sources=None, industry_reviews=None
+):
     from backend.macro.daily_research import ResearchValidationError, _TZ
 
     anchors = {}
@@ -310,6 +320,12 @@ def validate_value_directions(proposals, packet, now, source_aliases):
         ],
         list(anchors.values()),
     )
+    reviews = {row["industry"]: row for row in industry_reviews or []}
+    sector_rows = [
+        *anchors.values(),
+        *(packet.get("quantitativeScan") or {}).get("items", []),
+        *packet.get("discoveryUniverse", []),
+    ]
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
     if len(proposals) > MAX_VALUE_DIRECTIONS:
@@ -334,6 +350,63 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 "SOURCE_REFERENCE_INVALID", "unknown direction source"
             )
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
+        try:
+            cycle = normalize_industry_cycle(
+                direction.get("industryCycle"),
+                source_aliases=source_aliases,
+                sources=sources,
+                now=now,
+                require_checks=bool(
+                    (packet.get("industryCycleResearch") or {}).get("required")
+                ),
+            )
+        except ValueError as exc:
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED", str(exc)
+            ) from exc
+        if any(ref not in refs for ref in cycle["sourceIds"]):
+            raise ResearchValidationError(
+                "SOURCE_REFERENCE_INVALID",
+                "industry-cycle sources must belong to the direction",
+            )
+        review_ids = set(direction["reviewIndustryIds"])
+        if (packet.get("industryCycleResearch") or {}).get("required") and not reviews:
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "direction requires an explicit industry review link",
+            )
+        if reviews:
+            for proposal in direction["plans"]:
+                review_ids.update(
+                    row["discoverySector"]
+                    for row in sector_rows
+                    if isinstance(row, dict)
+                    and row.get("discoverySector")
+                    and (
+                        plan_identity(row) == plan_identity(proposal)
+                        or row.get("fundCode") == proposal.get("subjectId")
+                    )
+                )
+            if any(identity not in reviews for identity in review_ids):
+                raise ResearchValidationError(
+                    "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
+                )
+            if (packet.get("industryCycleResearch") or {}).get(
+                "required"
+            ) and not review_ids:
+                raise ResearchValidationError(
+                    "DIRECTION_VALIDATION_FAILED",
+                    "direction requires an explicit industry review link",
+                )
+            for identity in sorted(review_ids):
+                cycle = merge_industry_cycles(cycle, reviews[identity])
+            refs = sorted(set(refs) | set(cycle["sourceIds"]))
+        elif review_ids:
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
+            )
+        direction["reviewIndustryIds"] = sorted(review_ids)
+        direction["industryCycle"] = cycle
         macros = sorted(set(direction["macroCodes"]))
         if any(code not in macro_codes for code in macros):
             raise ResearchValidationError(
@@ -352,7 +425,7 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 note["sourceIds"] = sorted(
                     {source_aliases[ref] for ref in note["sourceIds"]}
                 )
-        plans, used = [], set()
+        plans, used, revisions = [], set(), []
         for proposal in direction["plans"]:
             identity = plan_identity(proposal)
             pair = (*identity, proposal["track"])
@@ -375,18 +448,27 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 or (now.astimezone(_TZ).date() - day).days > 10
             ):
                 raise ResearchValidationError(
-                    "FUND_PLAN_INVALID", "current direction price is stale or unverified"
+                    "FUND_PLAN_INVALID",
+                    "current direction price is stale or unverified",
                 )
             old = previous_plan(previous, anchor, proposal["track"])
             revision = proposal["priceRevisionStatus"]
             old_track = None
             if same_coordinate(anchor, old):
-                old_day, _, old_track = _program_plan(
-                    old, proposal["track"], now, require_theme=False
-                )
-                if old_day > day:
+                try:
+                    old_day, _, old_track = _program_plan(
+                        old, proposal["track"], now, require_theme=False
+                    )
+                except ValueError:
+                    if (old.get("industryRiskAdjustment") or {}).get(
+                        "state"
+                    ) != "INSUFFICIENT":
+                        raise
+                    old, old_track, old_day = None, None, None
+                if old_day is not None and old_day > day:
                     raise ResearchValidationError(
-                        "FUND_PLAN_INVALID", "direction previous plan is later than current"
+                        "FUND_PLAN_INVALID",
+                        "direction previous plan is later than current",
                     )
             if revision == "TAKE_PROFIT_ALERT":
                 if not (
@@ -398,7 +480,8 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                     and current >= _price(old_track.get("takeProfitT1"))
                 ):
                     raise ResearchValidationError(
-                        "FUND_PLAN_INVALID", "direction profit alert lacks observed target"
+                        "FUND_PLAN_INVALID",
+                        "direction profit alert lacks observed target",
                     )
             note_field = "catalysts" if revision == "UPGRADED" else "risks"
             note_refs = {
@@ -415,14 +498,7 @@ def validate_value_directions(proposals, packet, now, source_aliases):
                 fundamental_refs = sorted(
                     {source_aliases[ref] for ref in requested_refs}
                 )
-            normalize_price_revision(
-                proposal,
-                anchor,
-                track,
-                old,
-                old_track,
-                fundamental_refs=fundamental_refs,
-            )
+            revisions.append((old, old_track, fundamental_refs))
             allowed_rules = {f"DISCOVERY:{key}", anchor.get("themeCode")}
             if any(
                 rule not in rules or rules[rule].get("themeCode") not in allowed_rules
@@ -498,6 +574,42 @@ def validate_value_directions(proposals, packet, now, source_aliases):
             raise ResearchValidationError(
                 "FUND_PLAN_INVALID", "profit signal lacks observed target"
             )
+        # First validate exact same-fund quantitative coordinates above; the
+        # industry overlay is then applied equally to plans and their evidence.
+        from backend.indicators.actionable_zones import apply_industry_cycle
+
+        plans = [apply_industry_cycle(plan, cycle) for plan in plans]
+        quantitative = [apply_industry_cycle(plan, cycle) for plan in quantitative]
+        for plan, (old, old_track, fundamental_refs) in zip(plans, revisions):
+            final_track = next(
+                row for row in plan["tracks"] if row["track"] == plan["selectedTrack"]
+            )
+            if plan["priceRevisionStatus"] != "TAKE_PROFIT_ALERT" and (
+                any(
+                    final_track.get(key) is None
+                    for key in ("entryZoneMin", "entryZoneMax")
+                )
+                or old_track is not None
+                and any(
+                    old_track.get(key) is None
+                    for key in ("entryZoneMin", "entryZoneMax")
+                )
+            ):
+                plan.update(
+                    priceRevisionStatus="MAINTAINED" if old is not None else "INITIAL",
+                    priceRevisionBasis="PRICE",
+                    priceRevisionSourceIds=[],
+                    priceRevisionNote="缺少可验证的行业折价价格锚点，等待完整价格后再比较。",
+                )
+            else:
+                normalize_price_revision(
+                    plan,
+                    plan,
+                    final_track,
+                    old,
+                    old_track,
+                    fundamental_refs=fundamental_refs,
+                )
         output.append(
             {
                 **direction,

@@ -267,7 +267,15 @@ async def read_themes(conn, now, theme_code=None):
     return result
 
 
-def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
+def nav_plan(
+    history,
+    *,
+    now,
+    subject_kind="nav",
+    subject_id=None,
+    label=None,
+    benchmark_points=None,
+):
     now = _local(now)
     try:
         code = history["fundCode"]
@@ -342,6 +350,7 @@ def nav_plan(history, *, now, subject_kind="nav", subject_id=None, label=None):
         as_of=day,
         source_uri=history["sourceUri"],
         market="FUND_CN",
+        benchmark_points=benchmark_points,
     )
     plan.update(
         fundCode=code,
@@ -548,7 +557,7 @@ async def collect_theme_nav_histories(
     }
 
 
-def theme_plans(themes, bundle, now):
+def theme_plans(themes, bundle, now, *, benchmark_points=None):
     histories = {row.get("fundCode"): row for row in bundle.get("fundHistories", [])}
     plans = []
     for asset in themes:
@@ -571,6 +580,7 @@ def theme_plans(themes, bundle, now):
             subject_kind="fund" if asset.get("instrumentId") else "nav",
             subject_id=asset.get("instrumentId") or asset["assetCode"],
             label=asset["assetName"],
+            benchmark_points=benchmark_points,
         )
         if plan:
             plans.append(
@@ -583,11 +593,16 @@ def theme_plans(themes, bundle, now):
     return plans
 
 
-async def cached_nav_analysis(conn, code, now, *, subject_kind="nav", subject_id=None):
+async def cached_nav_analysis(
+    conn, code, now, *, subject_kind="nav", subject_id=None, fund_risk_context=None
+):
     from backend.macro.alpha_repository import read_alpha_public
+    from backend.investment.service import read_fund_risk_context, protect_fund_plan
 
     if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
         return None
+    if fund_risk_context is None:
+        fund_risk_context = await read_fund_risk_context(conn, now)
     bundle = await read_alpha_public(conn, now)
     rows = await conn.fetch(
         """SELECT payload FROM market.fund_research_nav_histories
@@ -630,9 +645,16 @@ async def cached_nav_analysis(conn, code, now, *, subject_kind="nav", subject_id
         history["calendarProof"] = await _calendar_proof(conn, history, _local(now))
     except Exception:  # noqa: BLE001 -- display history without certifying current prices
         history["calendarProof"] = None
-    plan = nav_plan(history, now=now, subject_kind=subject_kind, subject_id=subject_id)
+    plan = nav_plan(
+        history,
+        now=now,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        benchmark_points=fund_risk_context.get("benchmarkPoints"),
+    )
     if not plan:
         return None
+    plan = protect_fund_plan(plan, fund_risk_context)
     changes = {
         "basis": "UNIT_NAV_CHANGE",
         "unit": "decimal_fraction",

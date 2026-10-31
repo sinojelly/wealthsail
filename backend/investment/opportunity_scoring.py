@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from urllib.parse import urlsplit
 
-METHOD = "opportunity-priority-v1"
+METHOD = "opportunity-priority-v2"
 SCORE_FIELDS = (
     "opportunityScore",
     "rewardRiskRatio",
@@ -38,6 +38,20 @@ _POSITIVE = re.compile(
     r"增长|大增|回购|预增|扭亏|订单|获批|投产|上调|整合|突破|签署|增持|改善|盈利"
 )
 _NEGATIVE = re.compile(r"否认|终止|取消|下调|下滑|下降|亏损|未获批|不予|未实施|拟减持")
+_INVESTMENT_INTENTION = re.compile(
+    r"(?:拟|计划|将).{0,20}(?:投资|建厂|扩产|建设|投建|新建)|"
+    r"(?:投资|斥资).{0,20}(?:建厂|扩产|新建|建设)|"
+    r"框架协议|投资计划|扩产计划|意向协议|战略合作协议|预计.{0,12}(?:订单|收入|量产)"
+)
+_REALIZED_DELIVERY = re.compile(
+    r"(?:已披露|已公布|已发布|财报显示|季报显示|年报显示).{0,30}(?:净利润|营业利润|利润).{0,12}(?:增长|增加|扭亏)|"
+    r"(?:已实现|实际|已收到|已完成).{0,8}(?:回款|收款|订单交付)|"
+    r"(?:已披露|已公布|财报显示).{0,20}(?:回款|经营现金流).{0,8}(?:增长|增加|改善)"
+)
+_NO_REALIZED_DELIVERY = re.compile(
+    r"(?:尚无|尚未|没有|未有|未产生|未收到|不代表|未实现|并未).{0,12}(?:利润|回款|收款|订单交付|收入)|"
+    r"(?:预计|预期|计划|有望).{0,20}(?:利润|回款|收款|现金流).{0,12}(?:增长|增加|改善)"
+)
 
 
 def _number(value):
@@ -122,6 +136,13 @@ def _prepare_evidence(packet, now):
                 row.get("parentSourceId") or row["sourceUri"],
                 urlsplit(row["sourceUri"])._replace(query="", fragment="").geturl(),
                 row["sourceUri"],
+                bool(
+                    _INVESTMENT_INTENTION.search(text)
+                    and (
+                        not _REALIZED_DELIVERY.search(text)
+                        or _NO_REALIZED_DELIVERY.search(text)
+                    )
+                ),
             )
         )
     for row in (packet.get("institutionalSignals") or {}).get("etfFlows", [])[:40]:
@@ -146,12 +167,18 @@ def _prepare_evidence(packet, now):
 
 
 def _evidence(plan, packet, now, *, prepared=None):
+    from backend.macro.industry_cycle import requires_left_discount
+
     topics = _topics(plan.get("label", ""))
-    catalysts, shares = (
-        _prepare_evidence(packet, now) if prepared is None else prepared
-    )
+    catalysts, shares = _prepare_evidence(packet, now) if prepared is None else prepared
     parents, sources, urls = set(), [], set()
-    for related, parent, canonical, uri in catalysts:
+    cycle = plan.get("industryCycle") or {}
+    intentions_allowed = cycle.get(
+        "stage"
+    ) == "EARNINGS_DELIVERY" and not requires_left_discount(cycle)
+    for related, parent, canonical, uri, intention_only in catalysts:
+        if intention_only and not intentions_allowed:
+            continue
         if not topics.intersection(related) or parent in parents or canonical in urls:
             continue
         # Digest siblings and duplicate URLs remain one independent parent.
@@ -219,7 +246,10 @@ def _ready(plan, track):
 
 
 def score_plan(plan, packet, now, *, prepared_evidence=None):
+    from backend.macro.industry_cycle import requires_left_discount
+
     result = deepcopy(plan)
+    industry_penalty = -20 if requires_left_discount(result.get("industryCycle")) else 0
     for key in SCORE_FIELDS:
         result.pop(key, None)
     for track in result.get("tracks", []):
@@ -289,7 +319,18 @@ def score_plan(plan, packet, now, *, prepared_evidence=None):
         )
         track.update(
             opportunityScore=round(
-                float(technical + catalyst + share + reward + Decimal(str(strength))), 4
+                max(
+                    0,
+                    float(
+                        technical
+                        + catalyst
+                        + share
+                        + reward
+                        + Decimal(str(strength))
+                        + industry_penalty
+                    ),
+                ),
+                4,
             ),
             rewardRiskRatio=round(float(rr), 6),
             scoreMethodVersion=METHOD,
@@ -299,6 +340,7 @@ def score_plan(plan, packet, now, *, prepared_evidence=None):
                 "etfShares": share,
                 "rewardRisk": round(float(reward), 4),
                 "strength": strength,
+                "industryCyclePenalty": industry_penalty,
                 "evidenceScope": "SECTOR_PROXY",
                 "sourceUris": sources,
                 "missingEvidence": missing,
@@ -325,10 +367,14 @@ def score_plan(plan, packet, now, *, prepared_evidence=None):
 
 
 def priority_key(plan, track):
+    from backend.macro.industry_cycle import requires_left_discount
+
     high = high_zone(plan, track)
     group = 2 if high else 0 if _ready(plan, track) else 1
     return (
         group,
+        int(_blocked(plan, track)),
+        int(requires_left_discount(plan.get("industryCycle"))),
         -float(track.get("opportunityScore", 0)),
         -float(track.get("rewardRiskRatio", 0)),
         str(plan.get("fundCode", "")),
@@ -342,16 +388,69 @@ def rank_report(report, packet):
         return result
     evidence = _prepare_evidence(packet, now)
 
+    # The validated direction is the source of industry facts. Apply the same
+    # assessment to every public copy of that fund, including the scanner.
+    from backend.macro.industry_cycle import (
+        requires_left_discount,
+        merge_industry_cycles,
+    )
+
+    cycles = {}
+    reviews = {
+        row["industry"]: row
+        for row in result.get("industryCycleReviews", [])
+        if isinstance(row, dict) and isinstance(row.get("industry"), str)
+    }
+    sectors = {
+        (row.get("subjectKind"), row.get("subjectId"), row.get("priceBasis")): row[
+            "discoverySector"
+        ]
+        for row in (result.get("quantitativeScan") or {}).get("items", [])
+        if isinstance(row, dict) and row.get("discoverySector")
+    }
+    for direction in result.get("valueDirections", []):
+        cycle = direction.get("industryCycle")
+        if not isinstance(cycle, dict):
+            continue
+        for plan in direction.get("plans", []):
+            identity = (
+                plan.get("subjectKind"),
+                plan.get("subjectId"),
+                plan.get("priceBasis"),
+            )
+            prior = cycles.get(identity)
+            cycles[identity] = merge_industry_cycles(prior, cycle)
+
     def score(plan):
-        return score_plan(plan, packet, now, prepared_evidence=evidence)
+        from backend.indicators.actionable_zones import apply_industry_cycle
+
+        value = deepcopy(plan)
+        identity = (
+            plan.get("subjectKind"),
+            plan.get("subjectId"),
+            plan.get("priceBasis"),
+        )
+        cycle = cycles.get(identity, value.get("industryCycle"))
+        review = reviews.get(plan.get("discoverySector") or sectors.get(identity))
+        if review is not None:
+            cycle = merge_industry_cycles(cycle, review)
+        if isinstance(cycle, dict) and value.get("industryCycle") != cycle:
+            value = apply_industry_cycle(value, cycle)
+        return score_plan(value, packet, now, prepared_evidence=evidence)
 
     scan = result.get("quantitativeScan")
     if isinstance(scan, dict):
         scan["items"] = [score(plan) for plan in scan.get("items", [])]
     for direction in result.get("valueDirections", []):
-        direction["plans"] = [
-            score(plan) for plan in direction.get("plans", [])
-        ]
+        direction["plans"] = [score(plan) for plan in direction.get("plans", [])]
+        if "quantitativeEvidence" in direction:
+            direction["quantitativeEvidence"] = [
+                score(plan) for plan in direction["quantitativeEvidence"]
+            ]
+        if requires_left_discount(direction.get("industryCycle")):
+            from backend.indicators.actionable_zones import INDUSTRY_RISK_WARNING
+
+            direction["industryRiskWarning"] = INDUSTRY_RISK_WARNING
 
     def direction_key(direction):
         keys = [
@@ -361,14 +460,14 @@ def rank_report(report, packet):
             if track.get("track") == plan.get("selectedTrack", plan.get("track"))
             and "opportunityScore" in track
         ]
-        group = min((key[0] for key in keys), default=3)
+        group = min((key[:3] for key in keys), default=(3, 1, 0))
         # Keep each fund's research score, but a blocked/high-zone fund cannot
         # lift a direction that also offers an eligible buy-zone fund.
-        best_group = [key for key in keys if key[0] == group]
-        direction["opportunityScore"] = max((-key[1] for key in best_group), default=0)
-        rr = max((-key[2] for key in best_group), default=0)
+        best_group = [key for key in keys if key[:3] == group]
+        direction["opportunityScore"] = max((-key[3] for key in best_group), default=0)
+        rr = max((-key[4] for key in best_group), default=0)
         return (
-            group,
+            *group,
             -direction.get("opportunityScore", 0),
             -rr,
             str(direction.get("key", "")),
@@ -377,7 +476,5 @@ def rank_report(report, packet):
     if "valueDirections" in result:
         result["valueDirections"] = sorted(result["valueDirections"], key=direction_key)
     if "actionablePlans" in result:
-        result["actionablePlans"] = [
-            score(plan) for plan in result["actionablePlans"]
-        ]
+        result["actionablePlans"] = [score(plan) for plan in result["actionablePlans"]]
     return result

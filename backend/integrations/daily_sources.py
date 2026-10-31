@@ -61,6 +61,11 @@ OFFICIAL_HOSTS = frozenset(
         "www.iea.org",
         "www.opec.org",
         "www.consilium.europa.eu",
+        # Named exchange/official disclosure originals for industry earnings.
+        # The same bounded HTML/text, redirect and quote checks still apply.
+        "www.sse.com.cn",
+        "www.szse.cn",
+        "www.cninfo.com.cn",
     }
 )
 ENERGY = {
@@ -86,6 +91,81 @@ PUBLICATION_META = frozenset(
         "date",
     }
 )
+
+
+def industry_cycle_research_tasks(packet, now):
+    """Build live-search jobs from this run's actual sectors, without invented news.
+
+    Codex public research already runs with ``--search``. These queries extend
+    that collector to financing/operating-cycle sources outside official macro
+    feeds. Results must still use the ordinary report source-validation path.
+    """
+    from backend.macro.industry_cycle import RISK_CHECKS
+
+    now = _aware(now)
+    candidates = []
+    search_names = {
+        "ROBOT": "机器人 具身智能",
+        "ROBOTICS_MOBILITY": "机器人 智能驾驶",
+        "SEMICONDUCTOR_AI": "半导体 AI算力",
+        "AI": "人工智能 算力",
+        "RARE_EARTH": "稀土 有色金属",
+        "FINANCIAL": "银行 券商",
+        "FINANCE_POLICY": "金融政策 银行 券商",
+        "DRUG": "创新药 生物医药",
+        "HEALTHCARE_CLINICAL": "医药 临床",
+        "GOLD_ENERGY": "黄金 能源 油气",
+        "AEROSPACE": "航天 军工",
+        "CONSUMPTION": "消费 食品饮料",
+        "MEMORY": "存储芯片",
+        "PCB": "印制电路板",
+        "POWER": "电力 电网",
+        "SOLID_BATTERY": "固态电池",
+        "SATELLITE": "卫星互联网",
+        "LOW_ALTITUDE": "低空经济",
+        "HK_TECH": "港股科技",
+        "DIVIDEND": "红利 低波",
+        "TRADITIONAL_MEDICINE": "中药",
+        "COAL": "煤炭",
+        "GAMING": "游戏",
+        "CHEMICAL": "化工",
+    }
+
+    def add(value):
+        if isinstance(value, str) and value.strip() and value.strip() not in candidates:
+            candidates.append(value.strip()[:100])
+
+    for row in (packet.get("quantitativeScan") or {}).get("items", []):
+        if isinstance(row, dict):
+            add(row.get("discoverySector"))
+    for row in packet.get("discoveryUniverse", []):
+        if isinstance(row, dict):
+            add(row.get("discoverySector") or row.get("sector"))
+    for sector, ids in (
+        (packet.get("alphaPublic") or {}).get("sectorCatalysts", {}).items()
+    ):
+        if ids and sector != "OTHER":
+            add(sector)
+    return {
+        "required": True,
+        "execution": "PUBLIC_WEB_SEARCH",
+        "asOf": now.isoformat(),
+        "lookbackDays": 90,
+        "newDirectionRequiresSameChecks": True,
+        "candidates": [
+            {
+                "industry": industry,
+                "queries": [
+                    {
+                        "kind": kind,
+                        "query": f"{search_names.get(industry, industry)} {terms} {now.year} 近期 近90天",
+                    }
+                    for kind, terms in RISK_CHECKS.items()
+                ],
+            }
+            for industry in candidates
+        ],
+    }
 
 
 def _aware(value):
@@ -458,7 +538,13 @@ async def collect_daily_sources(now, *, client=None, clock=None):
     if client is None:
         async with httpx.AsyncClient() as owned:
             return await collect_daily_sources(now, client=owned, clock=clock)
-    result = {"documents": [], "candidateIndex": [], "energy": [], "sourceResults": {}}
+    result = {
+        "documents": [],
+        "candidateIndex": [],
+        "energy": [],
+        "sourceResults": {},
+        "industryCycleResearch": industry_cycle_research_tasks({}, now),
+    }
     semaphore = asyncio.Semaphore(3)
 
     async def collect(key, uri):

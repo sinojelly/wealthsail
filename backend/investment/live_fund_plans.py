@@ -14,7 +14,11 @@ from backend.funds.nav_history import (
     select_history_view,
     valid_points,
 )
-from backend.indicators.actionable_zones import VERSION, compute_actionable_price_plan
+from backend.indicators.actionable_zones import (
+    VERSION,
+    compute_actionable_price_plan,
+    apply_industry_cycle,
+)
 from backend.funds.nav_window import NAV_RESEARCH_MAX_SAMPLES, NAV_RESEARCH_MIN_SAMPLES
 from backend.investment.opportunity_scoring import SCORE_FIELDS
 from backend.investment.theme_graph import _disclosed_nav_quality, _history_quality
@@ -60,6 +64,11 @@ _STALE = (
     "priceRevisionBasis",
     "priceRevisionSourceIds",
     "rewardRiskRatio",
+    "relativeStrength",
+    "industryAdjustmentBase",
+    "industryRiskAdjustment",
+    "industryRiskWarning",
+    "riskAdjustmentVersion",
 )
 
 
@@ -307,6 +316,9 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
             unit="CNY/份",
             market="FUND_CN",
             source_uri=view.get("sourceUri") if enough else None,
+            benchmark_points=(
+                (packet or {}).get("relativeStrengthBenchmark") or {}
+            ).get("points"),
         )
         state = (
             "UNAVAILABLE"
@@ -374,12 +386,17 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
             for key in ("subjectKind", "subjectId", "label", "unit")
             if key in original
         }
+        cycle = deepcopy(original.get("industryCycle"))
         for key in _STALE:
             original.pop(key, None)
         updated = calculated.get(code)
         if updated is None:
             continue
-        original.update(deepcopy(updated))
+        original.update(
+            apply_industry_cycle(updated, cycle)
+            if isinstance(cycle, dict)
+            else deepcopy(updated)
+        )
         original.update(identity, fundCode=code)
         original.setdefault("researchAsOf", previous_as_of)
         original.setdefault("researchMethodVersion", previous_method)

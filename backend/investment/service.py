@@ -429,7 +429,187 @@ async def search(conn, keyword):
     return result[:20]
 
 
-def actionable_plan_for_analysis(result, kind, subject_id, *, label=None, now=None):
+def _public_risk_stamp(value):
+    try:
+        stamp = datetime.fromisoformat(value) if isinstance(value, str) else value
+        return (
+            stamp if isinstance(stamp, datetime) and stamp.tzinfo is not None else None
+        )
+    except (ValueError, TypeError):
+        return None
+
+
+def fund_risk_context(report, now, *, packet=None):
+    """Keep only recent, already-validated public industry facts and benchmark."""
+    from backend.macro.industry_cycle import merge_industry_cycles
+
+    if not isinstance(report, dict):
+        return {}
+    stamp = _public_risk_stamp(report.get("asOf"))
+    if stamp is None or not now - timedelta(days=10) <= stamp <= now:
+        return {}
+    context = {"asOf": stamp.isoformat(), "cyclesByFund": {}, "cyclesBySubject": {}}
+    reviews = {
+        row.get("industry"): row
+        for row in report.get("industryCycleReviews", [])
+        if isinstance(row, dict) and isinstance(row.get("industry"), str)
+    }
+
+    def collect(plan, direction_cycle=None):
+        if (
+            not isinstance(plan, dict)
+            or plan.get("subjectKind") not in {"fund", "nav"}
+            or plan.get("market") not in {None, "FUND_CN", "SSE", "SZSE"}
+            or plan.get("subjectKind") == "nav"
+            and plan.get("priceBasis") != "UNIT_NAV"
+        ):
+            return
+        code = plan.get("fundCode") or (
+            plan.get("subjectId") if plan.get("subjectKind") == "nav" else None
+        )
+        if plan.get("subjectKind") == "nav" and code != plan.get("subjectId"):
+            return
+        own, review = (
+            plan.get("industryCycle"),
+            reviews.get(plan.get("discoverySector")),
+        )
+        if not any(isinstance(cycle, dict) for cycle in (own, direction_cycle, review)):
+            return
+        cycle = merge_industry_cycles(own, direction_cycle)
+        cycle = merge_industry_cycles(cycle, review)
+        if not isinstance(cycle, dict) or not cycle:
+            return
+        if (
+            isinstance(code, str)
+            and len(code) == 6
+            and code.isascii()
+            and code.isdigit()
+        ):
+            context["cyclesByFund"][code] = merge_industry_cycles(
+                context["cyclesByFund"].get(code), cycle
+            )
+        subject = plan.get("subjectId")
+        if plan.get("subjectKind") == "fund" and isinstance(subject, str):
+            context["cyclesBySubject"][subject] = merge_industry_cycles(
+                context["cyclesBySubject"].get(subject), cycle
+            )
+
+    for field in (
+        "actionablePlans",
+        "themeActionableZones",
+        "discoveryActionableZones",
+        "actionableZones",
+    ):
+        for plan in report.get(field, []):
+            collect(plan)
+    for plan in (report.get("quantitativeScan") or {}).get("items", []):
+        collect(plan)
+    for direction in report.get("valueDirections", []):
+        if not isinstance(direction, dict):
+            continue
+        for field in ("plans", "quantitativeEvidence"):
+            for plan in direction.get(field, []):
+                collect(plan, direction.get("industryCycle"))
+    benchmark = (
+        (packet or {}).get("relativeStrengthBenchmark")
+        if isinstance(packet, dict)
+        else None
+    )
+    if (
+        isinstance(benchmark, dict)
+        and benchmark.get("state") == "READY"
+        and benchmark.get("indexId") == "hs300"
+    ):
+        retrieved = _public_risk_stamp(benchmark.get("retrievedAt"))
+        try:
+            observed = date.fromisoformat(str(benchmark.get("asOf")))
+            if (
+                retrieved is not None
+                and retrieved <= now
+                and now.date() - timedelta(days=10) <= observed <= now.date()
+                and isinstance(benchmark.get("points"), list)
+            ):
+                context["benchmarkPoints"] = deepcopy(benchmark["points"])
+        except (ValueError, TypeError):
+            pass
+    return context
+
+
+async def read_fund_risk_context(conn, now):
+    """Read frozen public facts once; never invoke daily repricing or analysis."""
+    try:
+        rows = await conn.fetch(
+            """SELECT t.payload,r.public_packet,t.recorded_at,r.dispatched_at
+            FROM research.daily_research_runs r JOIN research.daily_research_results t USING(run_id)
+            WHERE t.status='READY' AND t.recorded_at<=$1 AND r.dispatched_at<=$1
+              AND t.recorded_at>=$1 - interval '10 days'
+            ORDER BY r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC LIMIT 5""",
+            now,
+        )
+        for row in rows:
+            recorded, dispatched = (
+                _public_risk_stamp(row.get(key))
+                for key in ("recorded_at", "dispatched_at")
+            )
+            if (
+                recorded is None
+                or dispatched is None
+                or not recorded <= now
+                or not dispatched <= now
+            ):
+                continue
+            report, packet = (
+                json.loads(row[key]) if isinstance(row.get(key), str) else row.get(key)
+                for key in ("payload", "public_packet")
+            )
+            packet_stamp = (
+                _public_risk_stamp(packet.get("asOf"))
+                if isinstance(packet, dict)
+                else None
+            )
+            if packet_stamp is None or packet_stamp > now:
+                continue
+            context = fund_risk_context(report, now, packet=packet)
+            if context:
+                return context
+    except Exception:  # noqa: BLE001 -- optional shared evidence must not break local NAV reads
+        return {}
+    return {}
+
+
+def protect_fund_plan(plan, context):
+    """Merge a public risk floor by exact fund identity, preserving live prices."""
+    from backend.indicators.actionable_zones import apply_industry_cycle
+    from backend.macro.industry_cycle import merge_industry_cycles
+
+    if (
+        not isinstance(plan, dict)
+        or plan.get("subjectKind") not in {"nav", "fund"}
+        or plan.get("market") not in {None, "FUND_CN", "SSE", "SZSE"}
+        or plan.get("subjectKind") == "nav"
+        and plan.get("priceBasis") != "UNIT_NAV"
+    ):
+        return deepcopy(plan)
+    code = plan.get("fundCode") or (
+        plan.get("subjectId") if plan.get("subjectKind") == "nav" else None
+    )
+    by_code = (context.get("cyclesByFund") or {}).get(code)
+    by_subject = (
+        (context.get("cyclesBySubject") or {}).get(plan.get("subjectId"))
+        if plan.get("subjectKind") == "fund"
+        else None
+    )
+    if by_code is None and by_subject is None:
+        return deepcopy(plan)
+    cycle = merge_industry_cycles(by_code, by_subject)
+    return apply_industry_cycle(
+        plan, merge_industry_cycles(plan.get("industryCycle"), cycle)
+    )
+
+
+def actionable_plan_for_analysis(
+    result, kind, subject_id, *, label=None, now=None, benchmark_points=None
+):
     """Use the snapshot's proven current window, independently of old scores."""
     from backend.indicators.actionable_zones import compute_actionable_price_plan
 
@@ -530,6 +710,7 @@ def actionable_plan_for_analysis(result, kind, subject_id, *, label=None, now=No
         pe_percentile=pe.get("percentile") if pe_current else None,
         source_uri=result.get("source"),
         market=result.get("market"),
+        benchmark_points=benchmark_points,
     )
     plan.update(
         retrievedAt=_iso(result.get("retrievedAt")),
@@ -821,13 +1002,28 @@ async def analysis(conn, kind, subject_id):
     if kind == "fund":
         from backend.investment.theme_graph import cached_nav_analysis
 
+        now = now_shanghai()
+        risk_context = await read_fund_risk_context(conn, now)
         code = await conn.fetchval(
             """SELECT fund_code FROM reference.research_fund_catalog
             WHERE instrument_id::text=$1 AND market='FUND_CN' AND trade_form='FUND'""",
             str(subject_id),
         )
+        risk_code = code
+        if risk_code is None and risk_context.get("cyclesByFund"):
+            risk_code = await conn.fetchval(
+                """SELECT CASE WHEN count(DISTINCT fund_code)=1 THEN min(fund_code) END
+                FROM reference.research_fund_catalog WHERE instrument_id::text=$1
+                  AND market IN ('SSE','SZSE') AND trade_form='ETF'""",
+                str(subject_id),
+            )
         nav = await cached_nav_analysis(
-            conn, code, now_shanghai(), subject_kind="fund", subject_id=str(subject_id)
+            conn,
+            code,
+            now,
+            subject_kind="fund",
+            subject_id=str(subject_id),
+            fund_risk_context=risk_context,
         )
         if nav:
             newer = result.get("asOf") is None
@@ -843,6 +1039,22 @@ async def analysis(conn, kind, subject_id):
                 pass
             if newer:
                 result.update(nav)
+        if nav is None or result.get("actionableZones") is not nav.get(
+            "actionableZones"
+        ):
+            result["actionableZones"] = actionable_plan_for_analysis(
+                result,
+                kind,
+                subject_id,
+                now=now,
+                benchmark_points=risk_context.get("benchmarkPoints"),
+            )
+        if isinstance(result.get("actionableZones"), dict):
+            if risk_code:
+                result["actionableZones"]["fundCode"] = risk_code
+            result["actionableZones"] = protect_fund_plan(
+                result["actionableZones"], risk_context
+            )
     return result
 
 

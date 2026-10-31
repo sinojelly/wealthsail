@@ -91,6 +91,7 @@ async def load_public_packet(
     from backend.investment.theme_graph import read_themes, theme_plans
     from backend.investment.strategy_memory import read_strategy_memory, public_memory
     from backend.macro.alpha_research import extend_public_packet
+    from backend.jobs.opportunity_market import relative_strength_benchmark
     from uuid import UUID
 
     context = await market_context(conn, now=now)
@@ -106,6 +107,7 @@ async def load_public_packet(
         "SELECT * FROM reference.research_indices WHERE id IN ('hs300','a500','zz500') ORDER BY sort_order,id"
     )
     evidence = []
+    benchmark = relative_strength_benchmark(None, now)
     for index in indices:
         result = await analysis(conn, "index", index["id"])
         retrieved = market_repository._stamp(result.get("retrievedAt"))
@@ -122,6 +124,8 @@ async def load_public_packet(
         row = market_evidence(index, result)
         row["actionableZones"] = result.get("actionableZones")
         evidence.append(row)
+        if index["id"] == "hs300":
+            benchmark = relative_strength_benchmark(result, now)
     bundle = await read_alpha_public(
         conn,
         now,
@@ -162,9 +166,15 @@ async def load_public_packet(
         previous=previous,
         external=external,
     )
+    packet["relativeStrengthBenchmark"] = benchmark
     packet.update(
         extend_public_packet(
-            bundle, themes, theme_plans(themes, bundle, now), rules, price_previous, now
+            bundle,
+            themes,
+            theme_plans(themes, bundle, now, benchmark_points=benchmark["points"]),
+            rules,
+            price_previous,
+            now,
         )
     )
     from backend.investment.discovery import build_discovery_packet

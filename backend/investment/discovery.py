@@ -800,6 +800,9 @@ async def build_discovery_packet(
             subject_kind=asset["subjectKind"],
             subject_id=asset["subjectId"],
             label=asset["label"],
+            benchmark_points=(packet.get("relativeStrengthBenchmark") or {}).get(
+                "points"
+            ),
         )
         if plan:
             anchors.append(plan)

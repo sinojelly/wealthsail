@@ -197,6 +197,11 @@ async def daily_direction_origin(
             raise ValueError("missing direction evidence")
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError_("该日报方向或标的计划无效，无法冻结") from exc
+    from backend.investment.service import fund_risk_context, protect_fund_plan
+
+    plan = protect_fund_plan(
+        plan, fund_risk_context(report, now, packet=decode(row.get("public_packet")))
+    )
     plan = await _refresh_origin_plan(
         conn, plan, plan_track, now, packet=decode(row.get("public_packet"))
     )
@@ -213,6 +218,9 @@ async def daily_direction_origin(
             "catalysts",
             "risks",
             "quantitativeFundCodes",
+            "industryCycle",
+            "industryRiskWarning",
+            "reviewIndustryIds",
         )
         if key in direction
     }
