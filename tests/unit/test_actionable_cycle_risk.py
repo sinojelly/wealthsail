@@ -96,23 +96,39 @@ def test_as_of_applies_to_both_series_without_borrowing_a_future_benchmark():
 
 
 @pytest.mark.parametrize(
-    "cycle",
+    "cycle,expected_prices,discount_scale",
     [
-        {"stage": "EARLY_COMMERCIALIZATION"},
-        {"stage": "POLICY_CATALYST", "riskFlags": ["FINANCING_COOLING"]},
+        (
+            {"stage": "EARLY_COMMERCIALIZATION"},
+            ["97.40", "99.00", "93.40", "105.40", "109.72"],
+            0.5,
+        ),
+        (
+            {"stage": "POLICY_CATALYST", "riskFlags": ["FINANCING_COOLING"]},
+            ["96.40", "98.00", "92.40", "104.40", "108.72"],
+            1.0,
+        ),
     ],
 )
-def test_cooling_moves_only_left_entries_one_scale_and_recomputes_readiness(cycle):
+def test_cooling_moves_only_left_entries_by_risk_tier_and_recomputes_readiness(
+    cycle, expected_prices, discount_scale
+):
     rows = observations([100] * 200)
     before = plan(rows, pe_percentile=35)
     result = plan(rows, pe_percentile=35, industry_cycle=cycle)
     adjusted = left(result)
     assert left(before)["entryReady"] is True
-    assert adjusted["entryZoneMin"] == "96.40"
-    assert adjusted["entryZoneMax"] == "98.00"
-    assert adjusted["stopLossPrice"] == "92.40"
-    assert adjusted["takeProfitT1"] == "104.40"
-    assert adjusted["takeProfitT2"] == "108.72"
+    assert [
+        adjusted[key]
+        for key in (
+            "entryZoneMin",
+            "entryZoneMax",
+            "stopLossPrice",
+            "takeProfitT1",
+            "takeProfitT2",
+        )
+    ] == expected_prices
+    assert result["industryRiskAdjustment"]["entryShiftScale"] == discount_scale
     assert adjusted["inBuyZone"] is False
     assert adjusted["entryReady"] is False
     assert result["tracks"][1] == before["tracks"][1]
@@ -192,8 +208,9 @@ def test_short_nav_history_stays_partial_after_cycle_discount():
         price_basis="UNIT_NAV",
         industry_cycle={"stage": "EARLY_COMMERCIALIZATION"},
     )
-    assert left(result)["entryZoneMin"] == "0.9784"
-    assert left(result)["entryZoneMax"] == "0.9880"
+    assert left(result)["entryZoneMin"] == "0.9844"
+    assert left(result)["entryZoneMax"] == "0.9940"
+    assert result["industryRiskAdjustment"]["entryShiftScale"] == 0.5
     assert left(result)["priceState"] == "PARTIAL"
     assert left(result)["entryReady"] is False
 
@@ -221,9 +238,10 @@ def test_discount_updates_scanner_distance_and_selected_coordinates_together():
     assert signal["inEntryZone"] is False
     assert signal["entryReady"] is False
     assert signal["candidate"] is True
-    assert signal["distanceToEntryPct"] == 2
-    assert result["entryZoneMin"] == "96.40"
-    assert result["entryZoneMax"] == "98.00"
+    assert signal["distanceToEntryPct"] == 1
+    assert result["entryZoneMin"] == "97.40"
+    assert result["entryZoneMax"] == "99.00"
+    assert result["industryRiskAdjustment"]["entryShiftScale"] == 0.5
     assert result["entryReady"] is False
     assert result["entryStatus"] == result["industryRiskWarning"]
 

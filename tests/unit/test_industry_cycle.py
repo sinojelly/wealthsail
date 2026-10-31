@@ -3,6 +3,30 @@
 from importlib import import_module, util
 
 import pytest
+from test_daily_research import NOW as RESEARCH_NOW
+
+
+def current_stage_sources():
+    return {
+        "source:one": {
+            "verification": "SOURCE_CHECKED",
+            "publishedDate": "2026-10-15",
+            "quote": "行业仍处试制验证阶段。",
+        }
+    }
+
+
+def validate_current_stage(rows, public=None):
+    from backend.macro.value_directions import validate_value_directions
+    from test_value_directions import NOW, packet
+
+    return validate_value_directions(
+        rows,
+        public or packet(),
+        NOW,
+        {"s1": "source:one", "s2": "source:two"},
+        sources=current_stage_sources(),
+    )
 
 
 def engine():
@@ -59,7 +83,10 @@ def test_legacy_missing_cycle_remains_unknown_without_inventing_robotics_risk():
 
 def test_cited_early_commercialization_propagates_precaution_without_keyword_guessing():
     actual = engine().normalize_industry_cycle(
-        cycle(), source_aliases={"s1": "source:one"}
+        cycle(),
+        source_aliases={"s1": "source:one"},
+        sources=current_stage_sources(),
+        now=RESEARCH_NOW,
     )
     assert actual["stage"] == "EARLY_COMMERCIALIZATION"
     assert actual["label"] == "🟠 商业化早期·去伪存真期"
@@ -161,10 +188,10 @@ def test_new_model_schema_requires_cycle_but_legacy_direction_remains_readable()
 
 
 def test_validated_direction_attaches_industry_cycle_to_its_original_plan():
-    from test_value_directions import direction, validate
+    from test_value_directions import direction
 
     raw = direction(industryCycle=cycle())
-    actual = validate([raw])[0]
+    actual = validate_current_stage([raw])[0]
     assert actual["industryCycle"]["stage"] == "EARLY_COMMERCIALIZATION"
     assert actual["plans"][0]["industryCycle"] == actual["industryCycle"]
     assert "左侧接飞刀" in actual["plans"][0]["industryRiskWarning"]
@@ -238,7 +265,7 @@ def test_report_keeps_rejected_candidate_reviews_and_refuses_unreviewed_dynamic_
 def test_unchanged_discounted_plan_is_not_misreported_as_a_price_upgrade():
     from datetime import timedelta
     from backend.indicators.actionable_zones import compute_actionable_price_plan
-    from test_value_directions import NOW, direction, packet, validate
+    from test_value_directions import NOW, direction, packet
 
     rows = [
         {
@@ -260,9 +287,9 @@ def test_unchanged_discounted_plan_is_not_misreported_as_a_price_upgrade():
     public = packet()
     public["discoveryActionableZones"] = [anchor]
     raw = direction(industryCycle=cycle())
-    first = validate([raw], public)[0]
+    first = validate_current_stage([raw], public)[0]
     public["previousValueDirections"] = [first]
-    second = validate([raw], public)[0]
+    second = validate_current_stage([raw], public)[0]
     assert second["plans"][0]["tracks"] == first["plans"][0]["tracks"]
     assert second["plans"][0]["priceRevisionStatus"] == "MAINTAINED"
 
@@ -302,14 +329,14 @@ def test_found_sector_review_is_a_risk_floor_for_an_optimistic_direction():
 
 
 def test_legacy_missing_discount_anchors_do_not_break_the_following_research_run():
-    from test_value_directions import direction, packet, validate
+    from test_value_directions import direction, packet
 
     public = packet()
     raw = direction(industryCycle=cycle())
-    first = validate([raw], public)[0]
+    first = validate_current_stage([raw], public)[0]
     assert first["plans"][0]["industryRiskAdjustment"]["state"] == "INSUFFICIENT"
     public["previousValueDirections"] = [first]
-    second = validate([raw], public)[0]
+    second = validate_current_stage([raw], public)[0]
     assert second["plans"][0]["tracks"][0]["entryZoneMin"] is None
     assert second["plans"][0]["entryReady"] is False
 
@@ -323,17 +350,30 @@ def test_new_watch_only_direction_must_link_its_review_without_using_title_keywo
     review = {
         "industry": "已审查观察行业",
         **engine().normalize_industry_cycle(
-            cycle(), source_aliases={"s1": "source:one"}
+            cycle(),
+            source_aliases={"s1": "source:one"},
+            sources=current_stage_sources(),
+            now=NOW,
         ),
     }
     raw = direction(industryCycle=cycle(), plans=[], signal="WATCH")
     with pytest.raises(ValueError, match="review link"):
         validate_value_directions(
-            [raw], public, NOW, {"s1": "source:one"}, industry_reviews=[review]
+            [raw],
+            public,
+            NOW,
+            {"s1": "source:one"},
+            industry_reviews=[review],
+            sources=current_stage_sources(),
         )
     raw["reviewIndustryIds"] = ["已审查观察行业"]
     actual = validate_value_directions(
-        [raw], public, NOW, {"s1": "source:one"}, industry_reviews=[review]
+        [raw],
+        public,
+        NOW,
+        {"s1": "source:one"},
+        industry_reviews=[review],
+        sources=current_stage_sources(),
     )[0]
     assert actual["industryCycle"]["riskFlags"] == ["EARLY_COMMERCIALIZATION"]
 
@@ -384,7 +424,7 @@ def test_mislabelled_forward_plan_unpaid_orders_and_old_disclosures_never_become
     assert "CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING" in actual["evidenceGaps"]
 
 
-def test_old_negative_article_is_retained_as_historical_without_permanent_current_discount():
+def test_old_negative_article_stays_historical_and_cannot_be_confirmed():
     from test_daily_research import NOW
 
     raw = cycle(stage="UNKNOWN", evidence=[])
@@ -403,10 +443,12 @@ def test_old_negative_article_is_retained_as_historical_without_permanent_curren
         },
         now=NOW,
     )
-    assert "FINANCING_COOLING" not in actual["riskFlags"]
-    assert actual["riskChecks"][0]["status"] == "UNVERIFIED"
+    assert "FINANCING_COOLING" in actual["suspectedRiskFlags"]
+    assert actual["riskChecks"][0]["status"] == "FOUND"
+    assert actual["riskChecks"][0]["claimSupported"] is False
+    assert actual["riskChecks"][0]["strength"] == "SUSPECTED"
     assert actual["riskChecks"][0]["timeVerification"] == "HISTORICAL"
-    assert engine().requires_left_discount(actual) is False
+    assert actual["leftDiscountScale"] == 0.5
 
 
 def test_historical_early_commercialization_evidence_cannot_lock_the_industry_in_early_stage_forever():
@@ -474,7 +516,10 @@ def test_public_scan_projection_preserves_server_discount_base_relative_strength
     assert projected["industryAdjustmentBase"]["close"] == "1.12"
     assert projected["relativeStrength"]["excessReturn20d"] == 0
     cycle_value = engine().normalize_industry_cycle(
-        cycle(), source_aliases={"s1": "source:one"}
+        cycle(),
+        source_aliases={"s1": "source:one"},
+        sources=current_stage_sources(),
+        now=NOW,
     )
     scan = public_quantitative_scan(
         {

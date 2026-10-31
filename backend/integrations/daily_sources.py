@@ -145,6 +145,31 @@ def industry_cycle_research_tasks(packet, now):
         if candidate and candidate not in candidates:
             candidates.append(candidate)
 
+    previous_risks = set()
+    for row in packet.get("previousIndustryRiskStates", []):
+        if not isinstance(row, dict):
+            continue
+        cycle = row.get("industryCycle")
+        if not isinstance(cycle, dict):
+            continue
+        risk_fields = (
+            "riskFlags",
+            "confirmedRiskFlags",
+            "suspectedRiskFlags",
+            "persistedRiskFlags",
+        )
+        if not any(
+            isinstance(cycle.get(field), list)
+            and any(isinstance(flag, str) and flag.strip() for flag in cycle[field])
+            for field in risk_fields
+        ):
+            continue
+        industry = row.get("industry")
+        if isinstance(industry, str) and industry.strip():
+            industry = industry.strip()[:100]
+            previous_risks.add(industry)
+            add(industry)
+
     for row in (packet.get("quantitativeScan") or {}).get("items", []):
         if isinstance(row, dict):
             sector = row.get("discoverySector")
@@ -181,7 +206,13 @@ def industry_cycle_research_tasks(packet, now):
     order = {sector: index for index, sector in enumerate(candidates)}
     candidates.sort(
         key=lambda sector: (
-            0 if sector in news else 1 if sector in quantitative else 2,
+            -1
+            if sector in previous_risks
+            else 0
+            if sector in news
+            else 1
+            if sector in quantitative
+            else 2,
             *quantitative.get(sector, (True, math.inf)),
             order[sector],
         )

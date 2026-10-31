@@ -269,7 +269,7 @@ def _relative_strength(points, benchmark_points, cutoff=None):
     if lower_high_risk:
         result["trendWeakening"] = True
         result["reasons"].append(
-            "近60个交易日三个连续20日窗口反弹高点依次下移，且20日/60日均跑输沪深300，触发技术趋势风控。"
+            "近60个交易日三个连续20日窗口最高价依次下移，且20日/60日均跑输沪深300，触发技术趋势风控。"
         )
     if len(prices) < 63 or any(
         aligned_at(index, 60) is None
@@ -748,9 +748,9 @@ def apply_industry_cycle(plan, industry_cycle):
     )
     policy = industry_risk_policy(industry_cycle)
     base_discount_scale = policy["leftDiscountScale"]
-    relative_upgrade = (
-        base_discount_scale == 0.5
-        and (result.get("relativeStrength") or {}).get("weakening") is True
+    relative_upgrade = base_discount_scale == 0.5 and bool(
+        (result.get("relativeStrength") or {}).get("weakening")
+        or (result.get("relativeStrength") or {}).get("trendWeakening")
     )
     discount_scale = 1.0 if relative_upgrade else base_discount_scale
     risk = discount_scale > 0

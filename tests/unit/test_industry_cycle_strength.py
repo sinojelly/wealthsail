@@ -31,6 +31,7 @@ def media(host="publisher-one.test", title="行业融资笔数减少", **updates
         "title": title,
         "publishedDate": "2026-10-15",
         "verification": "UNVERIFIED",
+        "quote": "本季度该行业一级市场融资笔数同比下降30%。",
         **updates,
     }
 
@@ -173,7 +174,7 @@ def test_policy_splits_stage_from_intensity_and_keeps_legacy_protection():
         industry.industry_risk_policy({"stage": "EARLY_COMMERCIALIZATION"})[
             "leftDiscountScale"
         ]
-        == 1
+        == 0.5
     )
     assert (
         industry.industry_risk_policy({"riskFlags": ["FINANCING_COOLING"]})["riskLevel"]
@@ -239,7 +240,7 @@ def test_missed_search_retains_recent_confirmed_risk_as_half_discount_observatio
     assert expired["leftDiscountScale"] == 0
 
 
-def test_search_failure_retains_watch_but_verified_earnings_releases_the_observation():
+def test_search_failure_and_company_earnings_keep_the_specific_industry_observation():
     previous = normalized(media(verification="SOURCE_CHECKED"))
     today = normalized()
     today["riskChecks"][0]["status"] = "UNVERIFIED"
@@ -256,7 +257,7 @@ def test_search_failure_retains_watch_but_verified_earnings_releases_the_observa
         industry.persist_industry_risk(
             recovered, previous, confirmed_at=NOW, now=NOW + timedelta(days=1)
         )["leftDiscountScale"]
-        == 0
+        == 0.5
     )
     assert (
         industry.persist_industry_risk(previous, today, confirmed_at=NOW, now=NOW)[
@@ -344,7 +345,7 @@ def test_source_count_finds_independent_host_title_pairs_without_greedy_order_bi
     assert actual["riskLevel"] == "CONFIRMED"
 
 
-def test_full_early_stage_discount_does_not_present_a_suspected_media_claim_as_confirmed():
+def test_early_stage_keeps_suspected_industry_claim_at_half_discount():
     raw = cycle(
         sourceIds=["s0"],
         evidence=[
@@ -362,6 +363,7 @@ def test_full_early_stage_discount_does_not_present_a_suspected_media_claim_as_c
         sources={"source:zero": media()},
         now=NOW,
     )
-    assert actual["riskLevel"] == "CONFIRMED"
+    assert actual["riskLevel"] == "SUSPECTED"
+    assert actual["leftDiscountScale"] == 0.5
     assert actual["riskChecks"][0]["strength"] == "SUSPECTED"
     assert "一级市场融资降温（待核实）" in actual["industryRiskWarning"]

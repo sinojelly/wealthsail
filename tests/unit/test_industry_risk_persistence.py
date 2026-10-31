@@ -170,7 +170,7 @@ def test_direction_prices_and_scan_keep_half_protection_before_price_revision_is
     )
 
 
-def test_verified_recovery_in_history_prevents_older_risk_from_reappearing():
+def test_verified_company_recovery_in_history_keeps_older_sector_risk_observation():
     old = previous(NOW - timedelta(days=5))
     recovered = previous(NOW - timedelta(days=2))
     recovered["report"]["industryCycleReviews"][0].update(
@@ -182,7 +182,8 @@ def test_verified_recovery_in_history_prevents_older_risk_from_reappearing():
         earningsVerified=True,
     )
     actual = validate_with_history([old, recovered])["industryCycleReviews"][0]
-    assert "PERSISTED_RISK_WATCH" not in actual["riskFlags"]
+    assert "PERSISTED_RISK_WATCH" in actual["riskFlags"]
+    assert actual["persistedRiskFlags"] == ["FINANCING_COOLING"]
 
 
 def test_new_completion_timestamp_cannot_renew_an_old_report_confirmation():

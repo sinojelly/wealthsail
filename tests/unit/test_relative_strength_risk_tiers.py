@@ -62,7 +62,7 @@ def test_lower_highs_uses_three_ordered_twenty_day_peaks_and_enters_trend_risk()
     assert strength["breakdownDate"] is None
     assert strength["trendWeakening"] is True
     assert result["trendWeakening"] is True
-    assert any("高点" in reason for reason in strength["reasons"])
+    assert any("最高价" in reason for reason in strength["reasons"])
 
 
 @pytest.mark.parametrize(

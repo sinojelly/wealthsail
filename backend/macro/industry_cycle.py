@@ -20,6 +20,20 @@ RISK_CHECKS = {
     "OVERCAPACITY_PRICE_WAR": "产能过剩/价格战",
     "PRODUCTION_DELAY": "商业化量产推迟",
 }
+EARNINGS_RISK_FLAGS = frozenset(
+    {
+        "EARLY_COMMERCIALIZATION",
+        "NO_EARNINGS_DELIVERY",
+        "NO_CURRENT_EARNINGS_PROOF",
+        "FORWARD_PLANS_ONLY",
+    }
+)
+LEGACY_CONFIRMED_RISK_FLAGS = frozenset(
+    {"DEBUBBLING", "LEGACY_CONFIRMED_RISK", "CONFIRMED_RISK"}
+)
+COMPANY_EARNINGS_INDUSTRY_WATCH_NOTE = (
+    "个别企业当期盈利已核实，但近14日行业级风险观察尚未到期解除"
+)
 STAGE_LABELS = {
     "EARNINGS_DELIVERY": "🟢 业绩兑现期",
     "POLICY_CATALYST": "🟡 政策/事件催化期",
@@ -90,39 +104,60 @@ def _source_recency(source, now):
     return "RECENT" if 0 <= age <= 90 else "HISTORICAL" if age > 90 else "FUTURE"
 
 
+def _quote_clauses(quote):
+    return re.split(
+        r"[，。；;\n]|(?<!\d),(?!\d)|(?<=[A-Za-z])\.(?=\s+[A-Z])"
+        r"|但是|然而|不过|其中|但|而(?!非)|却|\b(?:but|however|whereas|while)\b",
+        str(quote or ""),
+        flags=re.I,
+    )
+
+
+def _profit_growth_supported(clause):
+    if re.search(
+        r"下降|下滑|下跌|减少|亏损|负增长|缩水|预亏|续亏|首亏|暴跌|腰斩|转亏|由盈转亏|\b(?:fell|fall\w*|declin\w*|decreas\w*|drop\w*|shrunk|slump\w*|loss(?:es)?)\b",
+        clause,
+        re.I,
+    ):
+        return False
+    if re.search(r"(?:增长|增加|grew|increas\w*).{0,8}[-−]\s*\d", clause, re.I):
+        return False
+    for match in re.finditer(
+        r"(?:归母净利润|扣非净利润|净利润|归母净利|扣非净利|净利|营业利润|利润总额|利润|net profit|net income|\bprofit\b|\bearnings\b)"
+        r"(?P<between>[^。；;\n]{0,24}?)(?:增长|增加|扭亏|上升|\bgrew\b|\bgrowth\b|\brose\b|\bincreased?\b)",
+        clause,
+        re.I,
+    ):
+        if not re.search(
+            r"营收|营业收入|营业额|销售收入|销售额|现金流|毛利率|产能|产量|总资产|资产|总负债|负债|\b(?:revenue|sales|turnover|margin|capacity|production|assets|liabilities)\b|cash flow",
+            match["between"],
+            re.I,
+        ):
+            return True
+    return False
+
+
 def _earnings_fact_clauses(source, kind, now):
     if source.get("verification") != "SOURCE_CHECKED" or _source_recency(
         source, now
     ) not in {"RECENT", "DATED"}:
         return []
+    if re.search(
+        r"否认|不属实|传闻不实|\bdenied\b", str(source.get("quote") or ""), re.I
+    ):
+        return []
     # Validate a minimal factual statement in the checked quote, rather than
     # trusting an LLM's evidence.kind or its paraphrased summary.
     matches = []
-    for index, clause in enumerate(
-        re.split(
-            r"[，。；;\n]|(?<!\d),(?!\d)|(?<=[A-Za-z])\.(?=\s+[A-Z])",
-            str(source.get("quote") or ""),
-        )
-    ):
+    for index, clause in enumerate(_quote_clauses(source.get("quote"))):
         if re.search(
-            r"预计|预期|预测|计划|拟|有望|力争|目标|将|明年|未来|尚无|尚未|未实现|未收到|未回款|无实际|没有|未增长"
+            r"预计|预期|预测|计划|拟|有望|力争|目标|将|明年|未来|尚无|尚未|未实现|未收到|未回款|无实际|没有|未增长|否认|不属实|并非|传闻不实"
             r"|\b(?:expect\w*|forecast\w*|planned|planning|will|aims|could)\b|\bnot\b|\bno cash\b",
             clause,
             re.I,
         ):
             continue
-        if kind == "PROFIT_GROWTH" and (
-            re.search(
-                r"净利(?:润)?|归母净利|扣非净利|利润|\bprofit\b|\bearnings\b|net income",
-                clause,
-                re.I,
-            )
-            and re.search(
-                r"增长|增加|扭亏|上升|\bgrew\b|\bgrowth\b|\brose\b|\bincreased?\b",
-                clause,
-                re.I,
-            )
-        ):
+        if kind == "PROFIT_GROWTH" and _profit_growth_supported(clause):
             matches.append((index, clause.strip()))
         if kind == "CASH_COLLECTION" and re.search(
             r"实际回款|已回款|已.{0,6}收到.{0,12}货款|收到.{0,12}客户.{0,8}货款|客户.{0,12}已.{0,8}回款"
@@ -136,6 +171,94 @@ def _earnings_fact_clauses(source, kind, now):
 
 def _earnings_fact(source, kind, now):
     return bool(_earnings_fact_clauses(source, kind, now))
+
+
+_RISK_QUOTE_PATTERNS = {
+    "FINANCING_COOLING": re.compile(
+        r"(?:融资|募资).{0,16}(?:降温|断代|断层|收缩|减少|下降|下滑|萎缩|放缓|低迷|困难|枯竭|中断|锐减|骤降|回落)"
+        r"|(?:funding|financing|fundrais\w*).{0,35}(?:fell|fall\w*|drop\w*|declin\w*|cool\w*|slow\w*|contract\w*|dried)",
+        re.I,
+    ),
+    "LAYOFFS_CLOSURES": re.compile(
+        r"欠薪|拖欠(?:工资|薪资)|裁员|倒闭|破产|停业|关停|layoffs?|laying off|unpaid wages|wage arrears|bankrupt\w*|shut(?:ting)? down",
+        re.I,
+    ),
+    "ORDER_CUTS": re.compile(
+        r"砍单|削单|(?:订单|采购).{0,12}(?:取消|减少|下降|下滑|回落)|取消.{0,10}订单|(?:cancel\w*|cut|reduc\w*).{0,20}orders|orders.{0,20}(?:cut|cancel\w*|fell|declin\w*)",
+        re.I,
+    ),
+    "OVERCAPACITY_PRICE_WAR": re.compile(
+        r"产能过剩|过剩产能|价格战|降价竞争|price wars?|overcapacity|excess capacity",
+        re.I,
+    ),
+    "PRODUCTION_DELAY": re.compile(
+        r"(?:量产|商业化|交付|验收).{0,12}(?:推迟|延期|延后|延迟)|(?:推迟|延期|延后|延迟).{0,12}(?:量产|商业化|交付|验收)|(?:production|commerciali[sz]ation|deliver\w*).{0,25}(?:delay\w*|postpon\w*|defer\w*)",
+        re.I,
+    ),
+}
+
+
+def _old_quote_year(clause, source, now):
+    reference = now.year if isinstance(now, (date, datetime)) else None
+    if reference is None:
+        try:
+            reference = date.fromisoformat(str(source.get("publishedDate"))[:10]).year
+        except ValueError:
+            return False
+    years = {
+        int(year) for year in re.findall(r"(?<!\d)((?:19|20)\d{2})(?:年|\b)", clause)
+    }
+    return bool(years) and years.isdisjoint({reference, reference - 1})
+
+
+def _risk_quote_supported(source, kind, now=None):
+    """Check the quoted claim, separately from checking the original document."""
+    pattern = _RISK_QUOTE_PATTERNS.get(kind)
+    if pattern is None:
+        return False
+    if re.search(
+        r"否认|传闻不实|不属实|消息不实|说法不实|\bdenied\b|rumou?r.{0,20}(?:false|untrue|denied)",
+        str(source.get("quote") or ""),
+        re.I,
+    ):
+        return False
+    for clause in _quote_clauses(source.get("quote")):
+        if _old_quote_year(clause, source, now):
+            continue
+        if re.search(
+            r"预计|预期|预测|可能|或将|担忧|拟|计划|传闻|网传|谣言|\b(?:expect\w*|forecast\w*|could|may|might|potential|rumou?r\w*)\b",
+            clause,
+            re.I,
+        ):
+            continue
+        if re.search(
+            r"个别|单家|一家(?:公司|企业)|某家|\bisolated\b|\ba single\b|\bone company\b",
+            clause,
+            re.I,
+        ):
+            continue
+        if re.search(
+            r"没有|不存在|否认|并非|并未|未曾|未(?:出现|发生|有|见|遭遇)?|\b(?:no|not|denied?|without)\b",
+            clause,
+            re.I,
+        ):
+            continue
+        if kind == "FINANCING_COOLING" and re.search(
+            r"融资(?:成本|利率|利息|费用)", clause
+        ):
+            continue
+        if pattern.search(clause):
+            return True
+    return False
+
+
+def _early_quote_supported(source, kind, now):
+    # Stage remains an evidence-backed classification with half protection;
+    # it is not a confirmed industry downturn claim.
+    return (
+        kind in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}
+        and _source_recency(source, now) == "RECENT"
+    )
 
 
 def _title_fingerprint(value):
@@ -320,28 +443,35 @@ def normalize_industry_cycle(
             and check["queryValidation"] == "INSUFFICIENT_QUERY"
         ):
             check["status"] = "UNVERIFIED"
+        supported_refs = [
+            ref
+            for ref in check["sourceIds"]
+            if _source_recency(sources.get(ref, {}), now) == "RECENT"
+            and _risk_quote_supported(sources.get(ref, {}), kind, now)
+        ]
+        check["claimSupported"] = (
+            bool(supported_refs) and check["timeVerification"] == "RECENT"
+        )
+        check["claimSourceIds"] = supported_refs
         check["independentSourceCount"] = _independent_source_count(
-            check["sourceIds"], sources, now
+            supported_refs, sources, now
         )
         check["strength"] = "NONE"
         if check["status"] == "FOUND" and check["timeVerification"] == "HISTORICAL":
-            check["status"] = "UNVERIFIED"
             check["historicalEvidence"] = True
         if check["status"] == "FOUND":
             if not check["sourceIds"]:
                 raise ValueError("found industry risk requires a current cited source")
             flags.add(kind)
-            if (
+            if check["claimSupported"] and (
                 check["verification"] == "SOURCE_CHECKED"
                 or check["independentSourceCount"] >= 2
             ):
                 check["strength"] = "CONFIRMED"
                 confirmed_flags.add(kind)
-            elif check["independentSourceCount"] == 1:
+            else:
                 check["strength"] = "SUSPECTED"
                 suspected_flags.add(kind)
-            else:
-                check["strength"] = "UNPROVEN"
         if check["status"] != "FOUND" or check["verification"] != "SOURCE_CHECKED":
             gaps.append(kind)
     if seen != set(RISK_CHECKS):
@@ -350,6 +480,16 @@ def normalize_industry_cycle(
         row["kind"]
         for row in cycle["evidence"]
         if row.get("timeVerification") != "HISTORICAL"
+    }
+    stage_kinds = {
+        row["kind"]
+        for row in cycle["evidence"]
+        if row["kind"] in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}
+        and row.get("timeVerification") == "RECENT"
+        and any(
+            _early_quote_supported(sources.get(ref, {}), row["kind"], now)
+            for ref in row["sourceIds"]
+        )
     }
     facts = {kind: [] for kind in ("PROFIT_GROWTH", "CASH_COLLECTION")}
     for row in cycle["evidence"]:
@@ -374,14 +514,12 @@ def normalize_industry_cycle(
     if stage == "POLICY_CATALYST" and "POLICY_EVENT" not in kinds:
         stage = "UNKNOWN"
     if stage == "EARLY_COMMERCIALIZATION" and not (
-        "COMMERCIALIZATION_EARLY" in kinds
-        or "EARNINGS_NOT_DELIVERED" in kinds
-        or flags & {"FINANCING_COOLING", "PRODUCTION_DELAY"}
+        stage_kinds or confirmed_flags or suspected_flags
     ):
         stage = "UNKNOWN"
-    if "COMMERCIALIZATION_EARLY" in kinds:
+    if "COMMERCIALIZATION_EARLY" in stage_kinds:
         flags.add("EARLY_COMMERCIALIZATION")
-    if "EARNINGS_NOT_DELIVERED" in kinds:
+    if "EARNINGS_NOT_DELIVERED" in stage_kinds:
         flags.add("NO_EARNINGS_DELIVERY")
     if (
         cycle["stage"] != "UNKNOWN"
@@ -432,36 +570,39 @@ def industry_risk_policy(cycle):
     """
     cycle = cycle if isinstance(cycle, dict) else {}
     flags = set(cycle.get("riskFlags") or [])
-    confirmed = set(cycle.get("confirmedRiskFlags") or [])
+    confirmed = set(cycle.get("confirmedRiskFlags") or []) & (
+        set(RISK_CHECKS) | LEGACY_CONFIRMED_RISK_FLAGS
+    )
     suspected = set(cycle.get("suspectedRiskFlags") or [])
     declared = cycle.get("riskLevel")
-    unproven = flags & {
-        "FORWARD_PLANS_ONLY",
-        "NO_CURRENT_EARNINGS_PROOF",
-        "NO_EARNINGS_DELIVERY",
-    }
-    if cycle.get("forwardPlansOnly") is True:
+    recovered = cycle.get("earningsVerified") is True
+    if recovered:
+        flags.difference_update(EARNINGS_RISK_FLAGS)
+        suspected.difference_update(EARNINGS_RISK_FLAGS)
+    unproven = flags & EARNINGS_RISK_FLAGS
+    if not recovered and cycle.get("forwardPlansOnly") is True:
         unproven.add("FORWARD_PLANS_ONLY")
-    if "CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING" in (cycle.get("evidenceGaps") or []):
+    if not recovered and "CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING" in (
+        cycle.get("evidenceGaps") or []
+    ):
         unproven.add("NO_CURRENT_EARNINGS_PROOF")
     legacy = declared not in {"NONE", "UNPROVEN", "SUSPECTED", "CONFIRMED"}
     if legacy:
-        confirmed.update(
-            flags
-            & (
-                set(RISK_CHECKS)
-                | {"DEBUBBLING", "EARLY_COMMERCIALIZATION", "NO_EARNINGS_DELIVERY"}
-            )
-        )
-    early = cycle.get("stage") == "EARLY_COMMERCIALIZATION"
-    if early and "EARLY_COMMERCIALIZATION" in flags:
-        confirmed.add("EARLY_COMMERCIALIZATION")
+        confirmed.update(flags & (set(RISK_CHECKS) | LEGACY_CONFIRMED_RISK_FLAGS))
+    confirmed.update(flags & LEGACY_CONFIRMED_RISK_FLAGS)
+    if declared == "CONFIRMED" and not confirmed:
+        confirmed.update(flags & set(RISK_CHECKS))
+    early = not recovered and cycle.get("stage") == "EARLY_COMMERCIALIZATION"
     flags.update(confirmed | suspected | unproven)
-    if confirmed or early or declared == "CONFIRMED":
+    if confirmed:
         level, scale = "CONFIRMED", 1.0
-    elif suspected or "PERSISTED_RISK_WATCH" in flags or declared == "SUSPECTED":
+    elif (
+        suspected
+        or "PERSISTED_RISK_WATCH" in flags
+        or (declared == "SUSPECTED" and flags)
+    ):
         level, scale = "SUSPECTED", 0.5
-    elif unproven or flags or declared == "UNPROVEN":
+    elif early or unproven or flags:
         level, scale = "UNPROVEN", 0.5
     else:
         level, scale = "NONE", 0.0
@@ -476,7 +617,9 @@ def industry_risk_policy(cycle):
         "NO_EARNINGS_DELIVERY": "缺乏当期盈利兑现",
         "FORWARD_PLANS_ONLY": "仅见远期扩产/框架意向，尚无当期盈利兑现",
         "NO_CURRENT_EARNINGS_PROOF": "当期利润增长/实际回款证据不足",
-        "PERSISTED_RISK_WATCH": "延续近14日已确认的行业降温观察，待盈利恢复证据解除",
+        "PERSISTED_RISK_WATCH": COMPANY_EARNINGS_INDUSTRY_WATCH_NOTE
+        if recovered
+        else "延续近14日已确认的行业降温观察，等待该类风险的恢复证据",
     }
     messages = [
         label + ("（待核实）" if flag in suspected and flag not in confirmed else "")
@@ -524,10 +667,12 @@ def merge_industry_cycles(primary, review):
             if isinstance(primary, dict)
             else normalize_industry_cycle(None)
         )
+        result = _with_watch_note(_clear_earnings_risks(result))
         result.update(industry_risk_policy(result))
         return result
     if not isinstance(primary, dict):
         result = deepcopy(review)
+        result = _with_watch_note(_clear_earnings_risks(result))
         result.update(industry_risk_policy(result))
         return result
     result = deepcopy(primary)
@@ -610,6 +755,7 @@ def merge_industry_cycles(primary, review):
         result["confirmedRiskAt"] = dates
     if not result.get("confirmedAt") and review.get("confirmedAt"):
         result["confirmedAt"] = review["confirmedAt"]
+    result = _with_watch_note(_clear_earnings_risks(result))
     result.update(industry_risk_policy(result))
     return result
 
@@ -624,6 +770,54 @@ def _aware_stamp(value):
         )
     except (TypeError, ValueError):
         return None
+
+
+def _clear_earnings_risks(cycle):
+    result = deepcopy(cycle)
+    if result.get("earningsVerified") is not True:
+        return result
+    for field in (
+        "riskFlags",
+        "confirmedRiskFlags",
+        "suspectedRiskFlags",
+        "persistedRiskFlags",
+    ):
+        result[field] = sorted(set(result.get(field) or []) - EARNINGS_RISK_FLAGS)
+    result["forwardPlansOnly"] = False
+    result["evidenceGaps"] = [
+        gap
+        for gap in result.get("evidenceGaps") or []
+        if gap != "CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING"
+    ]
+    result["confirmedRiskAt"] = {
+        flag: stamp
+        for flag, stamp in (result.get("confirmedRiskAt") or {}).items()
+        if flag not in EARNINGS_RISK_FLAGS
+    }
+    result["persistedEvidence"] = [
+        proof
+        for proof in result.get("persistedEvidence") or []
+        if proof.get("flag") not in EARNINGS_RISK_FLAGS
+    ]
+    if not result["persistedRiskFlags"]:
+        result["riskFlags"] = sorted(
+            set(result["riskFlags"]) - {"PERSISTED_RISK_WATCH"}
+        )
+    return result
+
+
+def _with_watch_note(cycle):
+    if cycle.get("persistedRiskFlags"):
+        note = (
+            COMPANY_EARNINGS_INDUSTRY_WATCH_NOTE
+            if cycle.get("earningsVerified") is True
+            else "延续近14日已确认的行业降温观察，等待该类风险的恢复证据"
+        )
+        if note not in cycle.get("evidenceSummary", ""):
+            cycle["evidenceSummary"] = (
+                cycle.get("evidenceSummary", "").rstrip("。") + "。" + note + "。"
+            )
+    return cycle
 
 
 def persist_industry_risk(current, previous, *, confirmed_at, now):
@@ -641,13 +835,16 @@ def persist_industry_risk(current, previous, *, confirmed_at, now):
         if isinstance(current, dict)
         else normalize_industry_cycle(None)
     )
+    result = _clear_earnings_risks(result)
     saved_watch = set(result.get("persistedRiskFlags") or [])
     if saved_watch:
         dates = result.get("confirmedRiskAt") or {}
         valid_watch = {
             flag
             for flag in saved_watch
-            if result.get("earningsVerified") is not True
+            if not (
+                result.get("earningsVerified") is True and flag in EARNINGS_RISK_FLAGS
+            )
             and (stamp := _aware_stamp(dates.get(flag))) is not None
             and timedelta(0) <= now - stamp <= timedelta(days=14)
         }
@@ -678,15 +875,15 @@ def persist_industry_risk(current, previous, *, confirmed_at, now):
             if not result["confirmedRiskAt"]:
                 result.pop("confirmedAt", None)
     result.update(industry_risk_policy(result))
-    if not isinstance(previous, dict) or result.get("earningsVerified") is True:
-        return result
+    if not isinstance(previous, dict):
+        return _with_watch_note(result)
     prior_policy = industry_risk_policy(previous)
     current_policy = industry_risk_policy(result)
     old_flags = set(prior_policy["confirmedRiskFlags"]) | set(
         previous.get("persistedRiskFlags") or []
     )
-    if previous.get("stage") == "EARLY_COMMERCIALIZATION":
-        old_flags.add("EARLY_COMMERCIALIZATION")
+    if result.get("earningsVerified") is True:
+        old_flags.difference_update(EARNINGS_RISK_FLAGS)
     current_checks = {row["kind"]: row for row in result.get("riskChecks") or []}
     stored_dates = previous.get("confirmedRiskAt") or {}
     dates = deepcopy(result.get("confirmedRiskAt") or {})
@@ -757,11 +954,7 @@ def persist_industry_risk(current, previous, *, confirmed_at, now):
         result["riskFlags"] = sorted(
             set(result.get("riskFlags") or []) | {"PERSISTED_RISK_WATCH"}
         )
-        note = "延续近14日已确认的行业降温观察，待盈利恢复证据解除"
-        if note not in result.get("evidenceSummary", ""):
-            result["evidenceSummary"] = (
-                result.get("evidenceSummary", "").rstrip("。") + "。" + note + "。"
-            )
+        _with_watch_note(result)
         result.update(industry_risk_policy(result))
     return result
 
@@ -785,8 +978,7 @@ def expire_industry_risk(cycle, now):
         result["persistedEvidence"] = []
         result["riskLevel"] = (
             "CONFIRMED"
-            if result.get("confirmedRiskFlags")
-            or result.get("stage") == "EARLY_COMMERCIALIZATION"
+            if industry_risk_policy(result)["confirmedRiskFlags"]
             else "SUSPECTED"
             if result.get("suspectedRiskFlags")
             else "UNPROVEN"

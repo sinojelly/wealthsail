@@ -28,7 +28,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-risk-strength-v11"
+PROMPT_VERSION = "daily-research-industry-risk-strength-v12"
 MAX_REPORT_SOURCES = 24
 
 
@@ -335,6 +335,7 @@ def _public_industry_cycle(value):
                         "historicalEvidence",
                         "strength",
                         "independentSourceCount",
+                        "claimSupported",
                         "queryValidation",
                         "searchExecutionVerified",
                     ),
@@ -1224,6 +1225,51 @@ def _industry_history_rows(records, now):
     return output
 
 
+def _without_recovered_earnings_risks(cycle):
+    """A company recovery releases earnings doubts, never sector-wide facts."""
+    from backend.macro.industry_cycle import EARNINGS_RISK_FLAGS, industry_risk_policy
+
+    result = deepcopy(cycle)
+    prior_policy = industry_risk_policy(cycle)
+    for field in (
+        "riskFlags",
+        "confirmedRiskFlags",
+        "suspectedRiskFlags",
+        "persistedRiskFlags",
+    ):
+        result[field] = sorted(
+            set(prior_policy.get(field, result.get(field)) or []) - EARNINGS_RISK_FLAGS
+        )
+    result["confirmedRiskAt"] = {
+        flag: stamp
+        for flag, stamp in (result.get("confirmedRiskAt") or {}).items()
+        if flag not in EARNINGS_RISK_FLAGS
+    }
+    result["persistedEvidence"] = [
+        row
+        for row in result.get("persistedEvidence") or []
+        if row.get("flag") not in EARNINGS_RISK_FLAGS
+    ]
+    if not result["persistedRiskFlags"]:
+        result["riskFlags"] = [
+            flag for flag in result["riskFlags"] if flag != "PERSISTED_RISK_WATCH"
+        ]
+    if result.get("stage") == "EARLY_COMMERCIALIZATION":
+        result["stage"] = "UNKNOWN"
+    result["forwardPlansOnly"] = False
+    result["evidenceGaps"] = [
+        gap
+        for gap in result.get("evidenceGaps") or []
+        if gap not in EARNINGS_RISK_FLAGS
+        and gap != "CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING"
+    ]
+    # Recompute strength from the surviving flags; the old declaration may
+    # describe only the earnings doubts just removed.
+    result["riskLevel"] = "NONE"
+    result.update(industry_risk_policy(result))
+    return result
+
+
 def _previous_industry_states(packet, now):
     from backend.macro.industry_cycle import industry_risk_policy
 
@@ -1249,26 +1295,44 @@ def _previous_industry_states(packet, now):
         key = (
             ("industry", row["industry"]) if "industry" in row else ("key", row["key"])
         )
-        if (
-            key in chosen
-            or key in recovered
-            and _stamp(row["researchedAt"]) <= recovered[key]
-        ):
-            continue
-        if industry_risk_policy(row["industryCycle"])["leftDiscountScale"] > 0:
+        if key in recovered and _stamp(row["researchedAt"]) <= recovered[key]:
+            row = {
+                **row,
+                "industryCycle": _without_recovered_earnings_risks(
+                    row["industryCycle"]
+                ),
+            }
+        if key in chosen:
+            # Keep each older category's original clock: a newer observation
+            # about a different risk must not replace the entire sector state.
+            chosen[key] = {
+                **chosen[key],
+                "industryCycle": _persist_review_cycle(
+                    chosen[key]["industryCycle"], row, now
+                ),
+            }
+        elif industry_risk_policy(row["industryCycle"])["leftDiscountScale"] > 0:
             chosen[key] = row
     return chosen
 
 
-def _persist_review_cycle(cycle, history, now):
+def _persist_review_cycle(cycle, history, now, *, earnings_recovered=False):
     from backend.macro.industry_cycle import persist_industry_risk
 
     if history is None:
         return cycle
     previous = {**history["industryCycle"], "sources": history.get("sources", [])}
-    return persist_industry_risk(
-        cycle, previous, confirmed_at=history["researchedAt"], now=now
+    result = persist_industry_risk(
+        {**cycle, "earningsVerified": True} if earnings_recovered else cycle,
+        previous,
+        confirmed_at=history["researchedAt"],
+        now=now,
     )
+    if earnings_recovered:
+        # The proof belongs to individual linked companies, not every company
+        # in the sector review. Preserve the review's own verification state.
+        result["earningsVerified"] = cycle.get("earningsVerified", False)
+    return result
 
 
 def _nav_collection_results(rows, now):
@@ -1624,7 +1688,7 @@ def build_prompt(packet):
         "动态检索中英文资料：国内增长/信用/政策、美国通胀/利率、全球能源/航运/地缘、选举/贸易/制裁、全球权益/科技估值和未来日历。\n"
         "强制反方与行业降温证据核查：对industryCycleResearch中每个候选赛道及本次新发现的每个方向，实际执行公开网页检索，检索近90天一级市场融资降温/断代（FINANCING_COOLING）、企业欠薪/裁员/倒闭潮（LAYOFFS_CLOSURES）、下游砍单（ORDER_CUTS）、产能过剩价格战（OVERCAPACITY_PRICE_WAR）、商业化量产推迟（PRODUCTION_DELAY），并核对融资金额/笔数的时间区间与原始依据，不从赛道名称或个别企业困境推定行业事实。\n"
         "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
-        "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
+        "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务优先复查历史风险赛道，再按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
         "产业兑现阶段stage仅选EARNINGS_DELIVERY/POLICY_CATALYST/EARLY_COMMERCIALIZATION/UNKNOWN，evidence.kind仅选PROFIT_GROWTH/CASH_COLLECTION/PAID_ORDERS/POLICY_EVENT/COMMERCIALIZATION_EARLY/EARNINGS_NOT_DELIVERED/EXPANSION_PLAN/FRAMEWORK_AGREEMENT，每条{kind,summary,sourceIds}。业绩兑现必须同时有当期财报利润增长与真实订单回款原文，订单意向或销量预测不足；政策/事件待传导选POLICY_CATALYST，试制/量产尚早或去泡沫证据支持才选EARLY_COMMERCIALIZATION，未知保持UNKNOWN。\n"
         "严格区分拟投资建厂/签署框架协议等远期扩产计划与已披露财报利润增长/实际回款；如电关节投资计划只能归EXPANSION_PLAN，不能算当期盈利兑现。在商业化早期、融资降温或缺乏当期盈利兑现时，单纯扩产计划不得提高机会分或充当正向催化，只列观察事项。机器人/具身智能仅为核查示例，不预设今天发生融资降温。左轨额外折价和机会分扣减由服务器执行；去泡沫期仅极小仓位观察或等待右侧拐点。\n"
@@ -1813,14 +1877,13 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         for industry in direction.get("reviewIndustryIds", [])
     }
     industry_reviews = [
-        review
-        if review["industry"] in recovered_industries
-        else {
+        {
             "industry": review["industry"],
             **_persist_review_cycle(
                 review,
                 historical_cycles.get(("industry", review["industry"])),
                 completed_at,
+                earnings_recovered=review["industry"] in recovered_industries,
             ),
         }
         for review in industry_reviews
