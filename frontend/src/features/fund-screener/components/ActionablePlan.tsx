@@ -2,6 +2,7 @@ import FundNavTrendChart from "./FundNavTrendChart";
 import { buyZoneStatus, buyZoneClassName } from "../opportunity-display";
 import type {
   ActionableZoneResult,
+  DailyResearch,
   PlanPrice,
   PlanTrack,
 } from "../../../api/investment";
@@ -146,6 +147,15 @@ export function ActionablePlanEvidence({
               相对{result.relativeStrength.benchmark ?? "沪深300"}的板块强弱
             </strong>
           </p>
+          {result.relativeStrength.weakening === true ? (
+            <p className="op-relative-strength-warning" role="status">
+              📉 相对沪深300持续走弱（已触发趋势风控）
+            </p>
+          ) : result.relativeStrength.trendWeakening === true ? (
+            <p className="op-relative-strength-warning" role="status">
+              📉 反弹高点下移，趋势风险仍需观察。
+            </p>
+          ) : null}
           <p>
             20日超额收益：{numeric(result.relativeStrength.excessReturn20d, 2)}
             {result.relativeStrength.excessReturn20d != null ? " 个百分点" : ""}
@@ -291,11 +301,13 @@ export default function ActionablePlan({
   onTrack,
   pending = false,
   frozen = false,
+  sources,
 }: {
   result: ActionableZoneResult;
   onTrack?: (track: PlanTrack) => void;
   pending?: boolean;
   frozen?: boolean;
+  sources?: NonNullable<DailyResearch["report"]>["sources"];
 }) {
   const price = (value: PlanPrice | undefined) => planPrice(value, result);
   const unit = planUnit(result.unit);
@@ -339,6 +351,7 @@ export default function ActionablePlan({
       <IndustryCycleWarning
         cycle={result.industryCycle}
         warning={result.industryRiskWarning}
+        sources={sources}
       />
       <PlanPriceRefresh plan={result} />
       {planTimeBasisNote(result) && (

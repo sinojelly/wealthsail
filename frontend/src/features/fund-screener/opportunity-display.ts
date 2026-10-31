@@ -31,6 +31,9 @@ const industryRiskFlags = new Set([
   "DEBUBBLING",
   "EARLY_COMMERCIALIZATION",
   "NO_EARNINGS_DELIVERY",
+  "FORWARD_PLANS_ONLY",
+  "NO_CURRENT_EARNINGS_PROOF",
+  "PERSISTED_RISK_WATCH",
 ]);
 
 function hasIndustryRisk(
@@ -43,6 +46,8 @@ function hasIndustryRisk(
   );
   return (
     plan.industryCycle?.stage === "EARLY_COMMERCIALIZATION" ||
+    (plan.industryCycle?.riskLevel != null &&
+      plan.industryCycle.riskLevel !== "NONE") ||
     !!plan.industryCycle?.riskFlags?.some((flag) =>
       industryRiskFlags.has(flag),
     ) ||

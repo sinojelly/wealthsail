@@ -303,6 +303,24 @@ it("shows a personal sell card only from nonempty actor alerts even when researc
   expect(alert).toHaveTextContent("14:30估算净值");
   expect(alert).toHaveTextContent("已持仓");
 });
+it.each([
+  { riskLevel: "UNPROVEN" },
+  { riskLevel: "SUSPECTED" },
+  { riskFlags: ["FORWARD_PLANS_ONLY"] },
+  { riskFlags: ["NO_CURRENT_EARNINGS_PROOF"] },
+  { riskFlags: ["PERSISTED_RISK_WATCH"] },
+])("retains the server's graded industry caution in ranking: %j", (risk) => {
+  const cautious = plan("000001", "LEFT_VALUE", "CANDIDATE", "1.1", 60);
+  Object.assign(cautious, { industryCycle: { stage: "UNKNOWN", ...risk } });
+  const delivered = plan("999999", "LEFT_VALUE", "CANDIDATE", "1.1", 20);
+  delivered.industryCycle = { stage: "EARNINGS_DELIVERY" };
+  show(<QuantitativeScan data={daily([cautious, delivered])} />);
+  expect(
+    [...screen.getByRole("table").querySelectorAll("tbody tr")].map((row) =>
+      row.getAttribute("data-fund-code"),
+    ),
+  ).toEqual(["999999", "000001"]);
+});
 it("renders date-only values without an invented missing-time suffix and preserves real Shanghai time", () => {
   expect(timeLabel("2026-10-20")).toBe("2026年10月20日");
   expect(timeLabel("2026-10-20T20:30:00Z")).toBe("2026年10月21日 04:30");

@@ -388,6 +388,24 @@ export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   priceState: string;
   missingEvidence?: string[];
 }
+export type IndustryRiskLevel = "NONE" | "UNPROVEN" | "SUSPECTED" | "CONFIRMED";
+export type IndustryRiskKind =
+  | "FINANCING_COOLING"
+  | "LAYOFFS_CLOSURES"
+  | "ORDER_CUTS"
+  | "OVERCAPACITY_PRICE_WAR"
+  | "PRODUCTION_DELAY";
+export interface IndustryRiskCheck {
+  kind: IndustryRiskKind;
+  status: "FOUND" | "NOT_FOUND" | "UNVERIFIED";
+  verification?: string;
+  strength?: IndustryRiskLevel;
+  independentSourceCount?: number;
+  summary: string;
+  query: string;
+  sourceIds: string[];
+  recency?: string;
+}
 export interface IndustryCycle {
   stage:
     | "EARNINGS_DELIVERY"
@@ -395,9 +413,18 @@ export interface IndustryCycle {
     | "EARLY_COMMERCIALIZATION"
     | "UNKNOWN";
   label?: string;
+  riskLevel?: IndustryRiskLevel;
+  leftDiscountScale?: 0 | 0.5 | 1;
+  earningsVerified?: boolean;
+  forwardPlansOnly?: boolean;
   riskFlags?: string[];
+  confirmedRiskFlags?: string[];
+  suspectedRiskFlags?: string[];
+  evidenceGaps?: string[];
+  riskChecks?: IndustryRiskCheck[];
   evidenceSummary?: string;
   sourceIds?: string[];
+  industryRiskWarning?: string | null;
 }
 export interface RelativeStrength {
   state?: string;
@@ -412,6 +439,8 @@ export interface RelativeStrength {
   drawdownUnit?: "PERCENT";
   breakdownDate: string | null;
   weakening?: boolean | null;
+  lowerHighs?: boolean | null;
+  trendWeakening?: boolean | null;
   consecutiveWeakDays?: number | null;
   reasons?: string[];
   missingEvidence?: string[];

@@ -147,11 +147,13 @@ function DirectionSignals({
 function FundPlan({
   plan,
   direction,
+  sources,
   reportRunId,
   onTrack,
 }: {
   plan: ActionableZoneResult;
   direction: ValueDirection;
+  sources: NonNullable<DailyResearch["report"]>["sources"];
   reportRunId?: string | null;
   onTrack?: (input: DirectionTrackInput) => Promise<void>;
 }) {
@@ -271,6 +273,7 @@ function FundPlan({
           <IndustryCycleWarning
             cycle={plan.industryCycle ?? direction.industryCycle}
             warning={plan.industryRiskWarning ?? direction.industryRiskWarning}
+            sources={sources}
           />
           {plan.priceBasis === "UNIT_NAV" && latest.data?.currentEstimate && (
             <FundWatchQuote
@@ -435,6 +438,7 @@ export default function ValueDirections({
               <IndustryCycleWarning
                 cycle={direction.industryCycle}
                 warning={direction.industryRiskWarning}
+                sources={report.sources}
               />
               <DirectionSignals
                 rows={direction.catalysts}
@@ -491,6 +495,7 @@ export default function ValueDirections({
                     key={`${plan.subjectKind}:${plan.subjectId}:${plan.selectedTrack ?? plan.track}`}
                     plan={plan}
                     direction={direction}
+                    sources={report.sources}
                     reportRunId={data.reportRunId}
                     onTrack={onTrack}
                   />
@@ -512,6 +517,7 @@ export default function ValueDirections({
             <ActionablePlan
               key={`${plan.subjectKind}:${plan.subjectId}:${plan.selectedTrack ?? plan.track}`}
               result={plan}
+              sources={report.sources}
             />
           ))}
         </>
