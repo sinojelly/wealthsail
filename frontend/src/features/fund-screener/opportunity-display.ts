@@ -15,11 +15,41 @@ import {
 type EntryGuard = EntrySafety & {
   triggerState?: string;
   inEntryZone?: boolean;
+  subscriptionRestricted?: boolean;
+  preferredEntryEligible?: boolean;
 };
 const number = (value: unknown) =>
   value != null && value !== "" && Number.isFinite(Number(value))
     ? Number(value)
     : null;
+const industryRiskFlags = new Set([
+  "FINANCING_COOLING",
+  "LAYOFFS_CLOSURES",
+  "ORDER_CUTS",
+  "OVERCAPACITY_PRICE_WAR",
+  "PRODUCTION_DELAY",
+  "DEBUBBLING",
+  "EARLY_COMMERCIALIZATION",
+  "NO_EARNINGS_DELIVERY",
+]);
+
+function hasIndustryRisk(
+  plan: ActionableZoneResult,
+  track?: ActionableZoneTrack,
+) {
+  const penalty = number(
+    track?.scoreBreakdown?.industryCyclePenalty ??
+      plan.scoreBreakdown?.industryCyclePenalty,
+  );
+  return (
+    plan.industryCycle?.stage === "EARLY_COMMERCIALIZATION" ||
+    !!plan.industryCycle?.riskFlags?.some((flag) =>
+      industryRiskFlags.has(flag),
+    ) ||
+    !!plan.industryRiskWarning?.trim() ||
+    (penalty != null && penalty < 0)
+  );
+}
 export function highPriceZone(
   plan: ActionableZoneResult,
   track?: ActionableZoneTrack,
@@ -180,9 +210,16 @@ export function planPriority(
   track?: ActionableZoneTrack,
   signal?: EntryGuard,
 ) {
+  const ready = planEntryReady(plan, track, signal);
   return {
-    preferred: preferredEntryEligible(plan, track, signal),
-    ready: planEntryReady(plan, track, signal),
+    group: highPriceZone(plan, track) ? 2 : ready ? 0 : 1,
+    blocked: [plan, track, signal].some(
+      (row: EntryGuard | undefined) =>
+        row?.entryBlocked === true ||
+        row?.subscriptionRestricted === true ||
+        row?.preferredEntryEligible === false,
+    ),
+    industryRisk: hasIndustryRisk(plan, track),
     score: priorityScore(track),
     rewardRisk:
       typeof track?.opportunityScore === "number" &&
@@ -199,8 +236,9 @@ export function comparePriority(
   b: ReturnType<typeof planPriority>,
 ) {
   return (
-    Number(b.preferred) - Number(a.preferred) ||
-    Number(b.ready) - Number(a.ready) ||
+    a.group - b.group ||
+    Number(a.blocked) - Number(b.blocked) ||
+    Number(a.industryRisk) - Number(b.industryRisk) ||
     b.score - a.score ||
     b.rewardRisk - a.rewardRisk ||
     a.distance - b.distance
@@ -234,8 +272,9 @@ export function bestDirectionPriority(plans: ActionableZoneResult[]) {
         ),
       )
       .sort(comparePriority)[0] ?? {
-      preferred: false,
-      ready: false,
+      group: 3,
+      blocked: false,
+      industryRisk: false,
       score: 0,
       rewardRisk: 0,
       distance: Infinity,

@@ -16,6 +16,7 @@ import { readingText } from "../research-reading";
 import PlanRevision from "./PlanRevision";
 import EstimatedProfitRange from "./EstimatedProfitRange";
 import PlanPriceRefresh from "./PlanPriceRefresh";
+import { IndustryCycleBadge, IndustryCycleWarning } from "./IndustryCycle";
 
 const planTrackLabel = (track: PlanTrack) =>
   track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势";
@@ -133,6 +134,47 @@ export function ActionablePlanEvidence({
   return (
     <div className="op-plan-evidence">
       {planTimeBasisNote(result) && <p>{planTimeBasisNote(result)}</p>}
+      {result.industryCycle?.evidenceSummary && (
+        <p>
+          产业阶段依据：{readingText(result.industryCycle.evidenceSummary, 400)}
+        </p>
+      )}
+      {result.relativeStrength && (
+        <section className="op-relative-strength" aria-label="板块相对强弱依据">
+          <p>
+            <strong>
+              相对{result.relativeStrength.benchmark ?? "沪深300"}的板块强弱
+            </strong>
+          </p>
+          <p>
+            20日超额收益：{numeric(result.relativeStrength.excessReturn20d, 2)}
+            {result.relativeStrength.excessReturn20d != null ? " 个百分点" : ""}
+          </p>
+          <p>
+            60日超额收益：{numeric(result.relativeStrength.excessReturn60d, 2)}
+            {result.relativeStrength.excessReturn60d != null ? " 个百分点" : ""}
+          </p>
+          <p>
+            近60日高点回落：{numeric(result.relativeStrength.drawdown60d, 2)}
+            {result.relativeStrength.drawdown60d != null ? "%" : ""}
+          </p>
+          <p>
+            本轮走弱分水岭（跌破MA60）：
+            {result.relativeStrength.breakdownDate
+              ? timeLabel(result.relativeStrength.breakdownDate)
+              : "尚未确认"}
+          </p>
+          {result.relativeStrength.missingEvidence?.length ? (
+            <p>
+              待补充：
+              {readingText(
+                result.relativeStrength.missingEvidence.join("；"),
+                400,
+              )}
+            </p>
+          ) : null}
+        </section>
+      )}
       {showConditions && (
         <>
           <p>{coordinateLabel(result)}</p>
@@ -266,10 +308,13 @@ export default function ActionablePlan({
       className="op-actionable-plan"
       aria-label={`${fundDisplayName(result.label, result.fundCode ?? result.subjectId)}双轨计划`}
     >
-      <h3>
-        {fundDisplayName(result.label, result.fundCode ?? result.subjectId)} ·
-        双轨计划
-      </h3>
+      <header className="op-plan-heading">
+        <h3>
+          {fundDisplayName(result.label, result.fundCode ?? result.subjectId)} ·
+          双轨计划
+        </h3>
+        <IndustryCycleBadge cycle={result.industryCycle} />
+      </header>
       <PlanRevision
         plan={{ ...result, selectedTrack: undefined, track: undefined }}
       />
@@ -291,6 +336,10 @@ export default function ActionablePlan({
           <span className={buyZoneClassName(status)}>{status.text}</span>
         )}
       </p>
+      <IndustryCycleWarning
+        cycle={result.industryCycle}
+        warning={result.industryRiskWarning}
+      />
       <PlanPriceRefresh plan={result} />
       {planTimeBasisNote(result) && (
         <p className="op-plan-time-basis">{planTimeBasisNote(result)}</p>

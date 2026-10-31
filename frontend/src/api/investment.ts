@@ -388,7 +388,38 @@ export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
   priceState: string;
   missingEvidence?: string[];
 }
+export interface IndustryCycle {
+  stage:
+    | "EARNINGS_DELIVERY"
+    | "POLICY_CATALYST"
+    | "EARLY_COMMERCIALIZATION"
+    | "UNKNOWN";
+  label?: string;
+  riskFlags?: string[];
+  evidenceSummary?: string;
+  sourceIds?: string[];
+}
+export interface RelativeStrength {
+  state?: string;
+  benchmark?: string;
+  asOf?: string | null;
+  /** Percentage points; -5.25 means underperforming by 5.25 points. */
+  excessReturn20d: number | null;
+  excessReturn60d: number | null;
+  excessReturnUnit?: "PERCENTAGE_POINTS";
+  /** Positive percentage decline from the 60-day high; 18.5 means down 18.5%. */
+  drawdown60d: number | null;
+  drawdownUnit?: "PERCENT";
+  breakdownDate: string | null;
+  weakening?: boolean | null;
+  consecutiveWeakDays?: number | null;
+  reasons?: string[];
+  missingEvidence?: string[];
+}
 export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
+  industryCycle?: IndustryCycle | null;
+  industryRiskWarning?: string | null;
+  relativeStrength?: RelativeStrength | null;
   methodVersion: string;
   subjectKind: "index" | "fund" | "nav";
   subjectId: string;
@@ -469,6 +500,8 @@ export interface QuantitativeScan {
   items: QuantitativeScanItem[];
 }
 export interface ValueDirection extends OpportunityPriority {
+  industryCycle?: IndustryCycle | null;
+  industryRiskWarning?: string | null;
   key: string;
   title: string;
   thesis: string;

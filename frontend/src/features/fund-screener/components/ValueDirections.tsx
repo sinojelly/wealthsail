@@ -34,6 +34,7 @@ import { useLatestFundQuote } from "../latest-quote-resource";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import EstimatedProfitRange from "./EstimatedProfitRange";
 import PlanPriceRefresh from "./PlanPriceRefresh";
+import { IndustryCycleBadge, IndustryCycleWarning } from "./IndustryCycle";
 
 export interface DirectionTrackInput {
   reportRunId: string;
@@ -267,6 +268,10 @@ function FundPlan({
               {status.text}
             </span>
           </p>
+          <IndustryCycleWarning
+            cycle={plan.industryCycle ?? direction.industryCycle}
+            warning={plan.industryRiskWarning ?? direction.industryRiskWarning}
+          />
           {plan.priceBasis === "UNIT_NAV" && latest.data?.currentEstimate && (
             <FundWatchQuote
               row={latest.data.currentEstimate}
@@ -424,8 +429,13 @@ export default function ValueDirections({
                 >
                   {labels[direction.signal]}
                 </span>
+                <IndustryCycleBadge cycle={direction.industryCycle} />
               </header>
               <p>{readingText(direction.thesis, 260)}</p>
+              <IndustryCycleWarning
+                cycle={direction.industryCycle}
+                warning={direction.industryRiskWarning}
+              />
               <DirectionSignals
                 rows={direction.catalysts}
                 sources={report.sources}
@@ -437,6 +447,12 @@ export default function ValueDirections({
               />
               <details>
                 <summary>综合依据与后续观察</summary>
+                {direction.industryCycle?.evidenceSummary && (
+                  <p>
+                    产业阶段依据：
+                    {readingText(direction.industryCycle.evidenceSummary, 400)}
+                  </p>
+                )}
                 {direction.sourceIds.map((id) => {
                   const source = report.sources.find((item) => item.id === id);
                   return (

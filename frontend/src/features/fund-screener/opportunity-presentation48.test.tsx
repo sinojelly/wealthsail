@@ -197,6 +197,59 @@ it("renders one high-zone warning instead of a duplicate buy label and puts the 
   expect(row.getAllByText("🔥 已入高位止盈区（勿追高）")).toHaveLength(1);
   expect(row.queryByText(/已入右侧.*买区/)).not.toBeInTheDocument();
 });
+it("keeps a higher-scoring high-zone cooling fund behind an ordinary waiting fund in cards and the scan", () => {
+  const hot = plan("000001", "LEFT_VALUE", "WATCH", "2", 60);
+  hot.industryCycle = { stage: "EARLY_COMMERCIALIZATION" };
+  hot.industryRiskWarning = "⚠️ 行业去泡沫/等待订单期 · 谨防左侧接飞刀";
+  const ordinary = plan("999999", "LEFT_VALUE", "WATCH", "1.5", 20);
+  for (const item of [hot, ordinary]) {
+    item.entryReady = false;
+    item.inBuyZone = false;
+    item.tracks[0].entryReady = false;
+    item.tracks[0].inBuyZone = false;
+  }
+  show(
+    <>
+      <ValueDirections data={daily([hot, ordinary])} />
+      <QuantitativeScan data={daily([hot, ordinary])} />
+    </>,
+  );
+  expect(
+    [...screen.getByRole("table").querySelectorAll("tbody tr")].map((row) =>
+      row.getAttribute("data-fund-code"),
+    ),
+  ).toEqual(["999999", "000001"]);
+  expect(
+    screen.getAllByRole("heading", { level: 3 }).map((row) => row.textContent),
+  ).toEqual(["今日价值方向与买卖计划", "方向999999", "方向000001"]);
+});
+it.each(["CANDIDATE", "WATCH"] as const)(
+  "puts verified earnings delivery ahead of higher-scoring cooling funds with the same %s execution group",
+  (state) => {
+    const cooling = plan("000001", "LEFT_VALUE", state, "1.1", 60);
+    cooling.industryCycle = { stage: "EARLY_COMMERCIALIZATION" };
+    cooling.tracks[0].scoreBreakdown = { industryCyclePenalty: -20 };
+    const delivered = plan("999999", "LEFT_VALUE", state, "1.1", 20);
+    delivered.industryCycle = { stage: "EARNINGS_DELIVERY" };
+    if (state === "WATCH") delivered.entryReady = false;
+    show(
+      <>
+        <ValueDirections data={daily([cooling, delivered])} />
+        <QuantitativeScan data={daily([cooling, delivered])} />
+      </>,
+    );
+    expect(
+      [...screen.getByRole("table").querySelectorAll("tbody tr")].map((row) =>
+        row.getAttribute("data-fund-code"),
+      ),
+    ).toEqual(["999999", "000001"]);
+    expect(
+      screen
+        .getAllByRole("heading", { level: 3 })
+        .map((row) => row.textContent),
+    ).toEqual(["今日价值方向与买卖计划", "方向999999", "方向000001"]);
+  },
+);
 it("shows a personal sell card only from nonempty actor alerts even when research is collapsed", () => {
   const base = {
     state: "READY",
