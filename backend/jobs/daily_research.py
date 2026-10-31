@@ -994,15 +994,21 @@ async def run_daily_research_service(
     while not stop_event.is_set():
         current = local(now_provider())
         try:
-            async with system_connection(pool) as conn:
+            async with _scheduler_database_connection(pool) as conn:
                 prior_pending = await archive_prior_pipelines(conn, current)
-        except Exception as exc:  # noqa: BLE001 -- keep the original due time on observation failure
+        except SchedulerDatabaseUnavailable as exc:
             logger.warning(
                 "daily_research_observation_failed error_class=%s retry_seconds=60",
-                type(exc).__name__,
+                exc.error_class,
             )
             await wait(stop_event, 60)
             continue
+        except Exception as exc:
+            logger.error(
+                "daily_research_observation_failed error_class=%s retryable=false action=stop_service",
+                type(exc).__name__,
+            )
+            raise
         delay = (due - current).total_seconds()
         if delay > 0:
             await wait(stop_event, min(delay, 60) if prior_pending else delay)

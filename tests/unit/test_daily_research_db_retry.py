@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
 import errno
+import logging
 import socket
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,39 @@ import pytest
 
 from test_daily_pipeline_edges import isolate_edges, stored_pipeline
 from test_daily_research_job import NOW, settings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type", [asyncpg.InsufficientPrivilegeError, asyncpg.PostgresSyntaxError]
+)
+async def test_permanent_archive_failure_stops_service_without_minute_retries(
+    monkeypatch, caplog, error_type
+):
+    mod, state, repo = isolate_edges(monkeypatch)
+    repo.archive_prior_pipelines.side_effect = [False, error_type("private details")]
+    stop = asyncio.Event()
+
+    async def stop_waiting(event, seconds):
+        event.set()
+
+    wait = AsyncMock(side_effect=stop_waiting)
+    with caplog.at_level(logging.ERROR, logger="wealthsail.daily_research"):
+        with pytest.raises(error_type):
+            await mod.run_daily_research_service(
+                object(),
+                settings(),
+                stop_event=stop,
+                now_provider=lambda: NOW,
+                wait=wait,
+            )
+    wait.assert_not_awaited()
+    repo.claim_pipeline.assert_not_awaited()
+    mod.run_codex_research.assert_not_awaited()
+    assert not state["consumed"]
+    assert f"error_class={error_type.__name__}" in caplog.text
+    assert "retryable=false action=stop_service" in caplog.text
+    assert "private details" not in caplog.text
 
 
 def unavailable_acquisition(monkeypatch, mod, error, *, acquisition):
