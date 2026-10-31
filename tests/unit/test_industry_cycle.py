@@ -115,11 +115,19 @@ def test_profit_and_cash_collection_both_need_independently_checked_originals_fo
     raw = cycle(
         stage="EARNINGS_DELIVERY",
         evidence=[
-            {"kind": "PROFIT_GROWTH", "summary": "季报利润增长。", "sourceIds": ["s1"]},
+            {
+                "kind": "PROFIT_GROWTH",
+                "summary": "季报利润增长。",
+                "sourceIds": ["s1"],
+                "companyName": "甲公司",
+                "reportPeriod": "2026Q3",
+            },
             {
                 "kind": "CASH_COLLECTION",
                 "summary": "财报披露真实订单回款。",
                 "sourceIds": ["s2"],
+                "companyName": "甲公司",
+                "reportPeriod": "2026Q3",
             },
         ],
         sourceIds=["s1", "s2"],
@@ -136,12 +144,12 @@ def test_profit_and_cash_collection_both_need_independently_checked_originals_fo
             "source:one": {
                 "verification": "SOURCE_CHECKED",
                 "publishedDate": "2026-10-15",
-                "quote": "本报告期净利润同比增长25%。",
+                "quote": "甲公司2026年第三季度净利润同比增长25%。",
             },
             "source:two": {
                 "verification": "SOURCE_CHECKED",
                 "publishedDate": "2026-10-15",
-                "quote": "本季度客户订单已实际回款2亿元。",
+                "quote": "甲公司2026年第三季度客户订单已实际回款2亿元。",
             },
         },
     )

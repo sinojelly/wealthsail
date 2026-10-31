@@ -49,12 +49,12 @@ def test_single_unchecked_media_is_half_discount_suspected_without_changing_stag
     assert "待核实" in actual["industryRiskWarning"]
 
 
-def test_two_hosts_with_different_original_titles_confirm_the_signal():
+def test_two_unchecked_hosts_with_different_titles_remain_suspected():
     actual = normalized(media(), media("publisher-two.test", "创投季度融资统计回落"))
     assert actual["riskChecks"][0]["independentSourceCount"] == 2
-    assert actual["confirmedRiskFlags"] == ["FINANCING_COOLING"]
-    assert actual["riskLevel"] == "CONFIRMED"
-    assert actual["leftDiscountScale"] == 1.0
+    assert actual["confirmedRiskFlags"] == []
+    assert actual["riskLevel"] == "SUSPECTED"
+    assert actual["leftDiscountScale"] == 0.5
 
 
 @pytest.mark.parametrize(
@@ -132,6 +132,12 @@ def test_syntactically_valid_query_does_not_invent_a_search_execution_receipt():
 
 
 def earnings_same_source(quote):
+    # Each checked fact now identifies its reporting entity and period.
+    quote = "。".join(
+        "甲公司2026年第三季度" + part.removeprefix("甲公司")
+        for part in quote.split("。")
+        if part
+    )
     return normalized(
         media(verification="SOURCE_CHECKED", quote=quote),
         stage="EARNINGS_DELIVERY",
@@ -140,11 +146,15 @@ def earnings_same_source(quote):
                 "kind": "PROFIT_GROWTH",
                 "summary": "甲公司本期利润增长。",
                 "sourceIds": ["s0"],
+                "companyName": "甲公司",
+                "reportPeriod": "2026Q3",
             },
             {
                 "kind": "CASH_COLLECTION",
                 "summary": "甲公司实际回款。",
                 "sourceIds": ["s0"],
+                "companyName": "甲公司",
+                "reportPeriod": "2026Q3",
             },
         ],
     )
@@ -342,7 +352,7 @@ def test_source_count_finds_independent_host_title_pairs_without_greedy_order_bi
         media("publisher-two.test", "a共同标题"),
     )
     assert actual["riskChecks"][0]["independentSourceCount"] == 2
-    assert actual["riskLevel"] == "CONFIRMED"
+    assert actual["riskLevel"] == "SUSPECTED"
 
 
 def test_early_stage_keeps_suspected_industry_claim_at_half_discount():

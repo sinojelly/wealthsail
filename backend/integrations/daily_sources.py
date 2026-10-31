@@ -226,6 +226,7 @@ def industry_cycle_research_tasks(packet, now):
         "lookbackDays": 90,
         "maximumCandidates": MAX_INDUSTRY_CYCLE_CANDIDATES,
         "omittedCandidateCount": omitted,
+        "omittedRiskCandidateCount": len(previous_risks - set(candidates)),
         "newDirectionRequiresSameChecks": True,
         "candidates": [
             {

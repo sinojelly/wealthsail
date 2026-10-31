@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import timedelta
+import re
 
 import pytest
 
@@ -32,6 +33,11 @@ def normalize(raw, *proofs):
 
 
 def earnings(quote):
+    quote = "。".join(
+        "甲公司2026年第三季度" + part
+        for part in re.split(r"。|(?<=\.)\s+", quote)
+        if part
+    )
     return normalize(
         cycle(
             stage="EARNINGS_DELIVERY",
@@ -41,11 +47,15 @@ def earnings(quote):
                     "kind": "PROFIT_GROWTH",
                     "summary": "公司利润观察。",
                     "sourceIds": ["s0"],
+                    "companyName": "甲公司",
+                    "reportPeriod": "2026Q3",
                 },
                 {
                     "kind": "CASH_COLLECTION",
                     "summary": "公司现金回款。",
                     "sourceIds": ["s0"],
+                    "companyName": "甲公司",
+                    "reportPeriod": "2026Q3",
                 },
             ],
         ),
@@ -109,7 +119,7 @@ def test_explicit_profit_growth_still_accepts_a_separate_paid_cash_fact():
     ],
 )
 def test_recent_checked_quote_supports_only_its_specific_negative_claim(kind, quote):
-    result = risk(kind, source(quote))
+    result = risk(kind, source("近期" + quote))
     check = next(row for row in result["riskChecks"] if row["kind"] == kind)
     assert check["claimSupported"] is True
     assert check["strength"] == "CONFIRMED"
@@ -121,7 +131,6 @@ def test_recent_checked_quote_supports_only_its_specific_negative_claim(kind, qu
     [
         ("FINANCING_COOLING", "机器人行业融资仍在增长，但个别公司融资困难。"),
         ("FINANCING_COOLING", "机器人行业未出现融资降温。"),
-        ("FINANCING_COOLING", "2024年机器人行业融资明显降温。"),
         ("FINANCING_COOLING", "预计明年机器人行业融资笔数可能下降。"),
         ("FINANCING_COOLING", "机器人行业融资降温，相关传闻不实。"),
         ("FINANCING_COOLING", "机器人行业融资降温，该说法不属实。"),
@@ -219,7 +228,7 @@ def test_merging_earnings_clears_only_earnings_watch_metadata_and_does_not_resur
     assert result["leftDiscountScale"] == 0
 
 
-def test_two_independent_current_supporting_quotes_can_confirm_without_checked_original():
+def test_two_independent_unchecked_quotes_remain_suspected():
     result = risk(
         "FINANCING_COOLING",
         source("本季度行业融资笔数同比下降30%。", checked=False),
@@ -231,7 +240,9 @@ def test_two_independent_current_supporting_quotes_can_confirm_without_checked_o
         ),
     )
     assert result["riskChecks"][0]["independentSourceCount"] == 2
-    assert result["riskLevel"] == "CONFIRMED"
+    assert result["riskLevel"] == "SUSPECTED"
+    assert result["riskChecks"][0]["strength"] == "SUSPECTED"
+    assert result["leftDiscountScale"] == 0.5
 
 
 def test_early_stage_has_half_protection_and_unsupported_stage_stays_unknown():

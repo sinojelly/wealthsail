@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.macro.industry_evidence_time import event_time_verification
+
 RISK_CHECKS = {
     "FINANCING_COOLING": "一级市场融资降温/断代",
     "LAYOFFS_CLOSURES": "企业欠薪/裁员/倒闭",
@@ -56,6 +58,9 @@ class IndustryEvidence(BaseModel):
     ]
     summary: str = Field(min_length=1, max_length=240)
     sourceIds: list[str] = Field(min_length=1, max_length=8)
+    companyName: str | None = Field(default=None, min_length=1, max_length=120)
+    entityId: str | None = Field(default=None, min_length=1, max_length=80)
+    reportPeriod: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class IndustryRiskCheck(BaseModel):
@@ -173,6 +178,122 @@ def _earnings_fact(source, kind, now):
     return bool(_earnings_fact_clauses(source, kind, now))
 
 
+def _report_periods(text):
+    """Recognize explicit reporting periods, without inferring one from dates."""
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    periods = set()
+    for match in re.finditer(
+        r"(?<!\d)(20\d{2})\s*(?:[- ]?Q([1-4])|年?第?([一二三四1-4])季度)",
+        text,
+        re.I,
+    ):
+        number = match[2] or match[3]
+        quarter = number if number.isdigit() else str("一二三四".index(number) + 1)
+        periods.add(f"{match[1]}Q{quarter}")
+    for match in re.finditer(
+        r"(?<!\d)(20\d{2})\s*(?:[- ]?H([12])|年?(上|下)半年)", text, re.I
+    ):
+        half = match[2] or ("1" if match[3] == "上" else "2")
+        periods.add(f"{match[1]}H{half}")
+    for match in re.finditer(
+        r"(?<!\d)(20\d{2})\s*(?:[- ]?FY|年?(?:全年|年度))", text, re.I
+    ):
+        periods.add(f"{match[1]}FY")
+    return periods
+
+
+def _fact_identity(row, clause):
+    """Require identity and period in the matched fact, not another firm's text.
+
+    Conservative explicit facts are intentional: ambiguous article-wide headers
+    or pronouns cannot establish that two financial statements share an entity.
+    """
+    name = str(row.get("companyName") or "").strip()
+    entity = str(row.get("entityId") or "").strip()
+    if name and name.casefold() in {
+        "公司",
+        "该公司",
+        "本公司",
+        "企业",
+        "该企业",
+        "本企业",
+        "我司",
+        "集团",
+        "本集团",
+        "该集团",
+        "company",
+        "the company",
+        "corporation",
+        "enterprise",
+    }:
+        return None
+    if not name and not entity:
+        return None
+    if name and (len(name) < 3 or name.casefold() not in clause.casefold()):
+        return None
+    if name:
+        subject_start = clause.casefold().index(name.casefold())
+        # A shared suffix inside two longer legal names is not their identity.
+        if subject_start and clause[subject_start - 1].isalnum():
+            return None
+        subject_end = subject_start + len(name)
+        metric = re.search(
+            r"净利润|净利|营业利润|利润总额|利润|net profit|net income|\bprofit\b|\bearnings\b"
+            if row["kind"] == "PROFIT_GROWTH"
+            else r"实际回款|已回款|回款|货款|现金|cash|payment|paid customer orders",
+            clause,
+            re.I,
+        )
+        if (
+            metric is None
+            or metric.start() < subject_end
+            or re.search(
+                r"公司|企业|集团|\b(?:company|corporation|inc|ltd)\b",
+                clause[subject_end : metric.start()],
+                re.I,
+            )
+        ):
+            return None
+    if entity:
+        identifier = re.search(
+            r"(?<![\w])" + re.escape(entity) + r"(?![\w])", clause, re.I
+        )
+        metric = re.search(
+            r"净利润|净利|营业利润|利润总额|利润|net profit|net income|\bprofit\b|\bearnings\b"
+            if row["kind"] == "PROFIT_GROWTH"
+            else r"实际回款|已回款|回款|货款|现金|cash|payment|paid customer orders",
+            clause,
+            re.I,
+        )
+        if (
+            len(entity) < 4
+            or identifier is None
+            or metric is None
+            or identifier.end() > metric.start()
+        ):
+            return None
+    proposed_periods = _report_periods(row.get("reportPeriod"))
+    if len(proposed_periods) != 1 or _report_periods(clause) != proposed_periods:
+        return None
+    return name, entity, next(iter(proposed_periods))
+
+
+def _same_earnings_identity(profit, cash):
+    name, entity, period = profit
+    other_name, other_entity, other_period = cash
+    if period != other_period:
+        return False
+    # Two stated, conflicting identities must never be joined via one alias.
+    if name and other_name and name.casefold() != other_name.casefold():
+        return False
+    if entity and other_entity and entity.casefold() != other_entity.casefold():
+        return False
+    return bool(
+        (name and other_name and name.casefold() == other_name.casefold())
+        or (entity and other_entity and entity.casefold() == other_entity.casefold())
+    )
+
+
 _RISK_QUOTE_PATTERNS = {
     "FINANCING_COOLING": re.compile(
         r"(?:融资|募资).{0,16}(?:降温|断代|断层|收缩|减少|下降|下滑|萎缩|放缓|低迷|困难|枯竭|中断|锐减|骤降|回落)"
@@ -211,20 +332,19 @@ def _old_quote_year(clause, source, now):
     return bool(years) and years.isdisjoint({reference, reference - 1})
 
 
-def _risk_quote_supported(source, kind, now=None):
+def _risk_quote_clauses(source, kind, now=None):
     """Check the quoted claim, separately from checking the original document."""
     pattern = _RISK_QUOTE_PATTERNS.get(kind)
     if pattern is None:
-        return False
+        return []
     if re.search(
         r"否认|传闻不实|不属实|消息不实|说法不实|\bdenied\b|rumou?r.{0,20}(?:false|untrue|denied)",
         str(source.get("quote") or ""),
         re.I,
     ):
-        return False
+        return []
+    matches = []
     for clause in _quote_clauses(source.get("quote")):
-        if _old_quote_year(clause, source, now):
-            continue
         if re.search(
             r"预计|预期|预测|可能|或将|担忧|拟|计划|传闻|网传|谣言|\b(?:expect\w*|forecast\w*|could|may|might|potential|rumou?r\w*)\b",
             clause,
@@ -238,7 +358,7 @@ def _risk_quote_supported(source, kind, now=None):
         ):
             continue
         if re.search(
-            r"没有|不存在|否认|并非|并未|未曾|未(?:出现|发生|有|见|遭遇)?|\b(?:no|not|denied?|without)\b",
+            r"没有|不存在|否认|并非|并未|未曾|未(?:出现|发生|有|见|遭遇|下降|降温|减少|下滑|砍单|推迟|延期|裁员|欠薪|倒闭)|\b(?:no|not|denied?|without)\b",
             clause,
             re.I,
         ):
@@ -248,17 +368,67 @@ def _risk_quote_supported(source, kind, now=None):
         ):
             continue
         if pattern.search(clause):
-            return True
-    return False
+            matches.append(clause.strip())
+    return matches
+
+
+def _risk_quote_supported(source, kind, now=None):
+    return bool(_risk_quote_clauses(source, kind, now))
+
+
+def _risk_event_contexts(source, kind, now):
+    # A date-only header immediately before a claim is its context. A later
+    # product announcement, including one after a comma, cannot date that claim.
+    contexts = []
+    for sentence in re.split(
+        r"[。；;\n]|(?<=[A-Za-z])\.(?=\s+[A-Z])", str(source.get("quote") or "")
+    ):
+        parts = re.split(r"，|(?<!\d),(?!\d)", sentence)
+        for index, part in enumerate(parts):
+            if not _risk_quote_supported({**source, "quote": part}, kind, now):
+                continue
+            previous = parts[index - 1].strip() if index else ""
+            if previous and re.fullmatch(
+                r"[\d\s年月日第季度一二三四上下本近期近日至到~～/\-]+", previous
+            ):
+                contexts.append(previous + "，" + part)
+            else:
+                contexts.append(part)
+    return contexts
 
 
 def _early_quote_supported(source, kind, now):
     # Stage remains an evidence-backed classification with half protection;
     # it is not a confirmed industry downturn claim.
-    return (
-        kind in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}
-        and _source_recency(source, now) == "RECENT"
+    if (
+        kind not in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}
+        or source.get("verification") != "SOURCE_CHECKED"
+        or _source_recency(source, now) != "RECENT"
+    ):
+        return False
+    quote = str(source.get("quote") or "")
+    if re.search(r"否认|不属实|传闻不实|并非|\bdenied\b", quote, re.I):
+        return False
+    pattern = (
+        r"(?:仍处|处于|尚处|正在|仍在).{0,10}(?:试制|验证|试验|试产|商业化早期)"
+        r"|(?:尚未|还未|未能|未实现).{0,8}(?:规模量产|量产|商业化)"
+        if kind == "COMMERCIALIZATION_EARLY"
+        else r"(?:尚未|还未|未能|未实现|尚无|没有|未).{0,8}(?:盈利|利润|实际回款|回款)"
     )
+    for clause in _quote_clauses(quote):
+        if _old_quote_year(clause, source, now) or re.search(
+            r"预计|预期|预测|计划|拟|有望|力争|目标|将|未来|\b(?:expect\w*|plan\w*|will)\b",
+            clause,
+            re.I,
+        ):
+            continue
+        if re.search(
+            r"(?:不|未)(?:处于|处在|属于)|已经?完成.{0,8}(?:规模量产|商业化)", clause
+        ):
+            continue
+        if re.search(pattern, clause, re.I):
+            return True
+    return False
 
 
 def _title_fingerprint(value):
@@ -427,6 +597,13 @@ def normalize_industry_cycle(
                 _earnings_fact(sources.get(ref, {}), row["kind"], now)
                 for ref in row["sourceIds"]
             )
+            row["factIdentityVerified"] = any(
+                _fact_identity(row, clause) is not None
+                for ref in row["sourceIds"]
+                for _, clause in _earnings_fact_clauses(
+                    sources.get(ref, {}), row["kind"], now
+                )
+            )
     for check in cycle["riskChecks"]:
         kind = check["kind"]
         if kind in seen:
@@ -453,6 +630,38 @@ def normalize_industry_cycle(
             bool(supported_refs) and check["timeVerification"] == "RECENT"
         )
         check["claimSourceIds"] = supported_refs
+        event_checks = (
+            [
+                event_time_verification(
+                    clause,
+                    sources.get(ref, {}).get("publishedDate")
+                    or sources.get(ref, {}).get("publishedAt"),
+                    now,
+                )
+                for ref in supported_refs
+                for clause in _risk_event_contexts(sources.get(ref, {}), kind, now)
+            ]
+            if isinstance(now, datetime)
+            else []
+        )
+        # The event clock is read only from the actual negative statement.
+        # Recent publication or a separate product announcement cannot renew it.
+        best_event = max(
+            event_checks,
+            key=lambda row: {
+                "UNVERIFIED": 0,
+                "FUTURE": 1,
+                "HISTORICAL": 2,
+                "RECENT": 3,
+            }[row["eventTimeVerification"]],
+            default={
+                "eventTimeVerification": "UNVERIFIED",
+                "eventPeriod": None,
+                "eventPeriodStart": None,
+                "eventPeriodEnd": None,
+            },
+        )
+        check.update(best_event)
         check["independentSourceCount"] = _independent_source_count(
             supported_refs, sources, now
         )
@@ -463,9 +672,10 @@ def normalize_industry_cycle(
             if not check["sourceIds"]:
                 raise ValueError("found industry risk requires a current cited source")
             flags.add(kind)
-            if check["claimSupported"] and (
-                check["verification"] == "SOURCE_CHECKED"
-                or check["independentSourceCount"] >= 2
+            if (
+                check["claimSupported"]
+                and check["verification"] == "SOURCE_CHECKED"
+                and check["eventTimeVerification"] == "RECENT"
             ):
                 check["strength"] = "CONFIRMED"
                 confirmed_flags.add(kind)
@@ -495,21 +705,31 @@ def normalize_industry_cycle(
     for row in cycle["evidence"]:
         if row["kind"] in facts:
             facts[row["kind"]].extend(
-                (ref, index, clause)
+                (ref, index, clause, identity)
                 for ref in row["sourceIds"]
                 for index, clause in _earnings_fact_clauses(
                     sources.get(ref, {}), row["kind"], now
                 )
+                if (identity := _fact_identity(row, clause)) is not None
             )
-    earnings_verified = any(
-        (profit[0] != cash[0] or profit[1] != cash[1]) and profit[2] != cash[2]
-        for profit in facts["PROFIT_GROWTH"]
-        for cash in facts["CASH_COLLECTION"]
+    earnings_pair = next(
+        (
+            (profit, cash)
+            for profit in facts["PROFIT_GROWTH"]
+            for cash in facts["CASH_COLLECTION"]
+            if (profit[0] != cash[0] or profit[1] != cash[1])
+            and profit[2] != cash[2]
+            and _same_earnings_identity(profit[3], cash[3])
+        ),
+        None,
     )
+    earnings_verified = earnings_pair is not None
     stage = cycle["stage"]
     if stage == "EARNINGS_DELIVERY" and not earnings_verified:
         stage = "UNKNOWN"
         gaps.append("CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING")
+        if not all(facts.values()) or not earnings_pair:
+            gaps.append("EARNINGS_ENTITY_OR_PERIOD_UNVERIFIED")
         flags.add("NO_CURRENT_EARNINGS_PROOF")
     if stage == "POLICY_CATALYST" and "POLICY_EVENT" not in kinds:
         stage = "UNKNOWN"
@@ -548,6 +768,10 @@ def normalize_industry_cycle(
         "researchStatus": "COMPLETE",
         "evidenceGaps": gaps,
         "earningsVerified": earnings_verified,
+        "earningsEntity": (earnings_pair[0][3][0] or earnings_pair[0][3][1])
+        if earnings_pair
+        else None,
+        "earningsReportPeriod": earnings_pair[0][3][2] if earnings_pair else None,
         "earningsEvidenceScope": "COMPANY_LEVEL" if earnings_verified else "UNVERIFIED",
         "evidenceSummary": summary,
         "forwardPlansOnly": forward_only,

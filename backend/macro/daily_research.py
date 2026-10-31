@@ -28,7 +28,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-risk-strength-v12"
+PROMPT_VERSION = "daily-research-industry-risk-strength-v13"
 MAX_REPORT_SOURCES = 24
 
 
@@ -304,6 +304,8 @@ def _public_industry_cycle(value):
             "leftDiscountScale",
             "industryRiskWarning",
             "earningsEvidenceScope",
+            "earningsEntity",
+            "earningsReportPeriod",
             "confirmedAt",
             "searchExecutionVerified",
         ),
@@ -331,6 +333,14 @@ def _public_industry_cycle(value):
                         "verification",
                         "timeVerification",
                         "currentFactVerified",
+                        "companyName",
+                        "entityId",
+                        "reportPeriod",
+                        "factIdentityVerified",
+                        "eventTimeVerification",
+                        "eventPeriod",
+                        "eventPeriodStart",
+                        "eventPeriodEnd",
                         "factCheckReason",
                         "historicalEvidence",
                         "strength",
@@ -1687,10 +1697,12 @@ def build_prompt(packet):
         "先发现并解释有操作价值的机会：把同一产业链的资金意向、经营景气、政策、近期事件与技术位置综合成投资假设，说明为何现在值得关注、受益环节和可观察的兑现路径。\n"
         "动态检索中英文资料：国内增长/信用/政策、美国通胀/利率、全球能源/航运/地缘、选举/贸易/制裁、全球权益/科技估值和未来日历。\n"
         "强制反方与行业降温证据核查：对industryCycleResearch中每个候选赛道及本次新发现的每个方向，实际执行公开网页检索，检索近90天一级市场融资降温/断代（FINANCING_COOLING）、企业欠薪/裁员/倒闭潮（LAYOFFS_CLOSURES）、下游砍单（ORDER_CUTS）、产能过剩价格战（OVERCAPACITY_PRICE_WAR）、商业化量产推迟（PRODUCTION_DELAY），并核对融资金额/笔数的时间区间与原始依据，不从赛道名称或个别企业困境推定行业事实。\n"
+        "区分文章发布日期与风险事件发生区间：原文短引文须保留对应事件的具体日期、月份、季度或明确近期时间；新文章引用往年事件不能当作近90天变化。无法识别事件时间保留缺口。多家未核验原文的媒体只是线索，不能用数量替代原文事实核验。\n"
         "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
         "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务优先复查历史风险赛道，再按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
         "产业兑现阶段stage仅选EARNINGS_DELIVERY/POLICY_CATALYST/EARLY_COMMERCIALIZATION/UNKNOWN，evidence.kind仅选PROFIT_GROWTH/CASH_COLLECTION/PAID_ORDERS/POLICY_EVENT/COMMERCIALIZATION_EARLY/EARNINGS_NOT_DELIVERED/EXPANSION_PLAN/FRAMEWORK_AGREEMENT，每条{kind,summary,sourceIds}。业绩兑现必须同时有当期财报利润增长与真实订单回款原文，订单意向或销量预测不足；政策/事件待传导选POLICY_CATALYST，试制/量产尚早或去泡沫证据支持才选EARLY_COMMERCIALIZATION，未知保持UNKNOWN。\n"
+        "PROFIT_GROWTH与CASH_COLLECTION还须提交companyName、entityId（可空）、reportPeriod；报告期使用YYYYQ1至YYYYQ4、YYYYH1/YYYYH2或YYYYFY的明确口径，并在所引原文保留企业名称与报告期。同一企业、同一报告期的已核验利润增长和实际回款才能组成公司级业绩兑现；严禁拼接不同企业、不同报告期，身份不明保持UNKNOWN。该公司级证据不能证明整个行业或基金真实持仓均已兑现。商业化早期须有近期已核验的试制/验证/尚未量产等原文，产品发布和建厂计划本身不足。\n"
         "严格区分拟投资建厂/签署框架协议等远期扩产计划与已披露财报利润增长/实际回款；如电关节投资计划只能归EXPANSION_PLAN，不能算当期盈利兑现。在商业化早期、融资降温或缺乏当期盈利兑现时，单纯扩产计划不得提高机会分或充当正向催化，只列观察事项。机器人/具身智能仅为核查示例，不预设今天发生融资降温。左轨额外折价和机会分扣减由服务器执行；去泡沫期仅极小仓位观察或等待右侧拐点。\n"
         "回看最近24小时新变化、近14天仍在进行的重大事件，以及前次未解决问题；合并同一事件，优先综合可用事实与价格发现机会，资料缺口在受影响的具体判断中说明。\n"
         "多家同链企业回购/增持意向、行业或海外龙头业绩改善、近期重要会议及超卖/趋势突破可共同构成催化，优先评估组合信号与预期差，归纳成独立方向；回购提议有意向信号价值，海外业绩有产业景气参考价值，阶段和传导待验证不自动否定研究价值。\n"
@@ -1851,11 +1863,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
                 "DIRECTION_VALIDATION_FAILED", str(exc)
             ) from exc
         industry_reviews.append({"industry": review["industry"], **cycle_review})
+    industry_tasks = industry_cycle_research_tasks(packet, completed_at)
     if (packet.get("industryCycleResearch") or {}).get("required"):
-        expected = {
-            row["industry"]
-            for row in industry_cycle_research_tasks(packet, completed_at)["candidates"]
-        }
+        expected = {row["industry"] for row in industry_tasks["candidates"]}
         if expected - reviewed:
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED", "unreviewed industry candidates"
@@ -1974,6 +1984,17 @@ def validate_report(raw, packet, source_checks, *, completed_at):
                 "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
                 "valueDirections": value_directions,
                 "industryCycleReviews": industry_reviews,
+                "industryResearchCoverage": {
+                    "maximumCandidates": industry_tasks["maximumCandidates"],
+                    "candidateCount": len(industry_tasks["candidates"]),
+                    "omittedCandidateCount": industry_tasks["omittedCandidateCount"],
+                    "omittedRiskCandidateCount": industry_tasks[
+                        "omittedRiskCandidateCount"
+                    ],
+                    "status": "PARTIAL"
+                    if industry_tasks["omittedCandidateCount"]
+                    else "COMPLETE",
+                },
                 "actionablePlans": [
                     plan
                     for direction in value_directions
