@@ -17,7 +17,7 @@ const stages = {
   UNKNOWN: { label: "产业阶段待核查", tone: "unknown" },
 };
 const riskLevels = {
-  NONE: { label: "行业风险：未触发", tone: "unknown" },
+  NONE: { label: "行业风险：本轮未确认负面", tone: "unknown" },
   UNPROVEN: { label: "行业风险：兑现待验证", tone: "policy" },
   SUSPECTED: { label: "行业风险：待核实", tone: "early" },
   CONFIRMED: { label: "行业风险：已确认", tone: "confirmed" },
@@ -52,6 +52,11 @@ function IndustryAudit({
   return (
     <details className="op-industry-audit-details">
       <summary>查看5项产业反方核查与证据明细</summary>
+      {cycle.searchExecutionVerified === false && (
+        <p>
+          <small>检索凭证：模型结构化核查（外部搜索回执待接入）</small>
+        </p>
+      )}
       {cycle.evidenceSummary && (
         <p>{readingText(cycle.evidenceSummary, 600)}</p>
       )}

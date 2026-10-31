@@ -399,6 +399,7 @@ export interface IndustryRiskCheck {
   kind: IndustryRiskKind;
   status: "FOUND" | "NOT_FOUND" | "UNVERIFIED";
   verification?: string;
+  claimSupported?: boolean;
   strength?: IndustryRiskLevel;
   independentSourceCount?: number;
   summary: string;
@@ -422,6 +423,7 @@ export interface IndustryCycle {
   suspectedRiskFlags?: string[];
   evidenceGaps?: string[];
   riskChecks?: IndustryRiskCheck[];
+  searchExecutionVerified?: boolean;
   evidenceSummary?: string;
   sourceIds?: string[];
   industryRiskWarning?: string | null;

@@ -338,15 +338,39 @@ it("uses the cycle's server warning when no plan warning is available", () => {
   ).toHaveTextContent("仅见远期扩产/框架意向");
 });
 
-it("does not turn the server's untriggered risk level into a claim of no industry risk", () => {
+it("limits the NONE risk label to this round's unconfirmed negative findings", () => {
   render(
     <IndustryCycleBadge
       cycle={{ stage: "POLICY_CATALYST", riskLevel: "NONE" }}
     />,
   );
-  expect(screen.getByLabelText("行业风险强度")).toHaveTextContent("未触发");
+  expect(screen.getByLabelText("行业风险强度")).toHaveTextContent(
+    /^行业风险：本轮未确认负面$/,
+  );
   expect(screen.queryByText(/无风险|没有风险/)).not.toBeInTheDocument();
 });
+
+it.each([
+  [false, true],
+  [true, false],
+  [undefined, false],
+] as const)(
+  "discloses model-only search provenance only when execution verification is explicitly %s",
+  async (verified, disclosed) => {
+    const cycle = Object.assign(
+      { stage: "UNKNOWN" as const, riskChecks: auditChecks() },
+      { searchExecutionVerified: verified },
+    );
+    render(<IndustryCycleWarning cycle={cycle} />);
+    const noteText = "检索凭证：模型结构化核查（外部搜索回执待接入）";
+    const summary = screen.getByText("查看5项产业反方核查与证据明细");
+    if (disclosed) expect(screen.getByText(noteText)).not.toBeVisible();
+    else expect(screen.queryByText(noteText)).not.toBeInTheDocument();
+    await userEvent.click(summary);
+    if (disclosed) expect(screen.getByText(noteText)).toBeVisible();
+    else expect(screen.queryByText(noteText)).not.toBeInTheDocument();
+  },
+);
 
 it("distinguishes lower-high trend pressure from an unconfirmed MA60 crossing", async () => {
   const result = plan();
