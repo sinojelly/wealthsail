@@ -320,9 +320,12 @@ async def read_recent_public_research(conn, now):
     """Bounded READY public reports only; never query actor study records."""
     stamp = local(now)
     rows = await conn.fetch(
-        _READ
-        + " AND t.status='READY' AND t.recorded_at>=$3"
-        + " ORDER BY t.recorded_at DESC,r.run_id LIMIT 14",
+        "WITH visible AS ("
+        + _READ
+        + " AND t.status='READY' AND t.recorded_at>=$3), ranked AS ("
+        + "SELECT *,row_number() OVER(PARTITION BY slot_date ORDER BY (run_mode='SCHEDULED') DESC,recorded_at DESC,run_id) AS day_rank FROM visible) "
+        + "SELECT * FROM ranked WHERE day_rank=1 OR run_id IN (SELECT run_id FROM visible ORDER BY recorded_at DESC,run_id LIMIT 14) "
+        + "ORDER BY recorded_at DESC,run_id LIMIT 30",
         stamp.date(),
         stamp,
         stamp - timedelta(days=14),

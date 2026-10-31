@@ -180,6 +180,7 @@ def model_packet(packet):
             "energy",
             "previousQuestions",
             "previousResearch",
+            "previousIndustryRiskStates",
             "previousUpcoming",
             "sourceResults",
             "strategyMemoryRules",

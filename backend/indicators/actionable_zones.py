@@ -13,8 +13,6 @@ from decimal import (
 import math
 from statistics import pstdev
 
-from backend.macro.industry_cycle import requires_left_discount
-
 VERSION = "actionable-zones-v6"
 PARAMETERS = {
     "ma": [20, 60, 200],
@@ -205,6 +203,8 @@ def _relative_strength(points, benchmark_points, cutoff=None):
         "drawdownUnit": "PERCENT",
         "breakdownDate": None,
         "weakening": None,
+        "lowerHighs": None,
+        "trendWeakening": None,
         "consecutiveWeakDays": None,
         "sampleCount": len(points),
         "benchmarkSampleCount": len(benchmark),
@@ -214,6 +214,9 @@ def _relative_strength(points, benchmark_points, cutoff=None):
     prices = [_number(point["close"]) for point in points]
     if len(prices) >= 60:
         result["drawdown60d"] = float((1 - prices[-1] / max(prices[-60:])) * 100)
+        result["lowerHighs"] = (
+            max(prices[-60:-40]) > max(prices[-40:-20]) > max(prices[-20:])
+        )
     else:
         result["missingEvidence"].append("近60日高点回落幅度需要60个连续有效样本。")
     if not points or not benchmark or conflict:
@@ -258,6 +261,16 @@ def _relative_strength(points, benchmark_points, cutoff=None):
             result["missingEvidence"].append(f"{period}日超额收益超出可表示数值范围。")
     if any(result[f"excessReturn{period}d"] is None for period in (20, 60)):
         return result
+    lower_high_risk = (
+        result["lowerHighs"] is True
+        and result["excessReturn20d"] < 0
+        and result["excessReturn60d"] < 0
+    )
+    if lower_high_risk:
+        result["trendWeakening"] = True
+        result["reasons"].append(
+            "近60个交易日三个连续20日窗口反弹高点依次下移，且20日/60日均跑输沪深300，触发技术趋势风控。"
+        )
     if len(prices) < 63 or any(
         aligned_at(index, 60) is None
         for index in range(max(0, len(prices) - 3), len(prices))
@@ -289,6 +302,7 @@ def _relative_strength(points, benchmark_points, cutoff=None):
         state="READY",
         consecutiveWeakDays=consecutive,
         weakening=consecutive >= 3 and declining,
+        trendWeakening=consecutive >= 3 and declining or lower_high_risk,
     )
     if result["weakening"]:
         # A recovered earlier crossing cannot be the start of the current leg.
@@ -326,7 +340,7 @@ def _zone(
     nav_scale=False,
     nav_basis=False,
     nav_history=None,
-    industry_discount=False,
+    discount_scale=0.0,
 ):
     result = {
         "entryZoneMin": None,
@@ -431,16 +445,17 @@ def _zone(
             )
         )
         result["priceState"] = "READY"
-    if industry_discount and kind == "LEFT_VALUE":
+    if discount_scale and kind == "LEFT_VALUE":
         if scale is None:
             result["priceState"] = "PARTIAL"
             return result, reasons + [
                 "行业降温但缺少有效风险尺度，未展示未经折价保护的左侧买区。"
             ]
-        minimum -= scale
-        maximum -= scale
+        discount = Decimal(str(discount_scale)) * scale
+        minimum -= discount
+        maximum -= discount
         reasons.append(
-            "产业风险保护：左侧原支撑买区额外下移1.0倍风险尺度，止损与收益按折价后区间重新计算。"
+            f"产业风险保护：左侧原支撑买区额外下移{discount_scale:.1f}倍风险尺度，止损与收益按折价后区间重新计算。"
         )
     rounded_minimum, rounded_maximum = (
         _quantized(value, places) for value in (minimum, maximum)
@@ -725,11 +740,21 @@ def _external_left_guard(track, baseline):
 
 def apply_industry_cycle(plan, industry_cycle):
     """Apply once from saved server anchors, never from an already reduced band."""
+    from backend.macro.industry_cycle import industry_risk_policy
+
     result = deepcopy(plan)
     result["industryCycle"] = (
         deepcopy(industry_cycle) if isinstance(industry_cycle, dict) else None
     )
-    risk = requires_left_discount(industry_cycle)
+    policy = industry_risk_policy(industry_cycle)
+    base_discount_scale = policy["leftDiscountScale"]
+    relative_upgrade = (
+        base_discount_scale == 0.5
+        and (result.get("relativeStrength") or {}).get("weakening") is True
+    )
+    discount_scale = 1.0 if relative_upgrade else base_discount_scale
+    risk = discount_scale > 0
+    warning = policy.get("industryRiskWarning")
     base = result.get("industryAdjustmentBase")
     current_left = next(
         (row for row in result.get("tracks", []) if row.get("track") == "LEFT_VALUE"),
@@ -739,7 +764,7 @@ def apply_industry_cycle(plan, industry_cycle):
         current_left or {},
         (base or {}).get("leftTrack", {}) if isinstance(base, dict) else {},
     )
-    result["riskAdjustmentVersion"] = "industry-left-discount-v1"
+    result["riskAdjustmentVersion"] = "industry-left-discount-v2"
     result.pop("industryRiskWarning", None)
     result.pop("industryRiskAdjustment", None)
     if current_left is None:
@@ -797,10 +822,14 @@ def apply_industry_cycle(plan, industry_cycle):
             nav_scale=base.get("navScale", False),
             nav_basis=base.get("navBasis", False),
             nav_history=history,
-            industry_discount=True,
+            discount_scale=discount_scale,
         )
         adjusted.update(zone)
         adjusted["reasons"] = [*base.get("conditionReasons", []), *reasons]
+        if relative_upgrade:
+            adjusted["reasons"].append(
+                "产业线索与相对沪深300持续走弱共振，左侧风险折价由0.5倍升级为1.0倍。"
+            )
         low, high, sell = (
             _number(zone.get(key))
             for key in ("entryZoneMin", "entryZoneMax", "sellZoneMin")
@@ -853,13 +882,16 @@ def apply_industry_cycle(plan, industry_cycle):
             and high is not None
             and _number(base.get("scale")) is not None
         )
-    result["industryRiskWarning"] = INDUSTRY_RISK_WARNING
+    result["industryRiskWarning"] = warning
     result["industryRiskAdjustment"] = {
         "state": "APPLIED" if applied else "INSUFFICIENT",
-        "entryShiftScale": 1.0,
+        "riskLevel": policy["riskLevel"],
+        "entryShiftScale": discount_scale,
+        "baseEntryShiftScale": base_discount_scale,
+        "relativeStrengthUpgrade": relative_upgrade,
         "scale": base.get("scale") if isinstance(base, dict) else None,
     }
-    adjusted.update(entryStatus=INDUSTRY_RISK_WARNING, entryStatusTone="orange")
+    adjusted.update(entryStatus=warning, entryStatusTone="orange")
     adjusted.update(external_guard)
     result["tracks"] = [
         adjusted if row.get("track") == "LEFT_VALUE" else row
@@ -1313,6 +1345,7 @@ def compute_actionable_price_plan(
         "indicators": values,
         "indicatorStates": states,
         "relativeStrength": relative_strength,
+        "trendWeakening": relative_strength["trendWeakening"],
         "industryAdjustmentBase": left_base,
         "tracks": tracks,
     }

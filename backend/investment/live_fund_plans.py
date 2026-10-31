@@ -1,9 +1,12 @@
 """Reprice response copies from local public NAV, leaving research versions intact."""
 
+from collections import OrderedDict
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import re
+import hashlib
+import json
 from uuid import UUID
 
 from backend.funds.nav_history import (
@@ -25,6 +28,8 @@ from backend.investment.theme_graph import _disclosed_nav_quality, _history_qual
 from backend.macro.daily_research import apply_entry_guards
 
 _UNITS = {"CNY", "CNY/份", "元/份", "CNY/unit"}
+_PLAN_CACHE = OrderedDict()
+_PLAN_CACHE_LIMIT = 256
 _PLAN_ARRAYS = (
     "actionablePlans",
     "actionableZones",
@@ -276,11 +281,62 @@ def _signals(plan):
     return signals
 
 
+def _cached_nav_plan(code, view, points, benchmark):
+    """Cache immutable indicator math; freshness and entry guards run every read."""
+    benchmark_points = (benchmark or {}).get("points")
+    # Observation identities alone cannot detect in-place provider revisions.
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "points": points,
+                "benchmark": benchmark_points,
+                "source": view.get("sourceUri"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    key = (
+        code,
+        view.get("asOf"),
+        view.get("retrievedAt"),
+        len(points),
+        VERSION,
+        (benchmark or {}).get("asOf"),
+        fingerprint,
+    )
+    cached = _PLAN_CACHE.get(key)
+    if cached is not None:
+        _PLAN_CACHE.move_to_end(key)
+        return deepcopy(cached)
+    plan = compute_actionable_price_plan(
+        points,
+        subject_kind="nav",
+        subject_id=code,
+        label=code,
+        price_basis="UNIT_NAV",
+        unit="CNY/份",
+        market="FUND_CN",
+        source_uri=view.get("sourceUri") if points else None,
+        benchmark_points=benchmark_points,
+    )
+    _PLAN_CACHE[key] = deepcopy(plan)
+    _PLAN_CACHE.move_to_end(key)
+    while len(_PLAN_CACHE) > _PLAN_CACHE_LIMIT:
+        _PLAN_CACHE.popitem(last=False)
+    return plan
+
+
 async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet=None):
     """Update response-only CNY fund coordinates without provider I/O or DB writes."""
     if not isinstance(report, dict):
         return report
-    now, result = local(now), deepcopy(report)
+    from backend.macro.industry_cycle import expire_report_industry_risks
+
+    now = local(now)
+    result = expire_report_industry_risks(report, now)
     plans = [(plan, code) for plan in _plans(result) if (code := _code(plan))]
     if not plans:
         return result
@@ -307,18 +363,11 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
         view = select_history_view(code, code, "2y", candidates[code], now)
         points = _chart_points(view, candidates[code], now)
         enough = len(points) >= NAV_RESEARCH_MIN_SAMPLES
-        plan = compute_actionable_price_plan(
+        plan = _cached_nav_plan(
+            code,
+            view,
             points if enough else [],
-            subject_kind="nav",
-            subject_id=code,
-            label=code,
-            price_basis="UNIT_NAV",
-            unit="CNY/份",
-            market="FUND_CN",
-            source_uri=view.get("sourceUri") if enough else None,
-            benchmark_points=(
-                (packet or {}).get("relativeStrengthBenchmark") or {}
-            ).get("points"),
+            (packet or {}).get("relativeStrengthBenchmark"),
         )
         state = (
             "UNAVAILABLE"

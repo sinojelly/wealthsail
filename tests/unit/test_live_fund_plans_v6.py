@@ -206,6 +206,9 @@ async def test_complete_history_with_no_feasible_capped_trade_band_is_not_ready(
 async def test_old_report_plan_reprices_from_chart_window_once_per_code(monkeypatch):
     from backend.investment import live_fund_plans as module
 
+    # This test measures cold-cache work within one response. Cross-request
+    # cache reuse is covered separately and must not hide these calls.
+    module._PLAN_CACHE.clear()
     bank, oil = old_plan(), old_plan("162411", methodVersion="actionable-zones-v5")
     report = {
         "asOf": "2026-10-15T08:30:00+08:00",

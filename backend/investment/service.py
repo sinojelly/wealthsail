@@ -441,14 +441,23 @@ def _public_risk_stamp(value):
 
 def fund_risk_context(report, now, *, packet=None):
     """Keep only recent, already-validated public industry facts and benchmark."""
-    from backend.macro.industry_cycle import merge_industry_cycles
+    from backend.macro.industry_cycle import (
+        merge_industry_cycles,
+        expire_report_industry_risks,
+    )
 
     if not isinstance(report, dict):
         return {}
     stamp = _public_risk_stamp(report.get("asOf"))
     if stamp is None or not now - timedelta(days=10) <= stamp <= now:
         return {}
-    context = {"asOf": stamp.isoformat(), "cyclesByFund": {}, "cyclesBySubject": {}}
+    report = expire_report_industry_risks(report, now)
+    context = {
+        "asOf": stamp.isoformat(),
+        "evaluatedAt": now.isoformat(),
+        "cyclesByFund": {},
+        "cyclesBySubject": {},
+    }
     reviews = {
         row.get("industry"): row
         for row in report.get("industryCycleReviews", [])
@@ -577,10 +586,14 @@ async def read_fund_risk_context(conn, now):
     return {}
 
 
-def protect_fund_plan(plan, context):
+def protect_fund_plan(plan, context, *, now=None):
     """Merge a public risk floor by exact fund identity, preserving live prices."""
     from backend.indicators.actionable_zones import apply_industry_cycle
-    from backend.macro.industry_cycle import merge_industry_cycles
+    from backend.macro.industry_cycle import (
+        merge_industry_cycles,
+        expire_industry_risk,
+        expire_report_industry_risks,
+    )
 
     if (
         not isinstance(plan, dict)
@@ -590,6 +603,8 @@ def protect_fund_plan(plan, context):
         and plan.get("priceBasis") != "UNIT_NAV"
     ):
         return deepcopy(plan)
+    now = now or _public_risk_stamp(context.get("evaluatedAt")) or now_shanghai()
+    plan = expire_report_industry_risks(plan, now)
     code = plan.get("fundCode") or (
         plan.get("subjectId") if plan.get("subjectKind") == "nav" else None
     )
@@ -601,9 +616,12 @@ def protect_fund_plan(plan, context):
     )
     if by_code is None and by_subject is None:
         return deepcopy(plan)
-    cycle = merge_industry_cycles(by_code, by_subject)
+    cycle = expire_industry_risk(merge_industry_cycles(by_code, by_subject), now)
     return apply_industry_cycle(
-        plan, merge_industry_cycles(plan.get("industryCycle"), cycle)
+        plan,
+        merge_industry_cycles(
+            expire_industry_risk(plan.get("industryCycle"), now), cycle
+        ),
     )
 
 

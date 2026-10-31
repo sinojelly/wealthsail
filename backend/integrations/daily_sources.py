@@ -26,6 +26,7 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 MAX_BYTES = 2 * 1024 * 1024
 SOURCE_TIMEOUT_SECONDS = 45
 MAX_RESEARCH_SOURCE_CHECKS = 24
+MAX_INDUSTRY_CYCLE_CANDIDATES = 10
 OFFICIAL_HOSTS = frozenset(
     {
         "ofac.treasury.gov",
@@ -104,6 +105,14 @@ def industry_cycle_research_tasks(packet, now):
 
     now = _aware(now)
     candidates = []
+    news = {
+        sector
+        for sector, ids in (
+            (packet.get("alphaPublic") or {}).get("sectorCatalysts") or {}
+        ).items()
+        if ids and sector != "OTHER"
+    }
+    quantitative = {}
     search_names = {
         "ROBOT": "机器人 具身智能",
         "ROBOTICS_MOBILITY": "机器人 智能驾驶",
@@ -132,12 +141,35 @@ def industry_cycle_research_tasks(packet, now):
     }
 
     def add(value):
-        if isinstance(value, str) and value.strip() and value.strip() not in candidates:
-            candidates.append(value.strip()[:100])
+        candidate = value.strip()[:100] if isinstance(value, str) else ""
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
 
     for row in (packet.get("quantitativeScan") or {}).get("items", []):
         if isinstance(row, dict):
-            add(row.get("discoverySector"))
+            sector = row.get("discoverySector")
+            add(sector)
+            if not isinstance(sector, str):
+                continue
+            signals = [
+                item for item in row.get("signals", []) if isinstance(item, dict)
+            ]
+            ready = row.get("entryReady") is True or any(
+                item.get("entryReady") is True for item in signals
+            )
+            distances = []
+            for item in [row, *signals]:
+                value = item.get("distanceToEntryPct")
+                if isinstance(value, bool):
+                    continue
+                try:
+                    distance = float(value)
+                    if math.isfinite(distance) and distance >= 0:
+                        distances.append(distance)
+                except (ValueError, TypeError):
+                    continue
+            priority = (not ready, min(distances, default=math.inf))
+            quantitative[sector] = min(quantitative.get(sector, priority), priority)
     for row in packet.get("discoveryUniverse", []):
         if isinstance(row, dict):
             add(row.get("discoverySector") or row.get("sector"))
@@ -146,11 +178,23 @@ def industry_cycle_research_tasks(packet, now):
     ):
         if ids and sector != "OTHER":
             add(sector)
+    order = {sector: index for index, sector in enumerate(candidates)}
+    candidates.sort(
+        key=lambda sector: (
+            0 if sector in news else 1 if sector in quantitative else 2,
+            *quantitative.get(sector, (True, math.inf)),
+            order[sector],
+        )
+    )
+    omitted = max(0, len(candidates) - MAX_INDUSTRY_CYCLE_CANDIDATES)
+    candidates = candidates[:MAX_INDUSTRY_CYCLE_CANDIDATES]
     return {
         "required": True,
         "execution": "PUBLIC_WEB_SEARCH",
         "asOf": now.isoformat(),
         "lookbackDays": 90,
+        "maximumCandidates": MAX_INDUSTRY_CYCLE_CANDIDATES,
+        "omittedCandidateCount": omitted,
         "newDirectionRequiresSameChecks": True,
         "candidates": [
             {

@@ -28,7 +28,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-cycle-v10"
+PROMPT_VERSION = "daily-research-industry-risk-strength-v11"
 MAX_REPORT_SOURCES = 24
 
 
@@ -300,9 +300,22 @@ def _public_industry_cycle(value):
             "researchStatus",
             "earningsVerified",
             "forwardPlansOnly",
+            "riskLevel",
+            "leftDiscountScale",
+            "industryRiskWarning",
+            "earningsEvidenceScope",
+            "confirmedAt",
+            "searchExecutionVerified",
         ),
     )
-    for key in ("riskFlags", "sourceIds", "evidenceGaps"):
+    for key in (
+        "riskFlags",
+        "confirmedRiskFlags",
+        "suspectedRiskFlags",
+        "persistedRiskFlags",
+        "sourceIds",
+        "evidenceGaps",
+    ):
         result[key] = _texts(value.get(key), limit=24)
     for key in ("evidence", "riskChecks", "reviewEvidenceSummaries"):
         result[key] = [
@@ -320,6 +333,10 @@ def _public_industry_cycle(value):
                         "currentFactVerified",
                         "factCheckReason",
                         "historicalEvidence",
+                        "strength",
+                        "independentSourceCount",
+                        "queryValidation",
+                        "searchExecutionVerified",
                     ),
                 ),
                 "sourceIds": _texts(row.get("sourceIds"), limit=24),
@@ -327,7 +344,51 @@ def _public_industry_cycle(value):
             for row in (value.get(key) or [])[:64]
             if isinstance(row, dict)
         ]
+    result["confirmedRiskAt"] = {
+        str(flag)[:80]: stamp.isoformat()
+        for flag, raw in (value.get("confirmedRiskAt") or {}).items()
+        if (stamp := _stamp(raw)) is not None
+    }
+    result["persistedEvidence"] = []
+    for row in (value.get("persistedEvidence") or [])[:16]:
+        if not isinstance(row, dict):
+            continue
+        proof = {
+            **_pick(row, ("flag", "confirmedAt", "summary")),
+            "sourceIds": _texts(row.get("sourceIds"), 24),
+        }
+        proof["sources"] = _public_industry_sources(row.get("sources"))
+        result["persistedEvidence"].append(proof)
     return result
+
+
+def _public_industry_sources(rows):
+    output = []
+    for row in (rows if isinstance(rows, list) else [])[:24]:
+        if not isinstance(row, dict):
+            continue
+        try:
+            url = _url(row.get("url"))
+        except ValueError:
+            continue
+        output.append(
+            {
+                **_pick(
+                    row,
+                    (
+                        "id",
+                        "title",
+                        "quote",
+                        "publishedDate",
+                        "verification",
+                        "retrievedAt",
+                        "contentHash",
+                    ),
+                ),
+                "url": url,
+            }
+        )
+    return output
 
 
 def _public_risk_contracts(value, result):
@@ -336,7 +397,15 @@ def _public_risk_contracts(value, result):
         result["industryCycle"] = _public_industry_cycle(value["industryCycle"])
     if isinstance(value.get("industryRiskAdjustment"), dict):
         result["industryRiskAdjustment"] = _pick(
-            value["industryRiskAdjustment"], ("state", "entryShiftScale", "scale")
+            value["industryRiskAdjustment"],
+            (
+                "state",
+                "entryShiftScale",
+                "scale",
+                "riskLevel",
+                "baseEntryShiftScale",
+                "relativeStrengthUpgrade",
+            ),
         )
     strength = value.get("relativeStrength")
     if isinstance(strength, dict):
@@ -354,6 +423,8 @@ def _public_risk_contracts(value, result):
                     "drawdownUnit",
                     "breakdownDate",
                     "weakening",
+                    "lowerHighs",
+                    "trendWeakening",
                     "consecutiveWeakDays",
                     "sampleCount",
                     "benchmarkSampleCount",
@@ -1082,6 +1153,124 @@ def _public_continuation(previous, now):
     return events[:12], plans[:12]
 
 
+def _industry_history_rows(records, now):
+    """Project only dated, successful server reports and their public risk facts."""
+    output = []
+
+    def append(row, stamp, run_id, sources):
+        cycle = row.get("industryCycle")
+        if not isinstance(cycle, dict):
+            return
+        keys = []
+        if row.get("industry"):
+            keys.append(("industry", str(row["industry"])[:100]))
+        if row.get("key"):
+            keys.append(("key", str(row["key"])[:64]))
+        keys.extend(
+            ("industry", key) for key in _texts(row.get("reviewIndustryIds"), 16, 100)
+        )
+        refs = set(cycle.get("sourceIds") or [])
+        for field, identity in dict.fromkeys(keys):
+            output.append(
+                {
+                    field: identity,
+                    "researchedAt": stamp.isoformat(),
+                    "reportRunId": str(run_id or "")[:100],
+                    "industryCycle": _public_industry_cycle(cycle),
+                    "sources": [
+                        source for source in sources if source.get("id") in refs
+                    ],
+                }
+            )
+
+    for record in (records if isinstance(records, list) else [])[:128]:
+        if not isinstance(record, dict) or record.get("status", "READY") != "READY":
+            continue
+        report = record.get("report")
+        stamp = _stamp(
+            record.get("completedAt")
+            or record.get("researchedAt")
+            or record.get("asOf")
+        )
+        if stamp is None or not now - timedelta(days=14) <= stamp <= now:
+            continue
+        if isinstance(report, dict):
+            report_stamp = _stamp(report.get("asOf"))
+            if (
+                report_stamp is None
+                or report_stamp > stamp
+                or report_stamp < now - timedelta(days=14)
+            ):
+                continue
+            sources = _public_industry_sources(report.get("sources"))
+            for review in report.get("industryCycleReviews", [])[:64]:
+                if isinstance(review, dict):
+                    append(
+                        {"industry": review.get("industry"), "industryCycle": review},
+                        report_stamp,
+                        record.get("runId"),
+                        sources,
+                    )
+            for direction in report.get("valueDirections", [])[:MAX_VALUE_DIRECTIONS]:
+                if isinstance(direction, dict):
+                    append(direction, report_stamp, record.get("runId"), sources)
+        else:
+            append(
+                record,
+                stamp,
+                record.get("reportRunId"),
+                _public_industry_sources(record.get("sources")),
+            )
+    return output
+
+
+def _previous_industry_states(packet, now):
+    from backend.macro.industry_cycle import industry_risk_policy
+
+    rows = _industry_history_rows(
+        [
+            *packet.get("previousIndustryRiskStates", []),
+            *packet.get("previousValueDirections", []),
+            *packet.get("previousResearch", []),
+        ],
+        now,
+    )
+    recovered, chosen = {}, {}
+    for row in rows:
+        key = (
+            ("industry", row["industry"]) if "industry" in row else ("key", row["key"])
+        )
+        if row["industryCycle"].get("earningsVerified") is True:
+            stamp = _stamp(row["researchedAt"])
+            recovered[key] = max(recovered.get(key, stamp), stamp)
+    for row in sorted(
+        rows, key=lambda item: _stamp(item["researchedAt"]), reverse=True
+    ):
+        key = (
+            ("industry", row["industry"]) if "industry" in row else ("key", row["key"])
+        )
+        if (
+            key in chosen
+            or key in recovered
+            and _stamp(row["researchedAt"]) <= recovered[key]
+        ):
+            continue
+        if industry_risk_policy(row["industryCycle"])["leftDiscountScale"] > 0:
+            chosen[key] = row
+    return chosen
+
+
+def _persist_review_cycle(cycle, history, now):
+    from backend.macro.industry_cycle import persist_industry_risk
+
+    if history is None:
+        return cycle
+    previous = {**history["industryCycle"], "sources": history.get("sources", [])}
+    return persist_industry_risk(
+        cycle, previous, confirmed_at=history["researchedAt"], now=now
+    )
+
+
 def _nav_collection_results(rows, now):
     result = {}
     if not isinstance(rows, dict):
@@ -1402,6 +1591,11 @@ def make_research_packet(
         "energy": energy,
         "previousQuestions": questions[:24],
         "previousResearch": previous_research,
+        "previousIndustryRiskStates": list(
+            _previous_industry_states(
+                {"previousResearch": (previous or {}).get("history", [])}, now
+            ).values()
+        )[:64],
         "previousUpcoming": previous_upcoming,
         "candidateIndex": candidate_index,
         "sourceResults": source_results,
@@ -1430,7 +1624,7 @@ def build_prompt(packet):
         "动态检索中英文资料：国内增长/信用/政策、美国通胀/利率、全球能源/航运/地缘、选举/贸易/制裁、全球权益/科技估值和未来日历。\n"
         "强制反方与行业降温证据核查：对industryCycleResearch中每个候选赛道及本次新发现的每个方向，实际执行公开网页检索，检索近90天一级市场融资降温/断代（FINANCING_COOLING）、企业欠薪/裁员/倒闭潮（LAYOFFS_CLOSURES）、下游砍单（ORDER_CUTS）、产能过剩价格战（OVERCAPACITY_PRICE_WAR）、商业化量产推迟（PRODUCTION_DELAY），并核对融资金额/笔数的时间区间与原始依据，不从赛道名称或个别企业困境推定行业事实。\n"
         "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
-        "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。最多64个真实候选行业，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
+        "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
         "产业兑现阶段stage仅选EARNINGS_DELIVERY/POLICY_CATALYST/EARLY_COMMERCIALIZATION/UNKNOWN，evidence.kind仅选PROFIT_GROWTH/CASH_COLLECTION/PAID_ORDERS/POLICY_EVENT/COMMERCIALIZATION_EARLY/EARNINGS_NOT_DELIVERED/EXPANSION_PLAN/FRAMEWORK_AGREEMENT，每条{kind,summary,sourceIds}。业绩兑现必须同时有当期财报利润增长与真实订单回款原文，订单意向或销量预测不足；政策/事件待传导选POLICY_CATALYST，试制/量产尚早或去泡沫证据支持才选EARLY_COMMERCIALIZATION，未知保持UNKNOWN。\n"
         "严格区分拟投资建厂/签署框架协议等远期扩产计划与已披露财报利润增长/实际回款；如电关节投资计划只能归EXPANSION_PLAN，不能算当期盈利兑现。在商业化早期、融资降温或缺乏当期盈利兑现时，单纯扩产计划不得提高机会分或充当正向催化，只列观察事项。机器人/具身智能仅为核查示例，不预设今天发生融资降温。左轨额外折价和机会分扣减由服务器执行；去泡沫期仅极小仓位观察或等待右侧拐点。\n"
@@ -1602,6 +1796,7 @@ def validate_report(raw, packet, source_checks, *, completed_at):
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED", "unreviewed industry candidates"
             )
+    historical_cycles = _previous_industry_states(packet, completed_at)
     value_directions = validate_value_directions(
         report["valueDirections"],
         packet,
@@ -1609,7 +1804,27 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         aliases,
         sources=sources,
         industry_reviews=industry_reviews,
+        historical_cycles=historical_cycles,
     )
+    recovered_industries = {
+        industry
+        for direction in value_directions
+        if direction.get("industryCycle", {}).get("earningsVerified") is True
+        for industry in direction.get("reviewIndustryIds", [])
+    }
+    industry_reviews = [
+        review
+        if review["industry"] in recovered_industries
+        else {
+            "industry": review["industry"],
+            **_persist_review_cycle(
+                review,
+                historical_cycles.get(("industry", review["industry"])),
+                completed_at,
+            ),
+        }
+        for review in industry_reviews
+    ]
     directions.update(row["key"] for row in value_directions)
     events = {}
     for row in report["events"]:

@@ -297,7 +297,14 @@ def _macro_codes(packet, now):
 
 
 def validate_value_directions(
-    proposals, packet, now, source_aliases, *, sources=None, industry_reviews=None
+    proposals,
+    packet,
+    now,
+    source_aliases,
+    *,
+    sources=None,
+    industry_reviews=None,
+    historical_cycles=None,
 ):
     from backend.macro.daily_research import ResearchValidationError, _TZ
 
@@ -405,6 +412,16 @@ def validate_value_directions(
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
             )
+        if historical_cycles:
+            from backend.macro.daily_research import _persist_review_cycle
+
+            for identity in [
+                ("key", key),
+                *(("industry", item) for item in sorted(review_ids)),
+            ]:
+                cycle = _persist_review_cycle(
+                    cycle, historical_cycles.get(identity), now
+                )
         direction["reviewIndustryIds"] = sorted(review_ids)
         direction["industryCycle"] = cycle
         macros = sorted(set(direction["macroCodes"]))

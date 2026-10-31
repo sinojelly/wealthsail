@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from urllib.parse import urlsplit
 
-METHOD = "opportunity-priority-v2"
+METHOD = "opportunity-priority-v3"
 SCORE_FIELDS = (
     "opportunityScore",
     "rewardRiskRatio",
@@ -246,10 +246,23 @@ def _ready(plan, track):
 
 
 def score_plan(plan, packet, now, *, prepared_evidence=None):
-    from backend.macro.industry_cycle import requires_left_discount
+    from backend.macro.industry_cycle import industry_risk_policy
 
     result = deepcopy(plan)
-    industry_penalty = -20 if requires_left_discount(result.get("industryCycle")) else 0
+    policy = industry_risk_policy(result.get("industryCycle"))
+    industry_nominal = (
+        20
+        if policy["riskLevel"] == "CONFIRMED"
+        else 10
+        if policy["riskLevel"] in {"SUSPECTED", "UNPROVEN"}
+        else 0
+    )
+    relative = result.get("relativeStrength") or {}
+    relative_nominal = (
+        8
+        if relative.get("weakening") is True or relative.get("trendWeakening") is True
+        else 0
+    )
     for key in SCORE_FIELDS:
         result.pop(key, None)
     for track in result.get("tracks", []):
@@ -317,19 +330,19 @@ def score_plan(plan, packet, now, *, prepared_evidence=None):
         missing = ([] if catalyst else ["POSITIVE_INDUSTRY_CATALYST"]) + (
             [] if share else ["SSE_ETF_SHARE_GROWTH"]
         )
+        gross_score = float(
+            technical + catalyst + share + reward + Decimal(str(strength))
+        )
+        industry_penalty = -min(industry_nominal, max(0, gross_score))
+        relative_penalty = -min(
+            relative_nominal,
+            25 + industry_penalty,
+            max(0, gross_score + industry_penalty),
+        )
+        total_penalty = industry_penalty + relative_penalty
         track.update(
             opportunityScore=round(
-                max(
-                    0,
-                    float(
-                        technical
-                        + catalyst
-                        + share
-                        + reward
-                        + Decimal(str(strength))
-                        + industry_penalty
-                    ),
-                ),
+                max(0, gross_score + total_penalty),
                 4,
             ),
             rewardRiskRatio=round(float(rr), 6),
@@ -341,6 +354,17 @@ def score_plan(plan, packet, now, *, prepared_evidence=None):
                 "rewardRisk": round(float(reward), 4),
                 "strength": strength,
                 "industryCyclePenalty": industry_penalty,
+                "relativeStrengthPenalty": relative_penalty,
+                "nominalIndustryCyclePenalty": -industry_nominal,
+                "nominalRelativeStrengthPenalty": -relative_nominal,
+                "riskPenaltyTotal": total_penalty,
+                "riskPenaltyCap": 25,
+                "industryRiskLevel": policy["riskLevel"],
+                "relativeStrengthRiskBasis": "MA60_RELATIVE_BREAKDOWN"
+                if relative.get("weakening") is True
+                else "LOWER_HIGHS_AND_NEGATIVE_EXCESS"
+                if relative.get("trendWeakening") is True
+                else None,
                 "evidenceScope": "SECTOR_PROXY",
                 "sourceUris": sources,
                 "missingEvidence": missing,
@@ -382,16 +406,18 @@ def priority_key(plan, track):
 
 
 def rank_report(report, packet):
-    result = deepcopy(report)
     now = _stamp(packet.get("asOf")) or _stamp(report.get("asOf"))
     if now is None:
-        return result
+        return deepcopy(report)
+    from backend.macro.industry_cycle import expire_report_industry_risks
+
+    result = expire_report_industry_risks(report, now)
     evidence = _prepare_evidence(packet, now)
 
     # The validated direction is the source of industry facts. Apply the same
     # assessment to every public copy of that fund, including the scanner.
     from backend.macro.industry_cycle import (
-        requires_left_discount,
+        industry_risk_policy,
         merge_industry_cycles,
     )
 
@@ -447,10 +473,13 @@ def rank_report(report, packet):
             direction["quantitativeEvidence"] = [
                 score(plan) for plan in direction["quantitativeEvidence"]
             ]
-        if requires_left_discount(direction.get("industryCycle")):
-            from backend.indicators.actionable_zones import INDUSTRY_RISK_WARNING
-
-            direction["industryRiskWarning"] = INDUSTRY_RISK_WARNING
+        warning = industry_risk_policy(direction.get("industryCycle")).get(
+            "industryRiskWarning"
+        )
+        if warning:
+            direction["industryRiskWarning"] = warning
+        else:
+            direction.pop("industryRiskWarning", None)
 
     def direction_key(direction):
         keys = [

@@ -116,7 +116,11 @@ def test_cooling_moves_only_left_entries_one_scale_and_recomputes_readiness(cycl
     assert adjusted["inBuyZone"] is False
     assert adjusted["entryReady"] is False
     assert result["tracks"][1] == before["tracks"][1]
-    assert result["industryRiskWarning"] == ("⚠️ 行业去泡沫/等待订单期 · 谨防左侧接飞刀")
+    assert (
+        "商业化早期"
+        if cycle["stage"] == "EARLY_COMMERCIALIZATION"
+        else "一级市场融资降温"
+    ) in result["industryRiskWarning"]
     assert adjusted["entryStatus"] == result["industryRiskWarning"]
 
 

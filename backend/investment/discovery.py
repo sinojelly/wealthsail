@@ -210,6 +210,7 @@ def _public_universe(rows):
 def discovery_packet(universe, anchors, previous, now):
     from backend.macro.daily_research import (
         _public_actionable_plan,
+        _public_industry_cycle,
         _pick,
         _visible,
         _texts,
@@ -312,6 +313,11 @@ def discovery_packet(universe, anchors, previous, now):
                     ),
                 ),
                 "sourceIds": _texts(row.get("sourceIds"))[:8],
+                "industryCycle": _public_industry_cycle(row["industryCycle"])
+                if isinstance(row.get("industryCycle"), dict)
+                else None,
+                "reviewIndustryIds": _texts(row.get("reviewIndustryIds"), 16, 100),
+                "researchedAt": ((previous or {}).get("report") or {}).get("asOf"),
                 "macroCodes": _texts(row.get("macroCodes"))[:8],
                 "watchFor": _texts(row.get("watchFor"))[:4],
                 "quantitativeFundCodes": _texts(
