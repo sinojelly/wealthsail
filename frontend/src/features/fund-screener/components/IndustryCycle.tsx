@@ -68,6 +68,14 @@ function IndustryAudit({
             : "尚未同时核实，不能视为已兑现。"}
         </p>
       )}
+      {cycle.earningsVerified === true &&
+        cycle.earningsEntity?.trim() &&
+        cycle.earningsReportPeriod?.trim() && (
+          <p>
+            公司级证据：{readingText(cycle.earningsEntity, 160)} ·{" "}
+            {readingText(cycle.earningsReportPeriod, 80)}
+          </p>
+        )}
       {(Object.entries(riskLabels) as Array<[IndustryRiskKind, string]>).map(
         ([kind, label]) => {
           const check = cycle.riskChecks?.find((row) => row.kind === kind);

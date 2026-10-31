@@ -438,3 +438,107 @@ it("connects the compact card's inherited audit to report source links without c
   expect(compact).toHaveTextContent("0.950–1.050");
   expect(JSON.stringify(data)).toBe(original);
 });
+
+it("shows omitted industry candidates before the direction cards and highlights omitted historical risk sectors", () => {
+  const data = daily(direction());
+  Object.assign(data.report!, {
+    industryResearchCoverage: {
+      maximumCandidates: 10,
+      candidateCount: 10,
+      omittedCandidateCount: 7,
+      omittedRiskCandidateCount: 2,
+      status: "PARTIAL",
+    },
+  });
+  const original = JSON.stringify(data);
+  render(<ValueDirections data={data} />);
+  const coverage = screen.getByRole("status", { name: "行业反方核查覆盖缺口" });
+  expect(coverage).toBeVisible();
+  expect(coverage).toHaveTextContent(
+    "本轮行业反方核查覆盖10个候选，另有7个候选未纳入；检索覆盖存在缺口",
+  );
+  expect(coverage).toHaveTextContent("含2个历史风险赛道");
+  const card = screen.getByRole("region", { name: "机器人与具身智能" });
+  expect(
+    coverage.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(JSON.stringify(data)).toBe(original);
+});
+
+it("uses the server's actual covered count and leaves an unavailable omitted-risk count unspecified", () => {
+  const data = daily(direction());
+  Object.assign(data.report!, {
+    industryResearchCoverage: {
+      maximumCandidates: 10,
+      candidateCount: 8,
+      omittedCandidateCount: 3,
+      status: "PARTIAL",
+    },
+  });
+  render(<ValueDirections data={data} />);
+  const coverage = screen.getByRole("status", { name: "行业反方核查覆盖缺口" });
+  expect(coverage).toHaveTextContent(
+    "本轮行业反方核查覆盖8个候选，另有3个候选未纳入",
+  );
+  expect(coverage).not.toHaveTextContent("历史风险赛道");
+});
+
+it.each([
+  undefined,
+  {
+    maximumCandidates: 10,
+    candidateCount: 10,
+    omittedCandidateCount: 0,
+    omittedRiskCandidateCount: 0,
+    status: "COMPLETE",
+  },
+])(
+  "does not turn legacy or zero-omission coverage into a search receipt: %j",
+  (coverage) => {
+    const row = direction();
+    row.industryCycle = {
+      stage: "UNKNOWN",
+      riskChecks: auditChecks(),
+      searchExecutionVerified: false,
+    };
+    const data = daily(row);
+    if (coverage)
+      Object.assign(data.report!, { industryResearchCoverage: coverage });
+    render(<ValueDirections data={data} />);
+    expect(
+      screen.queryByRole("status", { name: "行业反方核查覆盖缺口" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/已完成外部搜索|外部搜索已核验/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText("检索凭证：模型结构化核查（外部搜索回执待接入）"),
+    ).toHaveLength(2);
+  },
+);
+
+it.each([
+  [true, "甲公司", "2026Q3", true],
+  [false, "甲公司", "2026Q3", false],
+  [true, undefined, "2026Q3", false],
+  [true, "甲公司", undefined, false],
+  [true, "", "2026Q3", false],
+  [true, "甲公司", "", false],
+] as const)(
+  "shows a company/period evidence identity only for a verified complete pair: %s/%s/%s",
+  async (verified, entity, period, displayed) => {
+    const cycle = Object.assign(
+      {
+        stage: "UNKNOWN" as const,
+        earningsVerified: verified,
+        riskChecks: auditChecks(),
+      },
+      { earningsEntity: entity, earningsReportPeriod: period },
+    );
+    render(<IndustryCycleWarning cycle={cycle} />);
+    await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+    if (displayed)
+      expect(screen.getByText("公司级证据：甲公司 · 2026Q3")).toBeVisible();
+    else expect(screen.queryByText(/公司级证据：/)).not.toBeInTheDocument();
+  },
+);

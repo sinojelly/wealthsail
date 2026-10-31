@@ -417,6 +417,29 @@ export default function ValueDirections({
           交易日14:30独立核对场外基金（北京时间）
         </small>
       </header>
+      {report.industryResearchCoverage &&
+        report.industryResearchCoverage.omittedCandidateCount > 0 && (
+          <div
+            className="op-industry-risk"
+            role="status"
+            aria-label="行业反方核查覆盖缺口"
+          >
+            <p>
+              本轮行业反方核查覆盖
+              {report.industryResearchCoverage.candidateCount}个候选，另有
+              {report.industryResearchCoverage.omittedCandidateCount}
+              个候选未纳入；检索覆盖存在缺口
+            </p>
+            {(report.industryResearchCoverage.omittedRiskCandidateCount ?? 0) >
+              0 && (
+              <strong>
+                其中含
+                {report.industryResearchCoverage.omittedRiskCandidateCount}
+                个历史风险赛道。
+              </strong>
+            )}
+          </div>
+        )}
       {directions?.length ? (
         directions.map((direction) => (
           <section

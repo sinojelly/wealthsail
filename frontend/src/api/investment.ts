@@ -406,6 +406,28 @@ export interface IndustryRiskCheck {
   query: string;
   sourceIds: string[];
   recency?: string;
+  timeVerification?: string;
+  eventTimeVerification?: string;
+  eventPeriod?: string | null;
+  eventPeriodStart?: string | null;
+  eventPeriodEnd?: string | null;
+}
+export interface IndustryEvidence {
+  kind:
+    | "PROFIT_GROWTH"
+    | "CASH_COLLECTION"
+    | "PAID_ORDERS"
+    | "POLICY_EVENT"
+    | "COMMERCIALIZATION_EARLY"
+    | "EARNINGS_NOT_DELIVERED"
+    | "EXPANSION_PLAN"
+    | "FRAMEWORK_AGREEMENT";
+  summary: string;
+  sourceIds: string[];
+  companyName?: string | null;
+  entityId?: string | null;
+  reportPeriod?: string | null;
+  factIdentityVerified?: boolean;
 }
 export interface IndustryCycle {
   stage:
@@ -417,6 +439,8 @@ export interface IndustryCycle {
   riskLevel?: IndustryRiskLevel;
   leftDiscountScale?: 0 | 0.5 | 1;
   earningsVerified?: boolean;
+  earningsEntity?: string | null;
+  earningsReportPeriod?: string | null;
   forwardPlansOnly?: boolean;
   riskFlags?: string[];
   confirmedRiskFlags?: string[];
@@ -425,6 +449,7 @@ export interface IndustryCycle {
   riskChecks?: IndustryRiskCheck[];
   searchExecutionVerified?: boolean;
   evidenceSummary?: string;
+  evidence?: IndustryEvidence[];
   sourceIds?: string[];
   industryRiskWarning?: string | null;
 }
@@ -715,6 +740,13 @@ export interface DailyResearch {
     actionablePlans?: ActionableZoneResult[];
     quantitativeScan?: QuantitativeScan;
     valueDirections?: ValueDirection[];
+    industryResearchCoverage?: {
+      maximumCandidates: number;
+      candidateCount: number;
+      omittedCandidateCount: number;
+      omittedRiskCandidateCount?: number;
+      status: "COMPLETE" | "PARTIAL";
+    };
     coverage: Array<{ topic: string; status: string; summary: string }>;
     sources: Array<{
       id: string;
