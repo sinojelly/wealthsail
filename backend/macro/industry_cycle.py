@@ -364,6 +364,16 @@ def _expected_scope_terms(expected_industries):
     return terms
 
 
+def _industry_subjects(quote):
+    # Scan in order, consuming each suffix before looking for the next subject.
+    # Bare 业 in 企业/商业/营业 or an organization name is not a sector marker.
+    return re.findall(
+        r"([\u4e00-\u9fff]{1,8}?)(产业链|行业|产业|赛道|领域|(?<![行产企商营])业)"
+        r"(?!股份|有限|集团|公司)",
+        quote,
+    )
+
+
 def _industry_scope_verified(source, expected_industries):
     """Verify a claim's industry; an unrelated title cannot override its subject.
 
@@ -374,30 +384,19 @@ def _industry_scope_verified(source, expected_industries):
     if not terms:
         return False
     quote = unicodedata.normalize("NFKC", str(source.get("quote") or ""))
+    if any(
+        not subject.endswith(("该", "本", "上述", "这一", "这个", "此"))
+        and not any(_scope_term_present(subject + suffix, term) for term in terms)
+        for subject, suffix in _industry_subjects(quote)
+    ):
+        return False
     if any(_scope_term_present(quote, term) for term in terms):
-        # Unsplit joined facts may introduce an unknown sector as "X业".
-        # Such an explicit subject cannot borrow another sector's keywords.
-        if any(
-            not subject.endswith(("行业", "产业", "企业", "商业"))
-            and not any(_scope_term_present(subject, term) for term in terms)
-            for subject in re.findall(
-                r"与([\u4e00-\u9fff]{2,8}业)(?!股份|有限|集团|公司)", quote
-            )
-        ):
-            return False
         if any(
             term not in terms
             and not any(_scope_term_present(target, term) for target in terms)
             and _scope_term_present(quote, term)
             for aliases in _INDUSTRY_SCOPE_TERMS.values()
             for term in aliases
-        ):
-            return False
-        subjects = re.findall(r"([\u4e00-\u9fff]{2,8})(?:行业|产业|赛道|领域)", quote)
-        if (
-            subjects
-            and not subjects[-1].endswith(("该", "本", "上述", "这一", "这个", "此"))
-            and not any(_scope_term_present(subjects[-1], term) for term in terms)
         ):
             return False
         return True
@@ -411,11 +410,6 @@ def _industry_scope_verified(source, expected_industries):
         r"(?:该|本|上述|这一|这个|此)(?:行业|产业)|\b(?:this|the same) industry\b",
         quote,
         re.I,
-    ):
-        return False
-    if any(
-        not subject.endswith(("该", "本", "上述", "这一", "这个", "此"))
-        for subject in re.findall(r"([\u4e00-\u9fff]+)(?:行业|产业)", quote)
     ):
         return False
     return any(

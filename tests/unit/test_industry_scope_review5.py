@@ -68,12 +68,36 @@ def test_unknown_but_explicit_shipbuilding_industry_cannot_borrow_robot_title():
     assert result["leftDiscountScale"] == 0.5
 
 
-def test_other_positive_predicate_cannot_attach_shipbuilding_risk_to_robot():
-    result = risk("近期机器人行业订单增长与造船业融资规模下降30%。")
+@pytest.mark.parametrize("connector", ["与", "和", "及", "以及", "、"])
+def test_other_positive_predicate_cannot_attach_shipbuilding_risk_to_robot(connector):
+    result = risk(f"近期机器人行业订单增长{connector}造船业融资规模下降30%。")
     check = result["riskChecks"][0]
     assert check["industryScopeVerified"] is False
     assert check["strength"] == "SUSPECTED"
     assert result["leftDiscountScale"] == 0.5
+
+
+def test_all_explicit_industry_subjects_must_apply_even_if_target_is_mentioned_last():
+    result = risk("近期机器人行业订单增长、造船业融资规模下降30%、机器人行业景气改善。")
+    assert result["riskChecks"][0]["industryScopeVerified"] is False
+    assert result["riskChecks"][0]["strength"] == "SUSPECTED"
+    assert result["leftDiscountScale"] == 0.5
+
+
+def test_enterprises_are_not_mistaken_for_another_industry_subject():
+    result = risk("近期机器人行业多家企业融资规模下降30%。")
+    assert result["riskChecks"][0]["industryScopeVerified"] is True
+    assert result["riskChecks"][0]["strength"] == "CONFIRMED"
+
+
+@pytest.mark.parametrize(
+    "company", ["甲机器人实业股份有限公司", "甲机器人实业集团有限公司"]
+)
+def test_generic_subject_guard_keeps_verified_applicable_company_facts(company):
+    result = earnings(company=company)
+    assert result["earningsVerified"] is True
+    assert result["earningsIndustryScopeVerified"] is True
+    assert result["stage"] == "EARNINGS_DELIVERY"
 
 
 @pytest.mark.parametrize(
