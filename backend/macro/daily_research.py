@@ -20,7 +20,11 @@ from backend.macro.model_projection import (
     known_company_names,
 )
 from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
-from backend.macro.industry_cycle import IndustryCycleReview, normalize_industry_cycle
+from backend.macro.industry_cycle import (
+    IndustryCycleReview,
+    earnings_recovery_verified,
+    normalize_industry_cycle,
+)
 from backend.macro.value_directions import (
     MAX_VALUE_DIRECTIONS,
     ValueDirectionProposal,
@@ -28,7 +32,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-risk-strength-v14"
+PROMPT_VERSION = "daily-research-industry-risk-strength-v15"
 MAX_REPORT_SOURCES = 24
 
 
@@ -300,6 +304,7 @@ def _public_industry_cycle(value):
             "researchStatus",
             "auditStructureStatus",
             "earningsVerified",
+            "earningsIndustryScopeVerified",
             "forwardPlansOnly",
             "riskLevel",
             "leftDiscountScale",
@@ -1298,7 +1303,7 @@ def _previous_industry_states(packet, now):
         key = (
             ("industry", row["industry"]) if "industry" in row else ("key", row["key"])
         )
-        if row["industryCycle"].get("earningsVerified") is True:
+        if earnings_recovery_verified(row["industryCycle"]):
             stamp = _stamp(row["researchedAt"])
             recovered[key] = max(recovered.get(key, stamp), stamp)
     for row in sorted(
@@ -1335,7 +1340,13 @@ def _persist_review_cycle(cycle, history, now, *, earnings_recovered=False):
         return cycle
     previous = {**history["industryCycle"], "sources": history.get("sources", [])}
     result = persist_industry_risk(
-        {**cycle, "earningsVerified": True} if earnings_recovered else cycle,
+        {
+            **cycle,
+            "earningsVerified": True,
+            "earningsIndustryScopeVerified": True,
+        }
+        if earnings_recovered
+        else cycle,
         previous,
         confirmed_at=history["researchedAt"],
         now=now,
@@ -1344,6 +1355,12 @@ def _persist_review_cycle(cycle, history, now, *, earnings_recovered=False):
         # The proof belongs to individual linked companies, not every company
         # in the sector review. Preserve the review's own verification state.
         result["earningsVerified"] = cycle.get("earningsVerified", False)
+        if "earningsIndustryScopeVerified" in cycle:
+            result["earningsIndustryScopeVerified"] = cycle[
+                "earningsIndustryScopeVerified"
+            ]
+        else:
+            result.pop("earningsIndustryScopeVerified", None)
     return result
 
 
@@ -1704,6 +1721,7 @@ def build_prompt(packet):
         "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务优先复查历史风险赛道，再按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
         "负面来源须属于正在核查的行业或明确相关产业链，引用时保留行业名/别名与事件事实；不得把半导体、光伏等其他行业的真实风险挂到机器人等无关赛道。无法核实归属只列待核实线索。商业化早期只能由试制、验证、尚未量产等成熟度原文支撑，融资降温、砍单本身不能证明商业化早期。\n"
+        "原文明确提及其他行业/产业时，不得用标题中的目标行业覆盖正文主体。阶段与盈利证据同样须核对产业关联：已核实的外行业公司财务事实可保留为公司级事实，但不能作为本方向的业绩兑现、成熟度标签或行业风险解除依据；归属未明时阶段保持UNKNOWN。\n"
         "产业兑现阶段stage仅选EARNINGS_DELIVERY/POLICY_CATALYST/EARLY_COMMERCIALIZATION/UNKNOWN，evidence.kind仅选PROFIT_GROWTH/CASH_COLLECTION/PAID_ORDERS/POLICY_EVENT/COMMERCIALIZATION_EARLY/EARNINGS_NOT_DELIVERED/EXPANSION_PLAN/FRAMEWORK_AGREEMENT，每条{kind,summary,sourceIds}。业绩兑现必须同时有当期财报利润增长与真实订单回款原文，订单意向或销量预测不足；政策/事件待传导选POLICY_CATALYST，试制/量产尚早或去泡沫证据支持才选EARLY_COMMERCIALIZATION，未知保持UNKNOWN。\n"
         "PROFIT_GROWTH与CASH_COLLECTION还须提交companyName、entityId（可空）、reportPeriod；报告期使用YYYYQ1至YYYYQ4、YYYYH1/YYYYH2或YYYYFY的明确口径，并在所引原文保留企业名称与报告期。同一企业、同一报告期的已核验利润增长和实际回款才能组成公司级业绩兑现；严禁拼接不同企业、不同报告期，身份不明保持UNKNOWN。该公司级证据不能证明整个行业或基金真实持仓均已兑现。商业化早期须有近期已核验的试制/验证/尚未量产等原文，产品发布和建厂计划本身不足。\n"
         "严格区分拟投资建厂/签署框架协议等远期扩产计划与已披露财报利润增长/实际回款；如电关节投资计划只能归EXPANSION_PLAN，不能算当期盈利兑现。在商业化早期、融资降温或缺乏当期盈利兑现时，单纯扩产计划不得提高机会分或充当正向催化，只列观察事项。机器人/具身智能仅为核查示例，不预设今天发生融资降温。左轨额外折价和机会分扣减由服务器执行；去泡沫期仅极小仓位观察或等待右侧拐点。\n"
@@ -1887,7 +1905,7 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     recovered_industries = {
         industry
         for direction in value_directions
-        if direction.get("industryCycle", {}).get("earningsVerified") is True
+        if earnings_recovery_verified(direction.get("industryCycle", {}))
         for industry in direction.get("reviewIndustryIds", [])
     }
     industry_reviews = [

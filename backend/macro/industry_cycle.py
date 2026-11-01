@@ -367,8 +367,8 @@ def _expected_scope_terms(expected_industries):
 def _industry_scope_verified(source, expected_industries):
     """Verify a claim's industry; an unrelated title cannot override its subject.
 
-    Callers pass the actual risk statement as quote. Only a statement with no
-    identifiable industry can use a specific title to resolve its subject.
+    Callers pass the actual supporting statement as quote. Only an explicit
+    context reference can use a title; an unknown named industry cannot.
     """
     terms = _expected_scope_terms(expected_industries)
     if not terms:
@@ -380,6 +380,17 @@ def _industry_scope_verified(source, expected_industries):
         _scope_term_present(quote, term)
         for aliases in _INDUSTRY_SCOPE_TERMS.values()
         for term in aliases
+    ):
+        return False
+    if not re.search(
+        r"(?:该|本|上述|这一|这个|此)(?:行业|产业)|\b(?:this|the same) industry\b",
+        quote,
+        re.I,
+    ):
+        return False
+    if any(
+        not subject.endswith(("该", "本", "上述", "这一", "这个", "此"))
+        for subject in re.findall(r"([\u4e00-\u9fff]+)(?:行业|产业)", quote)
     ):
         return False
     return any(
@@ -740,7 +751,7 @@ def _risk_event_contexts(source, kind, now):
     return contexts
 
 
-def _early_quote_supported(source, kind, now):
+def _early_quote_clauses(source, kind, now):
     # Stage remains an evidence-backed classification with half protection;
     # it is not a confirmed industry downturn claim.
     if (
@@ -748,16 +759,17 @@ def _early_quote_supported(source, kind, now):
         or source.get("verification") != "SOURCE_CHECKED"
         or _source_recency(source, now) != "RECENT"
     ):
-        return False
+        return []
     quote = str(source.get("quote") or "")
     if re.search(r"否认|不属实|传闻不实|并非|\bdenied\b", quote, re.I):
-        return False
+        return []
     pattern = (
         r"(?:仍处|处于|尚处|正在|仍在).{0,10}(?:试制|验证|试验|试产|商业化早期)"
         r"|(?:尚未|还未|未能|未实现).{0,8}(?:规模量产|量产|商业化)"
         if kind == "COMMERCIALIZATION_EARLY"
         else r"(?:尚未|还未|未能|未实现|尚无|没有|未).{0,8}(?:盈利|利润|实际回款|回款)"
     )
+    matches = []
     for clause in _quote_clauses(quote):
         if _old_quote_year(clause, source, now) or re.search(
             r"预计|预期|预测|计划|拟|有望|力争|目标|将|未来|\b(?:expect\w*|plan\w*|will)\b",
@@ -770,8 +782,12 @@ def _early_quote_supported(source, kind, now):
         ):
             continue
         if re.search(pattern, clause, re.I):
-            return True
-    return False
+            matches.append(clause.strip())
+    return matches
+
+
+def _early_quote_supported(source, kind, now):
+    return bool(_early_quote_clauses(source, kind, now))
 
 
 def _title_fingerprint(value):
@@ -942,6 +958,7 @@ def normalize_industry_cycle(
         )
         if row["timeVerification"] == "HISTORICAL":
             row["historicalEvidence"] = True
+        row["industryScopeVerified"] = False
         if row["kind"] in {"PROFIT_GROWTH", "CASH_COLLECTION"}:
             row["currentFactVerified"] = any(
                 _earnings_fact(sources.get(ref, {}), row["kind"], now)
@@ -953,6 +970,32 @@ def normalize_industry_cycle(
                 for _, clause in _earnings_fact_clauses(
                     sources.get(ref, {}), row["kind"], now
                 )
+            )
+            row["industryScopeVerified"] = bool(expected_industries) and any(
+                _fact_identity(row, clause) is not None
+                and _industry_scope_verified(
+                    {**sources.get(ref, {}), "quote": clause}, expected_industries
+                )
+                for ref in row["sourceIds"]
+                for _, clause in _earnings_fact_clauses(
+                    sources.get(ref, {}), row["kind"], now
+                )
+            )
+        elif row["kind"] in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}:
+            row["industryScopeVerified"] = bool(expected_industries) and any(
+                _industry_scope_verified(
+                    {**sources.get(ref, {}), "quote": clause}, expected_industries
+                )
+                for ref in row["sourceIds"]
+                for clause in _early_quote_clauses(
+                    sources.get(ref, {}), row["kind"], now
+                )
+            )
+        else:
+            row["industryScopeVerified"] = bool(expected_industries) and any(
+                sources.get(ref, {}).get("verification") == "SOURCE_CHECKED"
+                and _industry_scope_verified(sources.get(ref, {}), expected_industries)
+                for ref in row["sourceIds"]
             )
     for check in cycle["riskChecks"]:
         kind = check["kind"]
@@ -1056,7 +1099,7 @@ def normalize_industry_cycle(
         for row in cycle["evidence"]
         if row.get("timeVerification") != "HISTORICAL"
     }
-    stage_kinds = {
+    stage_candidates = {
         row["kind"]
         for row in cycle["evidence"]
         if row["kind"] in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}
@@ -1066,40 +1109,79 @@ def normalize_industry_cycle(
             for ref in row["sourceIds"]
         )
     }
+    stage_kinds = {
+        row["kind"]
+        for row in cycle["evidence"]
+        if row["kind"] in stage_candidates
+        and row.get("timeVerification") == "RECENT"
+        and (not expected_industries or row["industryScopeVerified"])
+    }
     facts = {kind: [] for kind in ("PROFIT_GROWTH", "CASH_COLLECTION")}
     for row in cycle["evidence"]:
         if row["kind"] in facts:
             facts[row["kind"]].extend(
-                (ref, index, clause, identity)
+                (
+                    ref,
+                    index,
+                    clause,
+                    identity,
+                    bool(expected_industries)
+                    and _industry_scope_verified(
+                        {**sources.get(ref, {}), "quote": clause}, expected_industries
+                    ),
+                )
                 for ref in row["sourceIds"]
                 for index, clause in _earnings_fact_clauses(
                     sources.get(ref, {}), row["kind"], now
                 )
                 if (identity := _fact_identity(row, clause)) is not None
             )
-    earnings_pair = next(
-        (
-            (profit, cash)
-            for profit in facts["PROFIT_GROWTH"]
-            for cash in facts["CASH_COLLECTION"]
-            if (profit[0] != cash[0] or profit[1] != cash[1])
-            and profit[2] != cash[2]
-            and _same_earnings_identity(profit[3], cash[3])
-        ),
-        None,
+    earnings_pairs = [
+        (profit, cash)
+        for profit in facts["PROFIT_GROWTH"]
+        for cash in facts["CASH_COLLECTION"]
+        if (profit[0] != cash[0] or profit[1] != cash[1])
+        and profit[2] != cash[2]
+        and _same_earnings_identity(profit[3], cash[3])
+    ]
+    scoped_pair = next(
+        (pair for pair in earnings_pairs if pair[0][4] and pair[1][4]), None
     )
+    earnings_pair = scoped_pair or next(iter(earnings_pairs), None)
     earnings_verified = earnings_pair is not None
+    earnings_scope_verified = bool(scoped_pair) if expected_industries else None
     stage = cycle["stage"]
-    if stage == "EARNINGS_DELIVERY" and not earnings_verified:
+    if stage == "EARNINGS_DELIVERY" and not earnings_recovery_verified(
+        {
+            "earningsVerified": earnings_verified,
+            "earningsIndustryScopeVerified": earnings_scope_verified,
+        }
+    ):
         stage = "UNKNOWN"
         gaps.append("CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING")
         if not all(facts.values()) or not earnings_pair:
             gaps.append("EARNINGS_ENTITY_OR_PERIOD_UNVERIFIED")
         flags.add("NO_CURRENT_EARNINGS_PROOF")
+    if earnings_verified and earnings_scope_verified is False:
+        gaps.append("EARNINGS_INDUSTRY_SCOPE_UNVERIFIED")
     if stage == "POLICY_CATALYST" and "POLICY_EVENT" not in kinds:
         stage = "UNKNOWN"
+    if (
+        stage == "POLICY_CATALYST"
+        and expected_industries
+        and not any(
+            row["kind"] == "POLICY_EVENT"
+            and row.get("timeVerification") != "HISTORICAL"
+            and row["industryScopeVerified"]
+            for row in cycle["evidence"]
+        )
+    ):
+        stage = "UNKNOWN"
+        gaps.append("STAGE_INDUSTRY_SCOPE_UNVERIFIED")
     if stage == "EARLY_COMMERCIALIZATION" and not stage_kinds:
         stage = "UNKNOWN"
+        if stage_candidates and expected_industries:
+            gaps.append("STAGE_INDUSTRY_SCOPE_UNVERIFIED")
     if "COMMERCIALIZATION_EARLY" in stage_kinds:
         flags.add("EARLY_COMMERCIALIZATION")
     if "EARNINGS_NOT_DELIVERED" in stage_kinds:
@@ -1132,6 +1214,7 @@ def normalize_industry_cycle(
         "auditStructureStatus": "COMPLETE",
         "evidenceGaps": gaps,
         "earningsVerified": earnings_verified,
+        "earningsIndustryScopeVerified": earnings_scope_verified,
         "earningsEntity": (earnings_pair[0][3][0] or earnings_pair[0][3][1])
         if earnings_pair
         else None,
@@ -1150,6 +1233,18 @@ def normalize_industry_cycle(
     return result
 
 
+def earnings_recovery_verified(cycle):
+    """Company facts relieve industry doubts only when applicable to its scope.
+
+    Reports written before explicit scope grading retain their legacy behavior.
+    """
+    return (
+        isinstance(cycle, dict)
+        and cycle.get("earningsVerified") is True
+        and cycle.get("earningsIndustryScopeVerified") is not False
+    )
+
+
 def industry_risk_policy(cycle):
     """Derive risk intensity independently of stage and stale saved scale values.
 
@@ -1163,7 +1258,7 @@ def industry_risk_policy(cycle):
     )
     suspected = set(cycle.get("suspectedRiskFlags") or [])
     declared = cycle.get("riskLevel")
-    recovered = cycle.get("earningsVerified") is True
+    recovered = earnings_recovery_verified(cycle)
     if recovered:
         flags.difference_update(EARNINGS_RISK_FLAGS)
         suspected.difference_update(EARNINGS_RISK_FLAGS)
@@ -1362,7 +1457,7 @@ def _aware_stamp(value):
 
 def _clear_earnings_risks(cycle):
     result = deepcopy(cycle)
-    if result.get("earningsVerified") is not True:
+    if not earnings_recovery_verified(result):
         return result
     for field in (
         "riskFlags",
@@ -1398,7 +1493,7 @@ def _with_watch_note(cycle):
     if cycle.get("persistedRiskFlags"):
         note = (
             COMPANY_EARNINGS_INDUSTRY_WATCH_NOTE
-            if cycle.get("earningsVerified") is True
+            if earnings_recovery_verified(cycle)
             else "延续近14日已确认的行业降温观察，等待该类风险的恢复证据"
         )
         if note not in cycle.get("evidenceSummary", ""):
@@ -1430,9 +1525,7 @@ def persist_industry_risk(current, previous, *, confirmed_at, now):
         valid_watch = {
             flag
             for flag in saved_watch
-            if not (
-                result.get("earningsVerified") is True and flag in EARNINGS_RISK_FLAGS
-            )
+            if not (earnings_recovery_verified(result) and flag in EARNINGS_RISK_FLAGS)
             and (stamp := _aware_stamp(dates.get(flag))) is not None
             and timedelta(0) <= now - stamp <= timedelta(days=14)
         }
@@ -1470,7 +1563,7 @@ def persist_industry_risk(current, previous, *, confirmed_at, now):
     old_flags = set(prior_policy["confirmedRiskFlags"]) | set(
         previous.get("persistedRiskFlags") or []
     )
-    if result.get("earningsVerified") is True:
+    if earnings_recovery_verified(result):
         old_flags.difference_update(EARNINGS_RISK_FLAGS)
     current_checks = {row["kind"]: row for row in result.get("riskChecks") or []}
     stored_dates = previous.get("confirmedRiskAt") or {}

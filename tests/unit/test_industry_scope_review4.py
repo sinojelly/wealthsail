@@ -58,7 +58,7 @@ def test_other_or_unknown_industry_claim_cannot_confirm_robot_risk(quote, title)
         ("近期具身智能与人形机器人融资笔数下降30%。", "产业观察"),
         ("近期丝杠与减速器产业链融资规模下降30%。", "产业观察"),
         ("2026-10-15 robot industry financing declined 30%.", "产业观察"),
-        ("近期行业融资笔数下降30%。", "人形机器人投融资观察"),
+        ("近期该行业融资笔数下降30%。", "人形机器人投融资观察"),
     ],
 )
 def test_corresponding_robot_claim_or_specific_title_can_confirm(quote, title):

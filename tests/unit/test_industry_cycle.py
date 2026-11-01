@@ -11,7 +11,7 @@ def current_stage_sources():
         "source:one": {
             "verification": "SOURCE_CHECKED",
             "publishedDate": "2026-10-15",
-            "quote": "行业仍处试制验证阶段。",
+            "quote": "医药行业仍处试制验证阶段。",
         }
     }
 
