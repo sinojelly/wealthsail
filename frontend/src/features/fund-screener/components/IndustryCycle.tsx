@@ -34,6 +34,12 @@ const gapLabels: Record<string, string> = {
   FORWARD_PLANS_ONLY: "仅见远期扩产或框架意向，尚无当期盈利兑现",
   NO_CURRENT_EARNINGS_PROOF: "当期盈利兑现缺少原文实证",
   PERSISTED_RISK_WATCH: "延续近期行业降温观察，等待盈利恢复证据",
+  "INDUSTRY_SCOPE_UNVERIFIED:FINANCING_COOLING": "融资降温证据的行业归属待核实",
+  "INDUSTRY_SCOPE_UNVERIFIED:LAYOFFS_CLOSURES": "欠薪倒闭证据的行业归属待核实",
+  "INDUSTRY_SCOPE_UNVERIFIED:ORDER_CUTS": "下游砍单证据的行业归属待核实",
+  "INDUSTRY_SCOPE_UNVERIFIED:OVERCAPACITY_PRICE_WAR":
+    "产能价格战证据的行业归属待核实",
+  "INDUSTRY_SCOPE_UNVERIFIED:PRODUCTION_DELAY": "量产推迟证据的行业归属待核实",
 };
 type AuditSources = NonNullable<DailyResearch["report"]>["sources"];
 function verificationLabel(check: IndustryRiskCheck) {
@@ -55,6 +61,11 @@ function IndustryAudit({
       {cycle.searchExecutionVerified === false && (
         <p>
           <small>检索凭证：模型结构化核查（外部搜索回执待接入）</small>
+        </p>
+      )}
+      {cycle.auditStructureStatus === "COMPLETE" && (
+        <p>
+          <small>五项核查结构齐全；不代表外部原文或检索已核验。</small>
         </p>
       )}
       {cycle.evidenceSummary && (
@@ -98,6 +109,15 @@ function IndustryAudit({
                     </strong>{" "}
                     · {verificationLabel(check)}
                   </p>
+                  {check.status === "FOUND" &&
+                    typeof check.industryScopeVerified === "boolean" && (
+                      <p>
+                        行业归属：
+                        {check.industryScopeVerified
+                          ? "关键词已匹配"
+                          : "待核实"}
+                      </p>
+                    )}
                   {check.strength && (
                     <p>
                       证据强度：

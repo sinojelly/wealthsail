@@ -542,3 +542,101 @@ it.each([
     else expect(screen.queryByText(/公司级证据：/)).not.toBeInTheDocument();
   },
 );
+
+it.each([
+  [false, "行业归属：待核实"],
+  [true, "行业归属：关键词已匹配"],
+  [undefined, undefined],
+] as const)(
+  "shows only the server's FOUND-risk industry keyword verification: %s",
+  async (verified, label) => {
+    const checks = auditChecks();
+    Object.assign(checks[0], { industryScopeVerified: verified });
+    render(
+      <IndustryCycleWarning cycle={{ stage: "UNKNOWN", riskChecks: checks }} />,
+    );
+    await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+    const financing = within(
+      screen.getByRole("region", { name: "融资降温核查" }),
+    );
+    if (label) expect(financing.getByText(label)).toBeVisible();
+    else expect(financing.queryByText(/行业归属：/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/持仓已核实|真实持仓已验证/),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it("does not add an industry-scope claim to a non-FOUND risk check", async () => {
+  const checks = auditChecks();
+  Object.assign(checks[2], { industryScopeVerified: false });
+  render(
+    <IndustryCycleWarning cycle={{ stage: "UNKNOWN", riskChecks: checks }} />,
+  );
+  await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+  expect(
+    within(screen.getByRole("region", { name: "下游砍单核查" })).queryByText(
+      /行业归属：/,
+    ),
+  ).not.toBeInTheDocument();
+});
+
+it("separates complete audit structure from source and external-search verification", async () => {
+  const cycle = Object.assign(
+    {
+      stage: "UNKNOWN" as const,
+      riskChecks: auditChecks(),
+      searchExecutionVerified: false,
+    },
+    { auditStructureStatus: "COMPLETE" as const },
+  );
+  render(<IndustryCycleWarning cycle={cycle} />);
+  await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+  expect(
+    screen.getByText("五项核查结构齐全；不代表外部原文或检索已核验。"),
+  ).toBeVisible();
+  expect(
+    screen.getByText("检索凭证：模型结构化核查（外部搜索回执待接入）"),
+  ).toBeVisible();
+  expect(
+    screen.queryByText(/外部搜索已完成|外部搜索已核验/),
+  ).not.toBeInTheDocument();
+});
+
+it("does not treat a legacy complete research status as a complete search or audit structure", async () => {
+  const cycle = Object.assign(
+    { stage: "UNKNOWN" as const, riskChecks: auditChecks() },
+    { researchStatus: "COMPLETE" },
+  );
+  render(<IndustryCycleWarning cycle={cycle} />);
+  await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+  expect(
+    screen.queryByText(/五项核查结构齐全|外部搜索已完成|外部搜索已核验/),
+  ).not.toBeInTheDocument();
+});
+
+it.each([
+  ["FINANCING_COOLING", "融资降温证据的行业归属待核实"],
+  ["LAYOFFS_CLOSURES", "欠薪倒闭证据的行业归属待核实"],
+  ["ORDER_CUTS", "下游砍单证据的行业归属待核实"],
+  ["OVERCAPACITY_PRICE_WAR", "产能价格战证据的行业归属待核实"],
+  ["PRODUCTION_DELAY", "量产推迟证据的行业归属待核实"],
+])(
+  "renders the industry-scope evidence gap in Chinese: %s",
+  async (kind, label) => {
+    render(
+      <IndustryCycleWarning
+        cycle={{
+          stage: "UNKNOWN",
+          evidenceGaps: [`INDUSTRY_SCOPE_UNVERIFIED:${kind}`],
+        }}
+      />,
+    );
+    await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+    const gaps = within(screen.getByRole("region", { name: "产业证据缺口" }));
+    expect(gaps.getByText(label)).toBeVisible();
+    expect(
+      gaps.queryByText(/INDUSTRY_SCOPE_UNVERIFIED/),
+    ).not.toBeInTheDocument();
+  },
+);

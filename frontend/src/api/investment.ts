@@ -400,6 +400,7 @@ export interface IndustryRiskCheck {
   status: "FOUND" | "NOT_FOUND" | "UNVERIFIED";
   verification?: string;
   claimSupported?: boolean;
+  industryScopeVerified?: boolean;
   strength?: IndustryRiskLevel;
   independentSourceCount?: number;
   summary: string;
@@ -447,6 +448,7 @@ export interface IndustryCycle {
   suspectedRiskFlags?: string[];
   evidenceGaps?: string[];
   riskChecks?: IndustryRiskCheck[];
+  auditStructureStatus?: "COMPLETE" | "INCOMPLETE";
   searchExecutionVerified?: boolean;
   evidenceSummary?: string;
   evidence?: IndustryEvidence[];
