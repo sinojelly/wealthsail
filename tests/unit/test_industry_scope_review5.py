@@ -68,6 +68,14 @@ def test_unknown_but_explicit_shipbuilding_industry_cannot_borrow_robot_title():
     assert result["leftDiscountScale"] == 0.5
 
 
+def test_other_positive_predicate_cannot_attach_shipbuilding_risk_to_robot():
+    result = risk("近期机器人行业订单增长与造船业融资规模下降30%。")
+    check = result["riskChecks"][0]
+    assert check["industryScopeVerified"] is False
+    assert check["strength"] == "SUSPECTED"
+    assert result["leftDiscountScale"] == 0.5
+
+
 @pytest.mark.parametrize(
     "quote",
     [

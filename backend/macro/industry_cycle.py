@@ -375,6 +375,16 @@ def _industry_scope_verified(source, expected_industries):
         return False
     quote = unicodedata.normalize("NFKC", str(source.get("quote") or ""))
     if any(_scope_term_present(quote, term) for term in terms):
+        # Unsplit joined facts may introduce an unknown sector as "X业".
+        # Such an explicit subject cannot borrow another sector's keywords.
+        if any(
+            not subject.endswith(("行业", "产业", "企业", "商业"))
+            and not any(_scope_term_present(subject, term) for term in terms)
+            for subject in re.findall(
+                r"与([\u4e00-\u9fff]{2,8}业)(?!股份|有限|集团|公司)", quote
+            )
+        ):
+            return False
         if any(
             term not in terms
             and not any(_scope_term_present(target, term) for target in terms)
