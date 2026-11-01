@@ -252,6 +252,100 @@ async def test_new_confirmed_nav_prevents_an_older_full_chart_from_hiding_the_re
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "period,latest_day,expected_date,expected_nav,expected_percentile,expected_refresh",
+    [
+        ("2y", "27", "2026-10-27", "2.9733", 37.5, "IDLE"),
+        ("2y", "28", "2026-10-28", "3.0027", 70.0, "IDLE"),
+        ("all", "27", "2026-10-26", "2.9767", 62.5, "QUEUED"),
+        ("all", "28", "2026-10-26", "2.9767", 62.5, "QUEUED"),
+    ],
+)
+async def test_latest_two_year_nav_is_not_hidden_by_an_older_complete_history(
+    period,
+    latest_day,
+    expected_date,
+    expected_nav,
+    expected_percentile,
+    expected_refresh,
+):
+    from backend.jobs.fund_nav_full_history import validate_full_payload
+
+    now = datetime(2026, 10, 28, 9, tzinfo=NOW.tzinfo)
+    old_points = [
+        {"date": "2024-10-01", "close": "2.2"},
+        {"date": "2025-01-01", "close": "2.0765"},
+        {"date": "2026-01-01", "close": "4.2992"},
+        {"date": "2026-10-26", "close": "2.9767"},
+    ]
+    chart = validate_full_payload(
+        {
+            "fundCode": "008281",
+            "sourceUri": "https://fund.eastmoney.com/pingzhongdata/008281.js",
+            "queryStart": "1900-01-01",
+            "queryEnd": "2026-10-28",
+            "complete": True,
+            "receivedRowCount": len(old_points),
+            "points": old_points,
+        },
+        "008281",
+        now,
+    )
+    recent = {
+        "fundCode": "008281",
+        "priceBasis": "UNIT_NAV",
+        "sourceUri": "https://fund.eastmoney.com/008281.html",
+        "retrievedAt": now.isoformat(),
+        "availableAt": now.isoformat(),
+        "points": [
+            *old_points,
+            {"date": "2026-10-27", "close": "2.9733"},
+            *(
+                [{"date": "2026-10-28", "close": "3.0027"}]
+                if latest_day == "28"
+                else []
+            ),
+        ],
+    }
+    store = Cache(chart=chart, research=recent)
+
+    result = await module().get_nav_history(
+        store, "008281", period, tenant_id="t", user_id="u", now=now
+    )
+
+    assert result["asOf"] == expected_date
+    assert result["points"][-1] == {"date": expected_date, "unitNav": expected_nav}
+    assert result["summary"]["currentNav"] == expected_nav
+    assert result["summary"]["minimumNav"] == "2.0765"
+    assert result["summary"]["maximumNav"] == "4.2992"
+    assert result["summary"]["percentilePct"] == expected_percentile
+    assert result["state"] == ("READY" if period == "2y" else "PARTIAL")
+    assert result["refresh"]["state"] == expected_refresh
+    assert result["coverage"]["fullHistory"] is False
+
+
+@pytest.mark.asyncio
+async def test_newer_partial_tail_does_not_replace_a_covered_two_year_history():
+    from test_nav_full_history47 import payload
+    from backend.jobs.fund_nav_full_history import validate_full_payload
+
+    chart = validate_full_payload(payload(), "008281", NOW)
+    recent = history()
+    recent["points"] = [{"date": "2026-10-20", "close": "1.7"}]
+    store = Cache(chart=chart, research=recent)
+
+    result = await module().get_nav_history(
+        store, "008281", "2y", tenant_id="t", user_id="u", now=NOW
+    )
+
+    assert result["asOf"] == "2026-10-19"
+    assert result["points"][-1] == {"date": "2026-10-19", "unitNav": "1.5"}
+    assert result["summary"]["currentNav"] == "1.5"
+    assert result["coverage"]["latestKnownNavDate"] == "2026-10-20"
+    assert result["state"] == "PARTIAL" and result["refresh"]["state"] == "QUEUED"
+
+
+@pytest.mark.asyncio
 async def test_complete_disclosed_old_fund_without_recent_points_is_not_queued_forever():
     from test_nav_full_history47 import payload
     from backend.jobs.fund_nav_full_history import validate_full_payload

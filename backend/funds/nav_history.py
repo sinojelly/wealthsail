@@ -297,7 +297,7 @@ def select_history_view(code, name, period, histories, now):
         candidates,
         key=lambda item: (
             item["state"] == "READY",
-            item["coverage"]["fullHistory"] if period in {"2y", "all"} else False,
+            item["coverage"]["fullHistory"] if period == "all" else False,
             item.get("asOf") or "",
             item["coverage"]["sampleCount"],
             item.get("retrievedAt") or "",
