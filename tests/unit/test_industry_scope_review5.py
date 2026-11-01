@@ -84,6 +84,33 @@ def test_parallel_or_compared_foreign_risk_cannot_confirm_robot_cooling(quote):
     assert result["leftDiscountScale"] == 0.5
 
 
+@pytest.mark.parametrize(
+    "quote,scope,strength,scale",
+    [
+        (
+            "近期机器人行业景气向好与造船业融资规模下降30%。",
+            False,
+            "SUSPECTED",
+            0.5,
+        ),
+        (
+            "近期机器人行业融资规模下降30%与造船行业景气向好。",
+            True,
+            "CONFIRMED",
+            1,
+        ),
+    ],
+)
+def test_joined_independent_facts_keep_the_risk_with_its_subject(
+    quote, scope, strength, scale
+):
+    result = risk(quote)
+    check = result["riskChecks"][0]
+    assert check["industryScopeVerified"] is scope
+    assert check["strength"] == strength
+    assert result["leftDiscountScale"] == scale
+
+
 def test_parallel_context_reference_keeps_robot_subject_and_current_event_time():
     result = risk("近期机器人行业订单放缓，同时该行业一级市场融资规模下降30%。")
     check = result["riskChecks"][0]

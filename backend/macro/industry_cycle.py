@@ -484,12 +484,30 @@ _CLAUSE_CONNECTORS = (
 )
 
 
+def _separate_industry_facts(quote):
+    # A completed predicate distinguishes joined facts from joined subjects.
+    # Keep e.g. "机器人与半导体行业" and "丝杠与减速器产业链" intact.
+    def separate(match):
+        fact = match["fact"]
+        complete = "景气向好" in fact or any(
+            pattern.search(fact) for pattern in _RISK_QUOTE_PATTERNS.values()
+        )
+        return fact + ("，" if complete else "与")
+
+    return re.sub(
+        r"(?P<fact>(?:行业|产业|赛道|领域)[^，,。；;\n与]+)与"
+        r"(?=[\u4e00-\u9fff]{2,8}(?:行业|产业|赛道|领域|业))",
+        separate,
+        str(quote or ""),
+    )
+
+
 def _quote_clauses(quote):
     return re.split(
         r"[，。；;\n]|(?<!\d),(?!\d)|(?<=[A-Za-z])\.(?=\s+[A-Z])"
         + "|"
         + _CLAUSE_CONNECTORS,
-        str(quote or ""),
+        _separate_industry_facts(quote),
         flags=re.I,
     )
 
@@ -757,7 +775,8 @@ def _risk_event_contexts(source, kind, now):
     # product announcement, including one after a comma, cannot date that claim.
     contexts = []
     for sentence in re.split(
-        r"[。；;\n]|(?<=[A-Za-z])\.(?=\s+[A-Z])", str(source.get("quote") or "")
+        r"[。；;\n]|(?<=[A-Za-z])\.(?=\s+[A-Z])",
+        _separate_industry_facts(source.get("quote")),
     ):
         parts = [
             part.strip()
