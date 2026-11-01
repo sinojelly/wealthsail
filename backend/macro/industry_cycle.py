@@ -375,6 +375,21 @@ def _industry_scope_verified(source, expected_industries):
         return False
     quote = unicodedata.normalize("NFKC", str(source.get("quote") or ""))
     if any(_scope_term_present(quote, term) for term in terms):
+        if any(
+            term not in terms
+            and not any(_scope_term_present(target, term) for target in terms)
+            and _scope_term_present(quote, term)
+            for aliases in _INDUSTRY_SCOPE_TERMS.values()
+            for term in aliases
+        ):
+            return False
+        subjects = re.findall(r"([\u4e00-\u9fff]{2,8})(?:行业|产业|赛道|领域)", quote)
+        if (
+            subjects
+            and not subjects[-1].endswith(("该", "本", "上述", "这一", "这个", "此"))
+            and not any(_scope_term_present(subjects[-1], term) for term in terms)
+        ):
+            return False
         return True
     if any(
         _scope_term_present(quote, term)
@@ -463,10 +478,17 @@ def _source_recency(source, now):
     return "RECENT" if 0 <= age <= 90 else "HISTORICAL" if age > 90 else "FUTURE"
 
 
+_CLAUSE_CONNECTORS = (
+    r"但是|然而|不过|其中|与此同时|同时|此外|另外|反观|相比之下|但|而(?!非)|却"
+    r"|\b(?:but|however|whereas|while|meanwhile)\b"
+)
+
+
 def _quote_clauses(quote):
     return re.split(
         r"[，。；;\n]|(?<!\d),(?!\d)|(?<=[A-Za-z])\.(?=\s+[A-Z])"
-        r"|但是|然而|不过|其中|但|而(?!非)|却|\b(?:but|however|whereas|while)\b",
+        + "|"
+        + _CLAUSE_CONNECTORS,
         str(quote or ""),
         flags=re.I,
     )
@@ -737,7 +759,13 @@ def _risk_event_contexts(source, kind, now):
     for sentence in re.split(
         r"[。；;\n]|(?<=[A-Za-z])\.(?=\s+[A-Z])", str(source.get("quote") or "")
     ):
-        parts = re.split(r"，|(?<!\d),(?!\d)", sentence)
+        parts = [
+            part.strip()
+            for part in re.split(
+                r"，|(?<!\d),(?!\d)|" + _CLAUSE_CONNECTORS, sentence, flags=re.I
+            )
+            if part.strip()
+        ]
         for index, part in enumerate(parts):
             if not _risk_quote_supported({**source, "quote": part}, kind, now):
                 continue
@@ -746,6 +774,11 @@ def _risk_event_contexts(source, kind, now):
                 r"[\d\s年月日第季度一二三四上下本近期近日至到~～/\-]+", previous
             ):
                 contexts.append(previous + "，" + part)
+            elif re.match(r"(?:该|本|上述|这一|这个|此)(?:行业|产业|赛道|领域)", part):
+                # Resolve an explicit same-industry reference from its adjacent
+                # subject/date header, without borrowing unrelated predicates.
+                antecedent = re.match(r".+(?:行业|产业|赛道|领域)", previous)
+                contexts.append((antecedent[0] + "，" if antecedent else "") + part)
             else:
                 contexts.append(part)
     return contexts

@@ -68,6 +68,61 @@ def test_unknown_but_explicit_shipbuilding_industry_cannot_borrow_robot_title():
     assert result["leftDiscountScale"] == 0.5
 
 
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "近期机器人行业景气向好，同时造船行业融资规模下降30%。",
+        "近期机器人行业景气向好同时半导体行业融资规模下降30%。",
+        "相比机器人行业，造船行业近期融资规模下降30%。",
+    ],
+)
+def test_parallel_or_compared_foreign_risk_cannot_confirm_robot_cooling(quote):
+    result = risk(quote)
+    check = result["riskChecks"][0]
+    assert check["industryScopeVerified"] is False
+    assert check["strength"] == "SUSPECTED"
+    assert result["leftDiscountScale"] == 0.5
+
+
+def test_parallel_context_reference_keeps_robot_subject_and_current_event_time():
+    result = risk("近期机器人行业订单放缓，同时该行业一级市场融资规模下降30%。")
+    check = result["riskChecks"][0]
+    assert check["industryScopeVerified"] is True
+    assert check["eventTimeVerification"] == "RECENT"
+    assert check["strength"] == "CONFIRMED"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "相比机器人行业，造船行业近期融资规模下降30%。",
+        "机器人与半导体行业近期融资规模下降30%。",
+    ],
+)
+def test_mixed_subjects_in_one_scope_statement_cannot_verify_robot(quote):
+    assert industry._industry_scope_verified(proof(quote), ("ROBOT",)) is False
+
+
+@pytest.mark.parametrize("period", ["近期", "2026年9月"])
+def test_parallel_split_preserves_immediately_preceding_date_only_context(period):
+    result = risk(f"{period}，同时机器人行业融资规模下降30%。")
+    assert result["riskChecks"][0]["eventTimeVerification"] == "RECENT"
+    assert result["riskChecks"][0]["strength"] == "CONFIRMED"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "近期半导体行业订单放缓，同时该行业一级市场融资规模下降30%。",
+        "近期机器人行业景气向好及造船行业订单放缓，同时该行业一级市场融资规模下降30%。",
+    ],
+)
+def test_context_reference_keeps_its_foreign_antecedent_despite_robot_title(quote):
+    result = risk(quote)
+    assert result["riskChecks"][0]["industryScopeVerified"] is False
+    assert result["riskChecks"][0]["strength"] == "SUSPECTED"
+
+
 def test_explicit_context_reference_can_still_use_the_specific_checked_title():
     result = risk("近期该行业融资规模下降30%。")
     assert result["riskChecks"][0]["industryScopeVerified"] is True
