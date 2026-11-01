@@ -640,3 +640,75 @@ it.each([
     ).not.toBeInTheDocument();
   },
 );
+
+it.each([false, true, null, undefined])(
+  "distinguishes verified company facts from industry association without inferring an assertion: %s",
+  async (scope) => {
+    const cycle = Object.assign(
+      {
+        stage: "UNKNOWN" as const,
+        earningsVerified: true,
+        earningsEntity: "甲公司",
+        earningsReportPeriod: "2026Q3",
+        riskChecks: auditChecks(),
+      },
+      { earningsIndustryScopeVerified: scope },
+    );
+    const original = JSON.stringify(cycle);
+    render(
+      <>
+        <IndustryCycleBadge cycle={cycle} />
+        <IndustryCycleWarning cycle={cycle} />
+      </>,
+    );
+    await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+    expect(screen.getByText("公司级证据：甲公司 · 2026Q3")).toBeVisible();
+    expect(screen.getByLabelText("产业兑现阶段")).toHaveTextContent(
+      "产业阶段待核查",
+    );
+    if (scope === false) {
+      expect(
+        screen.getByText("公司财务事实已核实；与当前产业方向的关联待核实。"),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(/原文证据已核实，适用范围以列示公司为准/),
+      ).not.toBeInTheDocument();
+    } else {
+      expect(
+        screen.queryByText(/公司财务事实已核实；与当前产业方向的关联待核实/),
+      ).not.toBeInTheDocument();
+    }
+    if (scope === true)
+      expect(
+        screen.getByText("公司业绩与当前产业方向的关键词已匹配。"),
+      ).toBeVisible();
+    else
+      expect(
+        screen.queryByText(/公司业绩与当前产业方向的关键词已匹配/),
+      ).not.toBeInTheDocument();
+    expect(JSON.stringify(cycle)).toBe(original);
+  },
+);
+
+it("renders company-financial and stage industry-association gaps in Chinese", async () => {
+  render(
+    <IndustryCycleWarning
+      cycle={{
+        stage: "UNKNOWN",
+        evidenceGaps: [
+          "EARNINGS_INDUSTRY_SCOPE_UNVERIFIED",
+          "STAGE_INDUSTRY_SCOPE_UNVERIFIED",
+        ],
+      }}
+    />,
+  );
+  await userEvent.click(screen.getByText("查看5项产业反方核查与证据明细"));
+  const gaps = within(screen.getByRole("region", { name: "产业证据缺口" }));
+  expect(
+    gaps.getByText("公司财务证据与当前产业方向的关联待核实"),
+  ).toBeVisible();
+  expect(
+    gaps.getByText("产业阶段证据与当前产业方向的关联待核实"),
+  ).toBeVisible();
+  expect(gaps.queryByText(/INDUSTRY_SCOPE_UNVERIFIED/)).not.toBeInTheDocument();
+});

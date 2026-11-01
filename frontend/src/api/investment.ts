@@ -429,6 +429,7 @@ export interface IndustryEvidence {
   entityId?: string | null;
   reportPeriod?: string | null;
   factIdentityVerified?: boolean;
+  industryScopeVerified?: boolean;
 }
 export interface IndustryCycle {
   stage:
@@ -440,6 +441,7 @@ export interface IndustryCycle {
   riskLevel?: IndustryRiskLevel;
   leftDiscountScale?: 0 | 0.5 | 1;
   earningsVerified?: boolean;
+  earningsIndustryScopeVerified?: boolean | null;
   earningsEntity?: string | null;
   earningsReportPeriod?: string | null;
   forwardPlansOnly?: boolean;

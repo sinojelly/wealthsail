@@ -34,6 +34,8 @@ const gapLabels: Record<string, string> = {
   FORWARD_PLANS_ONLY: "仅见远期扩产或框架意向，尚无当期盈利兑现",
   NO_CURRENT_EARNINGS_PROOF: "当期盈利兑现缺少原文实证",
   PERSISTED_RISK_WATCH: "延续近期行业降温观察，等待盈利恢复证据",
+  EARNINGS_INDUSTRY_SCOPE_UNVERIFIED: "公司财务证据与当前产业方向的关联待核实",
+  STAGE_INDUSTRY_SCOPE_UNVERIFIED: "产业阶段证据与当前产业方向的关联待核实",
   "INDUSTRY_SCOPE_UNVERIFIED:FINANCING_COOLING": "融资降温证据的行业归属待核实",
   "INDUSTRY_SCOPE_UNVERIFIED:LAYOFFS_CLOSURES": "欠薪倒闭证据的行业归属待核实",
   "INDUSTRY_SCOPE_UNVERIFIED:ORDER_CUTS": "下游砍单证据的行业归属待核实",
@@ -73,12 +75,23 @@ function IndustryAudit({
       )}
       {typeof cycle.earningsVerified === "boolean" && (
         <p>
-          当期利润与回款：
-          {cycle.earningsVerified
-            ? "原文证据已核实，适用范围以列示公司为准。"
-            : "尚未同时核实，不能视为已兑现。"}
+          {cycle.earningsVerified &&
+          cycle.earningsIndustryScopeVerified === false ? (
+            "公司财务事实已核实；与当前产业方向的关联待核实。"
+          ) : (
+            <>
+              当期利润与回款：
+              {cycle.earningsVerified
+                ? "原文证据已核实，适用范围以列示公司为准。"
+                : "尚未同时核实，不能视为已兑现。"}
+            </>
+          )}
         </p>
       )}
+      {cycle.earningsVerified === true &&
+        cycle.earningsIndustryScopeVerified === true && (
+          <p>公司业绩与当前产业方向的关键词已匹配。</p>
+        )}
       {cycle.earningsVerified === true &&
         cycle.earningsEntity?.trim() &&
         cycle.earningsReportPeriod?.trim() && (
