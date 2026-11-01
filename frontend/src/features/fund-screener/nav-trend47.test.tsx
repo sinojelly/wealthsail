@@ -1,4 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ActionableZoneTrack } from "../../api/investment";
 import FundNavTrendChart from "./components/FundNavTrendChart";
@@ -119,6 +125,71 @@ it("keeps a legacy single target as a line without fabricating a sell range", as
   expect(screen.queryByText("建议卖出区间")).not.toBeInTheDocument();
   expect(screen.getByText("卖出参考下沿（T1）")).toBeInTheDocument();
 });
+
+it.each(["mouse", "touch"])(
+  "makes the latest NAV readable and selectable near the right edge of a dense curve with %s",
+  async (pointer) => {
+    const points = Array.from({ length: 500 }, (_, index) => ({
+      date: new Date(Date.UTC(2026, 9, 28 - (499 - index)))
+        .toISOString()
+        .slice(0, 10),
+      unitNav: index === 499 ? "3.0027" : "2.9767",
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response(
+          history(pointer === "mouse" ? "100114" : "100115", "2y", {
+            asOf: "2026-10-28",
+            points,
+            coverage: {
+              startDate: "2025-06-16",
+              endDate: "2026-10-28",
+              fullHistory: false,
+              requestedStartDate: "2024-10-28",
+              sampleCount: 500,
+            },
+            summary: {
+              minimumNav: "2.9767",
+              maximumNav: "3.0027",
+              currentNav: "3.0027",
+              percentilePct: 99.9,
+              percentileMethod: "MIDRANK",
+            },
+          }),
+        ),
+      ),
+    );
+    const code = pointer === "mouse" ? "100114" : "100115";
+    render(<FundNavTrendChart fundCode={code} />);
+    const graph = await screen.findByRole("img", {
+      name: `${code}单位净值走势`,
+    });
+    await waitFor(() =>
+      expect(graph.querySelector(".recharts-line-curve")).toBeInTheDocument(),
+    );
+    // With 500 samples, a pointer two pixels inside the plot's right edge
+    // otherwise selects an earlier day instead of the latest disclosure.
+    const wrapper = graph.querySelector(".recharts-wrapper")!;
+    if (pointer === "mouse")
+      fireEvent.mouseMove(wrapper, { clientX: 590, clientY: 100 });
+    else
+      fireEvent.touchMove(wrapper, {
+        touches: [{ clientX: 590, clientY: 100 }],
+      });
+    await waitFor(() =>
+      expect(
+        graph.querySelector(".recharts-tooltip-wrapper"),
+      ).toHaveTextContent("2026年10月28日"),
+    );
+    expect(graph.querySelector(".recharts-tooltip-wrapper")).toHaveTextContent(
+      "3.0027 元/份",
+    );
+    expect(screen.getByText(/最新净值/)).toHaveTextContent(
+      "图中最新净值：2026年10月28日 · 3.0027 元/份",
+    );
+  },
+);
 
 it("switches to full disclosed history without claiming an invented inception date", async () => {
   vi.stubGlobal(

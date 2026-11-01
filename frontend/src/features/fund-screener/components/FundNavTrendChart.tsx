@@ -4,6 +4,7 @@ import {
   Line,
   LineChart,
   ReferenceArea,
+  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -41,6 +42,7 @@ function Trend({
   const points =
     data?.points.map((point) => ({ ...point, value: Number(point.unitNav) })) ??
     [];
+  const latestPoint = points.at(-1);
   const low = number(track?.entryZoneMin),
     high = number(track?.entryZoneMax),
     stop = number(track?.stopLossPrice),
@@ -79,6 +81,10 @@ function Trend({
       </header>
       {points.length ? (
         <>
+          <p className="op-nav-summary">
+            图中最新净值：{timeLabel(latestPoint!.date)} ·{" "}
+            {price(latestPoint!.unitNav)} 元/份
+          </p>
           <div
             className="op-nav-plot"
             role="img"
@@ -100,6 +106,7 @@ function Trend({
                 />
                 <XAxis
                   dataKey="date"
+                  padding={{ right: 24 }}
                   tickFormatter={(date: string) => date.slice(5)}
                   minTickGap={38}
                   tick={{ fontSize: 10 }}
@@ -167,6 +174,13 @@ function Trend({
                   dot={false}
                   activeDot={{ r: 3 }}
                   isAnimationActive={false}
+                />
+                <ReferenceDot
+                  x={latestPoint!.date}
+                  y={latestPoint!.value}
+                  r={3}
+                  fill="#087e8b"
+                  stroke="#fff"
                 />
               </LineChart>
             </ResponsiveContainer>
