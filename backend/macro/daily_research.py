@@ -28,7 +28,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-risk-strength-v13"
+PROMPT_VERSION = "daily-research-industry-risk-strength-v14"
 MAX_REPORT_SOURCES = 24
 
 
@@ -298,6 +298,7 @@ def _public_industry_cycle(value):
             "label",
             "evidenceSummary",
             "researchStatus",
+            "auditStructureStatus",
             "earningsVerified",
             "forwardPlansOnly",
             "riskLevel",
@@ -346,6 +347,7 @@ def _public_industry_cycle(value):
                         "strength",
                         "independentSourceCount",
                         "claimSupported",
+                        "industryScopeVerified",
                         "queryValidation",
                         "searchExecutionVerified",
                     ),
@@ -1701,6 +1703,7 @@ def build_prompt(packet):
         "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
         "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务优先复查历史风险赛道，再按当轮催化、入场就绪及距买区距离排序，最多10个核心候选和50条查询，不逐只基金重复检索。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
+        "负面来源须属于正在核查的行业或明确相关产业链，引用时保留行业名/别名与事件事实；不得把半导体、光伏等其他行业的真实风险挂到机器人等无关赛道。无法核实归属只列待核实线索。商业化早期只能由试制、验证、尚未量产等成熟度原文支撑，融资降温、砍单本身不能证明商业化早期。\n"
         "产业兑现阶段stage仅选EARNINGS_DELIVERY/POLICY_CATALYST/EARLY_COMMERCIALIZATION/UNKNOWN，evidence.kind仅选PROFIT_GROWTH/CASH_COLLECTION/PAID_ORDERS/POLICY_EVENT/COMMERCIALIZATION_EARLY/EARNINGS_NOT_DELIVERED/EXPANSION_PLAN/FRAMEWORK_AGREEMENT，每条{kind,summary,sourceIds}。业绩兑现必须同时有当期财报利润增长与真实订单回款原文，订单意向或销量预测不足；政策/事件待传导选POLICY_CATALYST，试制/量产尚早或去泡沫证据支持才选EARLY_COMMERCIALIZATION，未知保持UNKNOWN。\n"
         "PROFIT_GROWTH与CASH_COLLECTION还须提交companyName、entityId（可空）、reportPeriod；报告期使用YYYYQ1至YYYYQ4、YYYYH1/YYYYH2或YYYYFY的明确口径，并在所引原文保留企业名称与报告期。同一企业、同一报告期的已核验利润增长和实际回款才能组成公司级业绩兑现；严禁拼接不同企业、不同报告期，身份不明保持UNKNOWN。该公司级证据不能证明整个行业或基金真实持仓均已兑现。商业化早期须有近期已核验的试制/验证/尚未量产等原文，产品发布和建厂计划本身不足。\n"
         "严格区分拟投资建厂/签署框架协议等远期扩产计划与已披露财报利润增长/实际回款；如电关节投资计划只能归EXPANSION_PLAN，不能算当期盈利兑现。在商业化早期、融资降温或缺乏当期盈利兑现时，单纯扩产计划不得提高机会分或充当正向催化，只列观察事项。机器人/具身智能仅为核查示例，不预设今天发生融资降温。左轨额外折价和机会分扣减由服务器执行；去泡沫期仅极小仓位观察或等待右侧拐点。\n"
@@ -1857,6 +1860,7 @@ def validate_report(raw, packet, source_checks, *, completed_at):
                 sources=sources,
                 require_checks=True,
                 now=completed_at,
+                expected_industries=[review["industry"]],
             )
         except ValueError as exc:
             raise ResearchValidationError(

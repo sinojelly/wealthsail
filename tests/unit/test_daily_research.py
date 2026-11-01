@@ -233,7 +233,7 @@ def test_prompt_selects_available_fund_tracks_without_dropping_watch_candidates(
 
 def test_prompt_prioritizes_current_cross_industry_catalysts_before_extra_technical_slots():
     prompt = engine().build_prompt(packet())
-    assert engine().PROMPT_VERSION == "daily-research-industry-risk-strength-v13"
+    assert engine().PROMPT_VERSION == "daily-research-industry-risk-strength-v14"
     assert "sources总预算最多24条" in prompt
     assert "先跨行业覆盖本次输入中真实存在的核心催化" in prompt
     assert "再分配同链补充来源和纯量化方向" in prompt

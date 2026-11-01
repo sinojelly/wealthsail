@@ -43,6 +43,349 @@ STAGE_LABELS = {
     "UNKNOWN": "产业兑现阶段待核查",
 }
 
+# Scope aliases include common suppliers and customers; they identify the claim's
+# subject, not its maturity, valuation or investment merits.
+_INDUSTRY_SCOPE_TERMS = {
+    "ROBOT": (
+        "机器人",
+        "具身",
+        "人形",
+        "减速器",
+        "丝杠",
+        "灵巧手",
+        "伺服",
+        "robot",
+        "robots",
+        "robotics",
+        "embodied",
+    ),
+    "ROBOTICS_MOBILITY": (
+        "机器人",
+        "具身",
+        "人形",
+        "减速器",
+        "丝杠",
+        "灵巧手",
+        "伺服",
+        "智能驾驶",
+        "自动驾驶",
+        "智驾",
+        "robot",
+        "robotics",
+        "embodied",
+        "autonomous driving",
+    ),
+    "SEMICONDUCTOR_AI": (
+        "半导体",
+        "芯片",
+        "晶圆",
+        "光刻",
+        "先进封装",
+        "算力",
+        "semiconductor",
+        "semiconductors",
+        "chip",
+        "chips",
+        "wafer",
+        "foundry",
+        "ai computing",
+    ),
+    "AI": (
+        "人工智能",
+        "算力",
+        "大模型",
+        "数据中心",
+        "ai",
+        "artificial intelligence",
+        "large language model",
+        "data center",
+        "gpu",
+    ),
+    "RARE_EARTH": (
+        "稀土",
+        "永磁",
+        "磁材",
+        "有色金属",
+        "rare earth",
+        "rare-earth",
+        "permanent magnet",
+        "nonferrous",
+    ),
+    "FINANCIAL": (
+        "银行",
+        "券商",
+        "证券",
+        "保险",
+        "金融",
+        "bank",
+        "banks",
+        "banking",
+        "brokerage",
+        "insurance",
+        "financial",
+    ),
+    "FINANCE_POLICY": (
+        "银行",
+        "券商",
+        "证券",
+        "保险",
+        "金融政策",
+        "金融",
+        "bank",
+        "banking",
+        "brokerage",
+        "insurance",
+        "financial policy",
+    ),
+    "DRUG": (
+        "创新药",
+        "生物医药",
+        "制药",
+        "医药",
+        "药物",
+        "biopharma",
+        "pharmaceutical",
+        "drug",
+        "drugs",
+        "biotech",
+    ),
+    "HEALTHCARE_CLINICAL": (
+        "医疗",
+        "医药",
+        "临床",
+        "创新药",
+        "生物医药",
+        "医疗器械",
+        "clinical",
+        "healthcare",
+        "medical",
+        "biopharma",
+    ),
+    "GOLD_ENERGY": (
+        "黄金",
+        "能源",
+        "原油",
+        "油气",
+        "石油",
+        "天然气",
+        "gold",
+        "energy",
+        "crude oil",
+        "oil",
+        "natural gas",
+    ),
+    "AEROSPACE": (
+        "航空航天",
+        "航空",
+        "航天",
+        "军工",
+        "国防",
+        "aerospace",
+        "aviation",
+        "defense",
+        "defence",
+    ),
+    "CONSUMPTION": (
+        "消费",
+        "食品",
+        "饮料",
+        "白酒",
+        "乳业",
+        "零售",
+        "家电",
+        "consumer",
+        "consumption",
+        "retail",
+        "beverage",
+        "liquor",
+    ),
+    "MEMORY": ("存储", "存储芯片", "内存", "闪存", "memory", "dram", "nand", "hbm"),
+    "PCB": (
+        "印制电路板",
+        "印刷电路板",
+        "覆铜板",
+        "电路板",
+        "pcb",
+        "printed circuit",
+        "copper clad laminate",
+    ),
+    "POWER": (
+        "电力",
+        "电网",
+        "发电",
+        "输配电",
+        "电气设备",
+        "光伏",
+        "风电",
+        "power grid",
+        "electricity",
+        "electric power",
+        "photovoltaic",
+        "solar",
+    ),
+    "SOLID_BATTERY": (
+        "固态电池",
+        "固态锂电",
+        "固态电解质",
+        "锂电池",
+        "solid state battery",
+        "solid-state battery",
+        "solid electrolyte",
+        "lithium battery",
+    ),
+    "SATELLITE": (
+        "卫星",
+        "卫星互联网",
+        "商业航天",
+        "低轨",
+        "satellite",
+        "satellites",
+        "space internet",
+    ),
+    "LOW_ALTITUDE": (
+        "低空",
+        "无人机",
+        "飞行汽车",
+        "通航",
+        "low altitude",
+        "low-altitude",
+        "evtol",
+        "drone",
+        "drones",
+    ),
+    "HK_TECH": (
+        "港股科技",
+        "恒生科技",
+        "港股互联网",
+        "香港科技",
+        "hong kong tech",
+        "hang seng tech",
+    ),
+    "DIVIDEND": (
+        "红利",
+        "高股息",
+        "低波",
+        "dividend",
+        "dividends",
+        "high yield",
+        "low volatility",
+    ),
+    "TRADITIONAL_MEDICINE": (
+        "中药",
+        "中医药",
+        "中成药",
+        "traditional chinese medicine",
+        "chinese medicine",
+        "tcm",
+    ),
+    "COAL": (
+        "煤炭",
+        "焦煤",
+        "焦炭",
+        "动力煤",
+        "煤矿",
+        "coal",
+        "coking coal",
+        "thermal coal",
+    ),
+    "GAMING": (
+        "游戏",
+        "电竞",
+        "手游",
+        "端游",
+        "gaming",
+        "video game",
+        "video games",
+        "esports",
+    ),
+    "CHEMICAL": (
+        "化工",
+        "化学",
+        "石化",
+        "农化",
+        "聚氨酯",
+        "氟化工",
+        "chemical",
+        "chemicals",
+        "petrochemical",
+        "agrochemical",
+    ),
+}
+
+
+def _scope_term_present(text, term):
+    if term.isascii():
+        return bool(
+            re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text, re.I)
+        )
+    return term in text
+
+
+def _expected_scope_terms(expected_industries):
+    expected = (
+        [expected_industries]
+        if isinstance(expected_industries, str)
+        else (expected_industries or [])
+    )
+    codes = [
+        name.strip().upper()
+        for name in expected
+        if isinstance(name, str) and name.strip().upper() in _INDUSTRY_SCOPE_TERMS
+    ]
+    if codes:
+        # Structured sector IDs take precedence over prose titles with aliases
+        # shared by broader combined themes (for example ROBOTICS_MOBILITY).
+        return {term for code in codes for term in _INDUSTRY_SCOPE_TERMS[code]}
+    terms = set()
+    for name in expected:
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = unicodedata.normalize("NFKC", name).strip()
+        if name.upper() in _INDUSTRY_SCOPE_TERMS:
+            terms.update(_INDUSTRY_SCOPE_TERMS[name.upper()])
+            continue
+        matched = [
+            aliases
+            for aliases in _INDUSTRY_SCOPE_TERMS.values()
+            if any(_scope_term_present(name, term) for term in aliases)
+        ]
+        if matched:
+            terms.update(term for aliases in matched for term in aliases)
+        else:
+            # Keep whole Chinese roots, never one-character or generic labels.
+            terms.update(
+                root
+                for root in re.split(
+                    r"产业链|行业|产业|赛道|方向|机会|主题|价值|投资|基金|[\s、/·:：()（）与和]+",
+                    name,
+                )
+                if re.fullmatch(r"[\u4e00-\u9fff]{2,}", root)
+            )
+    return terms
+
+
+def _industry_scope_verified(source, expected_industries):
+    """Verify a claim's industry; an unrelated title cannot override its subject.
+
+    Callers pass the actual risk statement as quote. Only a statement with no
+    identifiable industry can use a specific title to resolve its subject.
+    """
+    terms = _expected_scope_terms(expected_industries)
+    if not terms:
+        return False
+    quote = unicodedata.normalize("NFKC", str(source.get("quote") or ""))
+    if any(_scope_term_present(quote, term) for term in terms):
+        return True
+    if any(
+        _scope_term_present(quote, term)
+        for aliases in _INDUSTRY_SCOPE_TERMS.values()
+        for term in aliases
+    ):
+        return False
+    return any(
+        _scope_term_present(str(source.get("title") or ""), term) for term in terms
+    )
+
 
 class IndustryEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -529,7 +872,13 @@ def _valid_not_found_query(check):
 
 
 def normalize_industry_cycle(
-    raw, *, source_aliases=None, sources=None, require_checks=False, now=None
+    raw,
+    *,
+    source_aliases=None,
+    sources=None,
+    require_checks=False,
+    now=None,
+    expected_industries=None,
 ):
     """Normalize a model proposal using only current validated source identities.
 
@@ -549,6 +898,7 @@ def normalize_industry_cycle(
             "riskChecks": [],
             "evidenceSummary": "旧报告未执行产业周期反方核查，等待本轮研究补齐。",
             "researchStatus": "INCOMPLETE",
+            "auditStructureStatus": "INCOMPLETE",
             "evidenceGaps": list(RISK_CHECKS),
             "searchExecutionVerified": False,
             **industry_risk_policy({"riskLevel": "NONE"}),
@@ -630,13 +980,17 @@ def normalize_industry_cycle(
             bool(supported_refs) and check["timeVerification"] == "RECENT"
         )
         check["claimSourceIds"] = supported_refs
-        event_checks = (
+        event_claims = (
             [
-                event_time_verification(
+                (
+                    ref,
                     clause,
-                    sources.get(ref, {}).get("publishedDate")
-                    or sources.get(ref, {}).get("publishedAt"),
-                    now,
+                    event_time_verification(
+                        clause,
+                        sources.get(ref, {}).get("publishedDate")
+                        or sources.get(ref, {}).get("publishedAt"),
+                        now,
+                    ),
                 )
                 for ref in supported_refs
                 for clause in _risk_event_contexts(sources.get(ref, {}), kind, now)
@@ -644,10 +998,18 @@ def normalize_industry_cycle(
             if isinstance(now, datetime)
             else []
         )
+        check["industryScopeVerified"] = bool(expected_industries) and any(
+            event["eventTimeVerification"] == "RECENT"
+            and sources.get(ref, {}).get("verification") == "SOURCE_CHECKED"
+            and _industry_scope_verified(
+                {**sources.get(ref, {}), "quote": clause}, expected_industries
+            )
+            for ref, clause, event in event_claims
+        )
         # The event clock is read only from the actual negative statement.
         # Recent publication or a separate product announcement cannot renew it.
         best_event = max(
-            event_checks,
+            (event for _, _, event in event_claims),
             key=lambda row: {
                 "UNVERIFIED": 0,
                 "FUTURE": 1,
@@ -676,12 +1038,15 @@ def normalize_industry_cycle(
                 check["claimSupported"]
                 and check["verification"] == "SOURCE_CHECKED"
                 and check["eventTimeVerification"] == "RECENT"
+                and (not expected_industries or check["industryScopeVerified"])
             ):
                 check["strength"] = "CONFIRMED"
                 confirmed_flags.add(kind)
             else:
                 check["strength"] = "SUSPECTED"
                 suspected_flags.add(kind)
+            if expected_industries and not check["industryScopeVerified"]:
+                gaps.append("INDUSTRY_SCOPE_UNVERIFIED:" + kind)
         if check["status"] != "FOUND" or check["verification"] != "SOURCE_CHECKED":
             gaps.append(kind)
     if seen != set(RISK_CHECKS):
@@ -733,9 +1098,7 @@ def normalize_industry_cycle(
         flags.add("NO_CURRENT_EARNINGS_PROOF")
     if stage == "POLICY_CATALYST" and "POLICY_EVENT" not in kinds:
         stage = "UNKNOWN"
-    if stage == "EARLY_COMMERCIALIZATION" and not (
-        stage_kinds or confirmed_flags or suspected_flags
-    ):
+    if stage == "EARLY_COMMERCIALIZATION" and not stage_kinds:
         stage = "UNKNOWN"
     if "COMMERCIALIZATION_EARLY" in stage_kinds:
         flags.add("EARLY_COMMERCIALIZATION")
@@ -766,6 +1129,7 @@ def normalize_industry_cycle(
         "suspectedRiskFlags": sorted(suspected_flags),
         "riskLevel": "NONE",
         "researchStatus": "COMPLETE",
+        "auditStructureStatus": "COMPLETE",
         "evidenceGaps": gaps,
         "earningsVerified": earnings_verified,
         "earningsEntity": (earnings_pair[0][3][0] or earnings_pair[0][3][1])

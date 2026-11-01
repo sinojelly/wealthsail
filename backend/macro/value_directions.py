@@ -357,12 +357,28 @@ def validate_value_directions(
                 "SOURCE_REFERENCE_INVALID", "unknown direction source"
             )
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
+        review_ids = set(direction["reviewIndustryIds"])
+        plan_sectors = {
+            row["discoverySector"]
+            for proposal in direction["plans"]
+            for row in sector_rows
+            if isinstance(row, dict)
+            and row.get("discoverySector")
+            and (
+                plan_identity(row) == plan_identity(proposal)
+                or row.get("fundCode") == proposal.get("subjectId")
+            )
+        }
         try:
             cycle = normalize_industry_cycle(
                 direction.get("industryCycle"),
                 source_aliases=source_aliases,
                 sources=sources,
                 now=now,
+                # Prefer structured review links and server product sectors.
+                # A model title may describe the scope only when neither exists.
+                expected_industries=sorted(review_ids | plan_sectors)
+                or [direction["title"]],
                 require_checks=bool(
                     (packet.get("industryCycleResearch") or {}).get("required")
                 ),
@@ -376,24 +392,13 @@ def validate_value_directions(
                 "SOURCE_REFERENCE_INVALID",
                 "industry-cycle sources must belong to the direction",
             )
-        review_ids = set(direction["reviewIndustryIds"])
         if (packet.get("industryCycleResearch") or {}).get("required") and not reviews:
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "direction requires an explicit industry review link",
             )
         if reviews:
-            for proposal in direction["plans"]:
-                review_ids.update(
-                    row["discoverySector"]
-                    for row in sector_rows
-                    if isinstance(row, dict)
-                    and row.get("discoverySector")
-                    and (
-                        plan_identity(row) == plan_identity(proposal)
-                        or row.get("fundCode") == proposal.get("subjectId")
-                    )
-                )
+            review_ids.update(plan_sectors)
             if any(identity not in reviews for identity in review_ids):
                 raise ResearchValidationError(
                     "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
