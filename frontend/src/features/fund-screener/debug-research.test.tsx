@@ -21,6 +21,7 @@ const request = (status = "QUEUED") => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   vi.mocked(api.getResearchRefresh).mockResolvedValue({
     enabled: true,
     request: null,
@@ -33,8 +34,12 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 it("only explicitly starts collection and one model analysis, disabling an active request", async () => {
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  const button = await screen.findByRole("button", { name: "重新采集并分析" });
-  expect(screen.getByText(/重新抓取新闻并运行一次模型/)).toBeVisible();
+  const button = await screen.findByRole("button", { name: "手动启动研究" });
+  expect(
+    screen.getByText(
+      /将重新采集最新公共信息并调用一次 Codex，产生新的用量；普通刷新不会重跑/,
+    ),
+  ).toBeVisible();
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
   await userEvent.click(button);
   expect(button).toBeDisabled();
@@ -49,7 +54,7 @@ it("retries an uncertain submission using the same command UUID", async () => {
   );
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
   await userEvent.click(
-    await screen.findByRole("button", { name: "重新采集并分析" }),
+    await screen.findByRole("button", { name: "手动启动研究" }),
   );
   await userEvent.click(
     await screen.findByRole("button", { name: "重试本次提交" }),
@@ -65,7 +70,7 @@ it("recovers the current user's active request without starting another model", 
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
   expect(
-    await screen.findByRole("button", { name: "重新采集并分析" }),
+    await screen.findByRole("button", { name: "手动启动研究" }),
   ).toBeDisabled();
   expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
@@ -81,7 +86,7 @@ it("shows failed analysis with its safe reason and keeps the previous report", a
       /采集或分析失败.*SourceUnavailable.*保留上一份有效报告/,
     ),
   ).toBeVisible();
-  expect(screen.getByRole("button", { name: "重新采集并分析" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "手动启动研究" })).toBeEnabled();
 });
 it("hides the control when debug capability is unavailable", async () => {
   vi.mocked(api.getResearchRefresh).mockResolvedValue({
@@ -102,9 +107,9 @@ it("stops polling and requests current results after READY", async () => {
   );
   const onReady = vi.fn();
   renderWithSession(<DailyResearchRefresh actor="owner-a" onReady={onReady} />);
-  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(await screen.findByText(/手动研究已完成/)).toBeVisible();
   expect(onReady).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("button", { name: "重新采集并分析" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "手动启动研究" })).toBeEnabled();
 });
 it("rechecks an old running request and recovers the server's completed report", async () => {
   vi.mocked(api.getResearchRefresh).mockResolvedValue({
@@ -120,7 +125,7 @@ it("rechecks an old running request and recovers the server's completed report",
   );
   const onReady = vi.fn();
   renderWithSession(<DailyResearchRefresh actor="owner-a" onReady={onReady} />);
-  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(await screen.findByText(/手动研究已完成/)).toBeVisible();
   expect(api.getResearchRefreshStatus).toHaveBeenCalledWith(
     "debug-1",
     expect.anything(),
@@ -142,7 +147,7 @@ it("checks an uncertain server request again without restarting the model", asyn
     request("READY") as never,
   );
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(await screen.findByText(/手动研究已完成/)).toBeVisible();
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
 });
 
@@ -173,7 +178,7 @@ it("counts execution from the worker start rather than time spent queued", async
   vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(running as never);
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
   expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
-  expect(screen.getByRole("button", { name: "重新采集并分析" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "手动启动研究" })).toBeDisabled();
   expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
 });
 
@@ -186,6 +191,6 @@ it("keeps a completed report terminal beyond its original waiting deadline", asy
     } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  expect(await screen.findByText(/调试研究已完成/)).toBeVisible();
+  expect(await screen.findByText(/手动研究已完成/)).toBeVisible();
   expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
 });

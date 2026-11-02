@@ -1,7 +1,12 @@
 import { request } from "./client";
-export interface DebugResearchRequest {
+import type { DailyResearch } from "./investment";
+export interface DebugResearchRequest extends Pick<
+  DailyResearch,
+  "failureStage" | "failureReasonCode" | "failureRuleId" | "failureItemIndex"
+> {
   id: string;
   status: "QUEUED" | "RUNNING" | "READY" | "FAILED" | "UNCERTAIN";
+  requestMode?: "DEBUG" | "MANUAL";
   requestedAt: string;
   startedAt: string | null;
   completedAt: string | null;

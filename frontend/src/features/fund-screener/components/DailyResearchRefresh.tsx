@@ -1,13 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../../../api/daily-research-debug";
+import { HttpError } from "../../../api/client";
 import { timeLabel } from "../macro-display";
+import { DailyResearchFailureDiagnosis } from "./DailyResearchReport";
 
 const LIMIT = 35 * 60 * 1000;
 const active = (status?: string) => status === "QUEUED" || status === "RUNNING";
 const pending = (request?: api.DebugResearchRequest | null) =>
   active(request?.status) ||
   (request?.status === "UNCERTAIN" && request.completedAt == null);
+const commandStorageKey = (actor: string) =>
+  `wealthsail:manual-research:command:${actor}`;
+function readCommand(actor: string) {
+  try {
+    const value = sessionStorage.getItem(commandStorageKey(actor));
+    return value &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value,
+      )
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+function storeCommand(actor: string, value: string | null) {
+  try {
+    if (value) sessionStorage.setItem(commandStorageKey(actor), value);
+    else sessionStorage.removeItem(commandStorageKey(actor));
+  } catch {
+    // Storage restrictions must not prevent an explicit request or its acknowledgment.
+  }
+}
 interface Props {
   actor: string;
   onReady?: () => void;
@@ -17,7 +42,10 @@ export default function DailyResearchRefresh(props: Props) {
 }
 function RefreshControl({ actor, onReady }: Props) {
   const client = useQueryClient();
-  const commandKey = useRef<string | null>(null);
+  const [unconfirmedKey, setUnconfirmedKey] = useState(() =>
+    readCommand(actor),
+  );
+  const commandKey = useRef<string | null>(unconfirmedKey);
   const completed = useRef<string | null>(null);
   const [submitted, setSubmitted] = useState<api.DebugResearchRequest | null>(
     null,
@@ -49,7 +77,7 @@ function RefreshControl({ actor, onReady }: Props) {
     active(result.status) &&
     Number.isFinite(started) &&
     (openedAt - started >= LIMIT || timedOut === result.id);
-  const busy = !!result && active(result.status) && !expired;
+  const busy = pending(result);
   useEffect(() => {
     if (!current || !active(result?.status) || !Number.isFinite(started))
       return;
@@ -75,16 +103,27 @@ function RefreshControl({ actor, onReady }: Props) {
     onReady?.();
   }, [result, actor, client, onReady]);
   const submit = useMutation({
-    mutationFn: () => {
-      commandKey.current ??= crypto.randomUUID();
-      return api.startResearchRefresh(commandKey.current);
+    mutationFn: (key: string) => {
+      commandKey.current = key;
+      storeCommand(actor, key);
+      setUnconfirmedKey(key);
+      return api.startResearchRefresh(key);
     },
     retry: false,
-    onSuccess: (value) => {
+    onSuccess: (value, key) => {
       setSubmitted(value);
-      commandKey.current = null;
+      if (readCommand(actor) === key) storeCommand(actor, null);
+      if (commandKey.current === key) {
+        commandKey.current = null;
+        setUnconfirmedKey(null);
+      }
     },
   });
+  const canClearUnconfirmed =
+    !!unconfirmedKey &&
+    submit.error instanceof HttpError &&
+    submit.error.status === 403 &&
+    submit.error.code === "FORBIDDEN";
   if (capability.data?.enabled !== true) return null;
   const safeError =
     result?.errorClass &&
@@ -92,23 +131,43 @@ function RefreshControl({ actor, onReady }: Props) {
       ? result.errorClass
       : "原因待核查";
   return (
-    <section className="op-debug-refresh" aria-label="调试研究更新">
+    <section className="op-debug-refresh" aria-label="手动研究">
       <button
         type="button"
         disabled={busy || submit.isPending}
-        onClick={() => submit.mutate()}
+        onClick={() =>
+          submit.mutate(commandKey.current ?? crypto.randomUUID())
+        }
       >
-        {submit.isError ? "重试本次提交" : "重新采集并分析"}
+        {unconfirmedKey ? "重试本次提交" : "手动启动研究"}
       </button>
-      <small>调试功能：重新抓取新闻并运行一次模型；普通刷新不会重跑。</small>
-      {submit.isError && (
+      <small>
+        将重新采集最新公共信息并调用一次 Codex，产生新的用量；普通刷新不会重跑。
+      </small>
+      {unconfirmedKey && !submit.isPending && (
         <p role="alert">
           提交结果待确认，可重试本次提交；相同请求不会重复运行。
         </p>
       )}
+      {canClearUnconfirmed && (
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              commandKey.current = null;
+              storeCommand(actor, null);
+              setUnconfirmedKey(null);
+              submit.reset();
+            }}
+          >
+            清除未确认提交记录
+          </button>
+          <p>只清除此页记录，不会取消后台任务。下一次启动将使用新请求。</p>
+        </div>
+      )}
       {expired && active(result?.status) ? (
         <p role="status">
-          超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，可显式重新运行。
+          超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，本次执行结束前不会启动新的模型。
         </p>
       ) : result?.status === "QUEUED" || result?.status === "RUNNING" ? (
         <p role="status">
@@ -117,7 +176,7 @@ function RefreshControl({ actor, onReady }: Props) {
           。保留上一份有效报告。
         </p>
       ) : result?.status === "READY" ? (
-        <p role="status">调试研究已完成，页面将显示最新有效报告。</p>
+        <p role="status">手动研究已完成，页面将加载最新有效报告。</p>
       ) : result?.status === "FAILED" ? (
         <p role="alert">
           采集或分析失败：{safeError}。保留上一份有效报告，可重新运行。
@@ -126,10 +185,21 @@ function RefreshControl({ actor, onReady }: Props) {
         <p role="status">
           执行结果待确认：{safeError}。
           {result.completedAt
-            ? "本次执行已结束，保留上一份有效报告，可显式重新运行。"
-            : "正在继续查询后台结果，保留上一份有效报告，不自动重跑模型。"}
+            ? "本次执行已结束，保留上一份有效报告，可显式提交新请求；模型退出尚未确认时，新请求将等待。"
+            : "正在继续查询后台结果，保留上一份有效报告，不会启动新的模型。"}
         </p>
       ) : null}
+      {(result?.status === "FAILED" || result?.status === "UNCERTAIN") && (
+        <DailyResearchFailureDiagnosis
+          data={{
+            failureStage: result.failureStage,
+            failureReasonCode: result.failureReasonCode,
+            failureRuleId: result.failureRuleId,
+            failureItemIndex: result.failureItemIndex,
+            runId: result.reportRunId,
+          }}
+        />
+      )}
       {status.isError && (
         <p role="alert">任务状态读取失败，将继续查询；不会自动重跑模型。</p>
       )}

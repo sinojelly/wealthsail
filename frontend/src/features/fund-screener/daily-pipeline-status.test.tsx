@@ -137,7 +137,7 @@ it("does not advertise a pending trigger while automatic research is disabled", 
       data={daily({ state: "DISABLED", scheduleState: "DISABLED" })}
     />,
   );
-  expect(screen.getByText("自动研究已关闭")).toBeVisible();
+  expect(screen.getByText("自动调度已关闭")).toBeVisible();
   expect(screen.queryByText(/触发：/)).not.toBeInTheDocument();
 });
 
@@ -202,7 +202,7 @@ it.each([
 it.each([
   ["NON_WORKDAY", "非工作日，不安排自动研究"],
   ["MISSED", "本次研究时段已结束"],
-  ["DISABLED", "自动研究已关闭"],
+  ["DISABLED", "自动调度已关闭"],
 ])("explains an inactive %s schedule", (scheduleState, expected) => {
   render(<DailyResearchStatus state="NOT_RUN" scheduleState={scheduleState} />);
   expect(screen.getByText(expected)).toBeVisible();

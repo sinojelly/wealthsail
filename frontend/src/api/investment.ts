@@ -713,8 +713,8 @@ export interface DailyResearch {
     timezone: "Asia/Shanghai";
     startWindowMinutes: number;
   };
-  runMode?: "SCHEDULED" | "DEBUG" | null;
-  reportRunMode?: "SCHEDULED" | "DEBUG" | null;
+  runMode?: "SCHEDULED" | "DEBUG" | "MANUAL" | null;
+  reportRunMode?: "SCHEDULED" | "DEBUG" | "MANUAL" | null;
   methodVersion: string;
   scheduleState?:
     | "NOT_DUE"

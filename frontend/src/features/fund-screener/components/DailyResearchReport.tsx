@@ -17,7 +17,7 @@ const stateLabels: Record<string, string> = {
   FAILED: "研究失败",
   UNCERTAIN: "执行异常 · 待核实",
   UNKNOWN: "执行状态未知",
-  DISABLED: "自动研究已关闭",
+  DISABLED: "自动调度已关闭",
   MISSED: "本次研究时段已结束",
 };
 const stageLabels: Record<string, string> = {
@@ -84,7 +84,24 @@ function diagnosticLabel(
     ? labels[value]
     : undefined;
 }
-function FailureDiagnosis({ data }: { data: DailyResearch }) {
+type FailureDetails = Pick<
+  DailyResearch,
+  | "failureStage"
+  | "failureReasonCode"
+  | "failureRuleId"
+  | "failureItemIndex"
+  | "runId"
+> & {
+  pipeline?: Pick<
+    NonNullable<DailyResearch["pipeline"]>,
+    "researchRunId"
+  > | null;
+};
+export function DailyResearchFailureDiagnosis({
+  data,
+}: {
+  data: FailureDetails;
+}) {
   const stage = diagnosticLabel(failureStages, data.failureStage);
   const reason = diagnosticLabel(failureReasons, data.failureReasonCode);
   const rule = diagnosticLabel(failureRules, data.failureRuleId);
@@ -166,8 +183,12 @@ function statusLabel(
   scheduleState?: string,
   hasReport?: boolean,
   stage?: string,
+  runMode?: DailyResearch["runMode"],
 ) {
-  if (state === "DISABLED" || scheduleState === "DISABLED")
+  if (
+    state === "DISABLED" ||
+    (scheduleState === "DISABLED" && runMode !== "MANUAL")
+  )
     return stateLabels.DISABLED;
   if (!state || state === "NOT_RUN" || state === "STALE") {
     if (scheduleState === "NON_WORKDAY") return "非工作日，不安排自动研究";
@@ -198,6 +219,7 @@ export function DailyResearchStatus({
     data?.scheduleState ?? scheduleState,
     data ? !!data.report : hasReport,
     data?.pipeline?.stage,
+    data?.runMode,
   );
   return (
     <span className="op-research-status" data-state={currentState}>
@@ -446,9 +468,12 @@ function DailyResearchContent({
   return (
     <section className="op-daily-report" aria-label="每日事件研究">
       <h3>{report ? "关键经济要闻" : "暂无有效日报"}</h3>
-      {data?.reportRunMode === "DEBUG" && (
+      {(data?.reportRunMode === "DEBUG" ||
+        data?.reportRunMode === "MANUAL") && (
         <p className="op-debug-version">
-          当前报告：调试版（显式重新采集与分析）
+          {data.reportRunMode === "MANUAL"
+            ? "当前报告：手动研究版（显式重新采集与分析）"
+            : "当前报告：调试版（显式重新采集与分析）"}
         </p>
       )}
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
@@ -715,7 +740,7 @@ function DailyResearchContent({
           )}
           {(currentState === "FAILED" || currentState === "UNCERTAIN") && (
             <>
-              <FailureDiagnosis data={data} />
+              <DailyResearchFailureDiagnosis data={data} />
               <p>
                 安全错误类：<span>{safeErrorClass}</span>
               </p>
@@ -729,9 +754,11 @@ function DailyResearchContent({
             </p>
           )}
           <small>
-            {researchScheduleLabel(data.schedule)}
+            {data.scheduleState === "DISABLED"
+              ? "自动调度已关闭"
+              : researchScheduleLabel(data.schedule)}
             ，完成时间取决于采集与研究耗时。
-            {data.nextRunAt
+            {data.scheduleState !== "DISABLED" && data.nextRunAt
               ? ` 下次计划：${timeLabel(data.nextRunAt)} 北京时间。`
               : ""}
             计划时间不代表研究服务此刻在线。
