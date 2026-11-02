@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.macro.industry_evidence_time import event_time_verification
+from backend.macro.research_diagnostics import RULE_IDS
 
 RISK_CHECKS = {
     "FINANCING_COOLING": "一级市场融资降温/断代",
@@ -42,6 +43,17 @@ STAGE_LABELS = {
     "EARLY_COMMERCIALIZATION": "🟠 商业化早期·去伪存真期",
     "UNKNOWN": "产业兑现阶段待核查",
 }
+
+
+class IndustryCycleValidationError(ValueError):
+    """A deterministic industry rule failure, separate from schema failures."""
+
+    def __init__(self, rule_id: str, message: str = ""):
+        if not isinstance(rule_id, str) or rule_id not in RULE_IDS:
+            raise ValueError("invalid industry diagnostic rule id")
+        super().__init__(message or rule_id)
+        self.rule_id = rule_id
+
 
 # Scope aliases include common suppliers and customers; they identify the claim's
 # subject, not its maturity, valuation or investment merits.
@@ -960,7 +972,10 @@ def normalize_industry_cycle(
     """
     if raw is None:
         if require_checks:
-            raise ValueError("each direction requires industry counter-evidence checks")
+            raise IndustryCycleValidationError(
+                "INDUSTRY_RISK_CHECK_MISSING",
+                "each direction requires industry counter-evidence checks",
+            )
         return {
             "stage": "UNKNOWN",
             "label": STAGE_LABELS["UNKNOWN"],
@@ -981,7 +996,10 @@ def normalize_industry_cycle(
 
     def references(refs):
         if any(ref not in aliases for ref in refs):
-            raise ValueError("unknown industry-cycle source reference")
+            raise IndustryCycleValidationError(
+                "INDUSTRY_CYCLE_SOURCE_INVALID",
+                "unknown industry-cycle source reference",
+            )
         return sorted({aliases[ref] for ref in refs})
 
     refs = references(cycle["sourceIds"])
@@ -992,7 +1010,10 @@ def normalize_industry_cycle(
     for row in [*cycle["evidence"], *cycle["riskChecks"]]:
         row["sourceIds"] = references(row["sourceIds"])
         if any(ref not in refs for ref in row["sourceIds"]):
-            raise ValueError("industry evidence must cite its direction cycle sources")
+            raise IndustryCycleValidationError(
+                "INDUSTRY_CYCLE_SOURCE_INVALID",
+                "industry evidence must cite its direction cycle sources",
+            )
         row["verification"] = (
             "SOURCE_CHECKED"
             if row["sourceIds"]
@@ -1056,7 +1077,10 @@ def normalize_industry_cycle(
     for check in cycle["riskChecks"]:
         kind = check["kind"]
         if kind in seen:
-            raise ValueError("each industry risk category must be checked exactly once")
+            raise IndustryCycleValidationError(
+                "INDUSTRY_RISK_CHECK_DUPLICATE",
+                "each industry risk category must be checked exactly once",
+            )
         seen.add(kind)
         check["queryValidation"] = (
             "BASIC_SYNTAX_ONLY"
@@ -1131,7 +1155,10 @@ def normalize_industry_cycle(
             check["historicalEvidence"] = True
         if check["status"] == "FOUND":
             if not check["sourceIds"]:
-                raise ValueError("found industry risk requires a current cited source")
+                raise IndustryCycleValidationError(
+                    "INDUSTRY_RISK_SOURCE_MISSING",
+                    "found industry risk requires a current cited source",
+                )
             flags.add(kind)
             if (
                 check["claimSupported"]
@@ -1149,7 +1176,10 @@ def normalize_industry_cycle(
         if check["status"] != "FOUND" or check["verification"] != "SOURCE_CHECKED":
             gaps.append(kind)
     if seen != set(RISK_CHECKS):
-        raise ValueError("five industry counter-evidence checks required")
+        raise IndustryCycleValidationError(
+            "INDUSTRY_RISK_CHECK_MISSING",
+            "five industry counter-evidence checks required",
+        )
     kinds = {
         row["kind"]
         for row in cycle["evidence"]

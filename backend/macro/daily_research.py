@@ -12,7 +12,12 @@ from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from backend.macro.research_diagnostics import (
+    REASON_CODES,
+    RULE_IDS,
+    is_safe_item_index,
+)
 from backend.macro.model_projection import (
     model_packet,
     separate_fund_codes as separate_fund_codes,
@@ -21,6 +26,7 @@ from backend.macro.model_projection import (
 )
 from backend.macro.alpha_research import ActionableProposal, validate_actionable_plans
 from backend.macro.industry_cycle import (
+    IndustryCycleValidationError,
     IndustryCycleReview,
     earnings_recovery_verified,
     normalize_industry_cycle,
@@ -42,9 +48,36 @@ class ResearchValidationError(ValueError):
     Carries a canonical reason_code that is safe for telemetry and logs.
     """
 
-    def __init__(self, reason_code: str, message: str = ""):
+    def __init__(
+        self, reason_code: str, message: str = "", *, rule_id=None, item_index=None
+    ):
+        if not isinstance(reason_code, str) or reason_code not in REASON_CODES:
+            raise ValueError("invalid research diagnostic reason code")
+        if rule_id is not None and (
+            not isinstance(rule_id, str) or rule_id not in RULE_IDS
+        ):
+            raise ValueError("invalid research diagnostic rule id")
+        if item_index is not None and not is_safe_item_index(item_index):
+            raise ValueError("invalid research diagnostic item index")
         super().__init__(message or reason_code)
         self.reason_code = reason_code
+        self.rule_id = rule_id
+        self.item_index = item_index
+
+
+def _schema_item_index(error):
+    """Read only a bounded top-level review/direction index from schema paths."""
+    if not isinstance(error, ValidationError):
+        return None
+    for detail in error.errors():
+        location = detail.get("loc", ())
+        if (
+            len(location) >= 2
+            and location[0] in {"industryCycleReviews", "valueDirections"}
+            and is_safe_item_index(location[1])
+        ):
+            return location[1]
+    return None
 
 
 class _Strict(BaseModel):
@@ -1787,7 +1820,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         report = _Report.model_validate(raw).model_dump()
     except Exception as exc:
         raise ResearchValidationError(
-            "SCHEMA_VALIDATION_FAILED", f"schema validation error: {exc}"
+            "SCHEMA_VALIDATION_FAILED",
+            f"schema validation error: {exc}",
+            item_index=_schema_item_index(exc),
         ) from exc
     _safe_narrative(report)
     report = readable_fund_codes(
@@ -1859,10 +1894,13 @@ def validate_report(raw, packet, source_checks, *, completed_at):
     from backend.integrations.daily_sources import industry_cycle_research_tasks
 
     industry_reviews, reviewed = [], set()
-    for review in report["industryCycleReviews"]:
+    for item_index, review in enumerate(report["industryCycleReviews"]):
         if review["industry"] in reviewed:
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", "duplicate industry review"
+                "DIRECTION_VALIDATION_FAILED",
+                "duplicate industry review",
+                rule_id="INDUSTRY_REVIEW_DUPLICATE",
+                item_index=item_index,
             )
         reviewed.add(review["industry"])
         try:
@@ -1880,9 +1918,18 @@ def validate_report(raw, packet, source_checks, *, completed_at):
                 now=completed_at,
                 expected_industries=[review["industry"]],
             )
+        except ValidationError as exc:
+            raise ResearchValidationError(
+                "SCHEMA_VALIDATION_FAILED", str(exc), item_index=item_index
+            ) from exc
         except ValueError as exc:
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", str(exc)
+                "DIRECTION_VALIDATION_FAILED",
+                str(exc),
+                item_index=item_index,
+                rule_id=exc.rule_id
+                if isinstance(exc, IndustryCycleValidationError)
+                else None,
             ) from exc
         industry_reviews.append({"industry": review["industry"], **cycle_review})
     industry_tasks = industry_cycle_research_tasks(packet, completed_at)
@@ -1890,7 +1937,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         expected = {row["industry"] for row in industry_tasks["candidates"]}
         if expected - reviewed:
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", "unreviewed industry candidates"
+                "DIRECTION_VALIDATION_FAILED",
+                "unreviewed industry candidates",
+                rule_id="INDUSTRY_REVIEW_COVERAGE_MISSING",
             )
     historical_cycles = _previous_industry_states(packet, completed_at)
     value_directions = validate_value_directions(

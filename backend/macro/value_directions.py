@@ -3,10 +3,11 @@
 from copy import deepcopy
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.macro.alpha_research import _price, _program_plan
 from backend.macro.industry_cycle import (
+    IndustryCycleValidationError,
     IndustryCycleProposal,
     merge_industry_cycles,
     normalize_industry_cycle,
@@ -306,6 +307,51 @@ def validate_value_directions(
     industry_reviews=None,
     historical_cycles=None,
 ):
+    """Keep a bounded direction index across nested validation boundaries."""
+    from backend.macro.daily_research import ResearchValidationError
+
+    active_index = [None]
+    try:
+        return _validate_value_directions(
+            proposals,
+            packet,
+            now,
+            source_aliases,
+            sources=sources,
+            industry_reviews=industry_reviews,
+            historical_cycles=historical_cycles,
+            _diagnostic_index=active_index,
+        )
+    except ResearchValidationError as exc:
+        if exc.item_index is not None or active_index[0] is None:
+            raise
+        raise ResearchValidationError(
+            exc.reason_code,
+            str(exc),
+            rule_id=exc.rule_id,
+            item_index=active_index[0],
+        ) from exc
+    except ValidationError as exc:
+        raise ResearchValidationError(
+            "SCHEMA_VALIDATION_FAILED", str(exc), item_index=active_index[0]
+        ) from exc
+    except ValueError as exc:
+        raise ResearchValidationError(
+            "PAYLOAD_VALIDATION_FAILED", str(exc), item_index=active_index[0]
+        ) from exc
+
+
+def _validate_value_directions(
+    proposals,
+    packet,
+    now,
+    source_aliases,
+    *,
+    sources=None,
+    industry_reviews=None,
+    historical_cycles=None,
+    _diagnostic_index=None,
+):
     from backend.macro.daily_research import ResearchValidationError, _TZ
 
     anchors = {}
@@ -339,7 +385,9 @@ def validate_value_directions(
         raise ResearchValidationError(
             "DIRECTION_VALIDATION_FAILED", "too many value directions"
         )
-    for raw in proposals:
+    for item_index, raw in enumerate(proposals):
+        if _diagnostic_index is not None:
+            _diagnostic_index[0] = item_index
         try:
             direction = ValueDirectionProposal.model_validate(raw).model_dump()
         except Exception as exc:
@@ -383,25 +431,35 @@ def validate_value_directions(
                     (packet.get("industryCycleResearch") or {}).get("required")
                 ),
             )
+        except ValidationError as exc:
+            raise ResearchValidationError("SCHEMA_VALIDATION_FAILED", str(exc)) from exc
         except ValueError as exc:
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", str(exc)
+                "DIRECTION_VALIDATION_FAILED",
+                str(exc),
+                rule_id=exc.rule_id
+                if isinstance(exc, IndustryCycleValidationError)
+                else None,
             ) from exc
         if any(ref not in refs for ref in cycle["sourceIds"]):
             raise ResearchValidationError(
                 "SOURCE_REFERENCE_INVALID",
                 "industry-cycle sources must belong to the direction",
+                rule_id="INDUSTRY_CYCLE_SOURCE_INVALID",
             )
         if (packet.get("industryCycleResearch") or {}).get("required") and not reviews:
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "direction requires an explicit industry review link",
+                rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
             )
         if reviews:
             review_ids.update(plan_sectors)
             if any(identity not in reviews for identity in review_ids):
                 raise ResearchValidationError(
-                    "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
+                    "DIRECTION_VALIDATION_FAILED",
+                    "unknown direction industry review",
+                    rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
                 )
             if (packet.get("industryCycleResearch") or {}).get(
                 "required"
@@ -409,13 +467,16 @@ def validate_value_directions(
                 raise ResearchValidationError(
                     "DIRECTION_VALIDATION_FAILED",
                     "direction requires an explicit industry review link",
+                    rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
                 )
             for identity in sorted(review_ids):
                 cycle = merge_industry_cycles(cycle, reviews[identity])
             refs = sorted(set(refs) | set(cycle["sourceIds"]))
         elif review_ids:
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", "unknown direction industry review"
+                "DIRECTION_VALIDATION_FAILED",
+                "unknown direction industry review",
+                rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
             )
         if historical_cycles:
             from backend.macro.daily_research import _persist_review_cycle
@@ -432,7 +493,9 @@ def validate_value_directions(
         macros = sorted(set(direction["macroCodes"]))
         if any(code not in macro_codes for code in macros):
             raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED", "unknown direction macro fact"
+                "DIRECTION_VALIDATION_FAILED",
+                "unknown direction macro fact",
+                rule_id="DIRECTION_MACRO_REFERENCE_UNKNOWN",
             )
         for field in ("catalysts", "risks"):
             for note in direction[field]:
@@ -527,7 +590,9 @@ def validate_value_directions(
                 for rule in proposal["calibrationRuleKeys"]
             ):
                 raise ResearchValidationError(
-                    "DIRECTION_VALIDATION_FAILED", "unknown direction calibration rule"
+                    "DIRECTION_VALIDATION_FAILED",
+                    "unknown direction calibration rule",
+                    rule_id="DIRECTION_CALIBRATION_RULE_UNKNOWN",
                 )
             plans.append(
                 {
@@ -573,11 +638,13 @@ def validate_value_directions(
                 raise ResearchValidationError(
                     "FUND_PLAN_INVALID",
                     "pure quantitative direction needs a triggered fund plan",
+                    rule_id="DIRECTION_EVIDENCE_INSUFFICIENT",
                 )
         elif len(refs) + len(macros) + len(quantitative) < 2:
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "direction needs multiple available evidence",
+                rule_id="DIRECTION_EVIDENCE_INSUFFICIENT",
             )
         if direction["signal"] in {"LEFT_VALUE", "RIGHT_TREND"} and not any(
             plan["selectedTrack"] == direction["signal"]
