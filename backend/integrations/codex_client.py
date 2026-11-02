@@ -380,12 +380,18 @@ async def _stream_chat(
         raise error from exc
 
 
-async def research(settings, prompt, schema, *, timeout=900, model=None) -> dict:
+async def research(settings, prompt, schema, *, timeout=900, model=None, on_return=None) -> dict:
     from backend.ai_usage.tracker import trace_inference
+
+    async def operation():
+        result = await _research(settings, prompt, schema, timeout=timeout, model=model)
+        if on_return is not None:
+            on_return()
+        return result
 
     return await trace_inference(
         settings, model=model or getattr(settings, "daily_research_model", None) or getattr(settings, "codex_model", None),
-        call_type="research", operation=lambda: _research(settings, prompt, schema, timeout=timeout, model=model),
+        call_type="research", operation=operation,
     )
 
 

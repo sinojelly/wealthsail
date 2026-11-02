@@ -42,7 +42,12 @@ def observed(monkeypatch):
 
 @asynccontextmanager
 async def transaction(*args, **kwargs):
-    yield object()
+    class Connection:
+        @asynccontextmanager
+        async def transaction(self):
+            yield self
+
+    yield Connection()
 
 
 def finished(events, event):
@@ -208,6 +213,13 @@ def daily_boundary(monkeypatch, remote):
         daily_research, "claim_daily_run", AsyncMock(return_value={"run_id": "run"})
     )
     monkeypatch.setattr(daily_research, "finish_daily_run", AsyncMock())
+    monkeypatch.setattr(daily_research, "lock_model_dispatch", AsyncMock())
+    monkeypatch.setattr(
+        daily_research, "create_model_guard", AsyncMock(return_value="token")
+    )
+    monkeypatch.setattr(
+        daily_research, "release_model_guard", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(
         daily_research, "collect_daily_sources", AsyncMock(return_value={})
     )

@@ -35,7 +35,10 @@ async def sync_alpha_public(
     now_provider=now_shanghai,
     nav_collector=None,
     debug_request_id=None,
+    manual_request_id=None,
 ):
+    if debug_request_id is not None and manual_request_id is not None:
+        raise ValueError("select one explicit collection request mode")
     stamp = local(now if now is not None else now_provider())
     async with system_connection(pool) as conn:
         async with conn.transaction():
@@ -45,6 +48,11 @@ async def sync_alpha_public(
                 **(
                     {"debug_request_id": debug_request_id}
                     if debug_request_id is not None
+                    else {}
+                ),
+                **(
+                    {"manual_request_id": manual_request_id}
+                    if manual_request_id is not None
                     else {}
                 ),
             )

@@ -3,6 +3,8 @@
 import asyncio
 import logging
 
+from backend.macro.research_modes import preferred_research_request_mode
+
 logger = logging.getLogger("wealthsail.alpha_runtime")
 
 
@@ -16,9 +18,7 @@ async def run_alpha_runtime(
         from backend.jobs.daily_research import run_daily_research_service
 
         services = []
-        if getattr(settings, "daily_research_debug_enabled", False) and getattr(
-            settings, "app_env", None
-        ) in {"development", "test"}:
+        if preferred_research_request_mode(settings) is not None:
             from backend.jobs.research_debug import run_debug_research_service
 
             async def debug(pool, *, stop_event):

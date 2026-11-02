@@ -39,7 +39,13 @@ async def completed_etf_dates(conn, now):
 
 
 async def prepare_research_inputs(
-    pool, now, external, *, debug_request_id=None, source_batch_id=None
+    pool,
+    now,
+    external,
+    *,
+    debug_request_id=None,
+    manual_request_id=None,
+    source_batch_id=None,
 ):
     from backend.investment.discovery import collect_discovery_nav_histories
     from backend.integrations.etf_flows import fetch_etf_flow_signals
@@ -56,6 +62,11 @@ async def prepare_research_inputs(
             **(
                 {"debug_request_id": debug_request_id}
                 if debug_request_id is not None
+                else {}
+            ),
+            **(
+                {"manual_request_id": manual_request_id}
+                if manual_request_id is not None
                 else {}
             ),
         )

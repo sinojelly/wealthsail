@@ -71,7 +71,10 @@ def _atomic_write(directory, identity, encoded, *, diagnostic=False):
 
 def check_research_audit(settings):
     """Probe optional storage once at worker service startup, without stopping it."""
-    if not getattr(settings, "daily_research_enabled", False):
+    if not (
+        getattr(settings, "daily_research_enabled", False)
+        or getattr(settings, "daily_research_manual_enabled", False)
+    ):
         return
     configured = getattr(settings, "daily_research_audit_dir", "")
     if not configured or not str(configured).strip():

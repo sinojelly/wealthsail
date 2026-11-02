@@ -80,6 +80,13 @@ def isolate(monkeypatch):
         mod, "consumed", AsyncMock(side_effect=lambda *_: state["consumed"])
     )
     monkeypatch.setattr(mod, "claim_daily_run", claim)
+    # The control-flow fixture has no SQL engine; real cross-process guard and
+    # transaction guarantees are covered by the owned PostgreSQL tests.
+    monkeypatch.setattr(mod, "lock_model_dispatch", AsyncMock())
+    monkeypatch.setattr(
+        mod, "create_model_guard", AsyncMock(return_value="guard-token")
+    )
+    monkeypatch.setattr(mod, "release_model_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "finish_daily_run", finished)
     monkeypatch.setattr(
         mod, "load_public_packet", AsyncMock(return_value={"asOf": NOW.isoformat()})

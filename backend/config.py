@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     # Independent opt-in for the five-minute holdings anomaly check/alert.
     intraday_tracking_enabled: bool = Field(default=False)
     daily_research_debug_enabled: bool = Field(default=False)
+    # Administrator website requests are independent of automatic scheduling.
+    # The development CLI retains its DEBUG environment gate.
+    daily_research_manual_enabled: bool = Field(default=False)
     daily_research_codex_path: str | None = Field(default=None)
     daily_research_model: str | None = Field(default=None)
     daily_research_catch_up: bool = Field(default=True)

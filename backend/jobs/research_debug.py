@@ -1,4 +1,4 @@
-"""Consume explicit development requests without delivering reports or trades."""
+"""Consume explicit research requests without delivering reports or trades."""
 
 import argparse
 import asyncio
@@ -15,24 +15,26 @@ from backend.config import get_settings
 from backend.dependencies import now_shanghai
 from backend.jobs.alpha_public import sync_alpha_public
 from backend.jobs.daily_research import sync_daily_research
+from backend.macro.research_diagnostics import safe_error_class
+from backend.macro.research_modes import (
+    preferred_research_request_mode,
+    research_request_mode_allowed,
+)
 
 logger = logging.getLogger("wealthsail.research_debug")
+REQUEST_TIMEOUT_SECONDS = 35 * 60
 
 
 def enabled(settings):
-    return (
-        getattr(settings, "app_env", None) in {"development", "test"}
-        and getattr(settings, "daily_research_debug_enabled", False)
-        and getattr(settings, "daily_research_enabled", False)
-    )
+    return preferred_research_request_mode(settings) is not None
 
 
-async def _claim(pool, now):
+async def _claim(pool, now, *, allowed_modes=None):
     from backend.macro.research_debug_repository import claim_refresh
 
     async with system_connection(pool) as conn:
         async with conn.transaction():
-            return await claim_refresh(conn, now)
+            return await claim_refresh(conn, now, allowed_modes=allowed_modes)
 
 
 async def _finish(pool, identity, now, **kwargs):
@@ -58,46 +60,62 @@ async def sync_debug_refresh(pool, settings):
     if not enabled(settings):
         return {"status": "DISABLED"}
     started = now_shanghai()
-    request = await _claim(pool, started)
+    allowed_modes = [
+        mode
+        for mode in ("MANUAL", "DEBUG")
+        if research_request_mode_allowed(settings, mode)
+    ]
+    request = await _claim(pool, started, allowed_modes=allowed_modes)
     if request is None:
         return {"status": "IDLE"}
     identity = request["id"]
+    mode = request.get("request_mode", "DEBUG")
     status, error, batch, report = "FAILED", None, None, None
     try:
-        if not await _operator_active(pool, request):
-            raise PermissionError("operator membership revoked")
-        collected = await sync_alpha_public(
-            pool, now_shanghai(), debug_request_id=identity
-        )
-        batch = collected.get("batchId")
-        if collected["status"] not in {"READY", "PARTIAL"} or not batch:
-            raise ValueError("debug public collection unavailable")
-        if now_shanghai() < started:
-            raise ValueError("debug clock regressed")
-        if not await _operator_active(pool, request):
-            raise PermissionError("operator membership revoked")
-        result = await sync_daily_research(
-            pool,
-            settings,
-            now_shanghai(),
-            debug_request_id=identity,
-            source_batch_id=batch,
-        )
-        report = result.get("runId")
-        status = (
-            result["status"]
-            if result["status"] in {"READY", "FAILED", "UNCERTAIN"}
-            else "UNCERTAIN"
-        )
-        if status != "READY":
-            error = "ResearchUnavailable"
+        async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+            if not research_request_mode_allowed(settings, mode):
+                raise PermissionError("saved request mode is disabled")
+            if not await _operator_active(pool, request):
+                raise PermissionError("operator membership revoked")
+            request_arguments = (
+                {"manual_request_id": identity}
+                if mode == "MANUAL"
+                else {"debug_request_id": identity}
+            )
+            collected = await sync_alpha_public(
+                pool, now_shanghai(), **request_arguments
+            )
+            batch = collected.get("batchId")
+            if collected["status"] not in {"READY", "PARTIAL"} or not batch:
+                raise ValueError("public collection unavailable")
+            if now_shanghai() < started:
+                raise ValueError("research clock regressed")
+            if not await _operator_active(pool, request):
+                raise PermissionError("operator membership revoked")
+            result = await sync_daily_research(
+                pool,
+                settings,
+                now_shanghai(),
+                source_batch_id=batch,
+                **request_arguments,
+            )
+            report = result.get("runId")
+            status = (
+                result["status"]
+                if result["status"] in {"READY", "FAILED", "UNCERTAIN"}
+                else "UNCERTAIN"
+            )
+            if status != "READY":
+                error = (
+                    safe_error_class(result.get("errorClass")) or "ResearchUnavailable"
+                )
     except asyncio.CancelledError:
         status, error = "UNCERTAIN", "CancelledError"
         raise
     except TimeoutError:
         status, error = "UNCERTAIN", "TimeoutError"
     except Exception as exc:  # noqa: BLE001 -- never persist provider bodies or credentials
-        status, error = "FAILED", type(exc).__name__
+        status, error = "FAILED", safe_error_class(type(exc).__name__)
         logger.warning("debug_research_failed error_class=%s", error)
     finally:
         await _finish(
@@ -127,6 +145,10 @@ async def _wait(stop_event, seconds):
 async def run_debug_research_service(pool, settings, *, stop_event=None, wait=_wait):
     if not enabled(settings):
         return
+    if not getattr(settings, "daily_research_enabled", False):
+        from backend.macro.research_audit import check_research_audit
+
+        check_research_audit(settings)
     stop_event = stop_event or asyncio.Event()
     while not stop_event.is_set():
         try:
@@ -173,7 +195,7 @@ async def main(argv=None):
     parser.add_argument("--no-wait", action="store_true")
     args = parser.parse_args(argv)
     settings = validate_macro_settings(get_settings())
-    if not enabled(settings):
+    if not research_request_mode_allowed(settings, "DEBUG"):
         raise ValueError(
             "development research debug and daily research must be enabled"
         )

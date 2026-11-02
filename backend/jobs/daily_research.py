@@ -54,6 +54,13 @@ from backend.macro.research_diagnostics import (
     sanitize_failure_diagnostics,
 )
 from backend.jobs.research_inputs import prepare_research_inputs, research_catalysts
+from backend.macro.research_modes import research_request_mode_allowed
+from backend.macro.model_dispatch_repository import (
+    ResearchModelBusy,
+    lock_model_dispatch,
+    create_model_guard,
+    release_model_guard,
+)
 
 logger = logging.getLogger("wealthsail.daily_research")
 PIPELINE_HEARTBEAT_SECONDS = 30
@@ -125,7 +132,13 @@ def _write_diagnostic_summary(settings, run_id, diagnostics, error, status):
 
 
 async def load_public_packet(
-    conn, now, external, *, debug_request_id=None, source_batch_id=None
+    conn,
+    now,
+    external,
+    *,
+    debug_request_id=None,
+    manual_request_id=None,
+    source_batch_id=None,
 ):
     """Only shared research queries; never assemble an actor/portfolio context."""
     from backend.investment import repository
@@ -178,6 +191,11 @@ async def load_public_packet(
         **(
             {"debug_request_id": debug_request_id}
             if debug_request_id is not None
+            else {}
+        ),
+        **(
+            {"manual_request_id": manual_request_id}
+            if manual_request_id is not None
             else {}
         ),
     )
@@ -380,6 +398,10 @@ async def _stop_pipeline_heartbeat(claim):
         await stop()
 
 
+async def _wait_model_slot():
+    await asyncio.sleep(3)
+
+
 async def _pipeline_stage(pool, claim, *, stage, state="RUNNING", **fields):
     from backend.macro.daily_pipeline_repository import advance_pipeline
 
@@ -414,6 +436,7 @@ async def _pipeline_stage(pool, claim, *, stage, state="RUNNING", **fields):
     "DAILY_RESEARCH",
     lambda bound: "基金机会研究（手动）"
     if bound.get("debug_request_id") is not None
+    or bound.get("manual_request_id") is not None
     else "基金机会研究（自动）",
 )
 async def sync_daily_research(
@@ -422,15 +445,17 @@ async def sync_daily_research(
     now,
     *,
     debug_request_id=None,
+    manual_request_id=None,
     source_batch_id=None,
     observe_only=False,
 ):
-    if debug_request_id is not None:
+    if debug_request_id is not None or manual_request_id is not None:
         return await _execute_daily_research(
             pool,
             settings,
             now,
             debug_request_id=debug_request_id,
+            manual_request_id=manual_request_id,
             source_batch_id=source_batch_id,
         )
     if not settings.daily_research_enabled:
@@ -720,37 +745,72 @@ async def _execute_daily_research(
     now,
     *,
     debug_request_id=None,
+    manual_request_id=None,
     source_batch_id=None,
     packet=None,
     pipeline=None,
 ):
     stamp = local(now)
+    if debug_request_id is not None and manual_request_id is not None:
+        raise ValueError("select one explicit research request mode")
     debug = debug_request_id is not None
-    if debug and (
-        getattr(settings, "app_env", None) not in {"development", "test"}
-        or not getattr(settings, "daily_research_debug_enabled", False)
+    manual = manual_request_id is not None
+    explicit = debug or manual
+    if explicit and not research_request_mode_allowed(
+        settings, "MANUAL" if manual else "DEBUG"
     ):
         return {"status": "DISABLED"}
-    if debug and source_batch_id is None:
-        raise ValueError("debug research requires its collected source batch")
-    if not settings.daily_research_enabled:
+    if explicit and source_batch_id is None:
+        raise ValueError("explicit research requires its collected source batch")
+    if not explicit and not settings.daily_research_enabled:
         return {"status": "DISABLED"}
-    if not debug:
+    if not explicit:
         async with system_connection(pool) as conn:
             if await consumed(conn, stamp):
                 return {"status": "SKIPPED"}
+    manual_bundle = None
+    if manual:
+        from backend.macro.alpha_repository import read_alpha_public
+        from backend.macro.daily_pipeline_repository import source_quality
+
+        async with system_connection(pool) as conn:
+            manual_bundle = await read_alpha_public(
+                conn,
+                stamp,
+                manual_request_id=manual_request_id,
+                source_batch_id=source_batch_id,
+            )
+        if (
+            manual_bundle.get("batchId") != str(source_batch_id)
+            or not source_quality(manual_bundle, stamp)["allowed"]
+        ):
+            return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
+    request_selection = (
+        {"manual_request_id": manual_request_id, "source_batch_id": source_batch_id}
+        if manual
+        else {"debug_request_id": debug_request_id}
+        if debug
+        else {}
+    )
     if packet is None:
         external = await collect_daily_sources(stamp)
         external = await prepare_research_inputs(
-            pool, local(now_shanghai()), external, debug_request_id=debug_request_id
+            pool,
+            local(now_shanghai()),
+            external,
+            **(request_selection if explicit else {"debug_request_id": None}),
         )
         async with system_connection(pool) as conn:
             packet = await load_public_packet(
                 conn,
                 local(now_shanghai()),
                 external,
-                **({"debug_request_id": debug_request_id} if debug else {}),
+                **request_selection,
             )
+    if manual:
+        packet = dict(packet)
+        packet["inputQuality"] = source_quality(manual_bundle, local(now_shanghai()))
+        packet["sourceBatchId"] = str(source_batch_id)
     prompt = build_prompt(packet)
     unavailable, cli = None, {}
     remote_codex = bool(getattr(settings, "codex_runner_url", ""))
@@ -765,9 +825,6 @@ async def _execute_daily_research(
         unavailable = type(exc).__name__
     if unavailable:
         return {"status": "FAILED", "errorClass": unavailable}
-    dispatched = local(now_shanghai())
-    if not debug and dispatched.date() != stamp.date():
-        return {"status": "MISSED", "errorClass": "SourcePreparationCrossedDay"}
     schedule = _schedule(settings)
     due = pipeline.get("scheduled_for") if pipeline else None
     if isinstance(due, str):
@@ -778,65 +835,89 @@ async def _execute_daily_research(
         else scheduled_for(stamp, schedule_time=schedule["schedule_time"])
     )
     packet_day = local(datetime.fromisoformat(packet["asOf"])).date()
-    if (
-        dispatched < stamp
-        or packet_day != dispatched.date()
-        or (not debug and (dispatched.date() != stamp.date() or dispatched < due))
-    ):
-        return {"status": "SKIPPED"}
-    if (
-        not debug
-        and not pipeline
-        and dispatched
-        >= due
-        + timedelta(
-            minutes=getattr(settings, "daily_research_start_window_minutes", 120)
-        )
-    ):
-        return {"status": "MISSED", "errorClass": "StartWindowExpired"}
-    if pipeline:
-        from backend.macro.daily_pipeline_repository import source_quality
-
-        if _remaining_runtime(pipeline, settings, dispatched) <= 0:
-            raise PipelineRuntimeExpired()
-        if not source_quality(pipeline.get("_source_bundle", {}), dispatched)[
-            "allowed"
-        ]:
-            return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
-    async with system_connection(pool) as conn:
-
-        async def dispatch():
-            return await claim_daily_run(
-                conn,
-                dispatched,
-                packet,
-                input_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-                prompt_version=PROMPT_VERSION,
-                cli_version=cli.get("version"),
-                source_batch_id=source_batch_id,
-                **({"schedule_time": due.strftime("%H:%M")} if not debug else {}),
-                **({"debug_request_id": debug_request_id} if debug else {}),
+    while True:
+        dispatched = local(now_shanghai())
+        if not explicit and dispatched.date() != stamp.date():
+            return {"status": "MISSED", "errorClass": "SourcePreparationCrossedDay"}
+        if (
+            dispatched < stamp
+            or packet_day != dispatched.date()
+            or (not explicit and dispatched < due)
+        ):
+            return {"status": "SKIPPED"}
+        if (
+            not explicit
+            and not pipeline
+            and dispatched
+            >= due
+            + timedelta(
+                minutes=getattr(settings, "daily_research_start_window_minutes", 120)
             )
+        ):
+            return {"status": "MISSED", "errorClass": "StartWindowExpired"}
+        if pipeline or manual:
+            from backend.macro.daily_pipeline_repository import source_quality
 
-        if pipeline:
-            from backend.macro.daily_pipeline_repository import advance_pipeline
+            if pipeline and _remaining_runtime(pipeline, settings, dispatched) <= 0:
+                raise PipelineRuntimeExpired()
+            if not source_quality(
+                manual_bundle if manual else pipeline.get("_source_bundle", {}),
+                dispatched,
+            )["allowed"]:
+                return {"status": "FAILED", "errorClass": "SourceQualityRejected"}
+        try:
+            async with system_connection(pool) as conn:
+                # Occupation and the immutable cost barrier must commit together.
+                # Neither a busy model nor a lost owner may consume a new slot.
+                async with conn.transaction():
+                    await lock_model_dispatch(conn)
+                    if pipeline:
+                        from backend.macro.daily_pipeline_repository import (
+                            advance_pipeline,
+                        )
 
-            async with conn.transaction():
-                if not await advance_pipeline(
-                    conn, pipeline, dispatched, stage="MODEL_RUNNING"
-                ):
-                    raise PipelineOwnershipLost()
-                claim = await dispatch()
-                if claim is not None and not await advance_pipeline(
-                    conn,
-                    pipeline,
-                    dispatched,
-                    stage="MODEL_RUNNING",
-                    research_run_id=claim["run_id"],
-                ):
-                    raise PipelineOwnershipLost()
-        else:
-            claim = await dispatch()
+                        if not await advance_pipeline(
+                            conn, pipeline, dispatched, stage="MODEL_RUNNING"
+                        ):
+                            raise PipelineOwnershipLost()
+                    claim = await claim_daily_run(
+                        conn,
+                        dispatched,
+                        packet,
+                        input_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                        prompt_version=PROMPT_VERSION,
+                        cli_version=cli.get("version"),
+                        source_batch_id=source_batch_id,
+                        **(
+                            {"schedule_time": due.strftime("%H:%M")}
+                            if not explicit
+                            else {}
+                        ),
+                        **({"debug_request_id": debug_request_id} if debug else {}),
+                        **({"manual_request_id": manual_request_id} if manual else {}),
+                    )
+                    owner_token = (
+                        await create_model_guard(conn, claim["run_id"], dispatched)
+                        if claim is not None
+                        else None
+                    )
+                    if (
+                        pipeline
+                        and claim is not None
+                        and not await advance_pipeline(
+                            conn,
+                            pipeline,
+                            dispatched,
+                            stage="MODEL_RUNNING",
+                            research_run_id=claim["run_id"],
+                        )
+                    ):
+                        raise PipelineOwnershipLost()
+            break
+        except ResearchModelBusy:
+            # Preserve request/run identities and release the DB connection while
+            # waiting. The existing pipeline/consumer deadline still applies.
+            await _wait_model_slot()
     if claim is None:
         return {"status": "SKIPPED"}
     # The unique slot has committed and the connection is released before exec.
@@ -853,7 +934,13 @@ async def _execute_daily_research(
     payload, error = None, unavailable
     raw, checks, audit_error = None, None, None
     diagnostics = {}
+    model_returned = False
     current_stage = "MODEL_EXECUTION"
+
+    def confirmed_model_return():
+        nonlocal model_returned
+        model_returned = True
+
     try:
         if unavailable:
             return result
@@ -866,21 +953,29 @@ async def _execute_daily_research(
                     REPORT_SCHEMA,
                     timeout=settings.daily_research_timeout_seconds,
                     model=model,
+                    on_return=confirmed_model_return,
                 )
             else:
                 selected_model = model or cli.get("selectedModel")
-                raw = await trace_inference(
-                    settings,
-                    model=selected_model,
-                    call_type="research",
-                    operation=lambda: run_codex_research(
+
+                async def operation():
+                    value = await run_codex_research(
                         cli["executable"],
                         prompt,
                         REPORT_SCHEMA,
                         timeout=settings.daily_research_timeout_seconds,
                         model=selected_model,
-                    ),
+                    )
+                    confirmed_model_return()
+                    return value
+
+                raw = await trace_inference(
+                    settings,
+                    model=selected_model,
+                    call_type="research",
+                    operation=operation,
                 )
+        model_returned = True
         write_research_audit(
             settings,
             run_id,
@@ -1014,6 +1109,20 @@ async def _execute_daily_research(
             _write_diagnostic_summary(
                 settings, run_id, diagnostics, error, result["status"]
             )
+        finally:
+            if model_returned:
+                try:
+                    async with system_connection(pool) as conn:
+                        if not await release_model_guard(
+                            conn, run_id, owner_token, local(now_shanghai())
+                        ):
+                            raise PipelineOwnershipLost()
+                except Exception as exc:  # noqa: BLE001 -- retain occupation on failure
+                    logger.warning(
+                        "daily_research_model_release_failed error_class=%s run_id=%s",
+                        safe_error_class(type(exc).__name__),
+                        run_id,
+                    )
     if error:
         result["errorClass"] = error
     return result

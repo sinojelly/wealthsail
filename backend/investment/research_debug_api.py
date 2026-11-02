@@ -1,4 +1,4 @@
-"""Explicit development-only research queue, with no collector or model authority."""
+"""Explicit administrator research queue, with no collector or model authority."""
 
 from uuid import UUID
 
@@ -15,6 +15,10 @@ from backend.dependencies import (
 )
 from backend.errors import ForbiddenError, ok
 from backend.macro import research_debug_repository as repository
+from backend.macro.research_modes import (
+    preferred_research_request_mode,
+    research_request_mode_allowed,
+)
 
 router = APIRouter(prefix="/investment/daily-research/refresh", tags=["investment"])
 
@@ -25,16 +29,26 @@ class RefreshCommand(BaseModel):
 
 
 def debug_enabled(settings):
-    return (
-        settings.app_env in {"development", "test"}
-        and settings.daily_research_debug_enabled
-        and settings.daily_research_enabled
+    return research_request_mode_allowed(settings, "DEBUG")
+
+
+def _allowed_modes(settings):
+    return [
+        mode
+        for mode in ("MANUAL", "DEBUG")
+        if research_request_mode_allowed(settings, mode)
+    ]
+
+
+def _request_visible(settings, value):
+    return value is not None and research_request_mode_allowed(
+        settings, value.get("requestMode", "DEBUG")
     )
 
 
 async def _enabled(conn, ctx, settings):
     return (
-        debug_enabled(settings)
+        preferred_research_request_mode(settings) is not None
         and ctx.is_owner_or_admin
         and await repository.active_operator(
             conn, UUID(ctx.tenant_id), UUID(ctx.user_id)
@@ -51,17 +65,23 @@ async def capability(
 ):
     now = now_shanghai()
     # No capability means no task lookup, and no routine forbidden browser response.
-    if not debug_enabled(settings) or not ctx.is_owner_or_admin:
+    if preferred_research_request_mode(settings) is None or not ctx.is_owner_or_admin:
         return ok({"enabled": False, "request": None}, request_id=request_id, as_of=now)
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         enabled = await _enabled(conn, ctx, settings)
         value = (
             await repository.latest_refresh(
-                conn, UUID(ctx.tenant_id), UUID(ctx.user_id), now
+                conn,
+                UUID(ctx.tenant_id),
+                UUID(ctx.user_id),
+                now,
+                allowed_modes=_allowed_modes(settings),
             )
             if enabled
             else None
         )
+        if not _request_visible(settings, value):
+            value = None
     return ok(
         {"enabled": bool(enabled), "request": value}, request_id=request_id, as_of=now
     )
@@ -75,15 +95,23 @@ async def enqueue(
     settings=Depends(get_settings_dep),
     request_id=Depends(get_request_id),
 ):
-    if not debug_enabled(settings) or not ctx.is_owner_or_admin:
-        raise ForbiddenError("当前环境或角色未启用调试研究")
+    mode = preferred_research_request_mode(settings)
+    if mode is None or not ctx.is_owner_or_admin:
+        raise ForbiddenError("当前环境或角色未启用手动研究")
     now = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         if not await _enabled(conn, ctx, settings):
-            raise ForbiddenError("当前成员已无调试研究权限")
+            raise ForbiddenError("当前成员已无手动研究权限")
         value = await repository.enqueue_refresh(
-            conn, UUID(ctx.tenant_id), UUID(ctx.user_id), body.commandKey, now
+            conn,
+            UUID(ctx.tenant_id),
+            UUID(ctx.user_id),
+            body.commandKey,
+            now,
+            **({"request_mode": "MANUAL"} if mode == "MANUAL" else {}),
         )
+        if not _request_visible(settings, value):
+            raise ForbiddenError("当前未启用此已保存研究请求的模式")
     return ok(value, request_id=request_id, as_of=now)
 
 
@@ -95,13 +123,15 @@ async def status(
     settings=Depends(get_settings_dep),
     request_id=Depends(get_request_id),
 ):
-    if not debug_enabled(settings) or not ctx.is_owner_or_admin:
-        raise ForbiddenError("当前环境或角色未启用调试研究")
+    if preferred_research_request_mode(settings) is None or not ctx.is_owner_or_admin:
+        raise ForbiddenError("当前环境或角色未启用手动研究")
     now = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         if not await _enabled(conn, ctx, settings):
-            raise ForbiddenError("当前成员已无调试研究权限")
+            raise ForbiddenError("当前成员已无手动研究权限")
         value = await repository.read_refresh(
             conn, UUID(ctx.tenant_id), UUID(ctx.user_id), run_id, now
         )
+        if not _request_visible(settings, value):
+            raise ForbiddenError("当前未启用此已保存研究请求的模式")
     return ok(value, request_id=request_id, as_of=now)
