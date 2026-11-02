@@ -207,7 +207,8 @@ async def test_history_query_keeps_each_calendar_day_despite_same_day_debug_burs
         "CREATE TABLE research.daily_research_runs (run_id TEXT,slot_date TEXT,dispatched_at TEXT,run_mode TEXT)"
     )
     database.execute(
-        "CREATE TABLE research.daily_research_results (run_id TEXT,status TEXT,recorded_at TEXT,payload TEXT,error_class TEXT)"
+        "CREATE TABLE research.daily_research_results (run_id TEXT,status TEXT,recorded_at TEXT,payload TEXT,error_class TEXT,"
+        "failure_stage TEXT,failure_reason_code TEXT,failure_rule_id TEXT,failure_item_index INTEGER)"
     )
     for index in range(22):
         stamp = (
@@ -224,7 +225,7 @@ async def test_history_query_keeps_each_calendar_day_despite_same_day_debug_burs
             ),
         )
         database.execute(
-            "INSERT INTO research.daily_research_results VALUES (?,?,?,?,?)",
+            "INSERT INTO research.daily_research_results (run_id,status,recorded_at,payload,error_class) VALUES (?,?,?,?,?)",
             (identity, "READY", str(stamp), "{}", None),
         )
 
