@@ -63,6 +63,9 @@ const failureRules: Record<DailyResearchFailureRuleId, string> = {
   INDUSTRY_RISK_SOURCE_MISSING: "行业风险证据缺少来源",
   INDUSTRY_CYCLE_SOURCE_INVALID: "产业周期证据引用的来源无效",
   DIRECTION_INDUSTRY_REVIEW_UNKNOWN: "价值方向引用了未知行业核查记录",
+  DIRECTION_DECLARED_INDUSTRY_UNKNOWN: "价值方向声明了未知行业",
+  DIRECTION_PLAN_SECTOR_UNREVIEWED: "基金计划引用的行业尚未完成反方核查",
+  INDUSTRY_REVIEW_BUDGET_EXCEEDED: "候选行业数量超过核查预算",
   DIRECTION_MACRO_REFERENCE_UNKNOWN: "价值方向引用了未知宏观指标",
   DIRECTION_CALIBRATION_RULE_UNKNOWN: "价值方向引用了未知校准规则",
   DIRECTION_EVIDENCE_INSUFFICIENT: "价值方向的证据不足",
@@ -75,6 +78,46 @@ const validationReasons = new Set<string>([
   "SOURCE_DATE_INVALID",
   "SOURCE_REFERENCE_INVALID",
   "PAYLOAD_VALIDATION_FAILED",
+]);
+// Match backend/macro/industry_contract.py; model-provided strings are not codes.
+const standardIndustryCodes = new Set<string>([
+  "ACTIVE_GROWTH",
+  "AEROSPACE",
+  "AI",
+  "BANK",
+  "BROAD",
+  "BROKER",
+  "CHEMICAL",
+  "COAL",
+  "COMMUNICATION",
+  "CONSUMPTION",
+  "DEFENCE",
+  "DIVIDEND",
+  "DRUG",
+  "FINANCE_POLICY",
+  "FINANCIAL",
+  "FINTECH",
+  "GAMING",
+  "GLOBAL_ENERGY",
+  "GOLD",
+  "GOLD_ENERGY",
+  "HEALTHCARE_CLINICAL",
+  "HK_TECH",
+  "INNOVATIVE_DRUG",
+  "LOW_ALTITUDE",
+  "MEMORY",
+  "NONFERROUS",
+  "PCB",
+  "POWER",
+  "RARE_EARTH",
+  "RARE_EARTH_METALS",
+  "ROBOT",
+  "ROBOTICS_MOBILITY",
+  "SATELLITE",
+  "SEMICONDUCTOR_AI",
+  "SOLID_BATTERY",
+  "TRADITIONAL_MEDICINE",
+  "US_TECH",
 ]);
 function diagnosticLabel(
   labels: Readonly<Record<string, string>>,
@@ -90,6 +133,7 @@ type FailureDetails = Pick<
   | "failureReasonCode"
   | "failureRuleId"
   | "failureItemIndex"
+  | "failureIndustryCodes"
   | "runId"
 > & {
   pipeline?: Pick<
@@ -117,6 +161,18 @@ export function DailyResearchFailureDiagnosis({
       ? runId
       : "身份未记录";
   const index = data.failureItemIndex;
+  const industryCodes = Array.isArray(data.failureIndustryCodes)
+    ? [
+        ...new Set(
+          data.failureIndustryCodes.filter(
+            (code: unknown): code is string =>
+              typeof code === "string" && standardIndustryCodes.has(code),
+          ),
+        ),
+      ]
+        .sort()
+        .slice(0, 10)
+    : [];
   return (
     <div role="group" aria-label="研究失败诊断">
       {validation && (
@@ -128,6 +184,9 @@ export function DailyResearchFailureDiagnosis({
       <p>失败阶段：{stage ?? "阶段待核查"}</p>
       {reason && <p>原因代码：{data.failureReasonCode}</p>}
       {rule && <p>校验规则：{data.failureRuleId}</p>}
+      {!!industryCodes.length && (
+        <p>相关行业代码：{industryCodes.join("、")}</p>
+      )}
       {typeof index === "number" &&
         Number.isSafeInteger(index) &&
         index >= 0 &&

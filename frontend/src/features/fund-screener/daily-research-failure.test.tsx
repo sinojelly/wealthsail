@@ -145,6 +145,9 @@ it.each([
   ["INDUSTRY_RISK_SOURCE_MISSING", "行业风险证据缺少来源"],
   ["INDUSTRY_CYCLE_SOURCE_INVALID", "产业周期证据引用的来源无效"],
   ["DIRECTION_INDUSTRY_REVIEW_UNKNOWN", "价值方向引用了未知行业核查记录"],
+  ["DIRECTION_DECLARED_INDUSTRY_UNKNOWN", "价值方向声明了未知行业"],
+  ["DIRECTION_PLAN_SECTOR_UNREVIEWED", "基金计划引用的行业尚未完成反方核查"],
+  ["INDUSTRY_REVIEW_BUDGET_EXCEEDED", "候选行业数量超过核查预算"],
   ["DIRECTION_MACRO_REFERENCE_UNKNOWN", "价值方向引用了未知宏观指标"],
   ["DIRECTION_CALIBRATION_RULE_UNKNOWN", "价值方向引用了未知校准规则"],
   ["DIRECTION_EVIDENCE_INSUFFICIENT", "价值方向的证据不足"],
@@ -260,4 +263,94 @@ it("does not use a retained run ID for a new pipeline without a research run", a
   expect(
     diagnosis.queryByText(new RegExp(previousRunId)),
   ).not.toBeInTheDocument();
+});
+
+it.each([
+  ["absent", undefined],
+  ["null", null],
+  ["empty", []],
+  [
+    "unknown and hostile",
+    [
+      "UNKNOWN_SECTOR",
+      "<script>secret-sector</script>",
+      "__proto__",
+      "constructor",
+    ],
+  ],
+  ["non-array", "MODEL_GENERATED_SECTOR"],
+  ["object", { value: "PRIVATE_SECTOR" }],
+])("does not expose %s industry diagnostic values", async (_label, codes) => {
+  await openDiagnostics(
+    Object.assign(daily(), { failureIndustryCodes: codes }),
+  );
+  const diagnosis = within(screen.getByRole("group", { name: "研究失败诊断" }));
+  expect(diagnosis.queryByText(/相关行业代码：/)).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(
+      /UNKNOWN_SECTOR|secret-sector|__proto__|constructor|MODEL_GENERATED_SECTOR|PRIVATE_SECTOR/,
+    ),
+  ).not.toBeInTheDocument();
+});
+
+it("does not borrow industry diagnostic codes from a retained report", async () => {
+  const data = daily();
+  Object.assign(data.report!, {
+    failureIndustryCodes: ["US_TECH"],
+  });
+  await openDiagnostics(data);
+  expect(screen.queryByText(/相关行业代码：|US_TECH/)).not.toBeInTheDocument();
+});
+
+it("displays only standard industry codes in sorted unique order without mutating the response", async () => {
+  const data = Object.assign(daily(), {
+    failureIndustryCodes: [
+      "ROBOT",
+      "AI",
+      "BANK",
+      "ROBOT",
+      "UNKNOWN_SECTOR",
+      "<script>secret-sector</script>",
+      "robot",
+      null,
+      42,
+      "__proto__",
+    ],
+  });
+  const original = JSON.stringify(data);
+  await openDiagnostics(data);
+  const diagnosis = within(screen.getByRole("group", { name: "研究失败诊断" }));
+  expect(diagnosis.getByText("相关行业代码：AI、BANK、ROBOT")).toBeVisible();
+  expect(
+    screen.queryByText(/UNKNOWN_SECTOR|secret-sector|__proto__/),
+  ).not.toBeInTheDocument();
+  expect(JSON.stringify(data)).toBe(original);
+});
+
+it("limits the sorted standard industry diagnosis to ten unique codes", async () => {
+  await openDiagnostics(
+    Object.assign(daily(), {
+      failureIndustryCodes: [
+        "US_TECH",
+        "SOLID_BATTERY",
+        "SATELLITE",
+        "ROBOT",
+        "POWER",
+        "PCB",
+        "MEMORY",
+        "HK_TECH",
+        "GOLD",
+        "FINTECH",
+        "CHEMICAL",
+        "ROBOT",
+      ],
+    }),
+  );
+  const diagnosis = within(screen.getByRole("group", { name: "研究失败诊断" }));
+  expect(
+    diagnosis.getByText(
+      "相关行业代码：CHEMICAL、FINTECH、GOLD、HK_TECH、MEMORY、PCB、POWER、ROBOT、SATELLITE、SOLID_BATTERY",
+    ),
+  ).toBeVisible();
+  expect(diagnosis.queryByText(/US_TECH/)).not.toBeInTheDocument();
 });

@@ -703,6 +703,9 @@ export type DailyResearchFailureRuleId =
   | "INDUSTRY_RISK_SOURCE_MISSING"
   | "INDUSTRY_CYCLE_SOURCE_INVALID"
   | "DIRECTION_INDUSTRY_REVIEW_UNKNOWN"
+  | "DIRECTION_DECLARED_INDUSTRY_UNKNOWN"
+  | "DIRECTION_PLAN_SECTOR_UNREVIEWED"
+  | "INDUSTRY_REVIEW_BUDGET_EXCEEDED"
   | "DIRECTION_MACRO_REFERENCE_UNKNOWN"
   | "DIRECTION_CALIBRATION_RULE_UNKNOWN"
   | "DIRECTION_EVIDENCE_INSUFFICIENT";
@@ -769,6 +772,7 @@ export interface DailyResearch {
   failureReasonCode?: DailyResearchFailureReasonCode | null;
   failureRuleId?: DailyResearchFailureRuleId | null;
   failureItemIndex?: number | null;
+  failureIndustryCodes?: string[] | null;
   report: {
     methodVersion?: string;
     asOf?: string;

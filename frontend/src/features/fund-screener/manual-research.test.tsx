@@ -346,6 +346,45 @@ it.each(["FAILED", "UNCERTAIN"] as const)(
   },
 );
 
+it("shows safe industry diagnostics from the manual request without borrowing the retained report's codes", async () => {
+  const retained = report();
+  Object.assign(retained.report!, { failureIndustryCodes: ["US_TECH"] });
+  const load = vi.fn().mockResolvedValue(retained);
+  vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(
+    Object.assign(
+      {
+        ...request("FAILED"),
+        reportRunId: currentRunId,
+        completedAt: new Date().toISOString(),
+        failureStage: "REPORT_VALIDATION" as const,
+        failureRuleId: "DIRECTION_PLAN_SECTOR_UNREVIEWED" as const,
+      },
+      {
+        failureIndustryCodes: [
+          "ROBOT",
+          "AI",
+          "ROBOT",
+          "<script>private-sector</script>",
+        ],
+      },
+    ),
+  );
+  renderWithSession(<ResearchPage load={load} />);
+  await screen.findByText("保留的自动研究摘要");
+  await userEvent.click(
+    await screen.findByRole("button", { name: "手动启动研究" }),
+  );
+  const diagnosis = within(
+    await screen.findByRole("group", { name: "研究失败诊断" }),
+  );
+  expect(diagnosis.getByText("相关行业代码：AI、ROBOT")).toBeVisible();
+  expect(diagnosis.getByText(`研究执行ID：${currentRunId}`)).toBeVisible();
+  expect(
+    diagnosis.queryByText(/US_TECH|private-sector/),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("保留的自动研究摘要")).toBeInTheDocument();
+});
+
 it.each([
   ["READY", "研究成功 · 报告已生成"],
   ["FAILED", "研究失败"],

@@ -196,6 +196,7 @@ function RefreshControl({ actor, onReady }: Props) {
             failureReasonCode: result.failureReasonCode,
             failureRuleId: result.failureRuleId,
             failureItemIndex: result.failureItemIndex,
+            failureIndustryCodes: result.failureIndustryCodes,
             runId: result.reportRunId,
           }}
         />
