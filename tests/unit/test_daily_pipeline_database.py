@@ -506,6 +506,10 @@ async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_
                     owned["id"],
                 )
                 await admin.execute(
+                    "DELETE FROM research.daily_research_model_guards WHERE run_id IN (SELECT run_id FROM research.daily_research_runs WHERE slot_date=$1 AND run_mode='SCHEDULED')",
+                    now.date(),
+                )
+                await admin.execute(
                     "DELETE FROM research.daily_research_results WHERE run_id IN (SELECT run_id FROM research.daily_research_runs WHERE slot_date=$1 AND run_mode='SCHEDULED')",
                     now.date(),
                 )

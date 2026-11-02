@@ -74,16 +74,24 @@ def _object(value):
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
-async def claim_alpha_batch(conn, now, *, debug_request_id=None):
+async def claim_alpha_batch(
+    conn, now, *, debug_request_id=None, manual_request_id=None
+):
     stamp = local(now)
-    if debug_request_id is not None:
+    if debug_request_id is not None and manual_request_id is not None:
+        raise ValueError("select one explicit collection request mode")
+    request_id = (
+        manual_request_id if manual_request_id is not None else debug_request_id
+    )
+    mode = "MANUAL" if manual_request_id is not None else "DEBUG"
+    if request_id is not None:
         return await conn.fetchrow(
-            """INSERT INTO market.alpha_public_batches(run_date,claimed_at,status,run_mode,debug_request_id)
-            VALUES($1,$2,'CLAIMED','DEBUG',$3)
-            ON CONFLICT(debug_request_id) WHERE run_mode='DEBUG' DO NOTHING RETURNING *""",
+            f"""INSERT INTO market.alpha_public_batches(run_date,claimed_at,status,run_mode,debug_request_id)
+            VALUES($1,$2,'CLAIMED','{mode}',$3)
+            ON CONFLICT(debug_request_id) WHERE run_mode='{mode}' DO NOTHING RETURNING *""",
             stamp.date(),
             stamp,
-            debug_request_id,
+            request_id,
         )
     return await conn.fetchrow(
         """INSERT INTO market.alpha_public_batches(run_date,claimed_at,status)
@@ -106,26 +114,37 @@ async def finish_alpha_batch(conn, identity, now, status, payload):
     )
 
 
-async def read_alpha_public(conn, now, *, debug_request_id=None, source_batch_id=None):
+async def read_alpha_public(
+    conn, now, *, debug_request_id=None, manual_request_id=None, source_batch_id=None
+):
     stamp = local(now)
+    if debug_request_id is not None and manual_request_id is not None:
+        raise ValueError("select one explicit collection request mode")
     if debug_request_id is not None and source_batch_id is not None:
         raise ValueError("select an exact debug request or source batch")
-    exact = (
-        " AND id=$3 AND run_mode='SCHEDULED'"
-        if source_batch_id is not None
-        else " AND debug_request_id=$3"
-        if debug_request_id is not None
-        else ""
-    )
-    arguments = (
-        (
-            stamp.date(),
-            stamp,
-            source_batch_id if source_batch_id is not None else debug_request_id,
+    if manual_request_id is not None:
+        exact = " AND debug_request_id=$3 AND run_mode='MANUAL'"
+        arguments = (stamp.date(), stamp, manual_request_id)
+        if source_batch_id is not None:
+            exact += " AND id=$4"
+            arguments += (source_batch_id,)
+    else:
+        exact = (
+            " AND id=$3 AND run_mode='SCHEDULED'"
+            if source_batch_id is not None
+            else " AND debug_request_id=$3 AND run_mode='DEBUG'"
+            if debug_request_id is not None
+            else ""
         )
-        if debug_request_id is not None or source_batch_id is not None
-        else (stamp.date(), stamp)
-    )
+        arguments = (
+            (
+                stamp.date(),
+                stamp,
+                source_batch_id if source_batch_id is not None else debug_request_id,
+            )
+            if debug_request_id is not None or source_batch_id is not None
+            else (stamp.date(), stamp)
+        )
     latest = await conn.fetchrow(
         """SELECT id,run_date,claimed_at,completed_at,status,
         CASE WHEN status='FAILED' THEN jsonb_build_object('errorClass',payload->'errorClass')

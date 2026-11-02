@@ -63,6 +63,32 @@ async def test_two_debug_updates_use_new_batches_and_source_failure_keeps_previo
     monkeypatch.setattr("httpx.AsyncClient.send", network)
     monkeypatch.setattr(daily, "run_codex_research", model)
     monkeypatch.setattr(daily, "verify_research_sources", AsyncMock(return_value={}))
+    # Keep the actual validator: the fake model must answer the current frozen
+    # industry's required reviews rather than relying on a legacy empty schema.
+    from copy import deepcopy
+    from backend.integrations.daily_sources import industry_cycle_research_tasks
+    from test_industry_cycle import checks
+
+    packets = []
+    real_load = daily.load_public_packet
+
+    async def load_packet(*args, **kwargs):
+        result = await real_load(*args, **kwargs)
+        packets.append(result)
+        return result
+
+    async def model_report(*args, **kwargs):
+        result = deepcopy(model.return_value)
+        result["industryCycleReviews"] = [
+            {"industry": row["industry"], "sourceIds": [], "riskChecks": checks()}
+            for row in industry_cycle_research_tasks(packets[-1], clock[0])[
+                "candidates"
+            ]
+        ]
+        return result
+
+    monkeypatch.setattr(daily, "load_public_packet", load_packet)
+    model.side_effect = model_report
     fail = [False]
 
     async def collect(_stamp):

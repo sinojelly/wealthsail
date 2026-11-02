@@ -37,19 +37,21 @@ NOW = datetime(2600, 1, 1, 7, tzinfo=ZoneInfo("Asia/Shanghai"))
 @asynccontextmanager
 async def fixture(*, committed=False):
     parts = urlsplit(DSN)
-    assert (
-        parts.hostname == "127.0.0.1"
-        and parts.port in {55434, 55436}
-        and (
-            parts.path.startswith("/wealthsail_review07_validation_v")
-            or parts.path
-            in {
-                "/wealthsail_review08_validation_v1",
-                "/wealthsail_review09_validation_v1",
-                "/wealthsail_review44_validation_v1",
-                "/wealthsail_review45_validation_v1",
-                "/wealthsail_review48_validation_v1",
-            }
+    assert parts.hostname == "127.0.0.1" and (
+        parts.path.startswith("/wealthsail_manual_research")
+        or (
+            parts.port in {55434, 55436}
+            and (
+                parts.path.startswith("/wealthsail_review07_validation_v")
+                or parts.path
+                in {
+                    "/wealthsail_review08_validation_v1",
+                    "/wealthsail_review09_validation_v1",
+                    "/wealthsail_review44_validation_v1",
+                    "/wealthsail_review45_validation_v1",
+                    "/wealthsail_review48_validation_v1",
+                }
+            )
         )
     )
     conn = await asyncpg.connect(DSN)
@@ -78,6 +80,10 @@ async def fixture(*, committed=False):
             await transaction.rollback()
         else:
             await conn.execute("RESET ROLE")
+            await conn.execute(
+                "DELETE FROM research.daily_research_model_guards WHERE run_id IN(SELECT run_id FROM research.daily_research_runs WHERE debug_request_id IN(SELECT id FROM research.daily_research_refresh_requests WHERE tenant_id=$1))",
+                tenant,
+            )
             await conn.execute(
                 "UPDATE research.daily_research_refresh_requests SET batch_id=NULL,report_run_id=NULL,status='FAILED',completed_at=COALESCE(completed_at,requested_at) WHERE tenant_id=$1",
                 tenant,

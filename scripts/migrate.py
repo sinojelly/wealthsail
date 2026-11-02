@@ -2660,6 +2660,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
         queue_table,
     )
     insert_columns = {"tenant_id", "user_id", "command_key", "requested_at"}
+    # 097 adds an explicit immutable request mode while retaining legacy DEBUG
+    # defaults. Continue rejecting every other new API/Worker INSERT privilege.
+    if any(column["attname"] == "request_mode" for column in queue_columns):
+        insert_columns.add("request_mode")
     update_columns = {
         "status",
         "started_at",

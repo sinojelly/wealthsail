@@ -55,27 +55,36 @@ async def claim_daily_run(
     prompt_version,
     cli_version=None,
     debug_request_id=None,
+    manual_request_id=None,
     source_batch_id=None,
     schedule_time="07:00",
 ):
     stamp = local(now)
-    slot = (
-        stamp if debug_request_id is not None else scheduled_for(stamp, schedule_time)
+    if debug_request_id is not None and manual_request_id is not None:
+        raise ValueError("select one explicit research request mode")
+    request_id = (
+        manual_request_id if manual_request_id is not None else debug_request_id
     )
+    mode = "MANUAL" if manual_request_id is not None else "DEBUG"
+    if manual_request_id is not None and source_batch_id is None:
+        raise ValueError("manual research requires its exact source batch")
+    slot = stamp if request_id is not None else scheduled_for(stamp, schedule_time)
     if stamp < slot:
         return None
-    if debug_request_id is not None:
+    if request_id is not None:
         return await conn.fetchrow(
-            """INSERT INTO research.daily_research_runs
+            f"""INSERT INTO research.daily_research_runs
             (slot_date,scheduled_for,dispatched_at,input_hash,prompt_version,public_packet,cli_version,run_mode,debug_request_id,source_batch_id)
-            SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,'DEBUG',$8,$9
+            SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,'{mode}',$8,$9
             WHERE EXISTS(
               SELECT 1 FROM research.daily_research_refresh_requests q
               JOIN identity.tenant_members m ON m.tenant_id=q.tenant_id AND m.user_id=q.user_id
               JOIN identity.tenants t ON t.id=m.tenant_id
               WHERE q.id=$8 AND q.requested_at<=$3 AND m.status='ACTIVE'
-                AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE')
-            ON CONFLICT(debug_request_id) WHERE run_mode='DEBUG' DO NOTHING RETURNING *""",
+                AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE'
+                AND q.request_mode='{mode}'
+                {"AND q.status='RUNNING'" if mode == "MANUAL" else ""})
+            ON CONFLICT(debug_request_id) WHERE run_mode='{mode}' DO NOTHING RETURNING *""",
             stamp.date(),
             slot,
             stamp,
@@ -83,7 +92,7 @@ async def claim_daily_run(
             prompt_version,
             json.dumps(packet, ensure_ascii=False, default=str),
             cli_version,
-            debug_request_id,
+            request_id,
             source_batch_id,
         )
     # The partial scheduled-slot index is the cross-process cost barrier; never DELETE or
@@ -202,6 +211,7 @@ async def read_daily_research(
             stamp,
         )
     today = latest and latest["slot_date"] == stamp.date()
+    manual_latest = bool(latest and latest.get("run_mode") == "MANUAL")
     if (
         pipeline
         and pipeline.get("scheduledFor")
@@ -209,6 +219,15 @@ async def read_daily_research(
         and today
     ):
         # Keep today's explicit research result ahead of an older live owner.
+        pipeline = None
+    if (
+        pipeline
+        and manual_latest
+        and pipeline.get("startedAt")
+        and latest["dispatched_at"] >= local(pipeline["startedAt"])
+    ):
+        # A later explicit research attempt owns the execution identity. Its
+        # retained READY report may still have a different, older provenance.
         pipeline = None
     scheduled_consumed = bool(
         latest
@@ -261,7 +280,7 @@ async def read_daily_research(
             schedule_state = "MISSED"
     elif not today and enabled and scheduled_day and stamp >= window_end:
         state = "MISSED"
-    if not enabled:
+    if not enabled and not (today and manual_latest):
         state = "DISABLED"
     packet = _object(report_row.get("public_packet")) if report_row else None
     report = (
