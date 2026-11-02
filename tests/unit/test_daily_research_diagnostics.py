@@ -6,7 +6,9 @@ from tests.unit.test_daily_research_job import isolate, settings, NOW
 
 
 @pytest.mark.asyncio
-async def test_validation_failure_logs_stage_and_canonical_reason_code(monkeypatch, caplog):
+async def test_validation_failure_logs_stage_and_canonical_reason_code(
+    monkeypatch, caplog
+):
     """Validation failure logs error_class, stage=REPORT_VALIDATION, and reason_code=PAYLOAD_VALIDATION_FAILED."""
     mod, state = isolate(monkeypatch)
 
@@ -40,7 +42,7 @@ async def test_source_check_failure_logs_source_verification_stage(monkeypatch, 
 
     assert outcome["status"] == "FAILED"
     assert (
-        "daily_research_failed error_class=RuntimeError stage=SOURCE_VERIFICATION reason_code=RuntimeError"
+        "daily_research_failed error_class=RuntimeError stage=SOURCE_VERIFICATION reason_code=UNEXPECTED_ERROR"
         in caplog.text
     )
 
@@ -77,7 +79,9 @@ async def test_model_execution_failure_logs_model_execution_stage(monkeypatch, c
         "SCHEDULE_DATE_INVALID",
     ],
 )
-async def test_fine_grained_validation_failure_logs_specific_reason_code(monkeypatch, caplog, reason_code):
+async def test_fine_grained_validation_failure_logs_specific_reason_code(
+    monkeypatch, caplog, reason_code
+):
     """Specific ResearchValidationError logs error_class=ResearchValidationError and exact reason_code."""
     from backend.macro.daily_research import ResearchValidationError
 
@@ -92,9 +96,7 @@ async def test_fine_grained_validation_failure_logs_specific_reason_code(monkeyp
         outcome = await mod.sync_daily_research(object(), settings(), NOW)
 
     assert outcome["status"] == "FAILED"
-    expected = (
-        f"daily_research_failed error_class=ResearchValidationError stage=REPORT_VALIDATION reason_code={reason_code}"
-    )
+    expected = f"daily_research_failed error_class=ResearchValidationError stage=REPORT_VALIDATION reason_code={reason_code}"
     assert expected in caplog.text
 
 
@@ -112,7 +114,9 @@ def test_canonical_reason_code_mapping():
     assert _canonical_reason_code(TimeoutError("slow")) == "TIMEOUT"
 
     # Network
-    assert _canonical_reason_code(ConnectionResetError("reset")) == "NETWORK_UNAVAILABLE"
+    assert (
+        _canonical_reason_code(ConnectionResetError("reset")) == "NETWORK_UNAVAILABLE"
+    )
 
     # JSON / Schema
     try:
@@ -121,7 +125,10 @@ def test_canonical_reason_code_mapping():
         assert _canonical_reason_code(exc) == "SCHEMA_VALIDATION_FAILED"
 
     # Generic ValueError fallback
-    assert _canonical_reason_code(ValueError("unknown issue")) == "PAYLOAD_VALIDATION_FAILED"
+    assert (
+        _canonical_reason_code(ValueError("unknown issue"))
+        == "PAYLOAD_VALIDATION_FAILED"
+    )
 
 
 @pytest.mark.asyncio
@@ -145,7 +152,9 @@ async def test_real_validate_report_failure_logs_diagnostic_reason(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_real_validate_report_with_bad_source_url_logs_source_reference_invalid(monkeypatch, caplog):
+async def test_real_validate_report_with_bad_source_url_logs_source_reference_invalid(
+    monkeypatch, caplog
+):
     """When model generates an unsafe source URL, real validate_report logs SOURCE_REFERENCE_INVALID."""
     from backend.macro.daily_research import validate_report as real_validate_report
     from tests.unit.test_daily_research import report
@@ -177,8 +186,3 @@ def test_validate_report_non_dict_raises_schema_validation_failed():
         with pytest.raises(ResearchValidationError) as exc_info:
             validate_report(non_dict, packet, {}, completed_at=NOW)
         assert exc_info.value.reason_code == "SCHEMA_VALIDATION_FAILED"
-
-
-
-
-

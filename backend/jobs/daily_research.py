@@ -43,7 +43,16 @@ from backend.macro.daily_research import (
     make_research_packet,
     validate_report,
 )
-from backend.macro.research_audit import write_research_audit
+from backend.macro.research_audit import (
+    check_research_audit,
+    write_research_audit,
+    write_research_diagnostic,
+)
+from backend.macro.research_diagnostics import (
+    REASON_CODES,
+    safe_error_class,
+    sanitize_failure_diagnostics,
+)
 from backend.jobs.research_inputs import prepare_research_inputs, research_catalysts
 
 logger = logging.getLogger("wealthsail.daily_research")
@@ -55,7 +64,7 @@ def _canonical_reason_code(exc: Exception) -> str:
 
     Avoids leaking prompt text, sensitive URLs, or unparsed model payloads into logs.
     If the exception provides a structured `reason_code` (e.g. ResearchValidationError),
-    it is returned directly to pinpoint the validation failure rule.
+    it is accepted only from the fixed reason-code set.
 
     Args:
         exc: Exception raised during research execution.
@@ -64,7 +73,7 @@ def _canonical_reason_code(exc: Exception) -> str:
         Canonical string token representing failure category.
     """
     code = getattr(exc, "reason_code", None)
-    if code and isinstance(code, str):
+    if isinstance(code, str) and code in REASON_CODES:
         return code
 
     name = type(exc).__name__
@@ -76,7 +85,43 @@ def _canonical_reason_code(exc: Exception) -> str:
         return "SCHEMA_VALIDATION_FAILED"
     if isinstance(exc, ValueError):
         return "PAYLOAD_VALIDATION_FAILED"
-    return name
+    return "UNEXPECTED_ERROR"
+
+
+def _log_research_failure(exc, stage, run_id, *, reason_code=None):
+    diagnostics = sanitize_failure_diagnostics(
+        stage=stage,
+        reason_code=reason_code or _canonical_reason_code(exc),
+        rule_id=getattr(exc, "rule_id", None),
+        item_index=getattr(exc, "item_index", None),
+    )
+    logger.warning(
+        "daily_research_failed error_class=%s stage=%s reason_code=%s "
+        "rule_id=%s item_index=%s run_id=%s",
+        safe_error_class(type(exc).__name__),
+        diagnostics["failure_stage"] or "-",
+        diagnostics["failure_reason_code"] or "-",
+        diagnostics["failure_rule_id"] or "-",
+        diagnostics["failure_item_index"]
+        if diagnostics["failure_item_index"] is not None
+        else "-",
+        run_id,
+    )
+    return diagnostics
+
+
+def _write_diagnostic_summary(settings, run_id, diagnostics, error, status):
+    write_research_diagnostic(
+        settings,
+        run_id,
+        stage=diagnostics.get("failure_stage", "PERSISTING"),
+        error_class=error,
+        reason_code=diagnostics.get("failure_reason_code"),
+        rule_id=diagnostics.get("failure_rule_id"),
+        item_index=diagnostics.get("failure_item_index"),
+        report_status=status,
+        completed_at=local(now_shanghai()),
+    )
 
 
 async def load_public_packet(
@@ -807,6 +852,7 @@ async def _execute_daily_research(
     result = {"status": "FAILED", "runId": str(run_id)}
     payload, error = None, unavailable
     raw, checks, audit_error = None, None, None
+    diagnostics = {}
     current_stage = "MODEL_EXECUTION"
     try:
         if unavailable:
@@ -869,29 +915,23 @@ async def _execute_daily_research(
         result["status"], error = "UNCERTAIN", "CancelledError"
         if pipeline and monotonic() >= pipeline.get("_runtime_deadline", float("inf")):
             error = "PipelineRuntimeExpired"
+        diagnostics = _log_research_failure(
+            exc,
+            current_stage,
+            run_id,
+            reason_code="PIPELINE_RUNTIME_EXPIRED"
+            if error == "PipelineRuntimeExpired"
+            else "CANCELLED",
+        )
         raise
     except TimeoutError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
-        reason_code = _canonical_reason_code(exc)
-        logger.warning(
-            "daily_research_failed error_class=%s stage=%s reason_code=%s run_id=%s",
-            error,
-            current_stage,
-            reason_code,
-            run_id,
-        )
+        diagnostics = _log_research_failure(exc, current_stage, run_id)
     except Exception as exc:  # noqa: BLE001
         audit_error = exc
-        error = type(exc).__name__
-        reason_code = _canonical_reason_code(exc)
-        logger.warning(
-            "daily_research_failed error_class=%s stage=%s reason_code=%s run_id=%s",
-            error,
-            current_stage,
-            reason_code,
-            run_id,
-        )
+        error = safe_error_class(type(exc).__name__)
+        diagnostics = _log_research_failure(exc, current_stage, run_id)
     finally:
         if raw is not None:
             write_research_audit(
@@ -909,39 +949,71 @@ async def _execute_daily_research(
                 completed_at=local(now_shanghai()),
                 error=audit_error,
             )
-        if pipeline and result["status"] == "READY":
-            await _pipeline_stage(pool, pipeline, stage="PERSISTING")
-        if pipeline:
-            await _stop_pipeline_heartbeat(pipeline)
-        async with system_connection(pool) as conn:
-
-            async def persist_result():
-                await finish_daily_run(
-                    conn,
-                    run_id,
-                    local(now_shanghai()),
-                    status=result["status"],
-                    payload=payload,
-                    error_class=error,
-                )
-
+        try:
+            if pipeline and result["status"] == "READY":
+                await _pipeline_stage(pool, pipeline, stage="PERSISTING")
             if pipeline:
-                from backend.macro.daily_pipeline_repository import advance_pipeline
+                await _stop_pipeline_heartbeat(pipeline)
+            async with system_connection(pool) as conn:
 
-                async with conn.transaction():
-                    if not await advance_pipeline(
+                async def persist_result():
+                    await finish_daily_run(
                         conn,
-                        pipeline,
+                        run_id,
                         local(now_shanghai()),
-                        stage=pipeline["stage"],
-                        state=result["status"],
+                        status=result["status"],
+                        payload=payload,
                         error_class=error,
-                    ):
-                        raise PipelineOwnershipLost()
+                        **diagnostics,
+                    )
+
+                if pipeline:
+                    from backend.macro.daily_pipeline_repository import advance_pipeline
+
+                    async with conn.transaction():
+                        if not await advance_pipeline(
+                            conn,
+                            pipeline,
+                            local(now_shanghai()),
+                            stage=pipeline["stage"],
+                            state=result["status"],
+                            error_class=error,
+                        ):
+                            raise PipelineOwnershipLost()
+                        await persist_result()
+                    pipeline["_terminal_written"] = True
+                else:
                     await persist_result()
-                pipeline["_terminal_written"] = True
-            else:
-                await persist_result()
+        except (Exception, asyncio.CancelledError) as exc:
+            persist_error = safe_error_class(type(exc).__name__)
+            logger.warning(
+                "daily_research_persist_failed stage=PERSISTING error_class=%s run_id=%s",
+                persist_error,
+                run_id,
+            )
+            _write_diagnostic_summary(
+                settings,
+                run_id,
+                sanitize_failure_diagnostics(
+                    stage="PERSISTING",
+                    reason_code=(
+                        "PIPELINE_RUNTIME_EXPIRED"
+                        if pipeline
+                        and monotonic()
+                        >= pipeline.get("_runtime_deadline", float("inf"))
+                        else "CANCELLED"
+                    )
+                    if isinstance(exc, asyncio.CancelledError)
+                    else _canonical_reason_code(exc),
+                ),
+                persist_error,
+                "UNCERTAIN",
+            )
+            raise
+        else:
+            _write_diagnostic_summary(
+                settings, run_id, diagnostics, error, result["status"]
+            )
     if error:
         result["errorClass"] = error
     return result
@@ -959,6 +1031,7 @@ async def run_daily_research_service(
 ):
     if not settings.daily_research_enabled:
         return
+    check_research_audit(settings)
     stop_event = stop_event or asyncio.Event()
     current = local(now_provider())
     schedule = _schedule(settings)
