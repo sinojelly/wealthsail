@@ -1,5 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
-import type { DailyResearch, Direction } from "../../../api/investment";
+import type {
+  DailyResearch,
+  DailyResearchFailureReasonCode,
+  DailyResearchFailureRuleId,
+  DailyResearchFailureStage,
+  Direction,
+} from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 import { researchScheduleLabel } from "../research-schedule-display";
@@ -29,6 +35,90 @@ const stages = [
   ["VERIFYING_OUTPUT", "核验报告"],
   ["PERSISTING", "保存报告"],
 ] as const;
+const failureStages: Record<DailyResearchFailureStage, string> = {
+  MODEL_EXECUTION: "模型执行",
+  SOURCE_VERIFICATION: "来源核验",
+  REPORT_VALIDATION: "报告业务校验",
+  PERSISTING: "保存报告",
+};
+const failureReasons: Record<DailyResearchFailureReasonCode, string> = {
+  DIRECTION_VALIDATION_FAILED: "价值方向未通过校验",
+  FUND_PLAN_INVALID: "基金计划不符合要求",
+  SCHEDULE_DATE_INVALID: "计划事件日期无效",
+  SCHEMA_VALIDATION_FAILED: "报告结构不符合要求",
+  SOURCE_DATE_INVALID: "来源发布日期无效",
+  SOURCE_REFERENCE_INVALID: "来源引用无效",
+  TIMEOUT: "执行超时",
+  NETWORK_UNAVAILABLE: "网络暂不可用",
+  PAYLOAD_VALIDATION_FAILED: "报告内容未通过校验",
+  UNEXPECTED_ERROR: "执行发生未分类异常",
+  CANCELLED: "执行已取消",
+  PIPELINE_RUNTIME_EXPIRED: "研究流程超过运行时限",
+};
+const failureRules: Record<DailyResearchFailureRuleId, string> = {
+  INDUSTRY_REVIEW_DUPLICATE: "行业反方核查记录重复",
+  INDUSTRY_REVIEW_COVERAGE_MISSING: "候选行业反方核查覆盖不完整",
+  INDUSTRY_RISK_CHECK_DUPLICATE: "行业风险核查项重复",
+  INDUSTRY_RISK_CHECK_MISSING: "行业风险核查项缺失",
+  INDUSTRY_RISK_SOURCE_MISSING: "行业风险证据缺少来源",
+  INDUSTRY_CYCLE_SOURCE_INVALID: "产业周期证据引用的来源无效",
+  DIRECTION_INDUSTRY_REVIEW_UNKNOWN: "价值方向引用了未知行业核查记录",
+  DIRECTION_MACRO_REFERENCE_UNKNOWN: "价值方向引用了未知宏观指标",
+  DIRECTION_CALIBRATION_RULE_UNKNOWN: "价值方向引用了未知校准规则",
+  DIRECTION_EVIDENCE_INSUFFICIENT: "价值方向的证据不足",
+};
+const validationReasons = new Set<string>([
+  "DIRECTION_VALIDATION_FAILED",
+  "FUND_PLAN_INVALID",
+  "SCHEDULE_DATE_INVALID",
+  "SCHEMA_VALIDATION_FAILED",
+  "SOURCE_DATE_INVALID",
+  "SOURCE_REFERENCE_INVALID",
+  "PAYLOAD_VALIDATION_FAILED",
+]);
+function diagnosticLabel(
+  labels: Readonly<Record<string, string>>,
+  value: unknown,
+) {
+  return typeof value === "string" && Object.hasOwn(labels, value)
+    ? labels[value]
+    : undefined;
+}
+function FailureDiagnosis({ data }: { data: DailyResearch }) {
+  const stage = diagnosticLabel(failureStages, data.failureStage);
+  const reason = diagnosticLabel(failureReasons, data.failureReasonCode);
+  const rule = diagnosticLabel(failureRules, data.failureRuleId);
+  const validation =
+    data.failureStage === "REPORT_VALIDATION" &&
+    (!!rule || (reason && validationReasons.has(data.failureReasonCode!)));
+  const runId = data.pipeline ? data.pipeline.researchRunId : data.runId;
+  const safeRunId =
+    typeof runId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      runId,
+    )
+      ? runId
+      : "身份未记录";
+  const index = data.failureItemIndex;
+  return (
+    <div role="group" aria-label="研究失败诊断">
+      {validation && (
+        <p>
+          <strong>报告未通过业务校验</strong>
+        </p>
+      )}
+      <p>失败原因：{rule ?? reason ?? "原因待核查"}</p>
+      <p>失败阶段：{stage ?? "阶段待核查"}</p>
+      {reason && <p>原因代码：{data.failureReasonCode}</p>}
+      {rule && <p>校验规则：{data.failureRuleId}</p>}
+      {typeof index === "number" &&
+        Number.isSafeInteger(index) &&
+        index >= 0 &&
+        index <= 9999 && <p>失败条目：数组索引 {index}（从0开始）</p>}
+      <p>研究执行ID：{safeRunId}</p>
+    </div>
+  );
+}
 const phases: Record<string, string> = {
   PLANNED: "计划中",
   ANNOUNCED: "已宣布",
@@ -624,9 +714,12 @@ function DailyResearchContent({
             </>
           )}
           {(currentState === "FAILED" || currentState === "UNCERTAIN") && (
-            <p>
-              安全错误类：<span>{safeErrorClass}</span>
-            </p>
+            <>
+              <FailureDiagnosis data={data} />
+              <p>
+                安全错误类：<span>{safeErrorClass}</span>
+              </p>
+            </>
           )}
           {report && (
             <p>

@@ -677,6 +677,35 @@ export interface OpportunityContext extends MacroContext {
   } | null;
   notices?: ConditionNotice[];
 }
+export type DailyResearchFailureStage =
+  | "MODEL_EXECUTION"
+  | "SOURCE_VERIFICATION"
+  | "REPORT_VALIDATION"
+  | "PERSISTING";
+export type DailyResearchFailureReasonCode =
+  | "DIRECTION_VALIDATION_FAILED"
+  | "FUND_PLAN_INVALID"
+  | "SCHEDULE_DATE_INVALID"
+  | "SCHEMA_VALIDATION_FAILED"
+  | "SOURCE_DATE_INVALID"
+  | "SOURCE_REFERENCE_INVALID"
+  | "TIMEOUT"
+  | "NETWORK_UNAVAILABLE"
+  | "PAYLOAD_VALIDATION_FAILED"
+  | "UNEXPECTED_ERROR"
+  | "CANCELLED"
+  | "PIPELINE_RUNTIME_EXPIRED";
+export type DailyResearchFailureRuleId =
+  | "INDUSTRY_REVIEW_DUPLICATE"
+  | "INDUSTRY_REVIEW_COVERAGE_MISSING"
+  | "INDUSTRY_RISK_CHECK_DUPLICATE"
+  | "INDUSTRY_RISK_CHECK_MISSING"
+  | "INDUSTRY_RISK_SOURCE_MISSING"
+  | "INDUSTRY_CYCLE_SOURCE_INVALID"
+  | "DIRECTION_INDUSTRY_REVIEW_UNKNOWN"
+  | "DIRECTION_MACRO_REFERENCE_UNKNOWN"
+  | "DIRECTION_CALIBRATION_RULE_UNKNOWN"
+  | "DIRECTION_EVIDENCE_INSUFFICIENT";
 export interface DailyResearch {
   schedule?: {
     mode: "DAILY" | "WEEKDAYS";
@@ -736,6 +765,10 @@ export interface DailyResearch {
   asOf: string | null;
   nextRunAt: string | null;
   errorClass?: string | null;
+  failureStage?: DailyResearchFailureStage | null;
+  failureReasonCode?: DailyResearchFailureReasonCode | null;
+  failureRuleId?: DailyResearchFailureRuleId | null;
+  failureItemIndex?: number | null;
   report: {
     methodVersion?: string;
     asOf?: string;
