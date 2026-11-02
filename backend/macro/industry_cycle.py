@@ -117,11 +117,43 @@ _INDUSTRY_SCOPE_TERMS = {
         "稀土",
         "永磁",
         "磁材",
+        "rare earth",
+        "rare-earth",
+        "permanent magnet",
+    ),
+    "NONFERROUS": (
         "有色金属",
+        "工业金属",
+        "铜铝",
+        "铜",
+        "铝",
+        "nonferrous",
+        "non-ferrous",
+        "industrial metals",
+        "copper",
+        "aluminum",
+        "aluminium",
+    ),
+    # A combined news/research bucket has its own broad scope. It never makes
+    # either of its constituent product sectors an equivalent risk identity.
+    "RARE_EARTH_METALS": (
+        "稀土",
+        "永磁",
+        "磁材",
+        "有色金属",
+        "工业金属",
+        "铜铝",
+        "铜",
+        "铝",
         "rare earth",
         "rare-earth",
         "permanent magnet",
         "nonferrous",
+        "non-ferrous",
+        "industrial metals",
+        "copper",
+        "aluminum",
+        "aluminium",
     ),
     "FINANCIAL": (
         "银行",
@@ -380,7 +412,7 @@ def _industry_subjects(quote):
     # Scan in order, consuming each suffix before looking for the next subject.
     # Bare 业 in 企业/商业/营业 or an organization name is not a sector marker.
     return re.findall(
-        r"([\u4e00-\u9fff]{1,8}?)(产业链|行业|产业|赛道|领域|(?<![行产企商营])业)"
+        r"([\u4e00-\u9fff]{1,8}?)(产业链|行业|产业|赛道|领域|(?<![行产企商营工])业)"
         r"(?!股份|有限|集团|公司)",
         quote,
     )
@@ -1328,6 +1360,68 @@ def earnings_recovery_verified(cycle):
         isinstance(cycle, dict)
         and cycle.get("earningsVerified") is True
         and cycle.get("earningsIndustryScopeVerified") is not False
+    )
+
+
+def normalize_plan_industry_cycle(
+    raw,
+    *,
+    expected_industries,
+    source_aliases=None,
+    sources=None,
+    now=None,
+):
+    """Reuse only direction facts whose actual statement belongs to this plan.
+
+    An unrelated FOUND check must not become a half-discount suspicion on a
+    different product. Matching facts still use the ordinary source, event,
+    entity and strength checks; this filter never promotes an unchecked claim.
+    """
+    if raw is None:
+        return normalize_industry_cycle(None)
+    proposal = IndustryCycleProposal.model_validate(raw).model_dump()
+    aliases, sources = source_aliases or {}, sources or {}
+
+    def belongs(ref, kind):
+        source = sources.get(aliases.get(ref), {})
+        if kind in RISK_CHECKS:
+            clauses = _risk_event_contexts(source, kind, now)
+        elif kind in {"PROFIT_GROWTH", "CASH_COLLECTION"}:
+            clauses = [
+                clause for _, clause in _earnings_fact_clauses(source, kind, now)
+            ]
+        elif kind in {"COMMERCIALIZATION_EARLY", "EARNINGS_NOT_DELIVERED"}:
+            clauses = _early_quote_clauses(source, kind, now)
+        else:
+            clauses = _quote_clauses(source.get("quote"))
+        return any(
+            _industry_scope_verified({**source, "quote": clause}, expected_industries)
+            for clause in clauses
+        )
+
+    for check in proposal["riskChecks"]:
+        if check["status"] == "FOUND":
+            check["sourceIds"] = [
+                ref for ref in check["sourceIds"] if belongs(ref, check["kind"])
+            ]
+            if not check["sourceIds"]:
+                check["status"] = "UNVERIFIED"
+    evidence = []
+    for row in proposal["evidence"]:
+        row["sourceIds"] = [
+            ref for ref in row["sourceIds"] if belongs(ref, row["kind"])
+        ]
+        if row["sourceIds"]:
+            evidence.append(row)
+    proposal["evidence"] = evidence
+    if not evidence:
+        proposal["stage"] = "UNKNOWN"
+    return normalize_industry_cycle(
+        proposal,
+        source_aliases=aliases,
+        sources=sources,
+        now=now,
+        expected_industries=expected_industries,
     )
 
 

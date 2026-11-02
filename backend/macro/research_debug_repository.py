@@ -15,7 +15,7 @@ EXECUTION_WINDOW = timedelta(minutes=35)
 REQUEST_MODES = frozenset({"DEBUG", "MANUAL"})
 
 _READ_REQUEST = """SELECT q.*,t.status AS report_status,
- t.failure_stage,t.failure_reason_code,t.failure_rule_id,t.failure_item_index
+ t.failure_stage,t.failure_reason_code,t.failure_rule_id,t.failure_item_index,t.failure_industry_codes
  FROM research.daily_research_refresh_requests q
  LEFT JOIN research.daily_research_runs r ON r.run_id=q.report_run_id
    AND r.debug_request_id=q.id AND r.run_mode=q.request_mode
@@ -62,6 +62,7 @@ def request_dto(row, now):
         reason_code=proof.get("failure_reason_code"),
         rule_id=proof.get("failure_rule_id"),
         item_index=proof.get("failure_item_index"),
+        missing_industry_codes=proof.get("failure_industry_codes"),
     )
     return {
         "id": str(row["id"]),
@@ -83,6 +84,7 @@ def request_dto(row, now):
         "failureReasonCode": diagnostics["failure_reason_code"],
         "failureRuleId": diagnostics["failure_rule_id"],
         "failureItemIndex": diagnostics["failure_item_index"],
+        "failureIndustryCodes": diagnostics.get("failure_industry_codes"),
     }
 
 

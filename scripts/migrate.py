@@ -2570,6 +2570,21 @@ async def _readback(conn: asyncpg.Connection) -> None:
             table,
         ):
             raise RuntimeError("daily research boundary is missing or unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=98)"
+    ):
+        safe_industry_metadata = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM information_schema.columns
+            WHERE table_schema='research' AND table_name='daily_research_results'
+              AND column_name='failure_industry_codes' AND is_nullable='YES'
+              AND data_type='ARRAY' AND udt_name='_text') AND
+            (SELECT count(*)=2 FROM pg_constraint
+             WHERE conrelid='research.daily_research_results'::regclass AND convalidated
+               AND conname IN ('daily_research_failure_industry_codes_check',
+                               'daily_research_ready_industry_codes_check'))"""
+        )
+        if not safe_industry_metadata:
+            raise RuntimeError("daily research industry diagnostic boundary is missing or unsafe")
     nav_job_constraint = await conn.fetchval(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
     )

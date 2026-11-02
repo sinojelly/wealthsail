@@ -101,10 +101,13 @@ def _log_research_failure(exc, stage, run_id, *, reason_code=None):
         reason_code=reason_code or _canonical_reason_code(exc),
         rule_id=getattr(exc, "rule_id", None),
         item_index=getattr(exc, "item_index", None),
+        missing_industry_codes=getattr(exc, "missing_industry_codes", None),
     )
-    logger.warning(
+    message = (
         "daily_research_failed error_class=%s stage=%s reason_code=%s "
-        "rule_id=%s item_index=%s run_id=%s",
+        "rule_id=%s item_index=%s run_id=%s"
+    )
+    values = [
         safe_error_class(type(exc).__name__),
         diagnostics["failure_stage"] or "-",
         diagnostics["failure_reason_code"] or "-",
@@ -113,7 +116,11 @@ def _log_research_failure(exc, stage, run_id, *, reason_code=None):
         if diagnostics["failure_item_index"] is not None
         else "-",
         run_id,
-    )
+    ]
+    if codes := diagnostics.get("failure_industry_codes"):
+        message += " industry_codes=%s"
+        values.append(json.dumps(codes, separators=(",", ":")))
+    logger.warning(message, *values)
     return diagnostics
 
 
@@ -126,6 +133,7 @@ def _write_diagnostic_summary(settings, run_id, diagnostics, error, status):
         reason_code=diagnostics.get("failure_reason_code"),
         rule_id=diagnostics.get("failure_rule_id"),
         item_index=diagnostics.get("failure_item_index"),
+        missing_industry_codes=diagnostics.get("failure_industry_codes"),
         report_status=status,
         completed_at=local(now_shanghai()),
     )

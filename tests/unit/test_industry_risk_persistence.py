@@ -139,6 +139,7 @@ def test_direction_prices_and_scan_keep_half_protection_before_price_revision_is
     anchor = real_anchor("005112")
     anchor.update(
         market="FUND_CN",
+        discoverySector="ROBOT",
         unit="CNY",
         historyQuality="READY",
         sourceUri="https://fund.eastmoney.com/005112.html",
@@ -208,7 +209,8 @@ async def test_history_query_keeps_each_calendar_day_despite_same_day_debug_burs
     )
     database.execute(
         "CREATE TABLE research.daily_research_results (run_id TEXT,status TEXT,recorded_at TEXT,payload TEXT,error_class TEXT,"
-        "failure_stage TEXT,failure_reason_code TEXT,failure_rule_id TEXT,failure_item_index INTEGER)"
+        "failure_stage TEXT,failure_reason_code TEXT,failure_rule_id TEXT,failure_item_index INTEGER,"
+        "failure_industry_codes TEXT)"
     )
     for index in range(22):
         stamp = (

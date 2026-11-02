@@ -132,6 +132,7 @@ async def finish_daily_run(
     failure_reason_code=None,
     failure_rule_id=None,
     failure_item_index=None,
+    failure_industry_codes=None,
 ):
     from backend.macro.research_diagnostics import sanitize_failure_diagnostics
 
@@ -148,11 +149,12 @@ async def finish_daily_run(
         reason_code=failure_reason_code if status != "READY" else None,
         rule_id=failure_rule_id if status != "READY" else None,
         item_index=failure_item_index if status != "READY" else None,
+        missing_industry_codes=failure_industry_codes if status != "READY" else None,
     )
     await conn.execute(
         """INSERT INTO research.daily_research_results
-        (run_id,status,recorded_at,payload,error_class,failure_stage,failure_reason_code,failure_rule_id,failure_item_index)
-        SELECT run_id,$2,$3,$4::jsonb,$5,$6,$7,$8,$9 FROM research.daily_research_runs
+        (run_id,status,recorded_at,payload,error_class,failure_industry_codes,failure_stage,failure_reason_code,failure_rule_id,failure_item_index)
+        SELECT run_id,$2,$3,$4::jsonb,$5,$6::text[],$7,$8,$9,$10 FROM research.daily_research_runs
         WHERE run_id=$1 AND dispatched_at<=$3 ON CONFLICT(run_id) DO NOTHING""",
         run_id,
         status,
@@ -161,6 +163,7 @@ async def finish_daily_run(
         if payload is not None
         else None,
         error_class,
+        diagnostics.get("failure_industry_codes"),
         diagnostics["failure_stage"],
         diagnostics["failure_reason_code"],
         diagnostics["failure_rule_id"],
@@ -169,7 +172,7 @@ async def finish_daily_run(
 
 
 _READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
- t.failure_stage,t.failure_reason_code,t.failure_rule_id,t.failure_item_index,
+ t.failure_stage,t.failure_reason_code,t.failure_rule_id,t.failure_item_index,t.failure_industry_codes,
  EXISTS(SELECT 1 FROM research.daily_research_runs scheduled
  WHERE scheduled.slot_date=$1 AND scheduled.dispatched_at<=$2 AND scheduled.run_mode='SCHEDULED') AS scheduled_consumed
  FROM research.daily_research_runs r LEFT JOIN research.daily_research_results t
@@ -186,6 +189,7 @@ async def read_daily_research(
     start_window_minutes=120,
     schedule_mode="DAILY",
     schedule_time="07:00",
+    include_failure_industry_codes=False,
 ):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
     from backend.investment.live_fund_plans import refresh_report_fund_plans
@@ -318,6 +322,10 @@ async def read_daily_research(
         reason_code=failure_row.get("failure_reason_code"),
         rule_id=failure_row.get("failure_rule_id"),
         item_index=failure_row.get("failure_item_index"),
+        # Reports are shared; taxonomy diagnostics need an explicit admin projection.
+        missing_industry_codes=failure_row.get("failure_industry_codes")
+        if include_failure_industry_codes is True
+        else None,
     )
     return {
         "methodVersion": METHOD,
@@ -340,6 +348,7 @@ async def read_daily_research(
         "failureReasonCode": diagnostics["failure_reason_code"],
         "failureRuleId": diagnostics["failure_rule_id"],
         "failureItemIndex": diagnostics["failure_item_index"],
+        "failureIndustryCodes": diagnostics.get("failure_industry_codes"),
         "scheduledFor": pipeline.get("scheduledFor") or today_slot
         if pipeline
         else latest["scheduled_for"]

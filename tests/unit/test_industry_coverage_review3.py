@@ -57,6 +57,8 @@ def test_report_carries_server_computed_research_coverage(total):
         "candidateCount": min(total, 10),
         "omittedCandidateCount": max(total - 10, 0),
         "omittedRiskCandidateCount": max(total - 10, 0),
+        "omittedIndustries": [f"RISK_{index}" for index in range(10, total)],
+        "omittedPlanIndustryIds": [],
         "status": "PARTIAL" if total > 10 else "COMPLETE",
     }
     assert public == before

@@ -30,6 +30,9 @@ RULE_IDS = frozenset(
         "INDUSTRY_RISK_SOURCE_MISSING",
         "INDUSTRY_CYCLE_SOURCE_INVALID",
         "DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
+        "DIRECTION_DECLARED_INDUSTRY_UNKNOWN",
+        "DIRECTION_PLAN_SECTOR_UNREVIEWED",
+        "INDUSTRY_REVIEW_BUDGET_EXCEEDED",
         "DIRECTION_MACRO_REFERENCE_UNKNOWN",
         "DIRECTION_CALIBRATION_RULE_UNKNOWN",
         "DIRECTION_EVIDENCE_INSUFFICIENT",
@@ -55,13 +58,34 @@ def _known(value, allowed):
     return value if isinstance(value, str) and value in allowed else None
 
 
+def sanitize_missing_industry_codes(value):
+    """Keep only bounded server taxonomy codes, never a model's unknown labels."""
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return None
+    from backend.macro.industry_contract import STANDARD_INDUSTRY_CODES
+
+    codes = sorted(
+        {item for item in value if isinstance(item, str) and item in STANDARD_INDUSTRY_CODES}
+    )[:10]
+    return codes or None
+
+
 def sanitize_failure_diagnostics(
-    *, stage=None, reason_code=None, rule_id=None, item_index=None
+    *,
+    stage=None,
+    reason_code=None,
+    rule_id=None,
+    item_index=None,
+    missing_industry_codes=None,
 ) -> dict:
     """Drop arbitrary text rather than letting optional diagnostics fail a run."""
-    return {
+    result = {
         "failure_stage": _known(stage, FAILURE_STAGES),
         "failure_reason_code": _known(reason_code, REASON_CODES),
         "failure_rule_id": _known(rule_id, RULE_IDS),
         "failure_item_index": item_index if is_safe_item_index(item_index) else None,
     }
+    codes = sanitize_missing_industry_codes(missing_industry_codes)
+    if codes:
+        result["failure_industry_codes"] = codes
+    return result

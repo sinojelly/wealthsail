@@ -414,52 +414,77 @@ def rank_report(report, packet):
     result = expire_report_industry_risks(report, now)
     evidence = _prepare_evidence(packet, now)
 
-    # The validated direction is the source of industry facts. Apply the same
-    # assessment to every public copy of that fund, including the scanner.
+    # Each validated plan owns its industry facts. A direction's combined
+    # summary can cover several unrelated products and cannot replace them.
+    from backend.macro.industry_contract import plan_industry_ids, same_fund_identity
     from backend.macro.industry_cycle import (
         industry_risk_policy,
         merge_industry_cycles,
     )
 
-    cycles = {}
+    cycles = []
     reviews = {
         row["industry"]: row
         for row in result.get("industryCycleReviews", [])
         if isinstance(row, dict) and isinstance(row.get("industry"), str)
     }
-    sectors = {
-        (row.get("subjectKind"), row.get("subjectId"), row.get("priceBasis")): row[
-            "discoverySector"
-        ]
-        for row in (result.get("quantitativeScan") or {}).get("items", [])
-        if isinstance(row, dict) and row.get("discoverySector")
-    }
+    scan_rows = (result.get("quantitativeScan") or {}).get("items", [])
+
+    def same_product(left, right):
+        if left.get("subjectKind") in {"fund", "nav"}:
+            return same_fund_identity(left, right)
+        # Existing broad-index plans retain their exact coordinate identity.
+        return bool(
+            left.get("subjectKind") == right.get("subjectKind") == "index"
+            and left.get("subjectId")
+            and left.get("subjectId") == right.get("subjectId")
+            and left.get("priceBasis") == right.get("priceBasis")
+        )
+
+    def product_industries(plan):
+        industries = plan_industry_ids(packet, plan)
+        key = plan.get("subjectKind"), plan.get("subjectId")
+        has_anchor = any(
+            isinstance(row, dict)
+            and (row.get("subjectKind"), row.get("subjectId")) == key
+            for row in packet.get("discoveryActionableZones", [])
+        )
+        if industries or has_anchor:
+            return industries
+        # Stored legacy reports may lack the frozen discovery packet. Their
+        # own server sector remains usable only with a consistent fund identity.
+        if not same_fund_identity(plan, plan):
+            return set()
+        if isinstance(plan.get("discoverySector"), str):
+            return {plan["discoverySector"]}
+        matches = {
+            row["discoverySector"]
+            for row in scan_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("discoverySector"), str)
+            and same_fund_identity(plan, row)
+        }
+        return matches if len(matches) == 1 else set()
+
     for direction in result.get("valueDirections", []):
-        cycle = direction.get("industryCycle")
-        if not isinstance(cycle, dict):
-            continue
         for plan in direction.get("plans", []):
-            identity = (
-                plan.get("subjectKind"),
-                plan.get("subjectId"),
-                plan.get("priceBasis"),
-            )
-            prior = cycles.get(identity)
-            cycles[identity] = merge_industry_cycles(prior, cycle)
+            cycle = plan.get("industryCycle")
+            if not isinstance(cycle, dict):
+                cycle = direction.get("industryCycle")
+            if isinstance(cycle, dict):
+                cycles.append((plan, cycle))
 
     def score(plan):
         from backend.indicators.actionable_zones import apply_industry_cycle
 
         value = deepcopy(plan)
-        identity = (
-            plan.get("subjectKind"),
-            plan.get("subjectId"),
-            plan.get("priceBasis"),
-        )
-        cycle = cycles.get(identity, value.get("industryCycle"))
-        review = reviews.get(plan.get("discoverySector") or sectors.get(identity))
-        if review is not None:
-            cycle = merge_industry_cycles(cycle, review)
+        matched = [cycle for product, cycle in cycles if same_product(product, plan)]
+        cycle = matched[0] if matched else value.get("industryCycle")
+        for extra in matched[1:]:
+            cycle = merge_industry_cycles(cycle, extra)
+        for industry in sorted(product_industries(plan)):
+            if industry in reviews:
+                cycle = merge_industry_cycles(cycle, reviews[industry])
         if isinstance(cycle, dict) and value.get("industryCycle") != cycle:
             value = apply_industry_cycle(value, cycle)
         return score_plan(value, packet, now, prepared_evidence=evidence)

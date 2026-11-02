@@ -6,11 +6,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.macro.alpha_research import _price, _program_plan
+from backend.macro.industry_contract import STANDARD_INDUSTRY_CODES, plan_industry_ids
 from backend.macro.industry_cycle import (
     IndustryCycleValidationError,
     IndustryCycleProposal,
     merge_industry_cycles,
     normalize_industry_cycle,
+    normalize_plan_industry_cycle,
 )
 from backend.macro.price_revision import (
     PriceRevisionStatus,
@@ -330,6 +332,7 @@ def validate_value_directions(
             str(exc),
             rule_id=exc.rule_id,
             item_index=active_index[0],
+            missing_industry_codes=exc.missing_industry_codes,
         ) from exc
     except ValidationError as exc:
         raise ResearchValidationError(
@@ -374,11 +377,6 @@ def _validate_value_directions(
         list(anchors.values()),
     )
     reviews = {row["industry"]: row for row in industry_reviews or []}
-    sector_rows = [
-        *anchors.values(),
-        *(packet.get("quantitativeScan") or {}).get("items", []),
-        *packet.get("discoveryUniverse", []),
-    ]
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
     if len(proposals) > MAX_VALUE_DIRECTIONS:
@@ -406,20 +404,37 @@ def _validate_value_directions(
             )
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
         review_ids = set(direction["reviewIndustryIds"])
-        plan_sectors = {
-            row["discoverySector"]
-            for proposal in direction["plans"]
-            for row in sector_rows
-            if isinstance(row, dict)
-            and row.get("discoverySector")
-            and (
-                plan_identity(row) == plan_identity(proposal)
-                or row.get("fundCode") == proposal.get("subjectId")
+        required = bool((packet.get("industryCycleResearch") or {}).get("required"))
+        if review_ids - reviews.keys():
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "unknown declared direction industry review",
+                rule_id="DIRECTION_DECLARED_INDUSTRY_UNKNOWN",
             )
-        }
+        plan_sectors = set()
+        for proposal in direction["plans"]:
+            industries = plan_industry_ids(packet, proposal)
+            if (
+                required
+                and proposal["subjectKind"] in {"fund", "nav"}
+                and not industries
+            ):
+                raise ResearchValidationError(
+                    "FUND_PLAN_INVALID", "selected fund has no verified server industry"
+                )
+            plan_sectors.update(industries)
+        missing = plan_sectors - reviews.keys()
+        if missing and (required or reviews):
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "server fund sectors require their own industry reviews",
+                rule_id="DIRECTION_PLAN_SECTOR_UNREVIEWED",
+                missing_industry_codes=sorted(missing & STANDARD_INDUSTRY_CODES),
+            )
+        cycle_proposal = direction.get("industryCycle")
         try:
             cycle = normalize_industry_cycle(
-                direction.get("industryCycle"),
+                cycle_proposal,
                 source_aliases=source_aliases,
                 sources=sources,
                 now=now,
@@ -427,9 +442,7 @@ def _validate_value_directions(
                 # A model title may describe the scope only when neither exists.
                 expected_industries=sorted(review_ids | plan_sectors)
                 or [direction["title"]],
-                require_checks=bool(
-                    (packet.get("industryCycleResearch") or {}).get("required")
-                ),
+                require_checks=required,
             )
         except ValidationError as exc:
             raise ResearchValidationError("SCHEMA_VALIDATION_FAILED", str(exc)) from exc
@@ -455,12 +468,6 @@ def _validate_value_directions(
             )
         if reviews:
             review_ids.update(plan_sectors)
-            if any(identity not in reviews for identity in review_ids):
-                raise ResearchValidationError(
-                    "DIRECTION_VALIDATION_FAILED",
-                    "unknown direction industry review",
-                    rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
-                )
             if (packet.get("industryCycleResearch") or {}).get(
                 "required"
             ) and not review_ids:
@@ -472,12 +479,6 @@ def _validate_value_directions(
             for identity in sorted(review_ids):
                 cycle = merge_industry_cycles(cycle, reviews[identity])
             refs = sorted(set(refs) | set(cycle["sourceIds"]))
-        elif review_ids:
-            raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED",
-                "unknown direction industry review",
-                rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
-            )
         if historical_cycles:
             from backend.macro.daily_research import _persist_review_cycle
 
@@ -667,8 +668,36 @@ def _validate_value_directions(
         # industry overlay is then applied equally to plans and their evidence.
         from backend.indicators.actionable_zones import apply_industry_cycle
 
-        plans = [apply_industry_cycle(plan, cycle) for plan in plans]
-        quantitative = [apply_industry_cycle(plan, cycle) for plan in quantitative]
+        plan_cycles = {}
+
+        def own_cycle(plan):
+            identity = plan_identity(plan)
+            if identity not in plan_cycles:
+                industries = plan_industry_ids(packet, plan)
+                if not required and not reviews:
+                    # Preserve legacy callers without the new review contract.
+                    own = cycle
+                else:
+                    own = normalize_plan_industry_cycle(
+                        cycle_proposal if industries else None,
+                        expected_industries=sorted(industries),
+                        source_aliases=source_aliases,
+                        sources=sources,
+                        now=now,
+                    )
+                    for industry in sorted(industries):
+                        own = merge_industry_cycles(own, reviews.get(industry))
+                        if historical_cycles:
+                            own = _persist_review_cycle(
+                                own, historical_cycles.get(("industry", industry)), now
+                            )
+                plan_cycles[identity] = own
+            return plan_cycles[identity]
+
+        plans = [apply_industry_cycle(plan, own_cycle(plan)) for plan in plans]
+        quantitative = [
+            apply_industry_cycle(plan, own_cycle(plan)) for plan in quantitative
+        ]
         for plan, (old, old_track, fundamental_refs) in zip(plans, revisions):
             final_track = next(
                 row for row in plan["tracks"] if row["track"] == plan["selectedTrack"]

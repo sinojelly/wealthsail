@@ -102,6 +102,11 @@ def industry_cycle_research_tasks(packet, now):
     feeds. Results must still use the ordinary report source-validation path.
     """
     from backend.macro.industry_cycle import RISK_CHECKS
+    from backend.macro.industry_contract import (
+        NEWS_RELATED_INDUSTRIES,
+        STANDARD_INDUSTRY_CODES,
+        plan_industry_ids,
+    )
 
     now = _aware(now)
     candidates = []
@@ -112,13 +117,31 @@ def industry_cycle_research_tasks(packet, now):
         ).items()
         if ids and sector != "OTHER"
     }
+    news.update(
+        related
+        for sector in list(news)
+        for related in NEWS_RELATED_INDUSTRIES.get(sector, ())
+    )
     quantitative = {}
     search_names = {
         "ROBOT": "机器人 具身智能",
         "ROBOTICS_MOBILITY": "机器人 智能驾驶",
         "SEMICONDUCTOR_AI": "半导体 AI算力",
         "AI": "人工智能 算力",
-        "RARE_EARTH": "稀土 有色金属",
+        "RARE_EARTH": "稀土 永磁 磁材",
+        "NONFERROUS": "有色金属 工业金属 铜 铝",
+        "RARE_EARTH_METALS": "稀土 有色金属 产业链",
+        "BROAD": "宽基 指数 沪深300",
+        "BANK": "银行",
+        "BROKER": "证券 券商",
+        "FINTECH": "金融科技",
+        "ACTIVE_GROWTH": "成长行业 科技产业",
+        "DEFENCE": "军工 国防",
+        "COMMUNICATION": "通信 5G 光通信",
+        "INNOVATIVE_DRUG": "创新药 生物医药",
+        "GOLD": "黄金 金矿",
+        "GLOBAL_ENERGY": "全球能源 石油 天然气",
+        "US_TECH": "美国科技 纳斯达克",
         "FINANCIAL": "银行 券商",
         "FINANCE_POLICY": "金融政策 银行 券商",
         "DRUG": "创新药 生物医药",
@@ -170,11 +193,26 @@ def industry_cycle_research_tasks(packet, now):
             previous_risks.add(industry)
             add(industry)
 
+    plan_requirements = {}
+    plan_industries = set()
+    for anchor in packet.get("discoveryActionableZones", []):
+        if not isinstance(anchor, dict):
+            continue
+        key = anchor.get("subjectKind"), anchor.get("subjectId")
+        if key[0] not in {"fund", "nav"} or not isinstance(key[1], str):
+            continue
+        required = plan_industry_ids(packet, anchor)
+        plan_requirements.setdefault(key, set()).update(required)
+        for sector in sorted(required):
+            plan_industries.add(sector)
+            add(sector)
+
     for row in (packet.get("quantitativeScan") or {}).get("items", []):
         if isinstance(row, dict):
-            sector = row.get("discoverySector")
-            add(sector)
-            if not isinstance(sector, str):
+            sectors = plan_industry_ids(packet, row)
+            if not sectors and isinstance(row.get("discoverySector"), str):
+                sectors = {row["discoverySector"]}
+            if not sectors:
                 continue
             signals = [
                 item for item in row.get("signals", []) if isinstance(item, dict)
@@ -194,20 +232,21 @@ def industry_cycle_research_tasks(packet, now):
                 except (ValueError, TypeError):
                     continue
             priority = (not ready, min(distances, default=math.inf))
-            quantitative[sector] = min(quantitative.get(sector, priority), priority)
+            for sector in sorted(sectors):
+                add(sector)
+                quantitative[sector] = min(quantitative.get(sector, priority), priority)
     for row in packet.get("discoveryUniverse", []):
         if isinstance(row, dict):
             add(row.get("discoverySector") or row.get("sector"))
-    for sector, ids in (
-        (packet.get("alphaPublic") or {}).get("sectorCatalysts", {}).items()
-    ):
-        if ids and sector != "OTHER":
-            add(sector)
+    for sector in sorted(news):
+        add(sector)
     order = {sector: index for index, sector in enumerate(candidates)}
     candidates.sort(
         key=lambda sector: (
-            -1
+            -2
             if sector in previous_risks
+            else -1
+            if sector in plan_industries
             else 0
             if sector in news
             else 1
@@ -217,16 +256,29 @@ def industry_cycle_research_tasks(packet, now):
             order[sector],
         )
     )
-    omitted = max(0, len(candidates) - MAX_INDUSTRY_CYCLE_CANDIDATES)
+    omitted_industries = candidates[MAX_INDUSTRY_CYCLE_CANDIDATES:]
     candidates = candidates[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    selected = set(candidates)
     return {
         "required": True,
         "execution": "PUBLIC_WEB_SEARCH",
         "asOf": now.isoformat(),
         "lookbackDays": 90,
         "maximumCandidates": MAX_INDUSTRY_CYCLE_CANDIDATES,
-        "omittedCandidateCount": omitted,
-        "omittedRiskCandidateCount": len(previous_risks - set(candidates)),
+        "omittedCandidateCount": len(omitted_industries),
+        "omittedRiskCandidateCount": len(previous_risks - selected),
+        "omittedIndustries": omitted_industries,
+        "omittedPlanIndustryIds": sorted(plan_industries - selected),
+        "standardIndustryCodes": sorted(STANDARD_INDUSTRY_CODES),
+        "planReviewEligibility": [
+            {
+                "subjectKind": kind,
+                "subjectId": subject,
+                "requiredReviewIndustryIds": sorted(required),
+                "industryReviewEligible": bool(required) and required <= selected,
+            }
+            for (kind, subject), required in plan_requirements.items()
+        ],
         "newDirectionRequiresSameChecks": True,
         "candidates": [
             {

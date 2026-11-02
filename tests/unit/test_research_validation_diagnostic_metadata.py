@@ -58,7 +58,7 @@ def test_second_direction_source_failure_preserves_its_item_index():
 @pytest.mark.parametrize(
     "update,rule",
     [
-        ({"reviewIndustryIds": ["missing"]}, "DIRECTION_INDUSTRY_REVIEW_UNKNOWN"),
+        ({"reviewIndustryIds": ["missing"]}, "DIRECTION_DECLARED_INDUSTRY_UNKNOWN"),
         ({"macroCodes": ["missing"]}, "DIRECTION_MACRO_REFERENCE_UNKNOWN"),
         ({"macroCodes": []}, "DIRECTION_EVIDENCE_INSUFFICIENT"),
     ],

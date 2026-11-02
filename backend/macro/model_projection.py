@@ -47,6 +47,8 @@ def _plan(row):
             "inBuyZone",
             "inSellZone",
             "discoverySector",
+            "requiredReviewIndustryIds",
+            "industryReviewEligible",
             "industryCycle",
             "industryRiskWarning",
             "industryRiskAdjustment",
@@ -223,11 +225,37 @@ def model_packet(packet):
     ]
     scan = packet.get("quantitativeScan")
     if scan is not None:
+        from backend.macro.industry_contract import plan_industry_ids
+
+        contract = packet.get("industryCycleResearch") or {}
+        selected = {row["industry"] for row in contract.get("candidates", [])}
+        eligibility = {
+            (row["subjectKind"], row["subjectId"]): row
+            for row in contract.get("planReviewEligibility", [])
+        }
+
+        def research_plan(row):
+            item = _plan(row)
+            required = sorted(plan_industry_ids(packet, row))
+            obligation = eligibility.get((row.get("subjectKind"), row.get("subjectId")))
+            item.update(
+                requiredReviewIndustryIds=required,
+                industryReviewEligible=bool(required) and set(required) <= selected,
+            )
+            if obligation is not None:
+                item.update(
+                    _pick(
+                        obligation,
+                        ("requiredReviewIndustryIds", "industryReviewEligible"),
+                    )
+                )
+            return item
+
         result["quantitativeScan"] = {
             **_pick(
                 scan, ("methodVersion", "asOf", "coverage", "minimumHistorySamples")
             ),
-            "items": [_plan(row) for row in scan.get("items", [])[:46]],
+            "items": [research_plan(row) for row in scan.get("items", [])[:46]],
         }
     else:
         # Old contract packets do not have the unified scan yet.

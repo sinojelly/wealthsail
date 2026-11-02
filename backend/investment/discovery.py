@@ -272,6 +272,7 @@ def discovery_packet(universe, anchors, previous, now):
                     {
                         field: deepcopy(product[field])
                         for field in (
+                            "discoverySector",
                             "subscriptionStatus",
                             "subscriptionRestricted",
                             "subscriptionLabel",

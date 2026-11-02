@@ -332,6 +332,7 @@ async def get_context(
                 research_settings, "daily_research_schedule_time", "07:00"
             ),
             histories=alpha_public.get("fundHistories"),
+            include_failure_industry_codes=can_manage_operations is True,
         )
     from backend.investment.nav_change import report_with_nav_changes
 

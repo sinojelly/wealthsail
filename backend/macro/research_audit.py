@@ -101,6 +101,7 @@ def write_research_diagnostic(
     reason_code=None,
     rule_id=None,
     item_index=None,
+    missing_industry_codes=None,
 ):
     """Persist a small closed summary independently of the raw payload size."""
     configured = getattr(settings, "daily_research_audit_dir", "")
@@ -117,7 +118,13 @@ def write_research_diagnostic(
         ):
             raise ValueError("research diagnostic requires an aware completion time")
         diagnostics = sanitize_failure_diagnostics(
-            stage=stage, reason_code=reason_code, rule_id=rule_id, item_index=item_index
+            stage=stage,
+            reason_code=reason_code,
+            rule_id=rule_id,
+            item_index=item_index,
+            missing_industry_codes=missing_industry_codes
+            if report_status != "READY"
+            else None,
         )
         payload = {
             "stage": diagnostics["failure_stage"],
@@ -127,6 +134,8 @@ def write_research_diagnostic(
             "itemIndex": diagnostics["failure_item_index"],
             "reportStatus": report_status,
         }
+        if codes := diagnostics.get("failure_industry_codes"):
+            payload["industryCodes"] = codes
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         _atomic_write(
             Path(configured).expanduser().resolve(), identity, encoded, diagnostic=True
