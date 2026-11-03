@@ -30,9 +30,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+#RUN apt-get update \
+#    && apt-get install -y --no-install-recommends ca-certificates \
+#    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    sed -i \
+      's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g; \
+       s|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+      /etc/apt/sources.list.d/debian.sources; \
+    apt-get -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=codex-tooling /opt/codex/ /opt/codex/
 RUN ln -s "/opt/codex/native/$(cat /opt/codex/native-executable)" /usr/local/bin/codex \
     && codex --version
