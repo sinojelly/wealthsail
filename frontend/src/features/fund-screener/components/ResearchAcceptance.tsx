@@ -12,6 +12,7 @@ import {
   useAuthSession,
 } from "../../../app/auth-session";
 import { sourceHref, timeLabel } from "../macro-display";
+import { readingText } from "../research-reading";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const componentLabels: Record<string, string> = {
@@ -43,6 +44,14 @@ const artifactLabels = {
   RAW_MODEL: "模型原文",
   SOURCE_CHECKS: "来源核验凭据",
 };
+const archiveLabels = {
+  AUDIT_PENDING: "待归档",
+  ARCHIVING: "归档恢复中",
+  ARCHIVED: "已归档",
+  UNRECOVERABLE: "无法自动恢复",
+};
+const archivePending = (state?: string) =>
+  state === "AUDIT_PENDING" || state === "ARCHIVING";
 const cellStyle = { padding: "8px", borderBottom: "1px solid var(--op-line)" };
 const actionStyle = {
   border: "1px solid var(--op-line)",
@@ -51,11 +60,79 @@ const actionStyle = {
   width: "fit-content",
   maxWidth: "100%",
 };
+const riskLabels: Record<string, string> = {
+  FINANCING_COOLING: "融资降温",
+  LAYOFFS_CLOSURES: "欠薪倒闭",
+  ORDER_CUTS: "下游砍单",
+  OVERCAPACITY_PRICE_WAR: "产能价格战",
+  PRODUCTION_DELAY: "量产推迟",
+  EARLY_COMMERCIALIZATION: "商业化早期，兑现待验证",
+  NO_EARNINGS_DELIVERY: "缺乏当期盈利兑现",
+  NO_CURRENT_EARNINGS_PROOF: "当期盈利兑现缺少原文实证",
+  FORWARD_PLANS_ONLY: "仅见远期扩产或框架意向",
+  PERSISTED_RISK_WATCH: "延续近期行业降温观察",
+};
+const gapLabels: Record<string, string> = {
+  CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING: "当期利润增长或真实回款证据不足",
+  FORWARD_PLANS_ONLY: "仅见远期扩产或框架意向，尚无当期盈利兑现",
+  NO_CURRENT_EARNINGS_PROOF: "当期盈利兑现缺少原文实证",
+  EARNINGS_INDUSTRY_SCOPE_UNVERIFIED: "公司财务证据与当前产业方向的关联待核实",
+  STAGE_INDUSTRY_SCOPE_UNVERIFIED: "产业阶段证据与当前产业方向的关联待核实",
+};
+
+function RiskSummary({ cycle }: { cycle?: api.AcceptanceIndustryRisk | null }) {
+  if (!cycle) return null;
+  const level = {
+    NONE: "本轮未确认负面",
+    UNPROVEN: "兑现待验证",
+    SUSPECTED: "待核实",
+    CONFIRMED: "已确认",
+  }[cycle.riskLevel ?? "NONE"];
+  const flags = [
+    ...new Set([
+      ...(cycle.confirmedRiskFlags ?? []),
+      ...(cycle.suspectedRiskFlags ?? []),
+      ...(cycle.persistedRiskFlags ?? []),
+      ...(cycle.riskFlags ?? []),
+    ]),
+  ];
+  const gaps = [...new Set(cycle.evidenceGaps ?? [])].map((gap) => {
+    const scopeRisk = gap.startsWith("INDUSTRY_SCOPE_UNVERIFIED:")
+      ? riskLabels[gap.slice("INDUSTRY_SCOPE_UNVERIFIED:".length)]
+      : undefined;
+    return scopeRisk
+      ? `${scopeRisk}证据的行业归属待核实`
+      : (gapLabels[gap] ??
+          (riskLabels[gap]
+            ? `${riskLabels[gap]}证据仍待补齐`
+            : readingText(gap, 300)));
+  });
+  return (
+    <div aria-label="观察行业风险">
+      <p>
+        <strong>行业风险：{cycle.riskLevel ? level : "待核查"}</strong>
+      </p>
+      {flags.length > 0 && (
+        <p>
+          未解决风险：
+          {flags
+            .map((flag) => riskLabels[flag] ?? readingText(flag, 200))
+            .join("；")}
+        </p>
+      )}
+      {gaps.length > 0 && <p>证据缺口：{gaps.join("；")}</p>}
+    </div>
+  );
+}
 
 export default function ResearchAcceptance({
   runId,
+  state,
+  completedAt,
 }: {
   runId?: string | null;
+  state?: string | null;
+  completedAt?: string | null;
 }) {
   const client = useContext(QueryClientContext);
   const session = useAuthSession();
@@ -67,6 +144,8 @@ export default function ResearchAcceptance({
       key={`${actor}:${session.role}:${runId}`}
       runId={runId}
       actor={actor}
+      state={state}
+      completedAt={completedAt}
       queryKey={privateQueryKey(
         session,
         "research-acceptance",
@@ -81,18 +160,49 @@ function AcceptanceData({
   runId,
   actor,
   queryKey,
+  state,
+  completedAt,
 }: {
   runId: string;
   actor: string;
   queryKey: readonly (string | number)[];
+  state?: string | null;
+  completedAt?: string | null;
 }) {
+  const archiveFetches = useRef({ lifecycle: "", count: 0 });
+  const lifecycle = `${state ?? "UNKNOWN"}:${completedAt ?? "undated"}`;
+  const terminal =
+    state === "READY" ||
+    state === "FAILED" ||
+    (state === "UNCERTAIN" &&
+      !!completedAt &&
+      Number.isFinite(Date.parse(completedAt)));
   const query = useQuery({
-    queryKey,
-    queryFn: ({ signal }) => api.getResearchAcceptance(runId, signal),
+    queryKey: [
+      ...queryKey,
+      "initial",
+      state ?? "UNKNOWN",
+      completedAt ?? "undated",
+    ],
+    queryFn: ({ signal }) => {
+      if (archiveFetches.current.lifecycle !== lifecycle)
+        archiveFetches.current = { lifecycle, count: 0 };
+      archiveFetches.current.count += 1;
+      return api.getResearchAcceptance(runId, signal);
+    },
+    enabled: terminal,
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: (query) =>
+      !query.state.error &&
+      archivePending(query.state.data?.archiveState) &&
+      archiveFetches.current.count < 20
+        ? 15000
+        : false,
   });
+  if (!terminal) return null;
   if (query.error instanceof HttpError && query.error.status === 404)
     return null;
   const data = query.data;
@@ -108,7 +218,25 @@ function AcceptanceData({
         overflowWrap: "anywhere",
       }}
     >
-      <Outcome data={data} />
+      {data.archiveState && <p>归档状态：{archiveLabels[data.archiveState]}</p>}
+      {data.archiveState && data.archiveState !== "ARCHIVED" ? (
+        <div role="status">
+          <h4>
+            {data.archiveState === "UNRECOVERABLE"
+              ? "验收归档无法自动恢复"
+              : "验收归档待恢复"}
+          </h4>
+          <p>
+            {data.archiveMessage ??
+              (data.archiveState === "UNRECOVERABLE"
+                ? "验收归档无法自动恢复，不影响已发布严格报告。请管理员核对已保存材料。"
+                : "验收归档待恢复，不影响已发布严格报告。")}
+          </p>
+          <p>研究执行：{data.researchId}</p>
+        </div>
+      ) : (
+        <Outcome data={data} />
+      )}
       {(data.canInspectArtifacts || data.canReplay) && (
         <AdminTools
           key={`${actor}:${runId}`}
@@ -152,6 +280,17 @@ function Outcome({
       <p style={{ fontSize: "12px", color: "var(--op-muted)" }}>
         研究执行：{data.researchId} · 校验版本：{data.validatorVersion} ·
         校验时间：{timeLabel(data.validatedAt)}
+        {data.validatorRevision &&
+          /^[a-f0-9]{64}$/i.test(data.validatorRevision) && (
+            <span
+              title={
+                data.canInspectArtifacts ? data.validatorRevision : undefined
+              }
+            >
+              {" "}
+              · 校验修订：{data.validatorRevision.slice(0, 12)}
+            </span>
+          )}
       </p>
       {data.acceptedContentComplete === false && (
         <p
@@ -237,6 +376,7 @@ function Observations({
               {row.industryCycle?.evidenceSummary && (
                 <p>产业核查：{row.industryCycle.evidenceSummary}</p>
               )}
+              <RiskSummary cycle={row.industryCycle} />
               {!!row.watchFor?.length && (
                 <p>继续核查：{row.watchFor.join("；")}</p>
               )}
@@ -247,6 +387,45 @@ function Observations({
     );
   return (
     <div aria-label="已验收观察内容" style={{ display: "grid", gap: "14px" }}>
+      {accepted.macroOverview && (
+        <section aria-label="宏观总纲·模型研判待核实">
+          <h5>宏观总纲·模型研判待核实</h5>
+          <p>仅供观察，非可交易建议。</p>
+          {accepted.macroOverview.summary && (
+            <p>{accepted.macroOverview.summary}</p>
+          )}
+          {accepted.macroOverview.macroCycle && (
+            <p>{accepted.macroOverview.macroCycle}</p>
+          )}
+          {!!accepted.macroOverview.coverage?.length && (
+            <ul>
+              {accepted.macroOverview.coverage.map((row, index) => (
+                <li key={`${row.topic}:${index}`}>
+                  <strong>
+                    {(
+                      {
+                        DOMESTIC_GROWTH: "国内增长与信用",
+                        US_RATES: "美国通胀与利率",
+                        ENERGY_SHIPPING: "能源与航运",
+                        GEOPOLITICS_POLICY: "全球政策与地缘事件",
+                        GLOBAL_EQUITIES: "全球权益",
+                        CALENDAR: "未来日历",
+                      } as Record<string, string>
+                    )[row.topic] ?? "宏观覆盖"}{" "}
+                    ·{" "}
+                    {row.status === "FOUND"
+                      ? "发现线索，待核实"
+                      : row.status === "NOT_FOUND"
+                        ? "本轮未检得"
+                        : "尚未核验"}
+                  </strong>
+                  <p>{row.summary}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {observations("观察方向", accepted.valueDirections)}
       {accepted.industryCycleReviews.length > 0 && (
         <section aria-label="已验收行业核查">
@@ -256,6 +435,7 @@ function Observations({
               <li key={`${row.industry}:${index}`}>
                 <strong>{row.industry}</strong>
                 {row.evidenceSummary && <p>{row.evidenceSummary}</p>}
+                <RiskSummary cycle={row} />
               </li>
             ))}
           </ul>
@@ -278,6 +458,20 @@ function Observations({
                   ) : (
                     <strong>{source.title}</strong>
                   )}
+                  <p>
+                    <span className="op-badge" aria-label="来源核验状态">
+                      {source.verification === "SOURCE_CHECKED"
+                        ? "原文已核对"
+                        : source.verification === "UNAVAILABLE"
+                          ? "原文暂不可用"
+                          : source.verification === "UNVERIFIED"
+                            ? "原文尚未核验"
+                            : "来源状态待核实"}
+                    </span>{" "}
+                    {source.verification === "SOURCE_CHECKED"
+                      ? "引用与原始发布匹配，不代表影响已兑现。"
+                      : "原文与引用尚待核验，不能视为已确认事实。"}
+                  </p>
                   {source.quote && <blockquote>{source.quote}</blockquote>}
                 </li>
               );
@@ -503,6 +697,21 @@ function AdminTools({
   return (
     <section aria-label="管理员验收核查">
       <h5>管理员核查</h5>
+      {data.recoverableMaterials && (
+        <section aria-label="可恢复材料">
+          <h6>可恢复材料</h6>
+          <ul>
+            {(
+              Object.keys(artifactLabels) as Array<keyof typeof artifactLabels>
+            ).map((kind) => (
+              <li key={kind}>
+                {artifactLabels[kind]}：
+                {data.recoverableMaterials?.[kind] ? "可恢复" : "缺失或超限"}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {data.canInspectArtifacts && (
         <button
           type="button"

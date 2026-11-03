@@ -1,4 +1,5 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../api/research-acceptance";
 import { HttpError } from "../../api/client";
@@ -125,7 +126,7 @@ const outcome = (admin = false): api.ResearchAcceptanceOutcome => ({
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
-  vi.mocked(api.getResearchAcceptance).mockResolvedValue(outcome());
+  vi.mocked(api.getResearchAcceptance).mockReset().mockResolvedValue(outcome());
   vi.mocked(api.getResearchArtifacts).mockResolvedValue({
     researchId: runId,
     complete: true,
@@ -138,13 +139,320 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => vi.useRealTimers());
+
+it.each([
+  ["AUDIT_PENDING", "待归档"],
+  ["ARCHIVING", "归档恢复中"],
+  ["UNRECOVERABLE", "无法自动恢复"],
+] as const)(
+  "separates archive state %s from business rejection",
+  async (archiveState, label) => {
+    vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+      Object.assign(outcome(true), {
+        archiveState,
+        archivePending: archiveState !== "UNRECOVERABLE",
+        decision: "REJECTED",
+        canReplay: false,
+        archiveMessage: "验收归档待恢复，不影响已发布严格报告。",
+        recoverableMaterials: {
+          PACKET: true,
+          RAW_MODEL: true,
+          SOURCE_CHECKS: false,
+        },
+      }),
+    );
+    renderWithSession(<ResearchAcceptance runId={runId} state="READY" />);
+    expect(await screen.findByText(`归档状态：${label}`)).toBeVisible();
+    expect(
+      screen.getByText("验收归档待恢复，不影响已发布严格报告。"),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("本次验收未通过·未正式发布"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/冻结输入：可恢复/)).toBeVisible();
+    expect(screen.getByText(/来源核验凭据：缺失或超限/)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "查看冻结输入与原始结果" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /离线重放校验/ }),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it("polls pending archival until it is archived without running research or replay", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getResearchAcceptance)
+    .mockResolvedValueOnce(
+      Object.assign(outcome(), {
+        archiveState: "AUDIT_PENDING",
+        archivePending: true,
+        decision: "REJECTED",
+      }),
+    )
+    .mockResolvedValueOnce(
+      Object.assign(outcome(), {
+        archiveState: "ARCHIVING",
+        archivePending: true,
+        decision: "REJECTED",
+      }),
+    )
+    .mockResolvedValue(
+      Object.assign(outcome(), {
+        archiveState: "ARCHIVED",
+        archivePending: false,
+      }),
+    );
+  renderWithSession(<ResearchAcceptance runId={runId} state="READY" />);
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：待归档")).toBeVisible(),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(15000));
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：归档恢复中")).toBeVisible(),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(15000));
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：已归档")).toBeVisible(),
+  );
+  expect(screen.getByText("部分验收成果·仅供观察，未正式发布")).toBeVisible();
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(3);
+  expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+});
+
+it("bounds pending archive polling and keeps recoverable material details private", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+    Object.assign(outcome(), {
+      archiveState: "AUDIT_PENDING",
+      archivePending: true,
+      decision: "REJECTED",
+      recoverableMaterials: {
+        PACKET: true,
+        RAW_MODEL: true,
+        SOURCE_CHECKS: true,
+      },
+    }),
+  );
+  renderWithSession(<ResearchAcceptance runId={runId} state="READY" />);
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：待归档")).toBeVisible(),
+  );
+  for (let i = 0; i < 40; i++)
+    await act(async () => vi.advanceTimersByTimeAsync(15000));
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(20);
+  expect(
+    screen.queryByText(/可恢复材料|冻结输入：可恢复/),
+  ).not.toBeInTheDocument();
+});
+
+it("stops archive polling if its record is no longer available", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getResearchAcceptance)
+    .mockResolvedValueOnce(
+      Object.assign(outcome(), {
+        archiveState: "AUDIT_PENDING",
+        archivePending: true,
+        decision: "REJECTED",
+      }),
+    )
+    .mockRejectedValue(new HttpError("not found", 404));
+  const rendered = renderWithSession(
+    <ResearchAcceptance runId={runId} state="READY" />,
+  );
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：待归档")).toBeVisible(),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(15000));
+  await vi.waitFor(() => expect(rendered.container).toBeEmptyDOMElement());
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(2);
+});
+
+it.each(["RUNNING", "NOT_RUN", "DISABLED", "MISSED", "UNCERTAIN"] as const)(
+  "does not request acceptance before a completed run in state %s",
+  async (state) => {
+    const rendered = renderWithSession(
+      <ResearchAcceptance runId={runId} state={state} />,
+    );
+    await act(async () => {});
+    expect(api.getResearchAcceptance).not.toHaveBeenCalled();
+    expect(rendered.container).toBeEmptyDOMElement();
+  },
+);
+
+it("reads acceptance again when the same pipeline run finishes after an earlier silent 404", async () => {
+  vi.mocked(api.getResearchAcceptance)
+    .mockRejectedValueOnce(new HttpError("not found", 404))
+    .mockResolvedValueOnce(outcome());
+  const initial: DailyResearch = {
+    methodVersion: "daily-research-v1",
+    state: "FAILED",
+    runId: "c9dca9af-3e3a-462c-8267-adc18751d46d",
+    scheduledFor: null,
+    startedAt: null,
+    completedAt: null,
+    asOf: null,
+    nextRunAt: null,
+    report: null,
+    pipeline: {
+      id: "pipeline-a",
+      researchRunId: runId,
+      state: "FAILED",
+      stage: "VERIFYING_OUTPUT",
+      finishedAt: null,
+    },
+  };
+  let update!: (value: DailyResearch) => void;
+  function Page() {
+    const [daily, setDaily] = useState(initial);
+    update = setDaily;
+    return <DailyResearchReport data={daily} />;
+  }
+  renderWithSession(<Page />);
+  await waitFor(() => expect(api.getResearchAcceptance).toHaveBeenCalledOnce());
+  expect(api.getResearchAcceptance).toHaveBeenLastCalledWith(
+    runId,
+    expect.any(AbortSignal),
+  );
+  expect(
+    screen.queryByRole("region", { name: "研究验收记录" }),
+  ).not.toBeInTheDocument();
+  await act(async () =>
+    update({
+      ...initial,
+      pipeline: { ...initial.pipeline!, state: "RUNNING" },
+    }),
+  );
+  expect(api.getResearchAcceptance).toHaveBeenCalledOnce();
+  await act(async () =>
+    update({
+      ...initial,
+      pipeline: {
+        ...initial.pipeline!,
+        state: "FAILED",
+        finishedAt: "2026-11-03T09:00:00+08:00",
+      },
+    }),
+  );
+  expect(
+    await screen.findByText("部分验收成果·仅供观察，未正式发布"),
+  ).toBeVisible();
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(2);
+  expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+});
+
+it("distinguishes checked and unchecked sources and shows unresolved industry risks without trade controls", async () => {
+  const data = outcome();
+  data.accepted.sources = [
+    { id: "checked", title: "已核对的公告", verification: "SOURCE_CHECKED" },
+    {
+      id: "unchecked",
+      title: "尚未核对的媒体线索",
+      verification: "UNVERIFIED",
+    },
+    {
+      id: "unavailable",
+      title: "暂不可读取的来源",
+      verification: "UNAVAILABLE",
+    },
+  ];
+  Object.assign(data.accepted.industryCycleReviews[0], {
+    riskLevel: "CONFIRMED",
+    confirmedRiskFlags: ["FINANCING_COOLING"],
+    suspectedRiskFlags: ["ORDER_CUTS"],
+    persistedRiskFlags: ["PRODUCTION_DELAY"],
+    evidenceGaps: ["CURRENT_PROFIT_OR_CASH_EVIDENCE_MISSING"],
+  });
+  Object.assign(data.accepted.valueDirections[0], {
+    industryCycle: {
+      stage: "EARLY_COMMERCIALIZATION",
+      riskLevel: "SUSPECTED",
+      riskFlags: ["FORWARD_PLANS_ONLY"],
+      evidenceGaps: ["INDUSTRY_SCOPE_UNVERIFIED:ORDER_CUTS"],
+    },
+  });
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  const sources = within(
+    await screen.findByRole("region", { name: "已验收来源" }),
+  );
+  expect(sources.getByText("原文已核对")).toBeVisible();
+  expect(sources.getByText("原文尚未核验")).toBeVisible();
+  expect(sources.getByText("原文暂不可用")).toBeVisible();
+  const reviews = within(
+    screen.getByRole("region", { name: "已验收行业核查" }),
+  );
+  expect(reviews.getByText("行业风险：已确认")).toBeVisible();
+  expect(
+    reviews.getByText(/未解决风险：.*融资降温.*下游砍单.*量产推迟/),
+  ).toBeVisible();
+  expect(
+    reviews.getByText(/证据缺口：.*当期利润增长或真实回款证据不足/),
+  ).toBeVisible();
+  const directions = within(screen.getByRole("region", { name: "观察方向" }));
+  expect(directions.getByText("行业风险：待核实")).toBeVisible();
+  expect(
+    directions.getByText(/未解决风险：.*仅见远期扩产或框架意向/),
+  ).toBeVisible();
+  expect(
+    directions.getByText(/证据缺口：.*下游砍单证据的行业归属待核实/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|推送/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("keeps accepted macro observations explicitly unverified and shows the validator revision", async () => {
+  const data = outcome();
+  Object.assign(data, { validatorRevision: "0123456789abcdef".repeat(4) });
+  Object.assign(data.accepted, {
+    macroOverview: {
+      summary: "宏观需求仍待确认。",
+      macroCycle: "信用传导尚需后续数据。",
+      verification: "MODEL_UNVERIFIED",
+      sourceIds: ["source:one"],
+      coverage: [
+        {
+          topic: "DOMESTIC_GROWTH",
+          status: "UNVERIFIED",
+          summary: "国内需求证据不足。",
+        },
+        {
+          topic: "ENERGY_SHIPPING",
+          status: "NOT_FOUND",
+          summary: "本轮未检得能源变化。",
+        },
+      ],
+    },
+  });
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  const macro = within(
+    await screen.findByRole("region", { name: "宏观总纲·模型研判待核实" }),
+  );
+  expect(macro.getByText("宏观需求仍待确认。")).toBeVisible();
+  expect(macro.getByText("信用传导尚需后续数据。")).toBeVisible();
+  expect(macro.getByText(/国内增长与信用.*尚未核验/)).toBeVisible();
+  expect(macro.getByText(/能源与航运.*本轮未检得/)).toBeVisible();
+  expect(macro.getByText("仅供观察，非可交易建议。")).toBeVisible();
+  expect(screen.getByText(/校验修订：0123456789ab/)).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|推送/ }),
+  ).not.toBeInTheDocument();
+});
+
 it("shows partial observations and complete safe issues without any trade controls", async () => {
   const data = outcome();
   Object.assign(data.accepted.valueDirections[0], {
     plans: [{ entryZoneMin: "0.0001", fundCode: "004432" }],
   });
   vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   expect(
     await screen.findByText("部分验收成果·仅供观察，未正式发布"),
   ).toBeVisible();
@@ -172,7 +480,9 @@ it("quietly hides legacy runs with no stored validation outcome", async () => {
   vi.mocked(api.getResearchAcceptance).mockRejectedValue(
     new HttpError("not found", 404),
   );
-  const rendered = renderWithSession(<ResearchAcceptance runId={runId} />);
+  const rendered = renderWithSession(
+    <ResearchAcceptance runId={runId} state="FAILED" />,
+  );
   await waitFor(() => expect(api.getResearchAcceptance).toHaveBeenCalledOnce());
   expect(rendered.container).toBeEmptyDOMElement();
   expect(api.getResearchArtifacts).not.toHaveBeenCalled();
@@ -185,7 +495,7 @@ it("keeps a complete initial outcome compact instead of repeating the formal rep
     decision: "COMPLETE",
     formalPublishable: true,
   });
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   expect(await screen.findByText("验收完整")).toBeVisible();
   expect(screen.queryByText("等待下游订单核验。")).not.toBeInTheDocument();
 });
@@ -196,7 +506,7 @@ it.each(["PARTIAL", "COMPLETE"] as const)(
     vi.mocked(api.getResearchAcceptance).mockResolvedValue(
       Object.assign(outcome(), { decision, acceptedContentComplete: false }),
     );
-    renderWithSession(<ResearchAcceptance runId={runId} />);
+    renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
     expect(
       await screen.findByText("验收正文为节选，完整内容请管理员查看冻结材料"),
     ).toBeVisible();
@@ -216,7 +526,7 @@ it("keeps every issue and filters by category and rule without hiding the total"
   }));
   data.issueCount = 43;
   vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   expect(await screen.findByText("固定问题说明 42")).toBeVisible();
   expect(screen.getByText(/共43项/)).toBeVisible();
   await userEvent.selectOptions(screen.getByLabelText("条目类别"), "FUND_PLAN");
@@ -247,7 +557,7 @@ it("loads complete raw artifacts only when requested and renders them as escaped
       },
     ],
   });
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await screen.findByText("部分验收成果·仅供观察，未正式发布");
   expect(api.getResearchArtifacts).not.toHaveBeenCalled();
   await userEvent.click(
@@ -266,7 +576,7 @@ it("shows structured administrator dependencies as readable item associations", 
     dependencies: [{ itemType: "SOURCE", businessKey: "source:one" }],
   });
   vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   expect(await screen.findByText("依赖：来源 · source:one")).toBeVisible();
   expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
 });
@@ -288,7 +598,7 @@ it("shows artifact omissions while keeping replay disabled according to server c
       },
     ],
   });
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await userEvent.click(
     await screen.findByRole("button", { name: "查看冻结输入与原始结果" }),
   );
@@ -303,7 +613,9 @@ it("reuses an unacknowledged replay command after timeout and a remount, without
   vi.mocked(api.replayResearchAcceptance).mockRejectedValueOnce(
     new Error("PRIVATE NETWORK DETAIL"),
   );
-  const first = renderWithSession(<ResearchAcceptance runId={runId} />);
+  const first = renderWithSession(
+    <ResearchAcceptance runId={runId} state="FAILED" />,
+  );
   await userEvent.click(
     await screen.findByRole("button", { name: "离线重放校验（不调用Codex）" }),
   );
@@ -326,7 +638,7 @@ it("reuses an unacknowledged replay command after timeout and a remount, without
       upcoming: [],
     },
   });
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await userEvent.click(
     await screen.findByRole("button", {
       name: "重试离线重放校验（不调用Codex）",
@@ -352,7 +664,7 @@ it("loads saved replays only on explicit request", async () => {
       },
     ],
   });
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await screen.findByText("部分验收成果·仅供观察，未正式发布");
   expect(api.getResearchReplays).not.toHaveBeenCalled();
   await userEvent.click(
@@ -377,7 +689,7 @@ it("keeps repaired issues available on a complete outcome without expanding obse
   ];
   data.issueCount = 1;
   vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
-  renderWithSession(<ResearchAcceptance runId={runId} />);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await userEvent.click(await screen.findByText("查看验收问题（1项）"));
   expect(screen.getByText("已修复引用格式。")).toBeVisible();
   expect(screen.queryByText("等待下游订单核验。")).not.toBeInTheDocument();
@@ -388,7 +700,9 @@ it("does not display an outcome bound to another research run", async () => {
     ...outcome(true),
     researchId: "another-run",
   });
-  const rendered = renderWithSession(<ResearchAcceptance runId={runId} />);
+  const rendered = renderWithSession(
+    <ResearchAcceptance runId={runId} state="FAILED" />,
+  );
   await waitFor(() => expect(api.getResearchAcceptance).toHaveBeenCalledOnce());
   expect(rendered.container).toBeEmptyDOMElement();
 });
@@ -454,7 +768,12 @@ it.each(["FAILED", "UNCERTAIN"] as const)(
     const load = vi
       .fn()
       .mockResolvedValueOnce(previous)
-      .mockResolvedValue({ ...previous, runId, state: terminalStatus });
+      .mockResolvedValue({
+        ...previous,
+        runId,
+        state: terminalStatus,
+        completedAt: new Date().toISOString(),
+      });
     const market = vi.fn().mockResolvedValue({});
     const analysis = vi.fn().mockResolvedValue({});
     const funds = vi.fn().mockResolvedValue({});

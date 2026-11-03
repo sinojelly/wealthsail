@@ -537,7 +537,13 @@ function DailyResearchContent({
         </p>
       )}
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
-      <ResearchAcceptance runId={data?.runId} />
+      <ResearchAcceptance
+        runId={data?.pipeline ? data.pipeline.researchRunId : data?.runId}
+        state={currentState}
+        completedAt={
+          data?.pipeline ? data.pipeline.finishedAt : data?.completedAt
+        }
+      />
       {!report ? (
         <>
           <p>有效报告尚未生成，可先核查市场证据。</p>

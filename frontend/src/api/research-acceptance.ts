@@ -1,6 +1,20 @@
 import { request } from "./client";
 import type { IndustryCycle } from "./investment";
 
+export type AcceptanceIndustryRisk = Partial<
+  Pick<
+    IndustryCycle,
+    | "stage"
+    | "label"
+    | "riskLevel"
+    | "riskFlags"
+    | "confirmedRiskFlags"
+    | "suspectedRiskFlags"
+    | "evidenceGaps"
+    | "evidenceSummary"
+  >
+> & { persistedRiskFlags?: string[] };
+
 export interface AcceptanceIssue {
   issueId: string;
   researchId: string;
@@ -33,7 +47,7 @@ export interface AcceptanceObservation {
   sourceIds?: string[];
   scheduledAt?: string | null;
   scheduledDate?: string | null;
-  industryCycle?: IndustryCycle | null;
+  industryCycle?: AcceptanceIndustryRisk | null;
 }
 
 export interface ResearchAcceptanceOutcome {
@@ -42,6 +56,8 @@ export interface ResearchAcceptanceOutcome {
   kind: "INITIAL" | "REPLAY";
   decision: "COMPLETE" | "PARTIAL" | "EMPTY" | "REJECTED";
   validatorVersion: string;
+  validatorRevision?: string | null;
+  revisionStatus?: "AVAILABLE" | "UNAVAILABLE";
   validatedAt: string;
   recordedAt?: string;
   formalPublishable: boolean;
@@ -51,11 +67,24 @@ export interface ResearchAcceptanceOutcome {
   acceptedContentComplete?: boolean;
   canInspectArtifacts: boolean;
   canReplay: boolean;
+  archiveState?: "AUDIT_PENDING" | "ARCHIVING" | "ARCHIVED" | "UNRECOVERABLE";
+  archiveMessage?: string;
+  archivePending?: boolean;
+  recoverableMaterials?: Partial<
+    Record<"PACKET" | "RAW_MODEL" | "SOURCE_CHECKS", boolean>
+  >;
   counts: Record<
     string,
     { inputCount: number; acceptedCount: number; quarantinedCount: number }
   >;
   accepted: {
+    macroOverview?: {
+      summary?: string;
+      macroCycle?: string;
+      coverage: Array<{ topic: string; status: string; summary: string }>;
+      verification: "MODEL_UNVERIFIED";
+      sourceIds: string[];
+    };
     sources: Array<{
       id: string;
       title: string;
@@ -63,12 +92,7 @@ export interface ResearchAcceptanceOutcome {
       quote?: string;
       verification?: string;
     }>;
-    industryCycleReviews: Array<{
-      industry: string;
-      evidenceSummary?: string;
-      stage?: string;
-      riskLevel?: string;
-    }>;
+    industryCycleReviews: Array<{ industry: string } & AcceptanceIndustryRisk>;
     valueDirections: AcceptanceObservation[];
     events: AcceptanceObservation[];
     upcoming: AcceptanceObservation[];
