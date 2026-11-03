@@ -50,8 +50,18 @@ RUN ln -s "/opt/codex/native/$(cat /opt/codex/native-executable)" /usr/local/bin
 
 # 依赖层（利用构建缓存；akshare 依赖较多，单独一层）
 COPY requirements.txt .
-RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
+#RUN pip install --upgrade pip \
+#    && pip install -r requirements.txt
+
+# Configurable PyPI mirror
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN python -m pip install \
+    --index-url "${PIP_INDEX_URL}" \
+    --timeout 30 \
+    --retries 3 \
+    -r requirements.txt
+
 
 # 应用代码与迁移/种子脚本
 COPY backend/ ./backend/
