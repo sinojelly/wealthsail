@@ -28,7 +28,7 @@ async def fixture(*, manual=False):
     assert target.hostname in {"localhost", "127.0.0.1", "::1"}
     assert (
         target.path.startswith("/wealthsail_manual_research_acceptance")
-        or target.path == "/wealthsail_acceptance_review100_v1"
+        or (target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"})
     )
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()

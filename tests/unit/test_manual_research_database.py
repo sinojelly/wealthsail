@@ -30,7 +30,7 @@ async def fixture(*, committed=False):
         or ipaddress.ip_address(target.hostname).is_loopback
     )
     assert target.path.startswith("/wealthsail_manual_research") or (
-        target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"
+        target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"}
     )
     conn = await asyncpg.connect(DSN)
     tenant, actor, other = uuid4(), uuid4(), uuid4()
@@ -71,7 +71,7 @@ async def fixture(*, committed=False):
             # Immutable acceptance rows restrict deletion of their owning run.
             # Only this committed fixture's tenant/run identities are removed.
             if target.path.startswith("/wealthsail_manual_research_acceptance") or (
-                target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"
+                target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"}
             ):
                 run_ids = [
                     row["run_id"]

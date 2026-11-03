@@ -2643,6 +2643,25 @@ async def _readback(conn: asyncpg.Connection) -> None:
                     raise RuntimeError("research acceptance replay function grant is unsafe")
             if not await conn.fetchval("SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function):
                 raise RuntimeError("research acceptance replay function is missing or unsafe")
+    if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=101)"):
+        for table in ("research.research_history_repair_derivations", "research.research_history_repair_events", "research.research_history_repair_attempts"):
+            if not await conn.fetchval("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)", table):
+                raise RuntimeError("history repair RLS boundary is missing or unsafe")
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                    if await conn.fetchval("SELECT has_any_column_privilege($1,$2,$3)", role, table, privilege) if privilege in {"SELECT", "INSERT", "UPDATE", "REFERENCES"} else await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege):
+                        raise RuntimeError("history repair runtime privilege boundary is unsafe")
+            if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table):
+                raise RuntimeError("history repair exposes PUBLIC privileges")
+        for function in ("research.history_repair_source_admin(uuid)", "research.try_history_repair_locks(uuid)", "research.reserve_history_repair(uuid,uuid,text)", "research.finish_history_repair_failure(uuid,text)", "research.save_history_repair(uuid,jsonb,jsonb,text)", "research.read_history_repair(uuid,boolean)", "research.list_history_repairs(uuid,boolean,integer)", "research.record_history_repair_event(uuid,uuid,text)"):
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                if await conn.fetchval("SELECT has_function_privilege($1,$2,'EXECUTE')", role, function) != (role == "wealthsail_api"):
+                    raise RuntimeError("history repair function grant is unsafe")
+            if not await conn.fetchval("SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function):
+                raise RuntimeError("history repair function is missing or unsafe")
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            if await conn.fetchval("SELECT has_function_privilege($1,'research.validation_combined_budget(uuid,uuid)','EXECUTE')", role):
+                raise RuntimeError("history repair combined budget exposes private metadata")
     nav_job_constraint = await conn.fetchval(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
     )

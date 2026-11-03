@@ -13,6 +13,7 @@ import sys
 
 TIMEOUT_SECONDS = 30
 OUTPUT_LIMIT = 1024 * 1024
+REPAIR_OUTPUT_LIMIT = 4 * 1024 * 1024
 INPUT_LIMIT = 48 * 1024 * 1024
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,17 +41,17 @@ def child_environment():
     return result
 
 
-async def _read_output(reader):
+async def _read_output(reader, *, limit=OUTPUT_LIMIT):
     chunks, length = [], 0
     while chunk := await reader.read(65536):
         length += len(chunk)
-        if length > OUTPUT_LIMIT:
+        if length > limit:
             raise OfflineReplayError("OUTPUT_LIMIT")
         chunks.append(chunk)
     return b"".join(chunks)
 
 
-async def _exchange(proc, payload):
+async def _exchange(proc, payload, output_limit=OUTPUT_LIMIT):
     async def send():
         proc.stdin.write(payload)
         await proc.stdin.drain()
@@ -58,7 +59,7 @@ async def _exchange(proc, payload):
 
     sending = asyncio.create_task(send())
     try:
-        output = await _read_output(proc.stdout)
+        output = await _read_output(proc.stdout, limit=output_limit)
         await sending
         code = await proc.wait()
         if code:
@@ -105,6 +106,14 @@ async def _stop(proc):
 
 
 async def run_offline_validation(payload, *, timeout=TIMEOUT_SECONDS):
+    return await _run_child({**payload, "operation": "VALIDATE"}, timeout=timeout, output_limit=OUTPUT_LIMIT)
+
+
+async def run_offline_repair(payload, *, timeout=TIMEOUT_SECONDS):
+    return await _run_child({**payload, "operation": "REPAIR"}, timeout=timeout, output_limit=REPAIR_OUTPUT_LIMIT)
+
+
+async def _run_child(payload, *, timeout=TIMEOUT_SECONDS, output_limit=OUTPUT_LIMIT):
     encoded = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
@@ -121,7 +130,7 @@ async def run_offline_validation(payload, *, timeout=TIMEOUT_SECONDS):
         env=child_environment(),
     )
     try:
-        return await asyncio.wait_for(_exchange(proc, encoded), timeout)
+        return await asyncio.wait_for(_exchange(proc, encoded, output_limit), timeout)
     except TimeoutError:
         await _stop(proc)
         raise OfflineReplayError("TIMEOUT") from None
@@ -162,19 +171,20 @@ def main():
         if len(data) > INPUT_LIMIT:
             raise ValueError("input limit")
         payload = json.loads(data)
-        from backend.macro.research_acceptance import validate_report_outcome
-
-        value = validate_report_outcome(
-            payload["raw"],
-            payload["packet"],
-            payload["sourceChecks"],
-            research_id=payload["researchId"],
-            completed_at=datetime.fromisoformat(payload["validatedAt"]),
-        ).to_dict()
+        if payload.get("operation", "VALIDATE") == "REPAIR":
+            from backend.macro.research_repair import repair_report
+            value = repair_report(payload["raw"], payload["packet"], payload["sourceChecks"], research_id=payload["researchId"], validated_at=datetime.fromisoformat(payload["validatedAt"]))
+            limit = REPAIR_OUTPUT_LIMIT
+        elif payload.get("operation", "VALIDATE") == "VALIDATE":
+            from backend.macro.research_acceptance import validate_report_outcome
+            value = validate_report_outcome(payload["raw"], payload["packet"], payload["sourceChecks"], research_id=payload["researchId"], completed_at=datetime.fromisoformat(payload["validatedAt"])).to_dict()
+            limit = OUTPUT_LIMIT
+        else:
+            raise ValueError("unknown offline operation")
         output = json.dumps(
             value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-        if len(output) > OUTPUT_LIMIT:
+        if len(output) > limit:
             raise ValueError("output limit")
     except Exception:
         # No exception repr, raw text, URLs, command keys or credentials leave the child.

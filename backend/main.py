@@ -33,6 +33,7 @@ from backend.investment.study_api import router as study_router
 from backend.investment.fund_watch_api import router as fund_watch_router
 from backend.investment.research_debug_api import router as research_debug_router
 from backend.investment.research_acceptance_api import router as research_acceptance_router
+from backend.investment.research_history_repair_api import router as research_history_repair_router
 from backend.chat.api import router as chat_router
 from backend.identity.api import router as identity_router
 from backend.identity.platform_api import router as platform_identity_router
@@ -186,6 +187,7 @@ def create_app() -> FastAPI:
     app.include_router(fund_watch_router, prefix=prefix)
     app.include_router(research_debug_router, prefix=prefix)
     app.include_router(research_acceptance_router, prefix=prefix)
+    app.include_router(research_history_repair_router, prefix=prefix)
     app.include_router(debug_router, prefix=prefix)
 
     @app.get("/healthz", tags=["system"])

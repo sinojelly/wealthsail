@@ -113,3 +113,28 @@ async def test_real_child_uses_frozen_time_and_returns_current_revision_without_
     assert result["validatedAt"] == NOW.isoformat()
     assert len(result["validatorRevision"]) == 64
     assert "PRIVATE" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_repair_runner_forces_fixed_operation_and_keeps_validation_output_budget(monkeypatch):
+    mod = module()
+    child = AsyncMock(return_value={"decision": "BLOCKED"})
+    monkeypatch.setattr(mod, "_run_child", child)
+    await mod.run_offline_repair({"operation": "INJECTED"})
+    assert child.await_args.args[0]["operation"] == "REPAIR"
+    assert child.await_args.kwargs["output_limit"] == 4 * 1024 * 1024
+    await mod.run_offline_validation({"operation": "REPAIR"})
+    assert child.await_args.args[0]["operation"] == "VALIDATE"
+    assert child.await_args.kwargs["output_limit"] == 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_real_repair_child_strictly_revalidates_a_structural_fixture_without_ai():
+    from tests.unit.test_research_repair import fixture, NOW, RUN
+    packet, raw, checks = fixture()
+    result = await module().run_offline_repair({"raw": raw, "packet": packet, "sourceChecks": checks, "researchId": RUN, "validatedAt": NOW.isoformat()})
+    assert result["strictPass"] is True
+    assert result["originalOutcome"]["decision"] == "PARTIAL"
+    assert result["decision"] == "REPAIRED"
+    assert len(result["formalReport"]["valueDirections"]) == 1
+    assert result["validatedAt"] == NOW.isoformat()
