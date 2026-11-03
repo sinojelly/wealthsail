@@ -11,6 +11,11 @@ import {
 } from "../../test/fixtures";
 
 const runFundEstimate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("./components/ResearchHistoryRepairs", () => ({
+  default: ({ sourceRunId }: { sourceRunId?: string }) => (
+    <div>历史修复入口：{sourceRunId}</div>
+  ),
+}));
 
 vi.mock("../../api/hooks", () => ({
   useOpsJobs: () => ({
@@ -92,4 +97,18 @@ it("displays job and audit timestamps in Shanghai time and disables unavailable 
 it("formats freshness observation time as Beijing time rather than a raw timestamp", () => {
   renderWithSession(<OperationsPage />);
   expect(screen.getByText("2026/08/23 16:00:08")).toBeInTheDocument();
+});
+
+it("opens an independent historical repair tab with the source identity from the link", () => {
+  renderWithSession(
+    <OperationsPage />,
+    "/operations?tab=research-repair&sourceRunId=ecdf9dce-54e4-4b26-98ab-e1af6f4e1ffb",
+  );
+  expect(screen.getByRole("tab", { name: "历史研究修复" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.getByText("历史修复入口：ecdf9dce-54e4-4b26-98ab-e1af6f4e1ffb"),
+  ).toBeVisible();
 });

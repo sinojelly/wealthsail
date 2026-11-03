@@ -1,0 +1,35 @@
+{
+  "decision": "REPAIRED",
+  "strictPass": true,
+  "autoPublishAllowed": true,
+  "historicalPublishAllowed": true,
+  "safetyBlocked": false,
+  "repairVersion": "research-repair-v1",
+  "revision": "31842ac86d237619ddb417769c228d562bc1cb9ec8d16601a9ce655c56c118b5",
+  "buildCommit": null,
+  "quarantinedCount": 1,
+  "version": "research-repair-v1",
+  "originalDecision": "PARTIAL",
+  "strictRevalidated": true,
+  "repairRevision": "31842ac86d237619ddb417769c228d562bc1cb9ec8d16601a9ce655c56c118b5",
+  "counts": {
+    "fundPlans": 2,
+    "sources": 2,
+    "industryCycleReviews": 3,
+    "valueDirections": 1,
+    "events": 0,
+    "upcoming": 0
+  },
+  "quarantined": [
+    {
+      "itemType": "VALUE_DIRECTION",
+      "itemIndex": 1,
+      "ruleId": "WATCH_REVIEW_UNLINKED",
+      "businessKey": "orphan-watch",
+      "reason": "无计划观察方向缺少有效行业审核关联，已整体隔离。"
+    }
+  ],
+  "autoBlockers": [],
+  "hardBlockers": [],
+  "excerpted": true
+}

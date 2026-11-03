@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { IndustryCycle } from "./investment";
+import type { DeterministicRepair, IndustryCycle } from "./investment";
 
 export type AcceptanceIndustryRisk = Partial<
   Pick<
@@ -62,6 +62,8 @@ export interface ResearchAcceptanceOutcome {
   validatedAt: string;
   recordedAt?: string;
   formalPublishable: boolean;
+  repairedFormalPublished?: boolean;
+  deterministicRepair?: DeterministicRepair;
   actionable: false;
   issueCount: number;
   issueListComplete: boolean;

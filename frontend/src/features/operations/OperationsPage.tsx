@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Activity,
   Bot,
@@ -25,13 +26,17 @@ import PageHeader from "../../components/layout/PageHeader";
 import AuditLogTable from "./components/AuditLogTable";
 import JobRunsTable from "./components/JobRunsTable";
 import AiUsagePanel from "./components/AiUsagePanel";
+import ResearchHistoryRepairs from "./components/ResearchHistoryRepairs";
 import { formatShanghaiTime } from "./format-time";
 import "./operations.css";
 
-type Tab = "jobs" | "audit" | "ai-usage";
+type Tab = "jobs" | "audit" | "ai-usage" | "research-repair";
 
 export default function OperationsPage() {
-  const [tab, setTab] = useState<Tab>("jobs");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() =>
+    params.get("tab") === "research-repair" ? "research-repair" : "jobs",
+  );
   const jobs = useOpsJobs();
   const freshness = useOpsFreshness();
   const outbox = useOpsOutbox();
@@ -281,11 +286,24 @@ export default function OperationsPage() {
             <Bot size={14} />
             AI 用量
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === "research-repair"}
+            className={tab === "research-repair" ? "active" : ""}
+            onClick={() => setTab("research-repair")}
+          >
+            <FileClock size={14} />
+            历史研究修复
+          </button>
         </div>
         {tab === "jobs" ? (
           <JobRunsTable jobs={jobs.data?.jobs ?? []} runs={runs} />
         ) : tab === "audit" ? (
           <AuditLogTable rows={audit.data ?? []} />
+        ) : tab === "research-repair" ? (
+          <ResearchHistoryRepairs
+            sourceRunId={params.get("sourceRunId") ?? undefined}
+          />
         ) : (
           <AiUsagePanel />
         )}

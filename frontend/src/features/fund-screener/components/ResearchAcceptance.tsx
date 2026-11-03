@@ -111,7 +111,11 @@ const gapLabels: Record<string, string> = {
   STAGE_INDUSTRY_SCOPE_UNVERIFIED: "产业阶段证据与当前产业方向的关联待核实",
 };
 
-function RiskSummary({ cycle }: { cycle?: api.AcceptanceIndustryRisk | null }) {
+export function RiskSummary({
+  cycle,
+}: {
+  cycle?: api.AcceptanceIndustryRisk | null;
+}) {
   if (!cycle) return null;
   const level = {
     NONE: "本轮未确认负面",
@@ -296,6 +300,15 @@ function AcceptanceData({
         (data.archiveState && data.archiveState !== "ARCHIVED")) &&
         recheck}
       {(data.canInspectArtifacts || data.canReplay) && (
+        <p>
+          <a
+            href={`/operations?tab=research-repair&sourceRunId=${encodeURIComponent(data.researchId)}`}
+          >
+            管理历史研究修复
+          </a>
+        </p>
+      )}
+      {(data.canInspectArtifacts || data.canReplay) && (
         <AdminTools
           key={`${actor}:${runId}`}
           data={data}
@@ -315,13 +328,17 @@ function Outcome({
   replay?: boolean;
 }) {
   const title =
-    data.decision === "COMPLETE"
-      ? "验收完整"
-      : data.decision === "PARTIAL"
-        ? "部分验收成果·仅供观察，未正式发布"
-        : data.decision === "EMPTY"
-          ? "本次验收无可展示成果·未正式发布"
-          : "本次验收未通过·未正式发布";
+    data.kind === "INITIAL" &&
+    data.repairedFormalPublished === true &&
+    data.deterministicRepair?.strictRevalidated === true
+      ? "原始输出部分未通过，隔离后严格重验已发布"
+      : data.decision === "COMPLETE"
+        ? "验收完整"
+        : data.decision === "PARTIAL"
+          ? "部分验收成果·仅供观察，未正式发布"
+          : data.decision === "EMPTY"
+            ? "本次验收无可展示成果·未正式发布"
+            : "本次验收未通过·未正式发布";
   return (
     <>
       {data.decision === "COMPLETE" ? (
@@ -409,21 +426,21 @@ function Outcome({
               ))}
             </tbody>
           </table>
-          <Observations accepted={data.accepted} />
-          <Issues data={data} />
+          <AcceptanceObservations accepted={data.accepted} />
+          <AcceptanceIssues data={data} />
         </>
       )}
       {data.decision === "COMPLETE" && data.issueCount > 0 && (
         <details>
           <summary>查看验收问题（{data.issueCount}项）</summary>
-          <Issues data={data} />
+          <AcceptanceIssues data={data} />
         </details>
       )}
     </>
   );
 }
 
-function Observations({
+export function AcceptanceObservations({
   accepted,
 }: {
   accepted: api.ResearchAcceptanceOutcome["accepted"];
@@ -554,7 +571,19 @@ function Observations({
   );
 }
 
-function Issues({ data }: { data: api.ResearchAcceptanceOutcome }) {
+export function AcceptanceIssues({
+  data,
+}: {
+  data: Pick<
+    api.ResearchAcceptanceOutcome,
+    | "researchId"
+    | "issues"
+    | "issueCount"
+    | "issueListComplete"
+    | "canInspectArtifacts"
+    | "canReplay"
+  >;
+}) {
   const [itemType, setItemType] = useState("ALL");
   const [rule, setRule] = useState("ALL");
   const issues = useMemo(

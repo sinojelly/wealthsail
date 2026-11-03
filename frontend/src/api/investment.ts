@@ -709,6 +709,22 @@ export type DailyResearchFailureRuleId =
   | "DIRECTION_MACRO_REFERENCE_UNKNOWN"
   | "DIRECTION_CALIBRATION_RULE_UNKNOWN"
   | "DIRECTION_EVIDENCE_INSUFFICIENT";
+export interface DeterministicRepair {
+  version: string;
+  originalDecision: "PARTIAL";
+  strictRevalidated: boolean;
+  quarantinedCount: number;
+  quarantined: Array<{
+    itemType: string;
+    itemIndex?: number | null;
+    businessKey?: string;
+    ruleId?: string;
+    reason: string;
+  }>;
+  counts: Record<string, unknown>;
+  repairRevision?: string | null;
+  buildCommit?: string | null;
+}
 export interface DailyResearch {
   schedule?: {
     mode: "DAILY" | "WEEKDAYS";
@@ -774,6 +790,7 @@ export interface DailyResearch {
   failureItemIndex?: number | null;
   failureIndustryCodes?: string[] | null;
   report: {
+    deterministicRepair?: DeterministicRepair;
     methodVersion?: string;
     asOf?: string;
     summary: string;

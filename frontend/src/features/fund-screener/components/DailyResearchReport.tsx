@@ -10,6 +10,8 @@ import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 import { researchScheduleLabel } from "../research-schedule-display";
 import ResearchAcceptance from "./ResearchAcceptance";
+import DeterministicRepairNotice from "./DeterministicRepairNotice";
+import { PublishedResearchRepairs } from "../../operations/components/ResearchHistoryRepairs";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未启动",
   RUNNING: "研究正在执行",
@@ -537,6 +539,10 @@ function DailyResearchContent({
         </p>
       )}
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
+      <DeterministicRepairNotice
+        repair={report?.deterministicRepair}
+        reportRunId={data?.reportRunId}
+      />
       <ResearchAcceptance
         runId={data?.pipeline ? data.pipeline.researchRunId : data?.runId}
         state={currentState}
@@ -544,6 +550,7 @@ function DailyResearchContent({
           data?.pipeline ? data.pipeline.finishedAt : data?.completedAt
         }
       />
+      <PublishedResearchRepairs />
       {!report ? (
         <>
           <p>有效报告尚未生成，可先核查市场证据。</p>

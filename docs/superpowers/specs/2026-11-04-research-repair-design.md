@@ -1,0 +1,33 @@
+# 确定性研究纠错与历史离线衍生报告
+
+目标是让明确可安全隔离的观察条目不再一票否决本次新研究，同时让原FAILED研究可使用冻结资料生成独立历史修复版。原始研究、INITIAL、材料、模型计量、调度名额及pipeline不可改写。本轮只本地实现、测试及提交，不推送、不部署、不连接生产、不调用模型。
+
+## 方案选择与边界
+
+仅改Prompt不能修正已经发生的结构错误；放宽validate_report或把历史记录UPDATE为READY会破坏既有风控与审计。本实现采用共享的纯确定性纠错器，保留严格接口：最多一次、最多隔离2个无plans/quantitativeFundCodes且无有效审核关联的WATCH，完整保留sources和industryCycleReviews，使用原packet/checks/validated_at重跑公开validate_report。该次完整验证包含行业风险、价格、买入保护、评分和引用闭包；不复用收集式验收的宽松探测作为正式通过。
+
+不自动猜测行业，也不将RARE_EARTH、RARE_EARTH_METALS、NONFERROUS视为等价。有基金计划但缺规范行业审核、来源/结构安全失败、部分审核被删改、严重负面风险被隔离等情况必须阻止。原始输出和所有问题、隔离位置、稳定key、理由及依赖另存。
+
+原始方向key与种子方向ID可能重名，因此依赖闭包必须检查原始affectedDirectionIds，不能只靠删后严格校验发现悬空引用。HIGH事件、负面线索或14日历史风险不能静默删除。低重要性且可证明非负面的附属事件可随观察方向隔离；HIGH、叙述性风险、旧日历无重要性、总纲无可靠引用证明等情况阻止自动正式发布，但完整严格通过后可成为仅供独立人工审核的历史只读候选。所有隔离项均有不可省略的风险、情景、未知项及原来源附件。已规范认定的周期风险、FOUND或历史风险是硬阻断，历史审核也不能绕过；标题或否定句的词汇命中本身不作为事实认定。
+
+新增可选narrativeDirectionIds记录summary/macroCycle/coverage的方向依赖，旧格式仍兼容。新Prompt要求无计划方向也真实关联已有行业审核，无关联则不输出为正式方向；不增加10行业、50搜索、24来源预算。声明引用还须校验原始key，不能删除引用来伪造独立性。没有可靠依赖证明的旧输出不自动发布。
+
+## 未来研究
+
+先保存原始收集式验收结论。仅原严格验收失败时尝试纠错，只有strictPass且autoPublishAllowed才在本次第一次终态写READY；正式payload附deterministicRepair说明。原INITIAL仍标原始PARTIAL及原问题，另记录repairedFormalPublished，不伪装原始COMPLETE。现有READY消费路径可使用本次安全重验的保留计划，界面必须随实际报告身份显示隔离标记，不能把新失败任务的标记套到旧报告。
+
+## 历史恢复
+
+源必须是有权访问的terminal FAILED，INITIAL存在、归档ARCHIVED且三材料完整。服务器只接受runId和命令键，不接受模型原文、任意patch或自选证据时刻。核对材料身份、大小、哈希、原时钟及派发关系，使用固定30秒纯离线子进程，禁止provider、数据库和网络执行。
+
+GET预览是真正数据库只读事务，不保存衍生记录或尝试ledger；使用操作者/研究及全局最多2个非阻塞锁限制并发，固定安全元信息写应用日志，不承诺只读预览同时具有持久日配额。生成POST使用独立有界ledger，与现有重放共用操作者10次/上海日、研究20次/20MiB预算，4MiB预留对应候选、验收与安全摘要总存储上限，失败计额，同键不重复运行。
+
+迁移101新增不可变derivation和append-only审核/发布事件。DRAFT经不同于创建者的有效管理员独立APPROVE才可显式PUBLISH，REJECT终止；权限、租户与候选摘要绑定由数据库强制。普通成员仅看到本租户PUBLISHED安全观察摘要、原证据时刻、历史/过期警示及隔离事实附录；管理员可看完整评分、差异、问题、原材料摘要、规则和构建修订。不覆写旧报告或伪造新模型run。
+
+发布范围固定HISTORICAL_READ_ONLY，禁止跟踪、买卖、推送及重新解释为实时价格。原日报回退、基金跟踪、历史风险继承、量化评分、价格刷新、调度和通知的READY查询不UNION衍生表。若未来要进入当前投资动作，须另做完整消费路径与时效设计，不能复用历史发布开关。
+
+本地文件CLI只验证导出的自洽性并预览，不能证明导出有服务器签名，也不能生成或发布数据库记录。用户本轮提供原冻结导出后，已按三个固定哈希独立复现真实ceaa7c1c案例，详见本地验收与操作说明；原始材料留在ignored artifacts，不进入Git。
+
+## 消费路径盘点
+
+需保持原行为的路径包括daily_repository.read_daily_research/read_recent_public_research/read_previous，opportunity_service/service.read_fund_risk_context，study_repository的DAILY_REPORT/DAILY_DIRECTION/DAILY_QUANT_SCAN，study_price_watch，alpha_opportunities._today_report及通知，手动队列DTO与模型用量。A是当前安全READY，B是独立历史正文，二者不可混用身份。

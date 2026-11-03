@@ -16,6 +16,7 @@ import Phase2Evidence from "./Phase2Evidence";
 import ValueDirections, { type DirectionTrackInput } from "./ValueDirections";
 import QuantitativeScan, { type QuantScanTrackInput } from "./QuantitativeScan";
 import { researchSummary } from "../research-reading";
+import DeterministicRepairNotice from "./DeterministicRepairNotice";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
@@ -261,6 +262,10 @@ export default function MacroContextStrip({
         )}
       </header>
       {renderResearchRefresh?.()}
+      <DeterministicRepairNotice
+        repair={ready?.dailyResearch?.report?.deterministicRepair}
+        reportRunId={ready?.dailyResearch?.reportRunId}
+      />
       <SellRiskAlerts data={ready?.sellRiskAlerts} />
       {confirmedBreach && (
         <p role="alert" className="op-confirmed-risk">
