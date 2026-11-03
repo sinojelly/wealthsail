@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from copy import deepcopy
 from datetime import datetime, timedelta
 import errno
 import hashlib
@@ -19,7 +20,11 @@ from backend.common.database import (
 )
 from backend.config import get_settings
 from backend.dependencies import now_shanghai
-from backend.integrations.codex_research import preflight_codex, run_codex_research
+from backend.integrations.codex_research import (
+    CodexOutputError,
+    preflight_codex,
+    run_codex_research,
+)
 from backend.integrations.daily_sources import (
     collect_daily_sources,
     verify_research_sources,
@@ -41,7 +46,17 @@ from backend.macro.daily_research import (
     REPORT_SCHEMA,
     build_prompt,
     make_research_packet,
+    ResearchValidationError,
     validate_report,
+)
+from backend.macro.research_acceptance_repository import (
+    save_research_artifacts,
+    save_validation_outcome,
+)
+from backend.macro.research_acceptance import (
+    rejected_outcome,
+    sources_for_verification,
+    validate_report_outcome,
 )
 from backend.macro.research_audit import (
     check_research_audit,
@@ -602,6 +617,10 @@ async def sync_daily_research(
                     )
         raise
     except Exception as exc:
+        if claim.get("_persistence_failed"):
+            # The atomic result/acceptance write failed after dispatch. Never
+            # replace it with a separate pipeline-only terminal transition.
+            raise
         logger.warning(
             "daily_pipeline_failed pipeline_id=%s stage=%s error_class=%s",
             claim["id"],
@@ -941,6 +960,7 @@ async def _execute_daily_research(
     result = {"status": "FAILED", "runId": str(run_id)}
     payload, error = None, unavailable
     raw, checks, audit_error = None, None, None
+    outcome, validated_at, raw_metadata = None, None, None
     diagnostics = {}
     model_returned = False
     current_stage = "MODEL_EXECUTION"
@@ -948,6 +968,10 @@ async def _execute_daily_research(
     def confirmed_model_return():
         nonlocal model_returned
         model_returned = True
+
+    def capture_model_result(value):
+        nonlocal raw
+        raw = deepcopy(value)
 
     try:
         if unavailable:
@@ -962,6 +986,7 @@ async def _execute_daily_research(
                     timeout=settings.daily_research_timeout_seconds,
                     model=model,
                     on_return=confirmed_model_return,
+                    on_output=capture_model_result,
                 )
             else:
                 selected_model = model or cli.get("selectedModel")
@@ -974,6 +999,7 @@ async def _execute_daily_research(
                         timeout=settings.daily_research_timeout_seconds,
                         model=selected_model,
                     )
+                    capture_model_result(value)
                     confirmed_model_return()
                     return value
 
@@ -994,8 +1020,9 @@ async def _execute_daily_research(
         current_stage = "SOURCE_VERIFICATION"
         if pipeline:
             await _pipeline_stage(pool, pipeline, stage="VERIFYING_OUTPUT")
-        sources = raw.get("sources", []) if isinstance(raw, dict) else []
+        sources = sources_for_verification(raw, now=local(now_shanghai()))
         checks = await verify_research_sources(sources, now=local(now_shanghai()))
+        validated_at = local(now_shanghai())
         write_research_audit(
             settings,
             run_id,
@@ -1005,14 +1032,21 @@ async def _execute_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "REPORT_VALIDATION"
-        payload = validate_report(
-            raw, packet, checks, completed_at=local(now_shanghai())
+        outcome = validate_report_outcome(
+            raw, packet, checks, research_id=str(run_id), completed_at=validated_at,
+            _strict_validator=validate_report,
         )
-        if isinstance(packet.get("inputQuality"), dict):
+        payload = outcome.formal_payload
+        if payload is not None and isinstance(packet.get("inputQuality"), dict):
             payload = dict(payload)
             payload["inputQuality"] = packet["inputQuality"]
             payload["sourceBatchId"] = packet.get("sourceBatchId")
-        result["status"], error = "READY", None
+        if payload is not None:
+            result["status"], error = "READY", None
+        else:
+            audit_error = outcome.first_error or ResearchValidationError("PAYLOAD_VALIDATION_FAILED")
+            error = "ResearchValidationError"
+            diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
         audit_error = exc
         result["status"], error = "UNCERTAIN", "CancelledError"
@@ -1033,8 +1067,33 @@ async def _execute_daily_research(
         diagnostics = _log_research_failure(exc, current_stage, run_id)
     except Exception as exc:  # noqa: BLE001
         audit_error = exc
+        if getattr(exc, "inference_succeeded", False) is True:
+            model_returned = True
+        parse_failure = isinstance(exc, CodexOutputError)
+        if parse_failure:
+            current_stage = "REPORT_VALIDATION"
+            audit_error = ResearchValidationError("SCHEMA_VALIDATION_FAILED")
+        captured = getattr(exc, "raw_output", None)
+        if captured is not None or getattr(exc, "raw_output_bytes", None) is not None:
+            raw = captured
+            if raw is None:
+                raw_metadata = {
+                    "sha256": getattr(exc, "raw_output_sha256", None),
+                    "byteLength": getattr(exc, "raw_output_bytes", None),
+                    "omissionReason": getattr(exc, "raw_output_omission", "SIZE_LIMIT"),
+                }
+            validated_at = local(now_shanghai())
+            # A failed execution has never completed source verification. Its
+            # output is evidence for inspection, never a normal acceptance path.
+            outcome = rejected_outcome(
+                str(run_id), validated_at,
+                reason_code=_canonical_reason_code(audit_error),
+                rule_id="ACCEPTANCE_PARSE_FAILED" if parse_failure else "ACCEPTANCE_SYSTEM_FAILURE",
+            )
         error = safe_error_class(type(exc).__name__)
-        diagnostics = _log_research_failure(exc, current_stage, run_id)
+        if isinstance(audit_error, ResearchValidationError):
+            error = "ResearchValidationError"
+        diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     finally:
         if raw is not None:
             write_research_audit(
@@ -1053,6 +1112,17 @@ async def _execute_daily_research(
                 error=audit_error,
             )
         try:
+            validated_at = validated_at or local(now_shanghai())
+            if outcome is None:
+                outcome = rejected_outcome(
+                    str(run_id), validated_at,
+                    reason_code=diagnostics.get("failure_reason_code") or "UNEXPECTED_ERROR",
+                )
+            async with system_connection(pool) as conn:
+                await save_research_artifacts(
+                    conn, run_id, packet, raw, checks, validated_at,
+                    **({"raw_metadata": raw_metadata} if raw_metadata is not None else {}),
+                )
             if pipeline and result["status"] == "READY":
                 await _pipeline_stage(pool, pipeline, stage="PERSISTING")
             if pipeline:
@@ -1069,11 +1139,16 @@ async def _execute_daily_research(
                         error_class=error,
                         **diagnostics,
                     )
+                    if outcome is not None:
+                        await save_validation_outcome(
+                            conn, run_id, outcome.to_dict(), kind="INITIAL",
+                            recorded_at=local(now_shanghai()),
+                        )
 
-                if pipeline:
-                    from backend.macro.daily_pipeline_repository import advance_pipeline
+                async with conn.transaction():
+                    if pipeline:
+                        from backend.macro.daily_pipeline_repository import advance_pipeline
 
-                    async with conn.transaction():
                         if not await advance_pipeline(
                             conn,
                             pipeline,
@@ -1083,11 +1158,12 @@ async def _execute_daily_research(
                             error_class=error,
                         ):
                             raise PipelineOwnershipLost()
-                        await persist_result()
-                    pipeline["_terminal_written"] = True
-                else:
                     await persist_result()
+                if pipeline:
+                    pipeline["_terminal_written"] = True
         except (Exception, asyncio.CancelledError) as exc:
+            if pipeline and not isinstance(exc, (PipelineOwnershipLost, asyncio.CancelledError)):
+                pipeline["_persistence_failed"] = True
             persist_error = safe_error_class(type(exc).__name__)
             logger.warning(
                 "daily_research_persist_failed stage=PERSISTING error_class=%s run_id=%s",

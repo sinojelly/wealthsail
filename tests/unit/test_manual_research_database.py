@@ -66,6 +66,24 @@ async def fixture(*, committed=False):
                 "UPDATE research.daily_research_refresh_requests SET batch_id=NULL,report_run_id=NULL,status='FAILED',completed_at=COALESCE(completed_at,requested_at) WHERE tenant_id=$1",
                 tenant,
             )
+            # Immutable acceptance rows restrict deletion of their owning run.
+            # Only this committed fixture's tenant/run identities are removed.
+            if target.path.startswith("/wealthsail_manual_research_acceptance"):
+                run_ids = [
+                    row["run_id"]
+                    for row in await conn.fetch(
+                        "SELECT run_id FROM research.daily_research_runs WHERE debug_request_id IN(SELECT id FROM research.daily_research_refresh_requests WHERE tenant_id=$1)",
+                        tenant,
+                    )
+                ]
+                for table in (
+                    "research_validation_records",
+                    "research_validation_artifacts",
+                ):
+                    await conn.execute(
+                        f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
+                        run_ids,
+                    )
             await conn.execute(
                 "DELETE FROM research.daily_research_results WHERE run_id IN(SELECT run_id FROM research.daily_research_runs WHERE debug_request_id IN(SELECT id FROM research.daily_research_refresh_requests WHERE tenant_id=$1))",
                 tenant,

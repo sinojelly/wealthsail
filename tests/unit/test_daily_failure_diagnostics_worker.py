@@ -110,22 +110,28 @@ async def test_persistence_timeout_is_logged_uncertain_and_never_reinvokes_model
     monkeypatch, caplog
 ):
     mod, state = isolate(monkeypatch)
+    snapshot = Mock()
+    monkeypatch.setattr(mod, "write_research_diagnostic", snapshot)
     monkeypatch.setattr(
         mod, "finish_daily_run", AsyncMock(side_effect=TimeoutError("PRIVATE-DB-DSN"))
     )
-    with caplog.at_level("WARNING"):
-        result = await mod.sync_daily_research(object(), settings(), NOW)
-    assert result == {"status": "UNCERTAIN", "errorClass": "PipelineRuntimeExpired"}
+    with caplog.at_level("WARNING"), pytest.raises(TimeoutError):
+        await mod.sync_daily_research(object(), settings(), NOW)
     assert (
         "daily_research_persist_failed stage=PERSISTING error_class=TimeoutError run_id=one"
         in caplog.text
     )
     assert "PRIVATE-DB-DSN" not in caplog.text
+    fields = snapshot.call_args.kwargs
+    assert fields["stage"] == "PERSISTING"
+    assert fields["report_status"] == "UNCERTAIN"
+    assert fields["reason_code"] == "TIMEOUT"
     assert state["terminal"] == []
     assert (await mod.sync_daily_research(object(), settings(), NOW))[
         "status"
     ] == "SKIPPED"
     mod.run_codex_research.assert_awaited_once()
+    mod.release_model_guard.assert_awaited_once()
 
 
 @pytest.mark.asyncio

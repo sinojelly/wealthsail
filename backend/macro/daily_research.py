@@ -1830,6 +1830,13 @@ def build_prompt(packet):
 
 
 def validate_report(raw, packet, source_checks, *, completed_at):
+    """Strict compatibility entry: every original publication rule still applies."""
+    return _validate_report_core(raw, packet, source_checks, completed_at=completed_at)
+
+
+def _validate_report_core(
+    raw, packet, source_checks, *, completed_at, _require_candidate_coverage=True
+):
     """Validate shape/references/times; checking a quote cannot certify inference."""
     completed_at = _now(completed_at)
     if _now(packet.get("asOf")) > completed_at:
@@ -1996,7 +2003,9 @@ def validate_report(raw, packet, source_checks, *, completed_at):
         industry_reviews=industry_reviews,
         historical_cycles=historical_cycles,
     )
-    if (packet.get("industryCycleResearch") or {}).get("required"):
+    if _require_candidate_coverage and (packet.get("industryCycleResearch") or {}).get(
+        "required"
+    ):
         expected = {row["industry"] for row in industry_tasks["candidates"]}
         if expected - reviewed:
             raise ResearchValidationError(

@@ -206,15 +206,24 @@ def _safe_completion(result):
     return safe
 
 
-def _error_detail(error, message):
+def _error_detail(error, message, *, capture_output=False):
     if not hasattr(error, "inference_succeeded"):
         return message
     model = getattr(error, "model", None)
-    return {
+    detail = {
         "message": message, "usage": normalize_usage(getattr(error, "usage", None)),
         "model": model if isinstance(model, str) and 1 <= len(model) <= 120 else "codex",
         "inferenceSucceeded": getattr(error, "inference_succeeded", False) is True,
     }
+    if capture_output:
+        from backend.integrations.codex_research import raw_output_metadata
+
+        captured = raw_output_metadata(error)
+        if captured is not None:
+            detail["rawOutput"] = captured
+            if len(_json_bytes({"detail": detail})) > MAX_OUTPUT_BYTES:
+                detail["rawOutput"] = {**captured, "content": None, "omissionReason": "SIZE_LIMIT"}
+    return detail
 
 
 class ManagedStream(StreamingResponse):
@@ -300,7 +309,7 @@ def create_app(
             raise HTTPException(400, "Requested Codex model is not allowed")
         return allowed
 
-    async def invoke(operation: Callable[[], Awaitable], timeout: float, connection: Request):
+    async def invoke(operation: Callable[[], Awaitable], timeout: float, connection: Request, *, capture_output=False):
         async def execute():
             async with capacity.slot():
                 async with asyncio.timeout(timeout):
@@ -326,13 +335,13 @@ def create_app(
         except HTTPException:
             raise
         except TimeoutError as exc:
-            raise HTTPException(504, _error_detail(exc, "Codex execution timed out")) from exc
+            raise HTTPException(504, _error_detail(exc, "Codex execution timed out", capture_output=capture_output)) from exc
         except CodexUnavailableError as exc:
             raise HTTPException(503, "Codex authentication or runtime unavailable") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise HTTPException(502, _error_detail(exc, "Codex execution failed")) from exc
+            raise HTTPException(502, _error_detail(exc, "Codex execution failed", capture_output=capture_output)) from exc
         finally:
             with anyio.CancelScope(shield=True):
                 for task in (execution, disconnect):
@@ -374,6 +383,7 @@ def create_app(
             lambda: run_codex_research(executable, request.prompt, request.output_schema, timeout=request.timeout, environment=child_environment, model=selected),
             request.timeout + 5,
             connection,
+            capture_output=True,
         )
         if not isinstance(result, dict):
             raise HTTPException(502, "Invalid Codex research response")

@@ -1,6 +1,7 @@
 """One noninteractive public Codex session; no provider retry or private inputs."""
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,48 @@ class CodexExecutionError(Exception):
 
 class CodexOutputError(Exception):
     pass
+
+
+def _capture_output_error(error, path):
+    """Retain exact bounded evidence before the public scratch directory closes."""
+    digest, chunks, size = hashlib.sha256(), [], 0
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(65536):
+                digest.update(chunk)
+                size += len(chunk)
+                if size <= 2 * 1024 * 1024:
+                    chunks.append(chunk)
+                else:
+                    chunks.clear()
+        error.raw_output_bytes = size
+        error.raw_output_sha256 = digest.hexdigest()
+        error.raw_output = None
+        error.raw_output_omission = "SIZE_LIMIT" if size > 2 * 1024 * 1024 else None
+        if error.raw_output_omission is None:
+            try:
+                error.raw_output = b"".join(chunks).decode("utf-8")
+            except UnicodeError:
+                error.raw_output_omission = "INVALID_UTF8"
+    except OSError:
+        # Evidence collection must not replace the original execution error.
+        pass
+    return error
+
+
+def raw_output_metadata(error):
+    """Closed internal transport metadata; never include exception messages."""
+    content = getattr(error, "raw_output", None)
+    size = getattr(error, "raw_output_bytes", None)
+    digest = getattr(error, "raw_output_sha256", None)
+    if isinstance(content, str) and len(content.encode("utf-8")) <= 2 * 1024 * 1024:
+        encoded = content.encode("utf-8")
+        return {"content": content, "byteLength": len(encoded), "sha256": hashlib.sha256(encoded).hexdigest()}
+    if type(size) is int and size >= 0 and isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+        reason = getattr(error, "raw_output_omission", None)
+        return {"content": None, "byteLength": size, "sha256": digest,
+                "omissionReason": reason if reason in {"SIZE_LIMIT", "INVALID_UTF8"} else "SIZE_LIMIT"}
+    return None
 
 
 def normalize_usage(source, *, compute_total=False):
@@ -354,4 +397,5 @@ async def run_codex_research(
                 raise CodexOutputError("missing or oversized report")
             return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model)
         except (CodexExecutionError, CodexOutputError, OSError, UnicodeError) as exc:
+            _capture_output_error(exc, output_path)
             raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed)

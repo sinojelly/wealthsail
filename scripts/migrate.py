@@ -2585,6 +2585,36 @@ async def _readback(conn: asyncpg.Connection) -> None:
         )
         if not safe_industry_metadata:
             raise RuntimeError("daily research industry diagnostic boundary is missing or unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=99)"
+    ):
+        for table in ("research.research_validation_artifacts", "research.research_validation_records"):
+            if not await conn.fetchval(
+                "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)", table
+            ):
+                raise RuntimeError("research acceptance RLS boundary is missing or unsafe")
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                    expected = role == "wealthsail_worker" and privilege in {"SELECT", "INSERT"}
+                    if await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege) != expected:
+                        raise RuntimeError("research acceptance raw privilege boundary is missing or unsafe")
+            if await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table
+            ):
+                raise RuntimeError("research acceptance exposes PUBLIC privileges")
+        for column, allowed in (("summary", True), ("outcome", False)):
+            if await conn.fetchval(
+                "SELECT has_column_privilege('wealthsail_api','research.research_validation_records',$1,'SELECT')", column
+            ) != allowed:
+                raise RuntimeError("research acceptance summary projection is missing or unsafe")
+        for function in ("research.read_validation_artifacts_admin(uuid,boolean)", "research.read_validation_outcome_admin(uuid)"):
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                if await conn.fetchval("SELECT has_function_privilege($1,$2,'EXECUTE')", role, function) != (role == "wealthsail_api"):
+                    raise RuntimeError("research acceptance administrator function grant is unsafe")
+            if not await conn.fetchval(
+                "SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function
+            ):
+                raise RuntimeError("research acceptance administrator function is missing or unsafe")
     nav_job_constraint = await conn.fetchval(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
     )

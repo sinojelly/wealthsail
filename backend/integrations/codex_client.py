@@ -87,7 +87,7 @@ def _check_input(payload):
         raise CodexCallError("Codex input exceeds the configured limit")
 
 
-def _failure_metadata(error, source):
+def _failure_metadata(error, source, *, capture_raw=False):
     if isinstance(source, dict):
         uncertain = source.get("inferenceUncertain") is True
         succeeded = source.get("inferenceSucceeded")
@@ -100,6 +100,24 @@ def _failure_metadata(error, source):
         codex_research.with_telemetry(error, usage=usage, model=model if isinstance(model, str) and 1 <= len(model) <= 120 else None, inference_succeeded=succeeded)
     if uncertain:
         error.inference_uncertain = True
+    captured = (
+        source.get("rawOutput") if isinstance(source, dict)
+        else codex_research.raw_output_metadata(source)
+    ) if capture_raw else None
+    if isinstance(captured, dict):
+        content, size, digest = (captured.get(key) for key in ("content", "byteLength", "sha256"))
+        valid = type(size) is int and size >= 0 and isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
+        if isinstance(content, str):
+            try:
+                encoded = content.encode("utf-8")
+                valid = valid and len(encoded) <= _MAX_OUTPUT_BYTES and len(encoded) == size and hashlib.sha256(encoded).hexdigest() == digest
+            except UnicodeError:
+                valid = False
+        else:
+            valid = valid and content is None and captured.get("omissionReason") in {"SIZE_LIMIT", "INVALID_UTF8"}
+        if valid:
+            error.raw_output, error.raw_output_bytes, error.raw_output_sha256 = content, size, digest
+            error.raw_output_omission = captured.get("omissionReason")
     return error
 
 
@@ -144,7 +162,7 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         error = TimeoutError("Codex research outcome is uncertain") if uncertain and response.status_code == 504 else CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
                         if response.status_code == 504:
                             error.inference_uncertain = True
-                        raise _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None)
+                        raise _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research")
                     result = json.loads(b"".join(chunks))
                     if not isinstance(result, dict):
                         raise CodexCallError("Codex runner returned an invalid response")
@@ -380,11 +398,13 @@ async def _stream_chat(
         raise error from exc
 
 
-async def research(settings, prompt, schema, *, timeout=900, model=None, on_return=None) -> dict:
+async def research(settings, prompt, schema, *, timeout=900, model=None, on_return=None, on_output=None) -> dict:
     from backend.ai_usage.tracker import trace_inference
 
     async def operation():
         result = await _research(settings, prompt, schema, timeout=timeout, model=model)
+        if on_output is not None:
+            on_output(result)
         if on_return is not None:
             on_return()
         return result
@@ -418,4 +438,4 @@ async def _research(settings, prompt, schema, *, timeout=900, model=None) -> dic
     except TimeoutError:
         raise
     except Exception as exc:
-        raise _failure_metadata(CodexCallError("Codex public research failed"), exc) from exc
+        raise _failure_metadata(CodexCallError("Codex public research failed"), exc, capture_raw=True) from exc

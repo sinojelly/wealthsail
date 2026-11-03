@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -501,22 +502,37 @@ async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_
         admin = await asyncpg.connect(DSN)
         try:
             if owned:
+                run_id = await admin.fetchval(
+                    "SELECT research_run_id FROM research.daily_research_pipelines WHERE id=$1",
+                    owned["id"],
+                )
                 await admin.execute(
                     "DELETE FROM research.daily_research_pipelines WHERE id=$1",
                     owned["id"],
                 )
-                await admin.execute(
-                    "DELETE FROM research.daily_research_model_guards WHERE run_id IN (SELECT run_id FROM research.daily_research_runs WHERE slot_date=$1 AND run_mode='SCHEDULED')",
-                    now.date(),
-                )
-                await admin.execute(
-                    "DELETE FROM research.daily_research_results WHERE run_id IN (SELECT run_id FROM research.daily_research_runs WHERE slot_date=$1 AND run_mode='SCHEDULED')",
-                    now.date(),
-                )
-                await admin.execute(
-                    "DELETE FROM research.daily_research_runs WHERE slot_date=$1 AND run_mode='SCHEDULED'",
-                    now.date(),
-                )
+                if run_id is not None:
+                    target = urlsplit(DSN)
+                    if target.path.startswith(
+                        "/wealthsail_manual_research_acceptance"
+                    ):
+                        assert target.hostname in {"localhost", "127.0.0.1", "::1"}
+                        for table in (
+                            "research_validation_records",
+                            "research_validation_artifacts",
+                        ):
+                            await admin.execute(
+                                f"DELETE FROM research.{table} WHERE run_id=$1",
+                                run_id,
+                            )
+                    for table in (
+                        "daily_research_model_guards",
+                        "daily_research_results",
+                        "daily_research_runs",
+                    ):
+                        await admin.execute(
+                            f"DELETE FROM research.{table} WHERE run_id=$1",
+                            run_id,
+                        )
         finally:
             await admin.close()
 

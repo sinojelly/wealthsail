@@ -4,6 +4,7 @@ import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import pytest
@@ -340,6 +341,24 @@ async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_sl
             )
             await pool.close()
             if scheduled_batch is not None:
+                target = urlsplit(DSN)
+                if target.path.startswith("/wealthsail_manual_research_acceptance"):
+                    assert target.hostname in {"localhost", "127.0.0.1", "::1"}
+                    run_ids = [
+                        row["run_id"]
+                        for row in await admin.fetch(
+                            "SELECT run_id FROM research.daily_research_runs WHERE source_batch_id=$1",
+                            scheduled_batch,
+                        )
+                    ]
+                    for table in (
+                        "research_validation_records",
+                        "research_validation_artifacts",
+                    ):
+                        await admin.execute(
+                            f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
+                            run_ids,
+                        )
                 await admin.execute(
                     "DELETE FROM research.daily_research_pipelines WHERE source_batch_id=$1",
                     scheduled_batch,

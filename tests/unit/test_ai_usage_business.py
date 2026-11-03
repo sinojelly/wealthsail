@@ -213,6 +213,8 @@ def daily_boundary(monkeypatch, remote):
         daily_research, "claim_daily_run", AsyncMock(return_value={"run_id": "run"})
     )
     monkeypatch.setattr(daily_research, "finish_daily_run", AsyncMock())
+    monkeypatch.setattr(daily_research, "save_research_artifacts", AsyncMock(), raising=False)
+    monkeypatch.setattr(daily_research, "save_validation_outcome", AsyncMock(), raising=False)
     monkeypatch.setattr(daily_research, "lock_model_dispatch", AsyncMock())
     monkeypatch.setattr(
         daily_research, "create_model_guard", AsyncMock(return_value="token")
