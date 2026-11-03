@@ -262,6 +262,26 @@ export default function MacroContextStrip({
         )}
       </header>
       {renderResearchRefresh?.()}
+      {ready?.dailyResearch?.reportRunId && (
+        <p>
+          <button
+            type="button"
+            onClick={() => {
+              open("events", true);
+              requestAnimationFrame(() =>
+                document
+                  .getElementById(
+                    `research-topic-registry-${ready.dailyResearch!.reportRunId}`,
+                  )
+                  ?.scrollIntoView?.({ behavior: "smooth", block: "start" }),
+              );
+            }}
+          >
+            查看展示报告的主题目录
+          </button>
+          <small> · 报告ID：{ready.dailyResearch.reportRunId} · 只读</small>
+        </p>
+      )}
       <DeterministicRepairNotice
         repair={ready?.dailyResearch?.report?.deterministicRepair}
         reportRunId={ready?.dailyResearch?.reportRunId}

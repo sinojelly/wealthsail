@@ -12,6 +12,7 @@ import { researchScheduleLabel } from "../research-schedule-display";
 import ResearchAcceptance from "./ResearchAcceptance";
 import DeterministicRepairNotice from "./DeterministicRepairNotice";
 import { PublishedResearchRepairs } from "../../operations/components/ResearchHistoryRepairs";
+import ResearchTopicRegistry from "./ResearchTopicRegistry";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未启动",
   RUNNING: "研究正在执行",
@@ -551,6 +552,25 @@ function DailyResearchContent({
         }
       />
       <PublishedResearchRepairs />
+      {report && data?.reportRunId && (
+        <ResearchTopicRegistry
+          runId={data.reportRunId}
+          state="READY"
+          completedAt={data.reportCompletedAt}
+          variant="FORMAL"
+        />
+      )}
+      {(data?.pipeline ? data.pipeline.researchRunId : data?.runId) !==
+        data?.reportRunId && (
+        <ResearchTopicRegistry
+          runId={data?.pipeline ? data.pipeline.researchRunId : data?.runId}
+          state={currentState}
+          completedAt={
+            data?.pipeline ? data.pipeline.finishedAt : data?.completedAt
+          }
+          variant="CURRENT"
+        />
+      )}
       {!report ? (
         <>
           <p>有效报告尚未生成，可先核查市场证据。</p>

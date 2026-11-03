@@ -24,4 +24,6 @@
 - [x] Migration102 immutable snapshots/entries, archive compensation, scope-safe backlog and paged API with real PG tests.
 - [x] Read-only frontend topic pages, reasons/impact/measures/tasks and coverage; bind actual source identity.
 - [x] Regress NONFERROUS failure shape, actual ceaa7c1c export,12/20/30 topics, budget, matching, systemic risk, database, permissions, idempotency and no additional AI.
-- [ ] Full backend/frontend/PG/static/docs; inspect and make local functional commits only.
+- [x] Full backend/frontend/PG/static/docs; inspect and make local functional commits only.
+
+Final validation and operational limits: [operations](../../dynamic-research-operations.md).

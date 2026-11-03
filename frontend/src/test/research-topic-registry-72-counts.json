@@ -1,0 +1,29 @@
+{
+  "totalCount": 72,
+  "coverage": {
+    "plannedScopeCount": 3,
+    "reviewedScopeCount": 3,
+    "pendingScopeCount": 0,
+    "deferredScopeCount": 0,
+    "maxTopics": 64,
+    "maxFormalDirections": 8,
+    "maxScopes": 10,
+    "maxQueries": 50,
+    "maxSources": 24,
+    "maxModelCalls": 1,
+    "additionalModelCalls": 0,
+    "maxInputBytes": 4194304,
+    "maxOutputBytes": 2097152,
+    "maxExecutionSeconds": 1200,
+    "totalCount": 72,
+    "storedCount": 72,
+    "countsByStatus": {
+      "FORMAL": 8,
+      "OBSERVATION_ONLY": 0,
+      "PENDING_REVIEW": 64,
+      "QUARANTINED": 0
+    },
+    "searchExecutionVerified": false,
+    "hasMore": false
+  }
+}
