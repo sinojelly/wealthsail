@@ -190,6 +190,7 @@ def model_packet(packet):
             "discoveryCoverage",
             "dynamicNavSourceResults",
             "industryCycleResearch",
+            "researchDiscovery",
         ),
     )
     public = packet.get("alphaPublic") or {}

@@ -101,6 +101,11 @@ def industry_cycle_research_tasks(packet, now):
     that collector to financing/operating-cycle sources outside official macro
     feeds. Results must still use the ordinary report source-validation path.
     """
+    from backend.macro.research_topics import frozen_manifest
+    frozen = frozen_manifest(packet)
+    if frozen is not None:
+        from copy import deepcopy
+        return deepcopy(frozen["candidateContract"])
     from backend.macro.industry_cycle import RISK_CHECKS
     from backend.macro.industry_contract import (
         NEWS_RELATED_INDUSTRIES,
@@ -193,6 +198,23 @@ def industry_cycle_research_tasks(packet, now):
             previous_risks.add(industry)
             add(industry)
 
+    pending_scopes = set()
+    for row in packet.get("pendingTopicScopes", []):
+        if not isinstance(row, dict):
+            continue
+        identity, term = row.get("industryId"), row.get("searchTerm")
+        if not isinstance(identity, str) or not identity.strip() or len(identity) > 100:
+            continue
+        if not isinstance(term, str) or not term.strip() or len(term) > 100:
+            continue
+        if identity.startswith("TOPIC_SCOPE:"):
+            from backend.macro.research_topics import digest
+            if identity != "TOPIC_SCOPE:" + digest(term)[:32]:
+                continue
+        pending_scopes.add(identity)
+        search_names[identity] = term
+        add(identity)
+
     plan_requirements = {}
     plan_industries = set()
     for anchor in packet.get("discoveryActionableZones", []):
@@ -245,6 +267,8 @@ def industry_cycle_research_tasks(packet, now):
         key=lambda sector: (
             -2
             if sector in previous_risks
+            else -1.5
+            if sector in pending_scopes
             else -1
             if sector in plan_industries
             else 0
@@ -256,6 +280,7 @@ def industry_cycle_research_tasks(packet, now):
             order[sector],
         )
     )
+    all_industries = list(candidates)
     omitted_industries = candidates[MAX_INDUSTRY_CYCLE_CANDIDATES:]
     candidates = candidates[:MAX_INDUSTRY_CYCLE_CANDIDATES]
     selected = set(candidates)
@@ -268,6 +293,9 @@ def industry_cycle_research_tasks(packet, now):
         "omittedCandidateCount": len(omitted_industries),
         "omittedRiskCandidateCount": len(previous_risks - selected),
         "omittedIndustries": omitted_industries,
+        "allIndustries": all_industries,
+        "scopeSearchTerms": {industry: search_names.get(industry, industry) for industry in all_industries},
+        "deferredPages": [omitted_industries[index:index + 10] for index in range(0, len(omitted_industries), 10)],
         "omittedPlanIndustryIds": sorted(plan_industries - selected),
         "standardIndustryCodes": sorted(STANDARD_INDUSTRY_CODES),
         "planReviewEligibility": [
