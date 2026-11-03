@@ -1,4 +1,4 @@
-"""One model call freezes evidence before atomic acceptance/result publication."""
+"""One model call atomically publishes the result and frozen archive intent."""
 
 import asyncio
 import json
@@ -45,14 +45,23 @@ def boundary(monkeypatch, *, complete=True):
         state["collector"] = (raw, packet, checks, kwargs)
         return outcome
 
-    async def artifacts(conn, *args, **kwargs):
-        state["artifacts"] = args
-        state["artifact_kwargs"] = kwargs
-        assert not state.get("in_transaction", False)
-
-    async def save_outcome(conn, run_id, value, **kwargs):
+    async def enqueue(conn, *args, **kwargs):
         assert state["in_transaction"] is True
-        state["outcome"] = (run_id, value, kwargs)
+        state["archive_intent"] = (args, kwargs)
+
+    async def archive(pool, run_id, **kwargs):
+        assert not state.get("in_transaction", False)
+        args, queued_kwargs = state["archive_intent"]
+        state["artifacts"] = args[:5]
+        state["artifact_kwargs"] = {
+            key: value for key, value in queued_kwargs.items() if key == "raw_metadata"
+        }
+        state["outcome"] = (
+            run_id,
+            args[5],
+            {"kind": "INITIAL", "recorded_at": queued_kwargs["recorded_at"]},
+        )
+        return {"auditStatus": "ARCHIVED"}
 
     monkeypatch.setattr(mod, "validate_report_outcome", validate, raising=False)
     monkeypatch.setattr(
@@ -68,20 +77,18 @@ def boundary(monkeypatch, *, complete=True):
         raising=False,
     )
     monkeypatch.setattr(
-        mod, "save_research_artifacts", AsyncMock(side_effect=artifacts), raising=False
-    )
-    monkeypatch.setattr(
-        mod,
-        "save_validation_outcome",
-        AsyncMock(side_effect=save_outcome),
+        mod.archive_repository,
+        "enqueue_research_archive",
+        AsyncMock(side_effect=enqueue),
         raising=False,
     )
+    monkeypatch.setattr(mod, "archive_research_run", AsyncMock(side_effect=archive))
     return mod, state
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("complete", [False, True])
-async def test_acceptance_and_formal_result_share_transaction_after_separate_artifact_save(
+async def test_formal_result_and_frozen_archive_intent_share_transaction(
     monkeypatch, complete
 ):
     mod, state = boundary(monkeypatch, complete=complete)
@@ -98,24 +105,19 @@ async def test_acceptance_and_formal_result_share_transaction_after_separate_art
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed", ["artifact", "outcome"])
-async def test_evidence_or_acceptance_database_failure_raises_without_model_retry(
+async def test_archive_failure_keeps_formal_result_and_retryable_intent(
     monkeypatch, failed
 ):
     mod, state = boundary(monkeypatch)
-    target = (
-        mod.save_research_artifacts
-        if failed == "artifact"
-        else mod.save_validation_outcome
+    mod.archive_research_run.side_effect = ConnectionError(
+        f"private {failed} database message"
     )
-    target.side_effect = ConnectionError("private database message")
-    with pytest.raises(ConnectionError):
-        await mod.sync_daily_research(object(), settings(), NOW)
+    result = await mod.sync_daily_research(object(), settings(), NOW)
+    assert result["status"] == "READY" and result["auditStatus"] == "AUDIT_PENDING"
+    assert state["terminal"][0]["status"] == "READY"
+    assert "archive_intent" in state and "outcome" not in state
     mod.run_codex_research.assert_awaited_once()
     mod.release_model_guard.assert_awaited_once()
-    if failed == "artifact":
-        assert state["terminal"] == []
-    else:
-        assert "artifacts" in state
 
 
 @pytest.mark.asyncio

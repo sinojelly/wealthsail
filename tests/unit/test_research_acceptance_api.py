@@ -97,3 +97,35 @@ def test_replay_is_synchronous_idempotent_command_with_authenticated_actor(monke
         ).status_code
         == 400
     )
+
+
+def test_failed_replay_commits_attempt_transaction_before_returning_safe_error(
+    monkeypatch,
+):
+    from backend.errors import DataUnavailableError
+
+    api, module = client(monkeypatch)
+    state = {"committed": False}
+
+    @asynccontextmanager
+    async def transaction(*args):
+        yield AsyncMock(fetchval=AsyncMock(return_value=True))
+        state["committed"] = True
+
+    monkeypatch.setattr(module, "tenant_transaction", transaction)
+    monkeypatch.setattr(
+        module.repository,
+        "replay_validation",
+        AsyncMock(
+            return_value=module.repository.ReplayFailure(
+                DataUnavailableError("离线重放超时，已停止校验")
+            )
+        ),
+    )
+    response = api.post(
+        f"/api/v1/investment/daily-research/validation/{RUN}/replays",
+        json={"commandKey": str(uuid4())},
+    )
+    assert state["committed"] is True
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "离线重放超时，已停止校验"

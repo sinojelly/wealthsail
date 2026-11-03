@@ -2615,6 +2615,34 @@ async def _readback(conn: asyncpg.Connection) -> None:
                 "SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function
             ):
                 raise RuntimeError("research acceptance administrator function is missing or unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=100)"
+    ):
+        for table in ("research.research_validation_archive_queue", "research.research_validation_replay_attempts"):
+            if not await conn.fetchval("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)", table):
+                raise RuntimeError("research acceptance recovery RLS boundary is missing or unsafe")
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                    expected = (table.endswith("archive_queue") and role == "wealthsail_worker" and privilege in {"SELECT", "INSERT"}) or (table.endswith("replay_attempts") and role == "wealthsail_api" and privilege == "SELECT")
+                    if await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege) != expected:
+                        raise RuntimeError("research acceptance recovery privilege boundary is missing or unsafe")
+            if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table):
+                raise RuntimeError("research acceptance recovery exposes PUBLIC privileges")
+        for role, column, privilege, allowed in (
+            ("wealthsail_api", "frozen_bundle", "SELECT", False),
+            ("wealthsail_api", "safe_summary", "SELECT", True),
+            ("wealthsail_worker", "frozen_bundle", "UPDATE", False),
+            ("wealthsail_worker", "safe_summary", "UPDATE", False),
+            ("wealthsail_worker", "status", "UPDATE", True),
+        ):
+            if await conn.fetchval("SELECT has_column_privilege($1,'research.research_validation_archive_queue',$2,$3)", role, column, privilege) != allowed:
+                raise RuntimeError("research acceptance frozen recovery projection is missing or unsafe")
+        for function in ("research.read_validation_archive_outcome_admin(uuid)", "research.reserve_validation_replay(uuid,uuid,text)", "research.finish_validation_replay(uuid,text,uuid,text)"):
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                if await conn.fetchval("SELECT has_function_privilege($1,$2,'EXECUTE')", role, function) != (role == "wealthsail_api"):
+                    raise RuntimeError("research acceptance replay function grant is unsafe")
+            if not await conn.fetchval("SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function):
+                raise RuntimeError("research acceptance replay function is missing or unsafe")
     nav_job_constraint = await conn.fetchval(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
     )

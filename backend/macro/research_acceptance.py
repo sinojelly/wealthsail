@@ -8,8 +8,10 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 import json
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -21,6 +23,38 @@ from backend.macro.research_diagnostics import RULE_IDS, sanitize_missing_indust
 from backend.macro.value_directions import ValueDirectionProposal, _macro_codes
 
 VALIDATOR_VERSION = "research-acceptance-v1"
+_ROOT = Path(__file__).resolve().parents[2]
+_REVISION_FILES = tuple(
+    _ROOT / name
+    for name in (
+        "backend/macro/research_acceptance.py",
+        "backend/macro/daily_research.py",
+        "backend/macro/value_directions.py",
+        "backend/macro/industry_cycle.py",
+        "backend/macro/industry_contract.py",
+        "backend/macro/alpha_research.py",
+        "backend/indicators/actionable_zones.py",
+        "backend/investment/opportunity_scoring.py",
+        "backend/investment/subscription_status.py",
+    )
+)
+
+
+@lru_cache(maxsize=1)
+def validator_revision():
+    """Fingerprint the shipped rule sources without requiring a Git checkout."""
+    digest = hashlib.sha256()
+    try:
+        for path in _REVISION_FILES:
+            source = path.read_bytes().replace(b"\r\n", b"\n")
+            digest.update(path.name.encode("utf-8") + b"\0")
+            digest.update(len(source).to_bytes(8, "big") + source)
+    except OSError:
+        # Missing build metadata must never veto a strictly valid report.
+        return None
+    return digest.hexdigest()
+
+
 MAX_RAW_BYTES = 2 * 1024 * 1024
 MAX_ISSUES = 1000
 MAX_RECEIPT_BYTES = 768 * 1024
@@ -51,6 +85,7 @@ ISSUE_MESSAGES = {
     "ACCEPTANCE_SOURCE_VERIFICATION_FAILED": "来源核验未完成，不能使用空结果替代。",
     "ACCEPTANCE_ISSUE_LIMIT": "问题数量超过验收预算，不能声称清单完整。",
     "ACCEPTANCE_RECEIPT_LIMIT": "问题清单超过存储预算，需查看冻结材料，不能声称清单完整。",
+    "ACCEPTANCE_OVERVIEW_SOURCE_UNRESOLVED": "宏观总纲缺少逐句引用，相关全局来源未通过验收，已隔离。",
 }
 ISSUE_MESSAGES.update(
     {
@@ -118,11 +153,14 @@ class ValidationOutcome:
     first_error: strict.ResearchValidationError | None = field(default=None, repr=False)
     issue_list_complete: bool = True
     accepted_content_complete: bool = True
+    revision: str | None = field(default_factory=validator_revision)
 
     def to_dict(self):
         return {
             "researchId": self.research_id,
             "validatorVersion": VALIDATOR_VERSION,
+            "validatorRevision": self.revision,
+            "revisionStatus": "AVAILABLE" if self.revision else "UNAVAILABLE",
             "validatedAt": self.validated_at.isoformat(),
             "decision": self.decision,
             "formalPublishable": self.formal_payload is not None,
@@ -266,7 +304,10 @@ def _projection(report):
             "label",
             "riskLevel",
             "riskFlags",
+            "confirmedRiskFlags",
+            "suspectedRiskFlags",
             "persistedRiskFlags",
+            "evidenceGaps",
             "sourceIds",
             "evidenceSummary",
             "riskChecks",
@@ -347,7 +388,55 @@ def _projection(report):
             row["industryCycle"] = {
                 key: cycle[key] for key in cycle_fields if key in cycle
             }
+    output["macroOverview"] = _overview(
+        report, [row["id"] for row in output["sources"]]
+    )
     return output
+
+
+def _overview(raw, source_ids):
+    """Retain schema-valid model prose as inference, never verified facts.
+
+    The legacy header has no per-claim references. Its global source dependency
+    must therefore be intact before a partial report can retain this prose.
+    """
+    if not source_ids:
+        return {}
+    output = {"verification": "MODEL_UNVERIFIED", "sourceIds": list(source_ids)}
+    for name in ("summary", "macroCycle"):
+        value = raw.get(name)
+        if isinstance(value, str) and 1 <= len(value) <= 1000:
+            output[name] = value
+    values = raw.get("coverage")
+    if isinstance(values, list) and len(values) <= 6:
+        output["coverage"] = []
+        for row in values:
+            try:
+                output["coverage"].append(
+                    strict._Coverage.model_validate(row).model_dump()
+                )
+            except ValidationError:
+                continue
+    return (
+        output
+        if any(output.get(name) for name in ("summary", "macroCycle", "coverage"))
+        else {}
+    )
+
+
+def _overview_counts(raw, overview):
+    def count(value):
+        coverage = value.get("coverage")
+        return sum(name in value for name in ("summary", "macroCycle")) + (
+            len(coverage) if isinstance(coverage, list) else int("coverage" in value)
+        )
+
+    total, accepted = count(raw), count(overview)
+    return {
+        "inputCount": total,
+        "acceptedCount": accepted,
+        "quarantinedCount": total - accepted,
+    }
 
 
 def validate_report_outcome(
@@ -411,6 +500,9 @@ def validate_report_outcome(
             "acceptedCount": plans,
             "quarantinedCount": 0,
         }
+        counts["macroOverview"] = _overview_counts(
+            formal, _overview(formal, [row["id"] for row in formal["sources"]])
+        )
         return _bounded_outcome(
             ValidationOutcome(
                 str(research_id),
@@ -961,6 +1053,27 @@ def validate_report_outcome(
         "quarantinedCount": input_plans - accepted_plans,
     }
     observations = _projection(joint)
+    # Never expose neutral probe placeholders as the model's macro research.
+    intact = len(source_ids) == len(parsed.get("sources", [])) and bool(source_ids)
+    observations["macroOverview"] = (
+        _overview(parsed, [row["id"] for row in joint["sources"]]) if intact else {}
+    )
+    macro_fields = sum(name in parsed for name in ("summary", "macroCycle", "coverage"))
+    if not intact and macro_fields:
+        add(
+            "REPORT",
+            None,
+            "macroOverview",
+            {},
+            "ACCEPTANCE_OVERVIEW_SOURCE_UNRESOLVED",
+            disposition="BLOCKED",
+            deps=tuple(
+                {"itemType": "SOURCE", "businessKey": row.get("id", "unknown")}
+                for row in parsed.get("sources", [])
+                if isinstance(row, dict) and row.get("id") not in source_ids
+            ),
+        )
+    counts["macroOverview"] = _overview_counts(parsed, observations["macroOverview"])
     decision = "PARTIAL" if any(observations.values()) else "EMPTY"
     return _bounded_outcome(
         ValidationOutcome(

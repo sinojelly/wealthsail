@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from importlib import import_module
 import os
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -27,7 +26,10 @@ pytestmark = [
 async def fixture(*, manual=False):
     target = urlsplit(DSN)
     assert target.hostname in {"localhost", "127.0.0.1", "::1"}
-    assert target.path.startswith("/wealthsail_manual_research_acceptance")
+    assert (
+        target.path.startswith("/wealthsail_manual_research_acceptance")
+        or target.path == "/wealthsail_acceptance_review100_v1"
+    )
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()
     await tx.start()
@@ -188,12 +190,20 @@ async def test_scheduled_initial_is_shared_but_replays_are_tenant_private_and_id
         first = await initial(conn, run_id, now)
         calls = []
 
-        def validate(raw, packet, checks, *, research_id, completed_at):
-            calls.append((raw, packet, checks, research_id, completed_at))
-            return SimpleNamespace(to_dict=lambda: outcome(run_id, now))
+        async def validate(payload):
+            calls.append(
+                (
+                    payload["raw"],
+                    payload["packet"],
+                    payload["sourceChecks"],
+                    payload["researchId"],
+                    repo._aware(payload["validatedAt"]),
+                )
+            )
+            return outcome(run_id, now)
 
-        module = import_module("backend.macro.research_acceptance")
-        monkeypatch.setattr(module, "validate_report_outcome", validate)
+        module = import_module("backend.macro.research_acceptance_replay")
+        monkeypatch.setattr(module, "run_offline_validation", validate)
         await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
         key = uuid4()
         replay = await repo.replay_validation(
@@ -347,7 +357,9 @@ async def test_real_eight_direction_two_issue_replay_keeps_old_result_and_origin
         ] == initial_record["id"]
 
 
-async def test_replay_rejects_a_corrupt_inserted_digest_without_a_new_record(monkeypatch):
+async def test_replay_rejects_a_corrupt_inserted_digest_without_a_new_record(
+    monkeypatch,
+):
     import json
     from backend.errors import ValidationError_
 
@@ -358,13 +370,30 @@ async def test_replay_rejects_a_corrupt_inserted_digest_without_a_new_record(mon
         raw["sha256"] = "0" * 64
         await conn.execute(
             "INSERT INTO research.research_validation_artifacts(run_id,validated_at,packet,raw_output,source_checks) VALUES($1,$2,$3::jsonb,$4::jsonb,$5::jsonb)",
-            run_id, now, json.dumps(packet), json.dumps(raw), json.dumps(checks),
+            run_id,
+            now,
+            json.dumps(packet),
+            json.dumps(raw),
+            json.dumps(checks),
         )
+
         def forbidden(*args, **kwargs):
             raise AssertionError("corrupt artifacts must not reach the validator")
 
-        monkeypatch.setattr("backend.macro.research_acceptance.validate_report_outcome", forbidden)
+        monkeypatch.setattr(
+            "backend.macro.research_acceptance.validate_report_outcome", forbidden
+        )
         await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
-        with pytest.raises(ValidationError_, match="校验值"):
-            await repo.replay_validation(conn, run_id, actors[0], tenants[0], uuid4(), now)
-        assert await conn.fetch("SELECT id FROM research.research_validation_records WHERE run_id=$1", run_id) == []
+        failure = await repo.replay_validation(
+            conn, run_id, actors[0], tenants[0], uuid4(), now
+        )
+        assert isinstance(failure.error, ValidationError_) and "校验值" in str(
+            failure.error
+        )
+        assert (
+            await conn.fetch(
+                "SELECT id FROM research.research_validation_records WHERE run_id=$1",
+                run_id,
+            )
+            == []
+        )

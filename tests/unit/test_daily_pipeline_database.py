@@ -514,16 +514,19 @@ async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_
                     target = urlsplit(DSN)
                     if target.path.startswith(
                         "/wealthsail_manual_research_acceptance"
-                    ):
+                    ) or (target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"):
                         assert target.hostname in {"localhost", "127.0.0.1", "::1"}
                         for table in (
+                            "research_validation_replay_attempts",
+                            "research_validation_archive_queue",
                             "research_validation_records",
                             "research_validation_artifacts",
                         ):
-                            await admin.execute(
-                                f"DELETE FROM research.{table} WHERE run_id=$1",
-                                run_id,
-                            )
+                            if await admin.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                                await admin.execute(
+                                    f"DELETE FROM research.{table} WHERE run_id=$1",
+                                    run_id,
+                                )
                     for table in (
                         "daily_research_model_guards",
                         "daily_research_results",

@@ -61,6 +61,103 @@ def test_eight_directions_two_fail_six_retained_without_formal_payload():
     assert before == (packet, raw, checks)
 
 
+def test_partial_keeps_independent_macro_overview_as_unverified_inference():
+    packet, raw, checks = eight_directions()
+    raw["valueDirections"][0]["macroCodes"] = ["UNKNOWN_MACRO"]
+    raw["summary"] = "信用传导仍待后续资料验证。"
+    raw["macroCycle"] = "以宏观数据和公开报道作为观察背景。"
+    result = validate(raw, packet, checks).to_dict()
+    overview = result["accepted"]["macroOverview"]
+    assert overview["summary"] == raw["summary"]
+    assert overview["macroCycle"] == raw["macroCycle"]
+    assert overview["coverage"] == raw["coverage"]
+    assert overview["verification"] == "MODEL_UNVERIFIED"
+    assert set(overview["sourceIds"]) == {
+        row["id"] for row in result["accepted"]["sources"]
+    }
+    assert "plans" not in overview and result["actionable"] is False
+    assert result["counts"]["macroOverview"]["acceptedCount"] >= 2
+
+
+def test_macro_overview_quarantined_when_global_source_is_invalid():
+    packet, raw, checks = case()
+    raw["sources"][1]["publishedDate"] = "2099-01-01"
+    result = validate(raw, packet, checks).to_dict()
+    assert not result["accepted"].get("macroOverview")
+    issue = next(
+        row
+        for row in result["issues"]
+        if row["ruleId"] == "ACCEPTANCE_OVERVIEW_SOURCE_UNRESOLVED"
+    )
+    assert issue["dependencies"] and issue["disposition"] == "BLOCKED"
+
+
+def test_macro_fields_validate_independently_without_probe_placeholder_leak():
+    packet, raw, checks = case()
+    raw["summary"] = "x" * 1100
+    raw["macroCycle"] = "信用与需求仍需继续观察。"
+    result = validate(raw, packet, checks).to_dict()
+    overview = result["accepted"]["macroOverview"]
+    assert "summary" not in overview
+    assert overview["macroCycle"] == raw["macroCycle"]
+    assert "仅用于内部验收" not in json.dumps(overview, ensure_ascii=False)
+    assert any(issue["path"] == "summary" for issue in result["issues"])
+
+
+def test_bad_macro_coverage_rows_are_counted_as_quarantined_not_accepted():
+    packet, raw, checks = case()
+    raw["coverage"] = [
+        {"topic": "DOMESTIC_GROWTH", "status": "INVALID", "summary": "待核验。"}
+    ]
+    result = validate(raw, packet, checks).to_dict()
+    assert result["accepted"]["macroOverview"]["summary"] == raw["summary"]
+    assert result["accepted"]["macroOverview"]["coverage"] == []
+    assert result["counts"]["macroOverview"] == {
+        "inputCount": 2,
+        "acceptedCount": 1,
+        "quarantinedCount": 1,
+    }
+
+
+def test_validator_revision_tracks_code_bytes_and_does_not_change_saved_outcome(
+    tmp_path, monkeypatch
+):
+    from backend.macro import research_acceptance as acceptance
+
+    source = tmp_path / "rule.py"
+    source.write_bytes(b"rule = 1\r\n")
+    monkeypatch.setattr(acceptance, "_REVISION_FILES", (source,))
+    acceptance.validator_revision.cache_clear()
+    packet, raw, checks = case()
+    original = validate(raw, packet, checks).to_dict()
+    first = original["validatorRevision"]
+    assert len(first) == 64 and original["revisionStatus"] == "AVAILABLE"
+    source.write_bytes(b"rule = 1\n")
+    acceptance.validator_revision.cache_clear()
+    assert validate(raw, packet, checks).to_dict()["validatorRevision"] == first
+    source.write_bytes(b"rule = 2\n")
+    acceptance.validator_revision.cache_clear()
+    replay = validate(raw, packet, checks).to_dict()
+    assert replay["validatorRevision"] != first
+    assert original["validatorRevision"] == first
+    acceptance.validator_revision.cache_clear()
+
+
+def test_validator_revision_failure_is_explicit_and_cannot_veto_valid_report(
+    tmp_path, monkeypatch
+):
+    from backend.macro import research_acceptance as acceptance
+
+    monkeypatch.setattr(acceptance, "_REVISION_FILES", (tmp_path / "missing.py",))
+    acceptance.validator_revision.cache_clear()
+    packet, raw, checks = case()
+    outcome = validate(raw, packet, checks)
+    assert outcome.formal_payload is not None
+    assert outcome.to_dict()["validatorRevision"] is None
+    assert outcome.to_dict()["revisionStatus"] == "UNAVAILABLE"
+    acceptance.validator_revision.cache_clear()
+
+
 def test_missing_negative_review_blocks_only_dependent_funds_without_rewriting_checks():
     packet, raw, checks = case()
     other = deepcopy(raw["valueDirections"][0])
@@ -83,6 +180,31 @@ def test_missing_negative_review_blocks_only_dependent_funds_without_rewriting_c
         == "CONFIRMED"
     )
     assert raw == before
+
+
+@pytest.mark.asyncio
+async def test_real_offline_child_keeps_six_directions_with_entry_guards_and_risks():
+    from backend.macro.research_acceptance_replay import run_offline_validation
+
+    packet, raw, checks = eight_directions()
+    raw["valueDirections"][0]["macroCodes"] = ["UNKNOWN_MACRO"]
+    raw["valueDirections"][1]["reviewIndustryIds"] = ["MODEL_UNKNOWN"]
+    result = await run_offline_validation(
+        {
+            "raw": raw,
+            "packet": packet,
+            "sourceChecks": checks,
+            "researchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "validatedAt": NOW.isoformat(),
+        }
+    )
+    assert result["decision"] == "PARTIAL"
+    assert result["counts"]["valueDirections"]["acceptedCount"] == 6
+    assert (
+        result["accepted"]["valueDirections"][0]["industryCycle"]["riskLevel"]
+        == "CONFIRMED"
+    )
+    assert result["validatorRevision"] is not None
 
 
 def test_bad_news_reference_and_quarantined_direction_propagate_to_events():

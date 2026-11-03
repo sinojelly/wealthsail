@@ -29,7 +29,9 @@ async def fixture(*, committed=False):
         target.hostname == "localhost"
         or ipaddress.ip_address(target.hostname).is_loopback
     )
-    assert target.path.startswith("/wealthsail_manual_research")
+    assert target.path.startswith("/wealthsail_manual_research") or (
+        target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"
+    )
     conn = await asyncpg.connect(DSN)
     tenant, actor, other = uuid4(), uuid4(), uuid4()
     transaction = conn.transaction()
@@ -68,7 +70,9 @@ async def fixture(*, committed=False):
             )
             # Immutable acceptance rows restrict deletion of their owning run.
             # Only this committed fixture's tenant/run identities are removed.
-            if target.path.startswith("/wealthsail_manual_research_acceptance"):
+            if target.path.startswith("/wealthsail_manual_research_acceptance") or (
+                target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"
+            ):
                 run_ids = [
                     row["run_id"]
                     for row in await conn.fetch(
@@ -77,13 +81,16 @@ async def fixture(*, committed=False):
                     )
                 ]
                 for table in (
+                    "research_validation_replay_attempts",
+                    "research_validation_archive_queue",
                     "research_validation_records",
                     "research_validation_artifacts",
                 ):
-                    await conn.execute(
-                        f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
-                        run_ids,
-                    )
+                    if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                        await conn.execute(
+                            f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
+                            run_ids,
+                        )
             await conn.execute(
                 "DELETE FROM research.daily_research_results WHERE run_id IN(SELECT run_id FROM research.daily_research_runs WHERE debug_request_id IN(SELECT id FROM research.daily_research_refresh_requests WHERE tenant_id=$1))",
                 tenant,

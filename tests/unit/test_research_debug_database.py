@@ -39,6 +39,7 @@ async def fixture(*, committed=False):
     parts = urlsplit(DSN)
     assert parts.hostname == "127.0.0.1" and (
         parts.path.startswith("/wealthsail_manual_research")
+        or (parts.port == 29034 and parts.path == "/wealthsail_acceptance_review100_v1")
         or (
             parts.port in {55434, 55436}
             and (
@@ -88,7 +89,9 @@ async def fixture(*, committed=False):
                 "UPDATE research.daily_research_refresh_requests SET batch_id=NULL,report_run_id=NULL,status='FAILED',completed_at=COALESCE(completed_at,requested_at) WHERE tenant_id=$1",
                 tenant,
             )
-            if parts.path.startswith("/wealthsail_manual_research_acceptance"):
+            if parts.path.startswith("/wealthsail_manual_research_acceptance") or (
+                parts.port == 29034 and parts.path == "/wealthsail_acceptance_review100_v1"
+            ):
                 run_ids = [
                     row["run_id"]
                     for row in await conn.fetch(
@@ -97,13 +100,16 @@ async def fixture(*, committed=False):
                     )
                 ]
                 for table in (
+                    "research_validation_replay_attempts",
+                    "research_validation_archive_queue",
                     "research_validation_records",
                     "research_validation_artifacts",
                 ):
-                    await conn.execute(
-                        f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
-                        run_ids,
-                    )
+                    if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                        await conn.execute(
+                            f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
+                            run_ids,
+                        )
             await conn.execute(
                 "DELETE FROM research.daily_research_results WHERE run_id IN(SELECT run_id FROM research.daily_research_runs WHERE debug_request_id IN(SELECT id FROM research.daily_research_refresh_requests WHERE tenant_id=$1))",
                 tenant,

@@ -908,7 +908,7 @@ def _current_market_losses(packet, now):
 
 def apply_entry_guards(value, packet, now):
     """Overlay deterministic risk facts on copied report/model reading surfaces."""
-    from backend.jobs.opportunity_market import normalize_subscription_status
+    from backend.investment.subscription_status import normalize_subscription_status
 
     result = deepcopy(value)
     products = {

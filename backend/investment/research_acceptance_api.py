@@ -50,6 +50,8 @@ async def replay(run_id: UUID, body: ReplayCommand, pool=Depends(get_pool), ctx=
         if not await _admin(conn, ctx):
             raise ForbiddenError("仅当前有效管理员可执行离线重放")
         value = await repository.replay_validation(conn, run_id, UUID(ctx.user_id), UUID(ctx.tenant_id), body.commandKey, now)
+    if isinstance(value, repository.ReplayFailure):
+        raise value.error
     return ok(value, request_id=request_id, as_of=now)
 
 

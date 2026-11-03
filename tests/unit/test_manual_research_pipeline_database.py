@@ -342,7 +342,9 @@ async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_sl
             await pool.close()
             if scheduled_batch is not None:
                 target = urlsplit(DSN)
-                if target.path.startswith("/wealthsail_manual_research_acceptance"):
+                if target.path.startswith("/wealthsail_manual_research_acceptance") or (
+                    target.port == 29034 and target.path == "/wealthsail_acceptance_review100_v1"
+                ):
                     assert target.hostname in {"localhost", "127.0.0.1", "::1"}
                     run_ids = [
                         row["run_id"]
@@ -352,13 +354,16 @@ async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_sl
                         )
                     ]
                     for table in (
+                        "research_validation_replay_attempts",
+                        "research_validation_archive_queue",
                         "research_validation_records",
                         "research_validation_artifacts",
                     ):
-                        await admin.execute(
-                            f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
-                            run_ids,
-                        )
+                        if await admin.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                            await admin.execute(
+                                f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
+                                run_ids,
+                            )
                 await admin.execute(
                     "DELETE FROM research.daily_research_pipelines WHERE source_batch_id=$1",
                     scheduled_batch,

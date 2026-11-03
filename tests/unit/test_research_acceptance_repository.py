@@ -121,7 +121,9 @@ def test_public_summary_is_an_explicit_observation_projection_never_plans_or_raw
 @pytest.mark.parametrize(
     "fields,expected", [({}, True), ({"acceptedContentComplete": False}, False)]
 )
-def test_safe_summary_preserves_content_completeness_across_projection(fields, expected):
+def test_safe_summary_preserves_content_completeness_across_projection(
+    fields, expected
+):
     summary = repo().safe_outcome_summary(outcome(raw="PRIVATE_RAW", **fields))
     assert summary["acceptedContentComplete"] is expected
     projected = repo().safe_outcome_summary(summary)
@@ -131,21 +133,49 @@ def test_safe_summary_preserves_content_completeness_across_projection(fields, e
 
 def test_public_projection_marks_only_actual_observation_excerpts_as_incomplete():
     cases = [
-        ({"events": [{"title": "观察", "watchFor": ["关注"], "plans": ["PRIVATE" * 1000], "privateField": "PRIVATE" * 1000}]}, True),
+        (
+            {
+                "events": [
+                    {
+                        "title": "观察",
+                        "watchFor": ["关注"],
+                        "plans": ["PRIVATE" * 1000],
+                        "privateField": "PRIVATE" * 1000,
+                    }
+                ]
+            },
+            True,
+        ),
         ({"events": [{"title": "观察", "watchFor": ["字" * 500]}]}, False),
         ({"events": [{"summary": "字" * 1001}]}, False),
         ({"events": [{"watchFor": ["关注"] * 17}]}, False),
         ({"events": [{"title": "观察"}] * 13}, False),
         ({"sources": [{"id": "s1", "quote": "字" * 301}]}, False),
-        ({"valueDirections": [{"key": "observe", "industryCycle": {"evidenceSummary": "字" * 1001}}]}, False),
+        (
+            {
+                "valueDirections": [
+                    {
+                        "key": "observe",
+                        "industryCycle": {"evidenceSummary": "字" * 1001},
+                    }
+                ]
+            },
+            False,
+        ),
     ]
     for accepted, complete in cases:
-        summary = repo().safe_outcome_summary(outcome(
-            accepted=accepted, acceptedContentComplete=True,
-            decision="COMPLETE", formalPublishable=True,
-        ))
+        summary = repo().safe_outcome_summary(
+            outcome(
+                accepted=accepted,
+                acceptedContentComplete=True,
+                decision="COMPLETE",
+                formalPublishable=True,
+            )
+        )
         assert summary["acceptedContentComplete"] is complete
-        assert summary["decision"] == "COMPLETE" and summary["formalPublishable"] is True
+        assert (
+            summary["decision"] == "COMPLETE" and summary["formalPublishable"] is True
+        )
         assert summary["issueListComplete"] is True
         assert summary["issues"] == []
 
@@ -167,7 +197,9 @@ async def test_artifact_save_is_insert_once_with_three_bounded_frozen_inputs():
     assert "ON CONFLICT(run_id) DO NOTHING" in conn.execute.await_args.args[0]
     assert result["researchId"] == str(RUN) and result["complete"] is True
     assert len(result["items"]) == 3
-    assert all(item["content"] is None for item in result["items"]), "artifact refs must not return private bodies"
+    assert all(item["content"] is None for item in result["items"]), (
+        "artifact refs must not return private bodies"
+    )
 
 
 @pytest.mark.asyncio
@@ -194,9 +226,10 @@ async def test_replay_missing_or_modified_artifacts_cannot_call_validator(monkey
     monkeypatch.setattr(module, "read_artifacts_admin", read)
     conn = AsyncMock()
     conn.fetchrow.return_value = None
+    conn.fetchval.side_effect = [{"id": str(uuid4()), "status": "RUNNING"}, True]
     conn.transaction = Mock(return_value=AsyncMock())
-    with pytest.raises(ValidationError_):
-        await module.replay_validation(conn, RUN, uuid4(), uuid4(), uuid4(), NOW)
+    failure = await module.replay_validation(conn, RUN, uuid4(), uuid4(), uuid4(), NOW)
+    assert isinstance(failure.error, ValidationError_)
     assert all("INSERT" not in call.args[0] for call in conn.execute.await_args_list)
 
 
@@ -266,6 +299,57 @@ def test_observation_projection_retains_public_quotes_and_direction_risk_without
     assert direction["sourceIds"] == ["s1"]
     assert direction["industryCycle"]["evidenceSummary"] == "待盈利验证"
     assert "PRIVATE" not in json.dumps(summary)
+
+
+def test_public_receipt_retains_revision_closed_risk_conclusions_and_macro_overview():
+    cycle = {
+        "stage": "UNKNOWN",
+        "riskLevel": "SUSPECTED",
+        "confirmedRiskFlags": ["ORDER_CUTS", "PRIVATE_FLAG"],
+        "suspectedRiskFlags": ["PRODUCTION_DELAY"],
+        "persistedRiskFlags": ["FINANCING_COOLING"],
+        "evidenceGaps": ["STAGE_INDUSTRY_SCOPE_UNVERIFIED", "PRIVATE_GAP"],
+        "riskFlags": ["PERSISTED_RISK_WATCH"],
+        "privateField": "PRIVATE",
+    }
+    value = outcome(
+        validatorRevision="a" * 64,
+        revisionStatus="AVAILABLE",
+        accepted={
+            "industryCycleReviews": [{"industry": "ROBOTICS", **cycle}],
+            "valueDirections": [{"key": "observe", "industryCycle": cycle}],
+            "macroOverview": {
+                "summary": "宏观观察",
+                "macroCycle": "待传导",
+                "coverage": [
+                    {
+                        "topic": "信用",
+                        "status": "PENDING",
+                        "summary": "关注数据",
+                        "private": "PRIVATE",
+                    }
+                ],
+                "verification": "MODEL_UNVERIFIED",
+                "sourceIds": ["s1"],
+                "plans": ["PRIVATE"],
+            },
+        },
+    )
+    summary = repo().safe_outcome_summary(value)
+    assert summary["validatorRevision"] == "a" * 64
+    assert summary["revisionStatus"] == "AVAILABLE"
+    review = summary["accepted"]["industryCycleReviews"][0]
+    direction = summary["accepted"]["valueDirections"][0]["industryCycle"]
+    for item in (review, direction):
+        assert item["confirmedRiskFlags"] == ["ORDER_CUTS"]
+        assert item["suspectedRiskFlags"] == ["PRODUCTION_DELAY"]
+        assert item["persistedRiskFlags"] == ["FINANCING_COOLING"]
+        assert item["evidenceGaps"] == ["STAGE_INDUSTRY_SCOPE_UNVERIFIED"]
+    assert summary["accepted"]["macroOverview"]["summary"] == "宏观观察"
+    assert "PRIVATE" not in json.dumps(summary)
+    assert repo().safe_outcome_summary(summary)["validatorRevision"] == "a" * 64
+    value["accepted"]["macroOverview"]["coverage"][0]["summary"] = "字" * 301
+    assert repo().safe_outcome_summary(value)["acceptedContentComplete"] is False
 
 
 def test_public_issue_paths_are_generated_from_closed_components_not_raw_model_fields():
