@@ -9,6 +9,7 @@ import type {
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 import { researchScheduleLabel } from "../research-schedule-display";
+import ResearchAcceptance from "./ResearchAcceptance";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未启动",
   RUNNING: "研究正在执行",
@@ -536,6 +537,7 @@ function DailyResearchContent({
         </p>
       )}
       {report && <p>报告证据时间：{timeLabel(report.asOf ?? data?.asOf)}</p>}
+      <ResearchAcceptance runId={data?.runId} />
       {!report ? (
         <>
           <p>有效报告尚未生成，可先核查市场证据。</p>

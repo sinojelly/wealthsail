@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { useQuery } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import type { DailyResearch } from "../../api/investment";
@@ -341,7 +341,7 @@ it.each(["FAILED", "UNCERTAIN"] as const)(
       diagnostics.queryByText(new RegExp(previousRunId)),
     ).not.toBeInTheDocument();
     expect(screen.getByText("保留的自动研究摘要")).toBeInTheDocument();
-    expect(load).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     expect(screen.queryByText(/当前报告：手动研究版/)).not.toBeInTheDocument();
   },
 );

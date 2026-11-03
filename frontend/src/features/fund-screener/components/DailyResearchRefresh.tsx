@@ -47,6 +47,7 @@ function RefreshControl({ actor, onReady }: Props) {
   );
   const commandKey = useRef<string | null>(unconfirmedKey);
   const completed = useRef<string | null>(null);
+  const failedContextsReloaded = useRef(new Set<string>());
   const [submitted, setSubmitted] = useState<api.DebugResearchRequest | null>(
     null,
   );
@@ -102,6 +103,28 @@ function RefreshControl({ actor, onReady }: Props) {
     });
     onReady?.();
   }, [result, actor, client, onReady]);
+  useEffect(() => {
+    if (
+      !result ||
+      result.id !== current?.id ||
+      failedContextsReloaded.current.has(result.id) ||
+      !(
+        result.status === "FAILED" ||
+        (result.status === "UNCERTAIN" &&
+          result.completedAt != null &&
+          Number.isFinite(Date.parse(result.completedAt)))
+      )
+    )
+      return;
+    failedContextsReloaded.current.add(result.id);
+    void client.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey[0] === actor &&
+        ["opportunity-context", "market-context"].some((key) =>
+          query.queryKey.includes(key),
+        ),
+    });
+  }, [result, current?.id, actor, client]);
   const submit = useMutation({
     mutationFn: (key: string) => {
       commandKey.current = key;
