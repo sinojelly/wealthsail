@@ -383,3 +383,26 @@ async def test_database_admin_rejection_becomes_a_safe_forbidden_response():
     )
     with pytest.raises(ForbiddenError, match="管理员"):
         await repo().read_artifacts_admin(conn, RUN)
+
+
+def test_initial_keeps_small_repair_audit_without_reclassifying_original_partial():
+    value = outcome(repairedFormalPublished=True, deterministicRepair={
+        "decision": "REPAIRED", "strictPass": True, "autoPublishAllowed": True,
+        "historicalPublishAllowed": True, "safetyBlocked": False,
+        "repairVersion": "research-repair-v1", "revision": "a" * 64,
+        "originalDecision": "COMPLETE", "counts": {"valueDirections": 6, "PRIVATE": 999},
+        "quarantinedCount": 1, "quarantined": [{"itemType": "VALUE_DIRECTION", "itemIndex": 1, "ruleId": "WATCH_REVIEW_UNLINKED", "PRIVATE": "secret"}],
+        "autoBlockers": [{"code": "HEADER_PROVENANCE_MISSING", "reason": "PRIVATE"}],
+        "hardBlockers": [], "candidateRaw": {"PRIVATE": True}, "formalReport": {"PRIVATE": True},
+    })
+    summary = repo().safe_outcome_summary(value)
+    assert summary["decision"] == "PARTIAL" and summary["formalPublishable"] is False
+    assert summary["repairedFormalPublished"] is True
+    assert summary["deterministicRepair"]["decision"] == "REPAIRED"
+    assert summary["deterministicRepair"]["quarantinedCount"] == 1
+    assert summary["deterministicRepair"]["originalDecision"] == "PARTIAL"
+    assert summary["deterministicRepair"]["strictRevalidated"] is True
+    assert summary["deterministicRepair"]["repairRevision"] == "a" * 64
+    assert summary["deterministicRepair"]["counts"] == {"valueDirections": 6}
+    assert "PRIVATE" not in str(summary)
+    assert repo().safe_outcome_summary(summary)["deterministicRepair"] == summary["deterministicRepair"]

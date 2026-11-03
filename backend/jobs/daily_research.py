@@ -55,6 +55,7 @@ from backend.macro.research_acceptance import (
     sources_for_verification,
     validate_report_outcome,
 )
+from backend.macro.research_repair import repair_report, repair_summary
 from backend.macro.research_audit import (
     check_research_audit,
     write_research_audit,
@@ -958,6 +959,7 @@ async def _execute_daily_research(
     payload, error = None, unavailable
     raw, checks, audit_error = None, None, None
     outcome, validated_at, raw_metadata = None, None, None
+    deterministic_repair, repaired_formal_published = None, False
     diagnostics = {}
     model_returned = False
     current_stage = "MODEL_EXECUTION"
@@ -1034,6 +1036,15 @@ async def _execute_daily_research(
             _strict_validator=validate_report,
         )
         payload = outcome.formal_payload
+        if payload is None:
+            repair = repair_report(
+                raw, packet, checks, research_id=str(run_id), validated_at=validated_at,
+            )
+            deterministic_repair = repair_summary(repair)
+            if repair["strictPass"] and repair["autoPublishAllowed"]:
+                payload = deepcopy(repair["formalReport"])
+                payload["deterministicRepair"] = deterministic_repair
+                repaired_formal_published = True
         if payload is not None and isinstance(packet.get("inputQuality"), dict):
             payload = dict(payload)
             payload["inputQuality"] = packet["inputQuality"]
@@ -1131,9 +1142,13 @@ async def _execute_daily_research(
                         error_class=error,
                         **diagnostics,
                     )
+                    archived_outcome = outcome.to_dict()
+                    if deterministic_repair is not None:
+                        archived_outcome["deterministicRepair"] = deterministic_repair
+                        archived_outcome["repairedFormalPublished"] = repaired_formal_published
                     await archive_repository.enqueue_research_archive(
                         conn, run_id, packet, raw, checks, validated_at,
-                        outcome.to_dict(), recorded_at=local(now_shanghai()),
+                        archived_outcome, recorded_at=local(now_shanghai()),
                         **({"raw_metadata": raw_metadata} if raw_metadata is not None else {}),
                     )
 

@@ -39,7 +39,7 @@ from backend.macro.value_directions import (
 )
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-industry-plan-contract-v16"
+PROMPT_VERSION = "daily-research-deterministic-repair-v17"
 MAX_REPORT_SOURCES = 24
 
 
@@ -139,11 +139,18 @@ class _Event(_Strict):
 class _Upcoming(_Strict):
     title: str = Field(min_length=1, max_length=200)
     phase: Literal["PLANNED"]
+    importance: Literal["LOW", "MEDIUM", "HIGH"] | None = None
     scheduledDate: str | None
     scheduledAt: str | None
     sourceIds: list[str] = Field(min_length=1, max_length=8)
     affectedDirectionIds: list[str] = Field(max_length=16)
     watchFor: list[str] = Field(max_length=8)
+
+
+class _NarrativeDirectionIds(_Strict):
+    summary: list[str] = Field(max_length=8)
+    macroCycle: list[str] = Field(max_length=8)
+    coverage: list[str] = Field(max_length=8)
 
 
 class _Report(_Strict):
@@ -155,6 +162,8 @@ class _Report(_Strict):
     # Only select program-supplied series; the model cannot author energy values.
     energy: list[Literal["DCOILBRENTEU", "GASDESW"]] = Field(max_length=2)
     macroCycle: str = Field(min_length=1, max_length=1000)
+    # Stored reports predate this provenance; missing metadata never grants repair.
+    narrativeDirectionIds: _NarrativeDirectionIds | None = None
     actionablePlans: list[ActionableProposal] = Field(max_length=24)
     valueDirections: list[ValueDirectionProposal] = Field(
         max_length=MAX_VALUE_DIRECTIONS
@@ -166,6 +175,7 @@ class _Report(_Strict):
 
 REPORT_SCHEMA = _Report.model_json_schema()
 REPORT_SCHEMA["required"].append("industryCycleReviews")
+REPORT_SCHEMA["required"].append("narrativeDirectionIds")
 REPORT_SCHEMA["properties"]["industryCycleReviews"]["maxItems"] = 10
 REPORT_SCHEMA["properties"]["actionablePlans"]["maxItems"] = 0
 # New model requests must audit every direction. The permissive Python default
@@ -1787,6 +1797,8 @@ def build_prompt(packet):
         "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
         "另在顶层industryCycleReviews逐一保留industryCycleResearch.candidates每个赛道的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。任务优先复查历史风险赛道，其次本轮基金计划规范行业，再按当轮催化、入场就绪及距买区距离排序。硬上限10个行业审查和50条查询，不逐只基金重复检索，不因新发现方向追加超预算审查。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每方向reviewIndustryIds显式关联顶层已审查industry名称，尤其plans=[]的观察方向；新发现行业也须加顶层review并关联。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
+        "没有有效行业审核关联的观察项不要放入valueDirections；不得用WATCH或空plans绕过审核，不猜测相邻行业为同一范围。无计划观察方向同样要提供真实reviewIndustryIds，证据不足可以不生成该方向。\n"
+        "必须提供narrativeDirectionIds对象，含summary、macroCycle、coverage三个数组，逐字段列出文字实际依赖的本轮方向key或输入种子方向ID；没有方向依赖才填[]，不要引用未输出或未知方向，不用空数组隐瞒总纲依赖。日历upcoming提供importance LOW/MEDIUM/HIGH；重要性未知可null，不能把负面风险标LOW来请求隔离。所有负面、系统性及高重要性事实必须完整保留，禁止为获得发布删除反方核查、来源或事件。\n"
         "行业标识采用industryCycleResearch.standardIndustryCodes的标准代码；按本轮输入保留其他明确行业原名。每只基金必须逐项满足requiredReviewIndustryIds，全部列入本方向reviewIndustryIds且存在对应顶层已审查记录；004432等规范行业为NONFERROUS时，RARE_EARTH或RARE_EARTH_METALS不能替代。综合新闻行业与产品行业仅相关，不是等价别名。industryReviewEligible=false或所需行业在omittedPlanIndustryIds时，仅可WATCH且plans=[]观察，不选择该基金计划；不得借综合行业、删除核查项或新增第11个审查绕过预算。无计划观察方向只关联真实已审查行业，不伪造遗漏行业已完成审核。\n"
         "负面来源须属于正在核查的行业或明确相关产业链，引用时保留行业名/别名与事件事实；不得把半导体、光伏等其他行业的真实风险挂到机器人等无关赛道。无法核实归属只列待核实线索。商业化早期只能由试制、验证、尚未量产等成熟度原文支撑，融资降温、砍单本身不能证明商业化早期。\n"
         "原文明确提及其他行业/产业时，不得用标题中的目标行业覆盖正文主体。阶段与盈利证据同样须核对产业关联：已核实的外行业公司财务事实可保留为公司级事实，但不能作为本方向的业绩兑现、成熟度标签或行业风险解除依据；归属未明时阶段保持UNKNOWN。\n"

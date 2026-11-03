@@ -455,6 +455,39 @@ def _issues(value, *, admin=False, research_id=None):
     return output
 
 
+def _deterministic_repair_summary(value):
+    from backend.macro.research_repair import REPAIR_MESSAGES
+    if not isinstance(value, dict):
+        return None
+    result = {"decision": value.get("decision") if value.get("decision") in {"NO_CHANGE", "BLOCKED", "REPAIRED"} else "BLOCKED", "excerpted": True}
+    for field in ("strictPass", "autoPublishAllowed", "historicalPublishAllowed", "safetyBlocked"):
+        result[field] = value.get(field) is True
+    result["repairVersion"] = _token(value.get("repairVersion"))
+    result["version"] = result["repairVersion"]
+    result["strictRevalidated"] = result["strictPass"]
+    result["revision"] = value.get("revision") if isinstance(value.get("revision"), str) and re.fullmatch(r"[a-f0-9]{64}", value["revision"]) else None
+    result["repairRevision"] = result["revision"]
+    result["counts"] = {key: number for key, number in value.get("counts", {}).items() if key in COMPONENTS and type(number) is int and 0 <= number <= 10000} if isinstance(value.get("counts"), dict) else {}
+    commit = value.get("buildCommit")
+    result["buildCommit"] = commit.lower() if isinstance(commit, str) and re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", commit) else None
+    count = value.get("quarantinedCount")
+    result["quarantinedCount"] = min(count, 1000) if type(count) is int and count >= 0 else 0
+    result["quarantined"] = []
+    for row in value.get("quarantined", [])[:1000] if isinstance(value.get("quarantined"), list) else []:
+        if isinstance(row, dict) and row.get("itemType") in {"VALUE_DIRECTION", "EVENT", "UPCOMING"} and row.get("ruleId") in REPAIR_MESSAGES and type(row.get("itemIndex")) is int and 0 <= row["itemIndex"] <= 9999:
+            item = {field: row[field] for field in ("itemType", "itemIndex", "ruleId")}
+            item["reason"] = REPAIR_MESSAGES[row["ruleId"]]
+            if _token(row.get("businessKey")):
+                item["businessKey"] = row["businessKey"]
+            result["quarantined"].append(item)
+    for field in ("autoBlockers", "hardBlockers"):
+        result[field] = [{"code": row["code"], "reason": REPAIR_MESSAGES[row["code"]]} for row in value.get(field, [])[:64] if isinstance(row, dict) and row.get("code") in REPAIR_MESSAGES] if isinstance(value.get(field), list) else []
+    if len(_encode(result).encode("utf-8")) > 32768:
+        result.update(decision="BLOCKED", strictPass=False, autoPublishAllowed=False, historicalPublishAllowed=False, safetyBlocked=True, quarantined=[], autoBlockers=[], hardBlockers=[{"code": "REPAIR_OUTPUT_LIMIT", "reason": REPAIR_MESSAGES["REPAIR_OUTPUT_LIMIT"]}])
+    result["strictRevalidated"] = result["strictPass"]
+    return result
+
+
 def safe_outcome_summary(value):
     value = value if isinstance(value, dict) else {}
     counts = {}
@@ -473,7 +506,7 @@ def safe_outcome_summary(value):
             }
     issues = _issues(value.get("issues"), research_id=value.get("researchId"))
     accepted = _accepted(value.get("accepted"))
-    return {
+    result = {
         "researchId": str(UUID(str(value["researchId"]))),
         "validatorVersion": _token(value.get("validatorVersion")),
         "buildCommit": value.get("buildCommit", "").lower() if isinstance(value.get("buildCommit"), str) and re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", value["buildCommit"]) else None,
@@ -504,6 +537,12 @@ def safe_outcome_summary(value):
         is not False
         and not _has_excerpt(value.get("accepted"), accepted),
     }
+    if isinstance(value.get("deterministicRepair"), dict):
+        result["deterministicRepair"] = _deterministic_repair_summary(value["deterministicRepair"])
+        result["deterministicRepair"]["originalDecision"] = result["decision"]
+    if isinstance(value.get("repairedFormalPublished"), bool):
+        result["repairedFormalPublished"] = value["repairedFormalPublished"]
+    return result
 
 
 def _artifact_dto(row, *, content=True):
