@@ -542,6 +542,8 @@ def safe_outcome_summary(value):
         result["deterministicRepair"]["originalDecision"] = result["decision"]
     if isinstance(value.get("repairedFormalPublished"), bool):
         result["repairedFormalPublished"] = value["repairedFormalPublished"]
+    if value.get("topicRegistryAvailable") is False and value.get("topicArchiveIssue") == "REGISTRY_OUTPUT_LIMIT":
+        result.update(topicRegistryAvailable=False, topicArchiveIssue="REGISTRY_OUTPUT_LIMIT")
     return result
 
 
@@ -648,6 +650,7 @@ async def enqueue_research_archive(
     *,
     raw_metadata=None,
     recorded_at=None,
+    topic_registry=None,
 ):
     if str(outcome_dict.get("researchId")) != str(run_id):
         raise ValidationError_("校验结果与研究身份不一致")
@@ -662,6 +665,21 @@ async def enqueue_research_archive(
         "artifacts": dict(zip(("packet", "raw_output", "source_checks"), descriptors)),
         "outcome": outcome_dict,
     }
+    if topic_registry is not None:
+        from backend.macro.research_topic_repository import prepare_topic_registry, TopicRegistrySizeError, check_topic_storage_budget
+
+        try:
+            projected_registry = prepare_topic_registry(topic_registry, run_id, stamp)
+            await check_topic_storage_budget(conn, projected_registry, descriptors[0])
+            bundle["topicRegistry"] = projected_registry
+        except TopicRegistrySizeError:
+            descriptor = freeze_artifact(topic_registry, 0)
+            if descriptor["sha256"] is None:
+                raise
+            descriptor.update(content=None, omissionReason="SIZE_LIMIT")
+            bundle["topicRegistryOmission"] = descriptor
+            outcome_dict = {**outcome_dict, "topicRegistryAvailable": False, "topicArchiveIssue": "REGISTRY_OUTPUT_LIMIT"}
+            bundle["outcome"] = outcome_dict
     await conn.execute(
         """INSERT INTO research.research_validation_archive_queue(run_id,validated_at,frozen_bundle,safe_summary,created_at,updated_at,next_attempt_at)
         VALUES($1,$2,$3::jsonb,$4::jsonb,$5,clock_timestamp(),clock_timestamp()) ON CONFLICT(run_id) DO NOTHING""",
@@ -788,6 +806,14 @@ async def persist_research_archive(conn, claim, now=None):
         bundle["outcome"],
         recorded_at=_aware(bundle["recordedAt"]),
     )
+    if "topicRegistry" in bundle:
+        from backend.macro.research_topic_repository import save_topic_registry
+
+        await save_topic_registry(conn, claim["run_id"], bundle["topicRegistry"], bundle["validatedAt"])
+    elif "topicRegistryOmission" in bundle:
+        from backend.macro.research_topic_repository import save_topic_registry_omission
+
+        await save_topic_registry_omission(conn, claim["run_id"], bundle["topicRegistryOmission"], bundle["validatedAt"])
     if await finish_research_archive(conn, claim, status="ARCHIVED") is None:
         raise ValidationError_("归档租约已失效")
     return receipt

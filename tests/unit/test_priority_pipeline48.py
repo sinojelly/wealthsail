@@ -21,6 +21,9 @@ async def test_model_packet_keeps_identical_price_anchors_and_report_is_scored_a
     from backend.macro.daily_research import validate_report
 
     anchor = plan()
+    # New public packets require a server catalog industry and its explicit
+    # five-kind audit. This fixture tests prices, not an industry-audit bypass.
+    anchor["discoverySector"] = "SEMICONDUCTOR_AI"
     anchor["signals"] = [
         {
             "track": "LEFT_VALUE",
@@ -38,6 +41,7 @@ async def test_model_packet_keeps_identical_price_anchors_and_report_is_scored_a
         "items": [deepcopy(anchor)],
     }
     discovery_packet = {
+        "discoveryUniverse": [deepcopy(anchor)],
         "discoveryActionableZones": [deepcopy(anchor)],
         "quantitativeScan": scan,
     }
@@ -78,9 +82,36 @@ async def test_model_packet_keeps_identical_price_anchors_and_report_is_scored_a
     conn.fetch.return_value = []
     packet = await job.load_public_packet(conn, NOW, {})
     raw = report()
-    proposal = direction(sourceIds=[], macroCodes=[], quantitativeFundCodes=["008281"])
+    from backend.macro.industry_cycle import RISK_CHECKS
+
+    risk_checks = [
+        {
+            "kind": kind,
+            "query": f"半导体行业 {terms}",
+            "summary": "离线价格链路夹具，保留结构核查。",
+            "sourceIds": [],
+            "status": "NOT_FOUND",
+        }
+        for kind, terms in RISK_CHECKS.items()
+    ]
+    proposal = direction(
+        sourceIds=[],
+        macroCodes=[],
+        quantitativeFundCodes=["008281"],
+        reviewIndustryIds=["SEMICONDUCTOR_AI"],
+        industryCycle={
+            "stage": "UNKNOWN",
+            "evidenceSummary": "价格回归不主张产业阶段。",
+            "evidence": [],
+            "sourceIds": [],
+            "riskChecks": deepcopy(risk_checks),
+        },
+    )
     proposal["plans"][0]["subjectId"] = "008281"
     raw["valueDirections"] = [proposal]
+    raw["industryCycleReviews"] = [
+        {"industry": "SEMICONDUCTOR_AI", "sourceIds": [], "riskChecks": risk_checks}
+    ]
     result = validate_report(raw, packet, {}, completed_at=NOW)
     actual = result["valueDirections"][0]["plans"][0]
     assert actual["currentPrice"] == anchor["currentPrice"]

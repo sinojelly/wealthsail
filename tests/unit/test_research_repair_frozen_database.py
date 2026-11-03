@@ -40,6 +40,7 @@ async def test_real_frozen_material_can_generate_review_and_publish_history_only
     assert target.port == 29034 and target.path in {
         "/wealthsail_acceptance_repair101_v1",
         "/wealthsail_acceptance_repair101_v2",
+        "/wealthsail_dynamic_research102_v1",
     }
     frozen = read_frozen_bundle(EXPORT, RUN, observed_at=datetime.now(timezone.utc))
     assert frozen.material_hashes == HASHES

@@ -286,7 +286,28 @@ async def load_public_packet(
         external.get("etfFlowSignals", {}),
         now,
     )
-    return packet
+    from backend.macro.research_topic_repository import read_pending_topic_scopes
+    from backend.macro.research_topics import freeze_discovery_packet
+
+    request_id = manual_request_id or debug_request_id
+    tenant_id = (
+        await conn.fetchval(
+            "SELECT tenant_id FROM research.daily_research_refresh_requests WHERE id=$1",
+            UUID(str(request_id)),
+        )
+        if request_id is not None
+        else None
+    )
+    # Scheduled research can consume public backlog only. Manual backlog is
+    # scoped by the server-owned request identity, never client-supplied labels.
+    if request_id is not None and tenant_id is None:
+        raise ResearchValidationError(
+            "PAYLOAD_VALIDATION_FAILED", "research request scope unavailable"
+        )
+    packet["pendingTopicScopes"] = await read_pending_topic_scopes(
+        conn, tenant_id=tenant_id
+    )
+    return freeze_discovery_packet(packet, now)
 
 
 class PipelineOwnershipLost(RuntimeError):
@@ -837,6 +858,17 @@ async def _execute_daily_research(
         packet["inputQuality"] = source_quality(manual_bundle, local(now_shanghai()))
         packet["sourceBatchId"] = str(source_batch_id)
     prompt = build_prompt(packet)
+    if (packet.get("researchDiscovery") or {}).get(
+        "version"
+    ) == "research-discovery-v2":
+        from backend.macro.research_topics import BUDGET
+
+        if len(prompt.encode("utf-8")) > BUDGET["maxInputBytes"]:
+            raise ResearchValidationError(
+                "PAYLOAD_VALIDATION_FAILED",
+                "discovery input exceeds this batch's byte budget",
+                rule_id="RESEARCH_INPUT_BUDGET_EXCEEDED",
+            )
     unavailable, cli = None, {}
     remote_codex = bool(getattr(settings, "codex_runner_url", ""))
     try:
@@ -960,6 +992,7 @@ async def _execute_daily_research(
     raw, checks, audit_error = None, None, None
     outcome, validated_at, raw_metadata = None, None, None
     deterministic_repair, repaired_formal_published = None, False
+    topic_registry = None
     diagnostics = {}
     model_returned = False
     current_stage = "MODEL_EXECUTION"
@@ -1031,14 +1064,46 @@ async def _execute_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "REPORT_VALIDATION"
-        outcome = validate_report_outcome(
-            raw, packet, checks, research_id=str(run_id), completed_at=validated_at,
-            _strict_validator=validate_report,
-        )
-        payload = outcome.formal_payload
-        if payload is None:
+        if (packet.get("researchDiscovery") or {}).get(
+            "version"
+        ) == "research-discovery-v2":
+            from backend.macro.research_batch import evaluate_research_batch
+
+            batch = evaluate_research_batch(
+                raw, packet, checks, research_id=str(run_id), validated_at=validated_at
+            )
+            outcome = batch["originalOutcome"]
+            topic_registry = batch["registry"]
+            payload = (
+                deepcopy(batch["formalReport"]) if batch["autoPublishAllowed"] else None
+            )
+            if payload is not None:
+                payload["researchDiscovery"] = {
+                    "version": "research-discovery-v2",
+                    "coverage": topic_registry["coverage"],
+                    "registryRunId": str(run_id),
+                }
+                if outcome.formal_payload is None:
+                    deterministic_repair = batch["repairSummary"]
+                    payload["deterministicRepair"] = deterministic_repair
+                    repaired_formal_published = True
+        else:
+            outcome = validate_report_outcome(
+                raw,
+                packet,
+                checks,
+                research_id=str(run_id),
+                completed_at=validated_at,
+                _strict_validator=validate_report,
+            )
+            payload = outcome.formal_payload
+        if payload is None and topic_registry is None:
             repair = repair_report(
-                raw, packet, checks, research_id=str(run_id), validated_at=validated_at,
+                raw,
+                packet,
+                checks,
+                research_id=str(run_id),
+                validated_at=validated_at,
             )
             deterministic_repair = repair_summary(repair)
             if repair["strictPass"] and repair["autoPublishAllowed"]:
@@ -1052,7 +1117,9 @@ async def _execute_daily_research(
         if payload is not None:
             result["status"], error = "READY", None
         else:
-            audit_error = outcome.first_error or ResearchValidationError("PAYLOAD_VALIDATION_FAILED")
+            audit_error = outcome.first_error or ResearchValidationError(
+                "PAYLOAD_VALIDATION_FAILED"
+            )
             error = "ResearchValidationError"
             diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
@@ -1094,9 +1161,12 @@ async def _execute_daily_research(
             # A failed execution has never completed source verification. Its
             # output is evidence for inspection, never a normal acceptance path.
             outcome = rejected_outcome(
-                str(run_id), validated_at,
+                str(run_id),
+                validated_at,
                 reason_code=_canonical_reason_code(audit_error),
-                rule_id="ACCEPTANCE_PARSE_FAILED" if parse_failure else "ACCEPTANCE_SYSTEM_FAILURE",
+                rule_id="ACCEPTANCE_PARSE_FAILED"
+                if parse_failure
+                else "ACCEPTANCE_SYSTEM_FAILURE",
             )
         error = safe_error_class(type(exc).__name__)
         if isinstance(audit_error, ResearchValidationError):
@@ -1123,8 +1193,10 @@ async def _execute_daily_research(
             validated_at = validated_at or local(now_shanghai())
             if outcome is None:
                 outcome = rejected_outcome(
-                    str(run_id), validated_at,
-                    reason_code=diagnostics.get("failure_reason_code") or "UNEXPECTED_ERROR",
+                    str(run_id),
+                    validated_at,
+                    reason_code=diagnostics.get("failure_reason_code")
+                    or "UNEXPECTED_ERROR",
                 )
             if pipeline and result["status"] == "READY":
                 await _pipeline_stage(pool, pipeline, stage="PERSISTING")
@@ -1145,16 +1217,35 @@ async def _execute_daily_research(
                     archived_outcome = outcome.to_dict()
                     if deterministic_repair is not None:
                         archived_outcome["deterministicRepair"] = deterministic_repair
-                        archived_outcome["repairedFormalPublished"] = repaired_formal_published
+                        archived_outcome["repairedFormalPublished"] = (
+                            repaired_formal_published
+                        )
                     await archive_repository.enqueue_research_archive(
-                        conn, run_id, packet, raw, checks, validated_at,
-                        archived_outcome, recorded_at=local(now_shanghai()),
-                        **({"raw_metadata": raw_metadata} if raw_metadata is not None else {}),
+                        conn,
+                        run_id,
+                        packet,
+                        raw,
+                        checks,
+                        validated_at,
+                        archived_outcome,
+                        recorded_at=local(now_shanghai()),
+                        **(
+                            {"raw_metadata": raw_metadata}
+                            if raw_metadata is not None
+                            else {}
+                        ),
+                        **(
+                            {"topic_registry": topic_registry}
+                            if topic_registry is not None
+                            else {}
+                        ),
                     )
 
                 async with conn.transaction():
                     if pipeline:
-                        from backend.macro.daily_pipeline_repository import advance_pipeline
+                        from backend.macro.daily_pipeline_repository import (
+                            advance_pipeline,
+                        )
 
                         if not await advance_pipeline(
                             conn,
@@ -1169,7 +1260,9 @@ async def _execute_daily_research(
                 if pipeline:
                     pipeline["_terminal_written"] = True
         except (Exception, asyncio.CancelledError) as exc:
-            if pipeline and not isinstance(exc, (PipelineOwnershipLost, asyncio.CancelledError)):
+            if pipeline and not isinstance(
+                exc, (PipelineOwnershipLost, asyncio.CancelledError)
+            ):
                 pipeline["_persistence_failed"] = True
             persist_error = safe_error_class(type(exc).__name__)
             logger.warning(

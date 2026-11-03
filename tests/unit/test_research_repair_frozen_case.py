@@ -54,6 +54,9 @@ async def test_exact_frozen_case_passes_full_strict_in_fixed_zero_ai_child():
     assert error.value.rule_id == "DIRECTION_INDUSTRY_REVIEW_UNKNOWN"
 
     result = await run_offline_repair(frozen.repair_payload())
+    assert (
+        result["repairVersion"] == "research-repair-v1"
+    )  # never replay V1 evidence under V2 coverage rules
     assert result["strictPass"] is True
     # HIGH dependent facts and legacy narrative remain a human-only historical
     # annex. A passing reduced candidate must never auto-publish this old report.

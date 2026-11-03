@@ -39,7 +39,7 @@ async def fixture(*, committed=False):
     parts = urlsplit(DSN)
     assert parts.hostname == "127.0.0.1" and (
         parts.path.startswith("/wealthsail_manual_research")
-        or (parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"})
+        or (parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"})
         or (
             parts.port in {55434, 55436}
             and (
@@ -90,7 +90,7 @@ async def fixture(*, committed=False):
                 tenant,
             )
             if parts.path.startswith("/wealthsail_manual_research_acceptance") or (
-                parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"}
+                parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"}
             ):
                 run_ids = [
                     row["run_id"]

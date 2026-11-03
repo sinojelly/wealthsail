@@ -252,6 +252,46 @@ def _protection_unchanged(accepted, formal, candidate):
 
 def repair_report(raw, packet, source_checks, *, research_id, validated_at):
     """Return a private bounded receipt; callers publish only the explicit gate."""
+    if (packet.get("researchDiscovery") or {}).get(
+        "version"
+    ) == "research-discovery-v2":
+        # New and offline historical research use exactly the same deterministic
+        # core. A V1 frozen packet never receives V2 coverage semantics.
+        from backend.macro.research_batch import evaluate_research_batch
+
+        batch = evaluate_research_batch(
+            raw,
+            packet,
+            source_checks,
+            research_id=research_id,
+            validated_at=validated_at,
+        )
+        formal = batch.get("strictFormalReport")
+        original = batch["originalOutcome"].to_dict()
+        hard = batch.get("hardBlockers", [])
+        strict = batch.get("strictPass") is True and formal is not None
+        return {
+            "decision": "REPAIRED" if strict else "BLOCKED",
+            "strictPass": strict,
+            "autoPublishAllowed": strict and batch["autoPublishAllowed"],
+            "historicalPublishAllowed": strict
+            and batch.get("historicalPublishAllowed", False)
+            and not hard,
+            "safetyBlocked": batch.get("safetyBlocked", bool(hard)),
+            "formalReport": formal,
+            "candidateRaw": batch.get("candidateRaw"),
+            "originalOutcome": original,
+            "topicRegistry": batch["registry"],
+            "quarantined": batch.get("quarantined", []),
+            "retained": batch.get("retained", {}),
+            "hardBlockers": hard,
+            "autoBlockers": batch.get("autoBlockers", []),
+            "blockers": hard + batch.get("autoBlockers", []),
+            "repairVersion": "research-batch-v2",
+            "revision": batch["registry"]["revision"],
+            "buildCommit": batch["registry"].get("buildCommit"),
+            "validatedAt": _now(validated_at).isoformat(),
+        }
     stamp = _now(validated_at)
     result = {
         "decision": "BLOCKED",

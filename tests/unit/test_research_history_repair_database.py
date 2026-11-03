@@ -30,7 +30,7 @@ async def fixture(*, manual=True, committed=False):
     assert target.hostname in {"127.0.0.1", "localhost", "::1"} and target.port == 29034
     assert target.path in {
         "/wealthsail_acceptance_repair101_v1",
-        "/wealthsail_acceptance_repair101_v2",
+        "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1",
     }
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()

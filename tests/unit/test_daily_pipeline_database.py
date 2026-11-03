@@ -514,7 +514,7 @@ async def test_real_model_slot_and_pipeline_result_preserve_schedule_and_commit_
                     target = urlsplit(DSN)
                     if target.path.startswith(
                         "/wealthsail_manual_research_acceptance"
-                    ) or (target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2"}):
+                    ) or (target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"}):
                         assert target.hostname in {"localhost", "127.0.0.1", "::1"}
                         for table in (
                             "research_validation_replay_attempts",

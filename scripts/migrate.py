@@ -2662,6 +2662,23 @@ async def _readback(conn: asyncpg.Connection) -> None:
         for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
             if await conn.fetchval("SELECT has_function_privilege($1,'research.validation_combined_budget(uuid,uuid)','EXECUTE')", role):
                 raise RuntimeError("history repair combined budget exposes private metadata")
+    if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=102)"):
+        for table in ("research.research_topic_snapshots", "research.research_topic_entries"):
+            if not await conn.fetchval("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)", table):
+                raise RuntimeError("research topic RLS boundary is missing or unsafe")
+            for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+                    observed = await conn.fetchval("SELECT has_any_column_privilege($1,$2,$3)", role, table, privilege) if privilege in {"SELECT", "INSERT", "UPDATE", "REFERENCES"} else await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege)
+                    if observed != (privilege == "SELECT" and role != "authenticated"):
+                        raise RuntimeError("research topic runtime privilege boundary is unsafe")
+            if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table):
+                raise RuntimeError("research topic exposes PUBLIC privileges")
+        function = "research.save_topic_registry(uuid,jsonb)"
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            if await conn.fetchval("SELECT has_function_privilege($1,$2,'EXECUTE')", role, function) != (role == "wealthsail_worker"):
+                raise RuntimeError("research topic writer grant is unsafe")
+        if not await conn.fetchval("SELECT prosecdef AND 'search_path=pg_catalog'=ANY(proconfig) FROM pg_proc WHERE oid=$1::regprocedure", function):
+            raise RuntimeError("research topic writer is missing or unsafe")
     nav_job_constraint = await conn.fetchval(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='workflow.job_runs'::regclass AND conname='job_runs_job_type_check'"
     )
