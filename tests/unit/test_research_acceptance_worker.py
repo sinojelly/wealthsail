@@ -48,20 +48,16 @@ def boundary(monkeypatch, *, complete=True):
     async def enqueue(conn, *args, **kwargs):
         assert state["in_transaction"] is True
         state["archive_intent"] = (args, kwargs)
-
-    async def archive(pool, run_id, **kwargs):
-        assert not state.get("in_transaction", False)
-        args, queued_kwargs = state["archive_intent"]
+        # Inspect the frozen outbox payload; no archive receipt is written here.
         state["artifacts"] = args[:5]
         state["artifact_kwargs"] = {
-            key: value for key, value in queued_kwargs.items() if key == "raw_metadata"
+            key: value for key, value in kwargs.items() if key == "raw_metadata"
         }
         state["outcome"] = (
-            run_id,
+            args[0],
             args[5],
-            {"kind": "INITIAL", "recorded_at": queued_kwargs["recorded_at"]},
+            {"kind": "INITIAL", "recorded_at": kwargs["recorded_at"]},
         )
-        return {"auditStatus": "ARCHIVED"}
 
     monkeypatch.setattr(mod, "validate_report_outcome", validate, raising=False)
     monkeypatch.setattr(
@@ -82,7 +78,7 @@ def boundary(monkeypatch, *, complete=True):
         AsyncMock(side_effect=enqueue),
         raising=False,
     )
-    monkeypatch.setattr(mod, "archive_research_run", AsyncMock(side_effect=archive))
+    monkeypatch.setattr(mod, "archive_research_run", AsyncMock(), raising=False)
     return mod, state
 
 
@@ -99,6 +95,8 @@ async def test_formal_result_and_frozen_archive_intent_share_transaction(
     assert state["terminal_in_transactions"] == [True]
     assert state["outcome"][2]["kind"] == "INITIAL"
     assert (state["terminal"][0]["payload"] is not None) is complete
+    assert result["auditStatus"] == "AUDIT_PENDING"
+    mod.archive_research_run.assert_not_awaited()
     mod.run_codex_research.assert_awaited_once()
     mod.release_model_guard.assert_awaited_once()
 
@@ -115,7 +113,8 @@ async def test_archive_failure_keeps_formal_result_and_retryable_intent(
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "READY" and result["auditStatus"] == "AUDIT_PENDING"
     assert state["terminal"][0]["status"] == "READY"
-    assert "archive_intent" in state and "outcome" not in state
+    assert "archive_intent" in state
+    mod.archive_research_run.assert_not_awaited()
     mod.run_codex_research.assert_awaited_once()
     mod.release_model_guard.assert_awaited_once()
 

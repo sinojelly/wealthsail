@@ -33,6 +33,10 @@ def child_environment():
     result.update(
         PYTHONIOENCODING="utf-8", PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1"
     )
+    from backend.macro.research_acceptance import build_revision
+
+    if commit := build_revision():
+        result["WEALTHSAIL_BUILD_COMMIT"] = commit
     return result
 
 

@@ -19,6 +19,10 @@ RUN node /build/extract-native.mjs /usr/local/lib/node_modules/@openai/codex /op
 
 FROM python:3.12-slim AS base
 
+ARG BUILD_COMMIT=""
+ENV WEALTHSAIL_BUILD_COMMIT=${BUILD_COMMIT}
+LABEL org.opencontainers.image.revision="${BUILD_COMMIT}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

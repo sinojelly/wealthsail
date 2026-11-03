@@ -21,10 +21,9 @@ def archive_status(value):
 
 
 async def archive_research_run(pool, run_id=None, *, now=None):
-    stamp = now or now_shanghai()
     async with system_connection(pool) as conn:
         async with conn.transaction():
-            claim = await repository.claim_research_archive(conn, stamp, run_id=run_id)
+            claim = await repository.claim_research_archive(conn, run_id=run_id)
     if claim is None:
         return {"auditStatus": "AUDIT_PENDING", "claimed": False}
     try:
@@ -32,7 +31,7 @@ async def archive_research_run(pool, run_id=None, *, now=None):
             async with conn.transaction():
                 # The repository copies the original bounded descriptors and
                 # INITIAL outcome, then completes this exact lease atomically.
-                await repository.persist_research_archive(conn, claim, stamp)
+                await repository.persist_research_archive(conn, claim)
     except Exception as exc:  # noqa: BLE001 -- retry frozen data, never inference
         error_class = safe_error_class(type(exc).__name__)
         async with system_connection(pool) as conn:
@@ -40,7 +39,6 @@ async def archive_research_run(pool, run_id=None, *, now=None):
                 pending = await repository.finish_research_archive(
                     conn,
                     claim,
-                    now or now_shanghai(),
                     status="AUDIT_PENDING",
                     error_class=error_class,
                 )

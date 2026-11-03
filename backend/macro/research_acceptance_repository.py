@@ -1,6 +1,6 @@
 """Immutable validation evidence and local replay; no collection or execution authority."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from dataclasses import dataclass
 from decimal import Decimal
 from hashlib import sha256
@@ -476,6 +476,7 @@ def safe_outcome_summary(value):
     return {
         "researchId": str(UUID(str(value["researchId"]))),
         "validatorVersion": _token(value.get("validatorVersion")),
+        "buildCommit": value.get("buildCommit", "").lower() if isinstance(value.get("buildCommit"), str) and re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", value["buildCommit"]) else None,
         "validatorRevision": value.get("validatorRevision")
         if isinstance(value.get("validatorRevision"), str)
         and re.fullmatch(r"[a-f0-9]{64}", value["validatorRevision"])
@@ -624,7 +625,7 @@ async def enqueue_research_archive(
     }
     await conn.execute(
         """INSERT INTO research.research_validation_archive_queue(run_id,validated_at,frozen_bundle,safe_summary,created_at,updated_at,next_attempt_at)
-        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$5,$5) ON CONFLICT(run_id) DO NOTHING""",
+        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,clock_timestamp(),clock_timestamp()) ON CONFLICT(run_id) DO NOTHING""",
         run_id,
         stamp,
         _encode(bundle),
@@ -638,30 +639,29 @@ async def enqueue_research_archive(
     return _archive_status(row)
 
 
-async def claim_research_archive(conn, now, *, run_id=None):
-    now = _aware(now)
+async def claim_research_archive(conn, now=None, *, run_id=None):
+    """Use the live database clock; legacy ``now`` never grants lease authority."""
     await conn.execute(
         """WITH exhausted AS (
         SELECT run_id FROM research.research_validation_archive_queue
-        WHERE status='ARCHIVING' AND lease_expires_at<=$1 AND attempts>=8 AND ($2::uuid IS NULL OR run_id=$2)
+        WHERE status='ARCHIVING' AND lease_expires_at<=clock_timestamp() AND attempts>=8 AND ($1::uuid IS NULL OR run_id=$1)
         ORDER BY lease_expires_at,run_id FOR UPDATE SKIP LOCKED LIMIT 20)
-        UPDATE research.research_validation_archive_queue q SET status='UNRECOVERABLE',lease_token=NULL,lease_expires_at=NULL,updated_at=$1,last_error_class='TimeoutError'
+        UPDATE research.research_validation_archive_queue q SET status='UNRECOVERABLE',lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp(),last_error_class='TimeoutError'
         FROM exhausted e WHERE q.run_id=e.run_id""",
-        now,
         run_id,
     )
     row = await conn.fetchrow(
         """WITH candidate AS (
         SELECT run_id FROM research.research_validation_archive_queue
-        WHERE attempts<8 AND ($2::uuid IS NULL OR run_id=$2)
-          AND ((status='AUDIT_PENDING' AND next_attempt_at<=$1) OR (status='ARCHIVING' AND lease_expires_at<=$1))
+        WHERE attempts<8 AND ($1::uuid IS NULL OR run_id=$1)
+          AND ((status='AUDIT_PENDING' AND next_attempt_at<=clock_timestamp()) OR (status='ARCHIVING' AND lease_expires_at<=clock_timestamp()))
         ORDER BY next_attempt_at,run_id FOR UPDATE SKIP LOCKED LIMIT 1)
         UPDATE research.research_validation_archive_queue q SET status='ARCHIVING',attempts=q.attempts+1,
-          lease_token=$3,lease_expires_at=$1+interval '120 seconds',updated_at=$1
+          lease_token=$2,lease_expires_at=clock_timestamp()+$3*interval '1 second',updated_at=clock_timestamp()
         FROM candidate c WHERE q.run_id=c.run_id RETURNING q.*""",
-        now,
         run_id,
         uuid4(),
+        ARCHIVE_LEASE_SECONDS,
     )
     if row is None:
         return None
@@ -670,7 +670,7 @@ async def claim_research_archive(conn, now, *, run_id=None):
     return result
 
 
-async def finish_research_archive(conn, claim, now, *, status, error_class=None):
+async def finish_research_archive(conn, claim, now=None, *, status, error_class=None):
     if status not in {"ARCHIVED", "AUDIT_PENDING", "UNRECOVERABLE"}:
         raise ValidationError_("未知归档状态")
     attempts = claim["attempts"]
@@ -683,17 +683,23 @@ async def finish_research_archive(conn, claim, now, *, status, error_class=None)
         if error_class
         else None
     )
-    now = _aware(now)
+    # Predicate evaluation in a locking statement can precede a lock wait.
+    # Acquire the row first, then evaluate the live clock in another statement.
+    locked = await conn.fetchrow(
+        "SELECT run_id FROM research.research_validation_archive_queue WHERE run_id=$1 FOR UPDATE",
+        claim["run_id"],
+    )
+    if locked is None:
+        return None
     row = await conn.fetchrow(
-        """UPDATE research.research_validation_archive_queue SET status=$3,updated_at=$4,next_attempt_at=$5,
-          last_error_class=$6,lease_token=NULL,lease_expires_at=NULL
-        WHERE run_id=$1 AND lease_token=$2 AND status='ARCHIVING' AND lease_expires_at>$4
+        """UPDATE research.research_validation_archive_queue SET status=$3,updated_at=clock_timestamp(),next_attempt_at=clock_timestamp()+$4*interval '1 second',
+          last_error_class=$5,lease_token=NULL,lease_expires_at=NULL
+        WHERE run_id=$1 AND lease_token=$2 AND status='ARCHIVING' AND lease_expires_at>clock_timestamp()
         RETURNING status,attempts,next_attempt_at""",
         claim["run_id"],
         claim["lease_token"],
         status,
-        now,
-        now + timedelta(seconds=min(3600, 15 * 2 ** min(attempts, 8))),
+        min(3600, 15 * 2 ** min(attempts, 8)),
         safe_error,
     )
     return (
@@ -707,14 +713,19 @@ async def finish_research_archive(conn, claim, now, *, status, error_class=None)
     )
 
 
-async def persist_research_archive(conn, claim, now):
+async def persist_research_archive(conn, claim, now=None):
     # Fence the lease before writing. Caller wraps artifacts + receipt + finish in one transaction.
+    locked = await conn.fetchrow(
+        "SELECT run_id FROM research.research_validation_archive_queue WHERE run_id=$1 FOR UPDATE",
+        claim["run_id"],
+    )
+    if locked is None:
+        raise ValidationError_("归档租约已失效")
     row = await conn.fetchrow(
         """SELECT run_id FROM research.research_validation_archive_queue WHERE run_id=$1 AND lease_token=$2
-        AND status='ARCHIVING' AND lease_expires_at>$3 FOR UPDATE""",
+        AND status='ARCHIVING' AND lease_expires_at>clock_timestamp()""",
         claim["run_id"],
         claim["lease_token"],
-        _aware(now),
     )
     if row is None:
         raise ValidationError_("归档租约已失效")
@@ -738,7 +749,7 @@ async def persist_research_archive(conn, claim, now):
         bundle["outcome"],
         recorded_at=_aware(bundle["recordedAt"]),
     )
-    if await finish_research_archive(conn, claim, now, status="ARCHIVED") is None:
+    if await finish_research_archive(conn, claim, status="ARCHIVED") is None:
         raise ValidationError_("归档租约已失效")
     return receipt
 

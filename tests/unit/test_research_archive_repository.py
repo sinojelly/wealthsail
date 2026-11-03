@@ -60,6 +60,7 @@ async def test_claim_final_expired_attempt_is_marked_unrecoverable_before_skip_l
     assert "SKIP LOCKED LIMIT 20" in sql
     claim_sql = conn.fetchrow.await_args.args[0]
     assert "SKIP LOCKED" in claim_sql and "attempts<8" in claim_sql
+    assert "clock_timestamp()" in claim_sql
 
 
 @pytest.mark.asyncio
@@ -87,6 +88,7 @@ async def test_persist_does_not_refreeze_missing_descriptors_or_revalidate(monke
     }
     conn = AsyncMock()
     conn.fetchrow.side_effect = [
+        {"run_id": RUN},
         {"run_id": RUN},
         {"run_id": RUN, "validated_at": NOW, **descriptors},
     ]

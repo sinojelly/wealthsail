@@ -75,6 +75,21 @@ async def test_recovery_archives_frozen_job_without_any_provider(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_archive_job_does_not_reuse_application_time_for_lease_authority(
+    monkeypatch,
+):
+    mod, _state, claim = boundary(monkeypatch)
+    await mod.archive_research_run(object(), "one", now=NOW)
+    assert len(mod.repository.claim_research_archive.await_args.args) == 1
+    assert mod.repository.persist_research_archive.await_args.args[1:] == (claim,)
+    mod.repository.persist_research_archive.side_effect = ConnectionError(
+        "private test failure"
+    )
+    await mod.archive_research_run(object(), "one", now=NOW)
+    assert mod.repository.finish_research_archive.await_args.args[1:] == (claim,)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "attempt,expected", [(1, "AUDIT_PENDING"), (8, "UNRECOVERABLE")]
 )

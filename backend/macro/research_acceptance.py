@@ -11,7 +11,9 @@ from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 
 from pydantic import ValidationError
 
@@ -24,19 +26,10 @@ from backend.macro.value_directions import ValueDirectionProposal, _macro_codes
 
 VALIDATOR_VERSION = "research-acceptance-v1"
 _ROOT = Path(__file__).resolve().parents[2]
-_REVISION_FILES = tuple(
-    _ROOT / name
-    for name in (
-        "backend/macro/research_acceptance.py",
-        "backend/macro/daily_research.py",
-        "backend/macro/value_directions.py",
-        "backend/macro/industry_cycle.py",
-        "backend/macro/industry_contract.py",
-        "backend/macro/alpha_research.py",
-        "backend/indicators/actionable_zones.py",
-        "backend/investment/opportunity_scoring.py",
-        "backend/investment/subscription_status.py",
-    )
+# Hash the deployed backend tree, including lazy dependencies such as candidate
+# generation and diagnostics, so a newly imported rule cannot silently escape.
+_REVISION_FILES = tuple(sorted((_ROOT / "backend").rglob("*.py"))) + (
+    _ROOT / "requirements.txt",
 )
 
 
@@ -47,12 +40,26 @@ def validator_revision():
     try:
         for path in _REVISION_FILES:
             source = path.read_bytes().replace(b"\r\n", b"\n")
-            digest.update(path.name.encode("utf-8") + b"\0")
+            try:
+                identity = path.relative_to(_ROOT).as_posix()
+            except ValueError:
+                identity = path.name
+            digest.update(identity.encode("utf-8") + b"\0")
             digest.update(len(source).to_bytes(8, "big") + source)
     except OSError:
         # Missing build metadata must never veto a strictly valid report.
         return None
     return digest.hexdigest()
+
+
+def build_revision():
+    """Optional provenance supplied by the image build, never run Git at runtime."""
+    value = os.environ.get("WEALTHSAIL_BUILD_COMMIT", "")
+    return (
+        value.lower()
+        if re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", value)
+        else None
+    )
 
 
 MAX_RAW_BYTES = 2 * 1024 * 1024
@@ -154,12 +161,14 @@ class ValidationOutcome:
     issue_list_complete: bool = True
     accepted_content_complete: bool = True
     revision: str | None = field(default_factory=validator_revision)
+    build_commit: str | None = field(default_factory=build_revision)
 
     def to_dict(self):
         return {
             "researchId": self.research_id,
             "validatorVersion": VALIDATOR_VERSION,
             "validatorRevision": self.revision,
+            "buildCommit": self.build_commit,
             "revisionStatus": "AVAILABLE" if self.revision else "UNAVAILABLE",
             "validatedAt": self.validated_at.isoformat(),
             "decision": self.decision,

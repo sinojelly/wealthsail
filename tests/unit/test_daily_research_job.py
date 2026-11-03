@@ -89,7 +89,7 @@ def isolate(monkeypatch):
     monkeypatch.setattr(mod, "release_model_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "finish_daily_run", finished)
     monkeypatch.setattr(mod.archive_repository, "enqueue_research_archive", AsyncMock(), raising=False)
-    monkeypatch.setattr(mod, "archive_research_run", AsyncMock(return_value={"auditStatus": "ARCHIVED"}))
+    monkeypatch.setattr(mod, "archive_research_run", AsyncMock(return_value={"auditStatus": "ARCHIVED"}), raising=False)
     monkeypatch.setattr(
         mod, "load_public_packet", AsyncMock(return_value={"asOf": NOW.isoformat()})
     )

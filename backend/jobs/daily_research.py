@@ -50,7 +50,6 @@ from backend.macro.daily_research import (
     validate_report,
 )
 from backend.macro import research_acceptance_repository as archive_repository
-from backend.jobs.research_archive import archive_research_run, archive_status
 from backend.macro.research_acceptance import (
     rejected_outcome,
     sources_for_verification,
@@ -1186,18 +1185,9 @@ async def _execute_daily_research(
             _write_diagnostic_summary(
                 settings, run_id, diagnostics, error, result["status"]
             )
+            # The durable outbox owns archival. Returning here lets the existing
+            # confirmed-return guard release finish before any archive work.
             result["auditStatus"] = "AUDIT_PENDING"
-            try:
-                archived = await archive_research_run(pool, run_id, now=local(now_shanghai()))
-            except Exception as exc:  # noqa: BLE001 -- formal result already committed
-                logger.warning(
-                    "daily_research_archive_pending run_id=%s audit_status=AUDIT_PENDING error_class=%s",
-                    run_id, safe_error_class(type(exc).__name__),
-                )
-            else:
-                result["auditStatus"] = archive_status({
-                    "status": archived.get("auditStatus") if isinstance(archived, dict) else None,
-                })
         finally:
             if model_returned:
                 try:

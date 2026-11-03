@@ -8,6 +8,7 @@ import asyncpg
 import pytest
 
 from backend.common.database import apply_tenant_context
+from backend.errors import ValidationError_
 from backend.macro import research_acceptance_repository as repo
 from tests.unit.test_research_acceptance_database import fixture, outcome, DSN
 
@@ -81,6 +82,10 @@ async def test_recovery_preserves_oversize_hash_and_immutable_bundle_and_fences_
         first = await repo.claim_research_archive(conn, now, run_id=run_id)
         assert first["attempts"] == 1
         assert await repo.claim_research_archive(conn, now, run_id=run_id) is None
+        await conn.execute(
+            "UPDATE research.research_validation_archive_queue SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
+            run_id,
+        )
         second = await repo.claim_research_archive(
             conn, now + timedelta(seconds=121), run_id=run_id
         )
@@ -128,9 +133,8 @@ async def test_last_crashed_lease_is_explicitly_unrecoverable_and_queue_has_no_p
     async with fixture() as (conn, run_id, now, *_):
         await enqueue(conn, run_id, now)
         await conn.execute(
-            "UPDATE research.research_validation_archive_queue SET status='ARCHIVING',attempts=8,lease_token=gen_random_uuid(),lease_expires_at=$2 WHERE run_id=$1",
+            "UPDATE research.research_validation_archive_queue SET status='ARCHIVING',attempts=8,lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
             run_id,
-            now,
         )
         assert await repo.claim_research_archive(conn, now, run_id=run_id) is None
         assert (
@@ -166,9 +170,8 @@ async def test_locked_exhausted_lease_does_not_block_claiming_another_run():
         await enqueue(conn, exhausted, NOW)
         await enqueue(conn, waiting, NOW)
         await conn.execute(
-            "UPDATE research.research_validation_archive_queue SET status='ARCHIVING',attempts=8,lease_token=gen_random_uuid(),lease_expires_at=$2 WHERE run_id=$1",
+            "UPDATE research.research_validation_archive_queue SET status='ARCHIVING',attempts=8,lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
             exhausted,
-            NOW,
         )
         blocker = await asyncpg.connect(DSN)
         try:
@@ -206,4 +209,206 @@ async def test_locked_exhausted_lease_does_not_block_claiming_another_run():
                     == "UNRECOVERABLE"
                 )
         finally:
+            await blocker.close()
+
+
+@pytest.mark.parametrize("operation", ["persist", "finish"])
+async def test_expired_database_lease_cannot_be_revived_by_reusing_an_old_app_stamp(
+    operation,
+):
+    async with fixture() as (conn, run_id, now, *_):
+        await enqueue(conn, run_id, now)
+        claim = await repo.claim_research_archive(conn, now, run_id=run_id)
+        stale_stamp = await conn.fetchval(
+            "SELECT clock_timestamp()-interval '10 minutes'"
+        )
+        await conn.execute(
+            "UPDATE research.research_validation_archive_queue SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
+            run_id,
+        )
+        if operation == "persist":
+            with pytest.raises(ValidationError_, match="租约已失效"):
+                async with conn.transaction():
+                    await repo.persist_research_archive(conn, claim, stale_stamp)
+        else:
+            assert (
+                await repo.finish_research_archive(
+                    conn, claim, stale_stamp, status="ARCHIVED"
+                )
+                is None
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1",
+                run_id,
+            )
+            == "ARCHIVING"
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM research.research_validation_artifacts WHERE run_id=$1",
+                run_id,
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM research.research_validation_records WHERE run_id=$1",
+                run_id,
+            )
+            == 0
+        )
+
+
+async def test_lease_expiring_during_archive_write_rolls_back_artifacts_and_receipt(
+    monkeypatch,
+):
+    async with fixture() as (conn, run_id, now, *_):
+        await enqueue(conn, run_id, now)
+        claim = await repo.claim_research_archive(conn, now, run_id=run_id)
+        await conn.execute(
+            "UPDATE research.research_validation_archive_queue SET lease_expires_at=clock_timestamp()+interval '120 seconds' WHERE run_id=$1",
+            run_id,
+        )
+        stale_stamp = await conn.fetchval(
+            "SELECT clock_timestamp()-interval '10 minutes'"
+        )
+        original_save = repo._save_frozen_artifacts
+
+        async def expire_after_write(*args):
+            result = await original_save(*args)
+            await conn.execute(
+                "UPDATE research.research_validation_archive_queue SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
+                run_id,
+            )
+            return result
+
+        monkeypatch.setattr(repo, "_save_frozen_artifacts", expire_after_write)
+        with pytest.raises(ValidationError_, match="租约已失效"):
+            async with conn.transaction():
+                await repo.persist_research_archive(conn, claim, stale_stamp)
+        for table in ("research_validation_artifacts", "research_validation_records"):
+            assert (
+                await conn.fetchval(
+                    f"SELECT count(*) FROM research.{table} WHERE run_id=$1", run_id
+                )
+                == 0
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1",
+                run_id,
+            )
+            == "ARCHIVING"
+        )
+
+
+async def test_claim_and_retry_deadlines_ignore_future_application_clock():
+    async with fixture() as (conn, run_id, now, *_):
+        await enqueue(conn, run_id, now)
+        before = await conn.fetchval("SELECT clock_timestamp()")
+        claim = await repo.claim_research_archive(conn, now, run_id=run_id)
+        assert (
+            before + timedelta(seconds=119)
+            <= claim["lease_expires_at"]
+            <= before + timedelta(seconds=125)
+        )
+        assert (
+            await repo.claim_research_archive(
+                conn, now + timedelta(days=1), run_id=run_id
+            )
+            is None
+        )
+        pending = await repo.finish_research_archive(
+            conn, claim, now, status="AUDIT_PENDING"
+        )
+        assert pending["status"] == "AUDIT_PENDING"
+        assert (
+            await repo.claim_research_archive(
+                conn, now + timedelta(days=2), run_id=run_id
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize("operation", ["persist", "finish"])
+async def test_lease_is_rechecked_after_waiting_for_the_queue_row_lock(operation):
+    from tests.unit.test_manual_research_database import (
+        fixture as committed_fixture,
+        make_run,
+        NOW,
+    )
+
+    async with committed_fixture(committed=True) as (conn, tenant, actor, _other):
+        _, _, run_id = await make_run(conn, tenant, actor)
+        await enqueue(conn, run_id, NOW)
+        claim = await repo.claim_research_archive(conn, run_id=run_id)
+        stale_stamp = await conn.fetchval(
+            "SELECT clock_timestamp()-interval '10 minutes'"
+        )
+        blocker, worker = await asyncpg.connect(DSN), await asyncpg.connect(DSN)
+        pending = None
+        try:
+            blocking_tx = blocker.transaction()
+            await blocking_tx.start()
+            await blocker.fetchrow(
+                "SELECT run_id FROM research.research_validation_archive_queue WHERE run_id=$1 FOR UPDATE",
+                run_id,
+            )
+
+            async def attempt():
+                try:
+                    async with worker.transaction():
+                        await worker.execute("SET LOCAL ROLE wealthsail_worker")
+                        if operation == "persist":
+                            return await repo.persist_research_archive(
+                                worker, claim, stale_stamp
+                            )
+                        return await repo.finish_research_archive(
+                            worker, claim, stale_stamp, status="ARCHIVED"
+                        )
+                except ValidationError_:
+                    return None
+
+            pending = asyncio.create_task(attempt())
+
+            async def wait_for_lock():
+                while (
+                    await blocker.fetchval(
+                        "SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1",
+                        worker.get_server_pid(),
+                    )
+                    != "Lock"
+                ):
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_lock(), 2)
+            await blocker.execute(
+                "UPDATE research.research_validation_archive_queue SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE run_id=$1",
+                run_id,
+            )
+            await blocking_tx.commit()
+            assert await asyncio.wait_for(pending, 2) is None
+            assert (
+                await conn.fetchval(
+                    "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1",
+                    run_id,
+                )
+                == "ARCHIVING"
+            )
+            for table in (
+                "research_validation_artifacts",
+                "research_validation_records",
+            ):
+                assert (
+                    await conn.fetchval(
+                        f"SELECT count(*) FROM research.{table} WHERE run_id=$1", run_id
+                    )
+                    == 0
+                )
+        finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+            await worker.close()
             await blocker.close()

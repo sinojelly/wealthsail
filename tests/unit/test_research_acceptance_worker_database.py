@@ -1,7 +1,6 @@
 """Owned committed rows prove archive faults cannot roll back strict publication."""
 
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
@@ -24,7 +23,6 @@ pytestmark = [
 
 def boundary(monkeypatch, run_id, batch_id):
     actual_enqueue = acceptance.enqueue_research_archive
-    actual_archive = archiver.archive_research_run
     mod, _state = isolate(monkeypatch)
 
     @asynccontextmanager
@@ -54,7 +52,6 @@ def boundary(monkeypatch, run_id, batch_id):
     )
     monkeypatch.setattr(mod, "finish_daily_run", daily_repository.finish_daily_run)
     monkeypatch.setattr(acceptance, "enqueue_research_archive", actual_enqueue)
-    monkeypatch.setattr(mod, "archive_research_run", actual_archive)
     monkeypatch.setattr(mod, "validate_report_outcome", lambda *_, **__: outcome)
     monkeypatch.setattr(
         alpha_repository,
@@ -105,30 +102,43 @@ async def test_strict_ready_survives_archive_fault_and_recovers_without_inferenc
             )
         result = await execute(mod, request_id, batch_id)
         assert result["status"] == "READY"
-        assert result["auditStatus"] == ("AUDIT_PENDING" if fail_stage else "ARCHIVED")
+        assert result["auditStatus"] == "AUDIT_PENDING"
+        mod.archive_research_run.assert_not_awaited()
+        # The guard is released before a recovery service ever claims the job.
+        mod.release_model_guard.assert_awaited_once()
         row = await conn.fetchrow(
             "SELECT status,payload FROM research.daily_research_results WHERE run_id=$1",
             run_id,
         )
         assert row["status"] == "READY" and row["payload"] is not None
-        assert await conn.fetchval(
-            "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1",
-            run_id,
-        ) == ("AUDIT_PENDING" if fail_stage else "ARCHIVED")
-        for table in ("research_validation_artifacts", "research_validation_records"):
-            assert await conn.fetchval(
-                f"SELECT count(*) FROM research.{table} WHERE run_id=$1", run_id
-            ) == (0 if fail_stage else 1)
-        if fail_stage:
-            monkeypatch.setattr(acceptance, target, original)
-            recovered = await archiver.archive_research_run(
-                object(), run_id, now=NOW + timedelta(minutes=1)
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1",
+                run_id,
             )
-            assert recovered["auditStatus"] == "ARCHIVED"
-        # Repeating recovery is inert and cannot duplicate an INITIAL receipt.
-        await archiver.archive_research_run(
-            object(), run_id, now=NOW + timedelta(minutes=2)
+            == "AUDIT_PENDING"
         )
+        for table in ("research_validation_artifacts", "research_validation_records"):
+            assert (
+                await conn.fetchval(
+                    f"SELECT count(*) FROM research.{table} WHERE run_id=$1", run_id
+                )
+                == 0
+            )
+        recovered = await archiver.archive_research_run(object(), run_id)
+        if fail_stage:
+            assert recovered["auditStatus"] == "AUDIT_PENDING"
+            monkeypatch.setattr(acceptance, target, original)
+            # Advance only this owned test job's retry eligibility, never its
+            # lease clock or the frozen evidence/validation timestamps.
+            await conn.execute(
+                "UPDATE research.research_validation_archive_queue SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE run_id=$1 AND status='AUDIT_PENDING'",
+                run_id,
+            )
+            recovered = await archiver.archive_research_run(object(), run_id)
+        assert recovered["auditStatus"] == "ARCHIVED"
+        # Repeating recovery is inert and cannot duplicate an INITIAL receipt.
+        await archiver.archive_research_run(object(), run_id)
         for table in ("research_validation_artifacts", "research_validation_records"):
             assert (
                 await conn.fetchval(
