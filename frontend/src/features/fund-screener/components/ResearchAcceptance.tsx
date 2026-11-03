@@ -52,6 +52,37 @@ const archiveLabels = {
 };
 const archivePending = (state?: string) =>
   state === "AUDIT_PENDING" || state === "ARCHIVING";
+
+function ArchiveRecheck({
+  checking,
+  failed,
+  onRecheck,
+}: {
+  checking: boolean;
+  failed: boolean;
+  onRecheck: () => void;
+}) {
+  return (
+    <div>
+      <p role="status">
+        {failed
+          ? "验收归档状态暂不可读取。"
+          : "归档可能仍在恢复，可稍后重新检查。"}
+      </p>
+      <button
+        type="button"
+        style={actionStyle}
+        disabled={checking}
+        onClick={onRecheck}
+      >
+        重新检查归档状态
+      </button>
+      <p>
+        <small>只读取已保存状态，不会重新执行研究。</small>
+      </p>
+    </div>
+  );
+}
 const cellStyle = { padding: "8px", borderBottom: "1px solid var(--op-line)" };
 const actionStyle = {
   border: "1px solid var(--op-line)",
@@ -191,7 +222,14 @@ function AcceptanceData({
       return api.getResearchAcceptance(runId, signal);
     },
     enabled: terminal,
-    retry: false,
+    retry: (failureCount, error) =>
+      failureCount < 2 &&
+      (error instanceof TypeError ||
+        (error instanceof HttpError &&
+          (error.status === 408 ||
+            error.status === 429 ||
+            error.status >= 500))),
+    retryDelay: 1000,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -205,9 +243,26 @@ function AcceptanceData({
   if (!terminal) return null;
   if (query.error instanceof HttpError && query.error.status === 404)
     return null;
+  const recheck = (
+    <ArchiveRecheck
+      checking={query.isFetching}
+      failed={query.isError}
+      onRecheck={() => {
+        void query.refetch();
+      }}
+    />
+  );
   const data = query.data;
-  if (!data || data.researchId !== runId || data.kind !== "INITIAL")
-    return null;
+  if (!data)
+    return query.isError ? (
+      <section
+        aria-label="研究验收记录"
+        className="op-daily-acceptance op-research-issues"
+      >
+        {recheck}
+      </section>
+    ) : null;
+  if (data.researchId !== runId || data.kind !== "INITIAL") return null;
   return (
     <section
       aria-label="研究验收记录"
@@ -237,6 +292,9 @@ function AcceptanceData({
       ) : (
         <Outcome data={data} />
       )}
+      {(query.isError ||
+        (data.archiveState && data.archiveState !== "ARCHIVED")) &&
+        recheck}
       {(data.canInspectArtifacts || data.canReplay) && (
         <AdminTools
           key={`${actor}:${runId}`}
@@ -289,6 +347,19 @@ function Outcome({
             >
               {" "}
               · 校验修订：{data.validatorRevision.slice(0, 12)}
+            </span>
+          )}
+        {data.buildCommit &&
+          /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(data.buildCommit) && (
+            <span
+              title={data.canInspectArtifacts ? data.buildCommit : undefined}
+            >
+              {" "}
+              · 构建版本：
+              {data.buildCommit.slice(
+                0,
+                data.buildCommit.length === 40 ? 7 : 12,
+              )}
             </span>
           )}
       </p>

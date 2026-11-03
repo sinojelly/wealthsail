@@ -247,6 +247,100 @@ it("bounds pending archive polling and keeps recoverable material details privat
   expect(
     screen.queryByText(/可恢复材料|冻结输入：可恢复/),
   ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "重新检查归档状态" }),
+  ).toBeEnabled();
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+    Object.assign(outcome(), {
+      archiveState: "ARCHIVED",
+      archivePending: false,
+    }),
+  );
+  await act(async () =>
+    screen.getByRole("button", { name: "重新检查归档状态" }).click(),
+  );
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：已归档")).toBeVisible(),
+  );
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(21);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(21);
+  expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["network interruption", new TypeError("PRIVATE_NETWORK_DETAIL")],
+  ["temporary server failure", new HttpError("PRIVATE_SERVER_DETAIL", 503)],
+])(
+  "recovers from one %s during archive polling with a bounded GET retry",
+  async (_label, failure) => {
+    vi.useFakeTimers();
+    vi.mocked(api.getResearchAcceptance)
+      .mockResolvedValueOnce(
+        Object.assign(outcome(), {
+          archiveState: "AUDIT_PENDING",
+          archivePending: true,
+        }),
+      )
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(
+        Object.assign(outcome(), {
+          archiveState: "ARCHIVED",
+          archivePending: false,
+        }),
+      );
+    renderWithSession(<ResearchAcceptance runId={runId} state="READY" />);
+    await vi.waitFor(() =>
+      expect(screen.getByText("归档状态：待归档")).toBeVisible(),
+    );
+    expect(
+      screen.getByRole("button", { name: "重新检查归档状态" }),
+    ).toBeEnabled();
+    await act(async () => vi.advanceTimersByTimeAsync(15000));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    await vi.waitFor(() =>
+      expect(screen.getByText("归档状态：已归档")).toBeVisible(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(api.getResearchAcceptance).toHaveBeenCalledTimes(3);
+    expect(
+      screen.queryByText(/PRIVATE_NETWORK_DETAIL|PRIVATE_SERVER_DETAIL/),
+    ).not.toBeInTheDocument();
+    expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+    expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+  },
+);
+
+it("bounds initial archive read retries and lets a manual GET recover after the network returns", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getResearchAcceptance).mockRejectedValue(
+    new TypeError("PRIVATE_NETWORK_DETAIL"),
+  );
+  renderWithSession(<ResearchAcceptance runId={runId} state="READY" />);
+  await act(async () => vi.advanceTimersByTimeAsync(10000));
+  await vi.waitFor(() =>
+    expect(screen.getByText("验收归档状态暂不可读取。")).toBeVisible(),
+  );
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(3);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(3);
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+    Object.assign(outcome(), {
+      archiveState: "ARCHIVED",
+      archivePending: false,
+    }),
+  );
+  await act(async () =>
+    screen.getByRole("button", { name: "重新检查归档状态" }).click(),
+  );
+  await vi.waitFor(() =>
+    expect(screen.getByText("归档状态：已归档")).toBeVisible(),
+  );
+  expect(api.getResearchAcceptance).toHaveBeenCalledTimes(4);
+  expect(screen.queryByText("PRIVATE_NETWORK_DETAIL")).not.toBeInTheDocument();
+  expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
 });
 
 it("stops archive polling if its record is no longer available", async () => {
@@ -445,6 +539,25 @@ it("keeps accepted macro observations explicitly unverified and shows the valida
     screen.queryByRole("button", { name: /买入|跟踪|推送/ }),
   ).not.toBeInTheDocument();
 });
+
+it.each([40, 64])(
+  "shows an available %s-character build commit as a short read-only version",
+  async (length) => {
+    const buildCommit = "0123456789abcdef".repeat(4).slice(0, length);
+    vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+      Object.assign(outcome(), { buildCommit }),
+    );
+    renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+    expect(
+      await screen.findByText(
+        `构建版本：${buildCommit.slice(0, length === 40 ? 7 : 12)}`,
+        { exact: false },
+      ),
+    ).toBeVisible();
+    expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+    expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+  },
+);
 
 it("shows partial observations and complete safe issues without any trade controls", async () => {
   const data = outcome();

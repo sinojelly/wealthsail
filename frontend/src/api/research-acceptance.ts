@@ -57,6 +57,7 @@ export interface ResearchAcceptanceOutcome {
   decision: "COMPLETE" | "PARTIAL" | "EMPTY" | "REJECTED";
   validatorVersion: string;
   validatorRevision?: string | null;
+  buildCommit?: string | null;
   revisionStatus?: "AVAILABLE" | "UNAVAILABLE";
   validatedAt: string;
   recordedAt?: string;
