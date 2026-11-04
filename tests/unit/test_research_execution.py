@@ -50,7 +50,7 @@ def observe(*events):
 
 def test_completed_search_receipt_hashes_exact_query_without_saving_text():
     receipt = observe(event())
-    assert receipt["version"] == "research-execution-v1"
+    assert receipt["version"] == "research-execution-v2"
     assert receipt["coverage"] == "COMPLETE" and receipt["turnCompleted"] is True
     assert receipt["counts"]["webToolCalls"] == 1
     assert receipt["counts"]["searchQueries"] == 1

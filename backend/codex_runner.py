@@ -37,6 +37,7 @@ from backend.integrations.codex_research import (
 from backend.integrations.research_execution import (
     EXECUTION_TRANSPORT_HEADER,
     sanitize_execution_receipt,
+    summarize_execution_receipt,
     sanitize_execution_transport_reason,
 )
 
@@ -415,10 +416,7 @@ def create_app(
                 raise HTTPException(502, _error_detail(error, "Invalid Codex research response")) from exc
             receipt = sanitize_execution_receipt(getattr(result, "execution_receipt", None))
             if receipt is not None:
-                compact = {
-                    **receipt, "coverage": "PARTIAL", "eventsComplete": False,
-                    "queryReceipts": [],
-                }
+                compact = summarize_execution_receipt(receipt)
                 for candidate, reason in ((receipt, inherited_reason), (compact, "RECEIPT_SUMMARIZED_SIZE_LIMIT")):
                     envelope = {**base, "executionReceipt": candidate}
                     try:
