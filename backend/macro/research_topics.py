@@ -28,6 +28,81 @@ BUDGET = {
     "maxOutputBytes": 2 * 1024 * 1024,
     "maxExecutionSeconds": 1200,
 }
+# Historical profiles are literals, deliberately independent of the runtime
+# writer budget. New semantics require a newly registered discovery version.
+_DISCOVERY_CONTRACTS = {
+    "research-discovery-v2": {
+        "manifestVersion": "research-audit-manifest-v1",
+        "registryVersion": "industry-registry-v1",
+        "budgetProfiles": (
+            {
+                "maxTopics": 64,
+                "maxFormalDirections": 8,
+                "maxScopes": 10,
+                "maxQueries": 50,
+                "maxSources": 24,
+            },
+            {
+                "maxTopics": 64,
+                "maxFormalDirections": 8,
+                "maxScopes": 10,
+                "maxQueries": 50,
+                "maxSources": 24,
+                "maxModelCalls": 1,
+                "maxInputBytes": 4194304,
+                "maxOutputBytes": 2097152,
+                "maxExecutionSeconds": 1200,
+            },
+        ),
+        "riskKinds": frozenset(
+            {
+                "FINANCING_COOLING",
+                "LAYOFFS_CLOSURES",
+                "ORDER_CUTS",
+                "OVERCAPACITY_PRICE_WAR",
+                "PRODUCTION_DELAY",
+            }
+        ),
+    },
+}
+
+
+class FrozenDiscoveryCompatibilityError(ValueError):
+    code = "INCOMPATIBLE"
+
+    def __init__(self):
+        super().__init__(
+            "INCOMPATIBLE: unsupported frozen research contract version or profile"
+        )
+
+
+def _discovery_contract(packet):
+    if not isinstance(packet, dict) or "researchDiscovery" not in packet:
+        return None
+    discovery = packet["researchDiscovery"]
+    if not isinstance(discovery, dict):
+        raise ValueError("invalid frozen discovery structure")
+    version = discovery.get("version")
+    contract = _DISCOVERY_CONTRACTS.get(version) if isinstance(version, str) else None
+    if contract is None:
+        raise FrozenDiscoveryCompatibilityError()
+    return contract
+
+
+def _known_budget(contract, budget):
+    for profile in contract["budgetProfiles"]:
+        if (
+            isinstance(budget, dict)
+            and budget.keys() == profile.keys()
+            and all(
+                type(budget[key]) is int and budget[key] == value
+                for key, value in profile.items()
+            )
+        ):
+            return profile
+    raise FrozenDiscoveryCompatibilityError()
+
+
 TOPIC_MESSAGES = {
     "FORMAL_VALIDATED": "正式方向已通过完整严格校验，投资许可仍以具体计划的实时保护为准。",
     "OBSERVATION_ONLY": "已保存公开观察，未授予投资许可。",
@@ -89,8 +164,8 @@ def digest(value):
 
 def is_v2(packet):
     return (
-        isinstance(packet, dict)
-        and (packet.get("researchDiscovery") or {}).get("version") == DISCOVERY_VERSION
+        _discovery_contract(packet) is not None
+        and packet["researchDiscovery"]["version"] == "research-discovery-v2"
     )
 
 
@@ -221,14 +296,22 @@ def make_task(
 
 
 def frozen_manifest(packet):
-    discovery = packet.get("researchDiscovery") or {}
-    if discovery.get("version") != DISCOVERY_VERSION:
+    supported = _discovery_contract(packet)
+    if supported is None:
         return None
+    discovery = packet["researchDiscovery"]
     manifest = discovery.get("auditManifest")
+    if isinstance(manifest, dict) and (
+        manifest.get("version") != supported["manifestVersion"]
+        or manifest.get("registryVersion") != supported["registryVersion"]
+    ):
+        raise FrozenDiscoveryCompatibilityError()
     if not isinstance(manifest, dict) or manifest.get("manifestHash") != digest(
         {k: v for k, v in manifest.items() if k != "manifestHash"}
     ):
         raise ValueError("invalid frozen discovery manifest")
+    budget = _known_budget(supported, manifest.get("budget"))
+    _known_budget(supported, discovery.get("budget"))
     try:
         same_clock = datetime.fromisoformat(manifest["asOf"]) == datetime.fromisoformat(
             packet["asOf"]
@@ -238,8 +321,7 @@ def frozen_manifest(packet):
     contract = manifest.get("candidateContract") or {}
     if (
         not same_clock
-        or manifest.get("budget") != BUDGET
-        or discovery.get("budget") != BUDGET
+        or discovery.get("budget") != budget
         or [row.get("industry") for row in contract.get("candidates", [])]
         != manifest.get("selectedScopes")
         or contract.get("omittedIndustries") != manifest.get("deferredScopes")
@@ -248,18 +330,23 @@ def frozen_manifest(packet):
     selected, tasks = manifest.get("selectedScopes"), manifest.get("tasks")
     if (
         not isinstance(selected, list)
-        or len(selected) > 10
+        or len(selected) > budget["maxScopes"]
+        or any(not isinstance(scope, str) for scope in selected)
         or len(set(selected)) != len(selected)
         or not isinstance(tasks, list)
-        or len(tasks) != len(selected) * 5
-        or len(tasks) > 50
+        or len(tasks) != len(selected) * len(supported["riskKinds"])
+        or len(tasks) > budget["maxQueries"]
+        or any(
+            not isinstance(row, dict) or not isinstance(row.get("taskId"), str)
+            for row in tasks
+        )
     ):
         raise ValueError("invalid discovery budget")
-    from backend.macro.industry_cycle import RISK_CHECKS
-
     for scope in selected:
         rows = [row for row in tasks if row.get("industryId") == scope]
-        if {row.get("kind") for row in rows} != set(RISK_CHECKS) or len(rows) != 5:
+        if {row.get("kind") for row in rows} != supported["riskKinds"] or len(
+            rows
+        ) != len(supported["riskKinds"]):
             raise ValueError("invalid discovery risk tasks")
     if len({row.get("taskId") for row in tasks}) != len(tasks):
         raise ValueError("invalid discovery task identity")
@@ -271,9 +358,13 @@ def freeze_discovery_packet(packet, now):
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise ValueError("aware discovery time required")
     result = deepcopy(packet)
-    if is_v2(result):
+    if _discovery_contract(result) is not None:
         frozen_manifest(result)
         return result
+    supported = _DISCOVERY_CONTRACTS.get(DISCOVERY_VERSION)
+    if supported is None:
+        raise FrozenDiscoveryCompatibilityError()
+    _known_budget(supported, BUDGET)
     from backend.macro.daily_research import apply_entry_guards
     from backend.integrations.daily_sources import industry_cycle_research_tasks
 
@@ -289,10 +380,10 @@ def freeze_discovery_packet(packet, now):
     }
     selected = [row["industry"] for row in contract["candidates"]]
     manifest = {
-        "version": "research-audit-manifest-v1",
+        "version": supported["manifestVersion"],
         "asOf": stamp.isoformat(),
         "window": window,
-        "registryVersion": INDUSTRY_REGISTRY_VERSION,
+        "registryVersion": supported["registryVersion"],
         "budget": deepcopy(BUDGET),
         "selectedScopes": selected,
         "deferredScopes": list(contract["omittedIndustries"]),

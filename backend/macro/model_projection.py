@@ -167,6 +167,53 @@ def _observation_groups(rows):
     return list(groups.values())
 
 
+def _industry_research_view(packet):
+    from backend.macro.research_topics import frozen_manifest
+
+    manifest = frozen_manifest(packet)
+    if manifest is None:
+        return deepcopy(packet.get("industryCycleResearch"))
+    contract = manifest["candidateContract"]
+    result = _pick(
+        contract,
+        (
+            "required",
+            "execution",
+            "asOf",
+            "lookbackDays",
+            "maximumCandidates",
+            "omittedCandidateCount",
+            "omittedRiskCandidateCount",
+            "omittedIndustries",
+            "omittedPlanIndustryIds",
+            "standardIndustryCodes",
+            "planReviewEligibility",
+            "newDirectionRequiresSameChecks",
+            "scopeSearchTerms",
+        ),
+    )
+    result.update(
+        discoveryVersion=packet["researchDiscovery"]["version"],
+        registryVersion=manifest["registryVersion"],
+        budget=deepcopy(manifest["budget"]),
+        window=deepcopy(manifest["window"]),
+        maximumQueries=manifest["budget"]["maxQueries"],
+        candidates=[
+            {
+                "industry": scope,
+                "priority": index + 1,
+                "queries": [
+                    _pick(task, ("taskId", "kind", "query"))
+                    for task in manifest["tasks"]
+                    if task["industryId"] == scope
+                ],
+            }
+            for index, scope in enumerate(manifest["selectedScopes"])
+        ],
+    )
+    return result
+
+
 def model_packet(packet):
     """One price table, current evidence and previous fund coordinates, no history dumps."""
     result = _pick(
@@ -189,10 +236,11 @@ def model_packet(packet):
             "institutionalSignals",
             "discoveryCoverage",
             "dynamicNavSourceResults",
-            "industryCycleResearch",
-            "researchDiscovery",
         ),
     )
+    research_view = _industry_research_view(packet)
+    if research_view is not None:
+        result["industryCycleResearch"] = research_view
     public = packet.get("alphaPublic") or {}
     referenced_media = {
         row.get("mediaEvidenceId")

@@ -95,7 +95,8 @@ def test_real_batch_registry_contract_keeps_formal_and_all_discovered_topics():
     assert len(projected["items"]) == 31
     assert projected["coverage"]["maxModelCalls"] == 1
     assert projected["coverage"]["additionalModelCalls"] == 0
-    assert projected["coverage"]["searchExecutionVerified"] is False
+    # The real-core fixture now carries explicit offline protocol receipts.
+    assert projected["coverage"]["searchExecutionVerified"] is True
     assert projected["items"][0]["match"]["scopeVerified"] is not None
 
 
@@ -117,6 +118,74 @@ def test_registry_supports_full_union72_and_preserves_explicit_budget_coverage()
     assert projected["coverage"]["totalCount"] == 30
     assert projected["coverage"]["storedCount"] == 0
     assert projected["coverage"]["hasMore"] is True
+
+
+def test_topic_coverage_preserves_distinct_structure_execution_and_publish_outcomes():
+    run_id = uuid4()
+    value = registry(run_id, 1)
+    measured = {
+        "structureCompleteScopeCount": 10,
+        "executionVerifiedScopeCount": 0,
+        "evidenceVerifiedCheckCount": 7,
+        "executionVerifiedCheckCount": 0,
+        "strictDirectionCount": 1,
+        "autoPublishBlockerCount": 2,
+        "strictRevalidated": True,
+        "autoPublishAllowed": False,
+    }
+    value["coverage"].update(measured)
+
+    coverage = repository().prepare_topic_registry(value, run_id, NOW)["coverage"]
+
+    assert {key: coverage.get(key) for key in measured} == measured
+    assert coverage["searchExecutionVerified"] is False
+
+
+def test_legacy_topic_coverage_does_not_invent_verification_or_publish_fields():
+    run_id = uuid4()
+    coverage = repository().prepare_topic_registry(registry(run_id, 1), run_id, NOW)[
+        "coverage"
+    ]
+    for key in (
+        "structureCompleteScopeCount",
+        "executionVerifiedScopeCount",
+        "evidenceVerifiedCheckCount",
+        "executionVerifiedCheckCount",
+        "strictDirectionCount",
+        "autoPublishBlockerCount",
+        "strictRevalidated",
+        "autoPublishAllowed",
+    ):
+        assert key not in coverage
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "structureCompleteScopeCount",
+        "executionVerifiedScopeCount",
+        "evidenceVerifiedCheckCount",
+        "executionVerifiedCheckCount",
+        "strictDirectionCount",
+        "autoPublishBlockerCount",
+    ],
+)
+def test_topic_verification_counts_reject_booleans(key):
+    run_id = uuid4()
+    value = registry(run_id, 1)
+    value["coverage"][key] = True
+    with pytest.raises(ValidationError_):
+        repository().prepare_topic_registry(value, run_id, NOW)
+
+
+@pytest.mark.parametrize("key", ["strictRevalidated", "autoPublishAllowed"])
+@pytest.mark.parametrize("invalid", [0, 1, "false", None])
+def test_topic_publish_booleans_reject_non_booleans(key, invalid):
+    run_id = uuid4()
+    value = registry(run_id, 1)
+    value["coverage"][key] = invalid
+    with pytest.raises(ValidationError_):
+        repository().prepare_topic_registry(value, run_id, NOW)
 
 
 def test_unavailable_code_revision_is_explicit_metadata_not_research_failure():

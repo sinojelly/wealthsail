@@ -996,6 +996,9 @@ async def _execute_daily_research(
     diagnostics = {}
     model_returned = False
     current_stage = "MODEL_EXECUTION"
+    model_started, source_started = None, None
+    model_ms, sources_ms = None, None
+    execution_receipt, usage_observation = None, None
 
     def confirmed_model_return():
         nonlocal model_returned
@@ -1009,6 +1012,7 @@ async def _execute_daily_research(
         if unavailable:
             return result
         model = settings.daily_research_model or getattr(settings, "codex_model", None)
+        model_started = monotonic()
         async with asyncio.timeout(settings.daily_research_timeout_seconds):
             if remote_codex:
                 raw = await codex_client.research(
@@ -1042,6 +1046,9 @@ async def _execute_daily_research(
                     operation=operation,
                 )
         model_returned = True
+        model_ms = max(0, int((monotonic() - model_started) * 1000))
+        execution_receipt = getattr(raw, "execution_receipt", None)
+        usage_observation = getattr(raw, "usage", None)
         write_research_audit(
             settings,
             run_id,
@@ -1053,8 +1060,16 @@ async def _execute_daily_research(
         if pipeline:
             await _pipeline_stage(pool, pipeline, stage="VERIFYING_OUTPUT")
         sources = sources_for_verification(raw, now=local(now_shanghai()))
+        source_started = monotonic()
         checks = await verify_research_sources(sources, now=local(now_shanghai()))
+        sources_ms = max(0, int((monotonic() - source_started) * 1000))
         validated_at = local(now_shanghai())
+        from backend.macro.research_topics import frozen_manifest
+
+        if manifest := frozen_manifest(packet):
+            from backend.macro.research_assurance import bind_execution
+
+            checks = bind_execution(checks, execution_receipt, manifest, run_id, validated_at)
         write_research_audit(
             settings,
             run_id,
@@ -1123,6 +1138,8 @@ async def _execute_daily_research(
             error = "ResearchValidationError"
             diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
+        execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
+        usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
         result["status"], error = "UNCERTAIN", "CancelledError"
         if pipeline and monotonic() >= pipeline.get("_runtime_deadline", float("inf")):
@@ -1137,10 +1154,14 @@ async def _execute_daily_research(
         )
         raise
     except TimeoutError as exc:
+        execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
+        usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
         diagnostics = _log_research_failure(exc, current_stage, run_id)
     except Exception as exc:  # noqa: BLE001
+        execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
+        usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
         if getattr(exc, "inference_succeeded", False) is True:
             model_returned = True
@@ -1173,6 +1194,21 @@ async def _execute_daily_research(
             error = "ResearchValidationError"
         diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     finally:
+        from backend.macro.research_workload import measured_workload
+
+        if model_started is not None and model_ms is None:
+            model_ms = max(0, int((monotonic() - model_started) * 1000))
+        if source_started is not None and sources_ms is None:
+            sources_ms = max(0, int((monotonic() - source_started) * 1000))
+        workload = measured_workload(
+            len(prompt.encode("utf-8")), execution_receipt, usage_observation,
+            model_ms=model_ms, sources_ms=sources_ms,
+        )
+        logger.info(
+            "daily_research_workload run_id=%s prompt_bytes=%s model_ms=%s source_ms=%s search_queries=%s execution_coverage=%s",
+            run_id, workload["promptBytes"], model_ms, sources_ms,
+            workload["observedSearchQueries"], workload["executionCoverage"],
+        )
         if raw is not None:
             write_research_audit(
                 settings,
@@ -1215,6 +1251,7 @@ async def _execute_daily_research(
                         **diagnostics,
                     )
                     archived_outcome = outcome.to_dict()
+                    archived_outcome["researchWorkload"] = workload
                     if deterministic_repair is not None:
                         archived_outcome["deterministicRepair"] = deterministic_repair
                         archived_outcome["repairedFormalPublished"] = (

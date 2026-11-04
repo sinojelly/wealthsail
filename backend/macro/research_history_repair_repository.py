@@ -286,9 +286,13 @@ async def _source(conn, run_id):
 
 
 async def _repair(conn, run_id):
-    from backend.macro.research_acceptance_replay import run_offline_repair
+    from backend.macro.research_acceptance_replay import (
+        check_frozen_contract,
+        run_offline_repair,
+    )
 
     meta, frozen, observed = await _source(conn, run_id)
+    check_frozen_contract(frozen.packet)
     value = await run_offline_repair(frozen.repair_payload())
     if (
         not isinstance(value, dict)
@@ -337,6 +341,8 @@ async def preview_history_repair(conn, run_id, actor, tenant, now):
 
 
 def _failure(code):
+    if code == "INCOMPATIBLE":
+        return ReplayFailure(ValidationError_("该冻结契约版本暂不受支持"))
     if code in {"BUSY", "ACTOR_LIMIT", "RUN_LIMIT"}:
         return ReplayFailure(
             RateLimitedError(
@@ -366,6 +372,24 @@ def _failure(code):
     )
 
 
+async def _retry_failure(conn, run_id, code):
+    # INCOMPATIBLE cannot be added to historical attempt CHECK constraints.
+    # Re-read only the immutable contract; never re-run or charge a same key.
+    if code == "VALIDATOR_FAILED":
+        from backend.macro.research_acceptance_replay import check_frozen_contract
+
+        try:
+            _, frozen, _ = await _source(conn, run_id)
+            check_frozen_contract(frozen.packet)
+        except (OfflineReplayError, NotFoundError, ValidationError_, ValueError) as error:
+            return _failure(
+                error.code
+                if isinstance(error, OfflineReplayError)
+                else "MATERIALS_INVALID"
+            )
+    return _failure(code)
+
+
 async def generate_history_repair(conn, run_id, actor, tenant, command_key, now):
     from backend.macro.research_acceptance import validator_revision
 
@@ -382,7 +406,9 @@ async def generate_history_repair(conn, run_id, actor, tenant, command_key, now)
             conn, UUID(reserved["result_id"]), now, admin=True
         )
     if status != "RUNNING":
-        return _failure(
+        return await _retry_failure(
+            conn,
+            run_id,
             status
             if status in {"BUSY", "ACTOR_LIMIT", "RUN_LIMIT", "NOT_FOUND"}
             else reserved.get("error_code")
@@ -426,7 +452,12 @@ async def generate_history_repair(conn, run_id, actor, tenant, command_key, now)
             if isinstance(error, (NotFoundError, ValidationError_, ValueError))
             else "VALIDATOR_FAILED"
         )
-        await _rpc(conn, "finish_history_repair_failure", attempt_id, code)
+        await _rpc(
+            conn,
+            "finish_history_repair_failure",
+            attempt_id,
+            "VALIDATOR_FAILED" if code == "INCOMPATIBLE" else code,
+        )
         return _failure(code)
     try:
         async with conn.transaction():

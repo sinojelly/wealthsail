@@ -72,6 +72,31 @@ async def test_worker_writer_saves_all72_topics_and_filter_cannot_reuse_other_cu
             )
 
 
+async def test_optional_verification_coverage_roundtrips_without_implying_execution():
+    async with fixture() as (conn, run_id, now, tenants, actors, _):
+        value = registry(run_id, 1)
+        value["validatedAt"] = now.isoformat()
+        measured = {
+            "structureCompleteScopeCount": 10,
+            "executionVerifiedScopeCount": 0,
+            "evidenceVerifiedCheckCount": 7,
+            "executionVerifiedCheckCount": 0,
+            "strictDirectionCount": 1,
+            "autoPublishBlockerCount": 2,
+            "strictRevalidated": True,
+            "autoPublishAllowed": False,
+        }
+        value["coverage"].update(measured)
+        await repository().save_topic_registry(conn, run_id, value, now)
+        await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
+
+        page = await repository().read_topic_registry(conn, run_id)
+
+        assert {key: page["coverage"][key] for key in measured} == measured
+        assert page["coverage"]["searchExecutionVerified"] is False
+        assert page["actionable"] is False
+
+
 async def test_topics_keep_original_initial_and_run_result_and_reject_snapshot_overwrite():
     async with fixture() as (conn, run_id, now, *_):
         original = await conn.fetchval(

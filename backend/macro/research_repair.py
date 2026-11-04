@@ -252,9 +252,9 @@ def _protection_unchanged(accepted, formal, candidate):
 
 def repair_report(raw, packet, source_checks, *, research_id, validated_at):
     """Return a private bounded receipt; callers publish only the explicit gate."""
-    if (packet.get("researchDiscovery") or {}).get(
-        "version"
-    ) == "research-discovery-v2":
+    from backend.macro.research_topics import frozen_manifest
+
+    if frozen_manifest(packet) is not None:
         # New and offline historical research use exactly the same deterministic
         # core. A V1 frozen packet never receives V2 coverage semantics.
         from backend.macro.research_batch import evaluate_research_batch

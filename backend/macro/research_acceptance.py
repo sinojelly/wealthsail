@@ -98,6 +98,7 @@ ISSUE_MESSAGES.update(
     {
         "DIRECTION_PLAN_SECTOR_UNREVIEWED": "基金所属行业未完成核查，相关计划已隔离。",
         "DIRECTION_DECLARED_INDUSTRY_UNKNOWN": "方向声明的行业没有有效审核记录。",
+        "DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED": "行业核查缺少执行凭证或有效原文支持，相关计划待审核。",
         "DIRECTION_MACRO_REFERENCE_UNKNOWN": "方向引用的宏观事实无效。",
         "INDUSTRY_REVIEW_COVERAGE_MISSING": "本轮必查行业的核查覆盖不完整。",
     }

@@ -83,6 +83,10 @@ def main():
             "published": False,
             "actionable": False,
         }
+        from backend.macro.research_acceptance_replay import OfflineReplayError
+
+        if isinstance(error, OfflineReplayError) and error.code == "INCOMPATIBLE":
+            value["errorCode"] = "INCOMPATIBLE"
     print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
     return 0 if value.get("strictPass") and value.get("historicalPublishAllowed") else 2
 

@@ -544,6 +544,11 @@ def safe_outcome_summary(value):
         result["repairedFormalPublished"] = value["repairedFormalPublished"]
     if value.get("topicRegistryAvailable") is False and value.get("topicArchiveIssue") == "REGISTRY_OUTPUT_LIMIT":
         result.update(topicRegistryAvailable=False, topicArchiveIssue="REGISTRY_OUTPUT_LIMIT")
+    from backend.macro.research_workload import safe_workload
+
+    workload = safe_workload(value.get("researchWorkload"))
+    if workload is not None:
+        result["researchWorkload"] = workload
     return result
 
 
@@ -993,6 +998,59 @@ async def list_validation_replays(conn, run_id, now, *, limit=20):
     return [await _record_dto(conn, row, admin=True) for row in rows]
 
 
+def _checked_replay_payload(frozen, run_id):
+    from backend.macro.research_acceptance_replay import (
+        OfflineReplayError,
+        check_frozen_contract,
+    )
+
+    if frozen.get("complete") is not True:
+        raise OfflineReplayError("MATERIALS_INVALID")
+    bodies = {}
+    for item in frozen.get("items", []):
+        text, kind = item.get("content"), item.get("kind")
+        if (
+            kind not in KINDS
+            or kind in bodies
+            or not isinstance(text, str)
+            or sha256(text.encode("utf-8")).hexdigest() != item.get("sha256")
+            or len(text.encode("utf-8")) != item.get("byteLength")
+        ):
+            raise OfflineReplayError("MATERIALS_INVALID")
+        bodies[kind] = text
+    if set(bodies) != set(KINDS):
+        raise OfflineReplayError("MATERIALS_INVALID")
+    packet = json.loads(bodies["PACKET"])
+    check_frozen_contract(packet)
+    return {
+        "raw": bodies["RAW_MODEL"],
+        "packet": packet,
+        "sourceChecks": json.loads(bodies["SOURCE_CHECKS"]),
+        "researchId": str(run_id),
+        "validatedAt": _aware(frozen["validatedAt"]).isoformat(),
+    }
+
+
+async def _retry_replay_failure(conn, run_id, actor, tenant, code):
+    # Existing CHECK constraints retain the original storage vocabulary. A
+    # failed same-key retry can classify immutable contract metadata read-only,
+    # without admitting another attempt or launching another subprocess.
+    if code == "VALIDATOR_FAILED":
+        from backend.macro.research_acceptance_replay import OfflineReplayError
+
+        try:
+            _checked_replay_payload(
+                await read_artifacts_admin(conn, run_id, actor, tenant), run_id
+            )
+        except (OfflineReplayError, NotFoundError, ValueError) as error:
+            return _replay_failure(
+                error.code
+                if isinstance(error, OfflineReplayError)
+                else "MATERIALS_INVALID"
+            )
+    return _replay_failure(code)
+
+
 async def replay_validation(conn, run_id, actor, tenant, commandKey, now):
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -1014,7 +1072,11 @@ async def replay_validation(conn, run_id, actor, tenant, commandKey, now):
         if previous:
             if str(previous["run_id"]) != str(run_id):
                 raise IdempotencyConflictError("该命令已用于另一研究的离线重放")
-            return _replay_failure(
+            return await _retry_replay_failure(
+                conn,
+                run_id,
+                actor,
+                tenant,
                 "BUSY"
                 if previous["status"] == "RUNNING"
                 else previous["error_code"] or "VALIDATOR_FAILED"
@@ -1049,32 +1111,7 @@ async def replay_validation(conn, run_id, actor, tenant, commandKey, now):
 
         try:
             frozen = await read_artifacts_admin(conn, run_id, actor, tenant)
-            if frozen.get("complete") is not True:
-                raise OfflineReplayError("MATERIALS_INVALID")
-            bodies = {}
-            for item in frozen.get("items", []):
-                text = item.get("content")
-                kind = item.get("kind")
-                if (
-                    kind not in KINDS
-                    or kind in bodies
-                    or not isinstance(text, str)
-                    or sha256(text.encode("utf-8")).hexdigest() != item.get("sha256")
-                    or len(text.encode("utf-8")) != item.get("byteLength")
-                ):
-                    raise OfflineReplayError("MATERIALS_INVALID")
-                bodies[kind] = text
-            if set(bodies) != set(KINDS):
-                raise OfflineReplayError("MATERIALS_INVALID")
-            result = await run_offline_validation(
-                {
-                    "raw": bodies["RAW_MODEL"],
-                    "packet": json.loads(bodies["PACKET"]),
-                    "sourceChecks": json.loads(bodies["SOURCE_CHECKS"]),
-                    "researchId": str(run_id),
-                    "validatedAt": _aware(frozen["validatedAt"]).isoformat(),
-                }
-            )
+            result = await run_offline_validation(_checked_replay_payload(frozen, run_id))
             if (
                 str(result.get("researchId")) != str(run_id)
                 or len(_encode(result).encode("utf-8")) > OUTCOME_LIMIT
@@ -1101,7 +1138,7 @@ async def replay_validation(conn, run_id, actor, tenant, commandKey, now):
                 attempt_id,
                 state,
                 None,
-                code,
+                "VALIDATOR_FAILED" if code == "INCOMPATIBLE" else code,
             )
             return _replay_failure(code)
         receipt = await save_validation_outcome(
@@ -1134,6 +1171,8 @@ class ReplayFailure:
 
 
 def _replay_failure(code):
+    if code == "INCOMPATIBLE":
+        return ReplayFailure(ValidationError_("该冻结契约版本暂不受支持"))
     if code in {"BUSY", "ACTOR_LIMIT", "RUN_LIMIT"}:
         return ReplayFailure(
             RateLimitedError(

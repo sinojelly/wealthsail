@@ -24,6 +24,23 @@ class OfflineReplayError(Exception):
         super().__init__(code)
 
 
+def check_frozen_contract(packet):
+    """Classify version support separately from integrity, without execution."""
+    from backend.macro.research_topics import (
+        FrozenDiscoveryCompatibilityError,
+        frozen_manifest,
+    )
+
+    if not isinstance(packet, dict):
+        raise OfflineReplayError("MATERIALS_INVALID")
+    try:
+        frozen_manifest(packet)
+    except FrozenDiscoveryCompatibilityError:
+        raise OfflineReplayError("INCOMPATIBLE") from None
+    except (ValueError, TypeError):
+        raise OfflineReplayError("MATERIALS_INVALID") from None
+
+
 def child_environment():
     # In particular, do not inherit provider/DB credentials, PATH or PYTHONPATH.
     result = {
@@ -71,7 +88,12 @@ async def _exchange(proc, payload, output_limit=OUTPUT_LIMIT):
         if not isinstance(value, dict):
             raise OfflineReplayError("INVALID_OUTPUT")
         if value.get("error"):
-            raise OfflineReplayError("VALIDATOR_FAILED")
+            code = value["error"]
+            raise OfflineReplayError(
+                code
+                if code in ("INCOMPATIBLE", "MATERIALS_INVALID")
+                else "VALIDATOR_FAILED"
+            )
         return value
     finally:
         if not sending.done():
@@ -171,6 +193,7 @@ def main():
         if len(data) > INPUT_LIMIT:
             raise ValueError("input limit")
         payload = json.loads(data)
+        check_frozen_contract(payload["packet"])
         if payload.get("operation", "VALIDATE") == "REPAIR":
             from backend.macro.research_repair import repair_report
             value = repair_report(payload["raw"], payload["packet"], payload["sourceChecks"], research_id=payload["researchId"], validated_at=datetime.fromisoformat(payload["validatedAt"]))
@@ -186,6 +209,13 @@ def main():
         ).encode("utf-8")
         if len(output) > limit:
             raise ValueError("output limit")
+    except OfflineReplayError as error:
+        code = (
+            error.code
+            if error.code in ("INCOMPATIBLE", "MATERIALS_INVALID")
+            else "VALIDATOR_FAILED"
+        )
+        output = json.dumps({"error": code}).encode("utf-8")
     except Exception:
         # No exception repr, raw text, URLs, command keys or credentials leave the child.
         output = b'{"error":"VALIDATOR_FAILED"}'

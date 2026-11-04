@@ -22,7 +22,6 @@ from backend.macro.research_acceptance import (
     validator_revision,
 )
 from backend.macro.research_topics import (
-    BUDGET,
     MAX_REGISTRY_ITEMS,
     REGISTRY_VERSION,
     TOPIC_MESSAGES,
@@ -149,20 +148,12 @@ def evaluate_research_batch(
     structured_reviews = {
         row["industry"]: row for row in accepted.get("industryCycleReviews", [])
     }
-    completed_kinds = {}
-    for industry, review in structured_reviews.items():
-        completed_kinds[industry] = {
-            check["kind"]
-            for check in review.get("riskChecks", [])
-            if check.get("status") == "NOT_FOUND"
-            or (
-                check.get("status") == "FOUND"
-                and check.get("claimSupported") is True
-                and check.get("verification") == "SOURCE_CHECKED"
-                and check.get("eventTimeVerification") == "RECENT"
-                and check.get("industryScopeVerified") is True
-            )
-        }
+    from backend.macro.research_assurance import audit_assurance
+
+    assurance = audit_assurance(
+        structured_reviews, manifest, checks, stamp, research_id=research_id
+    )
+    completed_kinds = assurance["completedKinds"]
     reviews = {
         industry
         for industry, kinds in completed_kinds.items()
@@ -679,10 +670,10 @@ def evaluate_research_batch(
         "reviewedScopeCount": len(set(manifest["selectedScopes"]) & reviews),
         "pendingScopeCount": len(all_scopes - reviews),
         "deferredScopeCount": len(manifest["deferredScopes"]),
-        "searchExecutionVerified": False,
+        **{key: value for key, value in assurance.items() if key != "completedKinds"},
         "hasMore": bool(discovered_count and not registry["items"]),
         "additionalModelCalls": 0,
-        **BUDGET,
+        **manifest["budget"],
     }
     if len(json.dumps(registry, ensure_ascii=False).encode()) > 1024 * 1024:
         registry["items"] = []
@@ -700,6 +691,12 @@ def evaluate_research_batch(
     result["historicalPublishAllowed"] = (
         formal is not None and not result["hardBlockers"]
     )
+    registry["coverage"].update(
+        strictRevalidated=formal is not None,
+        strictDirectionCount=len(formal_by_key),
+        autoPublishAllowed=result["autoPublishAllowed"],
+        autoPublishBlockerCount=len(result["autoBlockers"]) + len(result["hardBlockers"]),
+    )
     result["decision"] = "REPAIRED" if result["historicalPublishAllowed"] else "BLOCKED"
     if not result["autoPublishAllowed"]:
         for item in registry["items"]:
@@ -714,4 +711,12 @@ def evaluate_research_batch(
         "repairRevision": registry["revision"],
         "buildCommit": registry["buildCommit"],
     }
+    # Match the existing READY notice contract without leaking private annexes.
+    from backend.macro.research_repair import REPAIR_MESSAGES
+
+    result["repairSummary"]["quarantined"] = [
+        {key: row[key] for key in ("itemType", "itemIndex", "businessKey", "ruleId")}
+        | {"reason": REPAIR_MESSAGES[row["ruleId"]]}
+        for row in result["quarantined"]
+    ]
     return result

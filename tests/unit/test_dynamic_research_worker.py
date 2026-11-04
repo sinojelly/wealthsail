@@ -14,6 +14,13 @@ async def test_future_batch_keeps_thirty_topics_and_calls_model_once(monkeypatch
     from backend.macro.research_topics import freeze_discovery_packet
 
     mod, state = boundary(monkeypatch)
+    original_claim = mod.claim_daily_run
+
+    async def claim(*args, **kwargs):
+        value = await original_claim(*args, **kwargs)
+        return {**value, "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"} if value else None
+
+    monkeypatch.setattr(mod, "claim_daily_run", claim)
     packet, raw, checks = fixture()
     raw["valueDirections"].pop()
     raw["topicCatalog"] = [
@@ -33,7 +40,14 @@ async def test_future_batch_keeps_thirty_topics_and_calls_model_once(monkeypatch
     original = deepcopy((packet, raw, checks))
     monkeypatch.setattr(mod, "now_shanghai", lambda: NOW)
     mod.run_codex_research.side_effect = None
-    mod.run_codex_research.return_value = raw
+    from backend.integrations.codex_research import ResearchResult
+    from tests.unit.test_research_cost_review75 import executed_checks, KEY
+
+    receipt = executed_checks(packet, checks)[KEY]["receipt"]
+    mod.run_codex_research.return_value = ResearchResult(
+        raw, usage={"prompt_tokens": 5000, "cached_input_tokens": 4000, "completion_tokens": 300},
+        execution_receipt=receipt,
+    )
     mod.verify_research_sources.side_effect = None
     mod.verify_research_sources.return_value = checks
     result = await mod._execute_daily_research(object(), settings(), NOW, packet=packet)
@@ -57,6 +71,16 @@ async def test_future_batch_keeps_thirty_topics_and_calls_model_once(monkeypatch
     )
     assert state["artifacts"][2] == original[1]
     assert original == (packet, raw, checks)
+    assert state["terminal"][0]["payload"]["valueDirections"]
+    bound_checks = queued.args[4]
+    assert bound_checks[KEY]["researchId"] == str(queued.args[1])
+    assert bound_checks[KEY]["receipt"] == receipt
+    workload = queued.args[6]["researchWorkload"]
+    assert workload["promptBytes"] > 0 and workload["modelElapsedMs"] >= 0
+    assert workload["sourceVerificationElapsedMs"] >= 0
+    assert workload["observedSearchQueries"] == len(receipt["queryReceipts"])
+    assert workload["inputTokens"] == 5000 and workload["cachedInputTokens"] == 4000
+    assert workload["preDispatchEnforcement"] is False
 
 
 @pytest.mark.asyncio

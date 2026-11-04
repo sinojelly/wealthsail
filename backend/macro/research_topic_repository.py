@@ -222,6 +222,12 @@ def prepare_topic_registry(value, run_id, validated_at):
         "maxSources",
         "maxModelCalls",
         "additionalModelCalls",
+        "structureCompleteScopeCount",
+        "executionVerifiedScopeCount",
+        "evidenceVerifiedCheckCount",
+        "executionVerifiedCheckCount",
+        "strictDirectionCount",
+        "autoPublishBlockerCount",
     ):
         if key in coverage:
             if type(coverage[key]) is not int or not 0 <= coverage[key] <= 10000:
@@ -236,6 +242,11 @@ def prepare_topic_registry(value, run_id, validated_at):
     ):
         if key in coverage:
             if type(coverage[key]) is not int or not 0 <= coverage[key] <= maximum:
+                _invalid()
+            safe_coverage[key] = coverage[key]
+    for key in ("strictRevalidated", "autoPublishAllowed"):
+        if key in coverage:
+            if type(coverage[key]) is not bool:
                 _invalid()
             safe_coverage[key] = coverage[key]
     counts = {

@@ -96,6 +96,8 @@ def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direct
     raw["narrativeDirectionIds"] = {"summary": [], "macroCycle": [], "coverage": []}
     packet["pendingTopicScopes"] = [{"industryId": "BROKER", "searchTerm": "券商"}]
     packet = freeze_discovery_packet(packet, NOW)
+    from tests.unit.test_research_cost_review75 import executed_checks
+    checks = executed_checks(packet, checks)
     result = evaluate_research_batch(
         raw,
         packet,
@@ -121,6 +123,8 @@ def test_unhashable_topic_key_is_one_quarantined_item_not_a_system_failure():
     packet, raw, checks = case()
     packet = freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [{"key": ["malformed-key"], "title": "坏主题"}]
+    from tests.unit.test_research_cost_review75 import executed_checks
+    checks = executed_checks(packet, checks)
     result = evaluate_research_batch(
         raw,
         packet,

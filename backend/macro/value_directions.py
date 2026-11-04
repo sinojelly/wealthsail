@@ -308,6 +308,7 @@ def validate_value_directions(
     sources=None,
     industry_reviews=None,
     historical_cycles=None,
+    audit_completed_scopes=None,
 ):
     """Keep a bounded direction index across nested validation boundaries."""
     from backend.macro.daily_research import ResearchValidationError
@@ -322,6 +323,7 @@ def validate_value_directions(
             sources=sources,
             industry_reviews=industry_reviews,
             historical_cycles=historical_cycles,
+            audit_completed_scopes=audit_completed_scopes,
             _diagnostic_index=active_index,
         )
     except ResearchValidationError as exc:
@@ -353,6 +355,7 @@ def _validate_value_directions(
     sources=None,
     industry_reviews=None,
     historical_cycles=None,
+    audit_completed_scopes=None,
     _diagnostic_index=None,
 ):
     from backend.macro.daily_research import ResearchValidationError, _TZ
@@ -431,19 +434,41 @@ def _validate_value_directions(
                 rule_id="DIRECTION_PLAN_SECTOR_UNREVIEWED",
                 missing_industry_codes=sorted(missing & STANDARD_INDUSTRY_CODES),
             )
-        cycle_proposal = direction.get("industryCycle")
-        try:
-            cycle = normalize_industry_cycle(
-                cycle_proposal,
-                source_aliases=source_aliases,
-                sources=sources,
-                now=now,
-                # Prefer structured review links and server product sectors.
-                # A model title may describe the scope only when neither exists.
-                expected_industries=sorted(review_ids | plan_sectors)
-                or [direction["title"]],
-                require_checks=required,
+        if audit_completed_scopes is not None and (review_ids | plan_sectors) - audit_completed_scopes:
+            raise ResearchValidationError(
+                "DIRECTION_VALIDATION_FAILED",
+                "industry checks require execution or verified supporting facts",
+                rule_id="DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED",
+                missing_industry_codes=sorted(
+                    (review_ids | plan_sectors) - audit_completed_scopes
+                ),
             )
+        cycle_proposal = direction.get("industryCycle")
+        from backend.macro.research_topics import is_v2
+
+        inherit_checks = (
+            is_v2(packet)
+            and bool(review_ids | plan_sectors)
+            and (review_ids | plan_sectors) <= reviews.keys()
+            and cycle_proposal is None
+        )
+        try:
+            if inherit_checks:
+                # Reviews already passed five-kind/source/time/scope validation.
+                # All linked scopes are merged below; no invented neutral checks.
+                cycle = deepcopy(reviews[sorted(review_ids | plan_sectors)[0]])
+                cycle.pop("industry", None)
+            else:
+                cycle = normalize_industry_cycle(
+                    cycle_proposal,
+                    source_aliases=source_aliases,
+                    sources=sources,
+                    now=now,
+                    # Prefer structured links and server product sectors.
+                    expected_industries=sorted(review_ids | plan_sectors)
+                    or [direction["title"]],
+                    require_checks=required,
+                )
         except ValidationError as exc:
             raise ResearchValidationError("SCHEMA_VALIDATION_FAILED", str(exc)) from exc
         except ValueError as exc:
@@ -454,7 +479,7 @@ def _validate_value_directions(
                 if isinstance(exc, IndustryCycleValidationError)
                 else None,
             ) from exc
-        if any(ref not in refs for ref in cycle["sourceIds"]):
+        if not inherit_checks and any(ref not in refs for ref in cycle["sourceIds"]):
             raise ResearchValidationError(
                 "SOURCE_REFERENCE_INVALID",
                 "industry-cycle sources must belong to the direction",

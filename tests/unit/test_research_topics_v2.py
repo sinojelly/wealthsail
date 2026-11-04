@@ -15,6 +15,17 @@ def topics():
     return import_module("backend.macro.research_topics")
 
 
+def evaluate_with_execution(raw, packet, checks, **kwargs):
+    """Attach offline protocol evidence to the caller's already-frozen packet."""
+    from backend.macro.research_batch import evaluate_research_batch
+    from tests.unit.test_research_cost_review75 import executed_checks
+
+    checks = executed_checks(
+        packet, checks, run_id=kwargs["research_id"], at=kwargs["validated_at"]
+    )
+    return evaluate_research_batch(raw, packet, checks, **kwargs)
+
+
 def topic(index, industry="NONFERROUS"):
     return {
         "key": f"topic-{index}",
@@ -32,7 +43,7 @@ def evaluate(count=12):
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [topic(i) for i in range(count)]
-    return import_module("backend.macro.research_batch").evaluate_research_batch(
+    return evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
 
@@ -48,7 +59,7 @@ def test_all_topic_discoveries_survive_one_call_without_expanding_formal_directi
     assert registry["coverage"]["maxModelCalls"] == 1
     assert registry["coverage"]["additionalModelCalls"] == 0
     assert "modelCalls" not in registry["coverage"]
-    assert registry["coverage"]["searchExecutionVerified"] is False
+    assert registry["coverage"]["searchExecutionVerified"] is True
     assert len(result["formalReport"]["valueDirections"]) == 1
     assert all(
         not row["investmentEligible"]
@@ -118,7 +129,7 @@ def test_missing_fund_industry_review_moves_whole_direction_pending_and_never_em
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["industryCycleReviews"] = raw["industryCycleReviews"][:2]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     item = next(
@@ -135,7 +146,7 @@ def test_exact_server_plan_scope_can_repair_model_review_label_without_alias_gue
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["valueDirections"][0]["reviewIndustryIds"] = ["UNKNOWN_MODEL_LABEL"]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["formalReport"] and result["autoPublishAllowed"]
@@ -153,7 +164,7 @@ def test_deferred_topic_is_pending_not_failed_or_silently_omitted():
     packet = topics().freeze_discovery_packet(packet, NOW)
     deferred = packet["researchDiscovery"]["auditManifest"]["deferredScopes"][-1]
     raw["topicCatalog"] = [topic(1, deferred)]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     row = next(row for row in result["registry"]["items"] if row["key"] == "topic-1")
@@ -169,14 +180,15 @@ def test_v1_coverage_gate_remains_strict_while_v2_tracks_missing_batch_reviews()
     with pytest.raises(ResearchValidationError):
         validate_report(raw, packet, checks, completed_at=NOW)
     frozen = topics().freeze_discovery_packet(packet, NOW)
-    assert validate_report(raw, frozen, checks, completed_at=NOW)
+    from tests.unit.test_research_cost_review75 import executed_checks
+    assert validate_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW)
 
 
 def test_one_bad_topic_does_not_destroy_independent_formal_projection():
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [topic(1), {"key": "bad-topic", "title": "缺失其他字段"}]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["formalReport"] is not None
@@ -187,7 +199,7 @@ def test_unsafe_topic_text_is_global_hard_failure_not_repaired_by_deleting_catal
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [{**topic(1), "thesis": "<script>unsafe</script>"}]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["formalReport"] is None and result["safetyBlocked"]
@@ -199,7 +211,7 @@ def test_catalog_label_cannot_borrow_an_unrelated_formal_direction_investment_pe
     raw["topicCatalog"] = [
         {**topic(1, "ROBOT"), "key": raw["valueDirections"][0]["key"]}
     ]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     item = result["registry"]["items"][0]
@@ -212,7 +224,7 @@ def test_backlog_contains_deferred_scopes_and_does_not_repeat_completed_review_t
         {"discoverySector": f"new-industry-{i}"} for i in range(20)
     ]
     packet = topics().freeze_discovery_packet(packet, NOW)
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     tasks = result["registry"]["auditTasks"]
@@ -228,7 +240,7 @@ def test_64_catalog_entries_and_eight_distinct_formal_keys_keep_all_72_registry_
     raw["valueDirections"] = [
         {**deepcopy(raw["valueDirections"][0]), "key": f"formal-{i}"} for i in range(8)
     ]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert len(result["registry"]["items"]) == 72
@@ -250,7 +262,7 @@ def test_high_dependency_allows_strict_historical_observation_but_never_auto_rea
     )
     raw["valueDirections"].append(orphan)
     raw["events"] = [event(raw, checks, importance="HIGH")]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["formalReport"] is None and not result["autoPublishAllowed"]
@@ -264,7 +276,7 @@ def test_unreviewed_systemic_topic_keeps_the_fact_but_blocks_automatic_formal_pu
     raw["topicCatalog"] = [
         {**topic(1), "thesis": "系统性风险及金融危机影响尚待进一步核实。"}
     ]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert not result["autoPublishAllowed"] and result["registry"]["items"]
@@ -275,7 +287,7 @@ def test_new_explicit_scope_gets_five_real_search_terms_without_inventing_an_ali
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [topic(1, "硅光互连")]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     row = result["registry"]["items"][0]
@@ -305,7 +317,7 @@ def test_client_rule_version_cannot_impersonate_a_validator_fingerprint():
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     with pytest.raises(ValueError, match="rule version"):
-        import_module("backend.macro.research_batch").evaluate_research_batch(
+        evaluate_with_execution(
             raw,
             packet,
             checks,
@@ -362,7 +374,7 @@ def test_invalid_direction_schema_with_reliable_key_keeps_independent_formal_wor
         "quantitativeFundCodes": [],
     }
     raw["valueDirections"].append(invalid)
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert (
@@ -376,7 +388,7 @@ def test_scalar_topic_is_quarantined_without_poisoning_independent_source_proofs
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [42]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert (
@@ -400,7 +412,7 @@ def test_new_scope_with_checked_same_scope_review_can_close_as_observation_only(
     review["riskChecks"][0].update(status="FOUND", sourceIds=["s3"])
     raw["industryCycleReviews"].append(review)
     raw["topicCatalog"] = [{**topic(1, "硅光互连"), "sourceIds": ["s3"]}]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     item = result["registry"]["items"][0]
@@ -417,7 +429,7 @@ def test_systemic_source_signal_blocks_auto_without_promoting_a_confirmed_fact()
     packet = topics().freeze_discovery_packet(packet, NOW)
     raw["sources"][1]["quote"] = "全行业信用违约影响尚待核实。"
     raw["topicCatalog"] = [topic(1, "新型服务行业")]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert not result["autoPublishAllowed"] and result["registry"]["items"]
@@ -434,7 +446,7 @@ def test_unresolved_negative_source_related_to_retained_scope_blocks_auto():
             "relatedIndustryIds": ["RARE_EARTH"],
         }
     ]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert (
@@ -462,7 +474,7 @@ def test_registry_overflow_is_explicit_and_includes_task_storage_budget():
         }
         for index in range(64)
     ]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     registry = result["registry"]
@@ -489,7 +501,7 @@ def test_unverified_review_rows_do_not_close_scope_or_authorize_formal_funds():
         for check in review["riskChecks"]:
             check.update(status="UNVERIFIED", sourceIds=[])
     raw["topicCatalog"] = [topic(1)]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     registry = result["registry"]
@@ -518,7 +530,7 @@ def test_only_unverified_risk_category_remains_in_scope_tasks():
     )
     review["riskChecks"][2].update(status="UNVERIFIED")
     raw["topicCatalog"] = [topic(1)]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     item = next(row for row in result["registry"]["items"] if row["key"] == "topic-1")
@@ -536,7 +548,7 @@ def test_oversize_item_preserves_dynamic_search_terms_in_global_tasks():
     packet = topics().freeze_discovery_packet(packet, NOW)
     claims = [f"第{index}产业" + "独立技术范围" * 15 for index in range(8)]
     raw["topicCatalog"] = [{**topic(1), "industryClaims": claims}]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     item = next(row for row in result["registry"]["items"] if row["key"] == "topic-1")
@@ -562,7 +574,7 @@ def test_original_catalog_systemic_signal_blocks_auto_before_item_isolation(fiel
     else:
         proposal[field] = [signal]
     raw["topicCatalog"] = [proposal]
-    result = import_module("backend.macro.research_batch").evaluate_research_batch(
+    result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["strictPass"] is True

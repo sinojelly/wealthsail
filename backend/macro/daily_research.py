@@ -40,7 +40,7 @@ from backend.macro.value_directions import (
 from backend.macro.research_topics import TopicProposal, is_v2
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-discovery-v18"
+PROMPT_VERSION = "daily-research-efficient-audit-v19"
 MAX_REPORT_SOURCES = 24
 
 
@@ -189,7 +189,7 @@ _direction_schema = REPORT_SCHEMA["$defs"]["ValueDirectionProposal"]
 _direction_schema["required"].append("industryCycle")
 _direction_schema["required"].append("reviewIndustryIds")
 _direction_schema["properties"]["industryCycle"] = {
-    "$ref": "#/$defs/IndustryCycleProposal"
+    "anyOf": [{"$ref": "#/$defs/IndustryCycleProposal"}, {"type": "null"}]
 }
 
 _TZ = ZoneInfo("Asia/Shanghai")
@@ -1798,9 +1798,9 @@ def build_prompt(packet):
         "先发现并解释有操作价值的机会：把同一产业链的资金意向、经营景气、政策、近期事件与技术位置综合成投资假设，说明为何现在值得关注、受益环节和可观察的兑现路径。\n"
         "动态检索中英文资料：国内增长/信用/政策、美国通胀/利率、全球能源/航运/地缘、选举/贸易/制裁、全球权益/科技估值和未来日历。\n"
         "发现与正式计划分离：topicCatalog每批最多64项发现，不受8个正式方向或10个审核范围限制；同一批只调用一次模型。每项输出key/title/thesis/industryClaims/relatedIndustryIds/sourceIds/unknowns/pendingTasks，不含plans、价格或投资许可；未匹配、未审核、预算外的主题也应完整保留为待审发现，不凑数、不静默截断。valueDirections只承载最多8个已具备严格证据的正式方向，且必须以同key出现在topicCatalog，不能用其名额代表发现总数。\n"
-        "强制反方与行业降温证据核查：仅对冻结auditManifest.selectedScopes（兼容industryCycleResearch.candidates）的本批最多10个范围执行五类检索，最多50条计划查询；新发现的预算外范围只列pendingTasks，不擅自追加查询、伪造审核或调用模型。检索近90天一级市场融资降温/断代（FINANCING_COOLING）、企业欠薪/裁员/倒闭潮（LAYOFFS_CLOSURES）、下游砍单（ORDER_CUTS）、产能过剩价格战（OVERCAPACITY_PRICE_WAR）、商业化量产推迟（PRODUCTION_DELAY），核对事件时间与原始依据，不从名称或个别企业困境推定行业事实。五项填写齐全只证明结构齐全，不是已执行搜索的服务器凭证，searchExecutionVerified保持false。\n"
+        "强制反方与行业降温证据核查：仅对industryCycleResearch.candidates中本批最多10个范围执行五类检索，最多50条计划查询；使用candidates[].queries中原query和taskId，时间窗口以industryCycleResearch.window为准。同一范围/任务仅核查一次，方向引用该顶层审核，不重复搜索或重新抄写五类详细结果。新发现的预算外范围只列pendingTasks，不追加查询、伪造审核或调用模型。五类为融资降温FINANCING_COOLING、欠薪裁员倒闭LAYOFFS_CLOSURES、砍单ORDER_CUTS、过剩价格战OVERCAPACITY_PRICE_WAR、量产推迟PRODUCTION_DELAY，核对事件时间、行业主体与原始依据。服务器独立核验实际执行事件；五项填写齐全只证明结构齐全，不授予搜索执行凭证。\n"
         "区分文章发布日期与风险事件发生区间：原文短引文须保留对应事件的具体日期、月份、季度或明确近期时间；新文章引用往年事件不能当作近90天变化。无法识别事件时间保留缺口。多家未核验原文的媒体只是线索，不能用数量替代原文事实核验。\n"
-        "每个valueDirection必须输出industryCycle：stage、evidenceSummary、sourceIds、evidence及riskChecks。riskChecks恰好五项、每类一次，逐项记录实际query、summary、sourceIds和status FOUND/NOT_FOUND/UNVERIFIED；有可引用原文才FOUND，检索未找到写NOT_FOUND且明确不等于不存在，无法检索/材料冲突写UNVERIFIED并保留缺口，禁止声称未执行过的搜索。所有引用仍必须进入sources及本方向sourceIds，不能绕过来源、日期与原文核查。\n"
+        "每个正式valueDirection必须输出industryCycle字段：通常填null，服务器会按reviewIndustryIds及实际基金行业合并完整顶层五类审核、来源和历史风险；不能用null绕过行业缺口。只有方向有独立产业阶段或盈利证据时才输出完整industryCycle对象，其额外负面证据必须保留。顶层riskChecks恰好五项、每类一次，记录query、简明summary、sourceIds和status；有原文才FOUND，实际搜索未找到才NOT_FOUND，未执行/冲突/预算不足为UNVERIFIED。不能将缺少搜索凭证的NOT_FOUND当成已完成审核。\n"
         "另在顶层industryCycleReviews逐一保留冻结industryCycleResearch.candidates每个范围的审查记录，按industry原名去重，每条{industry,sourceIds,riskChecks}，也必须覆盖最终未入选valueDirections的候选；不可用删掉方向来跳过反方核查。服务器已按历史风险、积压待审、基金行业及当轮信号分配预算，模型不得自行改选冻结范围。硬上限10个行业审查和50条查询，不逐只基金重复检索，不因新发现方向追加超预算审查。该顶层来源进入sources即可；入选方向的产业周期引用还需属于本方向sourceIds。\n"
         "每个正式valueDirection的reviewIndustryIds显式关联顶层已审查industry名称，plans=[]也不例外；只允许使用本批冻结已分配且真实完成的审核，其他新发现范围保留topicCatalog待审。服务器会按plans真实discoverySector强制合并该赛道已发现的负面证据，不能在industryCycle中将顶层FOUND改成NOT_FOUND以规避风险折价。\n"
         "没有有效行业审核关联的观察项放入topicCatalog并明确待审，不放入正式valueDirections；不得用WATCH或空plans绕过正式审核，不猜测相邻行业为同一范围。正式观察方向同样要提供真实reviewIndustryIds。\n"
@@ -2019,6 +2019,32 @@ def _validate_report_core(
             ) from exc
         industry_reviews.append({"industry": review["industry"], **cycle_review})
     historical_cycles = _previous_industry_states(packet, completed_at)
+    audit_completed_scopes = None
+    execution_scopes = None
+    if is_v2(packet):
+        from backend.macro.research_assurance import audit_assurance, verified_tasks
+        from backend.macro.research_topics import frozen_manifest
+        from backend.macro.industry_cycle import RISK_CHECKS
+
+        assurance = audit_assurance(
+            {row["industry"]: row for row in industry_reviews},
+            frozen_manifest(packet), source_checks, completed_at,
+        )
+        audit_completed_scopes = {
+            industry for industry, kinds in assurance["completedKinds"].items()
+            if kinds == set(RISK_CHECKS)
+        }
+        manifest = frozen_manifest(packet)
+        executed = verified_tasks(source_checks, manifest, completed_at)
+        execution_scopes = {
+            scope for scope in manifest["selectedScopes"]
+            if all(
+                task["taskId"] in executed
+                for task in manifest["tasks"] if task["industryId"] == scope
+            )
+        }
+        for review in industry_reviews:
+            review["searchExecutionVerified"] = review["industry"] in execution_scopes
     value_directions = validate_value_directions(
         report["valueDirections"],
         packet,
@@ -2027,7 +2053,16 @@ def _validate_report_core(
         sources=sources,
         industry_reviews=industry_reviews,
         historical_cycles=historical_cycles,
+        audit_completed_scopes=audit_completed_scopes,
     )
+    if execution_scopes is not None:
+        for direction in value_directions:
+            linked = set(direction["reviewIndustryIds"])
+            verified = bool(linked) and linked <= execution_scopes
+            direction["industryCycle"]["searchExecutionVerified"] = verified
+            for plan in direction["plans"]:
+                if isinstance(plan.get("industryCycle"), dict):
+                    plan["industryCycle"]["searchExecutionVerified"] = verified
     if _require_candidate_coverage and not is_v2(packet) and (packet.get("industryCycleResearch") or {}).get(
         "required"
     ):

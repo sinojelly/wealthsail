@@ -45,10 +45,13 @@ async def test_real_batch_registry_and_original_materials_archive_as_one_snapsho
             for index in range(30)
         ]
         packet = freeze_discovery_packet(packet, now)
+        from tests.unit.test_research_cost_review75 import executed_checks
+        checks = executed_checks(packet, checks, run_id=str(run_id), at=now)
         batch = evaluate_research_batch(
             raw, packet, checks, research_id=str(run_id), validated_at=now
         )
         assert batch["autoPublishAllowed"]
+        assert batch["formalReport"]["valueDirections"]
         await conn.execute(
             "INSERT INTO research.daily_research_results(run_id,status,recorded_at,payload) VALUES($1,'READY',$2,$3::jsonb)",
             run_id,
