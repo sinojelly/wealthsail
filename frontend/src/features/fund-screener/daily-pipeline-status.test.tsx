@@ -188,7 +188,7 @@ it("identifies an existing collector wait in both the status and current stage",
 });
 
 it.each([
-  ["FAILED", "研究失败"],
+  ["FAILED", "正式报告未通过"],
   ["UNCERTAIN", "执行异常 · 待核实"],
   ["UNKNOWN", "执行状态未知"],
 ])(
@@ -249,7 +249,7 @@ it("uses the same status for the compact header and full execution details while
       />
     </MemoryRouter>,
   );
-  const label = "研究失败（触发：2026年10月30日 07:01 北京时间）";
+  const label = "正式报告未通过（触发：2026年10月30日 07:01 北京时间）";
   expect(screen.getAllByText(label)).toHaveLength(2);
   expect(screen.getByText(/当前显示历史报告及原始日期/)).toBeVisible();
   await userEvent.click(screen.getByText("执行与报告状态"));

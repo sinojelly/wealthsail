@@ -683,6 +683,116 @@ it("shows partial observations and complete safe issues without any trade contro
   expect(api.getResearchReplays).not.toHaveBeenCalled();
 });
 
+it("preserves a source-backed negative event and namespace gaps without needing any formal direction", async () => {
+  const data = outcome();
+  data.accepted.valueDirections = [];
+  Object.assign(data.accepted.sources[0], {
+    verification: "SOURCE_CHECKED",
+    publishedDate: "2026-11-03",
+    retrievedAt: "2026-11-03T08:30:00+08:00",
+  });
+  Object.assign(data.accepted.events[0], {
+    phase: "REPORTED",
+    importance: "HIGH",
+    sourceIds: ["source:one", "source:unsafe", "missing-source"],
+    channels: ["融资约束可能拖慢供应链回款。"],
+    scenarios: [
+      {
+        condition: "融资未恢复",
+        impact: "交付可能延期",
+        counter: "新增订单回款改善",
+      },
+    ],
+    unknowns: ["行业风险是否扩散尚未确认。"],
+    relatedTopicKeys: ["dynamic-topic"],
+    relatedFormalDirectionKeys: [],
+    relatedMacroConcepts: ["US_RATES"],
+    candidateConceptLabels: ["新材料候选概念"],
+    referenceResolution: {
+      version: "research-event-links-v1",
+      resolved: [
+        {
+          namespace: "TOPIC",
+          inputKey: "Dynamic Topic",
+          key: "dynamic-topic",
+          method: "CANONICAL",
+        },
+      ],
+      unresolved: [
+        {
+          namespace: "LEGACY_DIRECTION",
+          key: "unknown-direction",
+          reasonCode: "UNKNOWN_REFERENCE",
+        },
+      ],
+    },
+  });
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  const events = within(
+    await screen.findByRole("region", { name: "已验收事件" }),
+  );
+  expect(events.getByText(/重要性：高/)).toBeVisible();
+  expect(events.getByText(/阶段：报道线索/)).toBeVisible();
+  expect(events.getByText("融资约束可能拖慢供应链回款。")).toBeVisible();
+  for (const text of [
+    "融资未恢复",
+    "交付可能延期",
+    "新增订单回款改善",
+    "行业风险是否扩散尚未确认。",
+  ])
+    expect(events.getByText(text, { exact: false })).toBeVisible();
+  expect(events.getByText(/关联观察主题：dynamic-topic/)).toBeVisible();
+  expect(events.getByText(/宏观概念声明.*US_RATES/)).toBeVisible();
+  expect(events.getByText(/候选概念声明.*新材料候选概念/)).toBeVisible();
+  expect(
+    events.getByText(/未解决关联.*unknown-direction.*未找到匹配引用/),
+  ).toBeVisible();
+  await userEvent.click(events.getByText("查看本项来源依据"));
+  expect(
+    events.getByRole("link", { name: "已核验的行业消息" }),
+  ).toHaveAttribute("href", "https://example.test/news");
+  expect(events.getByText("原文已核对")).toBeVisible();
+  expect(events.getByText(/公布：2026年11月3日/)).toBeVisible();
+  expect(
+    events.queryByRole("link", { name: "不可用链接" }),
+  ).not.toBeInTheDocument();
+  expect(events.getByText(/引用待核查：missing-source/)).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|研究|推送/ }),
+  ).not.toBeInTheDocument();
+  expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+});
+
+it("keeps the current accepted calendar independently read-only with item-specific source evidence", async () => {
+  const data = outcome();
+  data.accepted.valueDirections = [];
+  Object.assign(data.accepted.sources[0], { verification: "UNVERIFIED" });
+  Object.assign(data.accepted.upcoming[0], {
+    phase: "PLANNED",
+    sourceIds: ["source:one"],
+    relatedTopicKeys: ["dynamic-topic"],
+  });
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(data);
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  const calendar = within(
+    await screen.findByRole("region", { name: "已验收日程" }),
+  );
+  await userEvent.click(calendar.getByText("本次已验收日程·仅供观察"));
+  expect(calendar.getByText("下一次业绩披露")).toBeVisible();
+  expect(calendar.getByText(/2026年11月10日.*计划，尚未发生/)).toBeVisible();
+  expect(
+    calendar.getByText(/实际利润与订单回款仍需后续核对|利润兑现/),
+  ).toBeVisible();
+  await userEvent.click(calendar.getByText("查看本项来源依据"));
+  expect(
+    calendar.getByRole("link", { name: "已核验的行业消息" }),
+  ).toHaveAttribute("href", "https://example.test/news");
+  expect(calendar.getByText("原文尚未核验")).toBeVisible();
+  expect(calendar.queryByRole("button")).not.toBeInTheDocument();
+  expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+});
+
 it("quietly hides legacy runs with no stored validation outcome", async () => {
   vi.mocked(api.getResearchAcceptance).mockRejectedValue(
     new HttpError("not found", 404),

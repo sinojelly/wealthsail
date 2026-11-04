@@ -18,7 +18,7 @@ const stateLabels: Record<string, string> = {
   RUNNING: "研究正在执行",
   READY: "研究成功 · 报告已生成",
   STALE: "今日未完成 · 显示历史报告",
-  FAILED: "研究失败",
+  FAILED: "正式报告未通过",
   UNCERTAIN: "执行异常 · 待核实",
   UNKNOWN: "执行状态未知",
   DISABLED: "自动调度已关闭",

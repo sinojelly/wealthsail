@@ -320,6 +320,34 @@ function RegistryData({
 function Coverage({ data }: { data: TopicRegistryPage }) {
   const coverage = data.coverage;
   const unavailable = "旧版未提供，不可推断";
+  const deliveryMessage =
+    coverage.researchDeliveryStatus === "VALIDATED_READ_ONLY" &&
+    coverage.investmentQualificationStatus === "NO_QUALIFIED_OPPORTUNITIES"
+      ? "经济研究已完成，暂无满足完整风控条件的基金机会"
+      : coverage.researchDeliveryStatus
+        ? {
+            VALIDATED_READ_ONLY: "只读经济研究内容已通过独立验收",
+            OBSERVATION_READ_ONLY: "研究观察资料已保存，证据待核实",
+            UNAVAILABLE: "只读研究交付暂不可用",
+          }[coverage.researchDeliveryStatus]
+        : `只读研究交付状态：${unavailable}`;
+  const qualificationMessage = coverage.investmentQualificationStatus
+    ? {
+        QUALIFIED_CANDIDATES:
+          "存在符合完整风控条件的基金候选，仍以正式报告及最新保护为准",
+        NO_QUALIFIED_OPPORTUNITIES: "暂无满足完整风控条件的基金机会",
+        BLOCKED: "基金投资资格暂未放行",
+      }[coverage.investmentQualificationStatus]
+    : `投资资格状态：${unavailable}`;
+  const eligibilityLabels = {
+    NO_FORMAL_PROPOSAL: "未输出正式方向",
+    FUND_PLAN_MISSING: "没有基金计划",
+    SOURCE_EVIDENCE_PENDING: "来源证据待核实",
+    INDUSTRY_IDENTITY_PENDING: "行业身份待核实",
+    INDUSTRY_AUDIT_PENDING: "行业风险审核待完成",
+    FORMAL_VALIDATION_FAILED: "正式方向严格校验未通过",
+    PUBLICATION_SAFETY_BLOCKED: "发布安全依赖待复核",
+  };
   const matchStatus = coverage.executionMatchStatus
     ? {
         EXECUTION_UNMATCHED: "存在尚未匹配的执行事件",
@@ -336,7 +364,57 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
     : undefined;
   return (
     <div aria-label="主题登记与审核覆盖">
+      <div aria-label="只读研究交付与投资资格">
+        <p>
+          <strong>{deliveryMessage}</strong>
+        </p>
+        {coverage.researchDeliveryStatus === "VALIDATED_READ_ONLY" && (
+          <p>仅表示只读内容通过独立验收，经济传导仍为条件推演</p>
+        )}
+        <p>{qualificationMessage}</p>
+        <p>原投资报告状态保持不变；本区分开展示只读研究交付与基金投资资格。</p>
+      </div>
       <p>本批目录登记{coverage.totalCount}项（发现与正式方向按key汇总）</p>
+      <p>
+        发现主题：{coverage.discoveredTopicCount ?? unavailable}
+        {" · "}具有已核对来源的主题：
+        {coverage.evidenceBackedTopicCount ?? unavailable}
+      </p>
+      <p>
+        可评估基金方向：{coverage.evaluableFundDirectionCount ?? unavailable}
+        {" · "}符合正式资格方向：
+        {coverage.qualifiedFormalDirectionCount ?? unavailable}
+      </p>
+      <p>
+        有效事件：{coverage.validEventCount ?? unavailable}
+        {" · "}有效日程：{coverage.validUpcomingCount ?? unavailable}
+        {" · "}未解决引用：{coverage.unresolvedReferenceCount ?? unavailable}
+      </p>
+      <p>
+        来源已核对不代表主题推理或行业范围已证实；正式资格不等于已发布或实时可交易。
+      </p>
+      {coverage.qualifiedFormalDirectionCount === 0 && (
+        <p>本次无符合正式资格方向，观察新闻与动态主题仍独立保留。</p>
+      )}
+      {coverage.formalEligibilityReasons &&
+        Object.keys(coverage.formalEligibilityReasons).length > 0 && (
+          <div aria-label="正式资格限制原因">
+            <p>原因计数可重叠，不可相加推算方向总数。</p>
+            <ul>
+              {Object.entries(eligibilityLabels).map(([code, label]) => {
+                const count =
+                  coverage.formalEligibilityReasons?.[
+                    code as keyof typeof eligibilityLabels
+                  ];
+                return count == null ? null : (
+                  <li key={code}>
+                    {label}：{count}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       <p>
         计划审核
         {coverage.plannedScopeCount}个范围，审核结果记录
@@ -411,6 +489,7 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
             ? "独立搜索执行凭证尚未验证；五类核查结构不代表实际搜索完成。"
             : "搜索执行核验状态：旧版未提供，不可推断；五类核查结构不代表实际搜索完成。"}
       </p>
+      <p>部分流可有独立任务核验，未知动作不代表无风险；以各任务凭证为准。</p>
       <p>执行任务匹配：{matchStatus}</p>
       <p>
         可信匹配任务：{coverage.executionMatchedTaskCount ?? unavailable}
@@ -456,8 +535,34 @@ function Topic({ topic }: { topic: RegistryTopic }) {
         · {matches[topic.match.status]}
       </p>
       <p>{topic.summary}</p>
+      {topic.evidenceCoverageScore != null && (
+        <p>
+          引文核对覆盖{topic.evidenceCoverageScore}
+          %（不代表推理已证实或投资评分）
+        </p>
+      )}
       <p>状态原因：{topic.reason}</p>
       <p>影响：{topic.impact}</p>
+      {!!topic.unknowns?.length && (
+        <div>
+          <strong>尚未确认</strong>
+          <ul>
+            {topic.unknowns.map((text, index) => (
+              <li key={index}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!!topic.followUp?.length && (
+        <div>
+          <strong>后续观察</strong>
+          <ul>
+            {topic.followUp.map((text, index) => (
+              <li key={index}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {!!topic.measures.length && (
         <div>
           <strong>已采取措施</strong>

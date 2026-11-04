@@ -4,6 +4,10 @@ export interface RegistryTopic {
   key: string;
   title: string;
   summary: string;
+  unknowns?: string[];
+  followUp?: string[];
+  insightCategory?: "DYNAMIC" | "INDUSTRY" | "MULTI_SCOPE";
+  evidenceCoverageScore?: number;
   status: "FORMAL" | "OBSERVATION_ONLY" | "PENDING_REVIEW" | "QUARANTINED";
   reasonCode: string;
   reason: string;
@@ -51,6 +55,29 @@ export interface TopicRegistryPage {
   hasMore?: boolean;
   coverage: {
     totalCount: number;
+    discoveredTopicCount?: number;
+    evidenceBackedTopicCount?: number;
+    evaluableFundDirectionCount?: number;
+    qualifiedFormalDirectionCount?: number;
+    researchDeliveryStatus?:
+      "VALIDATED_READ_ONLY" | "OBSERVATION_READ_ONLY" | "UNAVAILABLE";
+    investmentQualificationStatus?:
+      "QUALIFIED_CANDIDATES" | "NO_QUALIFIED_OPPORTUNITIES" | "BLOCKED";
+    formalEligibilityReasons?: Partial<
+      Record<
+        | "NO_FORMAL_PROPOSAL"
+        | "FUND_PLAN_MISSING"
+        | "SOURCE_EVIDENCE_PENDING"
+        | "INDUSTRY_IDENTITY_PENDING"
+        | "INDUSTRY_AUDIT_PENDING"
+        | "FORMAL_VALIDATION_FAILED"
+        | "PUBLICATION_SAFETY_BLOCKED",
+        number
+      >
+    >;
+    validEventCount?: number;
+    validUpcomingCount?: number;
+    unresolvedReferenceCount?: number;
     storedCount?: number;
     countsByStatus?: Record<string, number>;
     plannedScopeCount: number;

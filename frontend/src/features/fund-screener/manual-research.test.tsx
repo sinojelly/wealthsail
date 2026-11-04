@@ -387,7 +387,7 @@ it("shows safe industry diagnostics from the manual request without borrowing th
 
 it.each([
   ["READY", "研究成功 · 报告已生成"],
-  ["FAILED", "研究失败"],
+  ["FAILED", "正式报告未通过"],
   ["UNCERTAIN", "执行异常 · 待核实"],
 ] as const)(
   "keeps MANUAL %s independent from a disabled automatic schedule",
@@ -412,7 +412,7 @@ it("shows disabled automatic scheduling separately without relabeling the old re
   renderWithSession(<DailyResearchReport data={data} />);
   await userEvent.click(screen.getByText("执行与报告状态"));
   expect(screen.getByText(/自动调度已关闭/)).toBeVisible();
-  expect(screen.getByText("研究失败")).toBeVisible();
+  expect(screen.getByText("正式报告未通过")).toBeVisible();
   expect(
     screen.queryByText(/当前报告：手动研究版|下次计划：/),
   ).not.toBeInTheDocument();

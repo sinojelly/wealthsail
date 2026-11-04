@@ -120,6 +120,33 @@ it("shows read-only topic status, match scope, budget gaps, source clock and exp
   ).not.toBeInTheDocument();
   expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
 });
+it("keeps new-insight unknowns and follow-up visible while labeling quote coverage independently of reasoning and investment", async () => {
+  const data = page();
+  Object.assign(data.items[0], {
+    unknowns: ["量产交付是否延期仍待核对。", "当前利润率尚无财报支持。"],
+    followUp: ["核对下一期订单回款与实际交付。"],
+    insightCategory: "DYNAMIC",
+    evidenceCoverageScore: 67,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  const first = renderWithSession(
+    <ResearchTopicRegistry runId={run} state="FAILED" />,
+  );
+  expect(await screen.findByText("量产交付是否延期仍待核对。")).toBeVisible();
+  expect(screen.getByText("当前利润率尚无财报支持。")).toBeVisible();
+  expect(screen.getByText("核对下一期订单回款与实际交付。")).toBeVisible();
+  expect(
+    screen.getByText("引文核对覆盖67%（不代表推理已证实或投资评分）"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|推送|执行研究/ }),
+  ).not.toBeInTheDocument();
+  first.unmount();
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(page());
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  await screen.findByText("动态主题0");
+  expect(screen.queryByText(/引文核对覆盖0%/)).not.toBeInTheDocument();
+});
 it("supports 12/20/30 pages across a registry larger than eight with opaque cursors and no extra model calls", async () => {
   vi.mocked(api.getResearchTopicRegistry).mockImplementation(
     async (_run, options) => ({
@@ -254,6 +281,120 @@ it("separates structural completeness from independently executed and evidence-v
   expect(screen.getByText(/证据已核验检查：0/)).toBeVisible();
   expect(screen.getByText(/结构齐全不等于执行或证据核验/)).toBeVisible();
   expect(screen.queryByText(/实际审核10/)).not.toBeInTheDocument();
+});
+it("separates discovered topics with checked sources from evaluable and formally qualified fund directions", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    discoveredTopicCount: 12,
+    evidenceBackedTopicCount: 4,
+    evaluableFundDirectionCount: 2,
+    qualifiedFormalDirectionCount: 0,
+    validEventCount: 3,
+    validUpcomingCount: 1,
+    unresolvedReferenceCount: 2,
+    formalEligibilityReasons: {},
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(
+    await screen.findByText(/发现主题：12.*具有已核对来源的主题：4/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/可评估基金方向：2.*符合正式资格方向：0/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/有效事件：3.*有效日程：1.*未解决引用：2/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/本次无符合正式资格方向，观察新闻与动态主题仍独立保留/),
+  ).toBeVisible();
+  expect(screen.getByText("动态主题0")).toBeVisible();
+});
+it("distinguishes independently validated read-only delivery from the unchanged failed investment report", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    researchDeliveryStatus: "VALIDATED_READ_ONLY",
+    investmentQualificationStatus: "NO_QUALIFIED_OPPORTUNITIES",
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(
+    await screen.findByText("经济研究已完成，暂无满足完整风控条件的基金机会"),
+  ).toBeVisible();
+  expect(
+    screen.getByText("仅表示只读内容通过独立验收，经济传导仍为条件推演"),
+  ).toBeVisible();
+  expect(screen.getByText(/原投资报告状态保持不变/)).toBeVisible();
+  expect(data.coverage.researchDeliveryStatus).toBe("VALIDATED_READ_ONLY");
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|推送|重跑/ }),
+  ).not.toBeInTheDocument();
+});
+it("keeps unverified saved observations and legacy missing delivery states distinct from completed research", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    researchDeliveryStatus: "OBSERVATION_READ_ONLY",
+    investmentQualificationStatus: "BLOCKED",
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  const first = renderWithSession(
+    <ResearchTopicRegistry runId={run} state="FAILED" />,
+  );
+  expect(
+    await screen.findByText("研究观察资料已保存，证据待核实"),
+  ).toBeVisible();
+  expect(screen.queryByText(/经济研究已完成/)).not.toBeInTheDocument();
+  first.unmount();
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(page());
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(
+    await screen.findByText(/只读研究交付状态：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(screen.getByText(/投资资格状态：旧版未提供，不可推断/)).toBeVisible();
+  expect(screen.queryByText(/经济研究已完成/)).not.toBeInTheDocument();
+});
+it("does not turn missing discovery and formal qualification counters into zero or reliable evidence", async () => {
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(
+    await screen.findByText(/发现主题：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/具有已核对来源的主题：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/符合正式资格方向：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.queryByText(/符合正式资格方向：0|具有已核对来源的主题：0/),
+  ).not.toBeInTheDocument();
+});
+it("shows only fixed non-exclusive qualification reasons without guessing unknown codes", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    formalEligibilityReasons: {
+      NO_FORMAL_PROPOSAL: 1,
+      SOURCE_EVIDENCE_PENDING: 2,
+      INDUSTRY_AUDIT_PENDING: 1,
+      UNSAFE_UNRECOGNIZED_TEXT: 9,
+    },
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(await screen.findByText(/未输出正式方向：1/)).toBeVisible();
+  expect(screen.getByText(/来源证据待核实：2/)).toBeVisible();
+  expect(screen.getByText(/行业风险审核待完成：1/)).toBeVisible();
+  expect(
+    screen.getByText(/原因计数可重叠，不可相加推算方向总数/),
+  ).toBeVisible();
+  expect(
+    screen.queryByText(/UNSAFE_UNRECOGNIZED_TEXT/),
+  ).not.toBeInTheDocument();
+});
+it("explains that partial CLI streams may still verify individual tasks without implying unknown actions are safe", async () => {
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(
+    await screen.findByText(/部分流可有独立任务核验，未知动作不代表无风险/),
+  ).toBeVisible();
 });
 it("shows verified CLI execution events without claiming exhaustive or risk-free research", async () => {
   const data = page();
@@ -615,6 +756,67 @@ const daily = (): DailyResearch => ({
     upcoming: [],
     energy: [],
   },
+});
+it("retains source-backed current news and dynamic topics when there is no formal report or qualified direction", async () => {
+  const registry = page();
+  Object.assign(registry.coverage, {
+    qualifiedFormalDirectionCount: 0,
+    validEventCount: 1,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(registry);
+  vi.mocked(getResearchAcceptance).mockResolvedValue({
+    id: run,
+    researchId: run,
+    kind: "INITIAL",
+    decision: "PARTIAL",
+    validatorVersion: "acceptance-v1",
+    validatedAt: registry.validatedAt,
+    actionable: false,
+    formalPublishable: false,
+    issueCount: 0,
+    issueListComplete: true,
+    canInspectArtifacts: false,
+    canReplay: false,
+    counts: {
+      sources: { inputCount: 1, acceptedCount: 1, quarantinedCount: 0 },
+      events: { inputCount: 1, acceptedCount: 1, quarantinedCount: 0 },
+    },
+    accepted: {
+      sources: [
+        {
+          id: "s1",
+          title: "本次融资报道原文",
+          url: "https://example.test/current-news",
+          quote: "融资规模下降。",
+          verification: "SOURCE_CHECKED",
+        },
+      ],
+      industryCycleReviews: [],
+      valueDirections: [],
+      upcoming: [],
+      events: [
+        {
+          id: "news-only",
+          title: "零正式方向下的有据新闻",
+          summary: "融资变化仍须核查。",
+          sourceIds: ["s1"],
+        },
+      ],
+    },
+  });
+  const data = { ...daily(), reportRunId: null, report: null };
+  renderWithSession(<DailyResearchReport data={data} />);
+  expect(await screen.findByText("零正式方向下的有据新闻")).toBeVisible();
+  expect(await screen.findByText("动态主题0")).toBeVisible();
+  expect(screen.getByText(/符合正式资格方向：0/)).toBeVisible();
+  expect(
+    screen.queryByRole("region", { name: "正式报告主题目录" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|推送/ }),
+  ).not.toBeInTheDocument();
+  expect(data.report).toBeNull();
+  expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
 });
 it("keeps the old READY registry separate from the latest failed research observations", async () => {
   vi.mocked(api.getResearchTopicRegistry).mockImplementation(

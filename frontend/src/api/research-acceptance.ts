@@ -43,11 +43,34 @@ export interface AcceptanceObservation {
   title?: string;
   thesis?: string;
   summary?: string;
+  phase?: "PLANNED" | "ANNOUNCED" | "IMPLEMENTED" | "REPORTED" | "OPINION";
+  importance?: "HIGH" | "MEDIUM" | "LOW";
+  channels?: string[];
+  scenarios?: Array<{ condition: string; impact: string; counter: string }>;
+  unknowns?: string[];
   watchFor?: string[];
   sourceIds?: string[];
   scheduledAt?: string | null;
   scheduledDate?: string | null;
   industryCycle?: AcceptanceIndustryRisk | null;
+  relatedTopicKeys?: string[];
+  relatedFormalDirectionKeys?: string[];
+  relatedMacroConcepts?: string[];
+  candidateConceptLabels?: string[];
+  referenceResolution?: {
+    version: "research-event-links-v1";
+    resolved: Array<{
+      namespace: "TOPIC" | "FORMAL_DIRECTION" | "LEGACY_DIRECTION";
+      inputKey: string;
+      key: string;
+      method: "EXACT" | "CANONICAL";
+    }>;
+    unresolved: Array<{
+      namespace: "TOPIC" | "FORMAL_DIRECTION" | "LEGACY_DIRECTION";
+      key: string;
+      reasonCode: "UNKNOWN_REFERENCE" | "AMBIGUOUS_REFERENCE";
+    }>;
+  };
 }
 
 export interface ResearchWorkload {
@@ -113,6 +136,9 @@ export interface ResearchAcceptanceOutcome {
       url?: string;
       quote?: string;
       verification?: string;
+      publishedDate?: string | null;
+      publishedAt?: string | null;
+      retrievedAt?: string | null;
     }>;
     industryCycleReviews: Array<{ industry: string } & AcceptanceIndustryRisk>;
     valueDirections: AcceptanceObservation[];

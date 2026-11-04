@@ -33,6 +33,21 @@ async function openDiagnostics(data: DailyResearch) {
   await userEvent.click(screen.getByText("执行与报告状态"));
 }
 
+it("limits a FAILED label to the formal report without claiming independent economic research passed or failed", async () => {
+  const data = Object.assign(daily(), {
+    failureStage: "REPORT_VALIDATION",
+    failureReasonCode: "SCHEMA_VALIDATION_FAILED",
+  });
+  const original = JSON.stringify(data);
+  await openDiagnostics(data);
+  expect(screen.getByText(/^正式报告未通过/)).toBeVisible();
+  expect(screen.queryByText(/^研究失败(?:（|$)/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/经济研究已完成/)).not.toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "研究失败诊断" })).toBeVisible();
+  expect(data.state).toBe("FAILED");
+  expect(JSON.stringify(data)).toBe(original);
+});
+
 it("explains a verified report-validation failure while retaining the historical report and error class", async () => {
   const data = Object.assign(daily(), {
     failureStage: "REPORT_VALIDATION",

@@ -476,7 +476,138 @@ function WorkloadDetails({ workload }: { workload?: api.ResearchWorkload }) {
       {workload.searchSoftLimitExceeded === true && (
         <p>观测超过计划参考线，未具备请求前硬拦截</p>
       )}
-      <p>模型阶段包含用量采集。仅展示已记录观测，不据字节或比例推算token及费用。</p>
+      <p>
+        模型阶段包含用量采集。仅展示已记录观测，不据字节或比例推算token及费用。
+      </p>
+    </details>
+  );
+}
+
+function ObservationSource({
+  source,
+}: {
+  source: api.ResearchAcceptanceOutcome["accepted"]["sources"][number];
+}) {
+  const href = sourceHref(source.url);
+  return (
+    <>
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer">
+          {source.title}
+        </a>
+      ) : (
+        <strong>{source.title}</strong>
+      )}
+      <p>
+        <span className="op-badge" aria-label="来源核验状态">
+          {source.verification === "SOURCE_CHECKED"
+            ? "原文已核对"
+            : source.verification === "UNAVAILABLE"
+              ? "原文暂不可用"
+              : source.verification === "UNVERIFIED"
+                ? "原文尚未核验"
+                : "来源状态待核实"}
+        </span>{" "}
+        {source.verification === "SOURCE_CHECKED"
+          ? "引用与原始发布匹配，不代表影响已兑现。"
+          : "原文与引用尚待核验，不能视为已确认事实。"}
+      </p>
+      {source.quote && <blockquote>{source.quote}</blockquote>}
+      {(source.publishedDate || source.publishedAt || source.retrievedAt) && (
+        <small>
+          公布：{timeLabel(source.publishedAt ?? source.publishedDate)} · 获取：
+          {timeLabel(source.retrievedAt)}
+        </small>
+      )}
+    </>
+  );
+}
+
+function ObservationReferences({ row }: { row: api.AcceptanceObservation }) {
+  const namespaces = {
+    TOPIC: "观察主题",
+    FORMAL_DIRECTION: "正式方向",
+    LEGACY_DIRECTION: "旧方向引用",
+  };
+  const resolution =
+    row.referenceResolution?.version === "research-event-links-v1"
+      ? row.referenceResolution
+      : undefined;
+  return (
+    <>
+      {!!row.relatedTopicKeys?.length && (
+        <p>
+          关联观察主题：{row.relatedTopicKeys.join("、")}
+          （只读关联，非投资许可）
+        </p>
+      )}
+      {!!row.relatedFormalDirectionKeys?.length && (
+        <p>
+          关联正式方向：{row.relatedFormalDirectionKeys.join("、")}
+          （仅引用，不提供交易动作）
+        </p>
+      )}
+      {!!row.relatedMacroConcepts?.length && (
+        <p>宏观概念声明（待核实）：{row.relatedMacroConcepts.join("、")}</p>
+      )}
+      {!!row.candidateConceptLabels?.length && (
+        <p>候选概念声明（待核实）：{row.candidateConceptLabels.join("、")}</p>
+      )}
+      {resolution?.unresolved.map((reference, index) => (
+        <p key={`${reference.namespace}:${reference.key}:${index}`}>
+          未解决关联：{namespaces[reference.namespace]} · {reference.key}（
+          {reference.reasonCode === "AMBIGUOUS_REFERENCE"
+            ? "存在歧义，待核对"
+            : "未找到匹配引用"}
+          ）
+        </p>
+      ))}
+      {!!resolution?.resolved.length && (
+        <details>
+          <summary>查看关联归一记录</summary>
+          <ul>
+            {resolution.resolved.map((reference, index) => (
+              <li key={`${reference.namespace}:${reference.inputKey}:${index}`}>
+                {namespaces[reference.namespace]}：{reference.inputKey} →{" "}
+                {reference.key}（
+                {reference.method === "EXACT" ? "精确匹配" : "规范化匹配"}）
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
+  );
+}
+
+function ObservationSources({
+  ids,
+  sources,
+}: {
+  ids?: string[];
+  sources: api.ResearchAcceptanceOutcome["accepted"]["sources"];
+}) {
+  const [open, setOpen] = useState(false);
+  if (!ids?.length) return <p>本项未声明来源依据，待核查。</p>;
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>查看本项来源依据</summary>
+      {open && (
+        <ul>
+          {[...new Set(ids)].map((id) => {
+            const source = sources.find((item) => item.id === id);
+            return (
+              <li key={id}>
+                {source ? (
+                  <ObservationSource source={source} />
+                ) : (
+                  <p>引用待核查：{id}，本次验收中无对应来源。</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </details>
   );
 }
@@ -486,34 +617,92 @@ export function AcceptanceObservations({
 }: {
   accepted: api.ResearchAcceptanceOutcome["accepted"];
 }) {
-  const observations = (title: string, rows: api.AcceptanceObservation[]) =>
-    rows.length > 0 && (
+  const observations = (
+    title: string,
+    rows: api.AcceptanceObservation[],
+    calendar = false,
+  ) => {
+    if (!rows.length) return null;
+    const content = (
+      <ul>
+        {rows.map((row, index) => (
+          <li key={row.id ?? row.key ?? index}>
+            <strong>{row.title}</strong>
+            {(row.thesis || row.summary) && <p>{row.thesis ?? row.summary}</p>}
+            {(row.phase || row.importance) && (
+              <p>
+                {row.phase &&
+                  `阶段：${{ PLANNED: "计划尚未发生", ANNOUNCED: "已宣布", IMPLEMENTED: "已实施", REPORTED: "报道线索", OPINION: "观点推演" }[row.phase]}`}
+                {row.importance &&
+                  ` · 重要性：${{ HIGH: "高（HIGH）", MEDIUM: "中", LOW: "低" }[row.importance]}`}
+              </p>
+            )}
+            {(calendar || row.scheduledAt || row.scheduledDate) && (
+              <p>
+                计划时间：{timeLabel(row.scheduledAt ?? row.scheduledDate)}
+                {calendar && " · 计划，尚未发生"}
+              </p>
+            )}
+            {!!row.channels?.length && (
+              <div>
+                <strong>可能传导 · 模型条件推演</strong>
+                {row.channels.map((channel, index) => (
+                  <p key={index}>{channel}</p>
+                ))}
+              </div>
+            )}
+            {!!row.scenarios?.length && (
+              <div>
+                <strong>正反情景与验证条件</strong>
+                {row.scenarios.map((scenario, index) => (
+                  <div key={index}>
+                    <p>若：{scenario.condition}</p>
+                    <p>可能影响：{scenario.impact}</p>
+                    <p>反方条件：{scenario.counter}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!!row.unknowns?.length && (
+              <div>
+                <strong>尚未确认</strong>
+                <ul>
+                  {row.unknowns.map((unknown, index) => (
+                    <li key={index}>{unknown}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {row.industryCycle?.evidenceSummary && (
+              <p>产业核查：{row.industryCycle.evidenceSummary}</p>
+            )}
+            <RiskSummary cycle={row.industryCycle} />
+            {!!row.watchFor?.length && (
+              <p>继续核查：{row.watchFor.join("；")}</p>
+            )}
+            <ObservationReferences row={row} />
+            <ObservationSources
+              ids={row.sourceIds}
+              sources={accepted.sources}
+            />
+          </li>
+        ))}
+      </ul>
+    );
+    return (
       <section aria-label={title}>
         <h5>{title}</h5>
-        <ul>
-          {rows.map((row, index) => (
-            <li key={row.id ?? row.key ?? index}>
-              <strong>{row.title}</strong>
-              {(row.thesis || row.summary) && (
-                <p>{row.thesis ?? row.summary}</p>
-              )}
-              {(row.scheduledAt || row.scheduledDate) && (
-                <p>
-                  计划时间：{timeLabel(row.scheduledAt ?? row.scheduledDate)}
-                </p>
-              )}
-              {row.industryCycle?.evidenceSummary && (
-                <p>产业核查：{row.industryCycle.evidenceSummary}</p>
-              )}
-              <RiskSummary cycle={row.industryCycle} />
-              {!!row.watchFor?.length && (
-                <p>继续核查：{row.watchFor.join("；")}</p>
-              )}
-            </li>
-          ))}
-        </ul>
+        {calendar ? (
+          <details>
+            <summary>本次已验收日程·仅供观察</summary>
+            {content}
+          </details>
+        ) : (
+          content
+        )}
       </section>
     );
+  };
   return (
     <div aria-label="已验收观察内容" style={{ display: "grid", gap: "14px" }}>
       {accepted.macroOverview && (
@@ -571,40 +760,16 @@ export function AcceptanceObservations({
         </section>
       )}
       {observations("已验收事件", accepted.events)}
-      {observations("已验收日程", accepted.upcoming)}
+      {observations("已验收日程", accepted.upcoming, true)}
       {accepted.sources.length > 0 && (
         <section aria-label="已验收来源">
           <h5>来源</h5>
           <ul>
-            {accepted.sources.map((source) => {
-              const href = sourceHref(source.url);
-              return (
-                <li key={source.id}>
-                  {href ? (
-                    <a href={href} target="_blank" rel="noreferrer">
-                      {source.title}
-                    </a>
-                  ) : (
-                    <strong>{source.title}</strong>
-                  )}
-                  <p>
-                    <span className="op-badge" aria-label="来源核验状态">
-                      {source.verification === "SOURCE_CHECKED"
-                        ? "原文已核对"
-                        : source.verification === "UNAVAILABLE"
-                          ? "原文暂不可用"
-                          : source.verification === "UNVERIFIED"
-                            ? "原文尚未核验"
-                            : "来源状态待核实"}
-                    </span>{" "}
-                    {source.verification === "SOURCE_CHECKED"
-                      ? "引用与原始发布匹配，不代表影响已兑现。"
-                      : "原文与引用尚待核验，不能视为已确认事实。"}
-                  </p>
-                  {source.quote && <blockquote>{source.quote}</blockquote>}
-                </li>
-              );
-            })}
+            {accepted.sources.map((source) => (
+              <li key={source.id}>
+                <ObservationSource source={source} />
+              </li>
+            ))}
           </ul>
         </section>
       )}
