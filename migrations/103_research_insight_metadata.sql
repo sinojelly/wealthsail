@@ -69,4 +69,3 @@ END $$;
 -- CREATE OR REPLACE preserves the original grants; restate the narrow boundary.
 REVOKE ALL ON FUNCTION research.save_topic_registry(UUID,JSONB) FROM PUBLIC,authenticated,wealthsail_api,wealthsail_worker;
 GRANT EXECUTE ON FUNCTION research.save_topic_registry(UUID,JSONB) TO wealthsail_worker;
-
