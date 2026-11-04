@@ -559,6 +559,100 @@ it.each([40, 64])(
   },
 );
 
+it.each(["PARTIAL", "COMPLETE"] as const)(
+  "shows recorded workload compactly for %s without calculating cost or starting work",
+  async (decision) => {
+    vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+      Object.assign(outcome(), {
+        decision,
+        researchWorkload: {
+          version: "research-workload-v1",
+          promptBytes: 4096,
+          modelElapsedMs: 12345,
+          sourceVerificationElapsedMs: 1500,
+          inputTokens: 1600,
+          cachedInputTokens: 800,
+          outputTokens: 200,
+          executionCoverage: "COMPLETE",
+          observedWebToolCalls: 54,
+          observedSearchQueries: 52,
+          observedPageOpens: 2,
+          observedPageFinds: 0,
+          preDispatchEnforcement: false,
+          providerRetries: null,
+          searchSoftLimitExceeded: true,
+        },
+      }),
+    );
+    renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+    await userEvent.click(await screen.findByText("研究工作量（只读观测）"));
+    const workload = within(screen.getByLabelText("研究工作量"));
+    expect(workload.getByText(/Prompt：4096字节/)).toBeVisible();
+    expect(workload.getByText(/模型阶段耗时：12.35秒/)).toBeVisible();
+    expect(workload.getByText(/来源核验耗时：1.50秒/)).toBeVisible();
+    expect(
+      workload.getByText(/输入token：1600.*缓存输入token：800.*输出token：200/),
+    ).toBeVisible();
+    expect(workload.getByText(/执行观测覆盖：完整观测/)).toBeVisible();
+    expect(
+      workload.getByText(
+        /Web工具调用：54.*搜索查询：52.*页面打开：2.*页面查找：0/,
+      ),
+    ).toBeVisible();
+    expect(
+      workload.getByText("观测超过计划参考线，未具备请求前硬拦截"),
+    ).toBeVisible();
+    expect(workload.getByText(/供应商重试：未知/)).toBeVisible();
+    expect(workload.queryByText(/%|￥|\$\d/)).not.toBeInTheDocument();
+    expect(api.replayResearchAcceptance).not.toHaveBeenCalled();
+    expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps unavailable workload observations unknown rather than inventing zeroes or tokens", async () => {
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+    Object.assign(outcome(), {
+      researchWorkload: {
+        version: "research-workload-v1",
+        executionCoverage: "PARTIAL",
+        observedWebToolCalls: null,
+        observedSearchQueries: null,
+        observedPageOpens: null,
+        observedPageFinds: null,
+        preDispatchEnforcement: false,
+        providerRetries: null,
+        searchSoftLimitExceeded: null,
+      },
+    }),
+  );
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  await userEvent.click(await screen.findByText("研究工作量（只读观测）"));
+  const workload = within(screen.getByLabelText("研究工作量"));
+  expect(
+    workload.getByText(/Prompt：未知.*模型阶段耗时：未知.*来源核验耗时：未知/),
+  ).toBeVisible();
+  expect(
+    workload.getByText(/输入token：未知.*缓存输入token：未知.*输出token：未知/),
+  ).toBeVisible();
+  expect(
+    workload.getByText(
+      /Web工具调用：未知.*搜索查询：未知.*页面打开：未知.*页面查找：未知/,
+    ),
+  ).toBeVisible();
+  expect(workload.getByText(/执行观测覆盖：部分观测/)).toBeVisible();
+  expect(workload.queryByText(/：0/)).not.toBeInTheDocument();
+  expect(
+    workload.queryByText("观测超过计划参考线，未具备请求前硬拦截"),
+  ).not.toBeInTheDocument();
+});
+
+it("does not add fabricated workload observations to old outcomes without metadata", async () => {
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  await screen.findByText("部分验收成果·仅供观察，未正式发布");
+  expect(screen.queryByText("研究工作量（只读观测）")).not.toBeInTheDocument();
+  expect(screen.queryByText(/输入token|Prompt：/)).not.toBeInTheDocument();
+});
+
 it("shows partial observations and complete safe issues without any trade controls", async () => {
   const data = outcome();
   Object.assign(data.accepted.valueDirections[0], {

@@ -109,7 +109,7 @@ it("shows read-only topic status, match scope, budget gaps, source clock and exp
     "s1",
   ])
     expect(screen.getByText(text, { exact: false })).toBeVisible();
-  expect(screen.getByText(/实际审核10/)).toBeVisible();
+  expect(screen.getByText(/审核结果记录10/)).toBeVisible();
   expect(screen.getByText(/待审2/)).toBeVisible();
   expect(screen.getByText(/独立搜索执行凭证尚未验证/)).toBeVisible();
   expect(screen.getByText(/新主题/)).toBeVisible();
@@ -237,6 +237,69 @@ it("does not describe an accepted strict candidate as published when the batch w
   expect(
     screen.queryByRole("button", { name: /跟踪|买入/ }),
   ).not.toBeInTheDocument();
+});
+it("separates structural completeness from independently executed and evidence-verified checks", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    structureCompleteScopeCount: 10,
+    executionVerifiedScopeCount: 0,
+    evidenceVerifiedCheckCount: 0,
+    executionVerifiedCheckCount: 0,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(await screen.findByText(/结构齐全范围：10/)).toBeVisible();
+  expect(screen.getByText(/执行凭证已核验范围：0/)).toBeVisible();
+  expect(screen.getByText(/执行凭证已核验检查：0/)).toBeVisible();
+  expect(screen.getByText(/证据已核验检查：0/)).toBeVisible();
+  expect(screen.getByText(/结构齐全不等于执行或证据核验/)).toBeVisible();
+  expect(screen.queryByText(/实际审核10/)).not.toBeInTheDocument();
+});
+it("shows passed strict calculation separately from withheld auto-publication without granting new actions", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    strictRevalidated: true,
+    strictDirectionCount: 6,
+    autoPublishAllowed: false,
+    autoPublishBlockerCount: 2,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(await screen.findByText("严格计算已通过")).toBeVisible();
+  expect(screen.getByText(/严格候选方向：6/)).toBeVisible();
+  expect(screen.getByText("自动发布暂缓")).toBeVisible();
+  expect(screen.getByText(/发布阻断项：2/)).toBeVisible();
+  expect(
+    screen.getByText(/下一步：请管理员核对阻断原因，或在后续获授权批次补证/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪|执行|重跑/ }),
+  ).not.toBeInTheDocument();
+});
+it("does not infer unavailable layered assurance or publishing outcomes from legacy reviewed counts", async () => {
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  await screen.findByText("动态主题0");
+  expect(screen.getByText(/结构齐全范围：旧版未提供，不可推断/)).toBeVisible();
+  expect(
+    screen.getByText(/执行凭证已核验范围：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(screen.getByText(/严格计算状态：旧版未提供，不可推断/)).toBeVisible();
+  expect(screen.getByText(/自动发布状态：旧版未提供，不可推断/)).toBeVisible();
+  expect(screen.queryByText(/证据已核验检查：0/)).not.toBeInTheDocument();
+});
+it("describes an allowed publishing policy without claiming that publication has already occurred", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    strictRevalidated: true,
+    strictDirectionCount: 1,
+    autoPublishAllowed: true,
+    autoPublishBlockerCount: 0,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(await screen.findByText("允许自动发布")).toBeVisible();
+  expect(screen.getByText(/实际发布以该研究的正式报告状态为准/)).toBeVisible();
+  expect(screen.queryByText("已正式发布")).not.toBeInTheDocument();
 });
 it("keeps unmatched themes visible with their explanation and without granting investment permission", async () => {
   const data = page();

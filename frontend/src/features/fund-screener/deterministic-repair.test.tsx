@@ -157,3 +157,21 @@ it("reads the actual offline server repair_summary output including aliases whil
   ).not.toBeInTheDocument();
   expect(data.state).toBe("READY");
 });
+it("keeps a published V2 repair notice readable when its legacy summary omits quarantine reasons", () => {
+  const data = daily();
+  data.state = "READY";
+  data.runId = reportId;
+  const legacy = { ...repair };
+  delete legacy.quarantined;
+  data.report!.deterministicRepair = legacy as DeterministicRepair;
+  renderWithSession(<DailyResearchReport data={data} />);
+  const notice = within(
+    screen.getByRole("region", { name: "报告修正与隔离说明" }),
+  );
+  expect(notice.getByText("已隔离并严格重验")).toBeVisible();
+  expect(notice.queryByRole("listitem")).not.toBeInTheDocument();
+  expect(
+    notice.queryByText("该方向证据不足，已隔离。"),
+  ).not.toBeInTheDocument();
+  expect(notice.getByText(`修正报告：${reportId}`)).toBeVisible();
+});

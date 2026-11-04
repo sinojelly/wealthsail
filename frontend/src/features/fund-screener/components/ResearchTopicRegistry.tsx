@@ -319,15 +319,59 @@ function RegistryData({
 }
 function Coverage({ data }: { data: TopicRegistryPage }) {
   const coverage = data.coverage;
+  const unavailable = "旧版未提供，不可推断";
   return (
-    <div aria-label="主题发现与实际审核覆盖">
+    <div aria-label="主题登记与审核覆盖">
       <p>本批目录登记{coverage.totalCount}项（发现与正式方向按key汇总）</p>
       <p>
         计划审核
-        {coverage.plannedScopeCount}个范围，实际审核
+        {coverage.plannedScopeCount}个范围，审核结果记录
         {coverage.reviewedScopeCount}个范围，待审{coverage.pendingScopeCount}
         个范围。
       </p>
+      <p>
+        结构齐全范围：{coverage.structureCompleteScopeCount ?? unavailable}；
+        执行凭证已核验范围：
+        {coverage.executionVerifiedScopeCount ?? unavailable}
+      </p>
+      <p>
+        执行凭证已核验检查：
+        {coverage.executionVerifiedCheckCount ?? unavailable}； 证据已核验检查：
+        {coverage.evidenceVerifiedCheckCount ?? unavailable}
+      </p>
+      <p>结构齐全不等于执行或证据核验；未核验不代表不存在风险。</p>
+      <div aria-label="严格计算与自动发布许可">
+        <p>
+          {coverage.strictRevalidated === undefined ? (
+            <>严格计算状态：{unavailable}</>
+          ) : (
+            <strong>
+              {coverage.strictRevalidated
+                ? "严格计算已通过"
+                : "严格计算尚未通过"}
+            </strong>
+          )}
+          {" · "}严格候选方向：{coverage.strictDirectionCount ?? unavailable}
+        </p>
+        <p>
+          {coverage.autoPublishAllowed === undefined ? (
+            <>自动发布状态：{unavailable}</>
+          ) : (
+            <strong>
+              {coverage.autoPublishAllowed ? "允许自动发布" : "自动发布暂缓"}
+            </strong>
+          )}
+          {" · "}发布阻断项：{coverage.autoPublishBlockerCount ?? unavailable}
+        </p>
+        {coverage.autoPublishAllowed === false && (
+          <p>
+            下一步：请管理员核对阻断原因，或在后续获授权批次补证；不会自动重跑研究。
+          </p>
+        )}
+        {coverage.autoPublishAllowed === true && (
+          <p>实际发布以该研究的正式报告状态为准，此目录仍为只读。</p>
+        )}
+      </div>
       {coverage.storedCount != null && (
         <p>
           目录已归档{coverage.storedCount}

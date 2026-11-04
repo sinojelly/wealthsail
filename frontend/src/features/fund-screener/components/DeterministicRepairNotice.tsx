@@ -20,13 +20,15 @@ export default function DeterministicRepairNotice({
         原始输出中{repair.quarantinedCount}
         项未通过，隔离后整份报告已严格重验并发布。
       </p>
-      <ul>
-        {repair.quarantined.map((item, index) => (
-          <li key={`${item.itemType}:${item.itemIndex}:${index}`}>
-            {item.reason}
-          </li>
-        ))}
-      </ul>
+      {!!repair.quarantined?.length && (
+        <ul>
+          {repair.quarantined.map((item, index) => (
+            <li key={`${item.itemType}:${item.itemIndex}:${index}`}>
+              {item.reason}
+            </li>
+          ))}
+        </ul>
+      )}
       <small>修正报告：{reportRunId}</small>
     </section>
   );

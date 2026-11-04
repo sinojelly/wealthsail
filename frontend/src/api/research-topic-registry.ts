@@ -57,6 +57,14 @@ export interface TopicRegistryPage {
     reviewedScopeCount: number;
     pendingScopeCount: number;
     searchExecutionVerified: false;
+    structureCompleteScopeCount?: number;
+    executionVerifiedScopeCount?: number;
+    evidenceVerifiedCheckCount?: number;
+    executionVerifiedCheckCount?: number;
+    strictRevalidated?: boolean;
+    strictDirectionCount?: number;
+    autoPublishAllowed?: boolean;
+    autoPublishBlockerCount?: number;
     maxModelCalls?: number;
     additionalModelCalls?: number;
     maxInputBytes?: number;

@@ -50,6 +50,24 @@ export interface AcceptanceObservation {
   industryCycle?: AcceptanceIndustryRisk | null;
 }
 
+export interface ResearchWorkload {
+  version: "research-workload-v1";
+  promptBytes?: number;
+  modelElapsedMs?: number;
+  sourceVerificationElapsedMs?: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  executionCoverage: "COMPLETE" | "PARTIAL" | "UNAVAILABLE";
+  observedWebToolCalls: number | null;
+  observedSearchQueries: number | null;
+  observedPageOpens: number | null;
+  observedPageFinds: number | null;
+  preDispatchEnforcement: false;
+  providerRetries: null;
+  searchSoftLimitExceeded: boolean | null;
+}
+
 export interface ResearchAcceptanceOutcome {
   id: string;
   researchId: string;
@@ -64,6 +82,7 @@ export interface ResearchAcceptanceOutcome {
   formalPublishable: boolean;
   repairedFormalPublished?: boolean;
   deterministicRepair?: DeterministicRepair;
+  researchWorkload?: ResearchWorkload;
   actionable: false;
   issueCount: number;
   issueListComplete: boolean;

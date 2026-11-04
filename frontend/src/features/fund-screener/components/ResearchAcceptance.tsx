@@ -380,6 +380,7 @@ function Outcome({
             </span>
           )}
       </p>
+      <WorkloadDetails workload={data.researchWorkload} />
       {data.acceptedContentComplete === false && (
         <p
           role="note"
@@ -437,6 +438,46 @@ function Outcome({
         </details>
       )}
     </>
+  );
+}
+
+function WorkloadDetails({ workload }: { workload?: api.ResearchWorkload }) {
+  if (workload?.version !== "research-workload-v1") return null;
+  const count = (value?: number | null) => value ?? "未知";
+  const elapsed = (value?: number) =>
+    value == null ? "未知" : `${(value / 1000).toFixed(2)}秒`;
+  const coverage = {
+    COMPLETE: "完整观测",
+    PARTIAL: "部分观测",
+    UNAVAILABLE: "无可用观测",
+  }[workload.executionCoverage];
+  return (
+    <details aria-label="研究工作量">
+      <summary>研究工作量（只读观测）</summary>
+      <p>
+        Prompt：
+        {workload.promptBytes == null ? "未知" : `${workload.promptBytes}字节`}
+        {" · "}模型阶段耗时：{elapsed(workload.modelElapsedMs)}
+        {" · "}来源核验耗时：{elapsed(workload.sourceVerificationElapsedMs)}
+      </p>
+      <p>
+        输入token：{count(workload.inputTokens)}
+        {" · "}缓存输入token：{count(workload.cachedInputTokens)}
+        {" · "}输出token：{count(workload.outputTokens)}
+      </p>
+      <p>执行观测覆盖：{coverage}</p>
+      <p>
+        Web工具调用：{count(workload.observedWebToolCalls)}
+        {" · "}搜索查询：{count(workload.observedSearchQueries)}
+        {" · "}页面打开：{count(workload.observedPageOpens)}
+        {" · "}页面查找：{count(workload.observedPageFinds)}
+      </p>
+      <p>请求前硬拦截：未具备；供应商重试：未知。</p>
+      {workload.searchSoftLimitExceeded === true && (
+        <p>观测超过计划参考线，未具备请求前硬拦截</p>
+      )}
+      <p>模型阶段包含用量采集。仅展示已记录观测，不据字节或比例推算token及费用。</p>
+    </details>
   );
 }
 

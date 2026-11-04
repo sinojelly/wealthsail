@@ -714,7 +714,7 @@ export interface DeterministicRepair {
   originalDecision: "PARTIAL";
   strictRevalidated: boolean;
   quarantinedCount: number;
-  quarantined: Array<{
+  quarantined?: Array<{
     itemType: string;
     itemIndex?: number | null;
     businessKey?: string;
