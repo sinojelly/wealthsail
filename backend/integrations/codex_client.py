@@ -19,6 +19,7 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from backend.integrations import codex_research
+from backend.integrations.research_execution import sanitize_execution_receipt
 
 _MAX_INPUT_BYTES = 2 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -100,6 +101,13 @@ def _failure_metadata(error, source, *, capture_raw=False):
         codex_research.with_telemetry(error, usage=usage, model=model if isinstance(model, str) and 1 <= len(model) <= 120 else None, inference_succeeded=succeeded)
     if uncertain:
         error.inference_uncertain = True
+    if capture_raw:
+        receipt = sanitize_execution_receipt(
+            source.get("executionReceipt") if isinstance(source, dict)
+            else getattr(source, "execution_receipt", None)
+        )
+        if receipt is not None:
+            error.execution_receipt = receipt
     captured = (
         source.get("rawOutput") if isinstance(source, dict)
         else codex_research.raw_output_metadata(source)
@@ -172,7 +180,7 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
     except (httpx.ReadError, httpx.WriteError, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.RemoteProtocolError, TimeoutError) as exc:
         if uncertain:
-            raise _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc) from exc
+            raise _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc, capture_raw=endpoint == "/v1/research") from exc
         raise _failure_metadata(CodexCallError("Codex runner request failed"), exc) from exc
     except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
         raise CodexCallError("Codex runner request failed") from exc
@@ -424,8 +432,8 @@ async def _research(settings, prompt, schema, *, timeout=900, model=None) -> dic
             settings, "POST", "/v1/research", payload=payload,
             timeout=timeout + 30, uncertain=True,
         )
-        if set(result) == {"report", "usage", "model"} and isinstance(result.get("report"), dict):
-            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]))
+        if set(result) in ({"report", "usage", "model"}, {"report", "usage", "model", "executionReceipt"}) and isinstance(result.get("report"), dict):
+            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]), execution_receipt=result.get("executionReceipt"))
         return codex_research.ResearchResult(result, model=model)
     path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
     executable = codex_research.resolve_codex_executable(path)

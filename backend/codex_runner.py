@@ -25,13 +25,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from backend.integrations.codex_research import (
+    CodexOutputError,
     CodexUnavailableError,
     ResearchResult,
     normalize_usage,
     preflight_codex,
     public_environment,
     run_codex_research,
+    with_telemetry,
 )
+from backend.integrations.research_execution import sanitize_execution_receipt
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -216,6 +219,9 @@ def _error_detail(error, message, *, capture_output=False):
         "inferenceSucceeded": getattr(error, "inference_succeeded", False) is True,
     }
     if capture_output:
+        receipt = sanitize_execution_receipt(getattr(error, "execution_receipt", None))
+        if receipt is not None:
+            detail["executionReceipt"] = receipt
         from backend.integrations.codex_research import raw_output_metadata
 
         captured = raw_output_metadata(error)
@@ -388,7 +394,30 @@ def create_app(
         if not isinstance(result, dict):
             raise HTTPException(502, "Invalid Codex research response")
         if isinstance(result, ResearchResult):
-            return {"report": dict(result), "usage": result.usage, "model": result.model}
+            base = {"report": dict(result), "usage": result.usage, "model": result.model}
+            try:
+                _bounded_output(base)
+            except (ValueError, TypeError) as exc:
+                error = with_telemetry(
+                    CodexOutputError("research response exceeds its byte budget"),
+                    usage=result.usage, model=result.model, inference_succeeded=True,
+                )
+                raise HTTPException(502, _error_detail(error, "Invalid Codex research response")) from exc
+            receipt = sanitize_execution_receipt(getattr(result, "execution_receipt", None))
+            if receipt is not None:
+                compact = {
+                    **receipt, "coverage": "PARTIAL", "eventsComplete": False,
+                    "queryReceipts": [],
+                }
+                for candidate in (receipt, compact):
+                    envelope = {**base, "executionReceipt": candidate}
+                    try:
+                        _bounded_output(envelope)
+                    except ValueError:
+                        continue
+                    return envelope
+            # Optional observations may be omitted, never the completed report.
+            return base
         return result
 
     @app.post("/v1/chat/stream", dependencies=[Depends(authorize)])

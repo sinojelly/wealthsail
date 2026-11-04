@@ -10,6 +10,11 @@ import subprocess
 import tempfile
 import tomllib
 
+from backend.integrations.research_execution import (
+    ExecutionObserver,
+    sanitize_execution_receipt,
+)
+
 
 class CodexUnavailableError(Exception):
     pass
@@ -103,20 +108,25 @@ def exec_usage(stdout):
     return usage, completed
 
 
-def with_telemetry(error, *, usage, model, inference_succeeded):
+def with_telemetry(error, *, usage, model, inference_succeeded, execution_receipt=None):
     error.usage = normalize_usage(usage)
     error.model = model or "codex"
     error.inference_succeeded = inference_succeeded
+    if execution_receipt is not None:
+        receipt = sanitize_execution_receipt(execution_receipt)
+        if receipt is not None:
+            error.execution_receipt = receipt
     return error
 
 
 class ResearchResult(dict):
     """Keep provider metadata outside the report's strict business schema."""
 
-    def __init__(self, report, *, usage=None, model=None):
+    def __init__(self, report, *, usage=None, model=None, execution_receipt=None):
         super().__init__(report)
         self.usage = normalize_usage(usage)
         self.model = model or "codex"
+        self.execution_receipt = sanitize_execution_receipt(execution_receipt)
 
 
 _DISABLED_FEATURES = ("shell_tool", "apps", "plugins", "multi_agent")
@@ -239,7 +249,7 @@ def public_environment(source, directory):
     return env
 
 
-async def _run(args, *, cwd, env, input_data=None, timeout=15):
+async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=None):
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     process = await asyncio.create_subprocess_exec(
         *args,
@@ -254,6 +264,8 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15):
     async def read(stream, keep):
         chunks, size = [], 0
         while chunk := await stream.read(65536):
+            if keep and stdout_observer is not None:
+                stdout_observer(chunk)
             size += len(chunk)
             if size > 2 * 1024 * 1024:
                 raise CodexOutputError("output limit")
@@ -380,22 +392,32 @@ async def run_codex_research(
         if model:
             args.extend(["--model", model])
         args.append("-")
-        code, stdout, _ = await _run(
-            args,
-            cwd=directory,
-            env=public_environment(
-                os.environ if environment is None else environment, directory
-            ),
-            input_data=prompt.encode("utf-8"),
-            timeout=timeout,
-        )
+        observer = ExecutionObserver()
+        try:
+            code, stdout, _ = await _run(
+                args,
+                cwd=directory,
+                env=public_environment(
+                    os.environ if environment is None else environment, directory
+                ),
+                input_data=prompt.encode("utf-8"),
+                timeout=timeout,
+                stdout_observer=observer.feed,
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            raise with_telemetry(
+                exc, usage={}, model=model,
+                inference_succeeded=observer.turn_completed,
+                execution_receipt=observer.finish(),
+            )
         usage, completed = exec_usage(stdout)
+        receipt = observer.finish()
         try:
             if code:
                 raise CodexExecutionError("CLI did not complete")
             if not output_path.is_file() or output_path.stat().st_size > 2 * 1024 * 1024:
                 raise CodexOutputError("missing or oversized report")
-            return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model)
+            return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model, execution_receipt=receipt)
         except (CodexExecutionError, CodexOutputError, OSError, UnicodeError) as exc:
             _capture_output_error(exc, output_path)
-            raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed)
+            raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed, execution_receipt=receipt)
