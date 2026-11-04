@@ -119,3 +119,40 @@ async def test_real_batch_registry_and_original_materials_archive_as_one_snapsho
             )
             == 1
         )
+
+
+async def test_zero_formal_news_and_unresolved_refs_roundtrip_without_trade_permission(monkeypatch):
+    from backend.macro.research_assurance import bind_execution
+    from backend.macro.research_batch import evaluate_research_batch
+    from tests.unit.test_research_independent_contracts import combined_case
+
+    monkeypatch.setattr(source_fixture, "stamp", lambda: NOW)
+    async with source_fixture.fixture() as (conn, run_id, now, tenants, actors, _):
+        packet, raw, checks = combined_case()
+        manifest = packet["researchDiscovery"]["auditManifest"]
+        checks = bind_execution(checks, checks["__wealthsail_execution_v1"]["receipt"], manifest, run_id, now)
+        batch = evaluate_research_batch(raw, packet, checks, research_id=str(run_id), validated_at=now)
+        assert batch["autoPublishAllowed"] and not batch["formalReport"]["valueDirections"]
+        await conn.execute(
+            "INSERT INTO research.daily_research_results(run_id,status,recorded_at,payload) VALUES($1,'READY',$2,$3::jsonb)",
+            run_id, now, archive._encode(batch["formalReport"]),
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        await archive.enqueue_research_archive(
+            conn, run_id, packet, raw, checks, now,
+            batch["originalOutcome"].to_dict(), topic_registry=batch["registry"], recorded_at=now,
+        )
+        claim = await archive.claim_research_archive(conn, run_id=run_id)
+        await archive.persist_research_archive(conn, claim)
+        await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
+        page = await catalog.read_topic_registry(conn, run_id, now, limit=20)
+        assert page["totalCount"] == 64 and page["actionable"] is False
+        assert page["coverage"]["researchDeliveryStatus"] == "VALIDATED_READ_ONLY"
+        assert page["coverage"]["qualifiedFormalDirectionCount"] == 0
+        assert page["items"][0]["evidenceCoverageScore"] == 100
+        assert page["items"][0]["unknowns"] and page["items"][0]["followUp"]
+        summary = await archive.read_validation_summary(conn, run_id, now)
+        assert len(summary["accepted"]["events"]) == 6
+        assert len(summary["accepted"]["upcoming"]) == 3
+        assert summary["accepted"]["events"][0]["referenceResolution"]["unresolved"]
+        assert summary["actionable"] is False

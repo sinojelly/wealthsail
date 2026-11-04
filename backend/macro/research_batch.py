@@ -337,15 +337,30 @@ def evaluate_research_batch(
     retained = validated_retained
     candidate = deepcopy(parsed)
     candidate["valueDirections"] = retained
-    # Discovery proposals are archived separately; they are not formal directions.
+    # A topic is a read-only identity, not a formal plan. Retain its legitimate
+    # reference context during strict news validation, without copying a plan or
+    # assigning industry audit rights. Invalid proposals stay in the registry.
     candidate["topicCatalog"] = []
+    for proposal in raw_topics:
+        try:
+            topic = TopicProposal.model_validate(proposal).model_dump()
+        except ValidationError:
+            continue
+        if all(ref in sources for ref in topic["sourceIds"]):
+            candidate["topicCatalog"].append(topic)
+    from backend.macro.research_event_links import possible_formal_dependencies
+
+    all_formal_keys = [
+        row["key"] for row in directions
+        if isinstance(row, dict) and isinstance(row.get("key"), str)
+    ]
     for component, kind in (("events", "EVENT"), ("upcoming", "UPCOMING")):
         kept = []
         for index, row in enumerate(parsed.get(component, [])):
             if not isinstance(row, dict):
                 result["hardBlockers"].append(_block("UNSAFE_INPUT"))
                 continue
-            refs = set(row.get("affectedDirectionIds") or []) & removed
+            refs = possible_formal_dependencies(row, all_formal_keys) & removed
             if not refs:
                 kept.append(row)
                 continue
@@ -595,6 +610,13 @@ def evaluate_research_batch(
             "key": proposal["key"],
             "title": proposal["title"],
             "summary": proposal["thesis"],
+            "unknowns": list(proposal["unknowns"]),
+            "followUp": list(proposal["pendingTasks"]),
+            "insightCategory": "MULTI_SCOPE" if len(match["industryIds"]) > 1 else "INDUSTRY" if match["industryIds"] else "DYNAMIC",
+            "evidenceCoverageScore": round(
+                100 * sum(source.get("verification") == "SOURCE_CHECKED" for source in proof)
+                / len(proposal["sourceIds"])
+            ) if proposal["sourceIds"] else 0,
             "status": status,
             "reasonCode": code,
             "reason": TOPIC_MESSAGES[code],
@@ -718,6 +740,92 @@ def evaluate_research_batch(
         autoPublishAllowed=result["autoPublishAllowed"],
         autoPublishBlockerCount=len(result["autoBlockers"]) + len(result["hardBlockers"]),
     )
+    # These describe different stages of coverage. A checked quote can support
+    # observation without proving an economic inference, industry scope or trade.
+    reasons = Counter()
+    if not directions:
+        reasons["NO_FORMAL_PROPOSAL"] = 1
+    for row in directions:
+        if not isinstance(row, dict):
+            reasons["FORMAL_VALIDATION_FAILED"] += 1
+        elif not row.get("plans"):
+            reasons["FUND_PLAN_MISSING"] += 1
+        elif row.get("key") not in formal_by_key:
+            reasons["FORMAL_VALIDATION_FAILED"] += 1
+    for item in registry["items"]:
+        reason = {
+            "SOURCE_SCOPE_UNVERIFIED": "SOURCE_EVIDENCE_PENDING",
+            "SOURCE_REFERENCE_INVALID": "SOURCE_EVIDENCE_PENDING",
+            "INDUSTRY_IDENTITY_PENDING": "INDUSTRY_IDENTITY_PENDING",
+            "AUDIT_INCOMPLETE": "INDUSTRY_AUDIT_PENDING",
+            "AUDIT_BUDGET_DEFERRED": "INDUSTRY_AUDIT_PENDING",
+        }.get(item["reasonCode"])
+        if reason:
+            reasons[reason] += 1
+    if result["hardBlockers"] or result["autoBlockers"]:
+        reasons["PUBLICATION_SAFETY_BLOCKED"] = len(result["hardBlockers"]) + len(result["autoBlockers"])
+    safe_news = formal or {"events": accepted.get("events", []), "upcoming": accepted.get("upcoming", [])}
+    registry["coverage"].update(
+        discoveredTopicCount=len(raw_topics),
+        evidenceBackedTopicCount=sum(
+            item["status"] != "QUARANTINED"
+            and any(sources.get(ref, {}).get("verification") == "SOURCE_CHECKED" for ref in item["sourceIds"])
+            for item in registry["items"]
+        ),
+        evaluableFundDirectionCount=sum(
+            isinstance(row, dict) and bool(row.get("plans"))
+            and isinstance(row["plans"], list)
+            and all(isinstance(plan, dict) and plan_industry_ids(packet, plan) for plan in row["plans"])
+            for row in directions
+        ),
+        qualifiedFormalDirectionCount=sum(
+            bool(row.get("plans")) and result["autoPublishAllowed"]
+            for row in formal_by_key.values()
+        ),
+        formalEligibilityReasons=dict(reasons),
+        validEventCount=len(safe_news.get("events", [])),
+        validUpcomingCount=len(safe_news.get("upcoming", [])),
+        unresolvedReferenceCount=sum(
+            len(row.get("referenceResolution", {}).get("unresolved", []))
+            for component in ("events", "upcoming")
+            for row in safe_news.get(component, [])
+        ),
+    )
+    # Read-only delivery is not the READY result or permission for an operation.
+    # A failed fund can coexist with independently checked economic material.
+    checked_source_ids = {
+        source["id"] for source in accepted.get("sources", [])
+        if source.get("verification") == "SOURCE_CHECKED"
+    }
+    checked_news = any(
+        set(row.get("sourceIds", [])) & checked_source_ids
+        for component in ("events", "upcoming") for row in safe_news.get(component, [])
+    )
+    observation_available = bool(
+        safe_news.get("events") or safe_news.get("upcoming")
+        or any(item["status"] != "QUARANTINED" for item in registry["items"])
+    )
+    news_errors = any(issue.item_type in {"SOURCE", "EVENT", "UPCOMING"} for issue in original.issues)
+    unsafe = any(block["code"] == "UNSAFE_INPUT" for block in result["hardBlockers"])
+    registry["coverage"]["researchDeliveryStatus"] = (
+        "VALIDATED_READ_ONLY" if not unsafe and not news_errors and (
+            checked_news or registry["coverage"]["evidenceBackedTopicCount"] > 0
+        ) else "OBSERVATION_READ_ONLY" if observation_available and not unsafe else "UNAVAILABLE"
+    )
+    registry["coverage"]["investmentQualificationStatus"] = (
+        "QUALIFIED_CANDIDATES" if registry["coverage"]["qualifiedFormalDirectionCount"]
+        else "BLOCKED" if any(isinstance(row, dict) and row.get("plans") for row in directions)
+        else "NO_QUALIFIED_OPPORTUNITIES"
+    )
+    result["retained"] = {
+        "counts": {
+            **{component: len((formal or {}).get(component, [])) for component in (
+                "sources", "industryCycleReviews", "valueDirections", "events", "upcoming",
+            )},
+            "fundPlans": sum(len(row.get("plans", [])) for row in formal_by_key.values()),
+        },
+        "directionKeys": sorted(formal_by_key),
+    }
     result["decision"] = "REPAIRED" if result["historicalPublishAllowed"] else "BLOCKED"
     if not result["autoPublishAllowed"]:
         for item in registry["items"]:

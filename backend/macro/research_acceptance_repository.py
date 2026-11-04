@@ -213,6 +213,7 @@ def _accepted(value):
             "quote",
             "publishedDate",
             "publishedAt",
+            "retrievedAt",
             "verification",
         ),
         "industryCycleReviews": (
@@ -232,20 +233,26 @@ def _accepted(value):
             "watchFor",
         ),
         "events": (
+            "id",
             "title",
             "summary",
             "phase",
             "importance",
             "sourceIds",
+            "affectedDirectionIds",
+            "channels",
             "watchFor",
             "unknowns",
         ),
         "upcoming": (
+            "id",
             "title",
             "phase",
+            "importance",
             "scheduledDate",
             "scheduledAt",
             "sourceIds",
+            "affectedDirectionIds",
             "watchFor",
         ),
     }
@@ -280,6 +287,21 @@ def _accepted(value):
                 row["url"] = _url(row["url"])
             except (ValueError, TypeError):
                 row.pop("url")
+    from backend.macro.research_event_links import safe_event_links
+
+    for component in ("events", "upcoming"):
+        originals = value.get(component)
+        for projected, original in zip(
+            output[component],
+            [row for row in originals if isinstance(row, dict)][:12]
+            if isinstance(originals, list) else [],
+        ):
+            projected.update(safe_event_links(original))
+            if component == "events" and isinstance(original.get("scenarios"), list):
+                projected["scenarios"] = [
+                    _safe_item(scenario, ("condition", "impact", "counter"))
+                    for scenario in original["scenarios"][:3] if isinstance(scenario, dict)
+                ]
     reviews = value.get("industryCycleReviews")
     for projected, original in zip(
         output["industryCycleReviews"],

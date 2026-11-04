@@ -120,6 +120,11 @@ TOPIC_MESSAGES = {
     "RECEIPT_SUMMARIZED_SIZE_LIMIT": "远程响应体积受限，执行回执仅保留计数摘要；原研究正文保留，未获证明的任务仍待审。",
     "RECEIPT_OMITTED_SIZE_LIMIT": "远程响应体积受限，执行回执已省略；原研究正文保留，不能把无回执视为未执行或已完成审核。",
 }
+FORMAL_ELIGIBILITY_REASONS = frozenset({
+    "NO_FORMAL_PROPOSAL", "FUND_PLAN_MISSING", "SOURCE_EVIDENCE_PENDING",
+    "INDUSTRY_IDENTITY_PENDING", "INDUSTRY_AUDIT_PENDING",
+    "FORMAL_VALIDATION_FAILED", "PUBLICATION_SAFETY_BLOCKED",
+})
 # Only reviewed exact names belong here. Related/composite terms are not aliases.
 STRICT_ALIASES = {
     "有色金属": "NONFERROUS",

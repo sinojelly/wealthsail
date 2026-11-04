@@ -5,6 +5,7 @@ from importlib import import_module
 import json
 import os
 
+import asyncpg
 import pytest
 
 from backend.common.database import apply_tenant_context
@@ -92,6 +93,16 @@ async def test_optional_verification_coverage_roundtrips_without_implying_execut
             "executionUnmatchedQueryHashCount": 2,
             "executionPendingDirectionCount": 1,
             "executionReceiptTransportReason": "RECEIPT_SUMMARIZED_SIZE_LIMIT",
+            "discoveredTopicCount": 1,
+            "evidenceBackedTopicCount": 0,
+            "evaluableFundDirectionCount": 0,
+            "qualifiedFormalDirectionCount": 0,
+            "validEventCount": 1,
+            "validUpcomingCount": 0,
+            "unresolvedReferenceCount": 1,
+            "formalEligibilityReasons": {"NO_FORMAL_PROPOSAL": 1},
+            "researchDeliveryStatus": "OBSERVATION_READ_ONLY",
+            "investmentQualificationStatus": "NO_QUALIFIED_OPPORTUNITIES",
         }
         value["coverage"].update(measured)
         await repository().save_topic_registry(conn, run_id, value, now)
@@ -102,6 +113,33 @@ async def test_optional_verification_coverage_roundtrips_without_implying_execut
         assert {key: page["coverage"][key] for key in measured} == measured
         assert page["coverage"]["searchExecutionVerified"] is False
         assert page["actionable"] is False
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("unknowns", {}), ("unknowns", ["x" * 301]), ("followUp", ["x"] * 9),
+    ("evidenceCoverageScore", 101), ("evidenceCoverageScore", True),
+    ("insightCategory", "TRADE_ELIGIBLE"), ("plans", []),
+])
+async def test_database_rejects_unbounded_insight_metadata_and_rolls_back_snapshot(field, bad):
+    async with fixture() as (conn, run_id, now, *_):
+        value = registry(run_id, 1)
+        value["validatedAt"] = now.isoformat()
+        projected = repository().prepare_topic_registry(value, run_id, now)
+        projected["items"][0][field] = bad
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        with pytest.raises(asyncpg.CheckViolationError):
+            async with conn.transaction():
+                await conn.fetchval(
+                    "SELECT research.save_topic_registry($1,$2::jsonb)",
+                    run_id, json.dumps(projected, ensure_ascii=False),
+                )
+        await conn.execute("RESET ROLE")
+        assert await conn.fetchval(
+            "SELECT count(*) FROM research.research_topic_snapshots WHERE run_id=$1", run_id,
+        ) == 0
+        assert await conn.fetchval(
+            "SELECT status FROM research.daily_research_results WHERE run_id=$1", run_id,
+        ) == "FAILED"
 
 
 async def test_topics_keep_original_initial_and_run_result_and_reject_snapshot_overwrite():

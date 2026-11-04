@@ -307,7 +307,7 @@ def _projection(report):
     """A closed observation DTO, deliberately excluding plans and trade origins."""
     output = _empty()
     fields = {
-        "sources": ("id", "title", "url", "quote", "publishedDate", "verification"),
+        "sources": ("id", "title", "url", "quote", "publishedDate", "publishedAt", "retrievedAt", "verification"),
         "industryCycleReviews": (
             "industry",
             "stage",
@@ -342,6 +342,13 @@ def _projection(report):
             "importance",
             "sourceIds",
             "affectedDirectionIds",
+            "relatedTopicKeys",
+            "relatedFormalDirectionKeys",
+            "relatedMacroConcepts",
+            "candidateConceptLabels",
+            "referenceResolution",
+            "channels",
+            "scenarios",
             "watchFor",
             "unknowns",
             "factVerification",
@@ -350,10 +357,16 @@ def _projection(report):
             "id",
             "title",
             "phase",
+            "importance",
             "scheduledDate",
             "scheduledAt",
             "sourceIds",
             "affectedDirectionIds",
+            "relatedTopicKeys",
+            "relatedFormalDirectionKeys",
+            "relatedMacroConcepts",
+            "candidateConceptLabels",
+            "referenceResolution",
             "watchFor",
         ),
     }
@@ -623,6 +636,8 @@ def validate_report_outcome(
         "coverage": [],
         "energy": [],
         "actionablePlans": [],
+        "topicCatalog": [row for row in parsed.get("topicCatalog", []) if isinstance(row, dict)]
+        if isinstance(parsed.get("topicCatalog", []), list) else [],
         **_empty(),
     }
     # Header failures remain explicit; neutral probe metadata cannot publish.
@@ -955,7 +970,14 @@ def validate_report_outcome(
                     "ACCEPTANCE_SOURCE_DEPENDENCY_INVALID",
                     deps=deps,
                 )
-            missing = set(row["affectedDirectionIds"]) - known_directions
+            if strict.is_v2(packet):
+                from backend.macro.research_event_links import resolved_formal_dependencies
+
+                missing = resolved_formal_dependencies(
+                    row, [direction["key"] for _, direction in shaped["valueDirections"]]
+                ) - valid_keys
+            else:
+                missing = set(row["affectedDirectionIds"]) - known_directions
             if missing:
                 add(
                     kind,

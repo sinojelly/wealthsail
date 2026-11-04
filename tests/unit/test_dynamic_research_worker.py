@@ -99,3 +99,45 @@ async def test_oversize_discovery_prompt_never_dispatches_or_consumes_slot(monke
     assert error.value.rule_id == "RESEARCH_INPUT_BUDGET_EXCEEDED"
     assert not state["consumed"]
     mod.run_codex_research.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zero_formal_delivers_news_topics_with_one_model_and_original_usage(monkeypatch):
+    from backend.integrations.codex_research import ResearchResult
+    from tests.unit.test_research_independent_contracts import combined_case, RUN
+
+    mod, state = boundary(monkeypatch)
+    original_claim = mod.claim_daily_run
+
+    async def claim(*args, **kwargs):
+        value = await original_claim(*args, **kwargs)
+        return {**value, "run_id": RUN} if value else None
+
+    monkeypatch.setattr(mod, "claim_daily_run", claim)
+    packet, raw, checks = combined_case()
+    original = deepcopy((packet, raw, checks))
+    receipt = checks.pop("__wealthsail_execution_v1")["receipt"]
+    monkeypatch.setattr(mod, "now_shanghai", lambda: NOW)
+    mod.run_codex_research.side_effect = None
+    mod.run_codex_research.return_value = ResearchResult(
+        raw, usage={"prompt_tokens": 5000, "cached_input_tokens": 4000, "completion_tokens": 300},
+        execution_receipt=receipt,
+    )
+    mod.verify_research_sources.side_effect = None
+    mod.verify_research_sources.return_value = checks
+    result = await mod._execute_daily_research(object(), settings(), NOW, packet=packet)
+    assert result["status"] == "READY"
+    mod.run_codex_research.assert_awaited_once()
+    mod.verify_research_sources.assert_awaited_once()
+    terminal = state["terminal"][0]["payload"]
+    assert terminal["valueDirections"] == [] and terminal["actionablePlans"] == []
+    assert len(terminal["events"]) == 6 and len(terminal["upcoming"]) == 3
+    queued = mod.archive_repository.enqueue_research_archive.await_args
+    coverage = queued.kwargs["topic_registry"]["coverage"]
+    assert coverage["discoveredTopicCount"] == 64
+    assert coverage["executionMatchedTaskCount"] == 50
+    assert coverage["researchDeliveryStatus"] == "VALIDATED_READ_ONLY"
+    assert coverage["qualifiedFormalDirectionCount"] == 0
+    assert queued.args[6]["researchWorkload"]["inputTokens"] == 5000
+    assert queued.args[6]["researchWorkload"]["cachedInputTokens"] == 4000
+    assert state["artifacts"][2] == original[1]

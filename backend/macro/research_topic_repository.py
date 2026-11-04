@@ -169,6 +169,18 @@ def prepare_topic_registry(value, run_id, validated_at):
             },
             "investmentEligible": eligible,
         }
+        for field in ("unknowns", "followUp"):
+            if field in row:
+                item[field] = _texts(row[field], 8, 300)
+        if "insightCategory" in row:
+            if row["insightCategory"] not in {"DYNAMIC", "INDUSTRY", "MULTI_SCOPE"}:
+                _invalid()
+            item["insightCategory"] = row["insightCategory"]
+        if "evidenceCoverageScore" in row:
+            score = row["evidenceCoverageScore"]
+            if type(score) is not int or not 0 <= score <= 100:
+                _invalid()
+            item["evidenceCoverageScore"] = score
         proposals = match.get("proposedScopes", [])
         if not isinstance(proposals, list) or len(proposals) > 8:
             _invalid()
@@ -231,9 +243,34 @@ def prepare_topic_registry(value, run_id, validated_at):
         "executionPlannedTaskCount",
         "executionMatchedTaskCount",
         "executionPendingDirectionCount",
+        "discoveredTopicCount",
+        "evidenceBackedTopicCount",
+        "evaluableFundDirectionCount",
+        "qualifiedFormalDirectionCount",
+        "validEventCount",
+        "validUpcomingCount",
+        "unresolvedReferenceCount",
     ):
         if key in coverage:
             if type(coverage[key]) is not int or not 0 <= coverage[key] <= 10000:
+                _invalid()
+            safe_coverage[key] = coverage[key]
+    if "formalEligibilityReasons" in coverage:
+        from backend.macro.research_topics import FORMAL_ELIGIBILITY_REASONS
+
+        reasons = coverage["formalEligibilityReasons"]
+        if not isinstance(reasons, dict) or any(
+            key not in FORMAL_ELIGIBILITY_REASONS or type(count) is not int or not 0 <= count <= 10000
+            for key, count in reasons.items()
+        ):
+            _invalid()
+        safe_coverage["formalEligibilityReasons"] = dict(reasons)
+    for key, allowed in (
+        ("researchDeliveryStatus", {"VALIDATED_READ_ONLY", "OBSERVATION_READ_ONLY", "UNAVAILABLE"}),
+        ("investmentQualificationStatus", {"QUALIFIED_CANDIDATES", "NO_QUALIFIED_OPPORTUNITIES", "BLOCKED"}),
+    ):
+        if key in coverage:
+            if not isinstance(coverage[key], str) or coverage[key] not in allowed:
                 _invalid()
             safe_coverage[key] = coverage[key]
     for key in ("executionObservedQueryCount", "executionUnmatchedQueryHashCount"):
