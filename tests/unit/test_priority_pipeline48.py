@@ -113,7 +113,8 @@ async def test_model_packet_keeps_identical_price_anchors_and_report_is_scored_a
         {"industry": "SEMICONDUCTOR_AI", "sourceIds": [], "riskChecks": risk_checks}
     ]
     from tests.unit.test_research_cost_review75 import executed_checks
-    result = validate_report(raw, packet, executed_checks(packet, {}), completed_at=NOW)
+    from tests.unit.test_research_cost_review75 import RUN
+    result = validate_report(raw, packet, executed_checks(packet, {}), completed_at=NOW, research_id=RUN)
     actual = result["valueDirections"][0]["plans"][0]
     assert actual["currentPrice"] == anchor["currentPrice"]
     assert actual["tracks"][0]["entryZoneMin"] == anchor["tracks"][0]["entryZoneMin"]

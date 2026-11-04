@@ -489,8 +489,17 @@ def validate_report_outcome(
                     rule_id="ACCEPTANCE_UNSAFE_SOURCE",
                 )
     validator = _strict_validator or strict.validate_report
+    # Legacy injected validators predate the identity keyword. V2 must always
+    # receive caller context; its expected run never comes from the receipt.
+    identity_context = (
+        {"research_id": research_id}
+        if _strict_validator is None or strict.is_v2(packet)
+        else {}
+    )
     try:
-        formal = validator(raw, packet, source_checks, completed_at=now)
+        formal = validator(
+            raw, packet, source_checks, completed_at=now, **identity_context
+        )
     except strict.ResearchValidationError as error:
         first_error = error
     else:
@@ -641,6 +650,7 @@ def validate_report_outcome(
             packet,
             source_checks,
             completed_at=now,
+            research_id=research_id,
             _require_candidate_coverage=False,
         )
 

@@ -116,6 +116,9 @@ TOPIC_MESSAGES = {
     "FORMAL_DIRECTION_PENDING": "整个方向已转为待审观察，相关计划未获投资许可。",
     "DEPENDENCY_REVIEW_REQUIRED": "关联事实或风险仍待核实，阻止自动正式发布。",
     "REGISTRY_OUTPUT_LIMIT": "主题目录超过保存预算，须查看原始材料，未静默截取主题。",
+    "EXECUTION_UNMATCHED": "已观测到未对应本批预设查询的搜索，不能推断其行业归属或关闭待审风险任务；已匹配的核查保持有效。",
+    "RECEIPT_SUMMARIZED_SIZE_LIMIT": "远程响应体积受限，执行回执仅保留计数摘要；原研究正文保留，未获证明的任务仍待审。",
+    "RECEIPT_OMITTED_SIZE_LIMIT": "远程响应体积受限，执行回执已省略；原研究正文保留，不能把无回执视为未执行或已完成审核。",
 }
 # Only reviewed exact names belong here. Related/composite terms are not aliases.
 STRICT_ALIASES = {

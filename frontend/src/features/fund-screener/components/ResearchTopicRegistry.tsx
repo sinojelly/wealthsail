@@ -320,6 +320,20 @@ function RegistryData({
 function Coverage({ data }: { data: TopicRegistryPage }) {
   const coverage = data.coverage;
   const unavailable = "旧版未提供，不可推断";
+  const matchStatus = coverage.executionMatchStatus
+    ? {
+        EXECUTION_UNMATCHED: "存在尚未匹配的执行事件",
+        EXECUTION_MATCHED: "执行事件与计划任务已匹配",
+        EXECUTION_NOT_OBSERVED: "尚未观测到执行事件",
+        EXECUTION_UNVERIFIED: "执行凭证尚未核验",
+      }[coverage.executionMatchStatus]
+    : unavailable;
+  const transportReason = coverage.executionReceiptTransportReason
+    ? {
+        RECEIPT_SUMMARIZED_SIZE_LIMIT: "执行凭证因大小限制仅保留摘要",
+        RECEIPT_OMITTED_SIZE_LIMIT: "执行凭证因大小限制已省略",
+      }[coverage.executionReceiptTransportReason]
+    : undefined;
   return (
     <div aria-label="主题登记与审核覆盖">
       <p>本批目录登记{coverage.totalCount}项（发现与正式方向按key汇总）</p>
@@ -390,7 +404,31 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
         {coverage.maxScopes ?? 10}个、五类查询计划{coverage.maxQueries ?? 50}
         条、来源{coverage.maxSources ?? 24}项。
       </p>
-      <p>独立搜索执行凭证尚未验证；五类核查结构不代表实际搜索完成。</p>
+      <p>
+        {coverage.searchExecutionVerified === true
+          ? "CLI执行事件已核验；仅覆盖已记录的执行事件，不代表检索穷尽或不存在风险。"
+          : coverage.searchExecutionVerified === false
+            ? "独立搜索执行凭证尚未验证；五类核查结构不代表实际搜索完成。"
+            : "搜索执行核验状态：旧版未提供，不可推断；五类核查结构不代表实际搜索完成。"}
+      </p>
+      <p>执行任务匹配：{matchStatus}</p>
+      <p>
+        可信匹配任务：{coverage.executionMatchedTaskCount ?? unavailable}
+        {" · "}计划任务：{coverage.executionPlannedTaskCount ?? unavailable}
+      </p>
+      <p>
+        观测查询：{coverage.executionObservedQueryCount ?? "未知"}
+        {" · "}未匹配查询哈希：
+        {coverage.executionUnmatchedQueryHashCount ?? "未知"}
+      </p>
+      <p>
+        执行凭证缺口待审方向：
+        {coverage.executionPendingDirectionCount ?? unavailable}
+      </p>
+      <p>
+        未匹配查询可能包含宏观等检索，不能自动归入某个行业，也不能据此判断该行业未搜索。
+      </p>
+      {transportReason && <p>{transportReason}；相关观察保留，未凭此放行。</p>}
       <p>
         {coverage.maxModelCalls != null
           ? `模型调用预算上限：${coverage.maxModelCalls}次；`

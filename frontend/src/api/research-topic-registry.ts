@@ -56,7 +56,19 @@ export interface TopicRegistryPage {
     plannedScopeCount: number;
     reviewedScopeCount: number;
     pendingScopeCount: number;
-    searchExecutionVerified: false;
+    searchExecutionVerified?: boolean;
+    executionMatchStatus?:
+      | "EXECUTION_UNMATCHED"
+      | "EXECUTION_MATCHED"
+      | "EXECUTION_NOT_OBSERVED"
+      | "EXECUTION_UNVERIFIED";
+    executionPlannedTaskCount?: number;
+    executionMatchedTaskCount?: number;
+    executionObservedQueryCount?: number | null;
+    executionUnmatchedQueryHashCount?: number | null;
+    executionPendingDirectionCount?: number;
+    executionReceiptTransportReason?:
+      "RECEIPT_SUMMARIZED_SIZE_LIMIT" | "RECEIPT_OMITTED_SIZE_LIMIT";
     structureCompleteScopeCount?: number;
     executionVerifiedScopeCount?: number;
     evidenceVerifiedCheckCount?: number;

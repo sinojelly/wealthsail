@@ -19,7 +19,11 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from backend.integrations import codex_research
-from backend.integrations.research_execution import sanitize_execution_receipt
+from backend.integrations.research_execution import (
+    EXECUTION_TRANSPORT_HEADER,
+    sanitize_execution_receipt,
+    sanitize_execution_transport_reason,
+)
 
 _MAX_INPUT_BYTES = 2 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -37,6 +41,14 @@ class CodexNotConfiguredError(CodexClientError):
 
 class CodexCallError(CodexClientError):
     pass
+
+
+class _ResearchEnvelope(dict):
+    """Retain bounded header metadata without modifying the JSON envelope."""
+
+    def __init__(self, payload, reason):
+        super().__init__(payload)
+        self.execution_receipt_transport_reason = reason
 
 
 def is_configured(settings) -> bool:
@@ -102,6 +114,12 @@ def _failure_metadata(error, source, *, capture_raw=False):
     if uncertain:
         error.inference_uncertain = True
     if capture_raw:
+        reason = sanitize_execution_transport_reason(
+            source.get("executionReceiptTransportReason") if isinstance(source, dict)
+            else getattr(source, "execution_receipt_transport_reason", None)
+        )
+        if reason is not None:
+            error.execution_receipt_transport_reason = reason
         receipt = sanitize_execution_receipt(
             source.get("executionReceipt") if isinstance(source, dict)
             else getattr(source, "execution_receipt", None)
@@ -162,6 +180,7 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         if size > _MAX_OUTPUT_BYTES:
                             raise CodexCallError("Codex output exceeds the configured limit")
                         chunks.append(chunk)
+                    transport_reason = sanitize_execution_transport_reason(response.headers.get(EXECUTION_TRANSPORT_HEADER)) if endpoint == "/v1/research" else None
                     if response.status_code != 200:
                         try:
                             body = json.loads(b"".join(chunks))
@@ -170,11 +189,14 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         error = TimeoutError("Codex research outcome is uncertain") if uncertain and response.status_code == 504 else CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
                         if response.status_code == 504:
                             error.inference_uncertain = True
-                        raise _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research")
+                        error = _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research")
+                        if transport_reason is not None:
+                            error.execution_receipt_transport_reason = transport_reason
+                        raise error
                     result = json.loads(b"".join(chunks))
                     if not isinstance(result, dict):
                         raise CodexCallError("Codex runner returned an invalid response")
-                    return result
+                    return _ResearchEnvelope(result, transport_reason) if transport_reason is not None else result
     except CodexClientError:
         raise
     except (httpx.ReadError, httpx.WriteError, httpx.ReadTimeout,
@@ -433,8 +455,8 @@ async def _research(settings, prompt, schema, *, timeout=900, model=None) -> dic
             timeout=timeout + 30, uncertain=True,
         )
         if set(result) in ({"report", "usage", "model"}, {"report", "usage", "model", "executionReceipt"}) and isinstance(result.get("report"), dict):
-            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]), execution_receipt=result.get("executionReceipt"))
-        return codex_research.ResearchResult(result, model=model)
+            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]), execution_receipt=result.get("executionReceipt"), execution_receipt_transport_reason=getattr(result, "execution_receipt_transport_reason", None))
+        return codex_research.ResearchResult(result, model=model, execution_receipt_transport_reason=getattr(result, "execution_receipt_transport_reason", None))
     path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
     executable = codex_research.resolve_codex_executable(path)
     if executable is None:

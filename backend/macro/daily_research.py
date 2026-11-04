@@ -1847,13 +1847,21 @@ def build_prompt(packet):
     )
 
 
-def validate_report(raw, packet, source_checks, *, completed_at):
+def validate_report(raw, packet, source_checks, *, completed_at, research_id=None):
     """Strict compatibility entry: every original publication rule still applies."""
-    return _validate_report_core(raw, packet, source_checks, completed_at=completed_at)
+    return _validate_report_core(
+        raw, packet, source_checks, completed_at=completed_at, research_id=research_id
+    )
 
 
 def _validate_report_core(
-    raw, packet, source_checks, *, completed_at, _require_candidate_coverage=True
+    raw,
+    packet,
+    source_checks,
+    *,
+    completed_at,
+    research_id=None,
+    _require_candidate_coverage=True,
 ):
     """Validate shape/references/times; checking a quote cannot certify inference."""
     completed_at = _now(completed_at)
@@ -2029,13 +2037,16 @@ def _validate_report_core(
         assurance = audit_assurance(
             {row["industry"]: row for row in industry_reviews},
             frozen_manifest(packet), source_checks, completed_at,
+            research_id=research_id,
         )
         audit_completed_scopes = {
             industry for industry, kinds in assurance["completedKinds"].items()
             if kinds == set(RISK_CHECKS)
         }
         manifest = frozen_manifest(packet)
-        executed = verified_tasks(source_checks, manifest, completed_at)
+        executed = verified_tasks(
+            source_checks, manifest, completed_at, research_id=research_id
+        )
         execution_scopes = {
             scope for scope in manifest["selectedScopes"]
             if all(

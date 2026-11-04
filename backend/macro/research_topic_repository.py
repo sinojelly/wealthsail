@@ -228,11 +228,33 @@ def prepare_topic_registry(value, run_id, validated_at):
         "executionVerifiedCheckCount",
         "strictDirectionCount",
         "autoPublishBlockerCount",
+        "executionPlannedTaskCount",
+        "executionMatchedTaskCount",
+        "executionPendingDirectionCount",
     ):
         if key in coverage:
             if type(coverage[key]) is not int or not 0 <= coverage[key] <= 10000:
                 _invalid()
             safe_coverage[key] = coverage[key]
+    for key in ("executionObservedQueryCount", "executionUnmatchedQueryHashCount"):
+        if key in coverage:
+            number = coverage[key]
+            if number is not None and (type(number) is not int or not 0 <= number <= 1_000_000):
+                _invalid()
+            safe_coverage[key] = number
+    if "executionMatchStatus" in coverage:
+        status = coverage["executionMatchStatus"]
+        if not isinstance(status, str) or status not in {
+            "EXECUTION_UNMATCHED", "EXECUTION_MATCHED", "EXECUTION_NOT_OBSERVED", "EXECUTION_UNVERIFIED",
+        }:
+            _invalid()
+        safe_coverage["executionMatchStatus"] = status
+    from backend.integrations.research_execution import sanitize_execution_transport_reason
+    if "executionReceiptTransportReason" in coverage:
+        reason = sanitize_execution_transport_reason(coverage["executionReceiptTransportReason"])
+        if reason is None:
+            _invalid()
+        safe_coverage["executionReceiptTransportReason"] = reason
     for key, maximum in (
         ("maxModelCalls", 1),
         ("additionalModelCalls", 0),

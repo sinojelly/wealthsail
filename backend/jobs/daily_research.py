@@ -999,6 +999,7 @@ async def _execute_daily_research(
     model_started, source_started = None, None
     model_ms, sources_ms = None, None
     execution_receipt, usage_observation = None, None
+    execution_transport_reason = None
 
     def confirmed_model_return():
         nonlocal model_returned
@@ -1048,6 +1049,7 @@ async def _execute_daily_research(
         model_returned = True
         model_ms = max(0, int((monotonic() - model_started) * 1000))
         execution_receipt = getattr(raw, "execution_receipt", None)
+        execution_transport_reason = getattr(raw, "execution_receipt_transport_reason", None)
         usage_observation = getattr(raw, "usage", None)
         write_research_audit(
             settings,
@@ -1069,7 +1071,10 @@ async def _execute_daily_research(
         if manifest := frozen_manifest(packet):
             from backend.macro.research_assurance import bind_execution
 
-            checks = bind_execution(checks, execution_receipt, manifest, run_id, validated_at)
+            checks = bind_execution(
+                checks, execution_receipt, manifest, run_id, validated_at,
+                transport_reason=execution_transport_reason,
+            )
         write_research_audit(
             settings,
             run_id,
@@ -1138,6 +1143,7 @@ async def _execute_daily_research(
             error = "ResearchValidationError"
             diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
+        execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
@@ -1154,12 +1160,14 @@ async def _execute_daily_research(
         )
         raise
     except TimeoutError as exc:
+        execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
         result["status"], error = "UNCERTAIN", "TimeoutError"
         diagnostics = _log_research_failure(exc, current_stage, run_id)
     except Exception as exc:  # noqa: BLE001
+        execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
@@ -1203,6 +1211,7 @@ async def _execute_daily_research(
         workload = measured_workload(
             len(prompt.encode("utf-8")), execution_receipt, usage_observation,
             model_ms=model_ms, sources_ms=sources_ms,
+            transport_reason=execution_transport_reason,
         )
         logger.info(
             "daily_research_workload run_id=%s prompt_bytes=%s model_ms=%s source_ms=%s search_queries=%s execution_coverage=%s",

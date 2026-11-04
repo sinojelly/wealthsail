@@ -14,6 +14,13 @@ MAX_RECEIPTS = 256
 MAX_ITEMS = 1024
 MAX_LINE_BYTES = 256 * 1024
 SOFT_QUERY_LIMIT = 50
+EXECUTION_TRANSPORT_HEADER = "X-WealthSail-Execution-Receipt-Reason"
+EXECUTION_TRANSPORT_REASONS = frozenset(
+    {
+        "RECEIPT_SUMMARIZED_SIZE_LIMIT",
+        "RECEIPT_OMITTED_SIZE_LIMIT",
+    }
+)
 _HASH = re.compile(r"[a-f0-9]{64}")
 _COUNTS = (
     "webToolCalls",
@@ -351,3 +358,67 @@ def executed_task_ids(receipt, manifest):
         and isinstance(task.get("query"), str)
         and _hash(task["query"]) in hashes
     }
+
+
+def sanitize_execution_transport_reason(value):
+    """Only fixed transport diagnostics may cross the internal boundary."""
+    return (
+        value
+        if isinstance(value, str) and value in EXECUTION_TRANSPORT_REASONS
+        else None
+    )
+
+
+def execution_match_stats(receipt, manifest):
+    """Describe exact-query association; this never grants an audit permission.
+
+    Hash counts are unique query hashes, while observedQueryCount retains the
+    actual query counter. Unmatched searches can include general macro research.
+    """
+    receipt = sanitize_execution_receipt(receipt)
+    output = {
+        "version": "research-execution-match-v1",
+        "classification": "EXECUTION_UNVERIFIED",
+        "plannedTaskCount": None,
+        "matchedTaskCount": 0,
+        "observedQueryCount": receipt["counts"]["searchQueries"] if receipt else None,
+        "matchedQueryHashCount": None,
+        "unmatchedQueryHashCount": None,
+    }
+    tasks = manifest.get("tasks") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(tasks, list)
+        or len(tasks) > 50
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("taskId"), str)
+            or not isinstance(row.get("query"), str)
+            for row in tasks
+        )
+        or len({row["taskId"] for row in tasks}) != len(tasks)
+    ):
+        return output
+    try:
+        planned_hashes = {_hash(row["query"]) for row in tasks}
+    except UnicodeError:
+        return output
+    output["plannedTaskCount"] = len(tasks)
+    if (
+        receipt is None
+        or receipt["coverage"] != "COMPLETE"
+        or not receipt["turnCompleted"]
+    ):
+        return output
+    observed_hashes = {row["queryHash"] for row in receipt["queryReceipts"]}
+    unmatched = observed_hashes - planned_hashes
+    output.update(
+        classification="EXECUTION_UNMATCHED"
+        if unmatched
+        else "EXECUTION_MATCHED"
+        if observed_hashes
+        else "EXECUTION_NOT_OBSERVED",
+        matchedTaskCount=len(executed_task_ids(receipt, manifest)),
+        matchedQueryHashCount=len(observed_hashes & planned_hashes),
+        unmatchedQueryHashCount=len(unmatched),
+    )
+    return output

@@ -154,6 +154,10 @@ def evaluate_research_batch(
         structured_reviews, manifest, checks, stamp, research_id=research_id
     )
     completed_kinds = assurance["completedKinds"]
+    if assurance["executionMatchStatus"] == "EXECUTION_UNMATCHED":
+        registry["issues"].append(_issue("EXECUTION_UNMATCHED"))
+    if assurance.get("executionReceiptTransportReason"):
+        registry["issues"].append(_issue(assurance["executionReceiptTransportReason"]))
     reviews = {
         industry
         for industry, kinds in completed_kinds.items()
@@ -406,7 +410,7 @@ def evaluate_research_batch(
     ):
         try:
             formal = (_strict_validator or validate_report)(
-                candidate, packet, checks, completed_at=stamp
+                candidate, packet, checks, completed_at=stamp, research_id=research_id
             )
         except ResearchValidationError:
             result["hardBlockers"].append(_block("STRICT_REVALIDATION_FAILED"))
@@ -675,6 +679,23 @@ def evaluate_research_batch(
         "additionalModelCalls": 0,
         **manifest["budget"],
     }
+    # This is an execution-gap count, not an attribution of unmatched queries.
+    registry["coverage"]["executionPendingDirectionCount"] = sum(
+        any(
+            check.get("status") == "NOT_FOUND"
+            and check["kind"] not in completed_kinds.get(industry, set())
+            for industry in (
+                direction_required.get(row["key"], set())
+                | {item for item in (
+                    row.get("reviewIndustryIds") if isinstance(row.get("reviewIndustryIds"), list) else []
+                ) if isinstance(item, str)}
+            )
+            for check in structured_reviews.get(industry, {}).get("riskChecks", [])
+        )
+        for row in directions
+        if isinstance(row, dict) and isinstance(row.get("key"), str)
+        and direction_states.get(row["key"]) == "FORMAL_DIRECTION_PENDING"
+    )
     if len(json.dumps(registry, ensure_ascii=False).encode()) > 1024 * 1024:
         registry["items"] = []
         registry["auditTasks"] = []

@@ -13,6 +13,7 @@ import tomllib
 from backend.integrations.research_execution import (
     ExecutionObserver,
     sanitize_execution_receipt,
+    sanitize_execution_transport_reason,
 )
 
 
@@ -108,7 +109,7 @@ def exec_usage(stdout):
     return usage, completed
 
 
-def with_telemetry(error, *, usage, model, inference_succeeded, execution_receipt=None):
+def with_telemetry(error, *, usage, model, inference_succeeded, execution_receipt=None, execution_receipt_transport_reason=None):
     error.usage = normalize_usage(usage)
     error.model = model or "codex"
     error.inference_succeeded = inference_succeeded
@@ -116,17 +117,21 @@ def with_telemetry(error, *, usage, model, inference_succeeded, execution_receip
         receipt = sanitize_execution_receipt(execution_receipt)
         if receipt is not None:
             error.execution_receipt = receipt
+    reason = sanitize_execution_transport_reason(execution_receipt_transport_reason)
+    if reason is not None:
+        error.execution_receipt_transport_reason = reason
     return error
 
 
 class ResearchResult(dict):
     """Keep provider metadata outside the report's strict business schema."""
 
-    def __init__(self, report, *, usage=None, model=None, execution_receipt=None):
+    def __init__(self, report, *, usage=None, model=None, execution_receipt=None, execution_receipt_transport_reason=None):
         super().__init__(report)
         self.usage = normalize_usage(usage)
         self.model = model or "codex"
         self.execution_receipt = sanitize_execution_receipt(execution_receipt)
+        self.execution_receipt_transport_reason = sanitize_execution_transport_reason(execution_receipt_transport_reason)
 
 
 _DISABLED_FEATURES = ("shell_tool", "apps", "plugins", "multi_agent")

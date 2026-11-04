@@ -580,7 +580,13 @@ def repair_report(raw, packet, source_checks, *, research_id, validated_at):
         candidate[component] = retained
     result["candidateRaw"] = candidate
     try:
-        formal = validate_report(candidate, packet, source_checks, completed_at=stamp)
+        formal = validate_report(
+            candidate,
+            packet,
+            source_checks,
+            completed_at=stamp,
+            research_id=research_id,
+        )
     except ResearchValidationError:
         result["hardBlockers"].append(_block("STRICT_REVALIDATION_FAILED"))
         return finish()

@@ -85,6 +85,13 @@ async def test_optional_verification_coverage_roundtrips_without_implying_execut
             "autoPublishBlockerCount": 2,
             "strictRevalidated": True,
             "autoPublishAllowed": False,
+            "executionMatchStatus": "EXECUTION_UNMATCHED",
+            "executionPlannedTaskCount": 50,
+            "executionMatchedTaskCount": 49,
+            "executionObservedQueryCount": 51,
+            "executionUnmatchedQueryHashCount": 2,
+            "executionPendingDirectionCount": 1,
+            "executionReceiptTransportReason": "RECEIPT_SUMMARIZED_SIZE_LIMIT",
         }
         value["coverage"].update(measured)
         await repository().save_topic_registry(conn, run_id, value, now)

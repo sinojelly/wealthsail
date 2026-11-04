@@ -181,7 +181,7 @@ def test_v1_coverage_gate_remains_strict_while_v2_tracks_missing_batch_reviews()
         validate_report(raw, packet, checks, completed_at=NOW)
     frozen = topics().freeze_discovery_packet(packet, NOW)
     from tests.unit.test_research_cost_review75 import executed_checks
-    assert validate_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW)
+    assert validate_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW, research_id=RUN)
 
 
 def test_one_bad_topic_does_not_destroy_independent_formal_projection():

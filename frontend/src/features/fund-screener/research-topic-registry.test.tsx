@@ -255,6 +255,131 @@ it("separates structural completeness from independently executed and evidence-v
   expect(screen.getByText(/结构齐全不等于执行或证据核验/)).toBeVisible();
   expect(screen.queryByText(/实际审核10/)).not.toBeInTheDocument();
 });
+it("shows verified CLI execution events without claiming exhaustive or risk-free research", async () => {
+  const data = page();
+  Object.assign(data.coverage, { searchExecutionVerified: true });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(await screen.findByText(/CLI执行事件已核验/)).toBeVisible();
+  expect(screen.getByText(/不代表检索穷尽或不存在风险/)).toBeVisible();
+  expect(
+    screen.queryByText(/独立搜索执行凭证尚未验证/),
+  ).not.toBeInTheDocument();
+  expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
+});
+it("keeps explicitly unverified execution distinct from a legacy missing field", async () => {
+  const first = renderWithSession(
+    <ResearchTopicRegistry runId={run} state="READY" />,
+  );
+  expect(await screen.findByText(/独立搜索执行凭证尚未验证/)).toBeVisible();
+  expect(screen.queryByText(/CLI执行事件已核验/)).not.toBeInTheDocument();
+  first.unmount();
+  const legacy = page();
+  Reflect.deleteProperty(legacy.coverage, "searchExecutionVerified");
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(legacy);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(
+    await screen.findByText(/搜索执行核验状态：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.queryByText(/独立搜索执行凭证尚未验证/),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/CLI执行事件已核验/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/执行凭证已核验检查：0/)).not.toBeInTheDocument();
+});
+it("reports trusted task matching and unattributed queries without claiming an industry was not searched", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    executionMatchStatus: "EXECUTION_UNMATCHED",
+    executionPlannedTaskCount: 15,
+    executionMatchedTaskCount: 3,
+    executionObservedQueryCount: 9,
+    executionUnmatchedQueryHashCount: 6,
+    executionPendingDirectionCount: 2,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(
+    await screen.findByText(/执行任务匹配：存在尚未匹配的执行事件/),
+  ).toBeVisible();
+  expect(screen.getByText(/可信匹配任务：3.*计划任务：15/)).toBeVisible();
+  expect(screen.getByText(/观测查询：9.*未匹配查询哈希：6/)).toBeVisible();
+  expect(screen.getByText(/执行凭证缺口待审方向：2/)).toBeVisible();
+  expect(
+    screen.getByText(/未匹配查询可能包含宏观等检索，不能自动归入某个行业/),
+  ).toBeVisible();
+  expect(screen.getByText(/不能据此判断该行业未搜索/)).toBeVisible();
+  expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
+  expect(
+    screen.queryByRole("button", { name: /执行研究|买入|跟踪|重跑/ }),
+  ).not.toBeInTheDocument();
+});
+it.each([
+  ["EXECUTION_MATCHED", "执行事件与计划任务已匹配"],
+  ["EXECUTION_NOT_OBSERVED", "尚未观测到执行事件"],
+  ["EXECUTION_UNVERIFIED", "执行凭证尚未核验"],
+])(
+  "labels saved matching status %s without inferring missing task counts",
+  async (executionMatchStatus, label) => {
+    const data = page();
+    Object.assign(data.coverage, { executionMatchStatus });
+    vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+    renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+    expect(await screen.findByText(`执行任务匹配：${label}`)).toBeVisible();
+    expect(
+      screen.getByText(/可信匹配任务：旧版未提供，不可推断/),
+    ).toBeVisible();
+  },
+);
+it("keeps missing and null execution match counts unknown rather than deriving zero from review counts", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    executionObservedQueryCount: null,
+    executionUnmatchedQueryHashCount: null,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
+  expect(
+    await screen.findByText(/执行任务匹配：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(
+      /可信匹配任务：旧版未提供，不可推断.*计划任务：旧版未提供，不可推断/,
+    ),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/观测查询：未知.*未匹配查询哈希：未知/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/执行凭证缺口待审方向：旧版未提供，不可推断/),
+  ).toBeVisible();
+  expect(
+    screen.queryByText(
+      /可信匹配任务：0|未匹配查询哈希：0|执行凭证缺口待审方向：0/,
+    ),
+  ).not.toBeInTheDocument();
+});
+it.each([
+  ["RECEIPT_SUMMARIZED_SIZE_LIMIT", "执行凭证因大小限制仅保留摘要"],
+  ["RECEIPT_OMITTED_SIZE_LIMIT", "执行凭证因大小限制已省略"],
+])(
+  "explains bounded receipt transport %s without releasing saved pending directions",
+  async (executionReceiptTransportReason, label) => {
+    const data = page();
+    Object.assign(data.coverage, {
+      executionReceiptTransportReason,
+      autoPublishAllowed: false,
+    });
+    vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+    renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+    expect(await screen.findByText(new RegExp(label))).toBeVisible();
+    expect(screen.getByText(/相关观察保留，未凭此放行/)).toBeVisible();
+    expect(screen.getByText("自动发布暂缓")).toBeVisible();
+    expect(screen.getByText("动态主题0")).toBeVisible();
+    expect(screen.queryByText("允许自动发布")).not.toBeInTheDocument();
+    expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
+  },
+);
 it("shows passed strict calculation separately from withheld auto-publication without granting new actions", async () => {
   const data = page();
   Object.assign(data.coverage, {
