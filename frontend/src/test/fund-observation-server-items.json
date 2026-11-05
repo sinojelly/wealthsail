@@ -1,0 +1,244 @@
+[
+  {
+    "fundCode": "003017",
+    "name": "广发中证军工ETF联接A",
+    "subjectKind": "nav",
+    "subjectId": "003017",
+    "identityVerified": true,
+    "identityProof": {
+      "scope": "FROZEN_SERVER_CATALOG",
+      "sourceUri": "https://gfwx.gffunds.com.cn/funds/?fundcode=003017",
+      "verifiedAt": "2026-10-19T00:00:00+08:00"
+    },
+    "observationStatus": "OBSERVABLE",
+    "confirmedNav": {
+      "value": "1.0293",
+      "asOf": "2026-11-05",
+      "retrievedAt": "2026-11-05T23:42:27.037051+08:00",
+      "sourceUri": "https://fund.eastmoney.com/003017.html"
+    },
+    "referenceTracks": [
+      {
+        "track": "LEFT_VALUE",
+        "priceState": "READY",
+        "technicalState": "CANDIDATE",
+        "entryZoneMin": "0.9822",
+        "entryZoneMax": "1.0336",
+        "stopLossPrice": "0.9404",
+        "takeProfitT1": "1.3165",
+        "takeProfitT2": "1.4629",
+        "distanceToEntryPct": 0,
+        "inEntryZone": true,
+        "metrics": {
+          "rsi14": 45.414242720392984,
+          "ma20": 1.033555,
+          "ma60": 1.0931283333333333,
+          "ma200": 1.245817,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "drawdown60d": 11.267241379310345
+        },
+        "observationStatus": "TECHNICAL_IN_ZONE",
+        "missingEvidence": [],
+        "entryBlocked": false,
+        "entryBlockReason": null,
+        "entryStatus": null,
+        "inSellZone": false,
+        "entryStatusTone": null
+      },
+      {
+        "track": "RIGHT_TREND",
+        "priceState": "READY",
+        "technicalState": "WATCH",
+        "entryZoneMin": "0.9822",
+        "entryZoneMax": "1.0336",
+        "stopLossPrice": "0.9404",
+        "takeProfitT1": "1.3165",
+        "takeProfitT2": "1.4629",
+        "distanceToEntryPct": 0,
+        "inEntryZone": true,
+        "metrics": {
+          "rsi14": 45.414242720392984,
+          "ma20": 1.033555,
+          "ma60": 1.0931283333333333,
+          "ma200": 1.245817,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "drawdown60d": 11.267241379310345
+        },
+        "observationStatus": "WATCH",
+        "missingEvidence": [],
+        "entryBlocked": false,
+        "entryBlockReason": null,
+        "entryStatus": null,
+        "inSellZone": false,
+        "entryStatusTone": null
+      }
+    ],
+    "subscription": {
+      "status": "UNKNOWN",
+      "restricted": null,
+      "label": null,
+      "dailyLimitCny": null,
+      "retrievedAt": null
+    },
+    "industry": {
+      "industryIds": ["DEFENCE"],
+      "unresolvedSector": null,
+      "auditStatus": "NOT_ALLOCATED",
+      "missingChecks": [
+        "FINANCING_COOLING",
+        "LAYOFFS_CLOSURES",
+        "ORDER_CUTS",
+        "OVERCAPACITY_PRICE_WAR",
+        "PRODUCTION_DELAY"
+      ]
+    },
+    "risk": {
+      "current": [],
+      "historical": []
+    },
+    "topicAssociations": [
+      {
+        "topicId": "topic:d16fd007f9e1c74f6d6a013667e40c81",
+        "key": "satellite-defense-delivery",
+        "title": "航天军工：低位技术等待独立交付证据",
+        "relation": "DECLARED_RELATED_ONLY",
+        "sourceIds": ["s15", "s16"]
+      }
+    ],
+    "missingEvidence": [
+      "SUBSCRIPTION_STATUS_UNKNOWN",
+      "INDUSTRY_AUDIT_PENDING_PROOF"
+    ],
+    "actionable": false,
+    "investmentEligible": false,
+    "relativeStrength": {
+      "state": "INSUFFICIENT",
+      "benchmark": "沪深300",
+      "asOf": "2026-11-05",
+      "excessReturn20d": null,
+      "excessReturn60d": null,
+      "excessReturnUnit": "PERCENTAGE_POINTS",
+      "drawdown60d": 11.267241379310345,
+      "drawdownUnit": "PERCENT",
+      "breakdownDate": null,
+      "weakening": null,
+      "lowerHighs": false,
+      "trendWeakening": null,
+      "consecutiveWeakDays": null,
+      "sampleCount": 486,
+      "benchmarkSampleCount": 600,
+      "reasons": [],
+      "missingEvidence": ["基金与沪深300最新交易日期不同，未对旧基准补值。"]
+    }
+  },
+  {
+    "fundCode": "008975",
+    "name": "富国中证消费50ETF联接A",
+    "subjectKind": "nav",
+    "subjectId": "008975",
+    "identityVerified": true,
+    "identityProof": {
+      "scope": "FROZEN_SERVER_CATALOG",
+      "sourceUri": null,
+      "verifiedAt": null
+    },
+    "observationStatus": "PRICE_INCOMPLETE",
+    "confirmedNav": {
+      "value": "1.2151",
+      "asOf": "2026-11-05",
+      "retrievedAt": "2026-11-05T23:42:25.68794+08:00",
+      "sourceUri": "https://fund.eastmoney.com/008975.html"
+    },
+    "referenceTracks": [
+      {
+        "track": "LEFT_VALUE",
+        "priceState": "PARTIAL",
+        "technicalState": "INSUFFICIENT",
+        "entryZoneMin": null,
+        "entryZoneMax": null,
+        "stopLossPrice": null,
+        "takeProfitT1": null,
+        "takeProfitT2": null,
+        "distanceToEntryPct": null,
+        "inEntryZone": null,
+        "metrics": {
+          "rsi14": null,
+          "ma20": null,
+          "ma60": null,
+          "ma200": null,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "drawdown60d": null
+        },
+        "observationStatus": "UNAVAILABLE",
+        "missingEvidence": ["REFERENCE_TRACK_UNAVAILABLE"],
+        "entryBlocked": false,
+        "entryBlockReason": null,
+        "entryStatus": null,
+        "inSellZone": false,
+        "entryStatusTone": null
+      },
+      {
+        "track": "RIGHT_TREND",
+        "priceState": "PARTIAL",
+        "technicalState": "WATCH",
+        "entryZoneMin": null,
+        "entryZoneMax": null,
+        "stopLossPrice": null,
+        "takeProfitT1": null,
+        "takeProfitT2": null,
+        "distanceToEntryPct": null,
+        "inEntryZone": null,
+        "metrics": {
+          "rsi14": null,
+          "ma20": null,
+          "ma60": null,
+          "ma200": null,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "drawdown60d": null
+        },
+        "observationStatus": "UNAVAILABLE",
+        "missingEvidence": ["REFERENCE_TRACK_UNAVAILABLE"],
+        "entryBlocked": false,
+        "entryBlockReason": null,
+        "entryStatus": "🚀 高于买区 5.91%·等待回落买区",
+        "inSellZone": false,
+        "entryStatusTone": "amber"
+      }
+    ],
+    "subscription": {
+      "status": "UNKNOWN",
+      "restricted": null,
+      "label": null,
+      "dailyLimitCny": null,
+      "retrievedAt": null
+    },
+    "industry": {
+      "industryIds": [],
+      "unresolvedSector": null,
+      "auditStatus": "NOT_ALLOCATED",
+      "missingChecks": [
+        "FINANCING_COOLING",
+        "LAYOFFS_CLOSURES",
+        "ORDER_CUTS",
+        "OVERCAPACITY_PRICE_WAR",
+        "PRODUCTION_DELAY"
+      ]
+    },
+    "risk": {
+      "current": [],
+      "historical": []
+    },
+    "topicAssociations": [],
+    "missingEvidence": [
+      "COMPLETE_REFERENCE_PRICE_UNAVAILABLE",
+      "SUBSCRIPTION_STATUS_UNKNOWN",
+      "INDUSTRY_AUDIT_PENDING_PROOF"
+    ],
+    "actionable": false,
+    "investmentEligible": false
+  }
+]

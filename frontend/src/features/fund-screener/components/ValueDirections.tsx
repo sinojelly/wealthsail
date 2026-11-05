@@ -385,13 +385,27 @@ export default function ValueDirections({
   data,
   onTrack,
   onViewMacro,
+  presentation = "DEFAULT",
 }: {
   data?: DailyResearch | null;
   onTrack?: (input: DirectionTrackInput) => Promise<void>;
   onViewMacro?: () => void;
+  presentation?: "DEFAULT" | "FORMAL";
 }) {
   const report = data?.report;
-  if (!report) return null;
+  if (!report)
+    return data ? (
+      <section
+        className="op-value-directions"
+        aria-label="今日价值方向与买卖计划"
+      >
+        <h3>严格正式计划</h3>
+        <p>暂无通过完整风控的正式计划</p>
+        <small>
+          已保存的 AI 主题与基金观察仍可独立阅读；观察记录不能替代正式投资资格。
+        </small>
+      </section>
+    ) : null;
   const directions = report.valueDirections
     ? [...report.valueDirections].sort((a, b) =>
         comparePriority(
@@ -408,9 +422,13 @@ export default function ValueDirections({
     >
       <header>
         <h3>
-          {data?.state === "READY"
-            ? "今日价值方向与买卖计划"
-            : "历史价值方向与买卖计划"}
+          {presentation === "FORMAL"
+            ? data?.state === "READY"
+              ? "严格正式计划"
+              : "历史严格正式计划"
+            : data?.state === "READY"
+              ? "今日价值方向与买卖计划"
+              : "历史价值方向与买卖计划"}
         </h3>
         <small>
           {researchScheduleLabel(data?.schedule)} ·
@@ -530,7 +548,7 @@ export default function ValueDirections({
           </section>
         ))
       ) : directions ? (
-        <p>当前证据尚未形成有充分依据的价值方向。</p>
+        <p>暂无通过完整风控的正式计划</p>
       ) : (
         <>
           <p>

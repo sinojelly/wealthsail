@@ -745,6 +745,121 @@ export interface EconomicResearchDelivery {
   issueListComplete?: boolean;
   actionable: false;
 }
+export interface FundObservationTrack {
+  track: PlanTrack;
+  priceState: string;
+  technicalState: string;
+  entryZoneMin: PlanPrice;
+  entryZoneMax: PlanPrice;
+  stopLossPrice: PlanPrice;
+  takeProfitT1: PlanPrice;
+  takeProfitT2: PlanPrice;
+  distanceToEntryPct: number | null;
+  inEntryZone: boolean | null;
+  observationStatus:
+    "TECHNICAL_IN_ZONE" | "WATCH" | "AWAY" | "UNAVAILABLE" | "STALE";
+  metrics: Record<
+    | "rsi14"
+    | "ma20"
+    | "ma60"
+    | "ma200"
+    | "excessReturn20d"
+    | "excessReturn60d"
+    | "drawdown60d",
+    PlanPrice
+  >;
+  missingEvidence: string[];
+  entryBlocked?: boolean | null;
+  entryBlockReason?: string | null;
+  entryStatus?: string | null;
+  inSellZone?: boolean | null;
+  entryStatusTone?: string | null;
+}
+export interface FundObservationRisk extends IndustryCycle {
+  industry: string;
+  researchedAt: string;
+  active?: boolean;
+  persistedRiskFlags?: string[];
+  confirmedAt?: string;
+  confirmedRiskAt?: Record<string, string>;
+}
+export interface FundObservationItem {
+  fundCode: string;
+  name: string;
+  subjectKind: "fund" | "nav" | null;
+  subjectId: string | null;
+  identityVerified: boolean;
+  identityProof: {
+    scope: "FROZEN_SERVER_CATALOG";
+    sourceUri: string | null;
+    verifiedAt: string | null;
+  } | null;
+  confirmedNav: {
+    value: PlanPrice;
+    asOf: string | null;
+    retrievedAt: string | null;
+    sourceUri: string | null;
+  } | null;
+  referenceTracks: FundObservationTrack[];
+  observationStatus:
+    | "OBSERVABLE"
+    | "PRICE_INCOMPLETE"
+    | "NOT_SCANNED"
+    | "IDENTITY_UNVERIFIED"
+    | "STALE";
+  subscription: {
+    status: "UNKNOWN" | "OPEN" | "LIMITED" | "SUSPENDED";
+    restricted: boolean | null;
+  };
+  industry: {
+    industryIds: string[];
+    unresolvedSector: string | null;
+    auditStatus:
+      "NOT_ALLOCATED" | "PENDING_PROOF" | "STRUCTURE_AND_EXECUTION_VERIFIED";
+    missingChecks: string[];
+  };
+  risk: {
+    current: FundObservationRisk[];
+    historical: Array<FundObservationRisk & { active: boolean }>;
+  };
+  topicAssociations: Array<{
+    topicId: string | null;
+    key: string;
+    title: string;
+    relation: "CONFIRMED_SCOPE_LINK" | "DECLARED_RELATED_ONLY";
+    sourceIds: string[];
+  }>;
+  relativeStrength?: RelativeStrength | null;
+  missingEvidence: string[];
+  actionable: false;
+  investmentEligible: false;
+}
+export interface FundObservation {
+  version: "fund-observation-v1";
+  researchId: string;
+  researchAsOf: string | null;
+  evaluatedAt: string | null;
+  status: "AVAILABLE" | "PARTIAL" | "STALE" | "UNAVAILABLE";
+  actionable: false;
+  investmentEligible: false;
+  coverage: {
+    catalogFundCount: number;
+    scannedFundCount: number;
+    confirmedNavFundCount: number;
+    pricedFundCount: number;
+    observableFundCount: number;
+    unpricedFundCount: number;
+    highlightCount: number;
+    selectedScopeCount: number;
+    deferredScopeCount: number;
+    executionVerifiedCheckCount: number;
+  };
+  highlights: FundObservationItem[];
+  items: FundObservationItem[];
+  unresolvedRiskNotice: string | null;
+  unresolvedRiskScopes: string[];
+  missingEvidence?: string[];
+}
 export interface DailyResearch {
   automaticResearchCooldown?: {
     active: boolean;
@@ -753,6 +868,7 @@ export interface DailyResearch {
     automaticEligibleAt: string | null;
   };
   economicResearch?: EconomicResearchDelivery;
+  fundObservation?: FundObservation;
   schedule?: {
     mode: "DAILY" | "WEEKDAYS";
     time: string;

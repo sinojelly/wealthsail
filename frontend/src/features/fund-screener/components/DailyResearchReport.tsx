@@ -308,8 +308,10 @@ export function DailyResearchStatus({
   const currentState = executionState(data, state);
   const economic = currentEconomicResearch(data);
   const previousDaySuccess =
-    currentState === "STALE" && !!data?.reportRunId &&
-    !!data?.reportCompletedAt && !!data?.report;
+    currentState === "STALE" &&
+    !!data?.reportRunId &&
+    !!data?.reportCompletedAt &&
+    !!data?.report;
   const label = statusLabel(
     currentState,
     data?.scheduleState ?? scheduleState,
@@ -344,7 +346,8 @@ export function DailyResearchStatus({
       {data?.automaticResearchCooldown?.active &&
         data.scheduleState !== "DISABLED" && (
           <span>
-            {" "}· 自动研究冷却中（23小时）：最近AI派发后，
+            {" "}
+            · 自动研究冷却中（23小时）：最近AI派发后，
             {timeLabel(data.automaticResearchCooldown.automaticEligibleAt)}
             北京时间前不自动研究；仅限制自动研究，手动仍需管理员明确触发。
           </span>
@@ -431,6 +434,7 @@ interface DailyResearchReportProps {
   trackingPending?: boolean;
   trackingError?: string;
   children?: ReactNode;
+  topicRegistryElsewhereRunId?: string | null;
 }
 
 export default function DailyResearchReport(props: DailyResearchReportProps) {
@@ -447,6 +451,7 @@ function DailyResearchContent({
   directions = [],
   onDirectionSelect,
   children,
+  topicRegistryElsewhereRunId,
 }: DailyResearchReportProps) {
   const [fullOpen, setFullOpen] = useState(false);
   const fullEventRefs = useRef(new Map<string, HTMLElement>());
@@ -660,25 +665,29 @@ function DailyResearchContent({
         }
       />
       <PublishedResearchRepairs />
-      {report && data?.reportRunId && (
-        <ResearchTopicRegistry
-          runId={data.reportRunId}
-          state="READY"
-          completedAt={data.reportCompletedAt}
-          variant="FORMAL"
-        />
-      )}
+      {report &&
+        data?.reportRunId &&
+        data.reportRunId !== topicRegistryElsewhereRunId && (
+          <ResearchTopicRegistry
+            runId={data.reportRunId}
+            state="READY"
+            completedAt={data.reportCompletedAt}
+            variant="FORMAL"
+          />
+        )}
       {(data?.pipeline ? data.pipeline.researchRunId : data?.runId) !==
-        data?.reportRunId && (
-        <ResearchTopicRegistry
-          runId={data?.pipeline ? data.pipeline.researchRunId : data?.runId}
-          state={currentState}
-          completedAt={
-            data?.pipeline ? data.pipeline.finishedAt : data?.completedAt
-          }
-          variant="CURRENT"
-        />
-      )}
+        topicRegistryElsewhereRunId &&
+        (data?.pipeline ? data.pipeline.researchRunId : data?.runId) !==
+          data?.reportRunId && (
+          <ResearchTopicRegistry
+            runId={data?.pipeline ? data.pipeline.researchRunId : data?.runId}
+            state={currentState}
+            completedAt={
+              data?.pipeline ? data.pipeline.finishedAt : data?.completedAt
+            }
+            variant="CURRENT"
+          />
+        )}
       {!report ? (
         <>
           <p>有效报告尚未生成，可先核查市场证据。</p>

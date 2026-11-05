@@ -71,7 +71,7 @@ type Props = {
   runId?: string | null;
   state?: string | null;
   completedAt?: string | null;
-  variant?: "FORMAL" | "CURRENT";
+  variant?: "FORMAL" | "CURRENT" | "HIGHLIGHT";
 };
 export default function ResearchTopicRegistry({
   runId,
@@ -108,7 +108,7 @@ function RegistryData({
   runId: string;
   state?: string | null;
   completedAt?: string | null;
-  variant: "FORMAL" | "CURRENT";
+  variant: "FORMAL" | "CURRENT" | "HIGHLIGHT";
   queryKey: readonly (string | number)[];
 }) {
   const [limit, setLimit] = useState<12 | 20 | 30>(12);
@@ -168,7 +168,12 @@ function RegistryData({
   const available = identity && data && isPage(data) ? data : undefined;
   const sameSnapshot =
     available && (!snapshot || snapshot === available.snapshotId);
-  const title = variant === "FORMAL" ? "正式报告主题目录" : "本次研究主题目录";
+  const title =
+    variant === "HIGHLIGHT"
+      ? "值得关注的 AI 投资主题"
+      : variant === "FORMAL"
+        ? "正式报告主题目录"
+        : "本次研究主题目录";
   const recheck = (
     <button
       type="button"
@@ -187,6 +192,11 @@ function RegistryData({
     >
       <h3>{title} · 只读观察</h3>
       <p>研究ID：{runId}</p>
+      {variant === "HIGHLIGHT" && (
+        <p>
+          保留同次研究的全部合规主题，包括仅供观察、待补证及已隔离的记录；行业审核尚未完成不等于主题没有研究价值。
+        </p>
+      )}
       {variant === "CURRENT" && (
         <p>此区属于本次执行的观察记录，不替换当前展示的正式报告。</p>
       )}
@@ -241,7 +251,23 @@ function RegistryData({
             )}
           </p>
           {available.revision === null && <p>校验修订信息未提供</p>}
-          <Coverage data={available} />
+          {variant === "HIGHLIGHT" ? (
+            <>
+              <p>
+                本次保存{available.totalCount}个主题 ·
+                具备已核对来源支持的主题：
+                {available.coverage.evidenceBackedTopicCount ?? "未知"} ·
+                待核实主题：
+                {available.coverage.pendingVerificationTopicCount ?? "未知"}
+              </p>
+              <details>
+                <summary>查看主题登记、行业审核与执行凭证覆盖</summary>
+                <Coverage data={available} />
+              </details>
+            </>
+          ) : (
+            <Coverage data={available} />
+          )}
           <label>
             每页主题数{" "}
             <select
@@ -269,7 +295,7 @@ function RegistryData({
             {available.items.length}项
           </p>
           {available.items.map((topic) => (
-            <Topic key={topic.topicId} topic={topic} />
+            <Topic key={topic.topicId} topic={topic} researchId={runId} />
           ))}
           {!available.items.length && <p>此快照没有可展示的主题。</p>}
           <nav
@@ -558,9 +584,18 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
     </div>
   );
 }
-function Topic({ topic }: { topic: RegistryTopic }) {
+function Topic({
+  topic,
+  researchId,
+}: {
+  topic: RegistryTopic;
+  researchId: string;
+}) {
   return (
-    <article style={box}>
+    <article
+      id={`research-topic-${researchId}-${encodeURIComponent(topic.key)}`}
+      style={box}
+    >
       <h4>{topic.title}</h4>
       <p>
         {topic.status === "FORMAL" && !topic.investmentEligible
@@ -574,6 +609,12 @@ function Topic({ topic }: { topic: RegistryTopic }) {
           引文核对覆盖{topic.evidenceCoverageScore}
           %（不代表推理已证实或投资评分）
         </p>
+      )}
+      {topic.evidenceCoverageScore == null && (
+        <p>来源核验状态未提供，引用存在不代表原文已核实。</p>
+      )}
+      {topic.match.scopeVerified !== true && (
+        <p>行业范围关联尚未核实，匹配标签不代表完成行业反方审核。</p>
       )}
       <p>状态原因：{topic.reason}</p>
       <p>影响：{topic.impact}</p>

@@ -147,7 +147,7 @@ beforeEach(() => {
   } as never);
 });
 
-it("opens with macro, discovered directions and plans before compact news without user selection", async () => {
+it("keeps strict plans ahead of historical macro and compact news without user selection", async () => {
   renderWithSession(<FundScreenerPage />);
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const directions = await screen.findByRole("region", {
@@ -155,7 +155,7 @@ it("opens with macro, discovered directions and plans before compact news withou
   });
   const news = screen.getByRole("region", { name: "每日事件研究" });
   expect(
-    macro.compareDocumentPosition(directions) &
+    directions.compareDocumentPosition(macro) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(
@@ -397,7 +397,7 @@ it("keeps a historical macro conclusion and directions dated instead of presenti
   expect(macro).toHaveTextContent("历史宏观研判");
   expect(macro).toHaveTextContent("2026年10月16日 09:00");
   expect(
-    screen.getByRole("heading", { name: "历史价值方向与买卖计划" }),
+    screen.getByRole("heading", { name: "历史严格正式计划" }),
   ).toBeVisible();
 });
 

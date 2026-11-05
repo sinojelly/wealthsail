@@ -17,6 +17,8 @@ import ValueDirections, { type DirectionTrackInput } from "./ValueDirections";
 import QuantitativeScan, { type QuantScanTrackInput } from "./QuantitativeScan";
 import { researchSummary } from "../research-reading";
 import DeterministicRepairNotice from "./DeterministicRepairNotice";
+import ResearchTopicRegistry from "./ResearchTopicRegistry";
+import FundObservations from "./FundObservations";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
@@ -230,6 +232,14 @@ export default function MacroContextStrip({
     ready?.dailyResearch?.report?.events.map((event) => event.id) ?? [],
   );
   const portfolio = ready?.portfolio;
+  const daily = ready?.dailyResearch;
+  const currentResearchId = daily?.pipeline
+    ? daily.pipeline.researchRunId
+    : daily?.runId;
+  const topicResearchId =
+    currentResearchId || (daily?.report ? daily.reportRunId : undefined);
+  const retainedTopics =
+    !!topicResearchId && topicResearchId !== currentResearchId;
   const confirmedBreach =
     portfolio?.state === "READY" &&
     portfolio.heldSelected === true &&
@@ -347,47 +357,89 @@ export default function MacroContextStrip({
           >
             {tab === "events" && (
               <>
-                {ready?.dailyResearch?.report && ready.dailyResearch.reportRunId && (
-                  <section
-                    className="op-daily-report"
-                    aria-label="最近一次成功研究"
-                  >
-                    <h3>最近一次成功研究</h3>
-                    <p>
-                      完成：{timeLabel(ready.dailyResearch.reportCompletedAt)}（北京时间）
-                      {ready.dailyResearch.state === "READY"
-                        ? " · 本研究日已完成"
-                        : " · 今日尚无新的正式研究；此为最近一次成功报告"}
-                    </p>
-                    <p>{researchSummary(ready.dailyResearch.report.summary || "", 380)}</p>
-                    {!!ready.dailyResearch.report.events.length && (
-                      <ul className="op-daily-events" aria-label="最近成功研究的主要事件">
-                        {ready.dailyResearch.report.events.slice(0, 3).map((event) => (
-                          <li key={event.id}>
-                            <article className="op-daily-event">
-                              <strong>{event.title}</strong>
-                              <p>{researchSummary(event.summary || "", 220)}</p>
-                            </article>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <a href="#latest-successful-daily-report">
-                      查看完整成功报告、新闻、主题与来源
-                    </a>
-                    <p>
-                      <small>历史研究仅供阅读；当前价格、风险及基金操作资格须重新核验。</small>
-                    </p>
-                  </section>
+                {retainedTopics && (
+                  <p>
+                    以下主题来自最近成功报告，保留原研究日期；今日主题尚未更新。
+                  </p>
                 )}
-                {ready && <MacroOverview data={ready} />}
-                {renderTrackedFunds?.()}
+                <ResearchTopicRegistry
+                  runId={topicResearchId}
+                  state={
+                    retainedTopics
+                      ? "READY"
+                      : (daily?.pipeline?.state ?? daily?.state)
+                  }
+                  completedAt={
+                    retainedTopics
+                      ? daily?.reportCompletedAt
+                      : daily?.pipeline
+                        ? daily.pipeline.finishedAt
+                        : daily?.completedAt
+                  }
+                  variant="HIGHLIGHT"
+                />
+                <FundObservations
+                  key={daily?.fundObservation?.researchId ?? "no-observation"}
+                  data={daily}
+                />
                 <ValueDirections
-                  key={ready?.dailyResearch?.reportRunId ?? "no-report"}
-                  data={ready?.dailyResearch}
+                  key={daily?.reportRunId ?? "no-report"}
+                  data={daily}
                   onTrack={onStudyDirection}
                   onViewMacro={() => open("macro")}
+                  presentation="FORMAL"
                 />
+                {ready?.dailyResearch?.report &&
+                  ready.dailyResearch.reportRunId && (
+                    <section
+                      className="op-daily-report"
+                      aria-label="最近一次成功研究"
+                    >
+                      <h3>最近一次成功研究</h3>
+                      <p>
+                        完成：{timeLabel(ready.dailyResearch.reportCompletedAt)}
+                        （北京时间）
+                        {ready.dailyResearch.state === "READY"
+                          ? " · 本研究日已完成"
+                          : " · 今日尚无新的正式研究；此为最近一次成功报告"}
+                      </p>
+                      <p>
+                        {researchSummary(
+                          ready.dailyResearch.report.summary || "",
+                          380,
+                        )}
+                      </p>
+                      {!!ready.dailyResearch.report.events.length && (
+                        <ul
+                          className="op-daily-events"
+                          aria-label="最近成功研究的主要事件"
+                        >
+                          {ready.dailyResearch.report.events
+                            .slice(0, 3)
+                            .map((event) => (
+                              <li key={event.id}>
+                                <article className="op-daily-event">
+                                  <strong>{event.title}</strong>
+                                  <p>
+                                    {researchSummary(event.summary || "", 220)}
+                                  </p>
+                                </article>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                      <a href="#latest-successful-daily-report">
+                        查看完整成功报告、新闻、主题与来源
+                      </a>
+                      <p>
+                        <small>
+                          历史研究仅供阅读；当前价格、风险及基金操作资格须重新核验。
+                        </small>
+                      </p>
+                    </section>
+                  )}
+                {ready && <MacroOverview data={ready} />}
+                {renderTrackedFunds?.()}
                 <QuantitativeScan
                   data={ready?.dailyResearch}
                   onTrack={onStudyQuantScan}
@@ -408,6 +460,7 @@ export default function MacroContextStrip({
                   data={ready?.dailyResearch}
                   directions={directions}
                   onDirectionSelect={onDirectionSelect}
+                  topicRegistryElsewhereRunId={topicResearchId}
                 />
                 {!!ready?.events?.filter((event) => !reportIds.has(event.id))
                   .length && (
