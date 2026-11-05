@@ -234,6 +234,11 @@ function currentEconomicResearch(data?: DailyResearch | null) {
   const economic = data?.economicResearch;
   const currentId =
     (data?.pipeline ? data.pipeline.researchRunId : data?.runId) ?? null;
+  // A previous-day READY report must not be relabelled as today's UNKNOWN
+  // economic research merely because its archive is no longer in today's slot.
+  if (data?.state === "STALE" && economic?.status === "UNKNOWN") {
+    return undefined;
+  }
   return economic?.version === "economic-research-delivery-v1" &&
     typeof economic.researchId === "string" &&
     economic.researchId.length > 0 &&
@@ -302,6 +307,9 @@ export function DailyResearchStatus({
 }) {
   const currentState = executionState(data, state);
   const economic = currentEconomicResearch(data);
+  const previousDaySuccess =
+    currentState === "STALE" && !!data?.reportRunId &&
+    !!data?.reportCompletedAt && !!data?.report;
   const label = statusLabel(
     currentState,
     data?.scheduleState ?? scheduleState,
@@ -309,6 +317,9 @@ export function DailyResearchStatus({
     data?.pipeline?.stage,
     data?.runMode,
   );
+  const displayedLabel = previousDaySuccess
+    ? `最近研究已完成（${timeLabel(data?.reportCompletedAt)}） · 今日尚未更新`
+    : label;
   return (
     <span
       className="op-research-status"
@@ -326,7 +337,7 @@ export function DailyResearchStatus({
         </>
       ) : (
         <>
-          {label}
+          {displayedLabel}
           {triggerTime(data)}
         </>
       )}
@@ -610,7 +621,11 @@ function DailyResearchContent({
       : readingText(channel || "尚未声明传导假设，需人工核查。");
   }
   return (
-    <section className="op-daily-report" aria-label="每日事件研究">
+    <section
+      id="latest-successful-daily-report"
+      className="op-daily-report"
+      aria-label="每日事件研究"
+    >
       <h3>
         {economic
           ? "经济研究与正式投资报告"
@@ -674,6 +689,8 @@ function DailyResearchContent({
           {currentState !== "READY" && (
             <p role="status">
               当前显示历史报告及原始日期，不代表今日已完成研究。
+              最近一次成功报告完成于{timeLabel(data?.reportCompletedAt)}；
+              历史基金操作条件须根据最新价格和风控重新核验。
             </p>
           )}
           <ul className="op-daily-events" aria-label="重要事件">

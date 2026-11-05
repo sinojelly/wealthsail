@@ -347,6 +347,39 @@ export default function MacroContextStrip({
           >
             {tab === "events" && (
               <>
+                {ready?.dailyResearch?.report && ready.dailyResearch.reportRunId && (
+                  <section
+                    className="op-daily-report"
+                    aria-label="最近一次成功研究"
+                  >
+                    <h3>最近一次成功研究</h3>
+                    <p>
+                      完成：{timeLabel(ready.dailyResearch.reportCompletedAt)}（北京时间）
+                      {ready.dailyResearch.state === "READY"
+                        ? " · 本研究日已完成"
+                        : " · 今日尚无新的正式研究；此为最近一次成功报告"}
+                    </p>
+                    <p>{researchSummary(ready.dailyResearch.report.summary || "", 380)}</p>
+                    {!!ready.dailyResearch.report.events.length && (
+                      <ul className="op-daily-events" aria-label="最近成功研究的主要事件">
+                        {ready.dailyResearch.report.events.slice(0, 3).map((event) => (
+                          <li key={event.id}>
+                            <article className="op-daily-event">
+                              <strong>{event.title}</strong>
+                              <p>{researchSummary(event.summary || "", 220)}</p>
+                            </article>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <a href="#latest-successful-daily-report">
+                      查看完整成功报告、新闻、主题与来源
+                    </a>
+                    <p>
+                      <small>历史研究仅供阅读；当前价格、风险及基金操作资格须重新核验。</small>
+                    </p>
+                  </section>
+                )}
                 {ready && <MacroOverview data={ready} />}
                 {renderTrackedFunds?.()}
                 <ValueDirections
