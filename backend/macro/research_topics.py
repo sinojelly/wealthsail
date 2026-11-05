@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 import hashlib
 import json
+import re
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,8 @@ DISCOVERY_VERSION = "research-discovery-v2"
 REGISTRY_VERSION = "research-topics-v2"
 MAX_REGISTRY_ITEMS = 72
 INDUSTRY_REGISTRY_VERSION = "industry-registry-v1"
+TOPIC_MATCH_VERSION = "topic-identity-v2"
+ALLOCATION_VERSION = "industry-allocation-v2"
 BUDGET = {
     "maxTopics": 64,
     "maxFormalDirections": 8,
@@ -86,6 +89,21 @@ def _discovery_contract(packet):
     contract = _DISCOVERY_CONTRACTS.get(version) if isinstance(version, str) else None
     if contract is None:
         raise FrozenDiscoveryCompatibilityError()
+    manifest = discovery.get("auditManifest")
+    for field, supported in (
+        ("topicMatchVersion", {None, "topic-identity-v1", TOPIC_MATCH_VERSION}),
+        ("allocationVersion", {None, "industry-allocation-v1", ALLOCATION_VERSION}),
+    ):
+        version = discovery.get(field)
+        frozen_version = manifest.get(field) if isinstance(manifest, dict) else None
+        if (
+            (version is not None and not isinstance(version, str))
+            or (frozen_version is not None and not isinstance(frozen_version, str))
+            or version not in supported
+            or frozen_version not in supported
+            or version != frozen_version
+        ):
+            raise FrozenDiscoveryCompatibilityError()
     return contract
 
 
@@ -120,11 +138,17 @@ TOPIC_MESSAGES = {
     "RECEIPT_SUMMARIZED_SIZE_LIMIT": "远程响应体积受限，执行回执仅保留计数摘要；原研究正文保留，未获证明的任务仍待审。",
     "RECEIPT_OMITTED_SIZE_LIMIT": "远程响应体积受限，执行回执已省略；原研究正文保留，不能把无回执视为未执行或已完成审核。",
 }
-FORMAL_ELIGIBILITY_REASONS = frozenset({
-    "NO_FORMAL_PROPOSAL", "FUND_PLAN_MISSING", "SOURCE_EVIDENCE_PENDING",
-    "INDUSTRY_IDENTITY_PENDING", "INDUSTRY_AUDIT_PENDING",
-    "FORMAL_VALIDATION_FAILED", "PUBLICATION_SAFETY_BLOCKED",
-})
+FORMAL_ELIGIBILITY_REASONS = frozenset(
+    {
+        "NO_FORMAL_PROPOSAL",
+        "FUND_PLAN_MISSING",
+        "SOURCE_EVIDENCE_PENDING",
+        "INDUSTRY_IDENTITY_PENDING",
+        "INDUSTRY_AUDIT_PENDING",
+        "FORMAL_VALIDATION_FAILED",
+        "PUBLICATION_SAFETY_BLOCKED",
+    }
+)
 # Only reviewed exact names belong here. Related/composite terms are not aliases.
 STRICT_ALIASES = {
     "有色金属": "NONFERROUS",
@@ -141,6 +165,20 @@ STRICT_ALIASES = {
     "消费": "CONSUMPTION",
 }
 EXPLICIT_RELATED = {"工业金属": ("NONFERROUS",)}
+V2_STRICT_ALIASES = {
+    **STRICT_ALIASES,
+    "券商": "BROKER",
+    "证券公司": "BROKER",
+    "金融科技": "FINTECH",
+    "存储芯片": "MEMORY",
+    "印制电路板": "PCB",
+    "固态电池": "SOLID_BATTERY",
+    "低空经济": "LOW_ALTITUDE",
+    "港股科技": "HK_TECH",
+    "中药": "TRADITIONAL_MEDICINE",
+    "游戏": "GAMING",
+    "国防军工": "DEFENCE",
+}
 ScopeName = Annotated[str, Field(min_length=1, max_length=100)]
 SourceId = Annotated[str, Field(min_length=1, max_length=80)]
 TopicNote = Annotated[str, Field(min_length=1, max_length=300)]
@@ -151,8 +189,14 @@ class TopicProposal(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     title: str = Field(min_length=1, max_length=100)
     thesis: str = Field(min_length=1, max_length=600)
-    industryClaims: list[ScopeName] = Field(max_length=8)
-    relatedIndustryIds: list[ScopeName] = Field(max_length=8)
+    industryClaims: list[ScopeName] = Field(
+        max_length=8,
+        description="行业身份：只填标准代码或精确行业名，例如ROBOT、BROKER或券商。不是产业判断、风险说明或完整句子；限制和风险写入unknowns、thesis或pendingTasks。",
+    )
+    relatedIndustryIds: list[ScopeName] = Field(
+        max_length=8,
+        description="仅相关的标准行业代码；相关不等于主题身份、同范围审核或投资资格。",
+    )
     sourceIds: list[SourceId] = Field(max_length=8)
     unknowns: list[TopicNote] = Field(max_length=8)
     pendingTasks: list[TopicNote] = Field(max_length=8)
@@ -177,8 +221,45 @@ def is_v2(packet):
     )
 
 
-def match_topic(proposal, *, sources=None):
+def topic_match_version(packet):
+    """Frozen packets choose their original identity policy, never today's default."""
+    _discovery_contract(packet)
+    discovery = packet.get("researchDiscovery") or {}
+    return discovery.get("topicMatchVersion") or "topic-identity-v1"
+
+
+def is_named_industry_scope(value):
+    """Only bounded names can schedule research; prose remains evidence to read."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(
+        2 <= len(value) <= 40
+        and re.fullmatch(
+            r"[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff _&+/-]*", value
+        )
+        and not re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
+        and not re.search(
+            r"不能|不等于|不足|不代表|不证明|证明|预计|预测|认为|判断|尚未|尚缺|需要|等待|验证|已核对|不属于|不是|未实施|增长|下降|减少|增加|上涨|下跌|过剩|裁员|欠薪|倒闭|砍单|回款|收入|净利润|盈利|身份|股份|份额|安排|传导|公布|宣布|计划|提议|风险",
+            value,
+        )
+        and not re.search(
+            r"\b(?:is|are|was|were|not|does|cannot|should|must|will|would|could|shows?|proves?|forecasts?|expected|profit|revenue|growth|decline)\b",
+            value,
+            re.IGNORECASE,
+        )
+    )
+
+
+def match_topic(proposal, *, sources=None, version=None):
     """Resolve exact names only; separately report checked-source scope support."""
+    if (version is not None and not isinstance(version, str)) or version not in {
+        None,
+        "topic-identity-v1",
+        TOPIC_MATCH_VERSION,
+    }:
+        raise FrozenDiscoveryCompatibilityError()
+    v2 = version == TOPIC_MATCH_VERSION
     claims = proposal.get("industryClaims") or []
     industries, related, evidence, unresolved = set(), set(), [], []
     alias, composite = False, False
@@ -187,25 +268,29 @@ def match_topic(proposal, *, sources=None):
             unresolved.append("")
             continue
         value = claim.strip()
+        canonical = value.upper() if v2 and value.isascii() else value
         code = (
-            value
-            if value in STANDARD_INDUSTRY_CODES
-            else STRICT_ALIASES.get(value.casefold())
+            canonical
+            if canonical in STANDARD_INDUSTRY_CODES
+            else (V2_STRICT_ALIASES if v2 else STRICT_ALIASES).get(value.casefold())
         )
         if code is None:
             unresolved.append(value)
             related.update(EXPLICIT_RELATED.get(value, ()))
             continue
         industries.add(code)
-        alias |= code != value
+        alias |= code != canonical
         composite |= code in NEWS_RELATED_INDUSTRIES
         related.update(NEWS_RELATED_INDUSTRIES.get(code, ()))
     # A model-proposed relationship cannot promote an unrecognized identity.
-    related.update(
-        value
-        for value in proposal.get("relatedIndustryIds", [])
-        if value in STANDARD_INDUSTRY_CODES
-    )
+    for value in proposal.get("relatedIndustryIds", []):
+        code = (
+            value.strip().upper()
+            if v2 and isinstance(value, str) and value.isascii()
+            else value
+        )
+        if isinstance(code, str) and code in STANDARD_INDUSTRY_CODES:
+            related.add(code)
     status = (
         "NEW_TOPIC"
         if unresolved
@@ -234,8 +319,15 @@ def match_topic(proposal, *, sources=None):
             "registryVersion": INDUSTRY_REGISTRY_VERSION,
         }
         for value in dict.fromkeys(unresolved)
-        if value
+        if value and (not v2 or is_named_industry_scope(value))
     ]
+    if v2:
+        if any(value and not is_named_industry_scope(value) for value in unresolved):
+            evidence.append("NARRATIVE_CLAIM_NOT_IDENTITY")
+        if proposed:
+            evidence.append("NAMED_SCOPE_UNREGISTERED")
+        if industries and unresolved:
+            evidence.append("PARTIAL_INDUSTRY_IDENTITY")
     if sources is not None:
         from backend.macro.industry_cycle import _industry_scope_verified
 
@@ -327,6 +419,8 @@ def frozen_manifest(packet):
     except (ValueError, TypeError, KeyError):
         same_clock = False
     contract = manifest.get("candidateContract") or {}
+    if contract.get("allocationVersion") != manifest.get("allocationVersion"):
+        raise FrozenDiscoveryCompatibilityError()
     if (
         not same_clock
         or discovery.get("budget") != budget
@@ -380,7 +474,7 @@ def freeze_discovery_packet(packet, now):
     if stamp.tzinfo is None or stamp > now:
         raise ValueError("invalid discovery input time")
     result = apply_entry_guards(result, result, stamp)
-    contract = industry_cycle_research_tasks(result, stamp)
+    contract = industry_cycle_research_tasks(result, stamp, allocation_version=ALLOCATION_VERSION)
     window = {
         "start": (stamp - timedelta(days=90)).date().isoformat(),
         "end": stamp.date().isoformat(),
@@ -389,6 +483,8 @@ def freeze_discovery_packet(packet, now):
     selected = [row["industry"] for row in contract["candidates"]]
     manifest = {
         "version": supported["manifestVersion"],
+        "topicMatchVersion": TOPIC_MATCH_VERSION,
+        "allocationVersion": ALLOCATION_VERSION,
         "asOf": stamp.isoformat(),
         "window": window,
         "registryVersion": supported["registryVersion"],
@@ -405,6 +501,8 @@ def freeze_discovery_packet(packet, now):
     manifest["manifestHash"] = digest(manifest)
     result["researchDiscovery"] = {
         "version": DISCOVERY_VERSION,
+        "topicMatchVersion": TOPIC_MATCH_VERSION,
+        "allocationVersion": ALLOCATION_VERSION,
         "budget": deepcopy(BUDGET),
         "auditManifest": manifest,
     }

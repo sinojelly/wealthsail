@@ -30,6 +30,7 @@ from backend.macro.research_topics import (
     freeze_discovery_packet,
     frozen_manifest,
     match_topic,
+    topic_match_version,
     topic_tasks,
 )
 
@@ -501,7 +502,7 @@ def evaluate_research_batch(
         else:
             status, code = "OBSERVATION_ONLY", "OBSERVATION_ONLY"
         proof = [sources[ref] for ref in proposal["sourceIds"] if ref in sources]
-        match = match_topic(proposal, sources=proof)
+        match = match_topic(proposal, sources=proof, version=topic_match_version(packet))
         claimed_industries = set(match["industryIds"])
         server_industries = direction_required.get(proposal["key"], set())
         if server_industries:
@@ -856,4 +857,11 @@ def evaluate_research_batch(
         | {"reason": REPAIR_MESSAGES[row["ruleId"]]}
         for row in result["quarantined"]
     ]
+    if topic_match_version(packet) == "topic-identity-v2":
+        # Resolve only the validated source alias map, after raw-reference risk
+        # and coverage checks. Frozen v1 registry identities stay unchanged.
+        for item in registry["items"]:
+            item["sourceIds"] = list(dict.fromkeys(
+                aliases.get(ref, ref) for ref in item["sourceIds"]
+            ))
     return result

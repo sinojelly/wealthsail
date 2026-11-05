@@ -13,6 +13,11 @@ from backend.macro.daily_research import (
 from test_daily_research import NOW, report
 from test_industry_cycle import checks
 
+HISTORICAL_INDUSTRIES = [
+    "ROBOT", "BANK", "BROKER", "AI", "RARE_EARTH", "POWER",
+    "GOLD", "DRUG", "COAL", "PCB", "DEFENCE", "COMMUNICATION",
+]
+
 
 def packet_and_report(total):
     public = {
@@ -21,7 +26,7 @@ def packet_and_report(total):
         "industryCycleResearch": {"required": True},
         "previousIndustryRiskStates": [
             {
-                "industry": f"RISK_{index}",
+                "industry": HISTORICAL_INDUSTRIES[index],
                 "industryCycle": {"riskFlags": ["ORDER_CUTS"]},
             }
             for index in range(total)
@@ -32,7 +37,7 @@ def packet_and_report(total):
         "sources": [],
         "events": [],
         "industryCycleReviews": [
-            {"industry": f"RISK_{index}", "sourceIds": [], "riskChecks": checks()}
+            {"industry": HISTORICAL_INDUSTRIES[index], "sourceIds": [], "riskChecks": checks()}
             for index in range(min(total, 10))
         ],
     }
@@ -57,7 +62,7 @@ def test_report_carries_server_computed_research_coverage(total):
         "candidateCount": min(total, 10),
         "omittedCandidateCount": max(total - 10, 0),
         "omittedRiskCandidateCount": max(total - 10, 0),
-        "omittedIndustries": [f"RISK_{index}" for index in range(10, total)],
+        "omittedIndustries": HISTORICAL_INDUSTRIES[10:total],
         "omittedPlanIndustryIds": [],
         "status": "PARTIAL" if total > 10 else "COMPLETE",
     }

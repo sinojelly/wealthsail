@@ -13,6 +13,7 @@ import io
 import math
 import re
 import unicodedata
+from itertools import zip_longest
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -94,23 +95,48 @@ PUBLICATION_META = frozenset(
 )
 
 
-def industry_cycle_research_tasks(packet, now):
+def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
     """Build live-search jobs from this run's actual sectors, without invented news.
 
     Codex public research already runs with ``--search``. These queries extend
     that collector to financing/operating-cycle sources outside official macro
     feeds. Results must still use the ordinary report source-validation path.
     """
-    from backend.macro.research_topics import frozen_manifest
+    from backend.macro.research_topics import (
+        ALLOCATION_VERSION,
+        FrozenDiscoveryCompatibilityError,
+        frozen_manifest,
+    )
+
+    if (
+        allocation_version is not None
+        and (
+            not isinstance(allocation_version, str)
+            or allocation_version not in {"industry-allocation-v1", ALLOCATION_VERSION}
+        )
+    ):
+        raise FrozenDiscoveryCompatibilityError()
+
     frozen = frozen_manifest(packet)
     if frozen is not None:
         from copy import deepcopy
+
         return deepcopy(frozen["candidateContract"])
+    if allocation_version in {None, "industry-allocation-v1"}:
+        from backend.integrations.industry_allocation_legacy import (
+            industry_cycle_research_tasks_legacy,
+        )
+
+        return industry_cycle_research_tasks_legacy(packet, now)
     from backend.macro.industry_cycle import RISK_CHECKS
     from backend.macro.industry_contract import (
         NEWS_RELATED_INDUSTRIES,
         STANDARD_INDUSTRY_CODES,
         plan_industry_ids,
+    )
+    from backend.macro.research_topics import (
+        digest,
+        is_named_industry_scope,
     )
 
     now = _aware(now)
@@ -128,6 +154,7 @@ def industry_cycle_research_tasks(packet, now):
         for related in NEWS_RELATED_INDUSTRIES.get(sector, ())
     )
     quantitative = {}
+    eligible_quantitative = set()
     search_names = {
         "ROBOT": "机器人 具身智能",
         "ROBOTICS_MOBILITY": "机器人 智能驾驶",
@@ -170,10 +197,27 @@ def industry_cycle_research_tasks(packet, now):
 
     def add(value):
         candidate = value.strip()[:100] if isinstance(value, str) else ""
-        if candidate and candidate not in candidates:
+        if (
+            candidate
+            and candidate not in candidates
+            and not any(key[0] == candidate for key in excluded)
+        ):
             candidates.append(candidate)
 
+    plan_requirements = {}
+    plan_industries = set()
+    for anchor in packet.get("discoveryActionableZones", []):
+        if not isinstance(anchor, dict):
+            continue
+        key = anchor.get("subjectKind"), anchor.get("subjectId")
+        if key[0] not in {"fund", "nav"} or not isinstance(key[1], str):
+            continue
+        required = plan_industry_ids(packet, anchor)
+        plan_requirements.setdefault(key, set()).update(required)
+        plan_industries.update(required)
+
     previous_risks = set()
+    risk_order = []
     for row in packet.get("previousIndustryRiskStates", []):
         if not isinstance(row, dict):
             continue
@@ -195,8 +239,22 @@ def industry_cycle_research_tasks(packet, now):
         industry = row.get("industry")
         if isinstance(industry, str) and industry.strip():
             industry = industry.strip()[:100]
-            previous_risks.add(industry)
-            add(industry)
+            if industry not in previous_risks:
+                risk_order.append(industry)
+                previous_risks.add(industry)
+    excluded = {}
+
+    def exclude(identity, term, reason):
+        # Only query allocation is withheld. The original packet and every
+        # historical risk remain intact, with an explicit auditable exclusion.
+        excluded[(identity, reason)] = {
+            "industryId": identity,
+            "searchTerm": term,
+            "reasonCode": reason,
+            "riskPreserved": identity in previous_risks,
+        }
+        if identity in candidates:
+            candidates.remove(identity)
 
     pending_scopes = set()
     for row in packet.get("pendingTopicScopes", []):
@@ -205,33 +263,81 @@ def industry_cycle_research_tasks(packet, now):
         identity, term = row.get("industryId"), row.get("searchTerm")
         if not isinstance(identity, str) or not identity.strip() or len(identity) > 100:
             continue
-        if not isinstance(term, str) or not term.strip() or len(term) > 100:
+        if not isinstance(term, str) or not term.strip():
+            if identity in STANDARD_INDUSTRY_CODES and identity in search_names:
+                term = search_names.get(identity, identity)
+            else:
+                exclude(
+                    identity,
+                    term,
+                    "UNKNOWN_PRODUCT_SCOPE"
+                    if identity in plan_industries
+                    else "SCOPE_SEARCH_TERM_MISSING",
+                )
+                continue
+        if len(term) > 100:
+            exclude(identity, term, "SCOPE_SEARCH_TERM_INVALID")
             continue
         if identity.startswith("TOPIC_SCOPE:"):
-            from backend.macro.research_topics import digest
             if identity != "TOPIC_SCOPE:" + digest(term)[:32]:
+                exclude(identity, term, "DYNAMIC_SCOPE_HASH_MISMATCH")
+                continue
+            if not is_named_industry_scope(term):
+                exclude(identity, term, "NARRATIVE_SCOPE_NOT_AUDITABLE")
                 continue
         pending_scopes.add(identity)
-        search_names[identity] = term
-        add(identity)
+        search_names[identity] = search_names.get(identity, term)
 
-    plan_requirements = {}
-    plan_industries = set()
-    for anchor in packet.get("discoveryActionableZones", []):
-        if not isinstance(anchor, dict):
-            continue
-        key = anchor.get("subjectKind"), anchor.get("subjectId")
-        if key[0] not in {"fund", "nav"} or not isinstance(key[1], str):
-            continue
-        required = plan_industry_ids(packet, anchor)
-        plan_requirements.setdefault(key, set()).update(required)
+    # A server product annotation proves which obligation must be satisfied,
+    # not that an unregistered code names an auditable industry. A validated
+    # named dynamic scope has its own explicit, hash-bound search identity.
+    def auditable_product_scope(industry):
+        if not isinstance(industry, str) or not industry.strip():
+            return False
+        if (industry in STANDARD_INDUSTRY_CODES and industry in search_names) or (
+            industry.startswith("TOPIC_SCOPE:") and industry in pending_scopes
+        ):
+            return True
+        exclude(industry, search_names.get(industry), "UNKNOWN_PRODUCT_SCOPE")
+        return False
+
+    for industry in plan_industries:
+        auditable_product_scope(industry)
+
+    for industry in risk_order:
+        if industry.startswith("TOPIC_SCOPE:"):
+            if industry in pending_scopes:
+                add(industry)
+            elif not any(key[0] == industry for key in excluded):
+                exclude(industry, None, "SCOPE_SEARCH_TERM_MISSING")
+        elif industry in STANDARD_INDUSTRY_CODES or (
+            is_named_industry_scope(industry)
+            and not re.fullmatch(r"[A-Z][A-Z0-9_]*", industry)
+        ):
+            add(industry)
+        else:
+            exclude(
+                industry,
+                industry,
+                "UNKNOWN_HISTORICAL_SCOPE"
+                if re.fullmatch(r"[A-Z][A-Z0-9_]*", industry)
+                else "NARRATIVE_SCOPE_NOT_AUDITABLE",
+            )
+    for row in packet.get("pendingTopicScopes", []):
+        if (
+            isinstance(row, dict)
+            and isinstance(row.get("industryId"), str)
+            and row["industryId"] in pending_scopes
+        ):
+            add(row["industryId"])
+    for required in plan_requirements.values():
         for sector in sorted(required):
-            plan_industries.add(sector)
             add(sector)
 
     for row in (packet.get("quantitativeScan") or {}).get("items", []):
         if isinstance(row, dict):
-            sectors = plan_industry_ids(packet, row)
+            exact_sectors = plan_industry_ids(packet, row)
+            sectors = exact_sectors
             if not sectors and isinstance(row.get("discoverySector"), str):
                 sectors = {row["discoverySector"]}
             if not sectors:
@@ -241,6 +347,10 @@ def industry_cycle_research_tasks(packet, now):
             ]
             ready = row.get("entryReady") is True or any(
                 item.get("entryReady") is True for item in signals
+            )
+            candidate = any(
+                item.get("candidate") is True or item.get("triggerState") == "CANDIDATE"
+                for item in signals
             )
             distances = []
             for item in [row, *signals]:
@@ -253,38 +363,120 @@ def industry_cycle_research_tasks(packet, now):
                         distances.append(distance)
                 except (ValueError, TypeError):
                     continue
-            priority = (not ready, min(distances, default=math.inf))
+            priority = (not ready, not candidate, min(distances, default=math.inf))
             for sector in sorted(sectors):
+                if not auditable_product_scope(sector):
+                    continue
                 add(sector)
                 quantitative[sector] = min(quantitative.get(sector, priority), priority)
+            if (
+                exact_sectors
+                and row.get("historyQuality") == "READY"
+                and signals
+                and not any(
+                    row.get(field) is True
+                    for field in (
+                        "entryBlocked",
+                        "subscriptionRestricted",
+                        "inSellZone",
+                    )
+                )
+                and any(
+                    not any(
+                        signal.get(field) is True
+                        for field in ("entryBlocked", "inSellZone")
+                    )
+                    for signal in signals
+                )
+            ):
+                eligible_quantitative.update(
+                    sector
+                    for sector in exact_sectors
+                    if auditable_product_scope(sector)
+                )
     for row in packet.get("discoveryUniverse", []):
         if isinstance(row, dict):
-            add(row.get("discoverySector") or row.get("sector"))
+            sector = row.get("discoverySector") or row.get("sector")
+            if auditable_product_scope(sector):
+                add(sector)
     for sector in sorted(news):
         add(sector)
     order = {sector: index for index, sector in enumerate(candidates)}
-    candidates.sort(
+    historical = [sector for sector in candidates if sector in previous_risks]
+    quant = sorted(
+        (plan_industries & set(candidates)) - previous_risks,
         key=lambda sector: (
-            -2
-            if sector in previous_risks
-            else -1.5
-            if sector in pending_scopes
-            else -1
-            if sector in plan_industries
-            else 0
-            if sector in news
-            else 1
-            if sector in quantitative
-            else 2,
-            *quantitative.get(sector, (True, math.inf)),
+            sector not in eligible_quantitative,
+            *quantitative.get(sector, (True, True, math.inf)),
             order[sector],
+        ),
+    )
+    pending = [
+        sector
+        for sector in candidates
+        if sector in pending_scopes
+        and sector not in previous_risks
+        and sector not in plan_industries
+    ]
+    fresh_news = [
+        sector
+        for sector in candidates
+        if sector in news
+        and sector not in previous_risks
+        and sector not in plan_industries
+        and sector not in pending_scopes
+    ]
+    rotation = [
+        value
+        for pair in zip_longest(pending, fresh_news)
+        for value in pair
+        if value is not None
+    ]
+    selected_order = historical[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    remaining = MAX_INDUSTRY_CYCLE_CANDIDATES - len(selected_order)
+    rotate_count = min(2, len(rotation), max(0, remaining - bool(quant)))
+    quant_count = min(6, len(quant), remaining - rotate_count)
+    selected_order += quant[:quant_count] + rotation[:rotate_count]
+    leftovers = (
+        historical[MAX_INDUSTRY_CYCLE_CANDIDATES:]
+        + quant[quant_count:]
+        + rotation[rotate_count:]
+        + sorted(
+            candidates,
+            key=lambda sector: (
+                0 if sector in plan_industries else 1 if sector in news else 2,
+                *quantitative.get(sector, (True, True, math.inf)),
+                order[sector],
+            ),
         )
     )
+    candidates = list(dict.fromkeys([*selected_order, *leftovers]))
     all_industries = list(candidates)
     omitted_industries = candidates[MAX_INDUSTRY_CYCLE_CANDIDATES:]
     candidates = candidates[:MAX_INDUSTRY_CYCLE_CANDIDATES]
     selected = set(candidates)
     return {
+        "allocationVersion": ALLOCATION_VERSION,
+        "excludedScopes": list(excluded.values()),
+        "excludedScopeCount": len(excluded),
+        "selectionReasons": [
+            {
+                "industryId": industry,
+                "selected": industry in selected,
+                "reasonCode": "HISTORICAL_RISK_PRIORITY"
+                if industry in previous_risks
+                else "QUANTITATIVE_FUND_PRIORITY"
+                if industry in eligible_quantitative
+                else "SERVER_FUND_SCOPE_PRIORITY"
+                if industry in plan_industries
+                else "BACKLOG_ROTATION"
+                if industry in pending_scopes
+                else "NEWS_ROTATION"
+                if industry in news
+                else "CATALOG_FALLBACK",
+            }
+            for industry in all_industries
+        ],
         "required": True,
         "execution": "PUBLIC_WEB_SEARCH",
         "asOf": now.isoformat(),
@@ -294,8 +486,14 @@ def industry_cycle_research_tasks(packet, now):
         "omittedRiskCandidateCount": len(previous_risks - selected),
         "omittedIndustries": omitted_industries,
         "allIndustries": all_industries,
-        "scopeSearchTerms": {industry: search_names.get(industry, industry) for industry in all_industries},
-        "deferredPages": [omitted_industries[index:index + 10] for index in range(0, len(omitted_industries), 10)],
+        "scopeSearchTerms": {
+            industry: search_names.get(industry, industry)
+            for industry in all_industries
+        },
+        "deferredPages": [
+            omitted_industries[index : index + 10]
+            for index in range(0, len(omitted_industries), 10)
+        ],
         "omittedPlanIndustryIds": sorted(plan_industries - selected),
         "standardIndustryCodes": sorted(STANDARD_INDUSTRY_CODES),
         "planReviewEligibility": [

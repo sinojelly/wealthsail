@@ -78,41 +78,48 @@ def test_prior_risky_industry_absent_from_current_universe_is_checked_before_new
 ):
     packet = {
         "previousIndustryRiskStates": [risk_state("ROBOT", field)],
-        "alphaPublic": {"sectorCatalysts": {"NEWS": ["today"]}},
+        "alphaPublic": {"sectorCatalysts": {"FINANCE_POLICY": ["today"]}},
         "quantitativeScan": {
             "items": [
                 {
-                    "discoverySector": "READY",
+                    "discoverySector": "BROKER",
                     "entryReady": True,
                     "distanceToEntryPct": 0,
                 }
             ]
         },
         "discoveryUniverse": [
-            {"discoverySector": f"OTHER_{index}"} for index in range(20)
+            {"discoverySector": industry} for industry in [
+                "BANK", "AI", "RARE_EARTH", "POWER", "GOLD", "DRUG", "COAL",
+                "PCB", "DEFENCE", "COMMUNICATION", "MEMORY", "FINTECH", "BROAD",
+                "NONFERROUS", "GAMING", "DIVIDEND", "HK_TECH", "AEROSPACE",
+                "SATELLITE", "SOLID_BATTERY",
+            ]
         ],
     }
     saved = deepcopy(packet)
     result = industry_cycle_research_tasks(packet, NOW)
     industries = [row["industry"] for row in result["candidates"]]
-    assert industries[:3] == ["ROBOT", "NEWS", "READY"]
+    assert industries[:3] == ["ROBOT", "FINANCE_POLICY", "BROKER"]
     assert len(industries) == 10
     assert len(result["candidates"][0]["queries"]) == 5
     assert packet == saved
 
 
 def test_prior_risks_share_hard_top_ten_cap_and_do_not_duplicate_industries():
+    industries = [
+        "ROBOT", "BANK", "BROKER", "AI", "RARE_EARTH", "POWER",
+        "GOLD", "DRUG", "COAL", "PCB", "DEFENCE", "COMMUNICATION",
+    ]
     packet = {
         "previousIndustryRiskStates": [
-            risk_state(f"RISK_{index}") for index in range(12)
+            risk_state(industry) for industry in industries
         ]
-        + [risk_state("RISK_0")],
+        + [risk_state(industries[0])],
         "alphaPublic": {"sectorCatalysts": {"NEWS": ["today"]}},
     }
     result = industry_cycle_research_tasks(packet, NOW)
-    assert [row["industry"] for row in result["candidates"]] == [
-        f"RISK_{index}" for index in range(10)
-    ]
+    assert [row["industry"] for row in result["candidates"]] == industries[:10]
     assert sum(len(row["queries"]) for row in result["candidates"]) == 50
     assert result["omittedCandidateCount"] == 3
 

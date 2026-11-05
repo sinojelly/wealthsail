@@ -58,11 +58,15 @@ def test_composite_news_adds_related_fund_candidates_without_alias_substitution(
 
 
 def test_historical_priority_keeps_budget_but_exposes_ineligible_omitted_plan():
+    industries = [
+        "ROBOT", "BANK", "BROKER", "AI", "RARE_EARTH", "POWER",
+        "GOLD", "DRUG", "COAL", "PCB", "DEFENCE", "COMMUNICATION",
+    ]
     packet = {
         "discoveryActionableZones": [nav(discoverySector="NONFERROUS")],
         "previousIndustryRiskStates": [
-            {"industry": f"RISK_{i}", "industryCycle": {"riskFlags": ["ORDER_CUTS"]}}
-            for i in range(12)
+            {"industry": industry, "industryCycle": {"riskFlags": ["ORDER_CUTS"]}}
+            for industry in industries
         ],
     }
     tasks = industry_cycle_research_tasks(packet, NOW)
@@ -74,6 +78,7 @@ def test_historical_priority_keeps_budget_but_exposes_ineligible_omitted_plan():
 
 
 def test_prompt_and_validator_share_guarded_candidate_order_and_packet_clock():
+    industries = ["BANK", "BROKER", "AI", "RARE_EARTH", "POWER", "GOLD", "DRUG", "COAL", "PCB", "DEFENCE", "COMMUNICATION"]
     packet = {
         "asOf": NOW.isoformat(),
         "directions": [],
@@ -83,12 +88,12 @@ def test_prompt_and_validator_share_guarded_candidate_order_and_packet_clock():
             "asOf": NOW.isoformat(),
             "items": [
                 {
-                    "discoverySector": f"S{i}",
+                    "discoverySector": industry,
                     "entryReady": True,
                     "fundCode": f"{i:06}",
                     "signals": [],
                 }
-                for i in range(11)
+                for i, industry in enumerate(industries)
             ],
         },
         "fundSubscriptionStatus": {"000000": {"purchaseStatus": "SUSPENDED"}},

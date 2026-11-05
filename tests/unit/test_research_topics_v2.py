@@ -9,6 +9,11 @@ from tests.unit.test_industrial_metals_research_regression import case
 from tests.unit.test_daily_research import NOW
 
 RUN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+ADDITIONAL_CATALOG_INDUSTRIES = [
+    "BANK", "AI", "POWER", "GOLD", "DRUG", "COAL", "PCB", "DEFENCE",
+    "COMMUNICATION", "MEMORY", "FINTECH", "BROAD", "BROKER", "GAMING",
+    "DIVIDEND", "HK_TECH", "AEROSPACE", "SATELLITE", "SOLID_BATTERY", "US_TECH",
+]
 
 
 def topics():
@@ -71,7 +76,7 @@ def test_all_topic_discoveries_survive_one_call_without_expanding_formal_directi
 def test_manifest_preserves_all_scopes_but_only_allocates_ten_times_five_queries():
     packet, _, _ = case()
     packet["discoveryUniverse"] += [
-        {"discoverySector": f"new-industry-{i}"} for i in range(20)
+        {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
     original = deepcopy(packet)
     frozen = topics().freeze_discovery_packet(packet, NOW)
@@ -159,7 +164,7 @@ def test_exact_server_plan_scope_can_repair_model_review_label_without_alias_gue
 def test_deferred_topic_is_pending_not_failed_or_silently_omitted():
     packet, raw, checks = case()
     packet["discoveryUniverse"] += [
-        {"discoverySector": f"new-industry-{i}"} for i in range(20)
+        {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
     packet = topics().freeze_discovery_packet(packet, NOW)
     deferred = packet["researchDiscovery"]["auditManifest"]["deferredScopes"][-1]
@@ -221,7 +226,7 @@ def test_catalog_label_cannot_borrow_an_unrelated_formal_direction_investment_pe
 def test_backlog_contains_deferred_scopes_and_does_not_repeat_completed_review_tasks():
     packet, raw, checks = case()
     packet["discoveryUniverse"] += [
-        {"discoverySector": f"new-industry-{i}"} for i in range(20)
+        {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
     packet = topics().freeze_discovery_packet(packet, NOW)
     result = evaluate_with_execution(
@@ -468,7 +473,7 @@ def test_registry_overflow_is_explicit_and_includes_task_storage_budget():
         {
             **topic(index),
             "industryClaims": [
-                f"第{index}主题第{claim}产业" + "公开产业范围" * 13
+                f"第{index}主题第{claim}产业" + "公开产业范围" * 4
                 for claim in range(8)
             ],
         }
@@ -546,7 +551,7 @@ def test_only_unverified_risk_category_remains_in_scope_tasks():
 def test_oversize_item_preserves_dynamic_search_terms_in_global_tasks():
     packet, raw, checks = case()
     packet = topics().freeze_discovery_packet(packet, NOW)
-    claims = [f"第{index}产业" + "独立技术范围" * 15 for index in range(8)]
+    claims = [f"第{index}产业" + "独立技术范围" * 5 for index in range(8)]
     raw["topicCatalog"] = [{**topic(1), "industryClaims": claims}]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
