@@ -1,4 +1,6 @@
 import { request } from "./client";
+import type { ResearchAcceptanceOutcome } from "./research-acceptance";
+import type { TopicRegistryPage } from "./research-topic-registry";
 export interface Direction {
   id: string;
   marketId: string;
@@ -725,7 +727,25 @@ export interface DeterministicRepair {
   repairRevision?: string | null;
   buildCommit?: string | null;
 }
+export interface EconomicResearchDelivery {
+  version: "economic-research-delivery-v1";
+  researchId: string | null;
+  status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE" | "PENDING" | "UNKNOWN";
+  asOf: string | null;
+  validatedAt: string | null;
+  recordedAt: string | null;
+  archiveState:
+    "ARCHIVED" | "AUDIT_PENDING" | "ARCHIVING" | "UNRECOVERABLE" | null;
+  archivePending: boolean;
+  coverage?: Partial<TopicRegistryPage["coverage"]> | null;
+  observations: ResearchAcceptanceOutcome["accepted"];
+  acceptedContentComplete: boolean;
+  issueCount?: number;
+  issueListComplete?: boolean;
+  actionable: false;
+}
 export interface DailyResearch {
+  economicResearch?: EconomicResearchDelivery;
   schedule?: {
     mode: "DAILY" | "WEEKDAYS";
     time: string;

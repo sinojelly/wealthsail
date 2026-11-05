@@ -5,14 +5,19 @@ import type {
   DailyResearchFailureRuleId,
   DailyResearchFailureStage,
   Direction,
+  EconomicResearchDelivery,
 } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 import { researchScheduleLabel } from "../research-schedule-display";
-import ResearchAcceptance from "./ResearchAcceptance";
+import ResearchAcceptance, {
+  AcceptanceObservations,
+} from "./ResearchAcceptance";
 import DeterministicRepairNotice from "./DeterministicRepairNotice";
 import { PublishedResearchRepairs } from "../../operations/components/ResearchHistoryRepairs";
-import ResearchTopicRegistry from "./ResearchTopicRegistry";
+import ResearchTopicRegistry, {
+  ResearchDeliverySummary,
+} from "./ResearchTopicRegistry";
 const stateLabels: Record<string, string> = {
   NOT_RUN: "今日尚未启动",
   RUNNING: "研究正在执行",
@@ -225,6 +230,25 @@ const energyUnit = (unit: string) =>
 function executionState(data?: DailyResearch | null, state?: string) {
   return data?.pipeline?.state ?? data?.state ?? state;
 }
+function currentEconomicResearch(data?: DailyResearch | null) {
+  const economic = data?.economicResearch;
+  const currentId =
+    (data?.pipeline ? data.pipeline.researchRunId : data?.runId) ?? null;
+  return economic?.version === "economic-research-delivery-v1" &&
+    typeof economic.researchId === "string" &&
+    economic.researchId.length > 0 &&
+    economic.actionable === false &&
+    economic.researchId === currentId
+    ? economic
+    : undefined;
+}
+const economicLabels: Record<EconomicResearchDelivery["status"], string> = {
+  AVAILABLE: "今日经济研究已有可阅读成果",
+  PARTIAL: "今日经济研究已有观察资料，证据仍待核实",
+  UNAVAILABLE: "今日经济研究暂无可阅读成果",
+  PENDING: "今日经济研究资料待归档",
+  UNKNOWN: "今日经济研究交付状态未知",
+};
 function triggerTime(data?: DailyResearch | null) {
   const actual = data?.pipeline?.startedAt ?? data?.startedAt;
   if (actual && timeLabel(actual) !== "未确认")
@@ -277,6 +301,7 @@ export function DailyResearchStatus({
   hasReport?: boolean;
 }) {
   const currentState = executionState(data, state);
+  const economic = currentEconomicResearch(data);
   const label = statusLabel(
     currentState,
     data?.scheduleState ?? scheduleState,
@@ -285,10 +310,57 @@ export function DailyResearchStatus({
     data?.runMode,
   );
   return (
-    <span className="op-research-status" data-state={currentState}>
-      {label}
-      {triggerTime(data)}
+    <span
+      className="op-research-status"
+      data-state={economic?.status ?? currentState}
+      data-report-state={currentState}
+    >
+      {economic ? (
+        <>
+          <span>{economicLabels[economic.status]}</span>
+          <span>
+            {" "}
+            · 正式投资报告：{label}
+            {triggerTime(data)}
+          </span>
+        </>
+      ) : (
+        <>
+          {label}
+          {triggerTime(data)}
+        </>
+      )}
     </span>
+  );
+}
+function EconomicResearchOverview({
+  economic,
+}: {
+  economic: EconomicResearchDelivery;
+}) {
+  const readable =
+    economic.status === "AVAILABLE" || economic.status === "PARTIAL";
+  return (
+    <section aria-label="今日信息总览">
+      <h3>今日信息总览 · 只读经济研究</h3>
+      <p>{economicLabels[economic.status]}</p>
+      <p>
+        研究ID：{economic.researchId ?? "未提供"} · 证据时间：
+        {timeLabel(economic.asOf)}
+      </p>
+      {readable && (
+        <>
+          <ResearchDeliverySummary coverage={economic.coverage} />
+          <p>
+            仅表示安全观察资料可阅读，经济传导仍为条件推演；不提供交易、跟踪或推送动作。
+          </p>
+          {economic.acceptedContentComplete === false && (
+            <p>验收正文为节选，完整内容请管理员查看冻结材料</p>
+          )}
+          <AcceptanceObservations accepted={economic.observations} />
+        </>
+      )}
+    </section>
   );
 }
 export function EnergyObservations({
@@ -360,6 +432,7 @@ function DailyResearchContent({
   const [fullOpen, setFullOpen] = useState(false);
   const fullEventRefs = useRef(new Map<string, HTMLElement>());
   const report = data?.report;
+  const economic = currentEconomicResearch(data);
   const events =
     report?.events.filter(
       (event, index, rows) =>
@@ -530,7 +603,19 @@ function DailyResearchContent({
   }
   return (
     <section className="op-daily-report" aria-label="每日事件研究">
-      <h3>{report ? "关键经济要闻" : "暂无有效日报"}</h3>
+      <h3>
+        {economic
+          ? "经济研究与正式投资报告"
+          : report
+            ? "关键经济要闻"
+            : "暂无有效日报"}
+      </h3>
+      {economic && (
+        <EconomicResearchOverview
+          key={economic.researchId}
+          economic={economic}
+        />
+      )}
       {(data?.reportRunMode === "DEBUG" ||
         data?.reportRunMode === "MANUAL") && (
         <p className="op-debug-version">

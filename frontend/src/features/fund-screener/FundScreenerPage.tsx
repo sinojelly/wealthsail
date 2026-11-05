@@ -23,6 +23,7 @@ import StudyTracking from "./components/StudyTracking";
 import TrackedFundWatch from "./components/TrackedFundWatch";
 import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
+import { useEconomicArchivePolling } from "./economic-archive-polling";
 import "./opportunities.css";
 
 export default function FundScreenerPage() {
@@ -55,9 +56,12 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     queryKey: [subject, "directions"],
     queryFn: ({ signal }) => api.getDirections(signal),
   });
+  const marketArchiveInterval = useEconomicArchivePolling();
+  const opportunityArchiveInterval = useEconomicArchivePolling();
   const context = useQuery({
     queryKey: [subject, "market-context", macroMonths],
     queryFn: ({ signal }) => api.getMarketContext(signal, macroMonths),
+    refetchInterval: marketArchiveInterval,
   });
   const unlinked = params.get("unlinked") === "1";
   const directionId = unlinked
@@ -191,6 +195,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         { ...opportunityScope, months: macroMonths },
         signal,
       ),
+    refetchInterval: opportunityArchiveInterval,
     enabled:
       directions.isSuccess && (unlinked || !directionId || indices.isSuccess),
   });

@@ -319,7 +319,9 @@ it("distinguishes independently validated read-only delivery from the unchanged 
   vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
   renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
   expect(
-    await screen.findByText("经济研究已完成，暂无满足完整风控条件的基金机会"),
+    await screen.findByText(
+      "今日经济研究已有可阅读成果，主题核验覆盖尚未提供；暂无合格机会",
+    ),
   ).toBeVisible();
   expect(
     screen.getByText("仅表示只读内容通过独立验收，经济传导仍为条件推演"),
@@ -408,6 +410,35 @@ it("shows verified CLI execution events without claiming exhaustive or risk-free
   ).not.toBeInTheDocument();
   expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
 });
+it("reports partial task matching and partial source coverage without calling the entire study complete", async () => {
+  const data = page();
+  Object.assign(data.coverage, {
+    researchDeliveryStatus: "VALIDATED_READ_ONLY",
+    investmentQualificationStatus: "NO_QUALIFIED_OPPORTUNITIES",
+    discoveredTopicCount: 64,
+    evidenceBackedTopicCount: 2,
+    pendingVerificationTopicCount: 62,
+    evidenceBackedTopicRatioPercent: 3.1,
+    qualifiedFormalDirectionCount: 0,
+    executionMatchStatus: "EXECUTION_PARTIALLY_MATCHED",
+    executionMatchedTaskCount: 48,
+    executionPlannedTaskCount: 50,
+    executionUnmatchedQueryHashCount: 0,
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
+  expect(
+    await screen.findByText(
+      "今日经济研究已有可阅读成果：64个发现主题，其中2个具备已核对来源支持，其余62个仍需核实；暂无合格机会",
+    ),
+  ).toBeVisible();
+  expect(screen.getByText(/执行任务匹配：计划任务仅部分匹配/)).toBeVisible();
+  expect(screen.getByText(/可信匹配任务：48.*计划任务：50/)).toBeVisible();
+  expect(
+    screen.getByText(/待核实主题：62.*已核对来源支持比例：3.1%/),
+  ).toBeVisible();
+  expect(screen.queryByText(/经济研究已完成/)).not.toBeInTheDocument();
+});
 it("keeps explicitly unverified execution distinct from a legacy missing field", async () => {
   const first = renderWithSession(
     <ResearchTopicRegistry runId={run} state="READY" />,
@@ -441,7 +472,7 @@ it("reports trusted task matching and unattributed queries without claiming an i
   vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
   renderWithSession(<ResearchTopicRegistry runId={run} state="FAILED" />);
   expect(
-    await screen.findByText(/执行任务匹配：存在尚未匹配的执行事件/),
+    await screen.findByText(/执行任务匹配：存在未归属计划任务的观测查询/),
   ).toBeVisible();
   expect(screen.getByText(/可信匹配任务：3.*计划任务：15/)).toBeVisible();
   expect(screen.getByText(/观测查询：9.*未匹配查询哈希：6/)).toBeVisible();
@@ -456,7 +487,7 @@ it("reports trusted task matching and unattributed queries without claiming an i
   ).not.toBeInTheDocument();
 });
 it.each([
-  ["EXECUTION_MATCHED", "执行事件与计划任务已匹配"],
+  ["EXECUTION_MATCHED", "全部计划任务已匹配"],
   ["EXECUTION_NOT_OBSERVED", "尚未观测到执行事件"],
   ["EXECUTION_UNVERIFIED", "执行凭证尚未核验"],
 ])(

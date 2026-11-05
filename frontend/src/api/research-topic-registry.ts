@@ -57,6 +57,8 @@ export interface TopicRegistryPage {
     totalCount: number;
     discoveredTopicCount?: number;
     evidenceBackedTopicCount?: number;
+    pendingVerificationTopicCount?: number;
+    evidenceBackedTopicRatioPercent?: number | null;
     evaluableFundDirectionCount?: number;
     qualifiedFormalDirectionCount?: number;
     researchDeliveryStatus?:
@@ -87,6 +89,7 @@ export interface TopicRegistryPage {
     executionMatchStatus?:
       | "EXECUTION_UNMATCHED"
       | "EXECUTION_MATCHED"
+      | "EXECUTION_PARTIALLY_MATCHED"
       | "EXECUTION_NOT_OBSERVED"
       | "EXECUTION_UNVERIFIED";
     executionPlannedTaskCount?: number;

@@ -317,20 +317,43 @@ function RegistryData({
     </section>
   );
 }
+export function ResearchDeliverySummary({
+  coverage,
+}: {
+  coverage?: Partial<TopicRegistryPage["coverage"]> | null;
+}) {
+  const suffix =
+    coverage?.investmentQualificationStatus === "NO_QUALIFIED_OPPORTUNITIES" ||
+    coverage?.qualifiedFormalDirectionCount === 0
+      ? "；暂无合格机会"
+      : "";
+  if (
+    coverage?.discoveredTopicCount != null &&
+    coverage.evidenceBackedTopicCount != null &&
+    coverage.pendingVerificationTopicCount != null
+  ) {
+    return (
+      <p>
+        今日经济研究已有可阅读成果：{coverage.discoveredTopicCount}
+        个发现主题，其中{coverage.evidenceBackedTopicCount}
+        个具备已核对来源支持，其余{coverage.pendingVerificationTopicCount}
+        个仍需核实{suffix}
+      </p>
+    );
+  }
+  return <p>今日经济研究已有可阅读成果，主题核验覆盖尚未提供{suffix}</p>;
+}
+
 function Coverage({ data }: { data: TopicRegistryPage }) {
   const coverage = data.coverage;
   const unavailable = "旧版未提供，不可推断";
-  const deliveryMessage =
-    coverage.researchDeliveryStatus === "VALIDATED_READ_ONLY" &&
-    coverage.investmentQualificationStatus === "NO_QUALIFIED_OPPORTUNITIES"
-      ? "经济研究已完成，暂无满足完整风控条件的基金机会"
-      : coverage.researchDeliveryStatus
-        ? {
-            VALIDATED_READ_ONLY: "只读经济研究内容已通过独立验收",
-            OBSERVATION_READ_ONLY: "研究观察资料已保存，证据待核实",
-            UNAVAILABLE: "只读研究交付暂不可用",
-          }[coverage.researchDeliveryStatus]
-        : `只读研究交付状态：${unavailable}`;
+  const deliveryMessage = coverage.researchDeliveryStatus
+    ? {
+        VALIDATED_READ_ONLY: "只读经济研究已有独立验收成果",
+        OBSERVATION_READ_ONLY: "研究观察资料已保存，证据待核实",
+        UNAVAILABLE: "只读研究交付暂不可用",
+      }[coverage.researchDeliveryStatus]
+    : `只读研究交付状态：${unavailable}`;
   const qualificationMessage = coverage.investmentQualificationStatus
     ? {
         QUALIFIED_CANDIDATES:
@@ -350,8 +373,9 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
   };
   const matchStatus = coverage.executionMatchStatus
     ? {
-        EXECUTION_UNMATCHED: "存在尚未匹配的执行事件",
-        EXECUTION_MATCHED: "执行事件与计划任务已匹配",
+        EXECUTION_UNMATCHED: "存在未归属计划任务的观测查询",
+        EXECUTION_MATCHED: "全部计划任务已匹配",
+        EXECUTION_PARTIALLY_MATCHED: "计划任务仅部分匹配",
         EXECUTION_NOT_OBSERVED: "尚未观测到执行事件",
         EXECUTION_UNVERIFIED: "执行凭证尚未核验",
       }[coverage.executionMatchStatus]
@@ -369,6 +393,9 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
           <strong>{deliveryMessage}</strong>
         </p>
         {coverage.researchDeliveryStatus === "VALIDATED_READ_ONLY" && (
+          <ResearchDeliverySummary coverage={coverage} />
+        )}
+        {coverage.researchDeliveryStatus === "VALIDATED_READ_ONLY" && (
           <p>仅表示只读内容通过独立验收，经济传导仍为条件推演</p>
         )}
         <p>{qualificationMessage}</p>
@@ -379,6 +406,13 @@ function Coverage({ data }: { data: TopicRegistryPage }) {
         发现主题：{coverage.discoveredTopicCount ?? unavailable}
         {" · "}具有已核对来源的主题：
         {coverage.evidenceBackedTopicCount ?? unavailable}
+      </p>
+      <p>
+        待核实主题：{coverage.pendingVerificationTopicCount ?? unavailable}
+        {" · "}已核对来源支持比例：
+        {coverage.evidenceBackedTopicRatioPercent == null
+          ? "未知"
+          : `${coverage.evidenceBackedTopicRatioPercent}%`}
       </p>
       <p>
         可评估基金方向：{coverage.evaluableFundDirectionCount ?? unavailable}
