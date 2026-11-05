@@ -269,7 +269,7 @@ async def test_real_manual_worker_refreshes_sources_replaces_report_and_retains_
             await pool.close()
 
 
-async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_slot(
+async def test_real_scheduled_worker_cools_after_manual_dispatch_without_consuming_slot(
     monkeypatch,
 ):
     from backend.common.database import create_pool
@@ -281,11 +281,8 @@ async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_sl
         monkeypatch, clock
     )
     state["hold"], state["entered"] = asyncio.Event(), asyncio.Event()
-    waiting, resume = asyncio.Event(), asyncio.Event()
-
     async def wait_for_guard():
-        waiting.set()
-        await resume.wait()
+        raise AssertionError("automatic cooldown must not wait for the manual model")
 
     monkeypatch.setattr(daily, "_wait_model_slot", wait_for_guard)
     automatic = SimpleNamespace(**{**vars(configured), "daily_research_enabled": True})
@@ -309,29 +306,49 @@ async def test_real_scheduled_worker_waits_for_manual_model_without_consuming_sl
             scheduled_task = asyncio.create_task(
                 daily.sync_daily_research(pool, automatic, clock[0])
             )
-            await asyncio.wait_for(waiting.wait(), timeout=10)
+            cooldown = await asyncio.wait_for(scheduled_task, timeout=10)
+            assert cooldown == {
+                "status": "COOLDOWN",
+                "errorClass": "ResearchCooldownActive",
+                "automaticEligibleAt": (clock[0] + timedelta(hours=23)).isoformat(),
+            }
             assert state["calls"] == state["active"] == 1
+            assert state["peak"] == 1
             assert not await consumed(admin, clock[0])
+            assert (
+                await admin.fetchval(
+                    """SELECT count(*) FROM research.daily_research_model_guards g
+                    JOIN research.daily_research_runs r USING(run_id)
+                    JOIN research.daily_research_refresh_requests q ON q.id=r.debug_request_id
+                    WHERE q.tenant_id=$1 AND g.released_at IS NULL""",
+                    tenant,
+                )
+                == 1
+            )
             state["hold"].set()
             assert (await asyncio.wait_for(manual_task, timeout=10))[
                 "status"
             ] == "READY"
-            resume.set()
-            assert (await asyncio.wait_for(scheduled_task, timeout=10))[
-                "status"
-            ] == "READY"
-            assert state["calls"] == 2 and state["peak"] == 1
-            assert await consumed(admin, clock[0])
+            assert state["calls"] == state["peak"] == 1
+            assert state["active"] == 0
+            assert (
+                await daily.sync_daily_research(pool, automatic, clock[0])
+            )["status"] == "COOLDOWN"
+            assert state["calls"] == 1
+            assert not await consumed(admin, clock[0])
             assert (
                 await admin.fetchval(
-                    "SELECT count(*) FROM research.daily_research_model_guards WHERE released_at IS NULL"
+                    """SELECT count(*) FROM research.daily_research_model_guards g
+                    JOIN research.daily_research_runs r USING(run_id)
+                    JOIN research.daily_research_refresh_requests q ON q.id=r.debug_request_id
+                    WHERE q.tenant_id=$1 AND g.released_at IS NULL""",
+                    tenant,
                 )
                 == 0
             )
             assert network.await_count == 0
         finally:
             state["hold"].set()
-            resume.set()
             for task in (manual_task, scheduled_task):
                 if task is not None and not task.done():
                     task.cancel()

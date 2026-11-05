@@ -306,6 +306,7 @@ def isolate_pipeline(monkeypatch, *, batch_state="READY", quality_allowed=True):
 
     monkeypatch.setattr(job, "system_connection", connection)
     monkeypatch.setattr(job, "consumed", AsyncMock(return_value=False))
+    monkeypatch.setattr(job, "read_automatic_research_cooldown", AsyncMock(return_value={"active": False}))
     monkeypatch.setattr(job, "now_shanghai", lambda: NOW)
     monkeypatch.setattr(job, "_pipeline_stage", stage)
     monkeypatch.setattr(repo, "read_pipeline", AsyncMock(return_value=None))

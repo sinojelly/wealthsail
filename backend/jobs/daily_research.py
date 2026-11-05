@@ -38,6 +38,7 @@ from backend.macro.daily_repository import (
     read_daily_research,
     read_previous_daily_research,
     read_recent_public_research,
+    read_automatic_research_cooldown,
     scheduled_for,
     is_scheduled_day,
 )
@@ -77,6 +78,13 @@ from backend.macro.model_dispatch_repository import (
 
 logger = logging.getLogger("wealthsail.daily_research")
 PIPELINE_HEARTBEAT_SECONDS = 30
+
+
+def _cooldown_result(cooldown):
+    eligible = cooldown["automaticEligibleAt"]
+    logger.info("daily_research_cooldown hours=23 automatic_eligible_at=%s", eligible.isoformat())
+    return {"status": "COOLDOWN", "errorClass": "ResearchCooldownActive",
+            "automaticEligibleAt": eligible.isoformat()}
 
 
 def _canonical_reason_code(exc: Exception) -> str:
@@ -575,6 +583,9 @@ async def sync_daily_research(
             return {"status": "WAITING_PIPELINE_OWNER", "pipelineId": existing["id"]}
         return {"status": "SKIPPED"}
     async with _scheduler_database_connection(pool) as conn:
+        cooldown = await read_automatic_research_cooldown(conn, stamp)
+        if cooldown["active"]:
+            return _cooldown_result(cooldown)
         claim = await claim_pipeline(
             conn,
             stamp,
@@ -769,11 +780,11 @@ async def _run_owned_pipeline(pool, settings, stamp, claim):
         packet=packet,
         pipeline=claim,
     )
-    state = (
-        result["status"]
-        if result["status"] in {"READY", "FAILED", "UNCERTAIN", "MISSED"}
-        else "UNCERTAIN"
-    )
+    state = result["status"]
+    if state == "COOLDOWN":
+        state = "MISSED"
+    elif state not in {"READY", "FAILED", "UNCERTAIN", "MISSED"}:
+        state = "UNCERTAIN"
     if not claim.get("_terminal_written"):
         await _pipeline_stage(
             pool,
@@ -814,6 +825,9 @@ async def _execute_daily_research(
         async with system_connection(pool) as conn:
             if await consumed(conn, stamp):
                 return {"status": "SKIPPED"}
+            cooldown = await read_automatic_research_cooldown(conn, stamp)
+            if cooldown["active"]:
+                return _cooldown_result(cooldown)
     manual_bundle = None
     if manual:
         from backend.macro.alpha_repository import read_alpha_public
@@ -928,6 +942,10 @@ async def _execute_daily_research(
                 # Neither a busy model nor a lost owner may consume a new slot.
                 async with conn.transaction():
                     await lock_model_dispatch(conn)
+                    if not explicit:
+                        cooldown = await read_automatic_research_cooldown(conn, dispatched)
+                        if cooldown["active"]:
+                            return _cooldown_result(cooldown)
                     if pipeline:
                         from backend.macro.daily_pipeline_repository import (
                             advance_pipeline,
@@ -972,6 +990,11 @@ async def _execute_daily_research(
                         raise PipelineOwnershipLost()
             break
         except ResearchModelBusy:
+            if not explicit:
+                async with system_connection(pool) as conn:
+                    cooldown = await read_automatic_research_cooldown(conn, local(now_shanghai()))
+                    if cooldown["active"]:
+                        return _cooldown_result(cooldown)
             # Preserve request/run identities and release the DB connection while
             # waiting. The existing pipeline/consumer deadline still applies.
             await _wait_model_slot()
@@ -1485,7 +1508,7 @@ async def main(argv=None):
         result = await sync_daily_research(pool, settings, now_shanghai())
         print(json.dumps(result, ensure_ascii=False))
         return (
-            0 if result["status"] in {"READY", "SKIPPED", "NOT_DUE", "DISABLED"} else 1
+            0 if result["status"] in {"READY", "SKIPPED", "NOT_DUE", "DISABLED", "COOLDOWN"} else 1
         )
     finally:
         await pool.close()

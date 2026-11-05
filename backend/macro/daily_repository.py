@@ -8,12 +8,34 @@ from zoneinfo import ZoneInfo
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 METHOD = "daily-research-v1"
 EXECUTION_WINDOW = timedelta(minutes=20)
+AUTOMATIC_RESEARCH_COOLDOWN = timedelta(hours=23)
 
 
 def local(now):
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("daily research requires an aware clock")
     return now.astimezone(SHANGHAI)
+
+
+def automatic_research_cooldown(last_dispatched_at, now):
+    """A dispatch intent may have incurred cost even when its outcome is unknown."""
+    stamp = local(now)
+    last = local(last_dispatched_at) if last_dispatched_at is not None else None
+    eligible = last + AUTOMATIC_RESEARCH_COOLDOWN if last is not None else None
+    return {
+        "active": eligible is not None and stamp < eligible,
+        "hours": 23,
+        "lastAiDispatchAt": last,
+        "automaticEligibleAt": eligible,
+    }
+
+
+async def read_automatic_research_cooldown(conn, now):
+    # Include all modes and terminal outcomes, independently of best-effort usage
+    # telemetry. Do not filter by a stale caller clock: a manual dispatch may
+    # have committed while the automatic caller was waiting for the global lock.
+    last = await conn.fetchval("SELECT max(dispatched_at) FROM research.daily_research_runs")
+    return automatic_research_cooldown(last, now)
 
 
 def scheduled_for(now, schedule_time="07:00"):
@@ -329,6 +351,13 @@ async def read_daily_research(
         else None,
     )
     economic_research = await read_economic_research(conn, displayed_run_id, stamp)
+    cooldown = automatic_research_cooldown(latest["dispatched_at"] if latest else None, stamp)
+    next_automatic = next_run(stamp, schedule_mode, schedule_time)
+    if enabled and cooldown["active"] and next_automatic < cooldown["automaticEligibleAt"]:
+        next_automatic = next_run(
+            cooldown["automaticEligibleAt"] - timedelta(microseconds=1),
+            schedule_mode, schedule_time,
+        )
     return {
         "methodVersion": METHOD,
         "state": state,
@@ -370,7 +399,8 @@ async def read_daily_research(
         "reportRunId": str(report_row["run_id"]) if report_row else None,
         "reportCompletedAt": report_row.get("recorded_at") if report_row else None,
         "reportSlotDate": report_row.get("slot_date") if report_row else None,
-        "nextRunAt": next_run(stamp, schedule_mode, schedule_time),
+        "nextRunAt": next_automatic,
+        "automaticResearchCooldown": cooldown,
         "errorClass": pipeline["errorClass"]
         if pipeline
         else latest.get("error_class")
