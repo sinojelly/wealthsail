@@ -219,6 +219,7 @@ async def read_daily_research(
     from backend.macro.daily_pipeline_repository import read_pipeline
     from backend.macro.research_diagnostics import sanitize_failure_diagnostics
     from backend.macro.research_delivery import read_economic_research
+    from backend.macro.research_opportunities import read_fund_observation
 
     stamp = local(now)
     pipeline = await read_pipeline(conn, stamp)
@@ -351,6 +352,7 @@ async def read_daily_research(
         else None,
     )
     economic_research = await read_economic_research(conn, displayed_run_id, stamp)
+    fund_observation = await read_fund_observation(conn, latest, displayed_run_id, stamp)
     cooldown = automatic_research_cooldown(latest["dispatched_at"] if latest else None, stamp)
     next_automatic = next_run(stamp, schedule_mode, schedule_time)
     if enabled and cooldown["active"] and next_automatic < cooldown["automaticEligibleAt"]:
@@ -420,6 +422,7 @@ async def read_daily_research(
         "promptVersion": report_row.get("prompt_version") if report_row else None,
         "report": report,
         "economicResearch": economic_research,
+        "fundObservation": fund_observation,
     }
 
 
