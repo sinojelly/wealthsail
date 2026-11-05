@@ -611,13 +611,16 @@ def execution_match_stats(receipt, manifest):
     ):
         return output
     unmatched = observed_hashes - planned_hashes
+    matched_task_count = len(executed_task_ids(receipt, manifest))
     output.update(
         classification="EXECUTION_UNMATCHED"
         if unmatched
+        else "EXECUTION_PARTIALLY_MATCHED"
+        if observed_hashes and matched_task_count < len(tasks)
         else "EXECUTION_MATCHED"
         if observed_hashes
         else "EXECUTION_NOT_OBSERVED",
-        matchedTaskCount=len(executed_task_ids(receipt, manifest)),
+        matchedTaskCount=matched_task_count,
         matchedQueryHashCount=len(observed_hashes & planned_hashes),
         unmatchedQueryHashCount=len(unmatched),
     )

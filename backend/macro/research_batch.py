@@ -765,10 +765,12 @@ def evaluate_research_batch(
     if result["hardBlockers"] or result["autoBlockers"]:
         reasons["PUBLICATION_SAFETY_BLOCKED"] = len(result["hardBlockers"]) + len(result["autoBlockers"])
     safe_news = formal or {"events": accepted.get("events", []), "upcoming": accepted.get("upcoming", [])}
+    registered_discovery_keys = {row["key"] for row in candidate["topicCatalog"]}
     registry["coverage"].update(
         discoveredTopicCount=len(raw_topics),
         evidenceBackedTopicCount=sum(
             item["status"] != "QUARANTINED"
+            and item["key"] in registered_discovery_keys
             and any(sources.get(ref, {}).get("verification") == "SOURCE_CHECKED" for ref in item["sourceIds"])
             for item in registry["items"]
         ),
@@ -790,6 +792,12 @@ def evaluate_research_batch(
             for component in ("events", "upcoming")
             for row in safe_news.get(component, [])
         ),
+    )
+    discovered = registry["coverage"]["discoveredTopicCount"]
+    checked = registry["coverage"]["evidenceBackedTopicCount"]
+    registry["coverage"].update(
+        pendingVerificationTopicCount=max(0, discovered - checked),
+        evidenceBackedTopicRatioPercent=round(100 * checked / discovered, 1) if discovered else None,
     )
     # Read-only delivery is not the READY result or permission for an operation.
     # A failed fund can coexist with independently checked economic material.

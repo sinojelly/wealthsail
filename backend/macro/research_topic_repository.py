@@ -250,11 +250,17 @@ def prepare_topic_registry(value, run_id, validated_at):
         "validEventCount",
         "validUpcomingCount",
         "unresolvedReferenceCount",
+        "pendingVerificationTopicCount",
     ):
         if key in coverage:
             if type(coverage[key]) is not int or not 0 <= coverage[key] <= 10000:
                 _invalid()
             safe_coverage[key] = coverage[key]
+    if "evidenceBackedTopicRatioPercent" in coverage:
+        ratio = coverage["evidenceBackedTopicRatioPercent"]
+        if ratio is not None and (type(ratio) not in {int, float} or not 0 <= ratio <= 100):
+            _invalid()
+        safe_coverage["evidenceBackedTopicRatioPercent"] = ratio
     if "formalEligibilityReasons" in coverage:
         from backend.macro.research_topics import FORMAL_ELIGIBILITY_REASONS
 
@@ -282,7 +288,7 @@ def prepare_topic_registry(value, run_id, validated_at):
     if "executionMatchStatus" in coverage:
         status = coverage["executionMatchStatus"]
         if not isinstance(status, str) or status not in {
-            "EXECUTION_UNMATCHED", "EXECUTION_MATCHED", "EXECUTION_NOT_OBSERVED", "EXECUTION_UNVERIFIED",
+            "EXECUTION_UNMATCHED", "EXECUTION_MATCHED", "EXECUTION_PARTIALLY_MATCHED", "EXECUTION_NOT_OBSERVED", "EXECUTION_UNVERIFIED",
         }:
             _invalid()
         safe_coverage["executionMatchStatus"] = status

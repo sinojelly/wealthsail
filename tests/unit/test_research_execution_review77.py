@@ -55,7 +55,7 @@ def test_matched_unique_hash_count_does_not_duplicate_actual_searches():
         event("two", action={"type": "search", "query": query}),
     )
     stats = execution().execution_match_stats(receipt, MANIFEST)
-    assert stats["classification"] == "EXECUTION_MATCHED"
+    assert stats["classification"] == "EXECUTION_PARTIALLY_MATCHED"
     assert stats["observedQueryCount"] == 2 and stats["matchedQueryHashCount"] == 1
     assert stats["matchedTaskCount"] == 1 and stats["unmatchedQueryHashCount"] == 0
 

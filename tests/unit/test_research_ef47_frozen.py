@@ -42,6 +42,11 @@ def test_actual_ef47_news_delivery_without_fabricating_legacy_partial_search_pro
     assert retained["valueDirections"] == []
     assert len(retained["events"]) == 6 and len(retained["upcoming"]) == 3
     assert len(result["registry"]["items"]) == 64
+    coverage = result["registry"]["coverage"]
+    assert coverage["discoveredTopicCount"] == 64
+    assert coverage["evidenceBackedTopicCount"] == 2
+    assert coverage["pendingVerificationTopicCount"] == 62
+    assert coverage["evidenceBackedTopicRatioPercent"] == 3.1
     assert all(not row["investmentEligible"] for row in result["registry"]["items"])
     assert result["registry"]["coverage"]["executionMatchedTaskCount"] == 0
     assert result["registry"]["coverage"]["searchExecutionVerified"] is False
