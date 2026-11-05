@@ -2153,6 +2153,9 @@ def _validate_report_core(
         )
         refs = _references(row, aliases, directions)
         identity = _identity(
+            "event", "economic-observation-v2", " ".join(row["title"].split()),
+            " ".join(row["summary"].split()), row["phase"]
+        ) if is_v2(packet) else _identity(
             "event", sorted(sources[ref]["url"] for ref in refs), row["phase"]
         )
         item = {
@@ -2166,6 +2169,14 @@ def _validate_report_core(
         }
         if identity in events:
             old = events[identity]
+            if is_v2(packet):
+                merged = _merge_economic_observation(old, item)
+                if merged is None:
+                    item["id"] = _identity("event", identity, row)
+                    events[item["id"]] = item
+                else:
+                    events[identity] = merged
+                continue
             for key in ("channels", "watchFor", "unknowns", "affectedDirectionIds", *LINK_FIELDS):
                 old[key] = sorted(set(old[key] + item[key]))
             old["referenceResolution"] = merge_reference_resolution(
@@ -2205,6 +2216,9 @@ def _validate_report_core(
                 "SCHEDULE_DATE_INVALID", "past schedule is not upcoming"
             )
         identity = _identity(
+            "planned", "economic-observation-v2", " ".join(row["title"].split()),
+            row["scheduledAt"], row["scheduledDate"], sorted(row["watchFor"]),
+        ) if is_v2(packet) else _identity(
             "planned",
             sorted(sources[ref]["url"] for ref in refs),
             row["scheduledAt"],
@@ -2212,6 +2226,14 @@ def _validate_report_core(
         )
         item = {**row, "id": identity, "sourceIds": refs}
         if old := upcoming.get(identity):
+            if is_v2(packet):
+                merged = _merge_economic_observation(old, item)
+                if merged is None:
+                    item["id"] = _identity("planned", identity, row)
+                    upcoming[item["id"]] = item
+                else:
+                    upcoming[identity] = merged
+                continue
             for key in ("affectedDirectionIds", *LINK_FIELDS):
                 item[key] = sorted(set(old[key] + item[key]))
             item["referenceResolution"] = merge_reference_resolution(
@@ -2327,6 +2349,35 @@ def _identity(kind, *values):
             json.dumps(values, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:24]
     )
+
+
+def _merge_economic_observation(old, item):
+    """Merge exact facts only when every detail fits the original safe bounds.
+
+    Different summaries are distinct observations, even under one headline.
+    Overfull unions stay separate rather than truncating sources or risks.
+    """
+    from backend.macro.research_event_links import LINK_FIELDS, merge_reference_resolution
+
+    merged = dict(old)
+    for key, limit in {
+        "sourceIds": 8, "channels": 6, "watchFor": 8, "unknowns": 8,
+        "affectedDirectionIds": 16, **dict.fromkeys(LINK_FIELDS, 16),
+        "scenarios": 3,
+    }.items():
+        if key not in old and key not in item:
+            continue
+        values = list(old.get(key, []))
+        values.extend(value for value in item.get(key, []) if value not in values)
+        if len(values) > limit:
+            return None
+        merged[key] = values
+    rank = {None: 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+    merged["importance"] = max((old.get("importance"), item.get("importance")), key=rank.get)
+    merged["referenceResolution"] = merge_reference_resolution(
+        old.get("referenceResolution"), item.get("referenceResolution"),
+    )
+    return merged
 
 
 def _references(row, aliases, directions):

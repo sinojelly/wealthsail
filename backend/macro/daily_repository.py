@@ -196,6 +196,7 @@ async def read_daily_research(
     from backend.common.timing import trace_stage
     from backend.macro.daily_pipeline_repository import read_pipeline
     from backend.macro.research_diagnostics import sanitize_failure_diagnostics
+    from backend.macro.research_delivery import read_economic_research
 
     stamp = local(now)
     pipeline = await read_pipeline(conn, stamp)
@@ -327,6 +328,7 @@ async def read_daily_research(
         if include_failure_industry_codes is True
         else None,
     )
+    economic_research = await read_economic_research(conn, displayed_run_id, stamp)
     return {
         "methodVersion": METHOD,
         "state": state,
@@ -387,6 +389,7 @@ async def read_daily_research(
         else None,
         "promptVersion": report_row.get("prompt_version") if report_row else None,
         "report": report,
+        "economicResearch": economic_research,
     }
 
 

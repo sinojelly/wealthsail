@@ -158,7 +158,7 @@ def test_public_scan_rejects_nonfinite_or_untyped_signal_distance(distance):
 
 
 @pytest.mark.asyncio
-async def test_old_report_scan_fallback_uses_exact_ready_run_not_latest_attempt():
+async def test_old_report_scan_fallback_uses_exact_ready_run_not_latest_attempt(monkeypatch):
     run = uuid4()
     old = {
         "run_id": run,
@@ -179,10 +179,13 @@ async def test_old_report_scan_fallback_uses_exact_ready_run_not_latest_attempt(
     }
     conn = AsyncMock()
     conn.fetchrow.side_effect = [latest, old]
+    economic = AsyncMock(return_value={"status": "UNKNOWN", "actionable": False})
+    monkeypatch.setattr("backend.macro.research_delivery.read_economic_research", economic)
     result = await daily_repository.read_daily_research(conn, NOW)
     assert result["reportRunId"] == str(run)
     assert len(result["report"]["quantitativeScan"]["items"]) == 30
     assert "quantitativeScan" not in old["payload"]
+    economic.assert_awaited_once_with(conn, str(latest["run_id"]), NOW)
 
 
 @pytest.mark.asyncio
