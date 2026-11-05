@@ -283,6 +283,15 @@ async def read_economic_research(conn, run_id, now):
         ):
             result[key] = value
     measured = result["coverage"] or {}
+    economic_issues = receipt.get("economicIssueCount")
+    result["economicIssueCount"] = (
+        economic_issues
+        if receipt.get("economicIssueScopeVersion")
+        == acceptance.ECONOMIC_ISSUE_SCOPE_VERSION
+        and type(economic_issues) is int
+        and 0 <= economic_issues <= result.get("issueCount", 0)
+        else result.get("issueCount", 0)
+    )
     available = any(
         observations.get(key)
         for key in (
@@ -297,7 +306,7 @@ async def read_economic_research(conn, run_id, now):
     partial = (
         filtered
         or not result["acceptedContentComplete"]
-        or result.get("issueCount", 0) > 0
+        or result["economicIssueCount"] > 0
         or result.get("issueListComplete") is False
         or measured.get("pendingVerificationTopicCount") != 0
     )

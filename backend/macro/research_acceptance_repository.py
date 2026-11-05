@@ -39,6 +39,7 @@ COMPONENTS = (
 SAFE_COLUMNS = "id,run_id,kind,validator_version,validated_at,recorded_at,summary"
 ARCHIVE_MAX_ATTEMPTS = 8
 ARCHIVE_LEASE_SECONDS = 120
+ECONOMIC_ISSUE_SCOPE_VERSION = "economic-issue-scope-v1"
 ARCHIVE_SAFE_COLUMNS = "run_id,status,attempts,created_at,updated_at,next_attempt_at,last_error_class,safe_summary"
 ARCHIVE_ERRORS = frozenset(
     {
@@ -510,6 +511,83 @@ def _deterministic_repair_summary(value):
     return result
 
 
+def _economic_issue_count(value):
+    """Exclude proven price/identity-only failures, never whole directions.
+
+    Private dependency keys are used before projection and only the aggregate
+    survives. Legacy summaries without this proof remain conservative.
+    """
+    rows = value.get("issues")
+    if not isinstance(rows, list):
+        return 0
+    from backend.macro.research_diagnostics import is_safe_item_index
+
+    def price_only(row):
+        return (
+            isinstance(row, dict)
+            and is_safe_item_index(row.get("itemIndex"))
+            and row.get("itemType") == "FUND_PLAN"
+            and row.get("ruleId") == "ACCEPTANCE_FUND_PLAN_INVALID"
+            and row.get("reasonCode") == "FUND_PLAN_INVALID"
+            and not row.get("dependencies")
+            and not row.get("missingIndustryCodes")
+        )
+
+    def plan_wrapper(row):
+        return (
+            isinstance(row, dict)
+            and is_safe_item_index(row.get("itemIndex"))
+            and row.get("itemType") == "VALUE_DIRECTION"
+            and row.get("ruleId") == "ACCEPTANCE_DEPENDENCY_BLOCKED"
+            and row.get("reasonCode") == "DIRECTION_VALIDATION_FAILED"
+            and not row.get("missingIndustryCodes")
+        )
+
+    # The record DTO sanitizes a stored summary again. Reuse only our versioned
+    # aggregate, with non-price/non-wrapper issues providing a conservative floor.
+    count = value.get("economicIssueCount")
+    if (
+        value.get("economicIssueScopeVersion") == ECONOMIC_ISSUE_SCOPE_VERSION
+        and type(count) is int
+        and 0 <= count <= len(rows)
+        and type(value.get("issueCount")) is int
+        and value.get("issueCount") == len(rows)
+        and all(isinstance(row, dict) and "dependencies" not in row for row in rows)
+    ):
+        return max(
+            count,
+            sum(not price_only(row) and not plan_wrapper(row) for row in rows),
+        )
+
+    plans = {
+        (row["itemIndex"], row["businessKey"])
+        for row in rows
+        if price_only(row)
+        and isinstance(row.get("businessKey"), str)
+        and row["businessKey"]
+    }
+    count = 0
+    for row in rows:
+        if price_only(row):
+            continue
+        dependencies = row.get("dependencies") if isinstance(row, dict) else None
+        if (
+            plan_wrapper(row)
+            and isinstance(dependencies, list)
+            and dependencies
+            and all(
+                isinstance(dependency, dict)
+                and dependency.get("itemType") == "FUND_PLAN"
+                and isinstance(dependency.get("businessKey"), str)
+                and (row.get("itemIndex"), dependency["businessKey"]) in plans
+                for dependency in dependencies
+            )
+        ):
+            continue
+        count += 1
+    return count
+
+
 def safe_outcome_summary(value):
     value = value if isinstance(value, dict) else {}
     counts = {}
@@ -553,6 +631,8 @@ def safe_outcome_summary(value):
         else 0,
         "issueListComplete": value.get("issueListComplete") is True
         and len(issues) == len(value.get("issues", [])),
+        "economicIssueCount": _economic_issue_count(value),
+        "economicIssueScopeVersion": ECONOMIC_ISSUE_SCOPE_VERSION,
         "issues": issues,
         "accepted": accepted,
         "acceptedContentComplete": value.get("acceptedContentComplete", True)
