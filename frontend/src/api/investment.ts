@@ -741,10 +741,17 @@ export interface EconomicResearchDelivery {
   observations: ResearchAcceptanceOutcome["accepted"];
   acceptedContentComplete: boolean;
   issueCount?: number;
+  economicIssueCount?: number;
   issueListComplete?: boolean;
   actionable: false;
 }
 export interface DailyResearch {
+  automaticResearchCooldown?: {
+    active: boolean;
+    hours: 23;
+    lastAiDispatchAt: string | null;
+    automaticEligibleAt: string | null;
+  };
   economicResearch?: EconomicResearchDelivery;
   schedule?: {
     mode: "DAILY" | "WEEKDAYS";

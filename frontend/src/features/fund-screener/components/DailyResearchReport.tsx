@@ -330,6 +330,14 @@ export function DailyResearchStatus({
           {triggerTime(data)}
         </>
       )}
+      {data?.automaticResearchCooldown?.active &&
+        data.scheduleState !== "DISABLED" && (
+          <span>
+            {" "}· 自动研究冷却中（23小时）：最近AI派发后，
+            {timeLabel(data.automaticResearchCooldown.automaticEligibleAt)}
+            北京时间前不自动研究；仅限制自动研究，手动仍需管理员明确触发。
+          </span>
+        )}
     </span>
   );
 }

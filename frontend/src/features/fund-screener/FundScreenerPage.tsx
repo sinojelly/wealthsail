@@ -61,7 +61,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const context = useQuery({
     queryKey: [subject, "market-context", macroMonths],
     queryFn: ({ signal }) => api.getMarketContext(signal, macroMonths),
-    refetchInterval: marketArchiveInterval,
+    refetchInterval: marketArchiveInterval.refetchInterval,
+    refetchOnReconnect: marketArchiveInterval.refetchOnReconnect,
   });
   const unlinked = params.get("unlinked") === "1";
   const directionId = unlinked
@@ -195,7 +196,8 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         { ...opportunityScope, months: macroMonths },
         signal,
       ),
-    refetchInterval: opportunityArchiveInterval,
+    refetchInterval: opportunityArchiveInterval.refetchInterval,
+    refetchOnReconnect: opportunityArchiveInterval.refetchOnReconnect,
     enabled:
       directions.isSuccess && (unlinked || !directionId || indices.isSuccess),
   });

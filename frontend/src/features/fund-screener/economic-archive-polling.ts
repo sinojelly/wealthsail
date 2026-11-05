@@ -25,30 +25,84 @@ export function economicArchivePollInterval(
   return elapsedMs < 5 * 60_000 ? 15_000 : 60_000;
 }
 
+interface ArchiveQuery {
+  queryHash?: string;
+  state: {
+    data?: unknown;
+    error: unknown;
+    errorUpdateCount: number;
+    fetchStatus: "fetching" | "paused" | "idle";
+  };
+}
+function contextDaily(query: ArchiveQuery) {
+  const data = query.state.data;
+  return data && typeof data === "object" && "dailyResearch" in data
+    ? (data as { dailyResearch?: DailyResearch | null }).dailyResearch
+    : undefined;
+}
+
 export function useEconomicArchivePolling() {
-  const pending = useRef<{ researchId: string; since: number } | null>(null);
-  return useCallback(
-    (query: { state: { data?: unknown; error: unknown } }): number | false => {
-      const data = query.state.data;
-      const daily =
-        data && typeof data === "object" && "dailyResearch" in data
-          ? (data as { dailyResearch?: DailyResearch | null }).dailyResearch
-          : undefined;
-      if (
-        economicArchivePollInterval(daily, 0, !!query.state.error) === false
-      ) {
-        pending.current = null;
-        return false;
-      }
-      const researchId = daily!.economicResearch!.researchId!;
+  const pending = useRef<{
+    researchId: string;
+    since: number;
+    recoveries: number;
+    lastFailure?: string;
+    recoverAt?: number;
+    reconnectChecked: boolean;
+  } | null>(null);
+  const cycleFor = useCallback((daily: DailyResearch) => {
+    const researchId = daily.economicResearch!.researchId!;
+    if (pending.current?.researchId !== researchId) {
+      pending.current = {
+        researchId,
+        since: Date.now(),
+        recoveries: 0,
+        reconnectChecked: false,
+      };
+    }
+    return pending.current;
+  }, []);
+  const interval = useCallback(
+    (query: ArchiveQuery): number | false => {
+      const daily = contextDaily(query);
+      if (economicArchivePollInterval(daily, 0) === false) return false;
+      const cycle = cycleFor(daily!);
       const now = Date.now();
-      if (pending.current?.researchId !== researchId)
-        pending.current = { researchId, since: now };
-      return economicArchivePollInterval(
-        daily,
-        Math.max(0, now - pending.current.since),
-      );
+      if (query.state.error) {
+        // Native retries remain unchanged; only a final idle error spends a recovery opportunity.
+        if (query.state.fetchStatus !== "idle") return false;
+        const failure = `${query.queryHash ?? "context"}:${query.state.errorUpdateCount}`;
+        if (cycle.lastFailure !== failure) {
+          cycle.lastFailure = failure;
+          cycle.recoverAt = undefined;
+          if (cycle.recoveries < 3) {
+            cycle.recoverAt = now + [15_000, 30_000, 60_000][cycle.recoveries];
+            cycle.recoveries++;
+          }
+        }
+        return cycle.recoverAt == null
+          ? false
+          : Math.max(1, cycle.recoverAt - now);
+      }
+      cycle.recoverAt = undefined;
+      return economicArchivePollInterval(daily, Math.max(0, now - cycle.since));
     },
-    [],
+    [cycleFor],
   );
+  const refetchOnReconnect = useCallback(
+    (query: ArchiveQuery): boolean | "always" => {
+      const daily = contextDaily(query);
+      const economic = daily?.economicResearch;
+      // Preserve the normal context-query reconnection policy outside archive waiting.
+      if (!economic?.archivePending && economic?.status !== "PENDING")
+        return true;
+      if (economicArchivePollInterval(daily, 0) === false) return false;
+      const cycle = cycleFor(daily!);
+      if (cycle.reconnectChecked) return false;
+      cycle.reconnectChecked = true;
+      return "always";
+    },
+    [cycleFor],
+  );
+  return { refetchInterval: interval, refetchOnReconnect };
 }

@@ -71,6 +71,42 @@ const daily = (): DailyResearch => ({
   },
 });
 
+it("explains the automatic-only 23-hour dispatch cooldown separately from economic delivery", () => {
+  const data = daily();
+  Object.assign(data, {
+    automaticResearchCooldown: {
+      active: true,
+      hours: 23,
+      lastAiDispatchAt: "2026-11-05T08:00:00+08:00",
+      automaticEligibleAt: "2026-11-06T07:00:00+08:00",
+    },
+  });
+  render(<DailyResearchStatus data={data} />);
+  expect(screen.getByText(/自动研究冷却中（23小时）/)).toBeVisible();
+  expect(screen.getByText(/仅限制自动研究/)).toBeVisible();
+  expect(
+    screen.getByText("今日经济研究已有观察资料，证据仍待核实"),
+  ).toBeVisible();
+});
+
+it("does not claim an expired or disabled automatic schedule is cooling", () => {
+  const data = daily();
+  Object.assign(data, {
+    automaticResearchCooldown: {
+      active: false,
+      hours: 23,
+      lastAiDispatchAt: "2026-11-04T08:00:00+08:00",
+      automaticEligibleAt: "2026-11-05T07:00:00+08:00",
+    },
+  });
+  const view = render(<DailyResearchStatus data={data} />);
+  expect(screen.queryByText(/自动研究冷却中/)).not.toBeInTheDocument();
+  data.scheduleState = "DISABLED";
+  data.automaticResearchCooldown!.active = true;
+  view.rerender(<DailyResearchStatus data={data} />);
+  expect(screen.queryByText(/自动研究冷却中/)).not.toBeInTheDocument();
+});
+
 it("makes today's economic delivery the primary status while keeping formal investment failure separate", () => {
   const data = daily();
   data.economicResearch!.status = "AVAILABLE";
