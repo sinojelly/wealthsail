@@ -11,6 +11,38 @@ COUNTS = {
 }
 
 
+def current_opportunity_industries(packet, now):
+    """Prioritize visible positive news, without granting investment eligibility."""
+    from zoneinfo import ZoneInfo
+
+    from backend.investment.opportunity_scoring import _NEGATIVE, _POSITIVE, _source, _stamp
+
+    public = packet.get("alphaPublic") or {}
+    positive_ids = set()
+    for row in public.get("catalysts", [])[:300]:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        published, retrieved = _stamp(row.get("publishedAt")), _stamp(row.get("retrievedAt"))
+        available = _stamp(row.get("availableAt")) if "availableAt" in row else retrieved
+        if (
+            published is None or retrieved is None or available is None
+            or published > now or retrieved > now or available > now
+            or published.astimezone(ZoneInfo("Asia/Shanghai")).date()
+            != now.astimezone(ZoneInfo("Asia/Shanghai")).date()
+            or not _source(row.get("sourceUri"))
+        ):
+            continue
+        text = " ".join(str(row.get(key) or "") for key in ("title", "content", "summary"))
+        if _POSITIVE.search(text) and not _NEGATIVE.search(text):
+            positive_ids.add(row["id"])
+    buckets = public.get("sectorCatalysts") or {}
+    return {
+        industry for industry, refs in buckets.items()
+        if isinstance(industry, str) and industry != "OTHER" and isinstance(refs, list)
+        and any(isinstance(ref, str) and ref in positive_ids for ref in refs)
+    }
+
+
 def safe_workload(value):
     if not isinstance(value, dict) or value.get("version") != VERSION:
         return None

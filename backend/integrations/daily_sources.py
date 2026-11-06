@@ -140,6 +140,18 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
     )
 
     now = _aware(now)
+    from backend.macro.research_workload import current_opportunity_industries
+
+    opportunities = current_opportunity_industries(packet, now)
+    opportunities.update(
+        related for sector in list(opportunities)
+        for related in NEWS_RELATED_INDUSTRIES.get(sector, ())
+    )
+    holding_order = list(dict.fromkeys(
+        industry for industry in packet.get("holdingIndustryIds", [])
+        if isinstance(industry, str) and industry.strip()
+    )) if isinstance(packet.get("holdingIndustryIds"), list) else []
+    holdings = set(holding_order)
     candidates = []
     news = {
         sector
@@ -304,6 +316,10 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
     for industry in plan_industries:
         auditable_product_scope(industry)
 
+    for industry in holding_order:
+        if auditable_product_scope(industry):
+            add(industry)
+
     for industry in risk_order:
         if industry.startswith("TOPIC_SCOPE:"):
             if industry in pending_scopes:
@@ -402,9 +418,17 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
     for sector in sorted(news):
         add(sector)
     order = {sector: index for index, sector in enumerate(candidates)}
-    historical = [sector for sector in candidates if sector in previous_risks]
+    priority_order = list(dict.fromkeys([
+        *[sector for sector in candidates if sector in opportunities],
+        *[sector for sector in holding_order if sector in order],
+    ]))
+    prioritized = set(priority_order)
+    historical = [
+        sector for sector in candidates
+        if sector in previous_risks and sector not in prioritized
+    ]
     quant = sorted(
-        (plan_industries & set(candidates)) - previous_risks,
+        (plan_industries & set(candidates)) - previous_risks - prioritized,
         key=lambda sector: (
             sector not in eligible_quantitative,
             *quantitative.get(sector, (True, True, math.inf)),
@@ -417,6 +441,7 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         if sector in pending_scopes
         and sector not in previous_risks
         and sector not in plan_industries
+        and sector not in prioritized
     ]
     fresh_news = [
         sector
@@ -425,6 +450,7 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         and sector not in previous_risks
         and sector not in plan_industries
         and sector not in pending_scopes
+        and sector not in prioritized
     ]
     rotation = [
         value
@@ -432,13 +458,18 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         for value in pair
         if value is not None
     ]
-    selected_order = historical[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    selected_order = priority_order[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    historical_count = min(
+        len(historical), MAX_INDUSTRY_CYCLE_CANDIDATES - len(selected_order)
+    )
+    selected_order += historical[:historical_count]
     remaining = MAX_INDUSTRY_CYCLE_CANDIDATES - len(selected_order)
     rotate_count = min(2, len(rotation), max(0, remaining - bool(quant)))
     quant_count = min(6, len(quant), remaining - rotate_count)
     selected_order += quant[:quant_count] + rotation[:rotate_count]
     leftovers = (
-        historical[MAX_INDUSTRY_CYCLE_CANDIDATES:]
+        priority_order[MAX_INDUSTRY_CYCLE_CANDIDATES:]
+        + historical[historical_count:]
         + quant[quant_count:]
         + rotation[rotate_count:]
         + sorted(
@@ -463,7 +494,11 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
             {
                 "industryId": industry,
                 "selected": industry in selected,
-                "reasonCode": "HISTORICAL_RISK_PRIORITY"
+                "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+                if industry in opportunities
+                else "HOLDING_INDUSTRY_PRIORITY"
+                if industry in holdings
+                else "HISTORICAL_RISK_PRIORITY"
                 if industry in previous_risks
                 else "QUANTITATIVE_FUND_PRIORITY"
                 if industry in eligible_quantitative
