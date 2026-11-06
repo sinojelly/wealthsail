@@ -23,6 +23,37 @@ vi.mock("../../app/auth-session", async (original) => ({
 vi.mock("../../api/research-topic-registry", () => ({
   getResearchTopicRegistry: vi.fn(),
 }));
+vi.mock("../../api/topic-fund-recommendations", () => ({
+  getTopicFundRecommendations: vi
+    .fn()
+    .mockImplementation(async (researchId: string) => ({
+      researchId,
+      validatedAt: "2026-11-06T08:00:00+08:00",
+      evaluatedAt: "2026-11-06T08:00:00+08:00",
+      actionable: false,
+      coverage: {
+        topicCount: 1,
+        matchedTopicCount: 0,
+        recommendedFundCount: 0,
+      },
+      items: [
+        {
+          topicId: "topic-robot",
+          key: "robot",
+          title: "机器人商业化观察",
+          thesis: "有价值的研究主题仍保留。",
+          sourceIds: ["s1"],
+          riskStatus: "UNVERIFIED_RISK",
+          riskScorePenalty: 0,
+          riskWarnings: [],
+          recommendedFunds: [],
+          recommendationStatus: "NO_MATCH",
+          missingEvidence: [],
+          actionable: false,
+        },
+      ],
+    })),
+}));
 vi.mock("../../api/research-acceptance", () => ({
   getResearchAcceptance: vi
     .fn()
@@ -235,14 +266,14 @@ beforeEach(() => {
 it("leads with all saved AI topics, independent top-ten fund observations and strict plans before the retained success summary", async () => {
   renderDaily();
   const topics = await screen.findByRole("region", {
-    name: "值得关注的 AI 投资主题",
+    name: "高价值机会",
   });
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   const plans = screen.getByRole("region", { name: "今日价值方向与买卖计划" });
   const retained = screen.getByRole("region", { name: "最近一次成功研究" });
-  expect(within(topics).getByText("机器人商业化观察")).toBeVisible();
-  expect(topics).toHaveTextContent("来源核验状态未提供");
-  expect(topics).toHaveTextContent("行业范围关联尚未核实");
+  expect(await within(topics).findByText("机器人商业化观察")).toBeVisible();
+  expect(topics).toHaveTextContent("负面风险待核验");
+  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
   expect(
     topics.compareDocumentPosition(funds) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -259,6 +290,12 @@ it("leads with all saved AI topics, independent top-ten fund observations and st
   expect(
     screen.getByRole("region", { name: "每日事件研究" }),
   ).not.toHaveTextContent("正式报告主题目录");
+  await userEvent.click(screen.getByText("完整研究主题目录"));
+  const catalog = await screen.findByRole("region", {
+    name: "本次研究主题目录",
+  });
+  expect(catalog).toHaveTextContent("来源核验状态未提供");
+  expect(catalog).toHaveTextContent("行业范围关联尚未核实");
   expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
 });
 
@@ -319,7 +356,7 @@ it("defaults to at most ten highlights and makes the complete 46-fund inventory 
   expect(within(funds).queryByText("观察基金45")).not.toBeInTheDocument();
   await userEvent.click(within(funds).getByText("查看完整代表池 · 46只基金"));
   expect(await within(funds).findByText(/观察基金45/)).toBeVisible();
-  expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
+  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
 });
 
 it("rejects an unrelated observation identity and preserves the explicit retained success report and its date", async () => {
@@ -386,8 +423,9 @@ it("allows explicitly retained observations while preserving the old READY topic
     name: "服务器代表池基金观察",
   });
   expect(funds).toHaveTextContent("此为最近成功报告对应的保留观察");
+  await userEvent.click(screen.getByText("完整研究主题目录"));
   const current = await screen.findByRole("region", {
-    name: "值得关注的 AI 投资主题",
+    name: "本次研究主题目录",
   });
   const retained = await screen.findByRole("region", {
     name: "正式报告主题目录",

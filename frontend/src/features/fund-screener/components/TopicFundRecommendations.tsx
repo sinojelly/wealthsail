@@ -1,10 +1,11 @@
-import { useContext } from "react";
+import { useContext, useRef, useState } from "react";
 import { QueryClientContext, useQuery } from "@tanstack/react-query";
 import { HttpError } from "../../../api/client";
 import {
   getTopicFundRecommendations,
   type TopicFundRecommendation,
   type TopicRecommendedFund,
+  type TopicFundRecommendationsPage,
 } from "../../../api/topic-fund-recommendations";
 import { privateQueryKey, useAuthSession } from "../../../app/auth-session";
 import { timeLabel } from "../macro-display";
@@ -25,8 +26,44 @@ const riskLabels = {
 const matchLabels = {
   CORE_MATCH: "精选池匹配",
   DYNAMIC_MATCH: "全量库动态匹配",
-  BROAD_FALLBACK: "宽基兜底匹配",
+  BROAD_FALLBACK: "宽基间接观察",
 };
+const associationLabels = {
+  DIRECT_INDEX: "指数直配",
+  CATEGORY_MATCH: "分类范围匹配",
+  NAME_CANDIDATE: "名称匹配候选",
+  BROAD_FALLBACK: "宽基间接观察",
+};
+const polarityLabels = {
+  POSITIVE_OPPORTUNITY: "正向机会线索",
+  NEGATIVE_RISK: "负面风险线索",
+  MIXED: "多空因素并存",
+  MACRO_OBSERVATION: "宏观观察",
+  UNDETERMINED: "方向待核实",
+};
+const importanceLabels = {
+  HIGH: "高重要性事件关联",
+  MEDIUM: "中重要性事件关联",
+  LOW: "低重要性事件关联",
+  UNKNOWN: "事件重要性未提供",
+};
+function isIndirect(fund: TopicRecommendedFund) {
+  return (
+    fund.associationLevel === "BROAD_FALLBACK" ||
+    fund.matchLevel === "BROAD_FALLBACK"
+  );
+}
+function isMatchingPending(data?: TopicFundRecommendationsPage) {
+  return (
+    data?.archiveState !== "UNRECOVERABLE" &&
+    (data?.missingEvidence?.some(
+      (code) =>
+        code === "TOPIC_ARCHIVE_PENDING" || code === "FUND_RECALL_PENDING",
+    ) ||
+      data?.archiveState === "TOPIC_ARCHIVE_PENDING" ||
+      data?.archiveState === "FUND_RECALL_PENDING")
+  );
+}
 
 function Fund({ fund }: { fund: TopicRecommendedFund }) {
   const subscription = fund.subscription;
@@ -50,10 +87,53 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
         {fund.fundCode} · {fund.name}
       </strong>
       <p>
-        <span>{matchLabels[fund.matchLevel] ?? "匹配等级待核验"}</span> ·{" "}
-        {subscriptionLabel}
+        <span>
+          {fund.associationLevel
+            ? associationLabels[fund.associationLevel]
+            : (matchLabels[fund.matchLevel] ?? "匹配等级待核验")}
+        </span>{" "}
+        · {subscriptionLabel}
       </p>
-      <p>匹配依据：{fund.matchReason || "关联依据待补充"}</p>
+      <p>
+        匹配依据：
+        {fund.associationReason || fund.matchReason || "关联依据待补充"}
+      </p>
+      {fund.salesChannel && (
+        <p>
+          销售场景：
+          {fund.salesChannel === "OFF_EXCHANGE"
+            ? "场外基金"
+            : fund.salesChannel === "EXCHANGE"
+              ? "场内ETF，需证券交易渠道"
+              : "渠道待核实"}
+        </p>
+      )}
+      {!!fund.alternativeShareClasses?.length && (
+        <p>
+          其他份额：
+          {fund.alternativeShareClasses
+            .map((share) => `${share.fundCode} · ${share.name}`)
+            .join("；")}
+        </p>
+      )}
+      {fund.pricePosition?.actionable === false && (
+        <div>
+          <p>
+            技术位置：{fund.pricePosition.label}
+            {fund.pricePosition.asOf
+              ? ` · 数据时间：${timeLabel(fund.pricePosition.asOf)}`
+              : ""}
+          </p>
+          {!!fund.pricePosition.reasons.length && (
+            <ul aria-label="技术位置依据">
+              {fund.pricePosition.reasons.map((reason, index) => (
+                <li key={index}>{reason}</li>
+              ))}
+            </ul>
+          )}
+          <p>技术位置仅供观察，不代表估值结论或买入许可。</p>
+        </div>
+      )}
       <p>
         量化得分：
         {typeof fund.quantitativeScore === "number" &&
@@ -81,10 +161,57 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
 }
 
 function Topic({ topic }: { topic: TopicFundRecommendation }) {
+  const direct = topic.recommendedFunds.filter((fund) => !isIndirect(fund));
+  const negative = topic.topicPolarity === "NEGATIVE_RISK";
+  const observation =
+    topic.topicPolarity === "MACRO_OBSERVATION" ||
+    topic.topicPolarity === "UNDETERMINED";
+  const recommended = negative || observation ? [] : direct;
+  const riskFunds = [
+    ...(topic.relatedRiskFunds ?? []),
+    ...(negative ? direct : []),
+  ];
+  const observationFunds = [
+    ...(topic.observationFunds ?? []),
+    ...(observation ? direct : []),
+  ];
+  const indirect = [
+    ...(topic.indirectFunds ?? []),
+    ...topic.recommendedFunds.filter(isIndirect),
+  ];
+  const groups = [
+    { title: "主题匹配候选", label: "匹配基金", funds: recommended },
+    { title: "风险涉及基金", label: "风险涉及基金", funds: riskFunds },
+    { title: "相关观察基金", label: "相关观察基金", funds: observationFunds },
+    { title: "间接敞口观察", label: "间接观察基金", funds: indirect },
+  ];
   return (
     <article style={box}>
       <h4>{topic.title}</h4>
       <p>{topic.thesis}</p>
+      {topic.priority && (
+        <p>
+          {importanceLabels[topic.priority.importance ?? "UNKNOWN"]} ·{" "}
+          {topic.priority.checkedSourceCoveragePercent == null
+            ? "引文核对覆盖未知"
+            : `引文核对覆盖${topic.priority.checkedSourceCoveragePercent}%（不代表主题推理已证实）`}
+          {topic.priority.scopeVerified
+            ? " · 行业范围关联已核实"
+            : " · 行业范围关联待核实"}
+        </p>
+      )}
+      {topic.topicPolarity && (
+        <p>
+          <strong>{polarityLabels[topic.topicPolarity]}</strong>
+        </p>
+      )}
+      {!!topic.polarityReasons?.length && (
+        <ul aria-label="主题方向依据">
+          {topic.polarityReasons.map((reason, index) => (
+            <li key={index}>{reason}</li>
+          ))}
+        </ul>
+      )}
       <p>
         <strong
           style={{
@@ -109,16 +236,24 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
         </ul>
       )}
       {topic.recommendationStatus === "SOURCE_PENDING" &&
-        topic.recommendedFunds.length > 0 && (
+        recommended.length > 0 && (
           <p>正面来源待核验，以下基金仅为主题匹配候选。</p>
         )}
-      {topic.recommendedFunds.length > 0 ? (
-        <ul aria-label={`${topic.title}的匹配基金`}>
-          {topic.recommendedFunds.map((fund) => (
-            <Fund key={fund.fundCode} fund={fund} />
-          ))}
-        </ul>
-      ) : (
+      {groups.map(
+        ({ title, label, funds }) =>
+          funds.length > 0 && (
+            <div key={label}>
+              <h5>{title}</h5>
+              <ul aria-label={`${topic.title}的${label}`}>
+                {funds.map((fund) => (
+                  <Fund key={fund.fundCode} fund={fund} />
+                ))}
+              </ul>
+            </div>
+          ),
+      )}
+      {negative && <p>仅提示相关行业风险，风险涉及基金不作为推荐。</p>}
+      {!groups.some((group) => group.funds.length > 0) && (
         <p>
           {topic.recommendationStatus === "SOURCE_PENDING"
             ? "正面来源待核验，基金匹配仍待补充。"
@@ -155,7 +290,7 @@ export default function TopicFundRecommendations({
   if (!terminal) return null;
   return (
     <RecommendationsData
-      key={`${session.tenantId}:${session.userId}:${session.role}:${runId}`}
+      key={`${session.tenantId}:${session.userId}:${session.role}:${runId}:${state}:${completedAt ?? "undated"}`}
       runId={runId}
       lifecycle={`${state}:${completedAt ?? "undated"}`}
       queryKey={privateQueryKey(
@@ -177,13 +312,34 @@ function RecommendationsData({
   lifecycle: string;
   queryKey: readonly (string | number)[];
 }) {
+  const reads = useRef(0);
+  const [pollingExhausted, setPollingExhausted] = useState(false);
   const query = useQuery({
     queryKey: [...queryKey, lifecycle],
-    queryFn: ({ signal }) => getTopicFundRecommendations(runId, signal),
+    queryFn: async ({ signal }) => {
+      reads.current++;
+      const data = await getTopicFundRecommendations(runId, signal);
+      if (reads.current > 10) setPollingExhausted(true);
+      return data;
+    },
     retry: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    refetchOnMount: (query) =>
+      isMatchingPending(query.state.data) ? "always" : true,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return !query.state.error &&
+        data?.researchId === runId &&
+        data.actionable === false &&
+        Array.isArray(data.items) &&
+        data.coverage &&
+        reads.current <= 10 &&
+        isMatchingPending(data)
+        ? 3000
+        : false;
+    },
   });
   if (query.error instanceof HttpError && query.error.status === 404)
     return null;
@@ -195,8 +351,8 @@ function RecommendationsData({
     Array.isArray(data.items) &&
     data.coverage;
   return (
-    <section aria-label="新闻机会与匹配基金" style={box}>
-      <h3>新闻机会与匹配基金</h3>
+    <section aria-label="高价值机会" style={box}>
+      <h3>高价值机会</h3>
       <p>
         由本次研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
       </p>
@@ -217,16 +373,23 @@ function RecommendationsData({
             <p>本次机会基金匹配资料尚不完整，不能据此判断没有机会或基金。</p>
           ) : (
             <p>
-              机会主题{data.coverage.topicCount}个 · 已匹配
-              {data.coverage.matchedTopicCount}个 · 匹配基金
+              研究主题{data.coverage.topicCount}个 · 直接匹配
+              {data.coverage.matchedTopicCount}个 · 直接候选基金
               {data.coverage.recommendedFundCount}只
             </p>
           )}
           {data.status === "PARTIAL" && (
             <p>部分来源或匹配资料尚待补齐，已匹配的基金继续展示。</p>
           )}
+          {isMatchingPending(data) && !query.isError && (
+            <p role="status">
+              {pollingExhausted
+                ? "自动检查已达上限，可手动重新检查主题归档或基金匹配。"
+                : "主题归档或基金匹配正在完成，每3秒自动检查，最多10次；也可手动重新检查。"}
+            </p>
+          )}
           <p>
-            优先展示已匹配基金的主题，再依次比较来源支持、量化得分与风险核查完成度。
+            优先展示具备直接基金匹配的主题，结合事件重要性、来源支持、关联程度与风险核查完成度排序；重点展示不增加投资资格。
           </p>
           {data.items.slice(0, 10).map((topic) => (
             <Topic key={topic.topicId} topic={topic} />
@@ -246,11 +409,19 @@ function RecommendationsData({
           )}
         </>
       )}
-      {(query.isError || (valid && data.status === "UNAVAILABLE")) && (
+      {(query.isError ||
+        (valid &&
+          (data.status === "UNAVAILABLE" ||
+            isMatchingPending(data) ||
+            data.missingEvidence?.includes("FUND_RECALL_FAILED")))) && (
         <button
           type="button"
           disabled={query.isFetching}
-          onClick={() => void query.refetch()}
+          onClick={() => {
+            reads.current = 0;
+            setPollingExhausted(false);
+            void query.refetch();
+          }}
         >
           重新检查机会基金匹配
         </button>

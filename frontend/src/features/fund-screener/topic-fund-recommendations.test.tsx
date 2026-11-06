@@ -1,17 +1,22 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import type { DailyResearch, OpportunityContext } from "../../api/investment";
 import { HttpError } from "../../api/client";
 import { renderWithSession } from "../../test/render-with-session";
 import MacroContextStrip from "./components/MacroContextStrip";
+import TopicFundRecommendations from "./components/TopicFundRecommendations";
+import { getResearchTopicRegistry } from "../../api/research-topic-registry";
+
+const session = vi.hoisted(() => ({
+  tenantId: "reader-tenant",
+  userId: "reader",
+  role: "MEMBER",
+}));
 
 vi.mock("../../app/auth-session", async (original) => ({
   ...(await original<typeof import("../../app/auth-session")>()),
-  useAuthSession: () => ({
-    tenantId: "reader-tenant",
-    userId: "reader",
-    role: "MEMBER",
-  }),
+  useAuthSession: () => session,
 }));
 vi.mock("../../api/research-topic-registry", () => ({
   getResearchTopicRegistry: vi
@@ -129,6 +134,8 @@ function ui(data = daily()) {
   );
 }
 beforeEach(() => {
+  session.tenantId = "reader-tenant";
+  vi.mocked(getResearchTopicRegistry).mockClear();
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation(
@@ -139,12 +146,15 @@ beforeEach(() => {
     ),
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 it("connects news opportunities to funds despite no formal report or incomplete risk checks", async () => {
   renderWithSession(ui());
   const region = await screen.findByRole("region", {
-    name: "新闻机会与匹配基金",
+    name: "高价值机会",
   });
   expect(await within(region).findByText("机器人订单机会")).toBeVisible();
   expect(within(region).getByText(/000001.*机器人主题基金/)).toBeVisible();
@@ -153,7 +163,7 @@ it("connects news opportunities to funds despite no formal report or incomplete 
   expect(within(region).getByText("风险核查已完成")).toBeVisible();
   expect(within(region).getByText("精选池匹配")).toBeVisible();
   expect(within(region).getByText("全量库动态匹配")).toBeVisible();
-  expect(within(region).getByText("宽基兜底匹配")).toBeVisible();
+  expect(within(region).getByText("宽基间接观察")).toBeVisible();
   expect(within(region).getByText("短期产能过剩与价格竞争")).toBeVisible();
   expect(within(region).getByText(/申购状态待核验/)).toBeVisible();
   expect(
@@ -169,7 +179,7 @@ it("does not request recommendations until the investment panel opens", async ()
   expect(fetch).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: /今日投资观察/ }));
   expect(
-    await screen.findByRole("region", { name: "新闻机会与匹配基金" }),
+    await screen.findByRole("region", { name: "高价值机会" }),
   ).toBeVisible();
 });
 
@@ -346,3 +356,345 @@ it("shows the concrete matching reason when no explainable asset mapping exists"
     await screen.findByText(/当前缺少可说明的地域或资产关联/),
   ).toBeVisible();
 });
+
+it("keeps negative news in risk funds and separates broad exposure from direct recommendations", async () => {
+  const data = response();
+  Object.assign(data.items[1], {
+    topicPolarity: "NEGATIVE_RISK",
+    polarityReasons: ["产能过剩风险正在扩大"],
+    relatedRiskFunds: data.items[1].recommendedFunds,
+    recommendedFunds: [],
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(JSON.stringify({ data, meta: {} })),
+  );
+  renderWithSession(ui());
+  const risk = await screen.findByRole("list", {
+    name: "芯片产业机会的风险涉及基金",
+  });
+  expect(within(risk).getByText(/000002.*芯片精选基金/)).toBeVisible();
+  expect(screen.getByText("负面风险线索")).toBeVisible();
+  expect(screen.getByText("产能过剩风险正在扩大")).toBeVisible();
+  expect(
+    screen.queryByRole("list", { name: "芯片产业机会的匹配基金" }),
+  ).not.toBeInTheDocument();
+  const indirect = screen.getByRole("list", {
+    name: "宏观需求改善的间接观察基金",
+  });
+  expect(within(indirect).getByText(/000003.*宽基指数基金/)).toBeVisible();
+  expect(
+    screen.queryByRole("list", { name: "宏观需求改善的匹配基金" }),
+  ).not.toBeInTheDocument();
+});
+
+it("shows association evidence, alternative shares and technical position without purchase promises", async () => {
+  const data = response();
+  Object.assign(data.items[0], {
+    topicPolarity: "POSITIVE_OPPORTUNITY",
+    polarityReasons: [],
+  });
+  Object.assign(data.items[0].recommendedFunds[0], {
+    associationLevel: "DIRECT_INDEX",
+    associationReason: "核验跟踪指数为中证机器人",
+    salesChannel: "OFF_EXCHANGE",
+    alternativeShareClasses: [{ fundCode: "000004", name: "机器人主题基金C" }],
+    pricePosition: {
+      status: "ENTRY_ZONE",
+      label: "技术位置接近区间下沿",
+      asOf: at,
+      reasons: ["净值处于历史区间较低位置"],
+      actionable: false,
+    },
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(JSON.stringify({ data, meta: {} })),
+  );
+  renderWithSession(ui());
+  expect(await screen.findByText("指数直配")).toBeVisible();
+  expect(screen.getByText(/核验跟踪指数为中证机器人/)).toBeVisible();
+  expect(screen.getByText(/场外基金/)).toBeVisible();
+  expect(screen.getByText(/其他份额：000004.*机器人主题基金C/)).toBeVisible();
+  expect(screen.getByText(/技术位置接近区间下沿/)).toBeVisible();
+  expect(screen.getByText("净值处于历史区间较低位置")).toBeVisible();
+  expect(screen.queryByText(/低估|可分批|立即买入/)).not.toBeInTheDocument();
+});
+
+it("renders one opportunity headline and loads the full topic catalog only after explicit expansion", async () => {
+  renderWithSession(ui());
+  await screen.findByText("机器人订单机会");
+  expect(screen.getAllByRole("heading", { name: "高价值机会" })).toHaveLength(
+    1,
+  );
+  expect(
+    screen.queryByRole("heading", { name: /值得关注的 AI 投资主题/ }),
+  ).not.toBeInTheDocument();
+  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByText("完整研究主题目录"));
+  expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
+});
+
+it("shows the server-selected importance and checked source coverage on the same opportunity card", async () => {
+  const data = response();
+  Object.assign(data.items[0], {
+    priority: {
+      importance: "HIGH",
+      checkedSourceCoveragePercent: 50,
+      checkedSourceCount: 1,
+      scopeVerified: false,
+      researchProgress: "PENDING_REVIEW",
+    },
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(fetchData(data));
+  renderWithSession(ui());
+  const title = await screen.findByText("机器人订单机会");
+  const card = title.closest("article")!;
+  expect(within(card).getByText(/高重要性事件关联/)).toBeVisible();
+  expect(within(card).getByText(/引文核对覆盖50%/)).toBeVisible();
+  expect(within(card).getByText(/行业范围关联待核实/)).toBeVisible();
+  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
+});
+
+function pending(code = "TOPIC_ARCHIVE_PENDING") {
+  return {
+    ...response(),
+    status: "UNAVAILABLE",
+    archiveState: "AUDIT_PENDING",
+    items: [],
+    missingEvidence: [code],
+  };
+}
+function fetchData(data: unknown) {
+  return new Response(JSON.stringify({ data, meta: {} }));
+}
+async function advance(ms = 3000) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+it("polls through archive and fund-recall pending stages and stops after completed matching", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(fetchData(pending()))
+    .mockResolvedValueOnce(fetchData(pending("FUND_RECALL_PENDING")))
+    .mockResolvedValue(fetchData(response()));
+  renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+  await advance(5);
+  expect(fetch).toHaveBeenCalledOnce();
+  await advance();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  await advance();
+  expect(screen.getByText("机器人订单机会")).toBeVisible();
+  await advance(60_000);
+  expect(fetch).toHaveBeenCalledTimes(3);
+});
+
+it("bounds pending polling at ten additional reads and preserves manual recovery", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch).mockImplementation(async () => fetchData(pending()));
+  renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+  await advance(5);
+  for (let index = 0; index < 12; index++) await advance();
+  expect(fetch).toHaveBeenCalledTimes(11);
+  expect(screen.getByText(/自动检查已达上限/)).toBeVisible();
+  await advance(60_000);
+  expect(fetch).toHaveBeenCalledTimes(11);
+  vi.mocked(fetch).mockImplementation(async () => fetchData(response()));
+  await act(async () => {
+    screen.getByRole("button", { name: "重新检查机会基金匹配" }).click();
+  });
+  await advance(5);
+  expect(screen.getByText("机器人订单机会")).toBeVisible();
+  expect(fetch).toHaveBeenCalledTimes(12);
+});
+
+it.each(["unrecoverable", "identity", "error"])(
+  "stops pending polling on %s",
+  async (stop) => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockResolvedValueOnce(fetchData(pending()));
+    if (stop === "error")
+      vi.mocked(fetch).mockRejectedValue(new TypeError("connection failed"));
+    else
+      vi.mocked(fetch).mockResolvedValue(
+        fetchData({
+          ...pending(),
+          ...(stop === "identity"
+            ? { researchId: "another-run" }
+            : { archiveState: "UNRECOVERABLE" }),
+        }),
+      );
+    renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+    await advance(5);
+    await advance();
+    await advance(60_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("cancels pending polling and in-flight reads when the investment panel collapses", async () => {
+  vi.useFakeTimers();
+  let signal: AbortSignal | undefined;
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(fetchData(pending()))
+    .mockImplementation((_url, init) => {
+      signal = init?.signal as AbortSignal;
+      return new Promise<Response>(() => {});
+    });
+  renderWithSession(ui());
+  await advance(5);
+  await advance();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    screen.getByRole("button", { name: /今日投资观察/ }).click();
+  });
+  expect(signal?.aborted).toBe(true);
+  await advance(60_000);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("starts a new polling budget when the same research reaches a different terminal lifecycle", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch).mockImplementation(async () => fetchData(pending()));
+  function Lifecycle() {
+    const [updated, setUpdated] = useState(false);
+    return (
+      <>
+        <button onClick={() => setUpdated(true)}>更新终态</button>
+        <TopicFundRecommendations
+          runId={run}
+          state={updated ? "FAILED" : "READY"}
+          completedAt={updated ? at : null}
+        />
+      </>
+    );
+  }
+  renderWithSession(<Lifecycle />);
+  await advance(5);
+  for (let index = 0; index < 10; index++) await advance();
+  expect(fetch).toHaveBeenCalledTimes(11);
+  await act(async () => {
+    screen.getByText("更新终态").click();
+  });
+  await advance(5);
+  expect(fetch).toHaveBeenCalledTimes(12);
+  vi.mocked(fetch).mockImplementation(async () => fetchData(response()));
+  await advance();
+  expect(screen.getByText("机器人订单机会")).toBeVisible();
+  expect(fetch).toHaveBeenCalledTimes(13);
+});
+
+it("aborts the old tenant read and never displays its content after an identity switch", async () => {
+  vi.useFakeTimers();
+  let previousSignal: AbortSignal | undefined;
+  let resolvePrevious: (value: Response) => void = () => {};
+  vi.mocked(fetch)
+    .mockImplementationOnce((_url, init) => {
+      previousSignal = init?.signal as AbortSignal;
+      return new Promise<Response>((resolve) => {
+        resolvePrevious = resolve;
+      });
+    })
+    .mockImplementation(async () => fetchData(pending()));
+  function Identity() {
+    const [, rerender] = useState(0);
+    return (
+      <>
+        <button
+          onClick={() => {
+            session.tenantId = "other-tenant";
+            rerender(1);
+          }}
+        >
+          切换身份
+        </button>
+        <TopicFundRecommendations runId={run} state="READY" />
+      </>
+    );
+  }
+  renderWithSession(<Identity />);
+  await advance(5);
+  await act(async () => {
+    screen.getByText("切换身份").click();
+  });
+  await advance(5);
+  expect(previousSignal?.aborted).toBe(true);
+  resolvePrevious(fetchData(response()));
+  await advance(5);
+  expect(screen.queryByText("机器人订单机会")).not.toBeInTheDocument();
+});
+
+it("rechecks a cached pending archive on reopening and still permits only ten automatic checks", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch).mockImplementation(async () => fetchData(pending()));
+  renderWithSession(ui());
+  await advance(5);
+  await act(async () => {
+    screen.getByRole("button", { name: /今日投资观察/ }).click();
+  });
+  await act(async () => {
+    screen.getByRole("button", { name: /今日投资观察/ }).click();
+  });
+  await advance(5);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (let index = 0; index < 12; index++) await advance();
+  expect(fetch).toHaveBeenCalledTimes(12);
+});
+
+it("keeps failed fund recall manual without hiding already available topics", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch).mockImplementation(async () =>
+    fetchData({
+      ...response(),
+      status: "PARTIAL",
+      missingEvidence: ["FUND_RECALL_FAILED"],
+    }),
+  );
+  renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+  await advance(5);
+  expect(screen.getByText("机器人订单机会")).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "重新检查机会基金匹配" }),
+  ).toBeEnabled();
+  await advance(60_000);
+  expect(fetch).toHaveBeenCalledOnce();
+  await act(async () => {
+    screen.getByRole("button", { name: "重新检查机会基金匹配" }).click();
+  });
+  await advance(5);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes expired completed matching on reopening to update local fund evidence", async () => {
+  vi.useFakeTimers();
+  renderWithSession(ui());
+  await advance(5);
+  expect(fetch).toHaveBeenCalledOnce();
+  await advance(61_000);
+  await act(async () => {
+    screen.getByRole("button", { name: /今日投资观察/ }).click();
+  });
+  await act(async () => {
+    screen.getByRole("button", { name: /今日投资观察/ }).click();
+  });
+  await advance(5);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it.each(["MACRO_OBSERVATION", "UNDETERMINED"])(
+  "keeps %s funds under observation even when a legacy response misplaces them in recommendations",
+  async (topicPolarity) => {
+    const data = response();
+    data.items = [data.items[0]];
+    Object.assign(data.items[0], { topicPolarity });
+    vi.mocked(fetch).mockResolvedValueOnce(fetchData(data));
+    renderWithSession(ui());
+    const list = await screen.findByRole("list", {
+      name: "机器人订单机会的相关观察基金",
+    });
+    expect(within(list).getByText(/000001.*机器人主题基金/)).toBeVisible();
+    expect(
+      screen.queryByRole("list", { name: "机器人订单机会的匹配基金" }),
+    ).not.toBeInTheDocument();
+  },
+);

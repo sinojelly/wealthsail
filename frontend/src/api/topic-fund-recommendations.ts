@@ -3,12 +3,31 @@ import { request } from "./client";
 export type TopicRiskStatus =
   "VERIFIED_SAFE" | "RISK_ALERT" | "UNVERIFIED_RISK";
 export type FundMatchLevel = "CORE_MATCH" | "DYNAMIC_MATCH" | "BROAD_FALLBACK";
+export type TopicPolarity =
+  | "POSITIVE_OPPORTUNITY"
+  | "NEGATIVE_RISK"
+  | "MIXED"
+  | "MACRO_OBSERVATION"
+  | "UNDETERMINED";
+export type FundAssociationLevel =
+  "DIRECT_INDEX" | "CATEGORY_MATCH" | "NAME_CANDIDATE" | "BROAD_FALLBACK";
 
 export interface TopicRecommendedFund {
   fundCode: string;
   name: string;
   matchLevel: FundMatchLevel;
   matchReason: string;
+  associationLevel?: FundAssociationLevel;
+  associationReason?: string;
+  alternativeShareClasses?: Array<{ fundCode: string; name: string }>;
+  salesChannel?: "OFF_EXCHANGE" | "EXCHANGE" | "UNKNOWN";
+  pricePosition?: {
+    status: "ENTRY_ZONE" | "NEUTRAL" | "OVERHEATED" | "DATA_PENDING";
+    label: string;
+    asOf?: string | null;
+    reasons: string[];
+    actionable: false;
+  };
   subscription?: { status: string; restricted: boolean | null } | null;
   quantitativeScore?: number | null;
   unadjustedQuantitativeScore?: number;
@@ -29,8 +48,27 @@ export interface TopicFundRecommendation {
   riskStatus: TopicRiskStatus;
   riskScorePenalty: number;
   riskWarnings: string[];
+  topicPolarity?: TopicPolarity;
+  polarityReasons?: string[];
   recommendedFunds: TopicRecommendedFund[];
-  recommendationStatus: "MATCHED" | "NO_MATCH" | "SOURCE_PENDING";
+  relatedRiskFunds?: TopicRecommendedFund[];
+  indirectFunds?: TopicRecommendedFund[];
+  observationFunds?: TopicRecommendedFund[];
+  priority?: {
+    importance?: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+    checkedSourceCoveragePercent?: number | null;
+    checkedSourceCount?: number;
+    scopeVerified?: boolean;
+    researchProgress?: string;
+    reasons?: string[];
+  };
+  recommendationStatus:
+    | "MATCHED"
+    | "NO_MATCH"
+    | "SOURCE_PENDING"
+    | "RISK_ONLY"
+    | "OBSERVATION_ONLY"
+    | "INDIRECT_ONLY";
   matchMessage?: string | null;
   missingEvidence: string[];
   actionable: false;

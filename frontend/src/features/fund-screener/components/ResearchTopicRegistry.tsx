@@ -149,25 +149,25 @@ function RegistryData({
       );
     },
     enabled: terminal,
-    retry: (count, error) =>
-      count < 2 &&
-      (error instanceof TypeError ||
-        (error instanceof HttpError &&
-          (error.status === 408 ||
-            error.status === 429 ||
-            error.status >= 500))),
-    retryDelay: 1000,
+    retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    refetchOnMount: (query) =>
+      query.state.data?.registryAvailable === false &&
+      (query.state.data.archiveState === "AUDIT_PENDING" ||
+        query.state.data.archiveState === "ARCHIVING")
+        ? "always"
+        : false,
     refetchInterval: (query) =>
       !query.state.error &&
+      query.state.data?.researchId === runId &&
+      query.state.data.actionable === false &&
       query.state.data?.registryAvailable === false &&
-      query.state.data.archiveState !== "UNRECOVERABLE" &&
-      reads.current.count < 30
-        ? reads.current.count < 20
-          ? 15_000
-          : 60_000
+      (query.state.data.archiveState === "AUDIT_PENDING" ||
+        query.state.data.archiveState === "ARCHIVING") &&
+      reads.current.count <= 10
+        ? 3000
         : false,
   });
   if (
@@ -193,7 +193,10 @@ function RegistryData({
       type="button"
       style={button}
       disabled={query.isFetching}
-      onClick={() => void query.refetch()}
+      onClick={() => {
+        reads.current = { lifecycle, count: 0 };
+        void query.refetch();
+      }}
     >
       重新检查主题目录
     </button>

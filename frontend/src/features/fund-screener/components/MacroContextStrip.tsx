@@ -21,6 +21,18 @@ import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
 import TopicFundRecommendations from "./TopicFundRecommendations";
 
+function TopicCatalog(
+  props: React.ComponentProps<typeof ResearchTopicRegistry>,
+) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>完整研究主题目录</summary>
+      {expanded && <ResearchTopicRegistry {...props} variant="CURRENT" />}
+    </details>
+  );
+}
+
 function MacroOverview({ data }: { data: OpportunityContext }) {
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const reportKey =
@@ -378,7 +390,8 @@ export default function MacroContextStrip({
                         : daily?.completedAt
                   }
                 />
-                <ResearchTopicRegistry
+                <TopicCatalog
+                  key={`catalog:${topicResearchId}`}
                   runId={topicResearchId}
                   state={
                     retainedTopics
@@ -392,14 +405,13 @@ export default function MacroContextStrip({
                         ? daily.pipeline.finishedAt
                         : daily?.completedAt
                   }
-                  variant="HIGHLIGHT"
                 />
                 <FundObservations
-                  key={daily?.fundObservation?.researchId ?? "no-observation"}
+                  key={`observation:${daily?.fundObservation?.researchId ?? "no-observation"}`}
                   data={daily}
                 />
                 <ValueDirections
-                  key={daily?.reportRunId ?? "no-report"}
+                  key={`formal:${daily?.reportRunId ?? "no-report"}`}
                   data={daily}
                   onTrack={onStudyDirection}
                   onViewMacro={() => open("macro")}

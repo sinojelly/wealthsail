@@ -735,7 +735,7 @@ it("keeps historical 404 quiet without polling and reloads when the same run rea
   expect(await screen.findByText("动态主题0")).toBeVisible();
   expect(api.getResearchTopicRegistry).toHaveBeenCalledTimes(2);
 });
-it("bounds fast and slower archive polling and keeps manual GET recovery after the automatic budget", async () => {
+it("bounds archive polling at ten checks every three seconds and keeps manual GET recovery", async () => {
   vi.useFakeTimers();
   vi.mocked(api.getResearchTopicRegistry).mockResolvedValue({
     researchId: run,
@@ -749,12 +749,12 @@ it("bounds fast and slower archive polling and keeps manual GET recovery after t
     await vi.advanceTimersByTimeAsync(5);
   });
   expect(screen.getByText(/主题目录待归档/)).toBeVisible();
-  for (let i = 0; i < 35; i++)
+  for (let i = 0; i < 12; i++)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(3000);
     });
   const calls = vi.mocked(api.getResearchTopicRegistry).mock.calls.length;
-  expect(calls).toBeLessThanOrEqual(30);
+  expect(calls).toBe(11);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(600_000);
   });
@@ -767,7 +767,7 @@ it("bounds fast and slower archive polling and keeps manual GET recovery after t
   expect(screen.getByText("动态主题0")).toBeVisible();
   expect(api.getResearchTopicRegistry).toHaveBeenCalledTimes(calls + 1);
 });
-it("bounds temporary network retries and lets a manual read recover without exposing the exception", async () => {
+it("stops temporary network errors and lets a manual read recover without exposing the exception", async () => {
   vi.useFakeTimers();
   vi.mocked(api.getResearchTopicRegistry).mockRejectedValue(
     new HttpError("PRIVATE_NETWORK", 503),
@@ -776,7 +776,7 @@ it("bounds temporary network retries and lets a manual read recover without expo
   await act(async () => {
     await vi.advanceTimersByTimeAsync(4000);
   });
-  expect(api.getResearchTopicRegistry).toHaveBeenCalledTimes(3);
+  expect(api.getResearchTopicRegistry).toHaveBeenCalledOnce();
   expect(screen.queryByText("PRIVATE_NETWORK")).not.toBeInTheDocument();
   vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(page());
   await act(async () => {
