@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import aclosing
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -23,6 +24,12 @@ from backend.integrations.research_execution import (
     EXECUTION_TRANSPORT_HEADER,
     sanitize_execution_receipt,
     sanitize_execution_transport_reason,
+    sanitize_execution_progress,
+    sanitize_execution_statistics,
+)
+from backend.integrations.research_lifecycle import (
+    RECOVERY_SECONDS, ResearchLifecycle, TIMEOUT_ORIGINS, call_identity,
+    research_deadlines, sanitize_lifecycle,
 )
 
 _MAX_INPUT_BYTES = 2 * 1024 * 1024
@@ -100,7 +107,7 @@ def _check_input(payload):
         raise CodexCallError("Codex input exceeds the configured limit")
 
 
-def _failure_metadata(error, source, *, capture_raw=False):
+def _failure_metadata(error, source, *, capture_raw=False, identity=None):
     if isinstance(source, dict):
         uncertain = source.get("inferenceUncertain") is True
         succeeded = source.get("inferenceSucceeded")
@@ -113,6 +120,18 @@ def _failure_metadata(error, source, *, capture_raw=False):
         codex_research.with_telemetry(error, usage=usage, model=model if isinstance(model, str) and 1 <= len(model) <= 120 else None, inference_succeeded=succeeded)
     if uncertain:
         error.inference_uncertain = True
+    origin = source.get("timeoutOrigin") if isinstance(source, dict) else getattr(source, "timeout_origin", None)
+    if isinstance(origin, str) and origin in TIMEOUT_ORIGINS:
+        error.timeout_origin = origin
+    if identity is not None:
+        lifecycle = sanitize_lifecycle(source.get("lifecycle") if isinstance(source, dict) else getattr(source, "research_execution_state", None), identity)
+        if lifecycle is not None:
+            error.research_execution_state = lifecycle
+    for field, key, sanitizer in (("execution_statistics", "executionStatistics", sanitize_execution_statistics),
+                                  ("execution_progress", "executionProgress", sanitize_execution_progress)):
+        safe = sanitizer(source.get(key) if isinstance(source, dict) else getattr(source, field, None))
+        if safe is not None:
+            setattr(error, field, safe)
     if capture_raw:
         reason = sanitize_execution_transport_reason(
             source.get("executionReceiptTransportReason") if isinstance(source, dict)
@@ -162,7 +181,7 @@ async def _sse_lines(response):
         yield pending.rstrip(b"\r").decode("utf-8")
 
 
-async def _request_json(settings, method, endpoint, *, payload=None, timeout=90, uncertain=False):
+async def _request_json(settings, method, endpoint, *, payload=None, timeout=90, uncertain=False, identity=None):
     base, headers = _remote(settings)
     if payload is not None:
         _check_input(payload)
@@ -189,7 +208,9 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         error = TimeoutError("Codex research outcome is uncertain") if uncertain and response.status_code == 504 else CodexCallError(f"Codex runner unavailable (HTTP {response.status_code})")
                         if response.status_code == 504:
                             error.inference_uncertain = True
-                        error = _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research")
+                        error = _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research", identity=identity)
+                        if response.status_code == 504 and not hasattr(error, "timeout_origin"):
+                            error.timeout_origin = "RUNNER_OPERATION_TIMEOUT"
                         if transport_reason is not None:
                             error.execution_receipt_transport_reason = transport_reason
                         raise error
@@ -202,7 +223,10 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
     except (httpx.ReadError, httpx.WriteError, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.RemoteProtocolError, TimeoutError) as exc:
         if uncertain:
-            raise _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc, capture_raw=endpoint == "/v1/research") from exc
+            error = _failure_metadata(TimeoutError("Codex research outcome is uncertain"), exc, capture_raw=endpoint == "/v1/research", identity=identity)
+            if not hasattr(error, "timeout_origin"):
+                error.timeout_origin = "WORKER_RPC_TIMEOUT" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "RUNNER_DISCONNECTED"
+            raise error from exc
         raise _failure_metadata(CodexCallError("Codex runner request failed"), exc) from exc
     except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
         raise CodexCallError("Codex runner request failed") from exc
@@ -428,44 +452,132 @@ async def _stream_chat(
         raise error from exc
 
 
-async def research(settings, prompt, schema, *, timeout=900, model=None, on_return=None, on_output=None) -> dict:
+async def research(settings, prompt, schema, *, timeout=900, model=None, on_return=None, on_output=None,
+                   identity=None, on_exit=None, on_progress=None, trace_usage=True) -> dict:
     from backend.ai_usage.tracker import trace_inference
 
     async def operation():
-        result = await _research(settings, prompt, schema, timeout=timeout, model=model)
+        result = await _research(settings, prompt, schema, timeout=timeout, model=model,
+                                 identity=identity, on_exit=on_exit, on_progress=on_progress)
         if on_output is not None:
             on_output(result)
         if on_return is not None:
             on_return()
         return result
 
+    if not trace_usage:
+        return await operation()
     return await trace_inference(
         settings, model=model or getattr(settings, "daily_research_model", None) or getattr(settings, "codex_model", None),
         call_type="research", operation=operation,
     )
 
 
-async def _research(settings, prompt, schema, *, timeout=900, model=None) -> dict:
+async def _notify(callback, value):
+    if callback is None or value is None:
+        return
+    try:
+        result = callback(value)
+        if inspect.isawaitable(result):
+            async with asyncio.timeout(1):
+                await result
+    except Exception:
+        # Diagnostic persistence never changes the research business result.
+        pass
+
+
+async def research_status(settings, identity, *, cancel=False):
+    identity = call_identity(identity)
+    result = await _request_json(settings, "POST", "/v1/research/cancel" if cancel else "/v1/research/status",
+                                 payload={"identity": identity}, timeout=2)
+    return sanitize_lifecycle(result.get("lifecycle"), identity)
+
+
+async def _recover_research(settings, identity, *, on_exit=None, on_progress=None):
+    try:
+        async with asyncio.timeout(RECOVERY_SECONDS):
+            state = await research_status(settings, identity, cancel=True)
+            while state is not None:
+                await _notify(on_progress, state.get("progress"))
+                if state["exitConfirmed"]:
+                    await _notify(on_exit, state)
+                    return state
+                await asyncio.sleep(0.25)
+                state = await research_status(settings, identity)
+    except (Exception, asyncio.CancelledError):
+        pass
+    return None
+
+
+async def _remote_research(settings, payload, *, timeout, identity, on_exit, on_progress):
+    async def monitor():
+        while True:
+            await asyncio.sleep(15)
+            try:
+                state = await research_status(settings, identity)
+                if state is not None:
+                    await _notify(on_progress, state.get("progress"))
+                    if state["exitConfirmed"]:
+                        await _notify(on_exit, state)
+            except Exception:
+                pass
+
+    progress_task = asyncio.create_task(monitor()) if identity is not None and on_progress is not None else None
+    try:
+        result = await _request_json(settings, "POST", "/v1/research", payload=payload,
+                                     timeout=research_deadlines(timeout)["rpcSeconds"], uncertain=True,
+                                     **({"identity": identity} if identity is not None else {}))
+        if identity is not None:
+            state = sanitize_lifecycle(result.get("lifecycle"), identity)
+            await _notify(on_exit, state)
+        return result
+    except (Exception, asyncio.CancelledError) as exc:
+        state = sanitize_lifecycle(getattr(exc, "research_execution_state", None), identity) if identity is not None else None
+        if state is not None:
+            await _notify(on_exit, state)
+        if identity is not None and (state is None or not state["exitConfirmed"]):
+            recovery = asyncio.create_task(_recover_research(settings, identity, on_exit=on_exit, on_progress=on_progress))
+            try:
+                state = await asyncio.shield(recovery)
+            except asyncio.CancelledError:
+                state = await asyncio.shield(recovery)
+            if state is not None:
+                exc.research_execution_state = state
+        raise
+    finally:
+        if progress_task is not None:
+            progress_task.cancel()
+            await asyncio.gather(progress_task, return_exceptions=True)
+
+
+async def _research(settings, prompt, schema, *, timeout=900, model=None, identity=None, on_exit=None, on_progress=None) -> dict:
     """Run exactly one public research invocation; this transport never retries."""
     payload = {"prompt": prompt, "schema": schema, "model": model, "timeout": timeout}
+    if identity is not None:
+        identity = call_identity(identity)
+        payload["identity"] = identity
     _check_input(payload)
     if getattr(settings, "codex_runner_url", ""):
-        result = await _request_json(
-            settings, "POST", "/v1/research", payload=payload,
-            timeout=timeout + 30, uncertain=True,
-        )
-        if set(result) in ({"report", "usage", "model"}, {"report", "usage", "model", "executionReceipt"}) and isinstance(result.get("report"), dict):
-            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]), execution_receipt=result.get("executionReceipt"), execution_receipt_transport_reason=getattr(result, "execution_receipt_transport_reason", None))
+        result = await _remote_research(settings, payload, timeout=timeout, identity=identity, on_exit=on_exit, on_progress=on_progress)
+        envelope_fields = {"report", "usage", "model", "executionReceipt", "lifecycle", "executionStatistics", "executionProgress"}
+        if {"report", "usage", "model"} <= set(result) <= envelope_fields and isinstance(result.get("report"), dict):
+            return codex_research.ResearchResult(result["report"], usage=result["usage"], model=_model(settings, result["model"]), execution_receipt=result.get("executionReceipt"), execution_receipt_transport_reason=getattr(result, "execution_receipt_transport_reason", None),
+                                                execution_statistics=result.get("executionStatistics"), execution_progress=result.get("executionProgress"))
         return codex_research.ResearchResult(result, model=model, execution_receipt_transport_reason=getattr(result, "execution_receipt_transport_reason", None))
     path = getattr(settings, "daily_research_codex_path", None) or getattr(settings, "codex_path", None)
     executable = codex_research.resolve_codex_executable(path)
     if executable is None:
         raise CodexNotConfiguredError("Codex installation is unavailable")
+    lifecycle = ResearchLifecycle(identity) if identity is not None else None
     try:
         return await codex_research.run_codex_research(
             executable, prompt, schema, timeout=timeout, model=model,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         )
     except TimeoutError:
         raise
     except Exception as exc:
         raise _failure_metadata(CodexCallError("Codex public research failed"), exc, capture_raw=True) from exc
+    finally:
+        if lifecycle is not None:
+            await _notify(on_exit, sanitize_lifecycle(lifecycle.snapshot(), identity))

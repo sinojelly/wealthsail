@@ -4,6 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -34,6 +35,93 @@ def transport(monkeypatch, handler):
         "AsyncClient",
         lambda **kwargs: client(transport=httpx.MockTransport(handler), **kwargs),
     )
+
+
+@pytest.mark.asyncio
+async def test_research_exit_callback_requires_bound_proof_and_one_dispatch(monkeypatch):
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    state = ResearchLifecycle(owner)
+    state.started()
+    state.exited(reaped=True, descendants_confirmed=True, returncode=0)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert json.loads(request.content)["identity"] == owner
+        return httpx.Response(200, json={"report": {"summary": "public"}, "usage": {}, "model": "codex", "lifecycle": state.snapshot()})
+
+    transport(monkeypatch, handler)
+    callbacks = []
+    result = await codex_client.research(settings(), "public", {}, identity=owner,
+                                         on_exit=callbacks.append, trace_usage=False)
+    assert result == {"summary": "public"}
+    assert callbacks[0]["exitConfirmed"] is True
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_rpc_disconnect_recovers_exit_without_redispatch(monkeypatch):
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    state = ResearchLifecycle(owner)
+    state.started()
+    state.terminating("CANCELLED")
+    state.exited(reaped=True, descendants_confirmed=True, returncode=-9)
+    requests = []
+
+    def handler(request):
+        requests.append(request.url.path)
+        if request.url.path == "/v1/research":
+            raise httpx.ReadError("private disconnect")
+        return httpx.Response(200, json={"lifecycle": state.snapshot()})
+
+    transport(monkeypatch, handler)
+    callbacks = []
+    with pytest.raises(TimeoutError) as error:
+        await codex_client.research(settings(), "public", {}, identity=owner,
+                                     on_exit=callbacks.append, trace_usage=False)
+    assert error.value.timeout_origin == "RUNNER_DISCONNECTED"
+    assert error.value.research_execution_state["exitConfirmed"] is True
+    assert callbacks[0]["exitConfirmed"] is True
+    assert requests.count("/v1/research") == 1
+    assert "/v1/research/cancel" in requests
+
+
+@pytest.mark.asyncio
+async def test_stale_exit_proof_never_confirms_new_owner(monkeypatch):
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    stale = ResearchLifecycle({**owner, "ownerToken": str(uuid4())})
+    stale.started()
+    stale.exited(reaped=True, descendants_confirmed=True, returncode=0)
+    transport(monkeypatch, lambda request: httpx.Response(200, json={"report": {"summary": "public"}, "usage": {}, "model": "codex", "lifecycle": stale.snapshot()}))
+    callbacks = []
+    assert await codex_client.research(settings(), "public", {}, identity=owner, on_exit=callbacks.append,
+                                        trace_usage=False) == {"summary": "public"}
+    assert callbacks == []
+
+
+@pytest.mark.asyncio
+async def test_old_runner_504_does_not_fabricate_exit_proof_or_retry(monkeypatch):
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(504 if request.url.path == "/v1/research" else 404, json={"detail": "legacy timeout"})
+
+    transport(monkeypatch, handler)
+    callbacks = []
+    with pytest.raises(TimeoutError) as error:
+        await codex_client.research(settings(), "public", {}, identity=owner,
+                                     on_exit=callbacks.append, trace_usage=False)
+    assert error.value.timeout_origin == "RUNNER_OPERATION_TIMEOUT"
+    assert not getattr(error.value, "research_execution_state", {}).get("exitConfirmed")
+    assert callbacks == [] and paths.count("/v1/research") == 1
 
 
 @pytest.mark.asyncio

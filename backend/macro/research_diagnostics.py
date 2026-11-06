@@ -19,6 +19,12 @@ REASON_CODES = frozenset(
         "UNEXPECTED_ERROR",
         "CANCELLED",
         "PIPELINE_RUNTIME_EXPIRED",
+        "CLI_MODEL_TIMEOUT",
+        "RUNNER_OPERATION_TIMEOUT",
+        "WORKER_RPC_TIMEOUT",
+        "WORKER_OUTER_TIMEOUT",
+        "RUNNER_DISCONNECTED",
+        "MODEL_EXIT_UNCONFIRMED",
     }
 )
 RULE_IDS = frozenset(

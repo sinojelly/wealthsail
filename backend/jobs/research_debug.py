@@ -15,6 +15,7 @@ from backend.config import get_settings
 from backend.dependencies import now_shanghai
 from backend.jobs.alpha_public import sync_alpha_public
 from backend.jobs.daily_research import sync_daily_research
+from backend.jobs.research_budget import research_request_budget
 from backend.macro.research_diagnostics import safe_error_class
 from backend.macro.research_modes import (
     preferred_research_request_mode,
@@ -68,8 +69,12 @@ async def sync_debug_refresh(pool, settings):
     request = await _claim(pool, started, allowed_modes=allowed_modes)
     if request is None:
         return {"status": "IDLE"}
-    identity = request["id"]
-    mode = request.get("request_mode", "DEBUG")
+    with research_request_budget(REQUEST_TIMEOUT_SECONDS):
+        return await _run_request(pool, settings, request, started)
+
+
+async def _run_request(pool, settings, request, started):
+    identity, mode = request["id"], request.get("request_mode", "DEBUG")
     status, error, batch, report = "FAILED", None, None, None
     try:
         async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):

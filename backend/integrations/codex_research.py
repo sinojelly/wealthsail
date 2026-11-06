@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -14,7 +15,15 @@ from backend.integrations.research_execution import (
     ExecutionObserver,
     sanitize_execution_receipt,
     sanitize_execution_transport_reason,
+    sanitize_execution_progress,
+    sanitize_execution_statistics,
 )
+from backend.integrations.research_process import cleanup_process
+from backend.integrations.research_lifecycle import CLEANUP_SECONDS
+
+_LATE_SPAWNS = set()
+_OWNED_CLEANUPS = set()
+_MAX_PENDING_OPERATIONS = 16
 
 
 class CodexUnavailableError(Exception):
@@ -86,7 +95,7 @@ def normalize_usage(source, *, compute_total=False):
         value = next((source[name] for name in names if name in source), None)
         if type(value) is int and 0 <= value <= 1_000_000_000_000:
             result[key] = value
-    if result.get("cached_input_tokens", 0) > result.get("prompt_tokens", 0):
+    if "cached_input_tokens" in result and "prompt_tokens" in result and result["cached_input_tokens"] > result["prompt_tokens"]:
         result.pop("cached_input_tokens", None)
     if "prompt_tokens" in result and "completion_tokens" in result and (
         compute_total or "total_tokens" in source or "totalTokens" in source
@@ -109,7 +118,8 @@ def exec_usage(stdout):
     return usage, completed
 
 
-def with_telemetry(error, *, usage, model, inference_succeeded, execution_receipt=None, execution_receipt_transport_reason=None):
+def with_telemetry(error, *, usage, model, inference_succeeded, execution_receipt=None, execution_receipt_transport_reason=None,
+                   execution_statistics=None, execution_progress=None):
     error.usage = normalize_usage(usage)
     error.model = model or "codex"
     error.inference_succeeded = inference_succeeded
@@ -120,18 +130,23 @@ def with_telemetry(error, *, usage, model, inference_succeeded, execution_receip
     reason = sanitize_execution_transport_reason(execution_receipt_transport_reason)
     if reason is not None:
         error.execution_receipt_transport_reason = reason
+    error.execution_statistics = sanitize_execution_statistics(execution_statistics)
+    error.execution_progress = sanitize_execution_progress(execution_progress)
     return error
 
 
 class ResearchResult(dict):
     """Keep provider metadata outside the report's strict business schema."""
 
-    def __init__(self, report, *, usage=None, model=None, execution_receipt=None, execution_receipt_transport_reason=None):
+    def __init__(self, report, *, usage=None, model=None, execution_receipt=None, execution_receipt_transport_reason=None,
+                 execution_statistics=None, execution_progress=None):
         super().__init__(report)
         self.usage = normalize_usage(usage)
         self.model = model or "codex"
         self.execution_receipt = sanitize_execution_receipt(execution_receipt)
         self.execution_receipt_transport_reason = sanitize_execution_transport_reason(execution_receipt_transport_reason)
+        self.execution_statistics = sanitize_execution_statistics(execution_statistics)
+        self.execution_progress = sanitize_execution_progress(execution_progress)
 
 
 _DISABLED_FEATURES = ("shell_tool", "apps", "plugins", "multi_agent")
@@ -254,17 +269,144 @@ def public_environment(source, directory):
     return env
 
 
-async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=None):
-    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-    process = await asyncio.create_subprocess_exec(
-        *args,
-        cwd=cwd,
-        env=env,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **options,
-    )
+def _close_control_fds(*fds):
+    for fd in fds:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _own_cleanup(process, *, control_read, control_write=None, lifecycle, isolated,
+                 supervised, readers=()):
+    async def discard(stream):
+        while await stream.read(65536):
+            pass
+
+    async def dispose():
+        _close_control_fds(control_write)
+        owned_readers = list(readers)
+        if not readers:
+            process.stdin.close()
+            owned_readers = [asyncio.create_task(discard(process.stdout)),
+                             asyncio.create_task(discard(process.stderr))]
+        try:
+            reaped, descendants = await cleanup_process(
+                process, isolated_group=isolated and not supervised, supervisor=supervised,
+            )
+            if control_read is not None:
+                try:
+                    os.set_blocking(control_read, False)
+                    evidence = json.loads(os.read(control_read, 4096))
+                    if not isinstance(evidence, dict) or type(evidence.get("returncode")) is not int:
+                        raise ValueError("invalid supervisor exit evidence")
+                    reaped = reaped and evidence.get("reaped") is True
+                    descendants = evidence.get("descendantsConfirmed") is True and reaped
+                except (OSError, ValueError, TypeError):
+                    descendants = False
+            if lifecycle is not None:
+                lifecycle.exited(reaped=reaped, descendants_confirmed=descendants,
+                                 returncode=process.returncode)
+        finally:
+            _close_control_fds(control_read)
+            for task in owned_readers:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*owned_readers, return_exceptions=True)
+
+    task = asyncio.create_task(dispose())
+    _OWNED_CLEANUPS.add(task)
+
+    def finished(task):
+        _OWNED_CLEANUPS.discard(task)
+        if not task.cancelled():
+            task.exception()  # Consume safe background failures without logging content.
+
+    task.add_done_callback(finished)
+    return task
+
+
+def _watch_late_spawn(spawn, **cleanup_options):
+    _LATE_SPAWNS.add(spawn)
+
+    def spawned(task):
+        _LATE_SPAWNS.discard(task)
+        try:
+            process = task.result()
+        except BaseException:
+            _close_control_fds(cleanup_options["control_read"], cleanup_options["control_write"])
+            return
+        _own_cleanup(process, **cleanup_options)
+
+    spawn.add_done_callback(spawned)
+
+
+async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=None, lifecycle=None):
+    if len(_LATE_SPAWNS) + len(_OWNED_CLEANUPS) >= _MAX_PENDING_OPERATIONS:
+        raise CodexUnavailableError("local process cleanup capacity unavailable")
+    isolated = os.name == "posix"
+    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+    control_read, control_write = None, None
+    supervised = lifecycle is not None and sys.platform == "linux"
+    if supervised:
+        control_read, control_write = os.pipe()
+        options["pass_fds"] = (control_write,)
+        args = [sys.executable, str(Path(__file__).with_name("research_supervisor.py")), str(control_write), str(timeout), str(os.getpid()), *args]
+    spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **options,
+        ))
+    cancelled_during_spawn = False
+    cleanup_deadline = None
+    handle_handed_off = False
+    try:
+        while True:
+            try:
+                if cancelled_during_spawn:
+                    remaining = cleanup_deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        if lifecycle is not None:
+                            lifecycle.terminating("CANCELLED")
+                            lifecycle.exited(reaped=False, descendants_confirmed=False, returncode=None)
+                        _watch_late_spawn(spawn, control_read=control_read, control_write=control_write,
+                                          lifecycle=lifecycle, isolated=isolated, supervised=supervised)
+                        control_read, control_write = None, None
+                        handle_handed_off = True
+                        break
+                    done, _ = await asyncio.wait({spawn}, timeout=remaining)
+                    if not done:
+                        continue
+                    process = spawn.result()
+                else:
+                    process = await asyncio.shield(spawn)
+                break
+            except asyncio.CancelledError:
+                # A cancelled await can race with successful OS creation.
+                # Obtain the handle before disposal; never abandon that child.
+                cancelled_during_spawn = True
+                if spawn.cancelled():
+                    raise
+                if cleanup_deadline is None:
+                    cleanup_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+        if handle_handed_off:
+            raise asyncio.CancelledError
+    except BaseException:
+        for fd in (control_read, control_write):
+            if fd is not None:
+                os.close(fd)
+        if lifecycle is not None:
+            lifecycle.exited(reaped=False, descendants_confirmed=False, returncode=None)
+        raise
+    if control_write is not None:
+        os.close(control_write)
+    if lifecycle is not None:
+        lifecycle.started()
 
     async def read(stream, keep):
         chunks, size = [], 0
@@ -291,24 +433,39 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=N
         process.stdin.close()
         return await asyncio.gather(*tasks)
 
+    communication = asyncio.create_task(communicate())
     try:
-        stdout, stderr, code = await asyncio.wait_for(communicate(), timeout)
+        if cancelled_during_spawn:
+            raise asyncio.CancelledError
+        stdout, stderr, code = await asyncio.wait_for(asyncio.shield(communication), timeout)
         return code, stdout, stderr
+    except TimeoutError as exc:
+        exc.timeout_origin = "CLI_MODEL_TIMEOUT"
+        if lifecycle is not None:
+            lifecycle.terminating("CLI_MODEL_TIMEOUT")
+        raise
+    except asyncio.CancelledError:
+        if lifecycle is not None and not lifecycle.data["terminationRequested"]:
+            lifecycle.terminating("CANCELLED")
+        raise
     finally:
-        if process.returncode is None:
+        cleanup = _own_cleanup(process, control_read=control_read, lifecycle=lifecycle,
+                               isolated=isolated, supervised=supervised, readers=[communication, *tasks])
+        if cleanup_deadline is None:
+            cleanup_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+        interrupted = False
+        while not cleanup.done():
+            remaining = cleanup_deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                if lifecycle is not None:
+                    lifecycle.exited(reaped=False, descendants_confirmed=False, returncode=None)
+                break
             try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), 5)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.wait({cleanup}, timeout=remaining)
+            except asyncio.CancelledError:
+                interrupted = True
+        if interrupted:
+            raise asyncio.CancelledError
 
 
 async def preflight_codex(executable=None, *, environment=None):
@@ -371,7 +528,7 @@ async def preflight_codex(executable=None, *, environment=None):
 
 
 async def run_codex_research(
-    executable, prompt, schema, *, timeout=900, environment=None, model=None
+    executable, prompt, schema, *, timeout=900, environment=None, model=None, lifecycle=None
 ):
     with tempfile.TemporaryDirectory(prefix="wealthsail-public-research-") as directory:
         root = Path(directory)
@@ -398,6 +555,23 @@ async def run_codex_research(
             args.extend(["--model", model])
         args.append("-")
         observer = ExecutionObserver()
+        observed_usage, usage_pending = {}, b""
+
+        def observe(chunk):
+            nonlocal observed_usage, usage_pending
+            observer.feed(chunk)
+            # Retain only numeric counters from bounded terminal JSONL events.
+            usage_pending += chunk
+            while b"\n" in usage_pending:
+                line, usage_pending = usage_pending.split(b"\n", 1)
+                if len(line) <= 256 * 1024:
+                    usage, completed = exec_usage(line)
+                    if completed:
+                        observed_usage = usage
+            if len(usage_pending) > 256 * 1024:
+                usage_pending = b""
+            if lifecycle is not None:
+                lifecycle.progress(observer.progress())
         try:
             code, stdout, _ = await _run(
                 args,
@@ -407,13 +581,17 @@ async def run_codex_research(
                 ),
                 input_data=prompt.encode("utf-8"),
                 timeout=timeout,
-                stdout_observer=observer.feed,
+                stdout_observer=observe,
+                **({"lifecycle": lifecycle} if lifecycle is not None else {}),
             )
         except (Exception, asyncio.CancelledError) as exc:
+            if lifecycle is not None:
+                exc.research_execution_state = lifecycle.snapshot()
             raise with_telemetry(
-                exc, usage={}, model=model,
+                exc, usage=observed_usage, model=model,
                 inference_succeeded=observer.turn_completed,
                 execution_receipt=observer.finish(),
+                execution_statistics=observer.statistics(), execution_progress=observer.progress(),
             )
         usage, completed = exec_usage(stdout)
         receipt = observer.finish()
@@ -422,7 +600,9 @@ async def run_codex_research(
                 raise CodexExecutionError("CLI did not complete")
             if not output_path.is_file() or output_path.stat().st_size > 2 * 1024 * 1024:
                 raise CodexOutputError("missing or oversized report")
-            return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model, execution_receipt=receipt)
+            return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model, execution_receipt=receipt,
+                                  execution_statistics=observer.statistics(), execution_progress=observer.progress())
         except (CodexExecutionError, CodexOutputError, OSError, UnicodeError) as exc:
             _capture_output_error(exc, output_path)
-            raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed, execution_receipt=receipt)
+            raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed, execution_receipt=receipt,
+                                 execution_statistics=observer.statistics(), execution_progress=observer.progress())

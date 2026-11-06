@@ -20,9 +20,21 @@ async def run_alpha_runtime(
         from backend.jobs.alpha_opportunities import run_alpha_opportunity_service
         from backend.jobs.daily_research import run_daily_research_service
         from backend.jobs.research_archive import run_research_archive_service
+        from backend.jobs.research_exit_recovery import (
+            run_research_exit_recovery_service,
+        )
+
+        async def recover_exits(pool, *, stop_event):
+            await run_research_exit_recovery_service(
+                pool, settings, stop_event=stop_event
+            )
 
         # Recovery drains existing frozen jobs even after inference is disabled.
-        services = [run_research_archive_service, run_opportunity_fund_nav_service]
+        services = [
+            run_research_archive_service,
+            run_opportunity_fund_nav_service,
+            recover_exits,
+        ]
         if preferred_research_request_mode(settings) is not None:
             from backend.jobs.research_debug import run_debug_research_service
 

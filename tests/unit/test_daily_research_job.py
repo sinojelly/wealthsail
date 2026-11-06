@@ -6,12 +6,55 @@ from datetime import datetime, timedelta, timezone
 from importlib import import_module, util
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 import pytest
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 NOW = datetime(2026, 10, 16, 8, tzinfo=SHANGHAI)  # Friday, inside the start window
+
+
+class ConfirmedResearchMock(AsyncMock):
+    """A fixture CLI return includes a reaped child; exceptions remain unknown."""
+
+    async def _execute_mock_call(self, *args, **kwargs):
+        result = await super()._execute_mock_call(*args, **kwargs)
+        lifecycle = kwargs.get("lifecycle")
+        if lifecycle is not None:
+            lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=0)
+        return result
+
+
+def fixture_call_identity(run_id, owner_token):
+    # Legacy control-flow fixtures use labels, while real identity/DB tests use
+    # actual UUIDs. Keep these labels out of the production identity validator.
+    def identity(value):
+        try:
+            return str(UUID(str(value)))
+        except ValueError:
+            return str(uuid5(NAMESPACE_URL, str(value)))
+
+    return {"runId": identity(run_id), "ownerToken": identity(owner_token), "callId": str(uuid4())}
+
+
+def confirmed_research_result(report, identity):
+    from backend.integrations.codex_research import ResearchResult
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    lifecycle = ResearchLifecycle(identity)
+    lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=0)
+    result = ResearchResult(report)
+    result.research_execution_state = lifecycle.snapshot()
+    return result
+
+
+def confirmed_research_failure(error):
+    async def fail(*args, lifecycle, **kwargs):
+        lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=1)
+        raise error
+
+    return fail
 
 
 def job():
@@ -88,6 +131,7 @@ def isolate(monkeypatch):
         mod, "create_model_guard", AsyncMock(return_value="guard-token")
     )
     monkeypatch.setattr(mod, "release_model_guard", AsyncMock(return_value=True))
+    monkeypatch.setattr(mod, "research_call_identity", fixture_call_identity)
     monkeypatch.setattr(mod, "finish_daily_run", finished)
     monkeypatch.setattr(mod.archive_repository, "enqueue_research_archive", AsyncMock(), raising=False)
     monkeypatch.setattr(mod, "archive_research_run", AsyncMock(return_value={"auditStatus": "ARCHIVED"}), raising=False)
@@ -110,7 +154,7 @@ def isolate(monkeypatch):
             return_value={"executable": "codex.exe", "version": "codex-cli test"}
         ),
     )
-    monkeypatch.setattr(mod, "run_codex_research", AsyncMock(side_effect=provider))
+    monkeypatch.setattr(mod, "run_codex_research", ConfirmedResearchMock(side_effect=provider))
     monkeypatch.setattr(mod, "verify_research_sources", AsyncMock(side_effect=provider))
     monkeypatch.setattr(mod, "build_prompt", lambda packet: "one prompt")
     monkeypatch.setattr(mod, "validate_report", lambda raw, *_, **__: raw)
@@ -722,6 +766,7 @@ async def test_model_timeout_is_enforced_even_when_provider_does_not_enforce_it(
     monkeypatch,
 ):
     mod, state = isolate(monkeypatch)
+    monkeypatch.setattr(mod, "research_deadlines", lambda _: {"workerSeconds": 0.01})
 
     async def slow(*args, **kwargs):
         await asyncio.Event().wait()

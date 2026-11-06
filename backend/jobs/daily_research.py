@@ -68,6 +68,13 @@ from backend.macro.research_diagnostics import (
     sanitize_failure_diagnostics,
 )
 from backend.jobs.research_inputs import prepare_research_inputs, research_catalysts
+from backend.jobs.research_budget import model_budget_fits
+from backend.jobs.research_exit_recovery import invocation_identity
+from backend.integrations.research_lifecycle import (
+    ResearchLifecycle,
+    research_deadlines,
+    sanitize_lifecycle,
+)
 from backend.macro.research_modes import research_request_mode_allowed
 from backend.macro.model_dispatch_repository import (
     ResearchModelBusy,
@@ -100,7 +107,7 @@ def _canonical_reason_code(exc: Exception) -> str:
     Returns:
         Canonical string token representing failure category.
     """
-    code = getattr(exc, "reason_code", None)
+    code = getattr(exc, "timeout_origin", None) or getattr(exc, "reason_code", None)
     if isinstance(code, str) and code in REASON_CODES:
         return code
 
@@ -114,6 +121,10 @@ def _canonical_reason_code(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return "PAYLOAD_VALIDATION_FAILED"
     return "UNEXPECTED_ERROR"
+
+
+def research_call_identity(run_id, owner_token):
+    return invocation_identity(run_id, owner_token)
 
 
 def _log_research_failure(exc, stage, run_id, *, reason_code=None):
@@ -906,8 +917,14 @@ async def _execute_daily_research(
         else scheduled_for(stamp, schedule_time=schedule["schedule_time"])
     )
     packet_day = local(datetime.fromisoformat(packet["asOf"])).date()
+    deadlines = research_deadlines(settings.daily_research_timeout_seconds)
     while True:
         dispatched = local(now_shanghai())
+        if not model_budget_fits(
+            deadlines["workerSeconds"],
+            pipeline_deadline=(pipeline or {}).get("_runtime_deadline", float("inf")),
+        ):
+            return {"status": "FAILED", "errorClass": "ResearchExecutionBudgetInsufficient"}
         if not explicit and dispatched.date() != stamp.date():
             return {"status": "MISSED", "errorClass": "SourcePreparationCrossedDay"}
         if (
@@ -1017,16 +1034,23 @@ async def _execute_daily_research(
     deterministic_repair, repaired_formal_published = None, False
     topic_registry = None
     diagnostics = {}
-    model_returned = False
+    model_exit_confirmed = False
+    model_operation_entered = False
+    identity = research_call_identity(run_id, owner_token)
+    lifecycle = ResearchLifecycle(identity)
+    execution_state = None
     current_stage = "MODEL_EXECUTION"
     model_started, source_started = None, None
     model_ms, sources_ms = None, None
     execution_receipt, usage_observation = None, None
     execution_transport_reason = None
 
-    def confirmed_model_return():
-        nonlocal model_returned
-        model_returned = True
+    def confirmed_model_exit(value):
+        nonlocal model_exit_confirmed, execution_state
+        safe = sanitize_lifecycle(value, identity)
+        if safe is not None and not (model_exit_confirmed and not safe["exitConfirmed"]):
+            execution_state = safe
+            model_exit_confirmed = model_exit_confirmed or safe["exitConfirmed"]
 
     def capture_model_result(value):
         nonlocal raw
@@ -1036,41 +1060,47 @@ async def _execute_daily_research(
         if unavailable:
             return result
         model = settings.daily_research_model or getattr(settings, "codex_model", None)
-        model_started = monotonic()
-        async with asyncio.timeout(settings.daily_research_timeout_seconds):
-            if remote_codex:
-                raw = await codex_client.research(
-                    settings,
-                    prompt,
-                    REPORT_SCHEMA,
-                    timeout=settings.daily_research_timeout_seconds,
-                    model=model,
-                    on_return=confirmed_model_return,
-                    on_output=capture_model_result,
-                )
-            else:
-                selected_model = model or cli.get("selectedModel")
+        selected_model = model or cli.get("selectedModel")
 
-                async def operation():
-                    value = await run_codex_research(
-                        cli["executable"],
-                        prompt,
-                        REPORT_SCHEMA,
-                        timeout=settings.daily_research_timeout_seconds,
-                        model=selected_model,
-                    )
+        async def operation():
+            nonlocal model_started, model_ms, model_operation_entered
+            # This synchronous boundary precedes every possible CLI/RPC await.
+            # If never entered, control flow proves no model was dispatched.
+            model_operation_entered = True
+            model_started = monotonic()
+            timer = asyncio.timeout(deadlines["workerSeconds"])
+            try:
+                async with timer:
+                    if remote_codex:
+                        value = await codex_client.research(
+                            settings, prompt, REPORT_SCHEMA,
+                            timeout=settings.daily_research_timeout_seconds,
+                            model=selected_model, identity=identity,
+                            on_exit=confirmed_model_exit, on_output=capture_model_result,
+                            trace_usage=False,
+                        )
+                    else:
+                        value = await run_codex_research(
+                            cli["executable"], prompt, REPORT_SCHEMA,
+                            timeout=settings.daily_research_timeout_seconds,
+                            model=selected_model, lifecycle=lifecycle,
+                        )
                     capture_model_result(value)
-                    confirmed_model_return()
+                    confirmed_model_exit(getattr(value, "research_execution_state", None))
                     return value
+            except TimeoutError as exc:
+                if timer.expired():
+                    exc.timeout_origin = "WORKER_OUTER_TIMEOUT"
+                raise
+            finally:
+                if not remote_codex:
+                    confirmed_model_exit(lifecycle.snapshot())
+                model_ms = max(0, int((monotonic() - model_started) * 1000))
 
-                raw = await trace_inference(
-                    settings,
-                    model=selected_model,
-                    call_type="research",
-                    operation=operation,
-                )
-        model_returned = True
-        model_ms = max(0, int((monotonic() - model_started) * 1000))
+        # Account snapshots have their own bounded budget outside this operation.
+        raw = await trace_inference(
+            settings, model=selected_model, call_type="research", operation=operation,
+        )
         execution_receipt = getattr(raw, "execution_receipt", None)
         execution_transport_reason = getattr(raw, "execution_receipt_transport_reason", None)
         usage_observation = getattr(raw, "usage", None)
@@ -1166,6 +1196,7 @@ async def _execute_daily_research(
             error = "ResearchValidationError"
             diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
+        confirmed_model_exit(getattr(exc, "research_execution_state", None))
         execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
@@ -1183,6 +1214,7 @@ async def _execute_daily_research(
         )
         raise
     except TimeoutError as exc:
+        confirmed_model_exit(getattr(exc, "research_execution_state", None))
         execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
@@ -1194,8 +1226,7 @@ async def _execute_daily_research(
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
         audit_error = exc
-        if getattr(exc, "inference_succeeded", False) is True:
-            model_returned = True
+        confirmed_model_exit(getattr(exc, "research_execution_state", None))
         parse_failure = isinstance(exc, CodexOutputError)
         if parse_failure:
             current_stage = "REPORT_VALIDATION"
@@ -1227,6 +1258,17 @@ async def _execute_daily_research(
     finally:
         from backend.macro.research_workload import measured_workload
 
+        # on_output runs before independent after-account observation; preserve
+        # measured inference evidence even if that bookkeeping is interrupted.
+        execution_receipt = execution_receipt or getattr(raw, "execution_receipt", None)
+        execution_transport_reason = execution_transport_reason or getattr(raw, "execution_receipt_transport_reason", None)
+        usage_observation = usage_observation or getattr(raw, "usage", None)
+        logger.info(
+            "daily_research_model_exit run_id=%s exit_confirmed=%s dispatch_started=%s state=%s reason=%s",
+            run_id, model_exit_confirmed, model_operation_entered,
+            execution_state["state"] if execution_state else "UNKNOWN",
+            execution_state.get("terminationReason") if execution_state else "MODEL_EXIT_UNCONFIRMED",
+        )
         if model_started is not None and model_ms is None:
             model_ms = max(0, int((monotonic() - model_started) * 1000))
         if source_started is not None and sources_ms is None:
@@ -1366,7 +1408,7 @@ async def _execute_daily_research(
             # confirmed-return guard release finish before any archive work.
             result["auditStatus"] = "AUDIT_PENDING"
         finally:
-            if model_returned:
+            if model_exit_confirmed or not model_operation_entered:
                 try:
                     async with system_connection(pool) as conn:
                         if not await release_model_guard(

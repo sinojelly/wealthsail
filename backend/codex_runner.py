@@ -39,6 +39,11 @@ from backend.integrations.research_execution import (
     sanitize_execution_receipt,
     summarize_execution_receipt,
     sanitize_execution_transport_reason,
+    sanitize_execution_progress,
+    sanitize_execution_statistics,
+)
+from backend.integrations.research_lifecycle import (
+    ResearchRegistry, TIMEOUT_ORIGINS, call_identity, research_deadlines,
 )
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -177,6 +182,12 @@ class ResearchRequest(BaseModel):
     output_schema: dict[str, Any] = Field(alias="schema")
     model: str | None = Field(default=None, min_length=1, max_length=120)
     timeout: float = Field(default=900, ge=30, le=1200)
+    identity: dict[str, str] | None = None
+
+    @field_validator("identity")
+    @classmethod
+    def valid_identity(cls, value):
+        return call_identity(value) if value is not None else None
 
     @field_validator("prompt")
     @classmethod
@@ -185,12 +196,23 @@ class ResearchRequest(BaseModel):
             raise ValueError("prompt limit")
         return value
 
+
     @field_validator("output_schema")
     @classmethod
     def bound_schema(cls, value):
         if len(_json_bytes(value)) > MAX_SCHEMA_BYTES:
             raise ValueError("schema limit")
         return value
+
+
+class LifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: dict[str, str]
+
+    @field_validator("identity")
+    @classmethod
+    def valid_identity(cls, value):
+        return call_identity(value)
 
 
 def _safe_completion(result):
@@ -214,8 +236,9 @@ def _safe_completion(result):
     return safe
 
 
-def _error_detail(error, message, *, capture_output=False):
-    if not hasattr(error, "inference_succeeded"):
+def _error_detail(error, message, *, capture_output=False, lifecycle=None):
+    origin = getattr(error, "timeout_origin", None)
+    if not hasattr(error, "inference_succeeded") and lifecycle is None and (not isinstance(origin, str) or origin not in TIMEOUT_ORIGINS):
         return message
     model = getattr(error, "model", None)
     detail = {
@@ -223,6 +246,15 @@ def _error_detail(error, message, *, capture_output=False):
         "model": model if isinstance(model, str) and 1 <= len(model) <= 120 else "codex",
         "inferenceSucceeded": getattr(error, "inference_succeeded", False) is True,
     }
+    if isinstance(origin, str) and origin in TIMEOUT_ORIGINS:
+        detail["timeoutOrigin"] = origin
+    if lifecycle is not None:
+        detail["lifecycle"] = lifecycle.snapshot()
+    for attr, key, sanitizer in (("execution_statistics", "executionStatistics", sanitize_execution_statistics),
+                                  ("execution_progress", "executionProgress", sanitize_execution_progress)):
+        safe = sanitizer(getattr(error, attr, None))
+        if safe is not None:
+            detail[key] = safe
     if capture_output:
         reason = sanitize_execution_transport_reason(getattr(error, "execution_receipt_transport_reason", None))
         if reason is not None:
@@ -293,6 +325,8 @@ def create_app(
     app = FastAPI(title="WealthSail internal Codex runner", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodyLimit)
     app.state.capacity = capacity
+    registry = ResearchRegistry()
+    app.state.research_registry = registry
     from backend.integrations.codex_account_cache import AccountMetadataCache, auth_file_generation
 
     async def inspect_account():
@@ -323,10 +357,16 @@ def create_app(
             raise HTTPException(400, "Requested Codex model is not allowed")
         return allowed
 
-    async def invoke(operation: Callable[[], Awaitable], timeout: float, connection: Request, *, capture_output=False):
+    async def invoke(operation: Callable[[], Awaitable], timeout: float, connection: Request, *, capture_output=False, lifecycle=None):
+        operation_entered = False
+
         async def execute():
+            nonlocal operation_entered
+            if lifecycle is not None:
+                lifecycle.task = asyncio.current_task()
             async with capacity.slot():
                 async with asyncio.timeout(timeout):
+                    operation_entered = True
                     result = await operation()
                     _bounded_output(result)
                     return result
@@ -343,25 +383,36 @@ def create_app(
             done, _ = await asyncio.wait({execution, disconnect}, return_when=asyncio.FIRST_COMPLETED)
             if execution in done:
                 return execution.result()
+            if lifecycle is not None:
+                lifecycle.terminating("CLIENT_DISCONNECTED")
             raise HTTPException(499, "Client disconnected")
         except RunnerBusy:
+            if lifecycle is not None:
+                # Admission failed before operation() and before any spawn.
+                lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=None)
             raise
         except HTTPException:
             raise
         except TimeoutError as exc:
-            raise HTTPException(504, _error_detail(exc, "Codex execution timed out", capture_output=capture_output)) from exc
+            if lifecycle is not None and getattr(exc, "timeout_origin", None) not in TIMEOUT_ORIGINS:
+                exc.timeout_origin = "RUNNER_OPERATION_TIMEOUT"
+            raise HTTPException(504, _error_detail(exc, "Codex execution timed out", capture_output=capture_output, lifecycle=lifecycle)) from exc
         except CodexUnavailableError as exc:
             raise HTTPException(503, "Codex authentication or runtime unavailable") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise HTTPException(502, _error_detail(exc, "Codex execution failed", capture_output=capture_output)) from exc
+            raise HTTPException(502, _error_detail(exc, "Codex execution failed", capture_output=capture_output, lifecycle=lifecycle)) from exc
         finally:
             with anyio.CancelScope(shield=True):
                 for task in (execution, disconnect):
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(execution, disconnect, return_exceptions=True)
+                if lifecycle is not None and not operation_entered:
+                    # Joining proves that cancellation cannot later acquire the
+                    # slot and enter operation. No child was ever dispatched.
+                    lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=None)
 
     @app.get("/healthz")
     async def health():
@@ -393,11 +444,19 @@ def create_app(
     @app.post("/v1/research", dependencies=[Depends(authorize)])
     async def research(request: ResearchRequest, connection: Request):
         selected = approved_model(request.model, daily_model)
+        lifecycle = None
+        if request.identity is not None:
+            try:
+                lifecycle = registry.create(request.identity)
+            except ValueError as exc:
+                raise HTTPException(409, "Research execution identity cannot be dispatched") from exc
         result = await invoke(
-            lambda: run_codex_research(executable, request.prompt, request.output_schema, timeout=request.timeout, environment=child_environment, model=selected),
-            request.timeout + 5,
+            lambda: run_codex_research(executable, request.prompt, request.output_schema, timeout=request.timeout, environment=child_environment, model=selected,
+                                       **({"lifecycle": lifecycle} if lifecycle is not None else {})),
+            research_deadlines(request.timeout)["runnerSeconds"],
             connection,
             capture_output=True,
+            lifecycle=lifecycle,
         )
         if not isinstance(result, dict):
             raise HTTPException(502, "Invalid Codex research response")
@@ -406,6 +465,13 @@ def create_app(
             def response(payload, reason=None):
                 return JSONResponse(payload, headers={EXECUTION_TRANSPORT_HEADER: reason}) if reason else payload
             base = {"report": dict(result), "usage": result.usage, "model": result.model}
+            for attr, key, sanitizer in (("execution_statistics", "executionStatistics", sanitize_execution_statistics),
+                                          ("execution_progress", "executionProgress", sanitize_execution_progress)):
+                safe = sanitizer(getattr(result, attr, None))
+                if safe is not None:
+                    base[key] = safe
+            if lifecycle is not None:
+                base["lifecycle"] = lifecycle.snapshot()
             try:
                 _bounded_output(base)
             except (ValueError, TypeError) as exc:
@@ -426,7 +492,23 @@ def create_app(
                     return response(envelope, reason)
             # Optional observations may be omitted, never the completed report.
             return response(base, "RECEIPT_OMITTED_SIZE_LIMIT" if receipt is not None else inherited_reason)
-        return result
+        return {"report": result, "usage": {}, "model": selected or "codex", "lifecycle": lifecycle.snapshot()} if lifecycle is not None else result
+
+    @app.post("/v1/research/status", dependencies=[Depends(authorize)])
+    async def research_status(request: LifecycleRequest):
+        state = registry.lookup(request.identity)
+        return {"lifecycle": state.snapshot()} if state is not None else {"status": "UNKNOWN"}
+
+    @app.post("/v1/research/cancel", dependencies=[Depends(authorize)])
+    async def research_cancel(request: LifecycleRequest):
+        state = registry.lookup(request.identity)
+        if state is None:
+            return {"status": "UNKNOWN"}
+        if state.task is not None and not state.task.done() and not state.data["exitConfirmed"]:
+            state.terminating("CANCELLED")
+            state.task.cancel()
+        # Request acknowledgement is not exit proof; the caller polls status.
+        return {"lifecycle": state.snapshot()}
 
     @app.post("/v1/chat/stream", dependencies=[Depends(authorize)])
     async def stream(request: PromptRequest):

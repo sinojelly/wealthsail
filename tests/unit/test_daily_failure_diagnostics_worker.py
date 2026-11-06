@@ -142,15 +142,18 @@ async def test_persist_cancellation_summary_distinguishes_runtime_expiry(
     mod, state = isolate(monkeypatch)
     snapshot = Mock()
     monkeypatch.setattr(mod, "write_research_diagnostic", snapshot)
-    monkeypatch.setattr(
-        mod, "finish_daily_run", AsyncMock(side_effect=asyncio.CancelledError())
-    )
     pipeline = {
         "id": "pipeline",
         "stage": "MODEL_RUNNING",
         "runtime_deadline_at": NOW + timedelta(hours=1),
-        "_runtime_deadline": 0 if expired else float("inf"),
+        "_runtime_deadline": float("inf"),
     }
+    async def cancelled_persist(*args, **kwargs):
+        if expired:
+            pipeline["_runtime_deadline"] = 0
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(mod, "finish_daily_run", AsyncMock(side_effect=cancelled_persist))
     with pytest.raises(asyncio.CancelledError):
         await mod._execute_daily_research(
             object(),

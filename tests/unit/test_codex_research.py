@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import sys
 import time
 import tomllib
 from importlib import import_module, util
@@ -16,6 +18,26 @@ def adapter():
         "Codex adapter missing"
     )
     return import_module("backend.integrations.codex_research")
+
+
+def test_partial_cached_usage_is_not_discarded_when_input_is_unknown():
+    assert adapter().normalize_usage({"cached_input_tokens": 10}) == {"cached_input_tokens": 10}
+
+
+@pytest.mark.asyncio
+async def test_timeout_retains_trusted_usage_and_safe_progress_from_prior_events(monkeypatch):
+    mod = adapter()
+
+    async def execute(args, **kwargs):
+        kwargs["stdout_observer"](b'{"type":"thread.started"}\n{"type":"turn.completed","usage":{"input_tokens":17,"output_tokens":3}}\n')
+        raise TimeoutError("private")
+
+    monkeypatch.setattr(mod, "_run", execute)
+    with pytest.raises(TimeoutError) as error:
+        await mod.run_codex_research("fake", "public", {})
+    assert error.value.usage["prompt_tokens"] == 17
+    assert error.value.execution_progress["modelCompleted"] is True
+    assert error.value.execution_statistics["version"] == "research-execution-stats-v1"
 
 
 @pytest.mark.asyncio
@@ -289,6 +311,7 @@ async def test_cancel_terminates_and_awaits_child(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert child.returncode == -15
+    await asyncio.gather(*list(mod._OWNED_CLEANUPS), return_exceptions=True)
     assert child.wait.await_count >= 2
 
 
@@ -325,3 +348,154 @@ async def test_timeout_in_stdin_drain_also_terminates_and_awaits_child(monkeypat
     assert time.monotonic() - started < 0.1
     assert child.returncode == -15
     assert child.wait.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_cli_timeout_preserves_bound_exit_state_and_origin(monkeypatch):
+    from uuid import uuid4
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    mod = adapter()
+    state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
+    with pytest.raises(TimeoutError) as error:
+        await mod._run([sys.executable, "-c", "import time; time.sleep(30)"], cwd=".",
+                       env=dict(os.environ), timeout=0.03, lifecycle=state)
+    assert error.value.timeout_origin == "CLI_MODEL_TIMEOUT"
+    assert state.snapshot()["reaped"] is True
+    assert state.snapshot()["terminationRequested"] is True
+    assert state.snapshot()["exitConfirmed"] is (sys.platform == "linux")
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_spawn_still_disposes_created_child(monkeypatch):
+    mod = adapter()
+    started, release = asyncio.Event(), asyncio.Event()
+    child = AsyncMock()
+    child.returncode = None
+    child.stdin.close = lambda: None
+    child.stdout.read.return_value = b""
+    child.stderr.read.return_value = b""
+    child.terminate = lambda: setattr(child, "returncode", -15)
+
+    async def spawn(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return child
+
+    async def wait():
+        if child.returncode is None:
+            await asyncio.Event().wait()
+        return child.returncode
+
+    child.wait.side_effect = wait
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}))
+    await started.wait()
+    active.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await active
+    assert child.returncode == -15
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_stuck_os_spawn_is_bounded_and_never_confirms_exit(monkeypatch):
+    from uuid import uuid4
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    mod = adapter()
+    monkeypatch.setattr(mod, "CLEANUP_SECONDS", 0.02, raising=False)
+    started = asyncio.Event()
+    os_tasks = []
+
+    async def spawn(*args, **kwargs):
+        os_tasks.append(asyncio.current_task())
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
+    active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}, lifecycle=state))
+    await started.wait()
+    active.cancel()
+    try:
+        done, _ = await asyncio.wait({active}, timeout=0.15)
+        assert active in done, "OS spawn must not hold the caller beyond cleanup budget"
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert state.snapshot()["exitConfirmed"] is False
+        assert state.snapshot()["state"] == "UNKNOWN"
+    finally:
+        for task in os_tasks:
+            task.cancel()
+        await asyncio.gather(*os_tasks, active, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_late_spawn_handle_is_owned_and_disposed_after_caller_returns(monkeypatch):
+    from uuid import uuid4
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    mod = adapter()
+    monkeypatch.setattr(mod, "CLEANUP_SECONDS", 0.02, raising=False)
+    started, release = asyncio.Event(), asyncio.Event()
+    child = AsyncMock()
+    child.returncode = None
+    child.stdin.close = lambda: None
+    child.stdout.read.return_value = b""
+    child.stderr.read.return_value = b""
+    child.terminate = lambda: setattr(child, "returncode", -15)
+    async def wait():
+        return child.returncode
+
+    child.wait.side_effect = wait
+
+    async def spawn(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return child
+
+    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
+    active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}, lifecycle=state))
+    await started.wait()
+    active.cancel()
+    try:
+        done, _ = await asyncio.wait({active}, timeout=0.15)
+        assert active in done
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert state.snapshot()["exitConfirmed"] is False
+    finally:
+        release.set()
+        await asyncio.gather(active, return_exceptions=True)
+    for _ in range(100):
+        if child.returncode is not None:
+            break
+        await asyncio.sleep(0)
+    assert child.returncode == -15
+    await asyncio.gather(*list(mod._OWNED_CLEANUPS), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="Linux production process group isolation")
+async def test_timeout_reaps_process_group_even_when_child_ignores_term(tmp_path):
+    from uuid import uuid4
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    mod = adapter()
+    marker = tmp_path / "child.pid"
+    program = (
+        "import os,signal,subprocess,sys,time; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "p=subprocess.Popen([sys.executable,'-c',"
+        "'import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)']); "
+        "open(sys.argv[1],'w').write(str(p.pid)); time.sleep(30)"
+    )
+    state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
+    with pytest.raises(TimeoutError):
+        await mod._run([sys.executable, "-c", program, str(marker)], cwd=str(tmp_path),
+                       env=dict(os.environ), timeout=0.3, lifecycle=state)
+    assert state.snapshot()["exitConfirmed"] is True
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)

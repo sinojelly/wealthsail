@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from importlib import import_module
 import json
+from uuid import uuid4
 from unittest.mock import AsyncMock
 
 import httpx
@@ -30,6 +31,184 @@ async def client_for(**kwargs):
 
 def auth():
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.mark.asyncio
+async def test_research_status_is_authenticated_identity_bound_and_restart_unknown(monkeypatch):
+    mod = runner()
+    from backend.integrations.codex_research import ResearchResult
+
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+
+    async def execute(*args, **kwargs):
+        state = kwargs["lifecycle"]
+        state.started()
+        state.exited(reaped=True, descendants_confirmed=True, returncode=0)
+        return ResearchResult({"summary": "public"})
+
+    monkeypatch.setattr(mod, "run_codex_research", execute)
+    async with client_for() as (client, _):
+        result = await client.post("/v1/research", headers=auth(), json={"prompt": "private input", "schema": {}, "identity": owner})
+        assert result.status_code == 200
+        assert result.json()["lifecycle"]["exitConfirmed"] is True
+        assert (await client.post("/v1/research/status", json={"identity": owner})).status_code == 401
+        status = await client.post("/v1/research/status", headers=auth(), json={"identity": owner})
+        assert status.json()["lifecycle"]["exitConfirmed"] is True
+        wrong = {**owner, "ownerToken": str(uuid4())}
+        unknown = await client.post("/v1/research/status", headers=auth(), json={"identity": wrong})
+        assert unknown.json() == {"status": "UNKNOWN"}
+        duplicate = await client.post("/v1/research", headers=auth(), json={"prompt": "private input", "schema": {}, "identity": owner})
+        assert duplicate.status_code == 409
+        assert "private input" not in status.text and owner["ownerToken"] not in status.text
+    async with client_for() as (client, _):
+        status = await client.post("/v1/research/status", headers=auth(), json={"identity": owner})
+        assert status.json() == {"status": "UNKNOWN"}
+
+
+@pytest.mark.asyncio
+async def test_research_cli_timeout_retains_confirmed_exit_proof(monkeypatch):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+
+    async def execute(*args, **kwargs):
+        state = kwargs["lifecycle"]
+        state.started()
+        state.terminating("CLI_MODEL_TIMEOUT")
+        state.exited(reaped=True, descendants_confirmed=True, returncode=-9)
+        error = TimeoutError("secret stderr")
+        error.timeout_origin = "CLI_MODEL_TIMEOUT"
+        raise error
+
+    monkeypatch.setattr(mod, "run_codex_research", execute)
+    async with client_for() as (client, _):
+        result = await client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {}, "identity": owner})
+    assert result.status_code == 504
+    detail = result.json()["detail"]
+    assert detail["timeoutOrigin"] == "CLI_MODEL_TIMEOUT"
+    assert detail["lifecycle"]["exitConfirmed"] is True
+    assert "secret" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_cannot_target_other_owner_and_receipt_arrives_after_reaping(monkeypatch):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    started, cleanup = asyncio.Event(), asyncio.Event()
+
+    async def execute(*args, **kwargs):
+        state = kwargs["lifecycle"]
+        state.started()
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await cleanup.wait()
+            state.exited(reaped=True, descendants_confirmed=True, returncode=-9)
+
+    monkeypatch.setattr(mod, "run_codex_research", execute)
+    async with client_for() as (client, _):
+        active = asyncio.create_task(client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {}, "identity": owner}))
+        await started.wait()
+        wrong = {**owner, "ownerToken": str(uuid4())}
+        assert (await client.post("/v1/research/cancel", headers=auth(), json={"identity": wrong})).json() == {"status": "UNKNOWN"}
+        assert not active.done()
+        requested = await client.post("/v1/research/cancel", headers=auth(), json={"identity": owner})
+        assert requested.json()["lifecycle"]["exitConfirmed"] is False
+        cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        status = await client.post("/v1/research/status", headers=auth(), json={"identity": owner})
+        assert status.json()["lifecycle"]["exitConfirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_runner_operation_timeout_is_distinct_from_cli_budget(monkeypatch):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    monkeypatch.setattr(mod, "research_deadlines", lambda timeout: {"runnerSeconds": 0.01})
+
+    async def execute(*args, **kwargs):
+        state = kwargs["lifecycle"]
+        state.started()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            state.exited(reaped=True, descendants_confirmed=True, returncode=-15)
+
+    monkeypatch.setattr(mod, "run_codex_research", execute)
+    async with client_for() as (client, _):
+        result = await client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {}, "identity": owner})
+    assert result.status_code == 504
+    assert result.json()["detail"]["timeoutOrigin"] == "RUNNER_OPERATION_TIMEOUT"
+    assert result.json()["detail"]["lifecycle"]["exitConfirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_research_capacity_has_trusted_no_dispatch_exit(monkeypatch):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    inference = AsyncMock(side_effect=AssertionError("capacity rejection must not infer"))
+    monkeypatch.setattr(mod, "run_codex_research", inference)
+    async with client_for(max_concurrent=1, max_queued=0) as (client, app):
+        await app.state.capacity.acquire()
+        rejected = await client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {}, "identity": owner})
+        assert rejected.status_code == 503
+        status = await client.post("/v1/research/status", headers=auth(), json={"identity": owner})
+        assert status.json()["lifecycle"]["exitConfirmed"] is True
+        app.state.capacity.release()
+    inference.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_endpoint", [True, False])
+async def test_queued_research_cancel_proves_no_dispatch_after_execution_join(monkeypatch, cancel_endpoint):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    inference = AsyncMock(side_effect=AssertionError("queued cancellation must not infer"))
+    monkeypatch.setattr(mod, "run_codex_research", inference)
+    async with client_for(max_concurrent=1) as (client, app):
+        await app.state.capacity.acquire()
+        active = asyncio.create_task(client.post("/v1/research", headers=auth(), json={"prompt": "public", "schema": {}, "identity": owner}))
+        while app.state.capacity.queued == 0:
+            await asyncio.sleep(0)
+        if cancel_endpoint:
+            await client.post("/v1/research/cancel", headers=auth(), json={"identity": owner})
+        else:
+            active.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        status = await client.post("/v1/research/status", headers=auth(), json={"identity": owner})
+        assert status.json()["lifecycle"]["exitConfirmed"] is True
+        assert app.state.capacity.queued == 0
+        app.state.capacity.release()
+    inference.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_socket_disconnect_of_queued_research_proves_no_dispatch(monkeypatch):
+    mod = runner()
+    owner = {key: str(uuid4()) for key in ("runId", "ownerToken", "callId")}
+    inference = AsyncMock(side_effect=AssertionError("queued disconnect must not infer"))
+    monkeypatch.setattr(mod, "run_codex_research", inference)
+    app = mod.create_app(token=TOKEN, max_concurrent=1)
+    await app.state.capacity.acquire()
+    incoming = asyncio.Queue()
+    incoming.put_nowait({"type": "http.request", "body": json.dumps({"prompt": "public", "schema": {}, "identity": owner}).encode(), "more_body": False})
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/v1/research", "raw_path": b"/v1/research", "query_string": b"", "root_path": "", "headers": [(b"content-type", b"application/json"), (b"authorization", f"Bearer {TOKEN}".encode())], "client": ("127.0.0.1", 1234), "server": ("runner", 8090)}
+    active = asyncio.create_task(app(scope, incoming.get, send))
+    while app.state.capacity.queued == 0:
+        await asyncio.sleep(0)
+    incoming.put_nowait({"type": "http.disconnect"})
+    await asyncio.wait_for(active, 1)
+    assert sent[0]["status"] == 499
+    assert app.state.research_registry.lookup(owner).snapshot()["exitConfirmed"] is True
+    app.state.capacity.release()
+    inference.assert_not_awaited()
 
 
 @pytest.mark.asyncio

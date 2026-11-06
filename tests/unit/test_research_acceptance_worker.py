@@ -11,7 +11,9 @@ import pytest
 
 from backend.integrations.codex_research import CodexOutputError
 from backend.macro.daily_research import ResearchValidationError
-from tests.unit.test_daily_research_job import NOW, isolate, settings
+from tests.unit.test_daily_research_job import (
+    NOW, confirmed_research_failure, confirmed_research_result, isolate, settings,
+)
 
 
 @dataclass
@@ -141,7 +143,7 @@ async def test_completed_model_decode_failure_keeps_exact_raw_and_does_not_rerun
     error = CodexOutputError("invalid report JSON")
     error.raw_output = '{"broken":'
     error.inference_succeeded = True
-    mod.run_codex_research.side_effect = error
+    mod.run_codex_research.side_effect = confirmed_research_failure(error)
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "FAILED"
     assert state["artifacts"][2] == '{"broken":'
@@ -185,6 +187,7 @@ async def test_execution_failure_with_valid_json_cannot_publish_complete_accepta
             encoding="utf-8",
             newline="",
         )
+        kwargs["lifecycle"].exited(reaped=True, descendants_confirmed=True, returncode=1)
         return 1, b'{"type":"turn.completed"}\n', b"PRIVATE CLI stderr"
 
     cli = AsyncMock(side_effect=failed_cli)
@@ -271,7 +274,6 @@ async def test_cancelled_usage_bookkeeping_keeps_returned_raw_without_retry(
     monkeypatch, remote
 ):
     from backend.integrations import codex_client
-    from backend.ai_usage import tracker
 
     mod, state = boundary(monkeypatch)
     configured = settings()
@@ -286,14 +288,13 @@ async def test_cancelled_usage_bookkeeping_keeps_returned_raw_without_retry(
         monkeypatch.setattr(
             codex_client, "preflight", AsyncMock(return_value={"version": "fixture"})
         )
-        model = AsyncMock(return_value=raw)
+        model = AsyncMock(side_effect=lambda *a, **k: confirmed_research_result(raw, k["identity"]))
         monkeypatch.setattr(codex_client, "_research", model)
-        monkeypatch.setattr(tracker, "trace_inference", cancelled_after_operation)
     else:
         model = mod.run_codex_research
         model.side_effect = None
         model.return_value = raw
-        monkeypatch.setattr(mod, "trace_inference", cancelled_after_operation)
+    monkeypatch.setattr(mod, "trace_inference", cancelled_after_operation)
     with pytest.raises(asyncio.CancelledError):
         await mod.sync_daily_research(object(), configured, NOW)
     assert state["artifacts"][2] == raw
@@ -317,7 +318,7 @@ async def test_real_parse_rejection_freezes_exact_broken_output(monkeypatch):
     error = CodexOutputError("invalid report JSON")
     error.raw_output = '{"broken":'
     error.inference_succeeded = True
-    mod.run_codex_research.side_effect = error
+    mod.run_codex_research.side_effect = confirmed_research_failure(error)
     monkeypatch.setattr(mod, "validate_report_outcome", validate_report_outcome)
     monkeypatch.setattr(mod, "rejected_outcome", rejected_outcome)
     monkeypatch.setattr(mod, "validate_report", validate_report)
@@ -340,7 +341,7 @@ async def test_oversize_decode_output_keeps_hash_and_size_without_body(monkeypat
     error.raw_output_bytes = 2 * 1024 * 1024 + 1
     error.raw_output_sha256 = "a" * 64
     error.raw_output_omission = "SIZE_LIMIT"
-    mod.run_codex_research.side_effect = error
+    mod.run_codex_research.side_effect = confirmed_research_failure(error)
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "FAILED"
     assert state["artifacts"][2] is None

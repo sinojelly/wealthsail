@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -210,14 +211,26 @@ def daily_boundary(monkeypatch, remote):
     monkeypatch.setattr(daily_research, "system_connection", transaction)
     monkeypatch.setattr(daily_research, "consumed", AsyncMock(return_value=False))
     monkeypatch.setattr(
-        daily_research, "claim_daily_run", AsyncMock(return_value={"run_id": "run"})
+        daily_research,
+        "claim_daily_run",
+        AsyncMock(return_value={"run_id": str(uuid4())}),
     )
     monkeypatch.setattr(daily_research, "finish_daily_run", AsyncMock())
-    monkeypatch.setattr(daily_research.archive_repository, "enqueue_research_archive", AsyncMock(), raising=False)
-    monkeypatch.setattr(daily_research, "archive_research_run", AsyncMock(return_value={"auditStatus": "ARCHIVED"}), raising=False)
+    monkeypatch.setattr(
+        daily_research.archive_repository,
+        "enqueue_research_archive",
+        AsyncMock(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        daily_research,
+        "archive_research_run",
+        AsyncMock(return_value={"auditStatus": "ARCHIVED"}),
+        raising=False,
+    )
     monkeypatch.setattr(daily_research, "lock_model_dispatch", AsyncMock())
     monkeypatch.setattr(
-        daily_research, "create_model_guard", AsyncMock(return_value="token")
+        daily_research, "create_model_guard", AsyncMock(return_value=str(uuid4()))
     )
     monkeypatch.setattr(
         daily_research, "release_model_guard", AsyncMock(return_value=True)
@@ -267,19 +280,28 @@ async def test_daily_public_task_keeps_inference_on_business_validation_failure_
         usage={"prompt_tokens": 70, "cached_input_tokens": 30, "completion_tokens": 9},
         model="fixture",
     )
-    monkeypatch.setattr(
-        daily_research, "run_codex_research", AsyncMock(return_value=report)
-    )
+
+    async def local_response(*args, lifecycle, **kwargs):
+        lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=0)
+        return report
+
+    async def remote_response(*args, payload, **kwargs):
+        from backend.integrations.research_lifecycle import ResearchLifecycle
+
+        lifecycle = ResearchLifecycle(payload["identity"])
+        lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=0)
+        return {
+            "report": dict(report),
+            "usage": report.usage,
+            "model": report.model,
+            "lifecycle": lifecycle.snapshot(),
+        }
+
+    monkeypatch.setattr(daily_research, "run_codex_research", local_response)
     monkeypatch.setattr(
         codex_client,
         "_request_json",
-        AsyncMock(
-            return_value={
-                "report": dict(report),
-                "usage": report.usage,
-                "model": report.model,
-            }
-        ),
+        AsyncMock(side_effect=remote_response),
     )
 
     def reject(*args, **kwargs):

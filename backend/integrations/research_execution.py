@@ -5,9 +5,11 @@ observation stream, not source quality or provider-internal network retries.
 """
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
+from time import monotonic
 
 VERSION = "research-execution-v2"
 LEGACY_VERSION = "research-execution-v1"
@@ -63,6 +65,16 @@ _NON_WEB_ITEMS = {
     "collab_tool_call",
     "todo_list",
 }
+_TOOL_ITEMS = {
+    "web_search",
+    "command_execution",
+    "file_change",
+    "mcp_tool_call",
+    "collab_tool_call",
+}
+_PROGRESS_PHASES = frozenset(
+    {"MODEL_RUNNING", "WAITING_TOOL", "MODEL_MESSAGE", "TURN_COMPLETED", "TURN_FAILED"}
+)
 
 
 def _hash(value):
@@ -76,6 +88,110 @@ def _unique_object(pairs):
             raise ValueError("ambiguous event object")
         result[key] = value
     return result
+
+
+def _safe_count(value):
+    return value is None or (type(value) is int and 0 <= value <= 1_000_000)
+
+
+def sanitize_execution_statistics(value):
+    """Independent cost metadata cannot introduce query execution proof."""
+    if (
+        not isinstance(value, dict)
+        or value.get("version") != "research-execution-stats-v1"
+    ):
+        return None
+    if not isinstance(value.get("coverage"), str) or value["coverage"] not in {
+        "COMPLETE",
+        "PARTIAL",
+        "UNAVAILABLE",
+    }:
+        return None
+    if (
+        value.get("preDispatchEnforcement") is not False
+        or value.get("providerRetries") is not None
+        or value.get("sourceReferenceReuses") is not None
+    ):
+        return None
+    keys = (
+        "completedToolActions",
+        "distinctSearchQueries",
+        "duplicateSearchQueries",
+        "distinctPageTargets",
+        "repeatedPageOpens",
+    )
+    if any(not _safe_count(value.get(key)) for key in keys):
+        return None
+    return {
+        "version": "research-execution-stats-v1",
+        "coverage": value["coverage"],
+        **{key: value.get(key) for key in keys},
+        "sourceReferenceReuses": None,
+        "preDispatchEnforcement": False,
+        "providerRetries": None,
+    }
+
+
+def _safe_stamp(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+        return (
+            stamp.isoformat()
+            if stamp.tzinfo is not None and stamp.utcoffset() is not None
+            else None
+        )
+    except (ValueError, OverflowError):
+        return None
+
+
+def sanitize_execution_progress(value):
+    """Only fixed phases, bounded numbers and aware timestamps leave the CLI."""
+    if not isinstance(value, dict) or value.get("version") != "research-progress-v1":
+        return None
+    phase = value.get("phase")
+    if not isinstance(phase, str) or phase not in _PROGRESS_PHASES:
+        return None
+    started = _safe_stamp(value.get("startedAt"))
+    last = _safe_stamp(value.get("lastEventAt"))
+    if started is None or (value.get("lastEventAt") is not None and last is None):
+        return None
+    elapsed = value.get("elapsedMs")
+    completed, active = (
+        value.get("completedToolActions"),
+        value.get("activeToolActions"),
+    )
+    waiting = value.get("waitingExternalTools")
+    if (
+        type(elapsed) is not int
+        or not 0 <= elapsed <= 1_000_000_000_000
+        or not _safe_count(completed)
+        or not _safe_count(active)
+    ):
+        return None
+    if type(value.get("modelCompleted")) is not bool or waiting is not (
+        bool(active) if active is not None else None
+    ):
+        return None
+    counts = {
+        key: value.get(key)
+        for key in ("observedSearchQueries", "observedPageOpens", "observedPageFinds")
+    }
+    if any(not _safe_count(number) for number in counts.values()):
+        return None
+    return {
+        "version": "research-progress-v1",
+        "startedAt": started,
+        "lastEventAt": last,
+        "elapsedMs": elapsed,
+        "phase": phase,
+        "completedToolActions": completed,
+        "activeToolActions": active,
+        "waitingExternalTools": waiting,
+        "modelCompleted": value["modelCompleted"],
+        **counts,
+    }
 
 
 class ExecutionObserver:
@@ -94,6 +210,125 @@ class ExecutionObserver:
         self.counts = dict.fromkeys(_COUNTS, 0)
         self.unknown_actions = False
         self.unknown_events = False
+        self.started_at = datetime.now(timezone.utc).isoformat()
+        self.started_clock = monotonic()
+        self.last_event_at = None
+        self.phase = "MODEL_RUNNING"
+        self.active_tools = set()
+        self.completed_tools = set()
+        self.page_targets = {}
+        self.progress_unknown = False
+
+    def _observe_progress(self, value):
+        self.last_event_at = datetime.now(timezone.utc).isoformat()
+        kind = value["type"]
+        if kind == "turn.completed":
+            self.phase = "TURN_COMPLETED"
+        elif kind in {"turn.failed", "error"}:
+            self.phase = "TURN_FAILED"
+        elif kind in {"item.started", "item.updated", "item.completed"}:
+            item = value.get("item")
+            if not isinstance(item, dict):
+                return
+            identity, item_type = item.get("id"), item.get("type")
+            if item_type == "agent_message" and kind != "item.completed":
+                self.phase = "MODEL_MESSAGE"
+            if not isinstance(item_type, str) or item_type not in _TOOL_ITEMS:
+                return
+            if not isinstance(identity, str) or not 1 <= len(identity) <= 200:
+                self.progress_unknown = True
+                return
+            try:
+                identity = _hash(identity)
+            except UnicodeError:
+                self.progress_unknown = True
+                return
+            if (
+                identity not in self.active_tools | self.completed_tools
+                and len(self.active_tools | self.completed_tools) >= MAX_ITEMS
+            ):
+                self.progress_unknown = True
+                return
+            if kind == "item.completed":
+                self.active_tools.discard(identity)
+                self.completed_tools.add(identity)
+                self.phase = "WAITING_TOOL" if self.active_tools else "MODEL_RUNNING"
+            elif identity not in self.completed_tools:
+                self.active_tools.add(identity)
+                self.phase = "WAITING_TOOL"
+
+    def statistics(self):
+        """Exact repeat observations only; this metadata grants no audit proof.
+
+        Page targets are exact CLI targets. Different URLs/references cannot be
+        assumed to identify the same article, and citations are not observable.
+        """
+        receipt = self.finish()
+        counts = receipt["counts"]
+        query_count = counts["searchQueries"]
+        query_hashes = {
+            value for item in self.items.values() for value in item["queryHashes"]
+        }
+        query_known = query_count is not None and not any(
+            item["status"] == "RECEIPT_LIMIT" for item in self.items.values()
+        )
+        page_count = counts["pageOpens"]
+        page_known = (
+            page_count is not None
+            and len(self.page_targets) == page_count
+            and all(self.page_targets.values())
+        )
+        return {
+            "version": "research-execution-stats-v1",
+            "coverage": receipt["coverage"],
+            "completedToolActions": self._completed_tool_count(),
+            "distinctSearchQueries": len(query_hashes) if query_known else None,
+            "duplicateSearchQueries": query_count - len(query_hashes)
+            if query_known
+            else None,
+            "distinctPageTargets": len(set(self.page_targets.values()))
+            if page_known
+            else None,
+            "repeatedPageOpens": page_count - len(set(self.page_targets.values()))
+            if page_known
+            else None,
+            "sourceReferenceReuses": None,
+            "preDispatchEnforcement": False,
+            "providerRetries": None,
+        }
+
+    def _completed_tool_count(self):
+        return (
+            len(self.completed_tools)
+            if self.recognized
+            and not self.unknown_events
+            and not self.progress_unknown
+            and not any(item["status"] == "CONFLICT" for item in self.items.values())
+            else None
+        )
+
+    def progress(self):
+        """Small live observation; an event or completed turn is not process exit."""
+        active = (
+            len(self.active_tools)
+            if self.recognized and not self.unknown_events and not self.progress_unknown
+            else None
+        )
+        counts = self.finish()["counts"]
+        return {
+            "version": "research-progress-v1",
+            "startedAt": self.started_at,
+            "lastEventAt": self.last_event_at,
+            "elapsedMs": max(0, int((monotonic() - self.started_clock) * 1000)),
+            "phase": self.phase,
+            "completedToolActions": self._completed_tool_count(),
+            "activeToolActions": active,
+            "waitingExternalTools": bool(active) if active is not None else None,
+            "modelCompleted": self.turn_completed,
+            "observedSearchQueries": counts["searchQueries"],
+            "observedPageOpens": counts["pageOpens"],
+            "observedPageFinds": counts["pageFinds"],
+        }
 
     def _damage(self, reason="UNATTRIBUTED_EVENT"):
         self.partial = self.unknown_events = True
@@ -130,6 +365,7 @@ class ExecutionObserver:
         if not isinstance(kind, str):
             self._damage()
             return
+        self._observe_progress(value)
         if kind == "thread.started":
             self.recognized = self.thread_started = True
         elif kind == "turn.started":
@@ -243,6 +479,15 @@ class ExecutionObserver:
             elif action_type == "openPage":
                 self.counts["pageOpens"] += 1
                 previous["status"] = "COMPLETED_OPEN"
+                target = action.get("url")
+                try:
+                    self.page_targets[identity] = (
+                        _hash(target)
+                        if isinstance(target, str) and 1 <= len(target) <= 8192
+                        else None
+                    )
+                except UnicodeError:
+                    self.page_targets[identity] = None
             elif action_type == "findInPage":
                 self.counts["pageFinds"] += 1
                 previous["status"] = "COMPLETED_FIND"

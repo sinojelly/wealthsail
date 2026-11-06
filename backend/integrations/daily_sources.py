@@ -27,6 +27,8 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 MAX_BYTES = 2 * 1024 * 1024
 SOURCE_TIMEOUT_SECONDS = 45
 MAX_RESEARCH_SOURCE_CHECKS = 24
+SOURCE_CHECK_CONCURRENCY = 3
+SOURCE_CHECK_TIMEOUT_SECONDS = 25
 MAX_INDUSTRY_CYCLE_CANDIDATES = 10
 OFFICIAL_HOSTS = frozenset(
     {
@@ -738,7 +740,7 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
             return await verify_research_sources(
                 sources, now=now, client=owned, clock=clock
             )
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(SOURCE_CHECK_CONCURRENCY)
 
     async def check(source):
         base = {
@@ -753,7 +755,7 @@ async def verify_research_sources(sources, *, now, client=None, clock=None):
         except (TypeError, ValueError):
             return source.get("id"), {**base, "reason": "SOURCE_NOT_ALLOWLISTED"}
         try:
-            async with semaphore, asyncio.timeout(25):
+            async with semaphore, asyncio.timeout(SOURCE_CHECK_TIMEOUT_SECONDS):
                 raw = await fetch_text(client, uri)
             retrieved = _aware(clock())
             doc = _document(raw, uri, retrieved)

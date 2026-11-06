@@ -45,12 +45,12 @@
 
 **Interfaces:** `research_deadlines(cli_seconds)` returns CLI/cleanup/runner/RPC/worker budgets; `ResearchLifecycle(identity).snapshot()` and `sanitize_lifecycle(state, identity)` bind `{runId, ownerToken, callId}`. `codex_client.research(... identity=..., on_exit=..., trace_usage=False)` lets Worker wrap account observation outside actual model timing. Status/cancel are authenticated and never start a model.
 
-- [ ] Reproduce same-budget outer timeout and confirmed-exit failure cases with mocked transport and fixture subprocesses.
-- [ ] Keep default CLI 900 seconds and supported 30–1200 range. Use cleanup15, runner-response5, RPC15, recovery20, worker5 margins (900 -> runner920 -> RPC935 -> worker960), independently bounded account snapshots.
-- [ ] Separate operation elapsed time from account sampling; ensure manual35-minute and frozen automatic total budgets cannot silently widen or dispatch work that cannot fit.
-- [ ] Implement isolated process ownership/reaping, identity-bound safe terminal evidence, status/cancel recovery, old-error compatibility and fail-closed unknown/restart behavior.
-- [ ] Add six precise diagnostic origins, guarded release on proof even when business validation fails, and immutable terminal preservation.
-- [ ] Fault-inject normal/timeout/504/RPC/outer/disconnect/restart/stubborn/detached-child/snapshot/validation/late/wrong-owner cases; review and commit batch 2.
+- [x] Reproduce same-budget outer timeout and confirmed-exit failure cases with mocked transport and fixture subprocesses.
+- [x] Keep default CLI 900 seconds and supported 30–1200 range. Use cleanup15, runner-response5, RPC15, recovery20, worker5 margins (900 -> runner920 -> RPC935 -> worker960), independently bounded account snapshots.
+- [x] Separate operation elapsed time from account sampling; ensure manual35-minute and frozen automatic total budgets cannot silently widen or dispatch work that cannot fit. Reserve existing 24-source/3-concurrent/25-second verification (200 seconds) plus 30 seconds postprocessing, and independent snapshots (52 seconds).
+- [x] Implement isolated process ownership/reaping, identity-bound safe terminal evidence, status/cancel recovery, old-error compatibility and fail-closed unknown/restart behavior.
+- [x] Add six precise diagnostic origins, guarded release on proof even when business validation fails, and immutable terminal preservation.
+- [x] Fault-inject normal/timeout/504/RPC/outer/disconnect/restart/stubborn/detached-child/snapshot/validation/late/wrong-owner cases; review and commit batch 2.
 
 ## Batch 3 — actual work, progress and overlap
 
@@ -71,3 +71,5 @@
 - Ruling: no new migration unless existing JSON diagnostics cannot safely represent required progress; current diagnostic reason columns already accept bounded enum tokens.
 - Ruling: resource co-location is visible in code, but no claim is made that NAV overlap caused the reported NAS timeout.
 - Batch 1: same frozen sample 592170 -> 403055 prompt bytes (31.94%); actual JSON 571818 -> 390280; instructions 20352 -> 12775; schema unchanged 16266. The 570924 direct legacy projection excludes build_prompt preprocessing and is a separate measurement.
+
+- Batch 2: independent root verification 304 passed / 3 Linux-only skips plus 3 isolated loopback PostgreSQL cases. The Linux real detached-descendant and parent-SIGKILL fixtures are delivered but unexecuted on Windows. No real AI, migration or production access.

@@ -12,7 +12,7 @@ from backend.macro.daily_pipeline_repository import (
 )
 from backend.macro.model_dispatch_repository import ResearchModelBusy
 from tests.unit.test_daily_pipeline import valid_partial_bundle
-from tests.unit.test_daily_research_job import NOW, isolate, settings
+from tests.unit.test_daily_research_job import NOW, confirmed_research_result, isolate, settings
 
 
 def manual_boundary(monkeypatch):
@@ -176,7 +176,6 @@ async def test_unconfirmed_model_exit_does_not_release_global_guard(
 async def test_cancellation_in_usage_bookkeeping_after_model_return_releases_guard(
     monkeypatch, remote
 ):
-    from backend.ai_usage import tracker
     from backend.integrations import codex_client
 
     mod, state, configured, request, batch, _read = manual_boundary(monkeypatch)
@@ -190,12 +189,8 @@ async def test_cancellation_in_usage_bookkeeping_after_model_return_releases_gua
         monkeypatch.setattr(
             codex_client, "preflight", AsyncMock(return_value={"version": "fixture"})
         )
-        monkeypatch.setattr(
-            codex_client, "_research", AsyncMock(return_value={"summary": "public"})
-        )
-        monkeypatch.setattr(tracker, "trace_inference", cancelled_after_operation)
-    else:
-        monkeypatch.setattr(mod, "trace_inference", cancelled_after_operation)
+        monkeypatch.setattr(codex_client, "_research", AsyncMock(side_effect=lambda *a, **k: confirmed_research_result({"summary": "public"}, k["identity"])))
+    monkeypatch.setattr(mod, "trace_inference", cancelled_after_operation)
     with pytest.raises(asyncio.CancelledError):
         await mod.sync_daily_research(
             object(), configured, NOW, manual_request_id=request, source_batch_id=batch
