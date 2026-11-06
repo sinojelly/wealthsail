@@ -187,7 +187,16 @@ async def read_fund_observation(
 
 
 def project_topic_recommendations(
-    topics, recalls, *, sources, reviews, coverage, packet, validated_at, now
+    topics,
+    recalls,
+    *,
+    sources,
+    reviews,
+    coverage,
+    packet,
+    validated_at,
+    now,
+    accepted=None,
 ):
     """Attach real products to news theses; risk evidence annotates every match.
 
@@ -196,9 +205,21 @@ def project_topic_recommendations(
     """
     from backend.investment.fund_observation import _audit, _has_risk
     from backend.macro.research_topics import frozen_manifest
+    from backend.macro.research_topic_polarity import classify_topic_polarity
+    from backend.macro.research_topic_priority import IMPORTANCE, topic_highlights
 
     if not isinstance(topics, list) or len(topics) > 72:
         raise ValidationError_("机会推荐超过主题目录边界")
+    display = {
+        row["topic"]["topicId"]: row["priority"]
+        for row in topic_highlights(topics, accepted=accepted, limit=72)["items"]
+    }
+    association_order = {
+        "DIRECT_INDEX": 3,
+        "CATEGORY_MATCH": 2,
+        "NAME_CANDIDATE": 1,
+        "BROAD_FALLBACK": 0,
+    }
     reviews_by_scope = defaultdict(list)
     for review in reviews:
         if isinstance(review, dict) and isinstance(review.get("industry"), str):
@@ -227,6 +248,8 @@ def project_topic_recommendations(
     for ordinal, topic in enumerate(topics):
         if topic.get("status") == "QUARANTINED":
             continue
+        polarity = classify_topic_polarity(topic, sources=sources)
+        economic_direction = polarity["topicPolarity"]
         match = topic.get("match") or {}
         industries = set(match.get("industryIds", []))
         audit_scopes = industries | {
@@ -267,12 +290,16 @@ def project_topic_recommendations(
         )
         risk_status = (
             "RISK_ALERT"
-            if adverse
+            if adverse or economic_direction in {"NEGATIVE_RISK", "MIXED"}
             else "VERIFIED_SAFE"
             if verified
             else "UNVERIFIED_RISK"
         )
         warnings = []
+        if economic_direction in {"NEGATIVE_RISK", "MIXED"}:
+            warnings.append(
+                "主题文字包含负面经济信号，相关基金用于辨识风险敞口；请核对原始事实与分歧。"
+            )
         for review in adverse:
             warnings.extend(
                 str(check["summary"])[:600]
@@ -291,12 +318,39 @@ def project_topic_recommendations(
             20
             if any(row.get("riskLevel") == "CONFIRMED" for row in adverse)
             else 10
-            if adverse
+            if adverse or economic_direction in {"NEGATIVE_RISK", "MIXED"}
             else 0
         )
         recalled = recalls.get(topic.get("topicId"), recalls.get(topic.get("key"), {}))
-        funds = deepcopy(recalled.get("funds", []))[:3]
-        for fund in funds:
+        direct = deepcopy(
+            [
+                row
+                for row in recalled.get("funds", [])
+                if row.get("matchLevel") != "BROAD_FALLBACK"
+                and row.get("associationLevel") != "BROAD_FALLBACK"
+            ]
+        )[:3]
+        indirect = deepcopy(
+            [
+                *recalled.get("indirectFunds", []),
+                *(
+                    row
+                    for row in recalled.get("funds", [])
+                    if row.get("matchLevel") == "BROAD_FALLBACK"
+                    or row.get("associationLevel") == "BROAD_FALLBACK"
+                ),
+            ]
+        )[:3]
+        funds = (
+            direct if economic_direction in {"POSITIVE_OPPORTUNITY", "MIXED"} else []
+        )
+        risk_funds = direct if economic_direction == "NEGATIVE_RISK" else []
+        observations = (
+            direct
+            if economic_direction in {"MACRO_OBSERVATION", "UNDETERMINED"}
+            else []
+        )
+        for fund in [*direct, *indirect]:
             score = fund.get("quantitativeScore")
             if (
                 type(score) in (int, float)
@@ -329,16 +383,21 @@ def project_topic_recommendations(
         )
         if stale_audit:
             gaps.append("STALE_RISK_AUDIT")
-        if not funds:
+        if not direct and not indirect:
             gaps.append(
                 recalled.get("unavailableReason") or "NO_SUITABLE_FUND_IN_LOCAL_CATALOG"
             )
+        elif economic_direction == "NEGATIVE_RISK":
+            gaps.append("NEGATIVE_RISK_OBSERVATION_ONLY")
+        elif economic_direction in {"MACRO_OBSERVATION", "UNDETERMINED"}:
+            gaps.append("ECONOMIC_DIRECTION_PENDING")
         scores = [
             fund["quantitativeScore"]
             for fund in funds
             if fund["quantitativeScore"] is not None
         ]
         item = {
+            **polarity,
             "topicId": topic.get("topicId"),
             "key": topic["key"],
             "title": topic["title"],
@@ -349,10 +408,19 @@ def project_topic_recommendations(
             "riskScorePenalty": penalty,
             "missingRiskChecks": missing_checks,
             "recommendedFunds": funds,
+            "relatedRiskFunds": risk_funds,
+            "observationFunds": observations,
+            "indirectFunds": indirect,
             "recommendationStatus": "SOURCE_PENDING"
             if not backed
+            else "RISK_ONLY"
+            if economic_direction == "NEGATIVE_RISK"
+            else "OBSERVATION_ONLY"
+            if economic_direction in {"MACRO_OBSERVATION", "UNDETERMINED"}
             else "MATCHED"
             if funds
+            else "INDIRECT_ONLY"
+            if indirect
             else "NO_MATCH",
             "missingEvidence": gaps,
             "matchMessage": recalled.get("message"),
@@ -361,12 +429,22 @@ def project_topic_recommendations(
                 "title": topic["title"],
                 "thesis": topic.get("summary", ""),
                 "origin": "NEWS_TOPIC",
-            },
+            }
+            if economic_direction in {"POSITIVE_OPPORTUNITY", "MIXED"}
+            else None,
             "priority": {
+                **display.get(topic.get("topicId"), {}),
                 "matchedFundCount": len(funds),
                 "checkedSourceCount": len(refs & checked_ids),
                 "quantitativeScore": max(scores) if scores else None,
                 "riskAuditComplete": verified,
+                "associationStrength": max(
+                    (
+                        association_order.get(fund.get("associationLevel"), 1)
+                        for fund in funds
+                    ),
+                    default=0,
+                ),
             },
             "actionable": False,
         }
@@ -374,7 +452,9 @@ def project_topic_recommendations(
             (
                 (
                     -int(bool(funds)),
+                    -IMPORTANCE.get(item["priority"].get("importance"), 0),
                     -len(refs & checked_ids),
+                    -item["priority"]["associationStrength"],
                     -max(scores) if scores else 1,
                     -int(verified),
                     ordinal,
@@ -414,7 +494,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
     if validated is None or recorded is None or not validated <= recorded <= now:
         raise ValidationError_("机会推荐材料时间无效")
     result = {
-        "version": "topic-fund-recommendations-v1",
+        "version": "topic-fund-recommendations-v2",
         "researchId": str(identity),
         "validatedAt": validated.isoformat(),
         "evaluatedAt": now.isoformat(),
@@ -456,10 +536,29 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
         return result
     candidates = [topic for topic in topics if topic.get("status") != "QUARANTINED"]
     if _recall is None:
-        from backend.investment.opportunity_fund_recall import recall_topic_funds
+        from backend.investment.opportunity_fund_cache import (
+            read_cached_topic_funds,
+            read_topic_fund_cache_status,
+        )
+        from backend.investment.opportunity_fund_recall import enrich_topic_funds
+        from backend.investment.opportunity_fund_prices import (
+            enrich_fund_price_positions,
+        )
 
-        _recall = recall_topic_funds
-    recalls = await _recall(conn, candidates, packet, now)
+        discovered = await read_cached_topic_funds(
+            conn, identity, validated, candidates, now
+        )
+        if discovered is None:
+            state = await read_topic_fund_cache_status(conn, identity, validated, now)
+            result["missingEvidence"] = [
+                "FUND_RECALL_FAILED" if state == "FAILED" else "FUND_RECALL_PENDING"
+            ]
+            return result
+        recalls = await enrich_topic_funds(conn, discovered, packet, now)
+        recalls = await enrich_fund_price_positions(conn, recalls, packet, now)
+    else:
+        # Explicit test seam. Production reads always use the durable cache.
+        recalls = await _recall(conn, candidates, packet, now)
     observations, _ = _observations(receipt.get("accepted"), validated)
     items = project_topic_recommendations(
         topics,
@@ -470,6 +569,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
         packet=packet,
         validated_at=validated,
         now=now,
+        accepted=observations,
     )
     result.update(
         items=items,
@@ -482,6 +582,26 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
             "recommendedFundCount": sum(
                 len(item["recommendedFunds"]) for item in items
             ),
+            "directIndexFundCount": sum(
+                fund.get("associationLevel") == "DIRECT_INDEX"
+                for item in items
+                for fund in item["recommendedFunds"]
+            ),
+            "subscriptionVerifiedFundCount": sum(
+                fund.get("canSubscribe") is True
+                for item in items
+                for fund in item["recommendedFunds"]
+            ),
+            "priceEvaluableFundCount": sum(
+                (fund.get("pricePosition") or {}).get("status")
+                in {"ENTRY_ZONE", "NEUTRAL", "OVERHEATED"}
+                for item in items
+                for fund in item["recommendedFunds"]
+            ),
+            "riskTopicCount": sum(
+                item["topicPolarity"] == "NEGATIVE_RISK" for item in items
+            ),
+            "indirectFundCount": sum(len(item["indirectFunds"]) for item in items),
         },
     )
     return result

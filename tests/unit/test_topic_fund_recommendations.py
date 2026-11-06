@@ -194,7 +194,8 @@ def test_unchecked_sources_never_turn_risk_badge_green_and_quarantine_excluded()
     assert len(result) == 1
     assert result[0]["riskStatus"] == "UNVERIFIED_RISK"
     assert result[0]["recommendationStatus"] == "SOURCE_PENDING"
-    assert result[0]["recommendedFunds"]
+    assert result[0]["observationFunds"]
+    assert result[0]["recommendedFunds"] == []
     assert row == original
 
 

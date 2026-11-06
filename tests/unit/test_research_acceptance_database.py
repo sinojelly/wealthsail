@@ -23,17 +23,24 @@ pytestmark = [
 
 
 @asynccontextmanager
-async def fixture(*, manual=False):
+async def fixture(*, manual=False, now=None):
     target = urlsplit(DSN)
     assert target.hostname in {"localhost", "127.0.0.1", "::1"}
-    assert (
-        target.path.startswith("/wealthsail_manual_research_acceptance")
-        or (target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"})
+    assert target.path.startswith("/wealthsail_manual_research_acceptance") or (
+        target.port == 29034
+        and target.path
+        in {
+            "/wealthsail_acceptance_review100_v1",
+            "/wealthsail_acceptance_repair101_v1",
+            "/wealthsail_acceptance_repair101_v2",
+            "/wealthsail_dynamic_research102_v1",
+            "/wealthsail_opportunity104_validation",
+        }
     )
     conn = await asyncpg.connect(DSN)
     tx = conn.transaction()
     await tx.start()
-    now = stamp()
+    now = stamp() if now is None else now
     tenants, actors, viewer = [uuid4(), uuid4()], [uuid4(), uuid4()], uuid4()
     try:
         for tenant, actor in zip(tenants, actors):
