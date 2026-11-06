@@ -71,3 +71,93 @@ def test_partially_verified_or_duplicate_sources_do_not_promote_positive_thesis(
         result = module.classify_topic_polarity(row, sources=sources)
         assert result["topicPolarity"] == "UNDETERMINED"
         assert "SOURCE_SUPPORT_PENDING" in result["polarityReasonCodes"]
+
+
+@pytest.mark.parametrize(
+    "title,summary,expected",
+    [
+        ("光伏行业亏损收窄", "落后产能加速出清", "MIXED"),
+        ("光伏落后产能出清", "供给压力趋缓", "POSITIVE_OPPORTUNITY"),
+        ("医药集采降幅温和", "悲观预期见底", "POSITIVE_OPPORTUNITY"),
+        ("医药集采降幅温和", "", "POSITIVE_OPPORTUNITY"),
+        ("医药悲观预期见底", "", "POSITIVE_OPPORTUNITY"),
+        ("光伏供需拐点出现", "", "POSITIVE_OPPORTUNITY"),
+        ("光伏盈利触底", "", "POSITIVE_OPPORTUNITY"),
+        ("光伏盈利修复", "", "POSITIVE_OPPORTUNITY"),
+        ("医药业绩超预期", "", "POSITIVE_OPPORTUNITY"),
+        ("补贴政策落地", "", "POSITIVE_OPPORTUNITY"),
+        ("稳增长政策落地", "", "POSITIVE_OPPORTUNITY"),
+        ("产能过剩风险下降", "", "POSITIVE_OPPORTUNITY"),
+    ],
+)
+def test_sourced_economic_reversal_is_not_lost_to_negative_word_matching(
+    title, summary, expected
+):
+    result = classify(title, summary)
+    assert result["topicPolarity"] == expected
+    assert result["polarityEvidenceSourceIds"] == ["s1"]
+    assert result["actionable"] is False
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("光伏亏损扩大，订单收窄", "NEGATIVE_RISK"),
+        ("企业裁员出清", "NEGATIVE_RISK"),
+        ("违约风险落地", "NEGATIVE_RISK"),
+        ("风险落地", "UNDETERMINED"),
+        ("医药政策落地", "UNDETERMINED"),
+        ("医药亏损超预期", "NEGATIVE_RISK"),
+        ("订单超预期下滑", "NEGATIVE_RISK"),
+        ("盈利超预期恶化", "NEGATIVE_RISK"),
+        ("行业尚未出现拐点", "UNDETERMINED"),
+        ("行业不代表修复", "UNDETERMINED"),
+        ("行业产能出清尚未发生", "UNDETERMINED"),
+        ("行业盈利修复尚未兑现", "UNDETERMINED"),
+        ("行业盈利修复尚未得到确认", "UNDETERMINED"),
+        ("行业产能出清预期尚未兑现", "UNDETERMINED"),
+        ("公司亏损未收窄", "NEGATIVE_RISK"),
+    ],
+)
+def test_reversal_words_require_an_affirmed_improving_economic_claim(title, expected):
+    result = classify(title)
+    assert result["topicPolarity"] == expected
+    assert result["actionable"] is False
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [("光伏亏损收窄", "NEGATIVE_RISK"), ("光伏产能出清", "UNDETERMINED")],
+)
+@pytest.mark.parametrize(
+    "refs,sources,checked_ids",
+    [
+        (["s1", "s2"], [{"id": "s1", "verification": "SOURCE_CHECKED"}], ["s1"]),
+        (
+            ["s1"],
+            [
+                {"id": "s1", "verification": "SOURCE_CHECKED"},
+                {"id": "s1", "verification": "SOURCE_CHECKED"},
+            ],
+            [],
+        ),
+        (
+            ["s1", "s2"],
+            [
+                {"id": "s1", "verification": "SOURCE_CHECKED"},
+                {"id": "s2", "verification": "UNVERIFIED"},
+            ],
+            ["s1"],
+        ),
+    ],
+)
+def test_reversal_requires_every_referenced_source_to_be_unique_and_checked(
+    title, expected, refs, sources, checked_ids
+):
+    module = import_module("backend.macro.research_topic_polarity")
+    result = module.classify_topic_polarity(
+        {"title": title, "sourceIds": refs}, sources=sources
+    )
+    assert result["topicPolarity"] == expected
+    assert result["polarityEvidenceSourceIds"] == checked_ids
+    assert "SOURCE_SUPPORT_PENDING" in result["polarityReasonCodes"]
