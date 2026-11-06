@@ -8,7 +8,10 @@ from uuid import uuid4
 import asyncpg
 import pytest
 
-from backend.investment.opportunity_fund_recall import recall_topic_funds
+from backend.investment.opportunity_fund_recall import (
+    discover_topic_funds,
+    recall_topic_funds,
+)
 from tests.unit.test_opportunity_fund_recall import NOW, topic
 
 
@@ -99,11 +102,46 @@ async def test_full_master_index_recall_prioritizes_open_funds_before_candidate_
         assert indexed["subjectKind"] == "fund" and indexed["subjectId"] == str(
             instrument
         )
-        assert funds[0]["fundCode"] == (codes[-2] if open_a else codes[-1])
+        assert funds[0]["fundCode"] == codes[-1]
+        assert funds[0]["associationLevel"] == "DIRECT_INDEX"
         assert indexed["matchLevel"] == "DYNAMIC_MATCH"
         assert "跟踪指数" in indexed["matchReason"]
         assert indexed["sourceUri"] == "https://example.com/verified-index-fixture"
         assert all(fund["actionable"] is False for fund in funds)
+    finally:
+        await tx.rollback()
+        await conn.close()
+
+
+@pytest.mark.parametrize("role", ["wealthsail_api", "wealthsail_worker"])
+async def test_candidate_bound_counts_product_families_before_share_classes(role):
+    target = urlsplit(DSN)
+    assert target.hostname in {"127.0.0.1", "localhost"}
+    assert "validation" in target.path or "dynamic_research" in target.path
+    conn = await asyncpg.connect(DSN)
+    tx = conn.transaction()
+    await tx.start()
+    term = f"份额隔离{uuid4().hex[:8]}"
+    codes = sorted({f"{970000 + uuid4().int % 20000:06}" for _ in range(39)})
+    assert len(codes) == 39
+    try:
+        for offset, code in enumerate(codes):
+            family, share = divmod(offset, 3)
+            name = f"测试{term}产品{family}ETF联接{'ACE'[share]}"
+            await conn.execute(
+                "INSERT INTO reference.fund_master(fund_code,fund_name,fund_type,updated_at) VALUES($1,$2,'股票型-指数',$3)",
+                code,
+                name,
+                NOW,
+            )
+        await conn.execute(f"SET LOCAL ROLE {role}")
+        row = topic("shares", title=term, summary=term, match={})
+        candidates = (await discover_topic_funds(conn, [row], {}, NOW))["topic:shares"][
+            "funds"
+        ]
+        assert len({fund["fundGroupKey"] for fund in candidates}) == 12
+        assert len(candidates) == 36
+        assert all(fund["salesChannel"] == "OFF_EXCHANGE" for fund in candidates)
     finally:
         await tx.rollback()
         await conn.close()

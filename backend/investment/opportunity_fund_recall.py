@@ -13,17 +13,28 @@ from zoneinfo import ZoneInfo
 from backend.investment.discovery_limits import (
     OPPORTUNITY_CANDIDATES_PER_KEYWORD,
     OPPORTUNITY_FUNDS_PER_TOPIC,
-    OPPORTUNITY_KEYWORDS_PER_TOPIC,
     OPPORTUNITY_TOPIC_LIMIT,
 )
 from backend.investment.dynamic_discovery import (
     CORE_FUND_CODES,
     _FOREIGN_CURRENCY,
-    _THEMES,
     _share_priority,
     _stamp,
 )
 from backend.jobs.opportunity_market import read_fund_subscription_status
+from backend.investment.opportunity_fund_matching import (
+    ASSOCIATION_ORDER,
+    fallback as _fallback,
+    fund_group_key,
+    regional_bond_terms as _regional_bond_terms,
+    share_class_priority,
+    terms as _terms,
+    texts as _texts,
+)
+
+RECALL_MATCH_VERSION = "topic-fund-discovery-v2"
+_DISCOVERY_GROUP_LIMIT = 24
+_SHARES_PER_GROUP = 4
 
 _SOURCE = "https://fund.eastmoney.com/js/fundcode_search.js"
 _STATUS_MAX_AGE = timedelta(days=3)
@@ -33,115 +44,10 @@ _EXCLUDED_RECALL_NAME = re.compile(
     r"(?:[（(][^（）()]{0,30}[)）])?(?:人民币|美元|港币)?$",
     re.IGNORECASE,
 )
-_SPLIT = re.compile(
-    r"[\s，,、。:：;；/()（）]+|国产替代|商业化|产业|行业|政策|新增|订单|需求|利好|受益|加速|增长|带动|推动"
-)
-_LEVEL = {"CORE_MATCH": 0, "DYNAMIC_MATCH": 1, "BROAD_FALLBACK": 2}
-
-# These are explainable exposure search hints, never fabricated product links.
-_FALLBACKS = (
-    (r"黄金|贵金属", ("黄金",), "黄金资产"),
-    (r"债券|国债|纯债|固收", ("国债", "纯债"), "债券资产"),
-    (r"原油|油气|石油", ("油气", "原油"), "能源资产"),
-    (r"美股|美国|纳斯达克|标普", ("标普500", "纳斯达克100"), "美国权益宽基"),
-    (r"港股|香港|恒生", ("恒生指数", "恒生中国企业"), "港股宽基"),
-    (r"日本|日经|东证", ("日经225", "日经指数", "日本东证"), "日本权益宽基"),
-    (r"德国|DAX", ("德国DAX",), "德国权益宽基"),
-    (r"法国|CAC40", ("法国CAC40",), "法国权益宽基"),
-    (r"欧洲|欧元区|欧股", ("欧洲50", "欧洲精选", "欧洲股票"), "欧洲权益"),
-)
-
-
-def _texts(value):
-    return (
-        [v for v in value[:32] if isinstance(v, str)] if isinstance(value, list) else []
-    )
-
-
-def _topic_text(topic):
-    match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
-    return " ".join(
-        [
-            str(topic.get(field) or "")[:4000]
-            for field in ("title", "summary", "thesis", "impact")
-        ]
-        + _texts(topic.get("industryClaims"))
-        + _texts(match.get("unresolvedClaims"))
-    )
-
-
-def _regional_bond_terms(topic):
-    """An overseas rate exposure cannot borrow a generic domestic bond link."""
-    text = _topic_text(topic)
-    if not re.search(r"债|固收", text) or not re.search(
-        r"美国|美债|美元债|日本|日债|欧洲|欧元区|欧债|德国|德债|法国|英国|英债|"
-        r"海外|国际|全球|境外|印度|越南|东南亚|巴西|韩国|台湾|澳大利亚|加拿大|俄罗斯|新兴市场",
-        text,
-    ):
-        return None
-    if re.search(r"美国|美债", text) and re.search(r"国债|美债", text):
-        return ["美国国债", "美债"]
-    return []
-
-
-def _terms(topic):
-    regional_bonds = _regional_bond_terms(topic)
-    if regional_bonds is not None:
-        return regional_bonds
-    match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
-    text = _topic_text(topic)
-    explicit = (
-        [
-            str(row.get("searchTerm") or "")
-            for row in match.get("proposedScopes", [])[:8]
-            if isinstance(row, dict)
-        ]
-        if isinstance(match.get("proposedScopes"), list)
-        else []
-    )
-    explicit += _texts(match.get("unresolvedClaims")) + _texts(
-        topic.get("industryClaims")
-    )
-    hints = [
-        keyword
-        for code, pattern, keywords in _THEMES
-        if re.search(pattern, text, re.IGNORECASE | re.ASCII)
-        or code in _texts(match.get("industryIds"))
-        for keyword in keywords
-    ]
-    if re.search(r"芯片|半导体|SCI_TECH_CHIP", text, re.IGNORECASE):
-        hints += ["芯片", "半导体"]
-    candidates = explicit + hints + _SPLIT.split(str(topic.get("title") or ""))
-    return list(
-        dict.fromkeys(
-            word.strip()
-            for word in candidates
-            if isinstance(word, str)
-            and re.fullmatch(r"[A-Za-z0-9\u4e00-\u9fff·+ -]{2,32}", word.strip())
-            and not word.strip().isdigit()
-        )
-    )[:OPPORTUNITY_KEYWORDS_PER_TOPIC]
-
-
-def _fallback(topic):
-    regional_bonds = _regional_bond_terms(topic)
-    if regional_bonds is not None:
-        return regional_bonds, "美国国债资产" if regional_bonds else None
-    text = _topic_text(topic)
-    for pattern, keywords, label in _FALLBACKS:
-        if re.search(pattern, text):
-            return list(keywords), label
-    if re.search(
-        r"海外|国际|全球|境外|英国|印度|越南|东南亚|巴西|韩国|台湾|澳大利亚|加拿大|俄罗斯|新兴市场",
-        text,
-    ):
-        return [], None
-    return ["中证A500", "沪深300", "中证500"], "A股宽基"
-
-
-_LOOKUP_SQL = """WITH catalog AS (
-    SELECT c.*,m.updated_at AS identity_verified_at,
-      count(*) OVER(PARTITION BY c.market,c.fund_code) AS mapping_count
+_CATALOG_SELECT = r"""SELECT c.*,m.updated_at AS identity_verified_at,
+      count(*) OVER(PARTITION BY c.market,c.fund_code) AS mapping_count,
+      lower(regexp_replace(regexp_replace(c.fund_name,'[[:space:]]+','','g'),
+        '(.*([^A-Za-z]|ETF))[ACEIY](类|份额)?([（(]人民币[)）]|人民币)?$','\1','i')) AS fund_group_key
     FROM reference.research_fund_catalog c
     JOIN reference.fund_master m ON m.fund_code=c.fund_code
     WHERE c.market='FUND_CN' AND c.trade_form IN ('FUND','LOF')
@@ -153,30 +59,55 @@ _LOOKUP_SQL = """WITH catalog AS (
         WHERE a.alias_type='TICKER' AND a.alias_value=c.fund_code
           AND i.asset_type='OFF_EXCHANGE_FUND' AND i.lifecycle_status<>'ACTIVE'
           AND a.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
-          AND (a.effective_to IS NULL OR a.effective_to>=($1 AT TIME ZONE 'Asia/Shanghai')::date))
+          AND (a.effective_to IS NULL OR a.effective_to>=($1 AT TIME ZONE 'Asia/Shanghai')::date))"""
+
+_LOOKUP_SQL = (
+    """WITH keywords AS MATERIALIZED (
+    SELECT DISTINCT unnest($2::text[]) AS keyword
+), name_hits AS MATERIALIZED (
+    SELECT m.fund_code,k.keyword FROM keywords k
+    JOIN reference.fund_master m ON m.fund_name ILIKE '%'||k.keyword||'%'
+    WHERE m.updated_at<=$1
+    UNION
+    SELECT a.alias_value,k.keyword FROM keywords k
+    JOIN reference.instruments i ON i.canonical_name ILIKE '%'||k.keyword||'%'
+    JOIN reference.instrument_aliases a ON a.instrument_id=i.id
+    WHERE i.asset_type='OFF_EXCHANGE_FUND' AND i.lifecycle_status='ACTIVE'
+      AND a.alias_type='TICKER' AND i.primary_market='FUND_CN'
+      AND a.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
+      AND (a.effective_to IS NULL OR a.effective_to>=($1 AT TIME ZONE 'Asia/Shanghai')::date)
+), index_hits AS MATERIALIZED (
+    SELECT DISTINCT ON(p.fund_code,k.keyword) p.fund_code,k.keyword,i.name,p.source_uri
+    FROM keywords k JOIN reference.research_indices i ON i.name ILIKE '%'||k.keyword||'%'
+    JOIN reference.research_product_index_links p ON p.index_id=i.id
+    WHERE p.market='FUND_CN' AND p.relationship_type IN ('TRACKS','ETF_LINK')
+      AND p.verified_at<=$1
+      AND p.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
+      AND (p.effective_to IS NULL OR p.effective_to>=($1 AT TIME ZONE 'Asia/Shanghai')::date)
+    ORDER BY p.fund_code,k.keyword,p.verified_at DESC,i.id
+), hit_keywords AS MATERIALIZED (
+    SELECT fund_code,keyword FROM name_hits
+    UNION SELECT fund_code,keyword FROM index_hits
+), candidate_codes AS MATERIALIZED (
+    SELECT fund_code FROM hit_keywords UNION SELECT unnest($3::text[])
+), catalog AS ("""
+    + _CATALOG_SELECT
+    + """
+    AND c.fund_code IN (SELECT fund_code FROM candidate_codes)
 ), matched AS (
-    SELECT c.*,k AS matched_keyword,ix.name AS matched_index_name,
+    SELECT c.*,k.keyword AS matched_keyword,ix.name AS matched_index_name,
       ix.source_uri AS matched_index_source_uri,
+      CASE WHEN ix.name IS NOT NULL THEN 0 ELSE 1 END AS association_priority,
       CASE WHEN status.purchase_status IN ('OPEN','LIMITED')
         AND status.retrieved_at BETWEEN $1-interval '3 days' AND $1
         AND CASE WHEN status.daily_purchase_limit ~ '^[0-9]+([.][0-9]+)?$'
           THEN status.daily_purchase_limit::numeric>100
           ELSE status.daily_purchase_limit IS NULL AND status.purchase_status='OPEN' END
         THEN 0 ELSE 1 END AS subscription_priority,
-      CASE WHEN c.fund_name ~* 'ETF.*联接.*A([（(].*[)）])?$' THEN 0
-        WHEN c.fund_name ~* '(指数|ETF).*A([（(].*[)）])?$' THEN 1
-        WHEN c.fund_name ~* 'A([（(].*[)）])?$' THEN 2 ELSE 3 END AS share_priority
-    FROM catalog c CROSS JOIN unnest($2::text[]) k
-    LEFT JOIN LATERAL (
-      SELECT i.name,p.source_uri FROM reference.research_product_index_links p
-      JOIN reference.research_indices i ON i.id=p.index_id
-      WHERE p.fund_code=c.fund_code AND p.market=c.market
-        AND p.relationship_type IN ('TRACKS','ETF_LINK') AND p.verified_at<=$1
-        AND p.effective_from<=($1 AT TIME ZONE 'Asia/Shanghai')::date
-        AND (p.effective_to IS NULL OR p.effective_to>=($1 AT TIME ZONE 'Asia/Shanghai')::date)
-        AND i.name ILIKE '%'||k||'%'
-      ORDER BY p.verified_at DESC,i.id LIMIT 1
-    ) ix ON TRUE
+      CASE WHEN c.fund_name ~* 'A(类|份额)?([（(]人民币[)）]|人民币)?$' THEN 0
+        WHEN c.fund_name ~* 'C(类|份额)?([（(]人民币[)）]|人民币)?$' THEN 1 ELSE 2 END AS share_priority
+    FROM catalog c JOIN hit_keywords k ON k.fund_code=c.fund_code
+    LEFT JOIN index_hits ix ON ix.fund_code=c.fund_code AND ix.keyword=k.keyword
     LEFT JOIN LATERAL (
       SELECT s.purchase_status,s.daily_purchase_limit,s.retrieved_at
       FROM reference.fund_subscription_status s WHERE s.instrument_id=c.instrument_id
@@ -185,22 +116,37 @@ _LOOKUP_SQL = """WITH catalog AS (
         AND (s.retrieved_at IS NULL OR s.retrieved_at<=$1)
       ORDER BY s.effective_from DESC,s.retrieved_at DESC NULLS LAST LIMIT 1
     ) status ON TRUE
-    WHERE c.mapping_count=1 AND (c.fund_name ILIKE '%'||k||'%' OR ix.name IS NOT NULL)
+    WHERE c.mapping_count=1 AND (c.fund_name ILIKE '%'||k.keyword||'%' OR ix.name IS NOT NULL)
       AND c.fund_name !~* '(^|[^A-Za-z])B[[:space:]]*(类|份额)?([（(][^（）()]{0,30}[)）])?(人民币|美元|港币)?$'
+), family_best AS (
+    SELECT DISTINCT ON(matched_keyword,fund_group_key)
+      matched_keyword,fund_group_key,association_priority,subscription_priority,share_priority,fund_code
+    FROM matched ORDER BY matched_keyword,fund_group_key,association_priority,
+      subscription_priority,share_priority,fund_code
 ), ranked AS (
-    SELECT *,row_number() OVER(PARTITION BY matched_keyword
-      ORDER BY subscription_priority,share_priority,fund_code) AS keyword_rank
-    FROM matched
+    SELECT *,row_number() OVER(PARTITION BY matched_keyword ORDER BY association_priority,
+      subscription_priority,share_priority,fund_code) AS keyword_rank FROM family_best
 ), selected AS (
-    SELECT instrument_id,fund_code,fund_name,fund_type,trade_form,market,currency,
-      identity_verified_at,mapping_count,matched_keyword,matched_index_name,matched_index_source_uri
-    FROM ranked WHERE keyword_rank<=$4
+    SELECT m.instrument_id,m.fund_code,m.fund_name,m.fund_type,m.trade_form,m.market,m.currency,
+      m.identity_verified_at,m.mapping_count,m.matched_keyword,m.matched_index_name,m.matched_index_source_uri
+    FROM matched m JOIN ranked r USING(matched_keyword,fund_group_key) WHERE r.keyword_rank<=$4
     UNION ALL
     SELECT instrument_id,fund_code,fund_name,fund_type,trade_form,market,currency,
       identity_verified_at,mapping_count,''::text,NULL::text,NULL::text
     FROM catalog WHERE fund_code=ANY($3::text[]) AND mapping_count=1
 ) SELECT *, (fund_type ILIKE '%QDII%' OR fund_name ILIKE '%QDII%') AS overseas_calendar_required
   FROM selected ORDER BY fund_code,matched_keyword"""
+)
+
+# Cached candidate identities are rechecked by code without fuzzy matching.
+_IDENTITY_SQL = (
+    "WITH catalog AS ("
+    + _CATALOG_SELECT
+    + """
+    AND c.fund_code=ANY($2::text[])
+) SELECT *, (fund_type ILIKE '%QDII%' OR fund_name ILIKE '%QDII%') AS overseas_calendar_required
+  FROM catalog WHERE mapping_count=1"""
+)
 
 
 def _identities(rows, now):
@@ -259,14 +205,17 @@ def _identities(rows, now):
         if isinstance(keyword, str) and keyword:
             # Recheck the returned text, including a real verified index name.
             index = row.get("matched_index_name")
-            if keyword.casefold() in name.casefold():
-                product["matches"][keyword] = ("名称", name, _SOURCE)
-            elif isinstance(index, str) and keyword.casefold() in index.casefold():
+            if isinstance(index, str) and keyword.casefold() in index.casefold():
                 product["matches"][keyword] = (
                     "跟踪指数",
                     index,
                     row.get("matched_index_source_uri") or _SOURCE,
                 )
+            elif (
+                keyword.casefold() in name.casefold()
+                and product["matches"].get(keyword, (None,))[0] != "跟踪指数"
+            ):
+                product["matches"][keyword] = ("名称", name, _SOURCE)
     return {code: row for code, row in products.items() if code not in bad}
 
 
@@ -343,13 +292,61 @@ def _quantitative_score(price, packet, now):
     }
 
 
-async def recall_topic_funds(conn, topics, packet, now):
-    """Return real fund matches keyed by topicId (or key), with trade facts apart.
+def _bounded_candidates(candidates):
+    """Retain 24 independent product families and their four main share classes."""
+    groups = {}
+    for row in candidates:
+        groups.setdefault(row["fundGroupKey"], []).append(row)
+    ordered = sorted(
+        groups.values(),
+        key=lambda shares: min(
+            (ASSOCIATION_ORDER[row["associationLevel"]], row["fundCode"])
+            for row in shares
+        ),
+    )
+    return [
+        row
+        for shares in ordered[:_DISCOVERY_GROUP_LIMIT]
+        for row in sorted(
+            shares,
+            key=lambda row: (share_class_priority(row["name"]), row["fundCode"]),
+        )[:_SHARES_PER_GROUP]
+    ]
 
-    Two database reads, no network or mutation. 72 topics * 8 direct keywords,
-    12 candidates per keyword, and 3 displayed funds per topic bound the cost.
-    Oversize input is rejected explicitly rather than silently dropping topics.
+
+def _outcome(key, funds, indirect, unavailable=None):
+    if funds:
+        status, unavailable = "MATCHED", None
+        message = "已找到主题相关真实基金；申购状态与立即买入条件分别展示。"
+    elif indirect:
+        status, unavailable = "INDIRECT_ONLY", "INDIRECT_EXPOSURE_ONLY"
+        message = "仅找到可解释的间接资产观察，不作为主题推荐基金。"
+    else:
+        status = "UNAVAILABLE"
+        unavailable = unavailable or "NO_VERIFIED_FUND_MATCH"
+        message = (
+            "未找到主题直接匹配基金，当前缺少可说明的地域或资产关联，不能用其他地区宽基代替。"
+            if unavailable == "NO_EXPLAINABLE_ASSET_MAPPING"
+            else "当前真实基金主库中未找到可核验的主题场外基金，请补充基金主数据后重试。"
+        )
+    return {
+        "topicId": key,
+        "status": status,
+        "funds": funds,
+        "indirectFunds": indirect,
+        "unavailableReason": unavailable,
+        "message": message,
+    }
+
+
+async def discover_topic_funds(conn, topics, packet, now):
+    """Search the complete master once and return JSON-safe, stable match facts.
+
+    This phase is suitable for archive-time caching. Subscription availability,
+    NAV, scores and trading permissions are intentionally added only at read time.
     """
+    from backend.investment.opportunity_fund_matching import has_overseas_region
+
     now = _stamp(now)
     if now is None:
         raise ValueError("topic fund recall requires an aware clock")
@@ -391,23 +388,22 @@ async def recall_topic_funds(conn, topics, packet, now):
         OPPORTUNITY_CANDIDATES_PER_KEYWORD,
     )
     products = _identities(rows, now)
-    statuses = await read_fund_subscription_status(conn, now, list(products))
-    prices, stale_prices = _local_prices(packet, now)
     result = {}
     for key, topic, terms, fallback, fallback_label in prepared:
         match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
         industries = set(_texts(match.get("industryIds")))
         regional_bonds = _regional_bond_terms(topic) is not None
-        candidates = []
+        direct_candidates, indirect_candidates = [], []
         for code, product in products.items():
-            direct = next(
-                (
-                    product["matches"][word]
-                    for word in terms
-                    if word in product["matches"]
-                ),
-                None,
+            direct_matches = [
+                product["matches"][word] for word in terms if word in product["matches"]
+            ]
+            direct = min(
+                direct_matches,
+                key=lambda found: found[0] != "跟踪指数",
+                default=None,
             )
+            category = not regional_bonds and sectors.get(code) in industries
             broad = next(
                 (
                     product["matches"][word]
@@ -416,142 +412,248 @@ async def recall_topic_funds(conn, topics, packet, now):
                 ),
                 None,
             )
-            if code in core_codes and (
-                direct or not regional_bonds and sectors.get(code) in industries
-            ):
-                level = "CORE_MATCH"
-                reason = f"精选池基金与主题「{topic.get('title') or key}」的名称或登记行业精确匹配。"
+            title = str(topic.get("title") or key)[:200]
+            if direct and direct[0] == "跟踪指数":
+                association = "DIRECT_INDEX"
+                reason = f"主题「{title}」匹配已核验跟踪指数「{direct[1]}」。"
+            elif category:
+                association = "CATEGORY_MATCH"
+                reason = f"主题「{title}」与基金已登记行业「{sectors[code]}」一致。"
             elif direct:
-                level = "DYNAMIC_MATCH"
-                reason = f"主题「{topic.get('title') or key}」动态匹配基金{direct[0]}「{direct[1]}」。"
+                association = "NAME_CANDIDATE"
+                reason = f"主题「{title}」匹配基金名称「{direct[1]}」，作为名称候选。"
             elif broad:
-                level = "BROAD_FALLBACK"
-                reason = f"主题「{topic.get('title') or key}」未找到已确认可申购的直接匹配产品，回退至{fallback_label}「{broad[1]}」作间接参与。"
+                association = "BROAD_FALLBACK"
+                reason = f"主题「{title}」未找到直接匹配产品，{fallback_label}「{broad[1]}」仅作间接资产观察。"
             else:
                 continue
-            subscription, can_subscribe = _subscription(statuses.get(code), now)
-            price = prices.get(code)
-            if (
-                price
-                and (price["subjectKind"], price["subjectId"]) != product["identity"]
-            ):
-                price = None
-            score, scoring = _quantitative_score(price, packet, now)
-            missing = (
-                ([] if score is not None else ["QUANTITATIVE_SCORE_UNAVAILABLE"])
-                if price
-                else ["LOCAL_QUANTITATIVE_EVIDENCE_MISSING"]
+            level = (
+                "BROAD_FALLBACK"
+                if association == "BROAD_FALLBACK"
+                else "CORE_MATCH"
+                if code in core_codes
+                else "DYNAMIC_MATCH"
             )
-            warnings = [
-                "主题关联仅作为基金推荐依据，买入仍须独立核验净值区间与交易条件。"
-            ]
-            if stale_prices.get(code) == product["identity"]:
-                missing.append("STALE_QUANTITATIVE_EVIDENCE")
-                warnings.append(
-                    "冻结净值或抓取时间已过期，保留主题推荐，当前不展示旧净值区间或评分。"
-                )
-            if subscription["status"] == "UNKNOWN":
-                missing.append("CURRENT_SUBSCRIPTION_STATUS_UNVERIFIED")
-                warnings.append("未取得三日内有效申购状态，不能认定目前开放申购。")
-            elif not can_subscribe:
-                warnings.append(subscription["label"] or "基金申购受限。")
-            if level == "BROAD_FALLBACK":
-                warnings.append(
-                    "宽基或大类资产仅提供间接敞口，不代表纯主题持仓或收益。"
-                )
-            if direct and direct[0] == "名称":
-                warnings.append("名称关键词匹配不等于已核验基金当前持仓。")
-            candidates.append(
-                {
-                    **{
-                        field: product[field]
-                        for field in (
-                            "fundCode",
-                            "name",
-                            "subjectKind",
-                            "subjectId",
-                            "market",
-                            "identityVerifiedAt",
-                            "overseasCalendarRequired",
-                        )
-                    },
-                    "matchLevel": level,
-                    "matchReason": reason,
-                    "subscription": subscription,
-                    "canSubscribe": can_subscribe,
-                    "canBuyNow": False,
-                    "actionable": False,
-                    "quantitativeScore": score,
-                    **scoring,
-                    "sourceUri": (direct or broad or (None, None, _SOURCE))[2],
-                    "missingEvidence": missing,
-                    "riskWarnings": warnings,
-                    "confirmedNav": {
-                        "value": price["currentPrice"],
-                        "asOf": price["asOf"],
-                        "retrievedAt": price.get("retrievedAt"),
-                        "sourceUri": price.get("sourceUri"),
-                    }
-                    if price
-                    else None,
-                    "referenceTracks": deepcopy(price["tracks"]) if price else [],
-                }
+            candidate = {
+                **{
+                    field: product[field]
+                    for field in (
+                        "fundCode",
+                        "name",
+                        "subjectKind",
+                        "subjectId",
+                        "market",
+                        "identityVerifiedAt",
+                        "overseasCalendarRequired",
+                    )
+                },
+                "salesChannel": "OFF_EXCHANGE",
+                "fundGroupKey": fund_group_key(product["name"]),
+                "associationLevel": association,
+                "matchLevel": level,
+                "matchReason": reason[:600],
+                "sourceUri": (direct or broad or (None, None, _SOURCE))[2][:2000],
+            }
+            target = (
+                indirect_candidates
+                if association == "BROAD_FALLBACK"
+                else direct_candidates
             )
-        candidates.sort(
+            target.append(candidate)
+        # Any specific association excludes broad proxies, irrespective of status.
+        funds = _bounded_candidates(direct_candidates)
+        indirect = [] if direct_candidates else _bounded_candidates(indirect_candidates)
+        unavailable = (
+            "NO_EXPLAINABLE_ASSET_MAPPING"
+            if regional_bonds or has_overseas_region(topic) and not fallback
+            else "NO_VERIFIED_FUND_MATCH"
+        )
+        result[key] = _outcome(key, funds, indirect, unavailable)
+    return result
+
+
+def _rank_candidate(row, prices):
+    return (
+        ASSOCIATION_ORDER[row["associationLevel"]],
+        not row["canSubscribe"],
+        -(row["quantitativeScore"] if row["quantitativeScore"] is not None else -1),
+        _price_rank(prices.get(row["fundCode"]))
+        if row["confirmedNav"]
+        else _price_rank(None),
+        _share_priority(row["name"]),
+        row["fundCode"],
+    )
+
+
+def _display_groups(candidates, prices):
+    groups = {}
+    for row in candidates:
+        groups.setdefault(row["fundGroupKey"], []).append(row)
+    selected = []
+    for shares in groups.values():
+        # A suspended A share must not hide its currently available C share.
+        shares.sort(
             key=lambda row: (
                 not row["canSubscribe"],
-                _LEVEL[row["matchLevel"]],
-                -(
-                    row["quantitativeScore"]
-                    if row["quantitativeScore"] is not None
-                    else -1
-                ),
-                _price_rank(prices.get(row["fundCode"]))
-                if row["confirmedNav"]
-                else _price_rank(None),
-                _share_priority(row["name"]),
-                row["fundCode"],
+                share_class_priority(row["name"]),
+                _rank_candidate(row, prices),
             )
         )
-        # Once a tier has an available product, later fallback tiers add no value.
-        available_level = min(
-            (_LEVEL[row["matchLevel"]] for row in candidates if row["canSubscribe"]),
-            default=2,
-        )
-        funds = [
-            row for row in candidates if _LEVEL[row["matchLevel"]] <= available_level
-        ][:OPPORTUNITY_FUNDS_PER_TOPIC]
-        unavailable, message = (
-            None,
-            "已找到主题相关真实基金；申购状态与立即买入条件分别展示。",
-        )
-        if not funds:
-            unavailable, message = (
-                (
-                    "NO_VERIFIED_FUND_MATCH",
-                    "当前真实基金主库中未找到可核验的场外基金或合理资产映射，请补充基金主数据后重试。",
+        preferred = shares[0]
+        preferred["alternativeShareClasses"] = [
+            {
+                field: row[field]
+                for field in (
+                    "fundCode",
+                    "name",
+                    "subjectKind",
+                    "subjectId",
+                    "subscription",
+                    "canSubscribe",
                 )
-                if fallback and not regional_bonds
-                else (
-                    "NO_EXPLAINABLE_ASSET_MAPPING",
-                    "未找到主题直接匹配基金，当前缺少可说明的地域或资产关联，不能用其他地区宽基代替。",
+            }
+            for row in shares[1:]
+        ]
+        selected.append(preferred)
+    return sorted(selected, key=lambda row: _rank_candidate(row, prices))[
+        :OPPORTUNITY_FUNDS_PER_TOPIC
+    ]
+
+
+async def enrich_topic_funds(conn, discovered, packet, now):
+    """Recheck cached identities and attach current local trade and price facts.
+
+    Both database reads use the bounded candidate codes. Neither query repeats
+    market-wide name matching. A cache is never evidence of current availability.
+    """
+    now = _stamp(now)
+    if now is None:
+        raise ValueError("topic fund enrichment requires an aware clock")
+    if not isinstance(discovered, dict) or len(discovered) > OPPORTUNITY_TOPIC_LIMIT:
+        raise ValueError("topic fund enrichment exceeds its topic budget")
+    codes = sorted(
+        {
+            fund["fundCode"]
+            for row in discovered.values()
+            if isinstance(row, dict)
+            for field in ("funds", "indirectFunds")
+            for fund in row.get(field, [])
+            if isinstance(fund, dict)
+            and isinstance(fund.get("fundCode"), str)
+            and re.fullmatch(r"[0-9]{6}", fund["fundCode"])
+        }
+    )
+    if (
+        len(codes)
+        > OPPORTUNITY_TOPIC_LIMIT * _DISCOVERY_GROUP_LIMIT * _SHARES_PER_GROUP
+    ):
+        raise ValueError("topic fund enrichment exceeds its candidate budget")
+    products = (
+        _identities(await conn.fetch(_IDENTITY_SQL, now, codes), now) if codes else {}
+    )
+    statuses = await read_fund_subscription_status(conn, now, list(products))
+    packet = packet if isinstance(packet, dict) else {}
+    prices, stale_prices = _local_prices(packet, now)
+    result = {}
+    for key, discovery in discovered.items():
+        enriched = {"funds": [], "indirectFunds": []}
+        for field in enriched:
+            for cached in discovery.get(field, []):
+                code = cached.get("fundCode")
+                product = products.get(code)
+                if (
+                    not product
+                    or (cached.get("subjectKind"), cached.get("subjectId"))
+                    != product["identity"]
+                    or cached.get("name") != product["name"]
+                    or cached.get("associationLevel") not in ASSOCIATION_ORDER
+                ):
+                    continue
+                subscription, can_subscribe = _subscription(statuses.get(code), now)
+                price = prices.get(code)
+                if (
+                    price
+                    and (price["subjectKind"], price["subjectId"])
+                    != product["identity"]
+                ):
+                    price = None
+                score, scoring = _quantitative_score(price, packet, now)
+                missing = (
+                    ([] if score is not None else ["QUANTITATIVE_SCORE_UNAVAILABLE"])
+                    if price
+                    else ["LOCAL_QUANTITATIVE_EVIDENCE_MISSING"]
                 )
-            )
-        elif not any(row["canSubscribe"] for row in funds):
+                warnings = [
+                    "主题关联仅提供研究候选，买入仍须独立核验净值区间与交易条件。"
+                ]
+                if stale_prices.get(code) == product["identity"]:
+                    missing.append("STALE_QUANTITATIVE_EVIDENCE")
+                    warnings.append(
+                        "冻结净值或抓取时间已过期，保留主题推荐，当前不展示旧净值区间或评分。"
+                    )
+                if subscription["status"] == "UNKNOWN":
+                    missing.append("CURRENT_SUBSCRIPTION_STATUS_UNVERIFIED")
+                    warnings.append("未取得三日内有效申购状态，不能认定目前开放申购。")
+                elif not can_subscribe:
+                    warnings.append(subscription["label"] or "基金申购受限。")
+                if cached["associationLevel"] == "BROAD_FALLBACK":
+                    warnings.append(
+                        "宽基或大类资产仅提供间接敞口，不代表纯主题持仓或收益。"
+                    )
+                elif cached["associationLevel"] == "NAME_CANDIDATE":
+                    warnings.append("名称关键词匹配不等于已核验基金当前持仓。")
+                enriched[field].append(
+                    {
+                        **deepcopy(cached),
+                        "identityVerifiedAt": product["identityVerifiedAt"],
+                        "salesChannel": "OFF_EXCHANGE",
+                        "subscription": subscription,
+                        "canSubscribe": can_subscribe,
+                        "canBuyNow": False,
+                        "actionable": False,
+                        "quantitativeScore": score,
+                        **scoring,
+                        "missingEvidence": missing,
+                        "riskWarnings": warnings,
+                        "confirmedNav": {
+                            "value": price["currentPrice"],
+                            "asOf": price["asOf"],
+                            "retrievedAt": price.get("retrievedAt"),
+                            "sourceUri": price.get("sourceUri"),
+                        }
+                        if price
+                        else None,
+                        "referenceTracks": deepcopy(price["tracks"]) if price else [],
+                    }
+                )
+        funds = _display_groups(enriched["funds"], prices)
+        # Never reinterpret a formerly specific mapping as broad after live removal.
+        indirect = (
+            []
+            if discovery.get("funds")
+            else _display_groups(enriched["indirectFunds"], prices)
+        )
+        unavailable = discovery.get("unavailableReason")
+        if unavailable == "INDIRECT_EXPOSURE_ONLY":
+            unavailable = "NO_VERIFIED_FUND_MATCH"
+        outcome = _outcome(key, funds, indirect, unavailable)
+        if funds and not any(row["canSubscribe"] for row in funds):
             states = {row["subscription"]["status"] for row in funds}
-            unavailable = (
+            outcome["unavailableReason"] = (
                 "SUBSCRIPTION_UNVERIFIED"
                 if "UNKNOWN" in states
                 else "SUBSCRIPTION_SUSPENDED"
                 if states == {"SUSPENDED"}
                 else "SUBSCRIPTION_RESTRICTED"
             )
-            message = "已展示相关真实基金，但申购状态未知、暂停或额度受限，暂未找到已确认可正常申购的产品。"
-        result[key] = {
-            "topicId": key,
-            "status": "MATCHED" if funds else "UNAVAILABLE",
-            "funds": funds,
-            "unavailableReason": unavailable,
-            "message": message,
-        }
+            outcome["message"] = (
+                "已展示相关真实基金，但申购状态未知、暂停或额度受限，暂未找到已确认可正常申购的产品。"
+            )
+        result[key] = outcome
     return result
+
+
+async def recall_topic_funds(conn, topics, packet, now):
+    """Uncached convenience entry point; archived views cache discovery only."""
+    discovered = await discover_topic_funds(conn, topics, packet, now)
+    return await enrich_topic_funds(conn, discovered, packet, now)

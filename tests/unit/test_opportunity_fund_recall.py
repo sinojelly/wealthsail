@@ -31,6 +31,9 @@ def topic(key="chip", **changes):
 
 
 def product(code="981001", name="测试芯片ETF联接A", keyword="芯片", **changes):
+    # Distinct codes represent distinct products unless the test names a share family.
+    if code != "981001" and name == "测试芯片ETF联接A":
+        name = f"测试{code}芯片ETF联接A"
     return {
         "fund_code": code,
         "fund_name": name,
@@ -89,7 +92,7 @@ async def test_unregistered_chip_topic_reaches_real_master_outside_core_pool():
     assert fund["subscription"]["status"] == "OPEN"
     assert result["unavailableReason"] is None
     assert packet == before
-    assert len(conn.calls) == 2
+    assert len(conn.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -143,16 +146,11 @@ async def test_paused_core_falls_through_to_available_dynamic_fund():
 
 
 @pytest.mark.asyncio
-async def test_broad_fallback_is_explained_and_unknown_subscription_stays_unknown():
+async def test_narrow_chip_theme_never_invents_a_domestic_broad_proxy():
     conn = Connection([product("981003", "测试中证A500ETF联接A", "中证A500")])
     result = (await recall()(conn, [topic()], {}, NOW))["topic:chip"]
-    fund = result["funds"][0]
-    assert fund["matchLevel"] == "BROAD_FALLBACK"
-    assert "宽基" in fund["matchReason"] and "芯片" in fund["matchReason"]
-    assert fund["subscription"]["status"] == "UNKNOWN"
-    assert fund["canSubscribe"] is False
-    assert result["unavailableReason"] == "SUBSCRIPTION_UNVERIFIED"
-    assert "间接" in " ".join(fund["riskWarnings"])
+    assert result["funds"] == [] and result["indirectFunds"] == []
+    assert result["unavailableReason"] == "NO_VERIFIED_FUND_MATCH"
 
 
 @pytest.mark.asyncio
@@ -224,7 +222,7 @@ async def test_all_archived_topics_are_recalled_beyond_the_46_fund_pool_cap():
     result = await recall()(conn, topics, {}, NOW)
     assert len(result) == 72
     assert all(row["funds"][0]["fundCode"] == "981001" for row in result.values())
-    assert len(conn.calls) == 2
+    assert len(conn.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -353,7 +351,8 @@ async def test_japan_topic_can_fall_back_to_real_japan_equity_index():
         match={"industryIds": []},
     )
     result = (await recall()(conn, [row], {}, NOW))["topic:japan"]
-    fund = result["funds"][0]
+    assert result["funds"] == []
+    fund = result["indirectFunds"][0]
     assert fund["matchLevel"] == "BROAD_FALLBACK"
     assert "日本权益" in fund["matchReason"]
 
@@ -463,7 +462,9 @@ async def test_open_c_share_is_eligible_and_open_a_share_keeps_preference(
     )
     funds = (await recall()(conn, [topic()], {}, NOW))["topic:chip"]["funds"]
     assert funds[0]["fundCode"] == expected_first
-    c_share = next((fund for fund in funds if fund["fundCode"] == "981002"), None)
+    assert len(funds) == 1
+    shares = funds + funds[0]["alternativeShareClasses"]
+    c_share = next((fund for fund in shares if fund["fundCode"] == "981002"), None)
     assert c_share is not None
     assert c_share["canSubscribe"] is True
     assert c_share["subjectId"] == str(c_id) and c_share["subjectKind"] == "fund"
@@ -538,3 +539,157 @@ async def test_domestic_bond_topic_keeps_domestic_bond_recall():
         )
     )["topic:bond"]
     assert result["funds"][0]["fundCode"] == "981001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "title,root",
+    [
+        ("算力光模块业绩兑现", "通信"),
+        ("CPO订单兑现", "通信"),
+        ("电网设备出海提速", "电网设备"),
+        ("固态电池量产拐点", "电池"),
+        ("创新药出海订单兑现", "医药生物"),
+        ("人形机器人量产", "高端装备"),
+    ],
+)
+async def test_concept_synonyms_reach_canonical_fund_roots(title, root):
+    row = topic("concept", title=title, summary=title, match={})
+    conn = Connection([product(name=f"测试{root}ETF联接A", keyword=root)], [status()])
+    result = (await recall()(conn, [row], {}, NOW))["topic:concept"]
+    assert result["funds"][0]["associationLevel"] == "NAME_CANDIDATE"
+    assert root in conn.calls[0][1][1]
+
+
+@pytest.mark.asyncio
+async def test_verified_index_evidence_overrides_matching_product_name_and_open_name():
+    conn = Connection(
+        [
+            product(
+                matched_index_name="中证芯片产业指数",
+                matched_index_source_uri="https://example.com/index",
+            ),
+            product("981002"),
+        ],
+        [status(purchase="SUSPENDED"), status("981002")],
+    )
+    funds = (await recall()(conn, [topic()], {}, NOW))["topic:chip"]["funds"]
+    assert funds[0]["associationLevel"] == "DIRECT_INDEX"
+    assert funds[0]["fundCode"] == "981001"
+    assert "跟踪指数" in funds[0]["matchReason"]
+    assert funds[0]["sourceUri"] == "https://example.com/index"
+    assert funds[1]["associationLevel"] == "NAME_CANDIDATE"
+
+
+@pytest.mark.asyncio
+async def test_registered_discovery_sector_is_explicit_category_evidence():
+    conn = Connection([product("320007", "测试科技A", "")], [status("320007")])
+    packet = {
+        "discoveryUniverse": [{"fundCode": "320007", "discoverySector": "MEMORY"}]
+    }
+    row = topic(match={"industryIds": ["MEMORY"]})
+    fund = (await recall()(conn, [row], packet, NOW))["topic:chip"]["funds"][0]
+    assert fund["associationLevel"] == "CATEGORY_MATCH"
+    assert "MEMORY" in fund["matchReason"]
+
+
+@pytest.mark.asyncio
+async def test_any_direct_candidate_excludes_all_broad_candidates_even_when_suspended():
+    row = topic(
+        "policy", title="国内降准利好股市芯片", summary="中国货币政策宽松", match={}
+    )
+    conn = Connection(
+        [product(), product("981003", "测试沪深300指数A", "沪深300")],
+        [status(purchase="SUSPENDED"), status("981003")],
+    )
+    result = (await recall()(conn, [row], {}, NOW))["topic:policy"]
+    assert [fund["fundCode"] for fund in result["funds"]] == ["981001"]
+    assert result["indirectFunds"] == []
+    assert result["unavailableReason"] == "SUBSCRIPTION_SUSPENDED"
+
+
+@pytest.mark.asyncio
+async def test_explainable_domestic_macro_broad_exposure_is_only_indirect():
+    row = topic(
+        "policy",
+        title="国内降准提振A股市场",
+        summary="中国货币政策宽松利好权益",
+        match={},
+    )
+    conn = Connection([product("981003", "测试沪深300指数A", "沪深300")])
+    result = (await recall()(conn, [row], {}, NOW))["topic:policy"]
+    assert result["funds"] == []
+    assert result["status"] == "INDIRECT_ONLY"
+    fund = result["indirectFunds"][0]
+    assert fund["associationLevel"] == "BROAD_FALLBACK"
+    assert fund["canSubscribe"] is False
+    assert "间接" in fund["matchReason"]
+
+
+@pytest.mark.asyncio
+async def test_share_dedup_preserves_linked_launch_and_plain_product_meaning():
+    conn = Connection(
+        [
+            product("981001", "测试芯片ETF联接A"),
+            product("981002", "测试芯片ETF联接C"),
+            product("981003", "测试芯片ETF联接E"),
+            product("981004", "测试芯片ETFA"),
+            product("981005", "测试芯片ETF联接发起式A"),
+        ],
+        [status(f"98100{i}") for i in range(1, 6)],
+    )
+    funds = (await recall()(conn, [topic()], {}, NOW))["topic:chip"]["funds"]
+    assert {fund["fundCode"] for fund in funds} == {"981001", "981004", "981005"}
+    linked = next(fund for fund in funds if fund["fundCode"] == "981001")
+    assert {share["fundCode"] for share in linked["alternativeShareClasses"]} == {
+        "981002",
+        "981003",
+    }
+
+
+@pytest.mark.asyncio
+async def test_discovery_is_serializable_and_live_enrichment_refreshes_share_status():
+    import json
+
+    module = import_module("backend.investment.opportunity_fund_recall")
+    conn = Connection(
+        [product(), product("981002", "测试芯片ETF联接C")],
+        [status(), status("981002")],
+    )
+    discovered = await module.discover_topic_funds(conn, [topic()], {}, NOW)
+    cached = json.loads(json.dumps(discovered))
+    assert all(
+        not set(fund)
+        & {
+            "subscription",
+            "canSubscribe",
+            "quantitativeScore",
+            "confirmedNav",
+            "canBuyNow",
+            "actionable",
+        }
+        for fund in cached["topic:chip"]["funds"]
+    )
+    conn.statuses = [status(purchase="SUSPENDED"), status("981002")]
+    funds = (await module.enrich_topic_funds(conn, cached, {}, NOW))["topic:chip"][
+        "funds"
+    ]
+    assert len(funds) == 1 and funds[0]["fundCode"] == "981002"
+    assert funds[0]["canSubscribe"] is True
+    conn.products = []
+    result = (await module.enrich_topic_funds(conn, cached, {}, NOW))["topic:chip"]
+    assert result["funds"] == [] and result["status"] == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_removed_indirect_identity_reports_no_verified_match():
+    module = import_module("backend.investment.opportunity_fund_recall")
+    row = topic(
+        "policy", title="国内降准提振A股市场", summary="中国货币政策宽松", match={}
+    )
+    conn = Connection([product("981003", "测试沪深300指数A", "沪深300")])
+    cached = await module.discover_topic_funds(conn, [row], {}, NOW)
+    conn.products = []
+    result = (await module.enrich_topic_funds(conn, cached, {}, NOW))["topic:policy"]
+    assert result["funds"] == [] and result["indirectFunds"] == []
+    assert result["unavailableReason"] == "NO_VERIFIED_FUND_MATCH"
