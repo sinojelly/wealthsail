@@ -23,8 +23,8 @@ async def readonly_tenant_transaction(pool, ctx):
 
 
 @router.get("/{run_id}")
-async def read_registry(run_id: UUID, limit: int = Query(default=12, ge=1, le=30), cursor: str | None = Query(default=None, max_length=512), status: Literal["FORMAL", "OBSERVATION_ONLY", "PENDING_REVIEW", "QUARANTINED"] | None = None, pool=Depends(get_pool), ctx=Depends(get_tenant_context), request_id=Depends(get_request_id)):
+async def read_registry(run_id: UUID, limit: int = Query(default=12, ge=1, le=30), cursor: str | None = Query(default=None, max_length=512), status: Literal["FORMAL", "OBSERVATION_ONLY", "PENDING_REVIEW", "QUARANTINED"] | None = None, include_highlights: bool = Query(default=False, alias="includeHighlights"), pool=Depends(get_pool), ctx=Depends(get_tenant_context), request_id=Depends(get_request_id)):
     now = now_shanghai()
     async with readonly_tenant_transaction(pool, ctx) as conn:
-        value = await repository.read_topic_registry(conn, run_id, now, limit=limit, cursor=cursor, status=status)
+        value = await repository.read_topic_registry(conn, run_id, now, limit=limit, cursor=cursor, status=status, include_highlights=include_highlights)
     return ok(value, request_id=request_id, as_of=now)

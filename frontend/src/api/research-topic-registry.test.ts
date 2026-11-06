@@ -31,3 +31,19 @@ it("paginates saved registry snapshots using only encoded GET requests for allow
     expect(init.body).toBeUndefined();
   }
 });
+it("requests an optional server priority sidecar without changing original page cursor", async () => {
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(JSON.stringify({ data: { researchId: "run" }, meta: {} })),
+    );
+  vi.stubGlobal("fetch", fetcher);
+  await api.getResearchTopicRegistry("run", {
+    limit: 12,
+    cursor: "original",
+    includeHighlights: true,
+  });
+  expect(fetcher.mock.calls[0][0]).toBe(
+    `${API_BASE_URL}/v1/investment/daily-research/topic-registry/run?limit=12&cursor=original&includeHighlights=true`,
+  );
+});

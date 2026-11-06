@@ -49,6 +49,22 @@ export interface TopicRegistryPage {
   registryAvailable?: true;
   actionable: false;
   items: RegistryTopic[];
+  highlights?: {
+    version: "topic-display-priority-v1";
+    limit: 10;
+    catalogCount: number;
+    actionable: false;
+    items: Array<{
+      topic: RegistryTopic;
+      priority: {
+        importance: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+        checkedSourceCoveragePercent: number | null;
+        scopeVerified: boolean;
+        researchProgress: RegistryTopic["status"];
+        reasons: string[];
+      };
+    }>;
+  };
   totalCount: number;
   filteredCount?: number;
   nextCursor: string | null;
@@ -133,11 +149,16 @@ export type TopicRegistryResult =
     };
 export async function getResearchTopicRegistry(
   runId: string,
-  options: { limit: 12 | 20 | 30; cursor?: string },
+  options: {
+    limit: 12 | 20 | 30;
+    cursor?: string;
+    includeHighlights?: boolean;
+  },
   signal?: AbortSignal,
 ) {
   const params = new URLSearchParams({ limit: String(options.limit) });
   if (options.cursor) params.set("cursor", options.cursor);
+  if (options.includeHighlights) params.set("includeHighlights", "true");
   return (
     await request<TopicRegistryResult>(
       `/v1/investment/daily-research/topic-registry/${encodeURIComponent(runId)}?${params}`,

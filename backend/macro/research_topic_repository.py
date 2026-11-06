@@ -1,7 +1,7 @@
 """Immutable, tenant-scoped topic observations. Never a formal-report consumer."""
 
 import base64
-from datetime import date
+from datetime import date, datetime, timezone
 import json
 import re
 
@@ -518,7 +518,7 @@ async def save_topic_registry_omission(conn, run_id, descriptor, validated_at):
 
 
 async def read_topic_registry(
-    conn, run_id, now=None, *, limit=12, cursor=None, status=None
+    conn, run_id, now=None, *, limit=12, cursor=None, status=None, include_highlights=False
 ):
     if limit not in {12, 20, 30} or (status is not None and status not in STATUSES):
         raise ValidationError_("主题分页数量或状态无效")
@@ -602,7 +602,7 @@ async def read_topic_registry(
         run_id,
         snapshot["validated_at"],
     )["items"]
-    return {
+    result = {
         **safe_meta,
         "snapshotId": str(snapshot["id"]),
         "researchId": str(run_id),
@@ -619,6 +619,54 @@ async def read_topic_registry(
         if more
         else None,
     }
+    if include_highlights:
+        result["highlights"] = await _read_highlights(
+            conn, run_id, snapshot, safe_meta, now
+        )
+    return result
+
+
+async def _read_highlights(conn, run_id, snapshot, safe_meta, now):
+    """Read all bounded rows under the caller's existing RLS transaction.
+
+    Priority is a disposable read projection, not a rewritten historical ordinal.
+    Only same-run, same-clock INITIAL accepted events can supply importance.
+    """
+    from backend.macro.research_topic_priority import topic_highlights
+
+    rows = await conn.fetch(
+        "SELECT ordinal,body FROM research.research_topic_entries WHERE snapshot_id=$1 ORDER BY ordinal LIMIT 73",
+        snapshot["id"],
+    )
+    if len(rows) != snapshot["total_count"]:
+        _invalid()
+    items = prepare_topic_registry(
+        {
+            **safe_meta,
+            "researchId": str(run_id),
+            "validatedAt": acceptance._aware(snapshot["validated_at"]).isoformat(),
+            "items": [acceptance._object(row["body"]) for row in rows],
+        },
+        run_id,
+        snapshot["validated_at"],
+    )["items"]
+    stamp = acceptance._aware(now or datetime.now(timezone.utc))
+    summary = await acceptance.read_validation_summary(conn, run_id, stamp, admin=False)
+    accepted = {}
+    if (
+        isinstance(summary, dict)
+        and summary.get("researchId") == str(run_id)
+        and summary.get("kind") == "INITIAL"
+        and summary.get("archiveState") == "ARCHIVED"
+    ):
+        try:
+            validated = acceptance._aware(summary.get("validatedAt"))
+            recorded = acceptance._aware(summary.get("recordedAt"))
+            if validated == acceptance._aware(snapshot["validated_at"]) and validated <= recorded <= stamp:
+                accepted = summary.get("accepted", {})
+        except (TypeError, ValueError):
+            pass  # Missing provenance must leave importance UNKNOWN.
+    return topic_highlights(items, accepted=accepted)
 
 
 async def read_pending_topic_scopes(conn, tenant_id=None, limit=64):

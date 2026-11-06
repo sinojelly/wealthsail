@@ -98,6 +98,66 @@ beforeEach(() => {
   vi.mocked(listHistoricalRepairs).mockResolvedValue({ items: [] });
 });
 afterEach(() => vi.useRealTimers());
+it("highlights server-selected topics beyond page one and retains original paged catalog", async () => {
+  const data = page();
+  data.totalCount = 64;
+  data.items = [row(0)];
+  Object.assign(data, {
+    highlights: {
+      version: "topic-display-priority-v1",
+      limit: 10,
+      catalogCount: 64,
+      actionable: false,
+      items: [
+        {
+          topic: row(63),
+          priority: {
+            importance: "HIGH",
+            checkedSourceCoveragePercent: 50,
+            scopeVerified: false,
+            researchProgress: "PENDING_REVIEW",
+            reasons: ["EXPLICIT_HIGH_IMPORTANCE", "CHECKED_SOURCE_SUPPORT"],
+          },
+        },
+      ],
+    },
+  });
+  vi.mocked(api.getResearchTopicRegistry).mockResolvedValue(data);
+  renderWithSession(
+    <ResearchTopicRegistry runId={run} state="FAILED" variant="HIGHLIGHT" />,
+  );
+  const highlights = await screen.findByRole("region", {
+    name: "重点主题 · 只读优先级",
+  });
+  expect(within(highlights).getAllByText("动态主题63")[0]).toBeVisible();
+  expect(within(highlights).getByText(/高重要性事件关联/)).toBeVisible();
+  expect(within(highlights).getByText(/引文核对覆盖50%/)).toBeVisible();
+  expect(within(highlights).queryByText("动态主题0")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("完整主题目录 · 保留原始顺序与分页"));
+  expect(screen.getByText("动态主题0")).toBeVisible();
+  expect(api.getResearchTopicRegistry).toHaveBeenCalledWith(
+    run,
+    { limit: 12, cursor: undefined, includeHighlights: true },
+    expect.any(AbortSignal),
+  );
+  expect(
+    screen.queryByRole("button", { name: /买入|跟踪/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("legacy highlight response does not pretend the first ordinal page is priority-ranked", async () => {
+  renderWithSession(
+    <ResearchTopicRegistry runId={run} state="READY" variant="HIGHLIGHT" />,
+  );
+  expect(
+    await screen.findByText("本次未提供重点排序，完整目录仍可阅读。"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("region", { name: "重点主题 · 只读优先级" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("完整主题目录 · 保留原始顺序与分页")).toBeVisible();
+  expect(screen.getByText("动态主题0")).toBeVisible();
+});
 it("shows read-only topic status, match scope, budget gaps, source clock and explanatory tasks without investment actions", async () => {
   renderWithSession(<ResearchTopicRegistry runId={run} state="READY" />);
   expect(await screen.findByText("动态主题0")).toBeVisible();

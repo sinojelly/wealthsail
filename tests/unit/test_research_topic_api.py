@@ -70,3 +70,26 @@ def test_topic_page_uses_readonly_transaction_and_passes_bounded_request(
     assert response.status_code == 200 and seen == ["readonly"]
     assert response.json()["data"]["actionable"] is False
     assert read.await_args.kwargs["limit"] == limit
+    assert read.await_args.kwargs["include_highlights"] is False
+
+
+def test_highlight_sidecar_is_explicit_bounded_get_option(monkeypatch):
+    module = import_module("backend.investment.research_topic_api")
+    run_id, actor, tenant = [uuid4() for _ in range(3)]
+
+    @asynccontextmanager
+    async def readonly(*args):
+        yield object()
+
+    monkeypatch.setattr(module, "readonly_tenant_transaction", readonly)
+    read = AsyncMock(return_value={"researchId": str(run_id), "items": [], "actionable": False})
+    monkeypatch.setattr(module.repository, "read_topic_registry", read)
+    app = FastAPI(default_response_class=MoneyJSONResponse)
+    app.include_router(module.router, prefix="/api/v1")
+    app.dependency_overrides[get_pool] = lambda: object()
+    app.dependency_overrides[get_tenant_context] = lambda: TenantContext(str(actor), str(tenant), tenant_role="VIEWER")
+    response = TestClient(app).get(
+        f"/api/v1/investment/daily-research/topic-registry/{run_id}?limit=12&includeHighlights=true"
+    )
+    assert response.status_code == 200
+    assert read.await_args.kwargs["include_highlights"] is True

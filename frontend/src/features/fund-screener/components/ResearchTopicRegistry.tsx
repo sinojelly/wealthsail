@@ -1,4 +1,4 @@
-import { useContext, useRef, useState } from "react";
+import { useContext, useRef, useState, type ReactNode } from "react";
 import { QueryClientContext, useQuery } from "@tanstack/react-query";
 import {
   getResearchTopicRegistry,
@@ -127,12 +127,26 @@ function RegistryData({
       Number.isFinite(Date.parse(completedAt)));
   const cursor = cursors[index];
   const query = useQuery({
-    queryKey: [...queryKey, lifecycle, limit, cursor ?? "first"],
+    queryKey: [
+      ...queryKey,
+      lifecycle,
+      limit,
+      cursor ?? "first",
+      variant === "HIGHLIGHT" ? "priority" : "ordinal",
+    ],
     queryFn: ({ signal }) => {
       if (reads.current.lifecycle !== lifecycle)
         reads.current = { lifecycle, count: 0 };
       reads.current.count++;
-      return getResearchTopicRegistry(runId, { limit, cursor }, signal);
+      return getResearchTopicRegistry(
+        runId,
+        {
+          limit,
+          cursor,
+          ...(variant === "HIGHLIGHT" ? { includeHighlights: true } : {}),
+        },
+        signal,
+      );
     },
     enabled: terminal,
     retry: (count, error) =>
@@ -268,71 +282,79 @@ function RegistryData({
           ) : (
             <Coverage data={available} />
           )}
-          <label>
-            每页主题数{" "}
-            <select
-              aria-label="每页主题数"
-              value={limit}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                if (value === 12 || value === 20 || value === 30) {
-                  setLimit(value);
-                  setCursors([undefined]);
-                  setIndex(0);
-                  setSnapshot(null);
-                }
-              }}
-            >
-              {[12, 20, 30].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>
-            共{available.totalCount}个主题 · 当前第{index + 1}页 · 本页
-            {available.items.length}项
-          </p>
-          {available.items.map((topic) => (
-            <Topic key={topic.topicId} topic={topic} researchId={runId} />
-          ))}
-          {!available.items.length && <p>此快照没有可展示的主题。</p>}
-          <nav
-            aria-label="主题目录分页"
-            style={{
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-              marginTop: 12,
-            }}
+          {variant === "HIGHLIGHT" && (
+            <FocusTopics data={available} runId={runId} />
+          )}
+          <OriginalCatalog
+            highlight={variant === "HIGHLIGHT"}
+            defaultOpen={!available.highlights}
           >
-            <button
-              type="button"
-              style={button}
-              disabled={index === 0 || query.isFetching}
-              onClick={() => setIndex((previous) => previous - 1)}
-            >
-              上一页主题
-            </button>
-            <button
-              type="button"
-              style={button}
-              disabled={!available.nextCursor || query.isFetching}
-              onClick={() => {
-                if (available.nextCursor) {
-                  setSnapshot(available.snapshotId);
-                  setCursors((previous) => [
-                    ...previous.slice(0, index + 1),
-                    available.nextCursor!,
-                  ]);
-                  setIndex((previous) => previous + 1);
-                }
+            <label>
+              每页主题数{" "}
+              <select
+                aria-label="每页主题数"
+                value={limit}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (value === 12 || value === 20 || value === 30) {
+                    setLimit(value);
+                    setCursors([undefined]);
+                    setIndex(0);
+                    setSnapshot(null);
+                  }
+                }}
+              >
+                {[12, 20, 30].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p>
+              共{available.totalCount}个主题 · 当前第{index + 1}页 · 本页
+              {available.items.length}项
+            </p>
+            {available.items.map((topic) => (
+              <Topic key={topic.topicId} topic={topic} researchId={runId} />
+            ))}
+            {!available.items.length && <p>此快照没有可展示的主题。</p>}
+            <nav
+              aria-label="主题目录分页"
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                marginTop: 12,
               }}
             >
-              下一页主题
-            </button>
-          </nav>
+              <button
+                type="button"
+                style={button}
+                disabled={index === 0 || query.isFetching}
+                onClick={() => setIndex((previous) => previous - 1)}
+              >
+                上一页主题
+              </button>
+              <button
+                type="button"
+                style={button}
+                disabled={!available.nextCursor || query.isFetching}
+                onClick={() => {
+                  if (available.nextCursor) {
+                    setSnapshot(available.snapshotId);
+                    setCursors((previous) => [
+                      ...previous.slice(0, index + 1),
+                      available.nextCursor!,
+                    ]);
+                    setIndex((previous) => previous + 1);
+                  }
+                }}
+              >
+                下一页主题
+              </button>
+            </nav>
+          </OriginalCatalog>
         </>
       )}
       {(query.isError ||
@@ -340,6 +362,84 @@ function RegistryData({
         !available ||
         data?.registryAvailable === false) &&
         recheck}
+    </section>
+  );
+}
+function OriginalCatalog({
+  highlight,
+  defaultOpen,
+  children,
+}: {
+  highlight: boolean;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  return highlight ? (
+    <details open={defaultOpen}>
+      <summary>完整主题目录 · 保留原始顺序与分页</summary>
+      {children}
+    </details>
+  ) : (
+    <>{children}</>
+  );
+}
+function FocusTopics({
+  data,
+  runId,
+}: {
+  data: TopicRegistryPage;
+  runId: string;
+}) {
+  const focus = data.highlights;
+  if (
+    !focus ||
+    focus.version !== "topic-display-priority-v1" ||
+    focus.actionable !== false ||
+    focus.limit !== 10 ||
+    focus.catalogCount !== data.totalCount ||
+    !Array.isArray(focus.items) ||
+    focus.items.length > 10
+  ) {
+    return <p>本次未提供重点排序，完整目录仍可阅读。</p>;
+  }
+  const importanceLabels = {
+    HIGH: "高重要性事件关联",
+    MEDIUM: "中重要性事件关联",
+    LOW: "低重要性事件关联",
+    UNKNOWN: "事件重要性未提供",
+  };
+  return (
+    <section aria-label="重点主题 · 只读优先级">
+      <p>
+        从完整目录中优先展示{focus.items.length}
+        项；排序综合明确事件重要性、引文核对覆盖、行业关联与研究进展。重大负面线索同样优先，排序不是投资评分。
+      </p>
+      {focus.items.map(({ topic, priority }) => (
+        <article key={topic.topicId} style={box}>
+          <h4>{topic.title}</h4>
+          <p>{topic.summary}</p>
+          <p>
+            {importanceLabels[priority.importance]} ·{" "}
+            {statuses[priority.researchProgress]}
+          </p>
+          <p>
+            {priority.checkedSourceCoveragePercent == null
+              ? "引文核对覆盖未知，未按已核验处理"
+              : `引文核对覆盖${priority.checkedSourceCoveragePercent}%（不代表主题推理已证实）`}
+            {priority.scopeVerified
+              ? " · 行业范围关联已核实"
+              : " · 行业范围关联待核实"}
+          </p>
+          <p>状态原因：{topic.reason}；重点展示不增加投资资格。</p>
+          <details>
+            <summary>查看主题风险、依据与补证任务</summary>
+            <Topic topic={topic} researchId={`${runId}-highlight`} />
+          </details>
+        </article>
+      ))}
+      {!focus.items.length && (
+        <p>本次没有可排序主题，完整目录状态仍独立保留。</p>
+      )}
     </section>
   );
 }
