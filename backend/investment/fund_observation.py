@@ -8,6 +8,7 @@ import re
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from backend.investment.discovery_limits import RESEARCH_SELECTION_LIMIT
 from backend.investment.quantitative_scan import public_quantitative_scan
 from backend.investment.subscription_status import normalize_subscription_status
 from backend.macro.daily_research import _public_actionable_plan, _stamp, _url, _visible
@@ -410,10 +411,10 @@ def build_fund_observation(
         or not input_at <= stamp <= evaluated
     ):
         raise FundObservationDataError("invalid fund observation evidence clock")
-    catalog = _bounded(packet.get("discoveryUniverse", []), 46)
+    catalog = _bounded(packet.get("discoveryUniverse", []), RESEARCH_SELECTION_LIMIT)
     scan = packet.get("quantitativeScan")
     scan = scan if isinstance(scan, dict) else {}
-    scan_rows = _bounded(scan.get("items", []), 46)
+    scan_rows = _bounded(scan.get("items", []), RESEARCH_SELECTION_LIMIT)
     scan_at = _stamp(scan.get("asOf"))
     scan_clock_valid = scan_at is not None and scan_at <= stamp
     topics = _bounded(topics, 72)

@@ -4,6 +4,11 @@ from datetime import date, datetime
 import re
 from uuid import UUID
 
+from backend.investment.discovery_limits import (
+    DYNAMIC_SELECTION_LIMIT,
+    RESEARCH_SELECTION_LIMIT,
+)
+
 CORE_FUND_CODES = (
     "320007",
     "008281",
@@ -46,8 +51,8 @@ CORE_FUND_CODES = (
     "000218",
     "023530",
 )
-SELECTION_LIMIT = 46
-DYNAMIC_LIMIT = 6
+SELECTION_LIMIT = RESEARCH_SELECTION_LIMIT
+DYNAMIC_LIMIT = DYNAMIC_SELECTION_LIMIT
 
 # These are name-search hints, not certified holdings or product-index links.
 _THEMES = (

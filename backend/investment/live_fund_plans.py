@@ -24,6 +24,7 @@ from backend.indicators.actionable_zones import (
 )
 from backend.funds.nav_window import NAV_RESEARCH_MAX_SAMPLES, NAV_RESEARCH_MIN_SAMPLES
 from backend.investment.opportunity_scoring import SCORE_FIELDS
+from backend.investment.discovery_limits import RESEARCH_SELECTION_LIMIT
 from backend.investment.theme_graph import _disclosed_nav_quality, _history_quality
 from backend.macro.daily_research import apply_entry_guards
 
@@ -346,12 +347,12 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
         *_histories(histories),
         *_histories((packet or {}).get("fundHistories", [])),
     ]
-    for offset in range(0, len(codes), 46):
+    for offset in range(0, len(codes), RESEARCH_SELECTION_LIMIT):
         supplied.extend(
             [
                 row
                 async for row in _local_histories(
-                    conn, codes[offset : offset + 46], now
+                    conn, codes[offset : offset + RESEARCH_SELECTION_LIMIT], now
                 )
             ]
         )

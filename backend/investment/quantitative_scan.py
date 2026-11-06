@@ -5,6 +5,8 @@ from decimal import Decimal
 import re
 from uuid import UUID
 
+from backend.investment.discovery_limits import RESEARCH_SELECTION_LIMIT
+
 
 def scan_minimum_history_samples(value):
     """V6 supports 120 samples; frozen earlier producers keep their 220 rule."""
@@ -40,7 +42,7 @@ def public_quantitative_scan(value, now):
         or stamp is None
         or stamp > now
         or not isinstance(rows, list)
-        or len(rows) > 46
+        or len(rows) > RESEARCH_SELECTION_LIMIT
     ):
         raise ValueError("invalid quantitative scan version or time")
     minimum_samples = scan_minimum_history_samples(value)

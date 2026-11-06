@@ -7,7 +7,8 @@ from datetime import datetime, time, timedelta
 from uuid import UUID
 
 from backend.common.database import system_connection
-from backend.investment.dynamic_discovery import CORE_FUND_CODES, SELECTION_LIMIT
+from backend.investment.discovery_limits import RESEARCH_SELECTION_LIMIT as SELECTION_LIMIT
+from backend.investment.dynamic_discovery import CORE_FUND_CODES
 
 
 async def read_discovery_assets(conn, now, themes):
