@@ -88,7 +88,8 @@ fi
 
 if [[ "$MODE" != deploy ]]; then
   printf '\n[3/5] Build backend (shared API/Worker/Runner) and frontend\n'
-  sudo "$COMPOSE" ws build api frontend
+  BUILD_COMMIT="$(git -C "$WEALTH_ROOT" rev-parse --verify HEAD)"
+  sudo env BUILD_COMMIT="$BUILD_COMMIT" "$COMPOSE" ws build api worker codex-runner frontend
 fi
 if [[ "$MODE" == build ]]; then
   echo '[build-only] Images ready; running service unchanged.'

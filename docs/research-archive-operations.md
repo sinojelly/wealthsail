@@ -34,4 +34,24 @@ python -m scripts.research_archive_storage \
 docker build -f backend/Dockerfile --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t wealthsail-backend .
 ```
 
-该示例不代表已构建或部署。未传构建参数时buildCommit为空；代码指纹仍独立记录，不把未知构建号作为验收失败。
+`docker-compose.yml` 的 api、worker、codex-runner 共用后端镜像，三者统一传递 `BUILD_COMMIT` 构建参数。现有 `build_docker_wealthsail.sh` 在构建时自动读取源码目录的完整 Git HEAD，并通过 `sudo env` 传给 Compose；`--check`、`--deploy-only` 不读取或改写已有镜像的提交标识。
+
+NAS overlay 中可单独构建同一镜像的 db-init 工具也传递相同参数，避免后续单独构建工具时覆盖提交标签。
+
+直接使用 NAS 包装器时，在 WealthSail 源码目录执行：
+
+```sh
+sudo env BUILD_COMMIT="$(git rev-parse --verify HEAD)" \
+  "$NAS_TOOLS/nas-compose" ws build api worker codex-runner
+```
+
+构建后核对镜像标签，应与本次构建源码的 `git rev-parse HEAD` 一致，不固定为某个旧提交：
+
+```sh
+sudo docker image inspect wealthsail-backend:latest \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+```
+
+未传 Compose 参数时标签为 `unknown`；直接 `docker build` 未传参数时沿用 Dockerfile 的空值。研究验收中的 buildCommit 仅接受完整合法提交号，缺失或 unknown 仍显示未知；代码指纹独立记录。
+
+以上示例不代表已构建或部署。可将标签修复合并到下次正式构建；构建镜像不会更新现有运行容器，部署继续按既有流程执行。
