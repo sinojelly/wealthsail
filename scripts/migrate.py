@@ -2967,11 +2967,71 @@ async def _readback(conn: asyncpg.Connection) -> None:
     ):
         raise RuntimeError("discovery industry universe is missing or unsafe")
 
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=104)"
+    ):
+        await _readback_opportunity_fund_cache(conn)
+
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
     )
     if seed_versions:
         raise RuntimeError("development seed entered the production migration ledger")
+
+
+async def _readback_opportunity_fund_cache(conn: asyncpg.Connection) -> None:
+    """A deploy must retain the cache's tenant scope and worker-only mutations."""
+    table = "research.opportunity_fund_cache"
+    if not await conn.fetchval(
+        "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)", table
+    ):
+        raise RuntimeError("opportunity fund cache RLS is missing or unsafe")
+    if not await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='research'
+        AND tablename='opportunity_fund_cache' AND policyname='opportunity_cache_member'
+        AND cmd='SELECT' AND roles=ARRAY['wealthsail_api']::name[]
+        AND qual LIKE '%research_topic_snapshots%')"""
+    ):
+        raise RuntimeError("opportunity fund cache member scope is missing or unsafe")
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+            expected = role == "wealthsail_worker" and privilege in {"SELECT", "INSERT", "UPDATE"}
+            if await conn.fetchval("SELECT has_table_privilege($1,$2,$3)", role, table, privilege) != expected:
+                raise RuntimeError("opportunity fund cache grants are missing or unsafe")
+        if role != "wealthsail_worker" and await conn.fetchval(
+            "SELECT has_any_column_privilege($1,$2,'INSERT') OR has_any_column_privilege($1,$2,'UPDATE') OR has_any_column_privilege($1,$2,'REFERENCES')",
+            role, table,
+        ):
+            raise RuntimeError("opportunity fund cache column grants are unsafe")
+    for column in ("candidates", "status", "snapshot_id", "content_digest", "catalog_revision"):
+        if not await conn.fetchval("SELECT has_column_privilege('wealthsail_api',$1,$2,'SELECT')", table, column):
+            raise RuntimeError("opportunity fund cache reader grants are missing")
+    for column in ("lease_token", "lease_expires_at"):
+        if await conn.fetchval("SELECT has_column_privilege('wealthsail_api',$1,$2,'SELECT')", table, column):
+            raise RuntimeError("opportunity fund cache lease grants are unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)", table
+    ):
+        raise RuntimeError("opportunity fund cache public grants are unsafe")
+    for source in ("fund_master", "research_indices", "product_index_links", "fund_index_links", "instruments", "instrument_aliases"):
+        if not await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass($1)
+            AND tgname='opportunity_catalog_revision' AND tgenabled<>'D'
+            AND tgfoid='reference.advance_opportunity_fund_catalog_revision()'::regprocedure)""",
+            "reference." + source,
+        ):
+            raise RuntimeError("opportunity fund cache catalog revision trigger is missing or unsafe")
+    if not await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::regclass
+        AND tgname='validate_opportunity_fund_cache' AND tgenabled<>'D'
+        AND tgfoid='research.validate_opportunity_fund_cache()'::regprocedure)""", table,
+    ):
+        raise RuntimeError("opportunity fund cache snapshot guard is missing or unsafe")
+    for index in ("reference.idx_fund_master_name_trgm", "reference.research_indices_name_trgm"):
+        if not await conn.fetchval(
+            "SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid=to_regclass($1)", index,
+        ):
+            raise RuntimeError("opportunity fund cache search index is missing or unsafe")
 
 
 async def migrate(

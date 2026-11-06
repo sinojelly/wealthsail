@@ -6,6 +6,7 @@ import logging
 
 from backend.common.database import system_connection
 from backend.dependencies import now_shanghai
+from backend.investment.opportunity_fund_cache import precompute_topic_funds
 from backend.macro import research_acceptance_repository as repository
 from backend.macro.research_diagnostics import safe_error_class
 
@@ -53,7 +54,21 @@ async def archive_research_run(pool, run_id=None, *, now=None):
     logger.info(
         "research_archive_completed run_id=%s audit_status=ARCHIVED", claim["run_id"]
     )
+    # This optional projection has its own durable retry state. A failure must
+    # never roll back the accepted economic archive or consume a model slot.
+    await _cache_candidates(pool, claim["run_id"])
     return {"auditStatus": "ARCHIVED", "claimed": True}
+
+
+async def _cache_candidates(pool, run_id=None):
+    try:
+        return await precompute_topic_funds(pool, run_id)
+    except Exception as exc:  # noqa: BLE001 -- independent background backfill
+        logger.warning(
+            "opportunity_cache_pending error_class=%s",
+            safe_error_class(type(exc).__name__),
+        )
+        return {"claimed": False, "status": "PENDING"}
 
 
 async def sync_research_archives(pool, *, now=None, limit=BATCH_LIMIT):
@@ -65,6 +80,12 @@ async def sync_research_archives(pool, *, now=None, limit=BATCH_LIMIT):
         if not result["claimed"]:
             break
         results.append(result)
+    # Also discover old snapshots when no economic archive is pending. This is
+    # the only backfill path; an API miss never performs the expensive search.
+    for _ in range(limit):
+        cached = await _cache_candidates(pool)
+        if not cached["claimed"]:
+            break
     return results
 
 
