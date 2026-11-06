@@ -201,6 +201,29 @@ def _cycle_projection(value):
     for field in ("earningsVerified", "searchExecutionVerified"):
         if isinstance(value.get(field), bool):
             result[field] = value[field]
+    if isinstance(value.get("riskChecks"), list):
+        # Six entries preserve an overfull/invalid structure as invalid. Filtering
+        # unknown rows or taking only five could manufacture a complete audit.
+        result["riskChecks"] = []
+        for check in value["riskChecks"][:6]:
+            projected = {}
+            if isinstance(check, dict):
+                for field, allowed in (
+                    ("kind", set(RISK_CHECKS)),
+                    ("status", {"FOUND", "NOT_FOUND", "UNVERIFIED"}),
+                    ("verification", {"SOURCE_CHECKED", "UNVERIFIED"}),
+                    ("eventTimeVerification", {"RECENT", "HISTORICAL", "FUTURE", "UNVERIFIED"}),
+                ):
+                    if isinstance(check.get(field), str) and check[field] in allowed:
+                        projected[field] = check[field]
+                for field in ("claimSupported", "industryScopeVerified", "searchExecutionVerified"):
+                    if isinstance(check.get(field), bool):
+                        projected[field] = check[field]
+                if isinstance(check.get("sourceIds"), list):
+                    projected["sourceIds"] = [
+                        ref for ref in check["sourceIds"][:16] if _token(ref)
+                    ]
+            result["riskChecks"].append(projected)
     return result
 
 
