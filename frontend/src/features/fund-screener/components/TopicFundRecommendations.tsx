@@ -350,6 +350,18 @@ function RecommendationsData({
     data.actionable === false &&
     Array.isArray(data.items) &&
     data.coverage;
+  const pricesPending =
+    valid &&
+    data.items.some((topic) =>
+      [
+        topic.recommendedFunds,
+        topic.relatedRiskFunds,
+        topic.observationFunds,
+        topic.indirectFunds,
+      ].some((funds) =>
+        funds?.some((fund) => fund.pricePosition?.status === "DATA_PENDING"),
+      ),
+    );
   return (
     <section aria-label="高价值机会" style={box}>
       <h3>高价值机会</h3>
@@ -381,6 +393,9 @@ function RecommendationsData({
           {data.status === "PARTIAL" && (
             <p>部分来源或匹配资料尚待补齐，已匹配的基金继续展示。</p>
           )}
+          {pricesPending && (
+            <p role="status">净值或技术位置资料待补齐，可稍后重新检查。</p>
+          )}
           {isMatchingPending(data) && !query.isError && (
             <p role="status">
               {pollingExhausted
@@ -411,7 +426,8 @@ function RecommendationsData({
       )}
       {(query.isError ||
         (valid &&
-          (data.status === "UNAVAILABLE" ||
+          (pricesPending ||
+            data.status === "UNAVAILABLE" ||
             isMatchingPending(data) ||
             data.missingEvidence?.includes("FUND_RECALL_FAILED")))) && (
         <button

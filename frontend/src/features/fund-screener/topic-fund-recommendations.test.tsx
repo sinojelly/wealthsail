@@ -681,6 +681,81 @@ it("refreshes expired completed matching on reopening to update local fund evide
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
+it.each([
+  "recommendedFunds",
+  "relatedRiskFunds",
+  "observationFunds",
+  "indirectFunds",
+])(
+  "manually rereads pending NAV for completed %s without polling or hiding funds",
+  async (group) => {
+    vi.useFakeTimers();
+    const data = response();
+    data.items = [data.items[0]];
+    Object.assign(data, {
+      status: "AVAILABLE",
+      archiveState: "ARCHIVED",
+      missingEvidence: [],
+      coverage: {
+        topicCount: 1,
+        matchedTopicCount: 1,
+        recommendedFundCount: 1,
+      },
+    });
+    const fund = data.items[0].recommendedFunds[0];
+    Object.assign(fund, {
+      pricePosition: {
+        status: "DATA_PENDING",
+        label: "净值资料待同步",
+        asOf: null,
+        reasons: ["本地净值历史尚待补齐"],
+        actionable: false,
+      },
+    });
+    data.items[0].recommendedFunds = [];
+    Object.assign(data.items[0], { [group]: [fund] });
+    vi.mocked(fetch).mockImplementation(async () => fetchData(data));
+    renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+    await advance(5);
+
+    expect(screen.getByText(/000001.*机器人主题基金/)).toBeVisible();
+    expect(
+      screen.getByText("净值或技术位置资料待补齐，可稍后重新检查。"),
+    ).toBeVisible();
+    await advance(60_000);
+    expect(fetch).toHaveBeenCalledOnce();
+
+    Object.assign(fund, {
+      pricePosition: {
+        status: "NEUTRAL",
+        label: "技术位置处于区间中部",
+        asOf: at,
+        reasons: ["本地净值资料已补齐"],
+        actionable: false,
+      },
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "重新检查机会基金匹配" }).click();
+    });
+    await advance(5);
+
+    expect(screen.getByText(/000001.*机器人主题基金/)).toBeVisible();
+    expect(screen.getByText(/技术位置处于区间中部/)).toBeVisible();
+    expect(
+      screen.queryByText("净值或技术位置资料待补齐，可稍后重新检查。"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重新检查机会基金匹配" }),
+    ).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, options] of vi.mocked(fetch).mock.calls) {
+      expect(String(url)).toContain(`/topic-fund-recommendations/${run}`);
+      expect(options?.method ?? "GET").toBe("GET");
+      expect(options?.body).toBeUndefined();
+    }
+  },
+);
+
 it.each(["MACRO_OBSERVATION", "UNDETERMINED"])(
   "keeps %s funds under observation even when a legacy response misplaces them in recommendations",
   async (topicPolarity) => {
