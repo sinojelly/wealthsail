@@ -1,6 +1,7 @@
 """Disposable PostgreSQL: durable backfill, immutable boundaries and tenant RLS."""
 
 from contextlib import asynccontextmanager
+from datetime import timedelta
 import json
 import os
 from urllib.parse import urlsplit
@@ -22,7 +23,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.skipif(not DSN, reason="owned104 
 
 
 @asynccontextmanager
-async def fixture(*, manual=True, count=1, topic_values=None, source_checked=False):
+async def fixture(*, manual=True, count=1, topic_values=None, source_checked=False, archived=False):
     target = urlsplit(DSN)
     assert target.hostname == "127.0.0.1" and target.port == 29034
     assert target.path == "/wealthsail_opportunity104_validation"
@@ -45,16 +46,24 @@ async def fixture(*, manual=True, count=1, topic_values=None, source_checked=Fal
             )
         packet = {"asOf": now.isoformat()}
         await conn.execute("UPDATE research.daily_research_runs SET public_packet=$2::jsonb WHERE run_id=$1", run, json.dumps(packet))
-        await acceptance.save_research_artifacts(conn, run, packet, {}, {}, now)
         accepted = outcome(run, now)
         if source_checked:
             accepted["accepted"]["sources"][0]["verification"] = "SOURCE_CHECKED"
-        await acceptance.save_validation_outcome(conn, run, accepted, recorded_at=now)
         value = registry(run, count)
         value["validatedAt"] = now.isoformat()
         if topic_values:
             value["items"][0].update(topic_values)
-        await save_topic_registry(conn, run, value, now)
+        if archived:
+            await acceptance.enqueue_research_archive(
+                conn, run, packet, {}, {}, now, accepted, recorded_at=now,
+                topic_registry=value,
+            )
+            claim = await acceptance.claim_research_archive(conn, run_id=run)
+            await acceptance.persist_research_archive(conn, claim)
+        else:
+            await acceptance.save_research_artifacts(conn, run, packet, {}, {}, now)
+            await acceptance.save_validation_outcome(conn, run, accepted, recorded_at=now)
+            await save_topic_registry(conn, run, value, now)
         yield conn, run, now, tenants, actors, value["items"]
     finally:
         await tx.rollback()
@@ -159,7 +168,7 @@ async def test_worker_failure_is_retryable_without_touching_economic_archive_or_
             raise ConnectionError("PRIVATE model key and connection string")
 
         result = await cache.precompute_topic_funds(Pool(), run, _discover=failing_discovery)
-        assert result == {"claimed": True, "status": "PENDING"}
+        assert result == {"claimed": True, "status": "PENDING", "runId": str(run)}
         state = await conn.fetchrow("SELECT attempts,last_error_class,next_attempt_at>clock_timestamp() AS backed_off FROM research.opportunity_fund_cache WHERE run_id=$1", run)
         assert state["attempts"] == 1 and state["last_error_class"] == "ConnectionError" and state["backed_off"]
         assert await conn.fetchval("SELECT outcome FROM research.research_validation_records WHERE run_id=$1", run) == original
@@ -174,7 +183,7 @@ async def test_old72_topic_snapshot_is_backfilled_without_request_or_model_execu
 
         # No run is supplied: the worker discovers pre-existing archive snapshots.
         result = await cache.precompute_topic_funds(Pool())
-        assert result == {"claimed": True, "status": "READY"}
+        assert result == {"claimed": True, "status": "READY", "runId": str(run)}
         await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
         found = await cache.read_cached_topic_funds(conn, run, now, topics, await conn.fetchval("SELECT clock_timestamp()"))
         assert len(found) == 72
@@ -182,6 +191,63 @@ async def test_old72_topic_snapshot_is_backfilled_without_request_or_model_execu
                    for row in found.values() for field in ("funds", "indirectFunds") for fund in row[field])
         await conn.execute("RESET ROLE")
         assert await cache.precompute_topic_funds(Pool(), run) == {"claimed": False, "status": "PENDING"}
+
+
+@pytest.mark.parametrize("queued_old,old_count", [(True, 1), (False, 9)])
+async def test_latest_archived_cycle_is_backfilled_before_older_backlog(queued_old, old_count):
+    async with fixture(manual=False, archived=True) as (conn, latest, now, tenants, actors, _topics):
+        # Older research is archived later, so created_at cannot stand in for
+        # the research clock. Nine snapshots also exceed a single seed batch.
+        old_runs = []
+        for index in range(old_count):
+            stamp = now - timedelta(days=index + 1)
+            older = await conn.fetchval(
+                """INSERT INTO research.daily_research_runs(slot_date,scheduled_for,dispatched_at,input_hash,prompt_version,public_packet)
+                VALUES($1,$2,$2,'cache-backlog','cache-fixture','{}') RETURNING run_id""",
+                stamp.date(), stamp,
+            )
+            value = registry(older, 1)
+            value["validatedAt"] = stamp.isoformat()
+            await acceptance.enqueue_research_archive(
+                conn, older, {"asOf": stamp.isoformat()}, {}, {}, stamp,
+                outcome(older, stamp), recorded_at=stamp, topic_registry=value,
+            )
+            claim = await acceptance.claim_research_archive(conn, run_id=older)
+            await acceptance.persist_research_archive(conn, claim)
+            old_runs.append(older)
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        if queued_old:
+            claim = await cache.claim_topic_fund_cache(conn, run_id=old_runs[0])
+            await cache.finish_topic_fund_cache(conn, claim, error_class="TimeoutError")
+            await conn.execute(
+                """UPDATE research.opportunity_fund_cache SET next_attempt_at=clock_timestamp()-interval '1 day'
+                WHERE run_id=$1""", old_runs[0],
+            )
+
+        class Pool:
+            @asynccontextmanager
+            async def acquire(self):
+                yield conn
+
+        async def local_discovery(_conn, topics, _packet, _now):
+            return candidates(topics)
+
+        assert await conn.fetchval(
+            "SELECT status FROM research.research_validation_archive_queue WHERE run_id=$1", latest,
+        ) == "ARCHIVED"
+        assert await conn.fetchval(
+            "SELECT count(*) FROM research.opportunity_fund_cache WHERE run_id=$1", latest,
+        ) == 0
+        assert await cache.precompute_topic_funds(Pool(), _discover=local_discovery) == {
+            "claimed": True, "status": "READY", "runId": str(latest),
+        }
+        assert await conn.fetchval(
+            "SELECT status FROM research.opportunity_fund_cache WHERE run_id=$1", latest,
+        ) == "READY"
+        assert not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM research.opportunity_fund_cache WHERE run_id=ANY($1::uuid[]) AND status='READY')",
+            old_runs,
+        )
 
 
 async def test_catalog_revision_changes_once_per_committed_catalog_write_transaction():

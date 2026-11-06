@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import suppress
 import logging
+from time import perf_counter
 
 from backend.common.database import system_connection
 from backend.dependencies import now_shanghai
@@ -22,6 +23,7 @@ def archive_status(value):
 
 
 async def archive_research_run(pool, run_id=None, *, now=None):
+    started = perf_counter()
     async with system_connection(pool) as conn:
         async with conn.transaction():
             claim = await repository.claim_research_archive(conn, run_id=run_id)
@@ -45,14 +47,17 @@ async def archive_research_run(pool, run_id=None, *, now=None):
                 )
         status = archive_status(pending)
         logger.warning(
-            "research_archive_failed run_id=%s audit_status=%s error_class=%s",
+            "research_archive_failed run_id=%s audit_status=%s error_class=%s duration_ms=%.1f",
             claim["run_id"],
             status,
             error_class,
+            (perf_counter() - started) * 1000,
         )
         return {"auditStatus": status, "claimed": True}
     logger.info(
-        "research_archive_completed run_id=%s audit_status=ARCHIVED", claim["run_id"]
+        "research_archive_completed run_id=%s audit_status=ARCHIVED duration_ms=%.1f",
+        claim["run_id"],
+        (perf_counter() - started) * 1000,
     )
     # This optional projection has its own durable retry state. A failure must
     # never roll back the accepted economic archive or consume a model slot.
@@ -61,12 +66,22 @@ async def archive_research_run(pool, run_id=None, *, now=None):
 
 
 async def _cache_candidates(pool, run_id=None):
+    started = perf_counter()
     try:
-        return await precompute_topic_funds(pool, run_id)
+        result = await precompute_topic_funds(pool, run_id)
+        if result["claimed"]:
+            logger.info(
+                "opportunity_cache_completed run_id=%s status=%s duration_ms=%.1f",
+                result.get("runId", run_id),
+                result["status"],
+                (perf_counter() - started) * 1000,
+            )
+        return result
     except Exception as exc:  # noqa: BLE001 -- independent background backfill
         logger.warning(
-            "opportunity_cache_pending error_class=%s",
+            "opportunity_cache_pending error_class=%s duration_ms=%.1f",
             safe_error_class(type(exc).__name__),
+            (perf_counter() - started) * 1000,
         )
         return {"claimed": False, "status": "PENDING"}
 

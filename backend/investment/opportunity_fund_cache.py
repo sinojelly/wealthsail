@@ -133,7 +133,7 @@ async def read_topic_fund_cache_status(conn, run_id, validated_at, now):
 
 
 async def claim_topic_fund_cache(conn, *, run_id=None):
-    """Seed old snapshots and claim one lease using only database-clock authority."""
+    """Backfill newest research first; only database time authorizes a lease."""
     from backend.investment.opportunity_fund_recall import RECALL_MATCH_VERSION
 
     await conn.execute(
@@ -147,7 +147,7 @@ async def claim_topic_fund_cache(conn, *, run_id=None):
           AND (c.run_id IS NULL OR c.match_version<>$2 OR c.catalog_revision<>v.revision
             OR c.catalog_day<>CURRENT_DATE OR c.content_digest<>s.content_digest)
           AND (c.status IS DISTINCT FROM 'COMPUTING' OR c.lease_expires_at<=clock_timestamp())
-        ORDER BY s.created_at DESC,s.run_id LIMIT 8
+        ORDER BY s.validated_at DESC,s.created_at DESC,s.run_id LIMIT 8
         ON CONFLICT(run_id) DO UPDATE SET snapshot_id=EXCLUDED.snapshot_id,
           content_digest=EXCLUDED.content_digest,validated_at=EXCLUDED.validated_at,
           match_version=EXCLUDED.match_version,catalog_revision=EXCLUDED.catalog_revision,
@@ -170,7 +170,7 @@ async def claim_topic_fund_cache(conn, *, run_id=None):
         WHERE ($1::uuid IS NULL OR run_id=$1) AND attempts<8
           AND ((status='PENDING' AND next_attempt_at<=clock_timestamp())
             OR (status='COMPUTING' AND lease_expires_at<=clock_timestamp()))
-        ORDER BY next_attempt_at,run_id FOR UPDATE SKIP LOCKED LIMIT 1)
+        ORDER BY validated_at DESC,next_attempt_at,run_id FOR UPDATE SKIP LOCKED LIMIT 1)
         UPDATE research.opportunity_fund_cache c SET status='COMPUTING',attempts=c.attempts+1,
           lease_token=$2,lease_expires_at=clock_timestamp()+$3*interval '1 second',
           updated_at=clock_timestamp()
@@ -236,4 +236,8 @@ async def precompute_topic_funds(pool, run_id=None, *, _discover=None):
             async with conn.transaction():
                 finished = await finish_topic_fund_cache(conn, claim, error_class=error)
         logger.warning("opportunity_cache_failed run_id=%s error_class=%s", claim["run_id"], error)
-    return {"claimed": True, "status": finished["status"] if finished else "PENDING"}
+    return {
+        "claimed": True,
+        "status": finished["status"] if finished else "PENDING",
+        "runId": str(claim["run_id"]),
+    }

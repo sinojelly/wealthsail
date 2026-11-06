@@ -165,3 +165,32 @@ async def test_archive_cancellation_leaves_the_durable_lease_for_recovery(monkey
     with pytest.raises(asyncio.CancelledError):
         await mod.archive_research_run(object(), "one", now=NOW)
     mod.repository.finish_research_archive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cache_backfill_logs_its_actual_run_and_separate_duration(
+    monkeypatch, caplog
+):
+    mod = import_module("backend.jobs.research_archive")
+    monkeypatch.setattr(
+        mod,
+        "precompute_topic_funds",
+        AsyncMock(return_value={"claimed": True, "status": "READY", "runId": "newest"}),
+    )
+    with caplog.at_level("INFO", logger="wealthsail.research_archive"):
+        await mod._cache_candidates(object())
+    assert (
+        "opportunity_cache_completed run_id=newest status=READY duration_ms="
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_archive_duration_excludes_candidate_precompute(monkeypatch, caplog):
+    mod, _state, _claim = boundary(monkeypatch)
+    clock = iter([1.0, 1.25])
+    monkeypatch.setattr(mod, "perf_counter", lambda: next(clock), raising=False)
+    monkeypatch.setattr(mod, "_cache_candidates", AsyncMock())
+    with caplog.at_level("INFO", logger="wealthsail.research_archive"):
+        await mod.archive_research_run(object(), "one", now=NOW)
+    assert "audit_status=ARCHIVED duration_ms=250.0" in caplog.text
