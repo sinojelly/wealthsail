@@ -2,9 +2,13 @@
 
 import json
 import logging
+from collections import Counter, defaultdict
+from copy import deepcopy
+from datetime import timedelta
+import math
 from uuid import UUID
 
-from backend.errors import ValidationError_
+from backend.errors import ForbiddenError, NotFoundError, ValidationError_
 from backend.macro import research_acceptance_repository as acceptance
 from backend.macro.research_delivery import _time, safe_delivery_coverage
 from backend.macro.research_topic_repository import prepare_topic_registry
@@ -180,3 +184,304 @@ async def read_fund_observation(
         )
         result = _unavailable(identity, validated, now)
     return {**result, "archiveState": archive, "topicLinkState": topic_state}
+
+
+def project_topic_recommendations(
+    topics, recalls, *, sources, reviews, coverage, packet, validated_at, now
+):
+    """Attach real products to news theses; risk evidence annotates every match.
+
+    Candidate directions do not depend on formal valueDirections or the audit
+    quota. Neither a thematic match nor a completed audit establishes a buy.
+    """
+    from backend.investment.fund_observation import _audit, _has_risk
+    from backend.macro.research_topics import frozen_manifest
+
+    if not isinstance(topics, list) or len(topics) > 72:
+        raise ValidationError_("机会推荐超过主题目录边界")
+    reviews_by_scope = defaultdict(list)
+    for review in reviews:
+        if isinstance(review, dict) and isinstance(review.get("industry"), str):
+            reviews_by_scope[review["industry"]].append(review)
+    try:
+        selected = (
+            set(frozen_manifest(packet)["selectedScopes"])
+            if "researchDiscovery" in packet
+            else {
+                row["industry"]
+                for row in (packet.get("industryCycleResearch") or {}).get(
+                    "candidates", []
+                )
+                if isinstance(row, dict) and isinstance(row.get("industry"), str)
+            }
+        )
+    except ValueError:
+        selected = set()
+    counts = Counter(row.get("id") for row in sources)
+    checked_ids = {
+        row["id"]
+        for row in sources
+        if counts[row.get("id")] == 1 and row.get("verification") == "SOURCE_CHECKED"
+    }
+    ranked = []
+    for ordinal, topic in enumerate(topics):
+        if topic.get("status") == "QUARANTINED":
+            continue
+        match = topic.get("match") or {}
+        industries = set(match.get("industryIds", []))
+        audit_scopes = industries | {
+            row["industryId"]
+            for row in match.get("proposedScopes", [])
+            if isinstance(row, dict) and isinstance(row.get("industryId"), str)
+        }
+        unresolved = set(match.get("unresolvedClaims", []))
+        scopes = audit_scopes | unresolved
+        associated = [
+            row for scope in scopes for row in reviews_by_scope.get(scope, [])
+        ]
+        for old in packet.get("previousIndustryRiskStates", []):
+            if not isinstance(old, dict) or old.get("industry") not in scopes:
+                continue
+            researched = _time(old.get("researchedAt"))
+            cycle = old.get("industryCycle")
+            if (
+                researched
+                and researched <= validated_at
+                and now - researched <= timedelta(days=14)
+                and isinstance(cycle, dict)
+            ):
+                associated.append(cycle)
+        adverse = [row for row in associated if _has_risk(row)]
+        audit, missing_checks = _audit(
+            audit_scopes, selected, reviews_by_scope, coverage
+        )
+        refs = set(topic.get("sourceIds", []))
+        backed = bool(refs) and refs <= checked_ids
+        stale_audit = now - validated_at > timedelta(days=3)
+        verified = (
+            audit == "STRUCTURE_AND_EXECUTION_VERIFIED"
+            and backed
+            and match.get("scopeVerified") is True
+            and not unresolved
+            and not stale_audit
+        )
+        risk_status = (
+            "RISK_ALERT"
+            if adverse
+            else "VERIFIED_SAFE"
+            if verified
+            else "UNVERIFIED_RISK"
+        )
+        warnings = []
+        for review in adverse:
+            warnings.extend(
+                str(check["summary"])[:600]
+                for check in review.get("riskChecks", [])
+                if isinstance(check, dict)
+                and check.get("status") == "FOUND"
+                and check.get("summary")
+            )
+            if review.get("evidenceSummary"):
+                warnings.append(str(review["evidenceSummary"])[:600])
+        if adverse and not warnings:
+            warnings.append("关联行业存在负面风险记录，请核对风险来源及分歧。")
+        if not verified:
+            warnings.append("负面风险核查尚未完整核验，基金匹配不代表已经排除风险。")
+        penalty = (
+            20
+            if any(row.get("riskLevel") == "CONFIRMED" for row in adverse)
+            else 10
+            if adverse
+            else 0
+        )
+        recalled = recalls.get(topic.get("topicId"), recalls.get(topic.get("key"), {}))
+        funds = deepcopy(recalled.get("funds", []))[:3]
+        for fund in funds:
+            score = fund.get("quantitativeScore")
+            if (
+                type(score) in (int, float)
+                and math.isfinite(score)
+                and 0 <= score <= 100
+            ):
+                applied = fund.get("quantitativeRiskPenaltyApplied", 0)
+                applied = (
+                    applied
+                    if type(applied) in (int, float)
+                    and math.isfinite(applied)
+                    and 0 <= applied <= 20
+                    else 0
+                )
+                fund["unadjustedQuantitativeScore"] = min(100, score + applied)
+                fund["quantitativeScore"] = max(0, score - max(0, penalty - applied))
+            else:
+                fund["quantitativeScore"] = None
+            fund.update(
+                actionable=False,
+                canBuyNow=False,
+                riskStatus=risk_status,
+                riskScorePenalty=penalty,
+            )
+            fund["riskWarnings"] = list(
+                dict.fromkeys([*fund.get("riskWarnings", []), *warnings])
+            )
+        gaps = ([] if backed else ["POSITIVE_SOURCE_UNVERIFIED"]) + (
+            [] if verified else ["RISK_AUDIT_INCOMPLETE"]
+        )
+        if stale_audit:
+            gaps.append("STALE_RISK_AUDIT")
+        if not funds:
+            gaps.append(
+                recalled.get("unavailableReason") or "NO_SUITABLE_FUND_IN_LOCAL_CATALOG"
+            )
+        scores = [
+            fund["quantitativeScore"]
+            for fund in funds
+            if fund["quantitativeScore"] is not None
+        ]
+        item = {
+            "topicId": topic.get("topicId"),
+            "key": topic["key"],
+            "title": topic["title"],
+            "thesis": topic.get("summary", ""),
+            "sourceIds": sorted(refs),
+            "riskStatus": risk_status,
+            "riskWarnings": list(dict.fromkeys(warnings)),
+            "riskScorePenalty": penalty,
+            "missingRiskChecks": missing_checks,
+            "recommendedFunds": funds,
+            "recommendationStatus": "SOURCE_PENDING"
+            if not backed
+            else "MATCHED"
+            if funds
+            else "NO_MATCH",
+            "missingEvidence": gaps,
+            "matchMessage": recalled.get("message"),
+            "candidateDirection": {
+                "key": topic["key"],
+                "title": topic["title"],
+                "thesis": topic.get("summary", ""),
+                "origin": "NEWS_TOPIC",
+            },
+            "priority": {
+                "matchedFundCount": len(funds),
+                "checkedSourceCount": len(refs & checked_ids),
+                "quantitativeScore": max(scores) if scores else None,
+                "riskAuditComplete": verified,
+            },
+            "actionable": False,
+        }
+        ranked.append(
+            (
+                (
+                    -int(bool(funds)),
+                    -len(refs & checked_ids),
+                    -max(scores) if scores else 1,
+                    -int(verified),
+                    ordinal,
+                ),
+                item,
+            )
+        )
+    ranked.sort(key=lambda row: row[0])
+    return [item for _, item in ranked]
+
+
+async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
+    """Read the complete visible topic snapshot and the current local catalog.
+
+    Only public, archived INITIAL observations supply theses and risk proof.
+    Fund recall reads local reference data and never calls a model or provider.
+    """
+    from backend.macro.research_delivery import _observations
+
+    identity = UUID(str(run_id))
+    allowed = await conn.fetchval(
+        "SELECT research.validation_live_member(research.validation_current_tenant(),false)"
+    )
+    if not allowed:
+        raise ForbiddenError("需要当前有效租户成员身份")
+    receipt = await acceptance.read_validation_summary(conn, identity, now, admin=False)
+    if (
+        not receipt
+        or receipt.get("researchId") != str(identity)
+        or receipt.get("kind") != "INITIAL"
+    ):
+        raise NotFoundError("该研究没有可见的机会推荐材料")
+    validated, recorded = (
+        _time(receipt.get("validatedAt")),
+        _time(receipt.get("recordedAt")),
+    )
+    if validated is None or recorded is None or not validated <= recorded <= now:
+        raise ValidationError_("机会推荐材料时间无效")
+    result = {
+        "version": "topic-fund-recommendations-v1",
+        "researchId": str(identity),
+        "validatedAt": validated.isoformat(),
+        "evaluatedAt": now.isoformat(),
+        "archiveState": receipt.get("archiveState"),
+        "status": "UNAVAILABLE",
+        "items": [],
+        "coverage": {
+            "topicCount": 0,
+            "matchedTopicCount": 0,
+            "recommendedFundCount": 0,
+        },
+        "missingEvidence": [],
+        "actionable": False,
+    }
+    if receipt.get("archiveState") != "ARCHIVED":
+        result["missingEvidence"] = ["TOPIC_ARCHIVE_PENDING"]
+        return result
+    row = await conn.fetchrow(
+        """SELECT run_id,dispatched_at,public_packet FROM research.daily_research_runs
+        WHERE run_id=$1 AND dispatched_at<=$2""",
+        identity,
+        now,
+    )
+    packet = _object(row.get("public_packet")) if row else None
+    dispatched = _time(row.get("dispatched_at")) if row else None
+    packet_at = _time(packet.get("asOf")) if packet else None
+    if (
+        not packet
+        or dispatched is None
+        or packet_at is None
+        or not dispatched <= validated
+        or packet_at > validated
+    ):
+        result["missingEvidence"] = ["FROZEN_PACKET_UNAVAILABLE"]
+        return result
+    topics, coverage, state = await _topics(conn, identity, validated, now)
+    if state != "ARCHIVED":
+        result["missingEvidence"] = ["TOPIC_" + state]
+        return result
+    candidates = [topic for topic in topics if topic.get("status") != "QUARANTINED"]
+    if _recall is None:
+        from backend.investment.opportunity_fund_recall import recall_topic_funds
+
+        _recall = recall_topic_funds
+    recalls = await _recall(conn, candidates, packet, now)
+    observations, _ = _observations(receipt.get("accepted"), validated)
+    items = project_topic_recommendations(
+        topics,
+        recalls,
+        sources=observations["sources"],
+        reviews=observations["industryCycleReviews"],
+        coverage=coverage,
+        packet=packet,
+        validated_at=validated,
+        now=now,
+    )
+    result.update(
+        items=items,
+        status="PARTIAL"
+        if any(item["missingEvidence"] for item in items)
+        else "AVAILABLE",
+        coverage={
+            "topicCount": len(items),
+            "matchedTopicCount": sum(bool(item["recommendedFunds"]) for item in items),
+            "recommendedFundCount": sum(
+                len(item["recommendedFunds"]) for item in items
+            ),
+        },
+    )
+    return result

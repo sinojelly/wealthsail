@@ -208,6 +208,8 @@ def _cycle_projection(value):
         for check in value["riskChecks"][:6]:
             projected = {}
             if isinstance(check, dict):
+                if isinstance(check.get("summary"), str):
+                    projected["summary"] = _text(check["summary"], 600)
                 for field, allowed in (
                     ("kind", set(RISK_CHECKS)),
                     ("status", {"FOUND", "NOT_FOUND", "UNVERIFIED"}),
