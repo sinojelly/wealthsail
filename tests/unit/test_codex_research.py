@@ -359,7 +359,7 @@ async def test_cli_timeout_preserves_bound_exit_state_and_origin(monkeypatch):
     state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
     with pytest.raises(TimeoutError) as error:
         await mod._run([sys.executable, "-c", "import time; time.sleep(30)"], cwd=".",
-                       env=dict(os.environ), timeout=0.03, lifecycle=state)
+                       env=dict(os.environ), timeout=2.0, lifecycle=state)
     assert error.value.timeout_origin == "CLI_MODEL_TIMEOUT"
     assert state.snapshot()["reaped"] is True
     assert state.snapshot()["terminationRequested"] is True
@@ -499,3 +499,40 @@ async def test_timeout_reaps_process_group_even_when_child_ignores_term(tmp_path
     assert state.snapshot()["exitConfirmed"] is True
     with pytest.raises(ProcessLookupError):
         os.kill(int(marker.read_text()), 0)
+
+@pytest.mark.asyncio
+async def test_extremely_short_timeout_never_forges_exit_proof():
+    from uuid import uuid4
+    from backend.integrations.research_lifecycle import ResearchLifecycle
+
+    mod = adapter()
+    state = ResearchLifecycle({
+        key: str(uuid4())
+        for key in ("runId", "ownerToken", "callId")
+    })
+
+    with pytest.raises(TimeoutError):
+        await mod._run(
+            [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+            ],
+            cwd=".",
+            env=dict(os.environ),
+            timeout=0.03,
+            lifecycle=state,
+        )
+
+    result = state.snapshot()
+
+    assert result["terminationRequested"] is True
+
+    # 极短超时存在启动竞态，因此允许成功确认或保持未知，
+    # 但绝不能没有完整证明就宣称已经退出。
+    if result["exitConfirmed"]:
+        assert result["state"] == "EXITED"
+        assert result["reaped"] is True
+        assert result["descendantsConfirmed"] is True
+    else:
+        assert result["state"] == "UNKNOWN"
