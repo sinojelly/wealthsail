@@ -31,6 +31,7 @@ export interface TopicFundRecommendation {
   riskWarnings: string[];
   recommendedFunds: TopicRecommendedFund[];
   recommendationStatus: "MATCHED" | "NO_MATCH" | "SOURCE_PENDING";
+  matchMessage?: string | null;
   missingEvidence: string[];
   actionable: false;
 }

@@ -125,6 +125,7 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
             : "当前没有满足匹配条件的基金，机会逻辑与待补资料继续保留。"}
         </p>
       )}
+      {topic.matchMessage && <p>基金匹配说明：{topic.matchMessage}</p>}
       {!!topic.missingEvidence?.length && (
         <p>此机会仍有待补证资料，风险未核验不代表不存在风险。</p>
       )}

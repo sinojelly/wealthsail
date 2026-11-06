@@ -329,3 +329,20 @@ it("shows the adverse risk deduction alongside the news thesis and matched fund"
   expect(screen.getByText(/量化得分：75（扣分前95分）/)).toBeVisible();
   expect(screen.getByText(/000002.*芯片精选基金/)).toBeVisible();
 });
+
+it("shows the concrete matching reason when no explainable asset mapping exists", async () => {
+  const data = response();
+  data.items = [data.items[0]];
+  data.items[0].recommendedFunds = [];
+  data.items[0].recommendationStatus = "NO_MATCH";
+  Object.assign(data.items[0], {
+    matchMessage: "当前缺少可说明的地域或资产关联",
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(JSON.stringify({ data, meta: {} })),
+  );
+  renderWithSession(ui());
+  expect(
+    await screen.findByText(/当前缺少可说明的地域或资产关联/),
+  ).toBeVisible();
+});
