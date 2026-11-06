@@ -58,11 +58,11 @@
 
 **Interfaces:** `ExecutionObserver.progress()` / `statistics()` expose only closed bounded metadata; existing receipt-v2 remains authoritative for exact execution matching. Workload accepts old and new timing/observation versions. Optional NAV warming defers only for active nonterminal model work; existing critical price collection remains enabled.
 
-- [ ] Add failing tests for replayed events, real duplicate query/page actions, unknown operands, safe progress, token unknown and active-model NAV deferral.
-- [ ] Count observed search/open/find separately from planned/matched tasks; expose exact repetition as cost diagnostics only, with soft-budget wording and no fake hard cap.
-- [ ] Carry safe live progress through authenticated Runner status; persist/project through existing safe metadata where possible, documenting unavailable observations rather than fabricating them.
-- [ ] Preserve deterministic scans/previous valid reports on failed inference; do not accept partial JSON or inherit absent-risk conclusions across dates.
-- [ ] Verify backend/frontend suites and isolated database boundaries, review all changes, document rollout/rollback and real external risks, then commit batch 3.
+- [x] Add failing tests for replayed events, real duplicate query/page actions, unknown operands, safe progress, token unknown and active-model NAV deferral.
+- [x] Count observed search/open/find separately from planned/matched tasks; expose exact repetition as cost diagnostics only, with soft-budget wording and no fake hard cap.
+- [x] Carry safe live progress through authenticated Runner status; persist/project through existing safe metadata where possible, documenting unavailable observations rather than fabricating them.
+- [x] Preserve deterministic scans/previous valid reports on failed inference; do not accept partial JSON or inherit absent-risk conclusions across dates.
+- [x] Verify backend/frontend suites and isolated database boundaries, review all changes, document rollout/rollback and real external risks, then commit batch 3.
 
 ## Execution Record
 
@@ -73,3 +73,5 @@
 - Batch 1: same frozen sample 592170 -> 403055 prompt bytes (31.94%); actual JSON 571818 -> 390280; instructions 20352 -> 12775; schema unchanged 16266. The 570924 direct legacy projection excludes build_prompt preprocessing and is a separate measurement.
 
 - Batch 2: independent root verification 304 passed / 3 Linux-only skips plus 3 isolated loopback PostgreSQL cases. The Linux real detached-descendant and parent-SIGKILL fixtures are delivered but unexecuted on Windows. No real AI, migration or production access.
+
+- Batch 3: Worker now binds original usage call/run, uses independent local/remote progress monitors, preserves observed work on failures/account interruption, and projects only identity-sanitized lifecycle metadata. Backend 5520 passed/363 skipped; frontend 799 passed; isolated DB 46 passed; other local integration/e2e 33 passed/5 skipped. Final client pending-cancel observation fix verified with 99 focused tests; frontend typecheck/ESLint/build passed.

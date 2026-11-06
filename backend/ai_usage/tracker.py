@@ -1,14 +1,14 @@
 """Task-local inference observation, with best-effort independent persistence."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import inspect
 import logging
 from time import monotonic
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import anyio
 
@@ -17,6 +17,10 @@ from backend.ai_usage.calculation import stamp, tokens
 
 logger = logging.getLogger(__name__)
 _current = ContextVar("ai_usage_task", default=None)
+_current_call = ContextVar("ai_usage_call", default=None)
+_research_run = ContextVar("ai_usage_research_run", default=None)
+PROGRESS_WRITE_INTERVAL_SECONDS = 10.0
+PROGRESS_WRITE_TIMEOUT_SECONDS = 1.0
 # One client call has a 25 second outer limit (HTTP 23s / Runner read 20s).
 # Telemetry gets no retries, and its two independent reads share a finite budget.
 SNAPSHOT_TIMEOUT_SECONDS = 26.0
@@ -47,6 +51,15 @@ def _failed_snapshot(reason, started):
     }
 
 
+def _capture_research_progress(record, value):
+    from backend.integrations.research_execution import sanitize_execution_progress
+
+    if record["callType"] == "research" and record.get("researchRunId"):
+        safe = sanitize_execution_progress(getattr(value, "execution_progress", None))
+        if safe is not None:
+            record["researchProgress"] = safe
+
+
 def now():
     return datetime.now(timezone.utc)
 
@@ -60,6 +73,77 @@ def mark_business(status):
     task = active_task()
     if task:
         task.business_status = status
+
+
+@contextmanager
+def research_progress_run(run_id):
+    """Bind telemetry to a server-selected run, without granting exit authority."""
+    token = _research_run.set(str(UUID(str(run_id))))
+    try:
+        yield
+    finally:
+        _research_run.reset(token)
+
+
+async def record_research_progress(run_id, progress):
+    """Best-effort snapshots from an independent monitor, at most once per 10s.
+
+    Callers await this only from their separate status-monitor task. A stalled
+    database gets one second and no retry; progress never runs a model, changes
+    its result, or provides process-exit evidence.
+    """
+    from backend.integrations.research_execution import sanitize_execution_progress
+
+    try:
+        identity = str(UUID(str(run_id)))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    context = _current_call.get()
+    task = active_task()
+    if (
+        context is None
+        or task is None
+        or context[0] is not task
+        or identity != _research_run.get()
+    ):
+        return False
+    record = context[1]
+    if (
+        record["callType"] != "research"
+        or record["status"] != "RUNNING"
+        or record.get("researchRunId") != identity
+    ):
+        return False
+    safe = sanitize_execution_progress(progress)
+    if safe is None:
+        return False
+    started = monotonic()
+    if (
+        started - record.get("progressLastWrite", -float("inf"))
+        < PROGRESS_WRITE_INTERVAL_SECONDS
+    ):
+        return False
+    # Set before awaiting so concurrent status observations share the same cap.
+    record["progressLastWrite"] = started
+    record["researchRunId"], record["researchProgress"] = identity, safe
+    try:
+        async with asyncio.timeout(PROGRESS_WRITE_TIMEOUT_SECONDS):
+            await repository.persist(
+                task.pool,
+                task.tenant_id,
+                task.user_id,
+                "call_progress",
+                {
+                    "id": record["id"],
+                    "taskId": record["taskId"],
+                    "runId": identity,
+                    "progress": safe,
+                },
+            )
+        return True
+    except Exception as exc:  # noqa: BLE001 -- optional live telemetry cannot change inference
+        logger.warning("ai_usage_progress_failed error_class=%s", type(exc).__name__)
+        return False
 
 
 _TRANSIENT_SQLSTATES = {
@@ -118,7 +202,9 @@ class Task:
                         )
                 return
             except Exception as exc:
-                sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+                sqlstate = getattr(exc, "sqlstate", None) or getattr(
+                    exc, "pgcode", None
+                )
                 if attempt + 1 < max_attempts and _is_transient_error(exc):
                     logger.warning(
                         "ai_usage_write_retry event=%s attempt=%d error_class=%s sqlstate=%s",
@@ -286,8 +372,11 @@ async def observe(settings, model, call_type):
         "callType": call_type,
         "startedAt": now(),
     }
+    if call_type == "research" and _research_run.get() is not None:
+        record["researchRunId"] = _research_run.get()
     await task.write("start_call", record)
     record.update(status="RUNNING", usage={}, before={})
+    call_token = _current_call.set((task, record))
     before_elapsed = 0.0
     try:
         snapshot_started = monotonic()
@@ -300,6 +389,7 @@ async def observe(settings, model, call_type):
             before_elapsed = monotonic() - snapshot_started
         yield record
     except BaseException as exc:
+        _capture_research_progress(record, exc)
         if not (isinstance(exc, GeneratorExit) and record["status"] == "SUCCEEDED"):
             task.business_status = (
                 "CANCELLED"
@@ -342,7 +432,14 @@ async def observe(settings, model, call_type):
             record["status"] = "UNCERTAIN"
         record["finishedAt"] = now()
         record["tokens"] = tokens(record.pop("usage", {}))
-        await task.write("finish_call", record)
+        try:
+            await task.write("finish_call", record)
+        finally:
+            try:
+                _current_call.reset(call_token)
+            except ValueError:
+                if _current_call.get() == (task, record):
+                    _current_call.set(None)
         if cancelled is not None:
             raise cancelled
 
@@ -351,6 +448,7 @@ async def trace_inference(settings, *, model, call_type, operation):
     async with observe(settings, model, call_type) as record:
         result = await operation()
         if record is not None:
+            _capture_research_progress(record, result)
             record.update(
                 status="SUCCEEDED",
                 usage=result.get("usage", {})

@@ -113,6 +113,9 @@ async def test_independent_service_cancels_and_awaits_active_public_collection(
         raising=False,
     )
     monkeypatch.setattr(mod, "_schedule_recalled_fund_nav_runs", collect, raising=False)
+    monkeypatch.setattr(
+        mod, "_research_model_running", AsyncMock(return_value=False), raising=False
+    )
     service = asyncio.create_task(
         mod.run_opportunity_fund_nav_service(object(), stop_event=stop)
     )
@@ -120,6 +123,38 @@ async def test_independent_service_cancels_and_awaits_active_public_collection(
     stop.set()
     await asyncio.wait_for(service, 1)
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running", [True, False])
+async def test_optional_warmup_defers_each_poll_while_research_is_running(
+    monkeypatch, running
+):
+    mod = module()
+    stop, checked = asyncio.Event(), asyncio.Event()
+
+    async def busy(pool):
+        checked.set()
+        return running
+
+    async def runs(pool):
+        stop.set()
+        return ["latest"]
+
+    collect = AsyncMock(return_value={"claimed": 0})
+    lookup = AsyncMock(side_effect=runs)
+    monkeypatch.setattr(mod, "_research_model_running", busy, raising=False)
+    monkeypatch.setattr(mod, "_latest_ready_runs", lookup)
+    monkeypatch.setattr(mod, "_schedule_recalled_fund_nav_runs", collect)
+    service = asyncio.create_task(
+        mod.run_opportunity_fund_nav_service(object(), stop_event=stop)
+    )
+    await asyncio.wait_for(checked.wait(), 1)
+    await asyncio.sleep(0)
+    if running:
+        stop.set()
+    await asyncio.wait_for(service, 1)
+    assert lookup.await_count == (0 if running else 1)
 
 
 @pytest.mark.asyncio

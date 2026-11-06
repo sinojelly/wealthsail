@@ -6,6 +6,7 @@ import json
 import os
 from urllib.parse import urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
@@ -31,7 +32,9 @@ async def fixture(*, manual=True, count=1, topic_values=None, source_checked=Fal
     tx = conn.transaction()
     await tx.start()
     tenants, actors = [uuid4(), uuid4()], [uuid4(), uuid4()]
-    now = await conn.fetchval("SELECT clock_timestamp()-interval '1 hour'")
+    now = (await conn.fetchval("SELECT clock_timestamp()-interval '1 hour'")).astimezone(
+        ZoneInfo("Asia/Shanghai")
+    )
     try:
         for tenant, actor in zip(tenants, actors):
             await conn.execute("INSERT INTO identity.tenants(id,name) VALUES($1,'opportunity cache fixture')", tenant)
@@ -306,7 +309,9 @@ async def test_api_reader_keeps_polarity_and_local_nav_live_after_cached_discove
     async with fixture(topic_values=topic_values, source_checked=True) as (conn, run, _now, tenants, actors, _topics):
         code = "990042"
         await conn.execute("INSERT INTO reference.fund_master(fund_code,fund_name,fund_type,updated_at) VALUES($1,'隔离微波量子ETF联接A','股票型-指数',clock_timestamp()-interval '1 hour')", code)
-        viewed = await conn.fetchval("SELECT clock_timestamp()-interval '1 second'")
+        viewed = (await conn.fetchval("SELECT clock_timestamp()-interval '1 second'")).astimezone(
+            ZoneInfo("Asia/Shanghai")
+        )
         monkeypatch.setattr(nav_fixture, "NOW", viewed)
         history = nav_fixture.history(code)
         await conn.execute("INSERT INTO market.fund_nav_chart_histories(fund_code,retrieved_at,available_at,payload) VALUES($1,$2,$2,$3::jsonb)", code, viewed, json.dumps(history))

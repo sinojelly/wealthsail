@@ -498,9 +498,11 @@ async def _recover_research(settings, identity, *, on_exit=None, on_progress=Non
         async with asyncio.timeout(RECOVERY_SECONDS):
             state = await research_status(settings, identity, cancel=True)
             while state is not None:
+                # A bound acknowledgement is useful diagnosis even while exit
+                # remains unconfirmed. The Worker alone decides guard release.
+                await _notify(on_exit, state)
                 await _notify(on_progress, state.get("progress"))
                 if state["exitConfirmed"]:
-                    await _notify(on_exit, state)
                     return state
                 await asyncio.sleep(0.25)
                 state = await research_status(settings, identity)
@@ -517,8 +519,7 @@ async def _remote_research(settings, payload, *, timeout, identity, on_exit, on_
                 state = await research_status(settings, identity)
                 if state is not None:
                     await _notify(on_progress, state.get("progress"))
-                    if state["exitConfirmed"]:
-                        await _notify(on_exit, state)
+                    await _notify(on_exit, state)
             except Exception:
                 pass
 

@@ -13,6 +13,7 @@ import {
 } from "../../../app/auth-session";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText } from "../research-reading";
+import { ResearchProgressDetails } from "./ResearchProgressDetails";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const componentLabels: Record<string, string> = {
@@ -442,7 +443,11 @@ function Outcome({
 }
 
 function WorkloadDetails({ workload }: { workload?: api.ResearchWorkload }) {
-  if (workload?.version !== "research-workload-v1") return null;
+  if (
+    workload?.version !== "research-workload-v1" &&
+    workload?.version !== "research-workload-v2"
+  )
+    return null;
   const count = (value?: number | null) => value ?? "未知";
   const elapsed = (value?: number) =>
     value == null ? "未知" : `${(value / 1000).toFixed(2)}秒`;
@@ -451,13 +456,22 @@ function WorkloadDetails({ workload }: { workload?: api.ResearchWorkload }) {
     PARTIAL: "部分观测",
     UNAVAILABLE: "无可用观测",
   }[workload.executionCoverage];
+  const operationOnly =
+    workload.version === "research-workload-v2" &&
+    workload.modelElapsedScope === "MODEL_OPERATION";
+  const statistics =
+    workload.executionStatistics?.version === "research-execution-stats-v1"
+      ? workload.executionStatistics
+      : undefined;
   return (
     <details aria-label="研究工作量">
       <summary>研究工作量（只读观测）</summary>
       <p>
         Prompt：
         {workload.promptBytes == null ? "未知" : `${workload.promptBytes}字节`}
-        {" · "}模型阶段耗时：{elapsed(workload.modelElapsedMs)}
+        {" · "}
+        {operationOnly ? "模型操作耗时" : "模型阶段耗时"}：
+        {elapsed(workload.modelElapsedMs)}
         {" · "}来源核验耗时：{elapsed(workload.sourceVerificationElapsedMs)}
       </p>
       <p>
@@ -473,13 +487,97 @@ function WorkloadDetails({ workload }: { workload?: api.ResearchWorkload }) {
         {" · "}页面查找：{count(workload.observedPageFinds)}
       </p>
       <p>请求前硬拦截：未具备；供应商重试：未知。</p>
+      {statistics && (
+        <p>
+          完全相同查询重复：{count(statistics.duplicateSearchQueries)} ·
+          完全相同页面目标重复打开：{count(statistics.repeatedPageOpens)} ·
+          来源引用复用次数：未知
+        </p>
+      )}
+      <ResearchProgressDetails progress={workload.executionProgress} />
+      <ModelExecutionDetails execution={workload.modelExecution} />
       {workload.searchSoftLimitExceeded === true && (
         <p>观测超过计划参考线，未具备请求前硬拦截</p>
       )}
       <p>
-        模型阶段包含用量采集。仅展示已记录观测，不据字节或比例推算token及费用。
+        {operationOnly
+          ? "独立账号额度采集不计入模型操作耗时。"
+          : workload.version === "research-workload-v1"
+            ? "模型阶段包含用量采集。"
+            : "模型耗时口径未记录。"}
+        仅展示已记录观测，不据字节或比例推算token及费用。
       </p>
     </details>
+  );
+}
+
+function ModelExecutionDetails({
+  execution,
+}: {
+  execution?: api.ResearchModelExecution;
+}) {
+  const state =
+    {
+      QUEUED: "等待执行",
+      RUNNING: "进程运行中",
+      TERMINATING: "正在终止",
+      EXITED: "进程已退出",
+      UNKNOWN: "未知",
+    }[execution?.state ?? "UNKNOWN"] ?? "未知";
+  const reasons: Record<string, string> = {
+    CLI_MODEL_TIMEOUT: "模型执行达到时限",
+    RUNNER_OPERATION_TIMEOUT: "Runner 操作超时",
+    WORKER_RPC_TIMEOUT: "Worker 接收响应超时",
+    WORKER_OUTER_TIMEOUT: "Worker 外层超时",
+    RUNNER_DISCONNECTED: "Runner 连接中断",
+    MODEL_EXIT_UNCONFIRMED: "模型退出待确认",
+    COMPLETED: "调用完成",
+    CLI_FAILED: "CLI 执行失败",
+    CANCELLED: "调用已取消",
+    CLIENT_DISCONNECTED: "调用连接中断",
+  };
+  const confirmed =
+    execution?.exitConfirmed === true &&
+    execution.state === "EXITED" &&
+    execution.reaped === true &&
+    execution.descendantsConfirmed === true &&
+    execution.dispatchStarted !== false;
+  return (
+    <section aria-label="模型进程状态">
+      <p>
+        {execution?.dispatchStarted === false
+          ? "未派发模型"
+          : `进程退出：${confirmed ? "已确认" : execution?.exitConfirmed === false ? "待确认" : "未知"}`}
+      </p>
+      <p>
+        终止请求：
+        {execution?.terminationRequested === true
+          ? "已请求"
+          : execution?.terminationRequested === false
+            ? "未请求"
+            : "未知"}
+      </p>
+      <p>
+        生命周期状态：{state} · 进程回收：
+        {execution?.reaped === true
+          ? "已确认"
+          : execution?.reaped === false
+            ? "未确认"
+            : "未知"}{" "}
+        · 后代进程清理：
+        {execution?.descendantsConfirmed === true
+          ? "已确认"
+          : execution?.descendantsConfirmed === false
+            ? "未确认"
+            : "未知"}
+      </p>
+      {execution?.terminationReason && (
+        <p>结束原因：{reasons[execution.terminationReason] ?? "未知"}</p>
+      )}
+      {execution?.completedAt && (
+        <p>生命周期完成时间：{timeLabel(execution.completedAt)}</p>
+      )}
+    </section>
   );
 }
 

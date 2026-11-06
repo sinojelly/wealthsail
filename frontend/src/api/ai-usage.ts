@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { privateQueryKey, useAuthSession } from "../app/auth-session";
 import { HttpError, request } from "./client";
+import type { ResearchProgress } from "./research-progress";
 
 export interface AiQuotaSnapshot {
   status: string;
@@ -29,6 +30,7 @@ export interface AiTokens {
 }
 
 export interface AiUsageCall extends AiTokens {
+  researchProgress?: ResearchProgress;
   id: string;
   model: string;
   callType: string;

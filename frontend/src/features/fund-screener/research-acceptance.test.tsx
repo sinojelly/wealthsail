@@ -646,6 +646,99 @@ it("keeps unavailable workload observations unknown rather than inventing zeroes
   ).not.toBeInTheDocument();
 });
 
+it("labels v2 model-only duration and exact repeated work without rewriting legacy timing", async () => {
+  vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+    Object.assign(outcome(), {
+      researchWorkload: {
+        version: "research-workload-v2",
+        modelElapsedScope: "MODEL_OPERATION",
+        modelElapsedMs: 12345,
+        executionCoverage: "COMPLETE",
+        observedWebToolCalls: 5,
+        observedSearchQueries: 4,
+        observedPageOpens: 2,
+        observedPageFinds: 0,
+        preDispatchEnforcement: false,
+        providerRetries: null,
+        searchSoftLimitExceeded: false,
+        executionStatistics: {
+          version: "research-execution-stats-v1",
+          coverage: "COMPLETE",
+          completedToolActions: 5,
+          distinctSearchQueries: 2,
+          duplicateSearchQueries: 2,
+          distinctPageTargets: 1,
+          repeatedPageOpens: 1,
+          sourceReferenceReuses: null,
+          preDispatchEnforcement: false,
+          providerRetries: null,
+        },
+      },
+    }),
+  );
+  renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+  await userEvent.click(await screen.findByText("研究工作量（只读观测）"));
+  const workload = within(screen.getByLabelText("研究工作量"));
+  expect(workload.getByText(/模型操作耗时：12.35秒/)).toBeVisible();
+  expect(
+    workload.getByText(/完全相同查询重复：2.*完全相同页面目标重复打开：1/),
+  ).toBeVisible();
+  expect(
+    workload.getByText(/独立账号额度采集不计入模型操作耗时/),
+  ).toBeVisible();
+  expect(workload.queryByText(/模型阶段包含用量采集/)).not.toBeInTheDocument();
+});
+
+it.each([
+  [true, true, "进程退出：已确认", "终止请求：已请求"],
+  [true, null, "进程退出：未知", "终止请求：未知"],
+  [false, null, "未派发模型", "终止请求：未知"],
+] as const)(
+  "shows actual safe lifecycle confirmation for dispatch=%s exit=%s",
+  async (dispatchStarted, exitConfirmed, exitLabel, terminationLabel) => {
+    vi.mocked(api.getResearchAcceptance).mockResolvedValue(
+      Object.assign(outcome(), {
+        researchWorkload: {
+          version: "research-workload-v2",
+          executionCoverage: "UNAVAILABLE",
+          observedWebToolCalls: null,
+          observedSearchQueries: null,
+          observedPageOpens: null,
+          observedPageFinds: null,
+          preDispatchEnforcement: false,
+          providerRetries: null,
+          searchSoftLimitExceeded: null,
+          modelExecution: {
+            state: exitConfirmed ? "EXITED" : "UNKNOWN",
+            dispatchStarted,
+            exitConfirmed,
+            reaped: exitConfirmed,
+            descendantsConfirmed: exitConfirmed,
+            terminationRequested: exitConfirmed,
+            terminationReason: exitConfirmed ? "CLI_MODEL_TIMEOUT" : null,
+            queuedAt: null,
+            startedAt: null,
+            completedAt: null,
+            elapsedMs: null,
+            ownerToken: "PRIVATE",
+            identityBinding: "PRIVATE",
+            callId: "PRIVATE",
+          },
+        },
+      }),
+    );
+    renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
+    await userEvent.click(await screen.findByText("研究工作量（只读观测）"));
+    const execution = within(screen.getByLabelText("模型进程状态"));
+    expect(execution.getByText(exitLabel)).toBeVisible();
+    expect(execution.getByText(terminationLabel)).toBeVisible();
+    expect(execution.queryByText(/PRIVATE/)).not.toBeInTheDocument();
+    if (dispatchStarted === false)
+      expect(execution.queryByText("进程退出：已确认")).not.toBeInTheDocument();
+    expect(refreshApi.startResearchRefresh).not.toHaveBeenCalled();
+  },
+);
+
 it("does not add fabricated workload observations to old outcomes without metadata", async () => {
   renderWithSession(<ResearchAcceptance runId={runId} state="FAILED" />);
   await screen.findByText("部分验收成果·仅供观察，未正式发布");

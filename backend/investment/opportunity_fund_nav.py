@@ -11,6 +11,7 @@ import logging
 from time import perf_counter
 from uuid import UUID, uuid4
 
+from backend.ai_usage.tracker import SNAPSHOT_TOTAL_BUDGET_SECONDS
 from backend.common.database import system_connection
 from backend.funds.nav_history import local, valid_points
 from backend.funds.nav_window import NAV_RESEARCH_MIN_SAMPLES, NAV_SYNC_TARGET_SAMPLES
@@ -30,10 +31,15 @@ from backend.investment.opportunity_fund_recall import (
 )
 from backend.investment.theme_graph import collect_theme_nav_histories
 from backend.macro.research_diagnostics import safe_error_class
+from backend.integrations.research_lifecycle import research_deadlines
 
 MAX_RECALLED_NAV_FUNDS = 24
 MAX_READY_NAV_RUNS = 4
 _LEASE_SECONDS = 360  # Collector has a 240 second global deadline.
+# Scheduling priority only: expiry never proves model exit or releases a guard.
+_MODEL_PRIORITY_WINDOW_SECONDS = (
+    research_deadlines(1200)["workerSeconds"] + SNAPSHOT_TOTAL_BUDGET_SECONDS
+)
 _TRIGGER = "OPPORTUNITY_NAV"
 logger = logging.getLogger("wealthsail.opportunity_fund_nav")
 
@@ -340,6 +346,24 @@ async def _latest_ready_run(pool):
     return runs[0] if runs else None
 
 
+async def _research_model_running(pool):
+    """Yield optional warming to an unfinished research invocation.
+
+    A historical UNCERTAIN result or an old result-less orphan may retain its
+    guard indefinitely. Only fresh unfinished invocations receive scheduling
+    priority; the finite observation window does not prove exit, change a
+    result, release occupation, or preempt an already started collection round.
+    """
+    async with system_connection(pool) as conn:
+        return await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM research.daily_research_model_guards g
+            LEFT JOIN research.daily_research_results r ON r.run_id=g.run_id
+            WHERE g.released_at IS NULL AND r.run_id IS NULL
+              AND g.acquired_at>=clock_timestamp()-$1*interval '1 second')""",
+            _MODEL_PRIORITY_WINDOW_SECONDS,
+        )
+
+
 async def _latest_ready_runs(pool):
     async with system_connection(pool) as conn:
         if await conn.fetchval("SELECT current_user") != "wealthsail_worker":
@@ -374,7 +398,10 @@ async def run_opportunity_fund_nav_service(
         while not stop_event.is_set():
             started = perf_counter()
             try:
-                run_ids = await _latest_ready_runs(pool)
+                busy = await _research_model_running(pool)
+                if busy:
+                    logger.info("opportunity_nav_deferred reason=RESEARCH_RUNNING")
+                run_ids = [] if busy else await _latest_ready_runs(pool)
                 if run_ids and not stop_event.is_set():
                     result = await _schedule_recalled_fund_nav_runs(pool, run_ids)
                     if result["claimed"]:

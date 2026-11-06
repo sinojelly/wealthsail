@@ -116,6 +116,48 @@ it("loads AI usage only when selected and expands each inference while keeping b
   expect(screen.getByText(/缓存输入已包含在输入/)).toBeInTheDocument();
 });
 
+it("shows safe live CLI progress without confusing a completed model event with process exit", async () => {
+  const user = userEvent.setup();
+  const data = structuredClone(aiUsageFixture);
+  Object.assign(data.tasks[0].calls[0], {
+    status: "RUNNING",
+    finishedAt: null,
+    researchProgress: {
+      version: "research-progress-v1",
+      startedAt: "2026-11-06T15:14:06+00:00",
+      lastEventAt: "2026-11-06T15:14:31+00:00",
+      elapsedMs: 25000,
+      phase: "WAITING_TOOL",
+      completedToolActions: 5,
+      activeToolActions: 1,
+      waitingExternalTools: true,
+      modelCompleted: false,
+      observedSearchQueries: 4,
+      observedPageOpens: 2,
+      observedPageFinds: 1,
+      raw: "PRIVATE",
+    },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => response(data)),
+  );
+  renderWithSession(<OperationsPage />);
+  await user.click(screen.getByRole("tab", { name: "AI 用量" }));
+  await user.click(
+    await screen.findByRole("button", { name: /展开.*2 次推理/ }),
+  );
+  const observed = within(screen.getByLabelText("研究运行进度"));
+  expect(observed.getByText("执行观测：等待工具返回")).toBeVisible();
+  expect(observed.getByText(/已完成工具：5.*活动工具：1/)).toBeVisible();
+  expect(
+    observed.getByText(/实际搜索查询：4.*页面打开：2.*页面查找：1/),
+  ).toBeVisible();
+  expect(observed.getByText(/模型完成事件：未收到/)).toBeVisible();
+  expect(observed.getByText(/进程退出须由独立生命周期回执确认/)).toBeVisible();
+  expect(observed.queryByText(/PRIVATE/)).not.toBeInTheDocument();
+});
+
 it.each([
   ["BEFORE_MISSING", "推理前额度快照缺失，无法估算"],
   ["AFTER_MISSING", "推理后额度快照缺失，无法估算"],

@@ -152,6 +152,60 @@ async def test_failed_provider_is_cooled_down_without_private_tenant_jobs(monkey
         assert await conn.fetchval("SELECT count(*) FROM workflow.job_runs") == before
 
 
+@pytest.mark.parametrize("terminal", [None, "UNCERTAIN", "FAILED", "READY"])
+async def test_only_unfinished_guard_pauses_optional_warmup(monkeypatch, terminal):
+    async with fixture() as (conn, run, now, *_):
+        connection(monkeypatch, conn)
+        await conn.execute(
+            "INSERT INTO research.daily_research_model_guards(run_id,owner_token,acquired_at) VALUES($1,$2,$3)",
+            run,
+            uuid4(),
+            await conn.fetchval("SELECT clock_timestamp()"),
+        )
+        if terminal:
+            await conn.execute(
+                "INSERT INTO research.daily_research_results(run_id,status,recorded_at,payload,error_class) VALUES($1,$2,$3,$4::jsonb,$5)",
+                run,
+                terminal,
+                now,
+                "{}" if terminal == "READY" else None,
+                None if terminal == "READY" else "ValidationFailure",
+            )
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        assert hasattr(nav, "_research_model_running")
+        assert await nav._research_model_running(object()) is (terminal is None)
+
+
+async def test_old_orphan_guard_does_not_starve_optional_nav_or_change_exit_authority(
+    monkeypatch,
+):
+    async with fixture() as (conn, run, _now, *_):
+        connection(monkeypatch, conn)
+        owner = uuid4()
+        await conn.execute(
+            "INSERT INTO research.daily_research_model_guards(run_id,owner_token,acquired_at) VALUES($1,$2,clock_timestamp()-interval '1 hour')",
+            run,
+            owner,
+        )
+        await conn.execute("SET LOCAL ROLE wealthsail_worker")
+        assert await nav._research_model_running(object()) is False
+        assert (
+            await conn.fetchval(
+                "SELECT released_at IS NULL FROM research.daily_research_model_guards WHERE run_id=$1 AND owner_token=$2",
+                run,
+                owner,
+            )
+            is True
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM research.daily_research_results WHERE run_id=$1",
+                run,
+            )
+            == 0
+        )
+
+
 async def test_short_unproven_history_is_partial_with_failure_retry_window(monkeypatch):
     async with fixture() as (conn, run, _now, _tenants, _actors, topics):
         await prepare(conn, run, topics)

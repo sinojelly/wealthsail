@@ -73,8 +73,26 @@ export interface AcceptanceObservation {
   };
 }
 
+export interface ResearchModelExecution {
+  state: "QUEUED" | "RUNNING" | "TERMINATING" | "EXITED" | "UNKNOWN";
+  dispatchStarted: boolean | null;
+  terminationRequested: boolean | null;
+  reaped: boolean | null;
+  descendantsConfirmed: boolean | null;
+  exitConfirmed: boolean | null;
+  terminationReason: string | null;
+  queuedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  elapsedMs: number | null;
+}
+
 export interface ResearchWorkload {
-  version: "research-workload-v1";
+  version: "research-workload-v1" | "research-workload-v2";
+  modelElapsedScope?: "MODEL_OPERATION";
+  executionStatistics?: import("./research-progress").ResearchExecutionStatistics;
+  executionProgress?: import("./research-progress").ResearchProgress;
+  modelExecution?: ResearchModelExecution;
   promptBytes?: number;
   modelElapsedMs?: number;
   sourceVerificationElapsedMs?: number;

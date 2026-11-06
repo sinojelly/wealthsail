@@ -11,6 +11,7 @@ import {
 } from "../../../api/ai-usage";
 import { HttpError } from "../../../api/client";
 import { formatShanghaiTime } from "../format-time";
+import { ResearchProgressDetails } from "../../fund-screener/components/ResearchProgressDetails";
 
 const statuses: Record<string, { label: string; tone: string }> = {
   SUCCEEDED: { label: "成功", tone: "success" },
@@ -397,6 +398,9 @@ function Task({ task }: { task: AiUsageTask }) {
                         </td>
                         <td>
                           <Status value={call.status} />
+                          <ResearchProgressDetails
+                            progress={call.researchProgress}
+                          />
                           {call.errorClass ? (
                             <small className="ai-error-class">
                               {call.errorClass}

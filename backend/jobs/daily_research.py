@@ -12,7 +12,12 @@ import logging
 import socket
 from time import monotonic
 
-from backend.ai_usage.tracker import trace_inference, track_task
+from backend.ai_usage.tracker import (
+    record_research_progress,
+    research_progress_run,
+    trace_inference,
+    track_task,
+)
 from backend.common.database import (
     create_pool,
     system_connection,
@@ -28,6 +33,10 @@ from backend.integrations.codex_research import (
 from backend.integrations.daily_sources import (
     collect_daily_sources,
     verify_research_sources,
+)
+from backend.integrations.research_execution import (
+    sanitize_execution_progress,
+    sanitize_execution_statistics,
 )
 from backend.macro.daily_repository import (
     claim_daily_run,
@@ -85,6 +94,7 @@ from backend.macro.model_dispatch_repository import (
 
 logger = logging.getLogger("wealthsail.daily_research")
 PIPELINE_HEARTBEAT_SECONDS = 30
+RESEARCH_PROGRESS_SECONDS = 15
 
 
 def _cooldown_result(cooldown):
@@ -1044,6 +1054,7 @@ async def _execute_daily_research(
     model_ms, sources_ms = None, None
     execution_receipt, usage_observation = None, None
     execution_transport_reason = None
+    execution_statistics, execution_progress = None, None
 
     def confirmed_model_exit(value):
         nonlocal model_exit_confirmed, execution_state
@@ -1055,6 +1066,31 @@ async def _execute_daily_research(
     def capture_model_result(value):
         nonlocal raw
         raw = deepcopy(value)
+        capture_execution_observations(value)
+
+    def capture_execution_observations(value):
+        nonlocal execution_statistics, execution_progress
+        statistics = sanitize_execution_statistics(getattr(value, "execution_statistics", None))
+        progress = sanitize_execution_progress(getattr(value, "execution_progress", None))
+        if statistics is not None:
+            execution_statistics = statistics
+        if progress is not None:
+            execution_progress = progress
+
+    async def publish_progress(value):
+        nonlocal execution_progress
+        safe = sanitize_execution_progress(value)
+        if safe is not None:
+            execution_progress = safe
+            await record_research_progress(identity["runId"], safe)
+
+    async def monitor_local_progress():
+        while True:
+            await asyncio.sleep(RESEARCH_PROGRESS_SECONDS)
+            try:
+                await publish_progress(lifecycle.snapshot().get("progress"))
+            except Exception as exc:  # noqa: BLE001 -- optional observation only
+                logger.warning("daily_research_progress_failed error_class=%s", type(exc).__name__)
 
     try:
         if unavailable:
@@ -1063,12 +1099,13 @@ async def _execute_daily_research(
         selected_model = model or cli.get("selectedModel")
 
         async def operation():
-            nonlocal model_started, model_ms, model_operation_entered
+            nonlocal model_started, model_ms, model_operation_entered, execution_progress
             # This synchronous boundary precedes every possible CLI/RPC await.
             # If never entered, control flow proves no model was dispatched.
             model_operation_entered = True
             model_started = monotonic()
             timer = asyncio.timeout(deadlines["workerSeconds"])
+            progress_task = asyncio.create_task(monitor_local_progress()) if not remote_codex else None
             try:
                 async with timer:
                     if remote_codex:
@@ -1077,6 +1114,7 @@ async def _execute_daily_research(
                             timeout=settings.daily_research_timeout_seconds,
                             model=selected_model, identity=identity,
                             on_exit=confirmed_model_exit, on_output=capture_model_result,
+                            on_progress=publish_progress,
                             trace_usage=False,
                         )
                     else:
@@ -1093,14 +1131,24 @@ async def _execute_daily_research(
                     exc.timeout_origin = "WORKER_OUTER_TIMEOUT"
                 raise
             finally:
+                if progress_task is not None:
+                    progress_task.cancel()
+                    await asyncio.gather(progress_task, return_exceptions=True)
                 if not remote_codex:
-                    confirmed_model_exit(lifecycle.snapshot())
+                    snapshot = lifecycle.snapshot()
+                    confirmed_model_exit(snapshot)
+                    progress = sanitize_execution_progress(snapshot.get("progress"))
+                    if progress is not None:
+                        # Preserve the last event without making telemetry DB
+                        # writes part of model/account completion.
+                        execution_progress = progress
                 model_ms = max(0, int((monotonic() - model_started) * 1000))
 
         # Account snapshots have their own bounded budget outside this operation.
-        raw = await trace_inference(
-            settings, model=selected_model, call_type="research", operation=operation,
-        )
+        with research_progress_run(identity["runId"]):
+            raw = await trace_inference(
+                settings, model=selected_model, call_type="research", operation=operation,
+            )
         execution_receipt = getattr(raw, "execution_receipt", None)
         execution_transport_reason = getattr(raw, "execution_receipt_transport_reason", None)
         usage_observation = getattr(raw, "usage", None)
@@ -1196,6 +1244,7 @@ async def _execute_daily_research(
             error = "ResearchValidationError"
             diagnostics = _log_research_failure(audit_error, current_stage, run_id)
     except asyncio.CancelledError as exc:
+        capture_execution_observations(exc)
         confirmed_model_exit(getattr(exc, "research_execution_state", None))
         execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
@@ -1214,6 +1263,7 @@ async def _execute_daily_research(
         )
         raise
     except TimeoutError as exc:
+        capture_execution_observations(exc)
         confirmed_model_exit(getattr(exc, "research_execution_state", None))
         execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
@@ -1222,6 +1272,7 @@ async def _execute_daily_research(
         result["status"], error = "UNCERTAIN", "TimeoutError"
         diagnostics = _log_research_failure(exc, current_stage, run_id)
     except Exception as exc:  # noqa: BLE001
+        capture_execution_observations(exc)
         execution_transport_reason = execution_transport_reason or getattr(exc, "execution_receipt_transport_reason", None)
         execution_receipt = execution_receipt or getattr(exc, "execution_receipt", None)
         usage_observation = usage_observation or getattr(exc, "usage", None)
@@ -1263,6 +1314,7 @@ async def _execute_daily_research(
         execution_receipt = execution_receipt or getattr(raw, "execution_receipt", None)
         execution_transport_reason = execution_transport_reason or getattr(raw, "execution_receipt_transport_reason", None)
         usage_observation = usage_observation or getattr(raw, "usage", None)
+        capture_execution_observations(raw)
         logger.info(
             "daily_research_model_exit run_id=%s exit_confirmed=%s dispatch_started=%s state=%s reason=%s",
             run_id, model_exit_confirmed, model_operation_entered,
@@ -1277,6 +1329,9 @@ async def _execute_daily_research(
             len(prompt.encode("utf-8")), execution_receipt, usage_observation,
             model_ms=model_ms, sources_ms=sources_ms,
             transport_reason=execution_transport_reason,
+            statistics=execution_statistics, progress=execution_progress,
+            model_timing_scope="MODEL_OPERATION", lifecycle=execution_state,
+            dispatch_started=model_operation_entered,
         )
         logger.info(
             "daily_research_workload run_id=%s prompt_bytes=%s model_ms=%s source_ms=%s search_queries=%s execution_coverage=%s",

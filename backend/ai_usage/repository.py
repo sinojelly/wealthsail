@@ -5,6 +5,7 @@ from uuid import UUID
 
 from backend.common.database import system_connection, tenant_transaction
 from backend.ai_usage.calculation import aggregate_task, quota_delta
+from backend.integrations.research_execution import sanitize_execution_progress
 
 
 def dump(value):
@@ -13,6 +14,13 @@ def dump(value):
 
 def decode(value):
     return json.loads(value) if isinstance(value, str) else value
+
+
+def _run_identity(value):
+    try:
+        return str(UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 async def persist(pool, tenant_id, user_id, event, data):
@@ -43,16 +51,46 @@ async def persist(pool, tenant_id, user_id, event, data):
                     data.get("errorClass"),
                 )
             elif event == "start_call":
+                run_id = (
+                    _run_identity(data.get("researchRunId"))
+                    if data["callType"] == "research"
+                    else None
+                )
                 await conn.execute(
-                    """INSERT INTO research.ai_usage_calls(id,task_id,started_at,model,call_type)
-                    VALUES($1,$2,$3,$4,$5)""",
+                    """INSERT INTO research.ai_usage_calls(id,task_id,started_at,model,call_type,details)
+                    VALUES($1,$2,$3,$4,$5,$6::jsonb)""",
                     UUID(data["id"]),
                     UUID(data["taskId"]),
                     data["startedAt"],
                     data["model"],
                     data["callType"],
+                    dump({"researchRunId": run_id} if run_id else {}),
+                )
+            elif event == "call_progress":
+                progress = sanitize_execution_progress(data.get("progress"))
+                run_id = _run_identity(data.get("runId"))
+                if progress is None or run_id is None:
+                    return
+                await conn.execute(
+                    """UPDATE research.ai_usage_calls
+                    SET details=jsonb_set(details,'{researchProgress}',$3::jsonb)
+                    WHERE id=$1 AND task_id=$2 AND status='RUNNING' AND finished_at IS NULL
+                      AND call_type='research' AND details->>'researchRunId'=$4
+                      AND (NOT details ? 'researchProgress' OR (
+                        details->'researchProgress'->>'startedAt'=$5
+                        AND details->'researchProgress'->'elapsedMs'<=$3::jsonb->'elapsedMs'))""",
+                    UUID(data["id"]),
+                    UUID(data["taskId"]),
+                    dump(progress),
+                    run_id,
+                    progress["startedAt"],
                 )
             elif event == "finish_call":
+                details = {key: data[key] for key in ("before", "after", "tokens")}
+                progress = sanitize_execution_progress(data.get("researchProgress"))
+                run_id = _run_identity(data.get("researchRunId"))
+                if progress is not None and run_id:
+                    details["researchProgress"] = progress
                 fingerprint = (data.get("before") or {}).get("accountFingerprint")
                 if fingerprint:
                     # Acquire before any call row lock. Concurrent completions
@@ -63,14 +101,17 @@ async def persist(pool, tenant_id, user_id, event, data):
                     )
                 await conn.execute(
                     """UPDATE research.ai_usage_calls SET finished_at=$2,status=$3,model=$4,error_class=$5,
-                    details=$6::jsonb,account_fingerprint=$7 WHERE id=$1""",
+                    details=details || CASE WHEN $8::text IS NULL OR details->>'researchRunId'=$8
+                      THEN $6::jsonb ELSE $6::jsonb-'researchProgress' END,
+                    account_fingerprint=$7 WHERE id=$1""",
                     UUID(data["id"]),
                     data["finishedAt"],
                     data["status"],
                     data["model"],
                     data.get("errorClass"),
-                    dump({key: data[key] for key in ("before", "after", "tokens")}),
+                    dump(details),
                     fingerprint,
+                    run_id,
                 )
                 await conn.execute(
                     "SELECT research.mark_ai_usage_overlap($1)", UUID(data["id"])
@@ -79,6 +120,7 @@ async def persist(pool, tenant_id, user_id, event, data):
 
 def call_dto(row):
     details = decode(row.get("details")) or {}
+    progress = sanitize_execution_progress(details.get("researchProgress"))
     return {
         "id": str(row["id"]),
         "model": row["model"],
@@ -96,6 +138,7 @@ def call_dto(row):
             details.get("after"),
             concurrent=row.get("concurrent", False),
         ),
+        **({"researchProgress": progress} if progress is not None else {}),
     }
 
 
@@ -180,4 +223,3 @@ async def reconcile_stale_calls(conn, *, limit: int = 100) -> str:
         """,
         limit,
     )
-
