@@ -214,8 +214,10 @@ def _industry_research_view(packet):
     return result
 
 
-def model_packet(packet):
+def model_packet(packet, *, version="daily-model-input-v1"):
     """One price table, current evidence and previous fund coordinates, no history dumps."""
+    if version not in {"daily-model-input-v1", "daily-model-input-v2"}:
+        raise ValueError("unsupported model input projection version")
     result = _pick(
         packet,
         (
@@ -357,6 +359,10 @@ def model_packet(packet):
             seen.add(key)
             prior.append(_plan(row))
     result["previousFundPlans"] = prior[:46]
+    if version == "daily-model-input-v2":
+        from backend.macro.model_input_v2 import compact_model_input
+
+        return compact_model_input(result, packet)
     return result
 
 
