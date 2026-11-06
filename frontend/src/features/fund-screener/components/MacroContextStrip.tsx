@@ -19,6 +19,7 @@ import { researchSummary } from "../research-reading";
 import DeterministicRepairNotice from "./DeterministicRepairNotice";
 import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
+import TopicFundRecommendations from "./TopicFundRecommendations";
 
 function MacroOverview({ data }: { data: OpportunityContext }) {
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
@@ -362,6 +363,21 @@ export default function MacroContextStrip({
                     以下主题来自最近成功报告，保留原研究日期；今日主题尚未更新。
                   </p>
                 )}
+                <TopicFundRecommendations
+                  runId={topicResearchId}
+                  state={
+                    retainedTopics
+                      ? "READY"
+                      : (daily?.pipeline?.state ?? daily?.state)
+                  }
+                  completedAt={
+                    retainedTopics
+                      ? daily?.reportCompletedAt
+                      : daily?.pipeline
+                        ? daily.pipeline.finishedAt
+                        : daily?.completedAt
+                  }
+                />
                 <ResearchTopicRegistry
                   runId={topicResearchId}
                   state={
