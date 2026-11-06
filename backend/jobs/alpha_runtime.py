@@ -13,13 +13,16 @@ async def run_alpha_runtime(
 ):
     stop_event = stop_event or asyncio.Event()
     if services is None:
+        from backend.investment.opportunity_fund_nav import (
+            run_opportunity_fund_nav_service,
+        )
         from backend.jobs.alpha_public import run_alpha_public_service
         from backend.jobs.alpha_opportunities import run_alpha_opportunity_service
         from backend.jobs.daily_research import run_daily_research_service
         from backend.jobs.research_archive import run_research_archive_service
 
         # Recovery drains existing frozen jobs even after inference is disabled.
-        services = [run_research_archive_service]
+        services = [run_research_archive_service, run_opportunity_fund_nav_service]
         if preferred_research_request_mode(settings) is not None:
             from backend.jobs.research_debug import run_debug_research_service
 
