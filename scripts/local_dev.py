@@ -600,7 +600,6 @@ def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict
     require_tools(env)
     check_ports([args.db_port, args.api_port, args.web_port])
     check_stop_request()
-    settings = configure(args)
     VENV_PY = select_python(env, skip_install=args.skip_install)
     print(f"Using Python environment: {VENV_PY.parent.parent}", flush=True)
     if not args.skip_install:
@@ -613,6 +612,24 @@ def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict
             command.extend(["--store-dir", str(LOCAL / "cache/pnpm")])
         run(command, {**env, "CI": "true"}, cwd=ROOT / "frontend")
         check_stop_request()
+    # A fresh launcher may use bare Python: pip installed into VENV_PY, not
+    # this supervisor. Generate configuration with that prepared interpreter.
+    configuration_keys = (
+        "DAILY_RESEARCH_ENABLED", "DAILY_RESEARCH_SCHEDULE_MODE",
+        "DAILY_RESEARCH_SCHEDULE_TIME", "DAILY_RESEARCH_START_WINDOW_MINUTES",
+        "DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS", "DAILY_RESEARCH_DEBUG_ENABLED",
+        "DAILY_RESEARCH_CODEX_PATH", "DAILY_RESEARCH_MODEL", "DAILY_RESEARCH_AUDIT_DIR",
+        "PRE_MARKET_REPORTS_ENABLED", "MORNING_OPPORTUNITY_PUSH_ENABLED",
+        "FUND_1430_ENABLED", "POST_MARKET_REVIEW_ENABLED", "INTRADAY_TRACKING_ENABLED",
+        "CODEX_PATH", "CODEX_MODEL", "ALPHA_PUBLIC_ENABLED", "ALPHA_OPPORTUNITY_ENABLED",
+        "WECOM_OPPORTUNITY_WEBHOOK_URL", "OPPORTUNITY_TENANT_ID", "OPPORTUNITY_USER_ID",
+    )
+    configuration_env = {**env, **{key: os.environ[key] for key in configuration_keys
+                                  if key in os.environ}}
+    run([str(VENV_PY), str(Path(__file__).resolve()), "--configure",
+         "--db-port", str(args.db_port), "--web-port", str(args.web_port)], configuration_env)
+    settings = json.loads((LOCAL / "secrets.json").read_text("utf-8"))
+    check_stop_request()
     run([str(VENV_PY), "-c", "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai')"], env)
     print("Building frontend...", flush=True)
     run(["pnpm.cmd", "build"], env, cwd=ROOT / "frontend")
@@ -634,6 +651,7 @@ def main() -> None:
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-macro", action="store_true")
     parser.add_argument("--initialize", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--configure", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
@@ -642,6 +660,9 @@ def main() -> None:
     env = child_environment(dict(os.environ), LOCAL)
     env.update({"WS_LOCAL_API_TARGET": f"http://127.0.0.1:{args.api_port}",
                 "VITE_API_BASE_URL": "/api"})
+    if args.configure:
+        configure(args)
+        return
     if args.action == "refreshmacro":
         refresh_local_macro(args, env)
         return

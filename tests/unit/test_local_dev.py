@@ -100,3 +100,59 @@ def test_portable_archive_keeps_runtime_only_and_rejects_path_escape(tmp_path):
     with pytest.raises(ValueError, match="outside"):
         extract_postgres(archive, target)
     assert not (tmp_path / "escaped.txt").exists()
+
+
+@pytest.mark.parametrize("skip_install", [False, True])
+def test_runtime_configures_with_selected_python_after_installation(
+    tmp_path, monkeypatch, skip_install
+):
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from scripts import local_dev, local_postgres
+
+    selected = tmp_path / "venv with spaces/Scripts/python.exe"
+    settings = {"postgres_password": "fixture"}
+    calls = []
+    monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setattr(local_dev, "VENV_PY", selected)
+    monkeypatch.setattr(local_dev, "require_tools", lambda *_: None)
+    monkeypatch.setattr(local_dev, "check_ports", lambda *_: None)
+    monkeypatch.setattr(local_dev, "check_stop_request", lambda: None)
+    monkeypatch.setattr(local_dev, "select_python", lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        local_dev, "configure",
+        Mock(side_effect=AssertionError("bootstrap Python has no installed dependencies")),
+    )
+    monkeypatch.setattr(local_postgres, "postgres_bin", lambda *_: Path("postgres/bin"))
+    monkeypatch.setenv("DAILY_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("DAILY_RESEARCH_SCHEDULE_TIME", "08:15")
+    monkeypatch.setenv("CODEX_MODEL", "configured-local-model")
+    monkeypatch.setenv("DATABASE_URL", "remote-authority-must-not-be-inherited")
+    monkeypatch.setenv("MODEL_API_KEY", "private-key-must-not-be-inherited")
+
+    def run(command, env, **_kwargs):
+        calls.append(command)
+        if "--configure" in command:
+            assert command[0] == str(selected)
+            pip = [str(selected), "-m", "pip", "install"]
+            assert any(call[:4] == pip for call in calls[:-1]) is not skip_install
+            assert env["DAILY_RESEARCH_SCHEDULE_TIME"] == "08:15"
+            assert env["DAILY_RESEARCH_ENABLED"] == "false"
+            assert env["CODEX_MODEL"] == "configured-local-model"
+            assert "DATABASE_URL" not in env and "MODEL_API_KEY" not in env
+            (tmp_path / "secrets.json").write_text(json.dumps(settings), encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(local_dev, "run", run)
+    args = SimpleNamespace(
+        db_port=55432, api_port=8000, web_port=5173,
+        skip_install=skip_install, postgres_bin=None,
+    )
+    actual, binary_dir = local_dev.prepare_runtime(args, {"PATH": "tools"})
+    assert actual == settings and binary_dir == Path("postgres/bin")
+    configurations = [command for command in calls if "--configure" in command]
+    assert len(configurations) == 1
+    assert configurations[0][-4:] == ["--db-port", "55432", "--web-port", "5173"]
