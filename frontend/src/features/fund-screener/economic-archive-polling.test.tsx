@@ -85,11 +85,8 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 it.each(["PARTIAL", "AVAILABLE"] as const)(
-  "refreshes both real context queries from archived-pending to %s and stops after archival",
+  "refreshes the single opportunity context from archived-pending to %s and stops after archival",
   async (status) => {
-    vi.mocked(api.getMarketContext)
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockResolvedValue(context(status));
     vi.mocked(api.getOpportunityContext)
       .mockResolvedValueOnce(context("PENDING"))
       .mockResolvedValue(context(status));
@@ -106,13 +103,12 @@ it.each(["PARTIAL", "AVAILABLE"] as const)(
     expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
       status,
     );
-    expect(api.getMarketContext).toHaveBeenCalledTimes(2);
     expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(120_000);
     });
-    expect(api.getMarketContext).toHaveBeenCalledTimes(2);
     expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
+    expect(api.getMarketContext).not.toHaveBeenCalled();
     expect(api.refreshResearch).not.toHaveBeenCalled();
   },
 );
@@ -138,9 +134,6 @@ it("slows pending GETs after five minutes and refuses terminal, mismatched, miss
 });
 
 it("stops after three delayed recoveries following final context errors without claiming available research", async () => {
-  vi.mocked(api.getMarketContext)
-    .mockResolvedValueOnce(context("PENDING"))
-    .mockRejectedValue(new TypeError("offline"));
   vi.mocked(api.getOpportunityContext)
     .mockResolvedValueOnce(context("PENDING"))
     .mockRejectedValue(new TypeError("offline"));
@@ -148,26 +141,23 @@ it("stops after three delayed recoveries following final context errors without 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(15_050);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(2);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(600_000);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(5);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(5);
   expect(screen.getByLabelText("economic-delivery")).not.toHaveTextContent(
     "AVAILABLE",
   );
+  expect(api.getMarketContext).not.toHaveBeenCalled();
   expect(api.refreshResearch).not.toHaveBeenCalled();
 });
 
 it("recovers from a final temporary GET error after a bounded delay and stops once the archive is available", async () => {
-  for (const request of [api.getMarketContext, api.getOpportunityContext]) {
-    vi.mocked(request)
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockRejectedValueOnce(new TypeError("offline"))
-      .mockResolvedValue(context("PARTIAL"));
-  }
+  vi.mocked(api.getOpportunityContext)
+    .mockResolvedValueOnce(context("PENDING"))
+    .mockRejectedValueOnce(new TypeError("offline"))
+    .mockResolvedValue(context("PARTIAL"));
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(15_050);
@@ -184,39 +174,34 @@ it("recovers from a final temporary GET error after a bounded delay and stops on
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300_000);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(3);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(3);
+  expect(api.getMarketContext).not.toHaveBeenCalled();
   expect(api.refreshResearch).not.toHaveBeenCalled();
 });
 
 it("keeps the recovery allowance spent after successful pending responses for the same run", async () => {
-  for (const request of [api.getMarketContext, api.getOpportunityContext]) {
-    vi.mocked(request)
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockRejectedValueOnce(new TypeError("offline"))
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockRejectedValueOnce(new TypeError("offline"))
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockRejectedValueOnce(new TypeError("offline"))
-      .mockResolvedValueOnce(context("PENDING"))
-      .mockRejectedValue(new TypeError("offline"));
-  }
+  vi.mocked(api.getOpportunityContext)
+    .mockResolvedValueOnce(context("PENDING"))
+    .mockRejectedValueOnce(new TypeError("offline"))
+    .mockResolvedValueOnce(context("PENDING"))
+    .mockRejectedValueOnce(new TypeError("offline"))
+    .mockResolvedValueOnce(context("PENDING"))
+    .mockRejectedValueOnce(new TypeError("offline"))
+    .mockResolvedValueOnce(context("PENDING"))
+    .mockRejectedValue(new TypeError("offline"));
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(900_000);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(8);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(8);
   expect(screen.getByLabelText("economic-delivery")).not.toHaveTextContent(
     "AVAILABLE",
   );
+  expect(api.getMarketContext).not.toHaveBeenCalled();
   expect(api.refreshResearch).not.toHaveBeenCalled();
 });
 
 it("permits only one controlled reconnection check for the same pending run without starting research", async () => {
-  vi.mocked(api.getMarketContext)
-    .mockResolvedValueOnce(context("PENDING"))
-    .mockRejectedValue(new TypeError("offline"));
   vi.mocked(api.getOpportunityContext)
     .mockResolvedValueOnce(context("PENDING"))
     .mockRejectedValue(new TypeError("offline"));
@@ -229,21 +214,19 @@ it("permits only one controlled reconnection check for the same pending run with
     onlineManager.setOnline(true);
     await vi.advanceTimersByTimeAsync(20);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(3);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(3);
   await act(async () => {
     onlineManager.setOnline(false);
     onlineManager.setOnline(true);
     await vi.advanceTimersByTimeAsync(20);
   });
-  expect(api.getMarketContext).toHaveBeenCalledTimes(3);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(3);
+  expect(api.getMarketContext).not.toHaveBeenCalled();
   expect(api.refreshResearch).not.toHaveBeenCalled();
 });
 
 it("preserves ordinary context reconnection refreshes when there is no economic archive wait", async () => {
   const ordinary = { state: "UNKNOWN", items: [] };
-  vi.mocked(api.getMarketContext).mockResolvedValue(ordinary);
   vi.mocked(api.getOpportunityContext).mockResolvedValue(ordinary);
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
@@ -256,7 +239,7 @@ it("preserves ordinary context reconnection refreshes when there is no economic 
       await vi.advanceTimersByTimeAsync(20);
     });
   }
-  expect(api.getMarketContext).toHaveBeenCalledTimes(3);
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(3);
+  expect(api.getMarketContext).not.toHaveBeenCalled();
   expect(api.refreshResearch).not.toHaveBeenCalled();
 });

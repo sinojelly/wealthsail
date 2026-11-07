@@ -24,8 +24,12 @@ it("queries and preserves the selected macro history window", async () => {
   await user.click(await screen.findByRole("tab", { name: "市场证据" }));
   await user.selectOptions(screen.getByLabelText("宏观观察窗口"), "60");
   await waitFor(() =>
-    expect(api.context).toHaveBeenLastCalledWith(expect.anything(), 60),
+    expect(api.opportunity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ months: 60 }),
+      expect.anything(),
+    ),
   );
+  expect(api.context).not.toHaveBeenCalled();
 });
 
 it("refreshes the candidate list when research data is updated", async () => {

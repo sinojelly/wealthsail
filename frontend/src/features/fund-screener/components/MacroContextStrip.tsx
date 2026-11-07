@@ -73,13 +73,14 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
   const preview = researchSummary(full, 280);
   return (
     <section className="op-macro-overview" aria-label="今日宏观总纲">
-      <h3>
-        {report
-          ? data.dailyResearch?.state === "READY"
+      <h3>当前宏观事实</h3>
+      {report && (
+        <h4>
+          {data.dailyResearch?.state === "READY"
             ? "宏观周期与今日总纲"
-            : "历史宏观研判"
-          : "当前宏观事实"}
-      </h3>
+            : "历史宏观研判"}
+        </h4>
+      )}
       <p id={summaryId}>{expanded ? full : preview}</p>
       {full !== preview && (
         <button
@@ -189,6 +190,8 @@ export default function MacroContextStrip({
   data,
   error,
   loading = false,
+  refreshing = false,
+  refreshError = false,
   months = 36,
   onMonthsChange,
   directions = [],
@@ -204,6 +207,8 @@ export default function MacroContextStrip({
   data?: OpportunityContext;
   error: boolean;
   loading?: boolean;
+  refreshing?: boolean;
+  refreshError?: boolean;
   months?: number;
   onMonthsChange?: (months: number) => void;
   directions?: Direction[];
@@ -275,8 +280,18 @@ export default function MacroContextStrip({
           <strong>今日投资观察</strong>
           <span>{expanded ? "收起研究" : "展开研究"}</span>
         </button>
-        <p className="op-observation-meta">
-          <DailyResearchStatus data={ready?.dailyResearch} />
+        <p
+          className="op-observation-meta"
+          role="group"
+          aria-label="本次执行状态"
+        >
+          {daily && (
+            <>
+              本次执行：
+              <DailyResearchStatus data={daily} /> · 执行ID：
+              {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
+            </>
+          )}
         </p>
         {ready?.dailyResearch?.nextRunAt && (
           <small className="op-observation-next-run">
@@ -285,6 +300,13 @@ export default function MacroContextStrip({
         )}
       </header>
       {renderResearchRefresh?.()}
+      {ready && (
+        <p aria-label="展示报告来源" aria-live="polite">
+          {daily?.report
+            ? `展示报告：${daily.reportRunId ?? "身份未记录"} · 完成：${timeLabel(daily.reportCompletedAt)}`
+            : "展示报告：尚无有效报告；以下为当前已采集事实与只读观察。"}
+        </p>
+      )}
       {ready?.dailyResearch?.reportRunId && (
         <p>
           <button
@@ -316,8 +338,14 @@ export default function MacroContextStrip({
           <a href="/dashboard?scope=MINE">核对我的持仓</a>
         </p>
       )}
-      {error && <p role="alert">宏观数据读取失败，请稍后重试。</p>}
-      {loading && <p role="status">宏观数据加载中…</p>}
+      {error && <p role="alert">展示报告读取失败，请稍后重试。</p>}
+      {loading && <p role="status">正在加载展示报告…</p>}
+      {refreshing && (
+        <p role="status">正在更新展示报告，继续显示上一份已加载内容。</p>
+      )}
+      {refreshError && (
+        <p role="alert">展示报告刷新失败，继续显示上一份已加载内容。</p>
+      )}
       {expanded && (
         <div id={panelId} className="op-daily-expanded">
           <nav
@@ -368,8 +396,9 @@ export default function MacroContextStrip({
             aria-labelledby={`${panelId}-${tab}`}
             className="op-research-topic-body"
           >
-            {tab === "events" && (
+            {tab === "events" && ready && (
               <>
+                <MacroOverview data={ready} />
                 {retainedTopics && (
                   <p>
                     以下主题来自最近成功报告，保留原研究日期；今日主题尚未更新。
@@ -466,7 +495,6 @@ export default function MacroContextStrip({
                       </p>
                     </section>
                   )}
-                {ready && <MacroOverview data={ready} />}
                 {renderTrackedFunds?.()}
                 <QuantitativeScan
                   data={ready?.dailyResearch}

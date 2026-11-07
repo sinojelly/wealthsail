@@ -56,14 +56,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     queryKey: [subject, "directions"],
     queryFn: ({ signal }) => api.getDirections(signal),
   });
-  const marketArchiveInterval = useEconomicArchivePolling();
   const opportunityArchiveInterval = useEconomicArchivePolling();
-  const context = useQuery({
-    queryKey: [subject, "market-context", macroMonths],
-    queryFn: ({ signal }) => api.getMarketContext(signal, macroMonths),
-    refetchInterval: marketArchiveInterval.refetchInterval,
-    refetchOnReconnect: marketArchiveInterval.refetchOnReconnect,
-  });
   const unlinked = params.get("unlinked") === "1";
   const directionId = unlinked
     ? null
@@ -201,7 +194,14 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     enabled:
       directions.isSuccess && (unlinked || !directionId || indices.isSuccess),
   });
-  const radarData = opportunity.data ?? context.data;
+  // The opportunity response already contains the macro facts. A second source
+  // would briefly show a different view while the report query is still pending.
+  const radarData = opportunity.data;
+  const reportError =
+    !radarData &&
+    (opportunity.isError ||
+      directions.isError ||
+      (!unlinked && !!directionId && indices.isError));
   const mode = fundCode || selection.fundId ? "fund" : "index";
   const objectId =
     mode === "fund"
@@ -448,8 +448,12 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         scopeKey={studyScopeKey}
         selectedDirection={direction}
         selectedIndexId={indexId ?? undefined}
-        error={!radarData && (opportunity.isError || context.isError)}
-        loading={!radarData && (opportunity.isPending || context.isPending)}
+        error={reportError}
+        loading={!radarData && !reportError}
+        refreshing={!!radarData && opportunity.isFetching}
+        refreshError={
+          !!radarData && opportunity.isError && !opportunity.isFetching
+        }
         directions={directions.data ?? []}
         onDirectionSelect={(id) => {
           setDirect(null);

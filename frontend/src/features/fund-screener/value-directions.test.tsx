@@ -147,7 +147,7 @@ beforeEach(() => {
   } as never);
 });
 
-it("keeps strict plans ahead of historical macro and compact news without user selection", async () => {
+it("keeps current macro facts first and strict plans ahead of compact news without user selection", async () => {
   renderWithSession(<FundScreenerPage />);
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const directions = await screen.findByRole("region", {
@@ -155,7 +155,7 @@ it("keeps strict plans ahead of historical macro and compact news without user s
   });
   const news = screen.getByRole("region", { name: "每日事件研究" });
   expect(
-    directions.compareDocumentPosition(macro) &
+    macro.compareDocumentPosition(directions) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(
