@@ -1,0 +1,163 @@
+.op-my-funds,
+.op-personal-reminders {
+  min-width: 0;
+  margin-block: 1rem;
+}
+.op-my-funds-heading,
+.op-personal-reminders > header,
+.op-my-funds-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.op-my-funds h3,
+.op-my-funds h4,
+.op-personal-reminders h3 {
+  margin: 0;
+}
+.op-my-funds-heading p {
+  margin: 0.35rem 0;
+  color: #526070;
+}
+.op-my-funds-toolbar nav,
+.op-my-fund-badges,
+.op-my-fund-plans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.op-my-funds button,
+.op-personal-reminders button,
+.op-my-funds input {
+  min-height: 2.25rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  background: #fff;
+  color: #243b53;
+  font: inherit;
+}
+.op-my-funds button[aria-pressed="true"] {
+  border-color: #087e8b;
+  background: #eaf7f7;
+  color: #075c66;
+}
+.op-my-funds button:focus-visible,
+.op-personal-reminders button:focus-visible,
+.op-my-funds input:focus-visible {
+  outline: 2px solid #087e8b;
+  outline-offset: 3px;
+}
+.op-my-funds input {
+  width: min(100%, 20rem);
+}
+.op-my-fund-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 1.25rem;
+  padding: 1.25rem;
+  margin-block: 1rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.8rem;
+  background: #fff;
+}
+.op-my-fund-info,
+.op-my-fund-chart {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.op-my-fund-info > *,
+.op-my-fund-plan > * {
+  margin-block: 0.65rem;
+}
+.op-my-fund-info small,
+.op-my-fund-plan > small {
+  display: block;
+  color: #526070;
+  line-height: 1.6;
+}
+.op-my-fund-badges span {
+  border-radius: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  background: #f0f5f9;
+  font-size: 0.8rem;
+}
+.op-my-fund-plan {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.5rem;
+}
+.op-my-fund-state.state-stop_loss,
+.op-reminder-risk {
+  color: #ad3232;
+}
+.op-my-fund-chart-empty {
+  display: grid;
+  align-content: center;
+  min-height: 15rem;
+  padding: 1rem;
+  background: #f8fafc;
+  color: #526070;
+}
+.op-my-funds-list,
+.op-my-funds-history,
+.op-personal-reminders ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.op-my-funds-list li + li,
+.op-my-funds-history li + li {
+  margin-top: 0.4rem;
+}
+.op-my-funds-list button {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  width: 100%;
+  text-align: left;
+}
+.op-my-funds-list span {
+  color: #526070;
+  font-size: 0.85rem;
+}
+.op-my-funds-review {
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+}
+.op-personal-reminders {
+  padding: 1rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.8rem;
+  background: #fff;
+}
+.op-personal-reminders li {
+  padding-block: 0.6rem;
+  border-bottom: 1px solid #edf2f7;
+}
+.op-personal-reminders li span {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  color: #526070;
+}
+.op-personal-reminders li p {
+  margin-bottom: 0;
+}
+@media (max-width: 720px) {
+  .op-my-fund-card {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.85rem;
+  }
+  .op-my-funds-toolbar input {
+    width: 100%;
+  }
+  .op-my-fund-plans button,
+  .op-my-funds-history button {
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+}

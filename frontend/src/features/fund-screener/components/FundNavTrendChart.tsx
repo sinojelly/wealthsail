@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import type { FundNavPeriod } from "../../../api/funds";
 import type { ActionableZoneTrack } from "../../../api/investment";
-import { timeLabel } from "../macro-display";
+import { sourceHref, timeLabel } from "../macro-display";
 import { useFundNavHistory } from "../nav-history-resource";
 
 const periods: Array<[FundNavPeriod, string]> = [
@@ -30,9 +30,11 @@ const price = (value: unknown) => number(value)?.toFixed(4) ?? "—";
 function Trend({
   fundCode,
   track,
+  confirmedNavAsOf,
 }: {
   fundCode: string;
   track?: ActionableZoneTrack;
+  confirmedNavAsOf?: string;
 }) {
   const [period, setPeriod] = useState<FundNavPeriod>("2y");
   const { data, loading, failed, exhausted, retry } = useFundNavHistory(
@@ -79,12 +81,31 @@ function Trend({
           ))}
         </div>
       </header>
+      {sourceHref(data?.sourceUri) && (
+        <small>
+          <a
+            href={sourceHref(data?.sourceUri)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            曲线数据来源
+          </a>
+        </small>
+      )}
       {points.length ? (
         <>
           <p className="op-nav-summary">
             图中最新净值：{timeLabel(latestPoint!.date)} ·{" "}
             {price(latestPoint!.unitNav)} 元/份
           </p>
+          {confirmedNavAsOf &&
+            latestPoint!.date < confirmedNavAsOf.slice(0, 10) && (
+              <p className="op-nav-summary" role="status">
+                曲线末点早于最新确认净值：曲线截至{timeLabel(latestPoint!.date)}
+                ， 确认净值截至{timeLabel(confirmedNavAsOf)}
+                ；较新的净值尚未纳入曲线。
+              </p>
+            )}
           <div
             className="op-nav-plot"
             role="img"
@@ -254,6 +275,7 @@ function Trend({
 export default function FundNavTrendChart(props: {
   fundCode: string;
   track?: ActionableZoneTrack;
+  confirmedNavAsOf?: string;
 }) {
   if (!/^\d{6}$/.test(props.fundCode)) return null;
   return <Trend key={props.fundCode} {...props} />;

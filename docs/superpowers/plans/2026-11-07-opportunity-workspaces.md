@@ -80,13 +80,13 @@
 
 **Interfaces:** `groupPersonalFunds(list: StudyTrackList, today: string): PersonalFundGroup[]`；`PersonalFundGroup` 含 key/market/code?/label/holding?/tracks[]/trackingSuppressed；`MyFundsWorkspace({actor, renderStudyTracking?})`；`PersonalActionReminders({actor,onViewFunds,excludedSellFundCodes?})`。两者共享 actor 隔离的 `['study', actor, 'list']` 查询，提醒不展示完整基金图表。
 
-- [ ] RED：持仓＋两个研究只一基金、原计划保持两份；同码跨市场不合并；无代码持仓不误用境内图；取消跟踪不隐藏持仓。
-- [ ] RED：disabled/ENDED/上海过期跟踪不进活动提醒；仅跟踪不算持仓；数据不足不能说没有新触发；报告 pending/error 仍读取私人记录。
-- [ ] GREEN：全部/已持仓/仅跟踪/历史复盘；搜索；<=4 只宽卡信息左图右，>4 只紧凑列表＋选中详情。
-- [ ] 多冻结计划选择独立；图仅叠所选原轨道；准确区分建立时间、计划行情基准、当前判断依据与图末点时间；不得造持仓收益。
-- [ ] 保留刷新、取消跟踪、研究详情及旧 studyTrack 入口；复盘继续原版本、capabilities、expectedGeneration 和成交守卫。
-- [ ] 今日提醒只列有效价格/风险命中与明确待核实状态；已在顶部卖出提醒出现的基金不重复堆同类提醒。
-- [ ] 跑新模型/组件、原 study/current-estimate/报价隔离测试；审查并提交。
+- [x] RED：持仓＋两个研究只一基金、原计划保持两份；同码跨市场不合并；无代码持仓不误用境内图；取消跟踪不隐藏持仓。
+- [x] RED：disabled/ENDED/上海过期跟踪不进活动提醒；仅跟踪不算持仓；数据不足不能说没有新触发；报告 pending/error 仍读取私人记录。
+- [x] GREEN：全部/已持仓/仅跟踪/历史复盘；搜索；<=4 只宽卡信息左图右，>4 只紧凑列表＋选中详情。
+- [x] 多冻结计划选择独立；图仅叠所选原轨道；准确区分建立时间、计划行情基准、当前判断依据与图末点时间；不得造持仓收益。
+- [x] 保留刷新、取消跟踪、研究详情及旧 studyTrack 入口；复盘继续原版本、capabilities、expectedGeneration 和成交守卫。
+- [x] 今日提醒只列有效价格/风险命中与明确待核实状态；已在顶部卖出提醒出现的基金不重复堆同类提醒。
+- [x] 跑新模型/组件、原 study/current-estimate/报价隔离测试；审查并提交。
 
 ### Task 4: 今日重点精选与市场证据语义
 
@@ -123,3 +123,6 @@
 - RED/GREEN、验证命令、提交与真实限制将在每个任务完成后写入这里；禁止提前标记完成。
 
 - Task 2：模型/组件先 RED 后实现；稳定身份与关联/日期补充 RED。独立审查两项 P2（日程发生状态、事实核验标记）均经失败测试修复并复核 PASS。最终 4 文件 46/46；TypeScript、文件 ESLint/Prettier 与差异检查通过；不改后端/Prompt/Schema，真实模型输出增量 0；浏览器与全量集成见 Task 5。
+
+- Task 2：提交 `6c94ace`。
+- Task 3：模型 7、组件 10、净值日期/来源用例先 RED 后 GREEN；专项及原研究/行情回归 61/61。独立审查发现真实旧 NAV 单位与未知市场取消两项 P2，新增 11 例 RED 后修复，覆盖 4 文件 45/45；六种服务器认可单位保留原冻结线，未知身份逐研究停止或准确报错。复核 spec/quality PASS，类型/文件 lint/格式检查通过；桌面右图及手机纵排已浏览器验证，未验证真实 NAS。
