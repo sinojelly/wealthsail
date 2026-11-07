@@ -34,7 +34,7 @@ python -m scripts.research_archive_storage \
 docker build -f backend/Dockerfile --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t wealthsail-backend .
 ```
 
-`docker-compose.yml` 的 api、worker、codex-runner 共用后端镜像，三者统一传递 `BUILD_COMMIT` 构建参数。现有 `build_docker_wealthsail.sh` 在构建时自动读取源码目录的完整 Git HEAD，并通过 `sudo env` 传给 Compose；`--check`、`--deploy-only` 不读取或改写已有镜像的提交标识。
+`docker-compose.yml` 的 api、worker、codex-runner 共用后端镜像，三者统一传递 `BUILD_COMMIT` 构建参数。现有 `build_docker_wealthsail.sh` 在构建时自动读取源码目录的完整 Git HEAD，并通过 `sudo env` 传给 Compose。`--check` 保持只读，不要求已有镜像等于当前 HEAD；`--deploy-only` 读取并核对已有镜像，不改写标签。
 
 NAS overlay 中可单独构建同一镜像的 db-init 工具也传递相同参数，避免后续单独构建工具时覆盖提交标签。
 
@@ -53,5 +53,14 @@ sudo docker image inspect wealthsail-backend:latest \
 ```
 
 未传 Compose 参数时标签为 `unknown`；直接 `docker build` 未传参数时沿用 Dockerfile 的空值。研究验收中的 buildCommit 仅接受完整合法提交号，缺失或 unknown 仍显示未知；代码指纹独立记录。
+
+正式构建/部署脚本执行以下版本门禁：
+
+- 默认模式和 `--build-only` 构建后，镜像 revision 必须等于本次开始时读取的完整 Git HEAD；标签缺失、unknown、镜像缺失或 Git HEAD 中途变化均退出失败。`--build-only` 不要求仍在线的旧容器先升级。
+- `--deploy-only` 在启动服务前完成同样核对。所有部署 `up` 均带 `--pull never --no-build`，镜像缺失不会触发隐式构建。
+- 部署后的 API、Worker、Runner 每个正式服务实例必须运行，容器 `.Image` 的不可变镜像 ID 必须等于已核对的后端镜像 ID，再按该实际 ID 读取 revision 与 HEAD 对比。每个服务至少有一个正式实例；历史一次性 `run` 容器不充当正式实例。
+- 通过健康/认证检查及版本核对后才输出部署完成。操作期间 HEAD 或共享后端镜像标签漂移、容器集合变化均拒绝宣布成功；失败时保留非零退出码，不自动重建或回滚。
+
+这套门禁覆盖 `build_docker_wealthsail.sh` 的构建和部署边界，数据库升级脚本调用它时沿用同样门禁；它不为两次调用之间的迁移过程锁定 Git 或可变镜像标签，期间应避免并发更新源码/构建镜像。前端不在本次后端三版本标签核对范围内，继续执行既有健康检查。
 
 以上示例不代表已构建或部署。可将标签修复合并到下次正式构建；构建镜像不会更新现有运行容器，部署继续按既有流程执行。

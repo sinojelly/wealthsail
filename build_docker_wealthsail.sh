@@ -17,8 +17,8 @@ Usage: bash build_docker_wealthsail.sh [--check | --build-only | --deploy-only]
 
   (no args)      Validate -> build API/backend + frontend -> deploy -> verify
   --check        Read-only Compose, volumes and container/login checks
-  --build-only   Validate and build images; do not deploy
-  --deploy-only  Validate and deploy already-built images
+  --build-only   Validate, build and verify image revision; do not deploy
+  --deploy-only  Verify and deploy already-built images; never build implicitly
 
 Uses a dedicated nas-compose wrapper. NEVER runs db-init, down -v or prune.
 Override wrapper directory with NAS_TOOLS=/actual/tools if needed.
@@ -53,6 +53,8 @@ check(real(d["wealth"])==real(root), "script and wrapper use the same WealthSail
 services=c["services"]
 for name in ("api","worker","frontend","codex-runner"):
  check(name in services, "service exists: "+name)
+for name in ("api","worker","codex-runner"):
+ check(services[name].get("image")=="wealthsail-backend:latest", "shared backend image: "+name)
 check(not any(service.get("ports") for service in services.values()), "NO service publishes NAS host ports")
 check("wealth_edge" in services["frontend"].get("networks",{}), "frontend connected to Cloudflare edge")
 check("postgres_shared" in services["api"].get("networks",{}), "API connected to existing PostgreSQL network")
@@ -86,22 +88,103 @@ if [[ "$MODE" == check ]]; then
   exit 0
 fi
 
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+EXPECTED_COMMIT="$(git -C "$WEALTH_ROOT" rev-parse --verify HEAD)"
+[[ "$EXPECTED_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+  || fail 'Cannot determine a complete Git commit for this operation'
+BACKEND_IMAGE_ID=''
+
+verify_source_commit() {
+  local current
+  current="$(git -C "$WEALTH_ROOT" rev-parse --verify HEAD)" \
+    || fail 'Cannot read Git HEAD while verifying deployment'
+  [[ "$current" == "$EXPECTED_COMMIT" ]] \
+    || fail "Git HEAD changed during this operation (expected $EXPECTED_COMMIT, got $current)"
+}
+
+verify_backend_image() {
+  local metadata image_id revision
+  metadata="$(sudo docker image inspect wealthsail-backend:latest \
+    --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+    || fail 'Cannot inspect the backend image; build it before deploying'
+  [[ "$metadata" != *$'\n'* ]] || fail 'Backend image metadata contains multiple records'
+  read -r image_id revision <<< "$metadata"
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail 'Backend image ID is missing or invalid'
+  [[ "$revision" == "$EXPECTED_COMMIT" ]] \
+    || fail "Backend image Git commit mismatch (expected $EXPECTED_COMMIT, got ${revision:-<missing>})"
+  [[ -z "$BACKEND_IMAGE_ID" || "$image_id" == "$BACKEND_IMAGE_ID" ]] \
+    || fail 'Backend image tag changed during this operation'
+  BACKEND_IMAGE_ID="$image_id"
+  echo "OK: backend image matches Git commit $EXPECTED_COMMIT"
+}
+
+verify_running_backends() {
+  local service container_ids container_id metadata image_id running project actual_service oneoff revision found current_ids
+  local -A verified_ids=()
+  for service in api worker codex-runner; do
+    container_ids="$(sudo "$COMPOSE" ws ps --all -q "$service" | LC_ALL=C sort)" \
+      || fail "Cannot list containers for $service"
+    verified_ids["$service"]="$container_ids"
+    found=false
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      metadata="$(sudo docker container inspect "$container_id" \
+        --format '{{.Image}} {{.State.Running}} {{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}} {{index .Config.Labels "com.docker.compose.oneoff"}}')" \
+        || fail "Cannot inspect container for $service"
+      read -r image_id running project actual_service oneoff <<< "$metadata"
+      [[ "$project" == wealthsail && "$actual_service" == "$service" ]] \
+        || fail "Unexpected container identity for $service"
+      [[ "${oneoff,,}" != true ]] || continue
+      [[ "${oneoff,,}" == false && "$running" == true ]] \
+        || fail "Runtime container for $service is not confirmed running"
+      [[ "$image_id" == "$BACKEND_IMAGE_ID" ]] \
+        || fail "Running $service uses a different backend image"
+      revision="$(sudo docker image inspect "$image_id" \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+        || fail "Cannot inspect the running image for $service"
+      [[ "$revision" == "$EXPECTED_COMMIT" ]] \
+        || fail "Running $service image Git commit mismatch"
+      found=true
+    done <<< "$container_ids"
+    [[ "$found" == true ]] || fail "No runtime container found for $service"
+    echo "OK: running $service matches Git commit $EXPECTED_COMMIT"
+  done
+  # A healthy old instance must not certify a concurrent replacement.
+  for service in api worker codex-runner; do
+    current_ids="$(sudo "$COMPOSE" ws ps --all -q "$service" | LC_ALL=C sort)" \
+      || fail "Cannot recheck containers for $service"
+    [[ "$current_ids" == "${verified_ids[$service]}" ]] \
+      || fail "Container set changed while verifying $service"
+  done
+}
+
 if [[ "$MODE" != deploy ]]; then
   printf '\n[3/5] Build backend (shared API/Worker/Runner) and frontend\n'
-  BUILD_COMMIT="$(git -C "$WEALTH_ROOT" rev-parse --verify HEAD)"
-  sudo env BUILD_COMMIT="$BUILD_COMMIT" "$COMPOSE" ws build api worker codex-runner frontend
+  sudo env BUILD_COMMIT="$EXPECTED_COMMIT" "$COMPOSE" ws build api worker codex-runner frontend
 fi
+verify_source_commit
+verify_backend_image
 if [[ "$MODE" == build ]]; then
   echo '[build-only] Images ready; running service unchanged.'
   exit 0
 fi
 
 printf '\n[4/5] Deploy only WealthSail runtime services\n'
-sudo "$COMPOSE" ws up -d --pull never --wait --wait-timeout 180 codex-runner api worker frontend
+sudo "$COMPOSE" ws up -d --pull never --no-build --wait --wait-timeout 180 codex-runner api worker frontend
 
 printf '\n[5/5] Verify health and Codex authentication\n'
 sudo "$COMPOSE" ws ps
 sudo "$COMPOSE" ws exec -T frontend nginx -t
 sudo "$COMPOSE" ws exec -T codex-runner codex --version
 sudo "$COMPOSE" ws exec -T codex-runner codex login status
+verify_source_commit
+verify_backend_image
+verify_running_backends
+verify_source_commit
+verify_backend_image
 echo 'WealthSail deployment checks complete. Check Web login and Codex chat in browser.'
