@@ -9,6 +9,7 @@ import {
 } from "../../../api/topic-fund-recommendations";
 import { privateQueryKey, useAuthSession } from "../../../app/auth-session";
 import { timeLabel } from "../macro-display";
+import ObservationSection from "./ObservationSection";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const box = {
@@ -282,12 +283,14 @@ export default function TopicFundRecommendations({
   completedAt,
   source = "REPORT",
   historical = false,
+  defaultExpanded = true,
 }: {
   runId?: string | null;
   state?: string | null;
   completedAt?: string | null;
   source?: "REPORT" | "CURRENT";
   historical?: boolean;
+  defaultExpanded?: boolean;
 }) {
   const client = useContext(QueryClientContext);
   const session = useAuthSession();
@@ -302,8 +305,11 @@ export default function TopicFundRecommendations({
     completedStaleResearch;
   const title = source === "CURRENT" ? "本次研究基金观察" : "高价值机会";
   return (
-    <section aria-label={title} style={box}>
-      <h3>{title}</h3>
+    <ObservationSection
+      title={title}
+      style={box}
+      defaultExpanded={defaultExpanded}
+    >
       <p>
         {source === "CURRENT"
           ? "本次研究 · 只读观察线索"
@@ -340,7 +346,7 @@ export default function TopicFundRecommendations({
           )}
         />
       )}
-    </section>
+    </ObservationSection>
   );
 }
 

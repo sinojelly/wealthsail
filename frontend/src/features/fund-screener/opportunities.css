@@ -1860,7 +1860,7 @@
 .op-value-directions > header h3 {
   margin: 0 0 10px;
 }
-.op-macro-overview > p {
+.op-macro-overview .op-observation-section-body > p {
   margin: 0 0 14px;
   line-height: 1.65;
 }
@@ -2367,7 +2367,7 @@
   color: #64748b;
   margin-left: 5px;
 }
-.op-tracked-funds > header {
+.op-tracked-funds .op-watch-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2375,6 +2375,31 @@
   flex-wrap: wrap;
 }
 .op-tracked-funds {
+  min-width: 0;
+}
+.op-observation-section > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  color: var(--op-ink);
+}
+.op-observation-section > summary h3 {
+  display: inline;
+  margin: 0;
+  font-size: inherit;
+}
+.op-observation-section-action {
+  margin-left: 12px;
+  color: var(--op-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.op-observation-section > summary:focus-visible {
+  outline: 2px solid var(--op-accent, #087f6e);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.op-observation-section-body {
+  padding-top: 8px;
   min-width: 0;
 }
 .op-watch-table-scroll {

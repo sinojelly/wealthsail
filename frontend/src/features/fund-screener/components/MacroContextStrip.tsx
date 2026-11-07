@@ -20,6 +20,7 @@ import DeterministicRepairNotice from "./DeterministicRepairNotice";
 import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
 import TopicFundRecommendations from "./TopicFundRecommendations";
+import ObservationSection from "./ObservationSection";
 
 function TopicCatalog(
   props: React.ComponentProps<typeof ResearchTopicRegistry>,
@@ -75,8 +76,11 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
   );
   const preview = researchSummary(full, 280);
   return (
-    <section className="op-macro-overview" aria-label="今日宏观总纲">
-      <h3>当前宏观事实</h3>
+    <ObservationSection
+      className="op-macro-overview"
+      label="今日宏观总纲"
+      title="当前宏观事实"
+    >
       {report && (
         <h4>
           {data.dailyResearch?.state === "READY"
@@ -130,7 +134,7 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
             </div>
           ))}
       </div>
-    </section>
+    </ObservationSection>
   );
 }
 function MacroEvents({
@@ -433,6 +437,7 @@ export default function MacroContextStrip({
                           state={daily?.pipeline?.state ?? daily?.state}
                           completedAt={currentResearchCompletedAt}
                           source="CURRENT"
+                          defaultExpanded={!daily?.report}
                         />
                       )}
                     {!daily?.report && !currentResearchId && (

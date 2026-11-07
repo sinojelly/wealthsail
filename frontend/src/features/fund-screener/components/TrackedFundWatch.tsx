@@ -14,6 +14,7 @@ import { studyStates } from "./study-display";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
 import { useStudyQuoteRefresh } from "../use-study-tracking";
+import ObservationSection from "./ObservationSection";
 import {
   refreshLatestFundQuotes,
   useLatestFundQuote,
@@ -227,9 +228,8 @@ export default function TrackedFundWatch({ actor }: { actor: string }) {
     }
   }
   return (
-    <section className="op-tracked-funds" aria-label="我的持续跟踪基金">
-      <header>
-        <h3>我的持续跟踪基金</h3>
+    <ObservationSection className="op-tracked-funds" title="我的持续跟踪基金">
+      <header className="op-watch-actions">
         <button
           type="button"
           disabled={list.isFetching}
@@ -380,6 +380,6 @@ export default function TrackedFundWatch({ actor }: { actor: string }) {
           </table>
         </div>
       )}
-    </section>
+    </ObservationSection>
   );
 }

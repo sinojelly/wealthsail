@@ -245,6 +245,16 @@ function mountPage() {
   return { ...view, client };
 }
 
+function sectionDisclosure(section: HTMLElement, title: string) {
+  const summary = within(section)
+    .getByRole("heading", { name: title, level: 3 })
+    .closest("summary");
+  expect(summary).not.toBeNull();
+  const details = summary?.parentElement;
+  expect(details?.tagName).toBe("DETAILS");
+  return { summary: summary!, details: details as HTMLDetailsElement };
+}
+
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.directions.mockResolvedValue([]);
@@ -331,6 +341,9 @@ it.each(["RUNNING", "FAILED", "UNCERTAIN", "STALE"] as const)(
     ).toHaveTextContent(currentId);
     const current = screen.getByRole("region", { name: "本次研究基金观察" });
     expect(current).toHaveTextContent(currentId);
+    const currentDisclosure = sectionDisclosure(current, "本次研究基金观察");
+    expect(currentDisclosure.details).not.toHaveAttribute("open");
+    await userEvent.click(currentDisclosure.summary);
     if (state === "RUNNING") {
       expect(current).toHaveTextContent(
         "研究尚未完成，基金匹配等待研究结果归档。",
@@ -378,6 +391,7 @@ it("distinguishes missing historical matching from an archived zero result in th
   expect(historical).toHaveTextContent(reportId);
   expect(historical).not.toHaveTextContent("已归档的匹配结果为零");
   const current = screen.getByRole("region", { name: "本次研究基金观察" });
+  await userEvent.click(sectionDisclosure(current, "本次研究基金观察").summary);
   expect(
     await within(current).findByText(
       "已归档的匹配结果为零；这仅表示该研究未匹配到基金，不代表市场没有机会。",
@@ -437,6 +451,110 @@ it("keeps long research collapsed while personal funds and archived opportunity 
     screen.getByRole("region", { name: "我的持续跟踪基金" }),
   ).toBeVisible();
   expect(screen.getByRole("region", { name: "高价值机会" })).toBeVisible();
+});
+
+it("lets sections fold independently and retains the reader's choices and fund nodes through refetch", async () => {
+  const refreshed = deferred<OpportunityContext>();
+  api.opportunity
+    .mockResolvedValueOnce(context(daily("RUNNING")))
+    .mockReturnValueOnce(refreshed.promise);
+  const { client } = mountPage();
+  const historical = await screen.findByRole("region", { name: "高价值机会" });
+  const fund =
+    await within(historical).findByText(/000001.*历史归档机器人基金/);
+  const tracking = screen.getByRole("region", { name: "我的持续跟踪基金" });
+  const ownFund = await within(tracking).findByText(/个人人工智能联接基金/);
+  const macro = screen.getByRole("region", { name: "今日宏观总纲" });
+  const current = screen.getByRole("region", { name: "本次研究基金观察" });
+  const macroDisclosure = sectionDisclosure(macro, "当前宏观事实");
+  const trackingDisclosure = sectionDisclosure(tracking, "我的持续跟踪基金");
+  const historicalDisclosure = sectionDisclosure(historical, "高价值机会");
+  const currentDisclosure = sectionDisclosure(current, "本次研究基金观察");
+  for (const disclosure of [
+    macroDisclosure,
+    trackingDisclosure,
+    historicalDisclosure,
+  ]) {
+    expect(disclosure.details).toHaveAttribute("open");
+  }
+  expect(currentDisclosure.details).not.toHaveAttribute("open");
+  const macroFact = within(macro).getByText("制造业PMI");
+  expect(macroFact).toBeVisible();
+  await userEvent.click(macroDisclosure.summary);
+  expect(macroFact).not.toBeVisible();
+  expect(ownFund).toBeVisible();
+  expect(fund).toBeVisible();
+  await userEvent.click(trackingDisclosure.summary);
+  expect(ownFund).not.toBeVisible();
+  expect(ownFund).toBeInTheDocument();
+  expect(fund).toBeVisible();
+  await userEvent.click(historicalDisclosure.summary);
+  expect(fund).not.toBeVisible();
+  expect(fund).toBeInTheDocument();
+  await userEvent.click(currentDisclosure.summary);
+  expect(currentDisclosure.details).toHaveAttribute("open");
+  expect(
+    within(current).getByText("研究尚未完成，基金匹配等待研究结果归档。"),
+  ).toBeVisible();
+
+  let refetch!: Promise<void>;
+  act(() => {
+    refetch = client.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("opportunity-context"),
+    });
+  });
+  expect(
+    await screen.findByText("正在更新展示报告，继续显示上一份已加载内容。"),
+  ).toBeVisible();
+  await act(async () => {
+    refreshed.resolve(context(daily("UNCERTAIN")));
+    await refetch;
+  });
+  expect(
+    await within(current).findByText(
+      "未找到该研究的基金匹配归档记录；缺少记录不代表没有基金机会。",
+    ),
+  ).toBeVisible();
+  for (const disclosure of [
+    macroDisclosure,
+    trackingDisclosure,
+    historicalDisclosure,
+  ]) {
+    expect(disclosure.details).not.toHaveAttribute("open");
+  }
+  expect(currentDisclosure.details).toHaveAttribute("open");
+  expect(within(historical).getByText(/000001.*历史归档机器人基金/)).toBe(fund);
+  expect(within(tracking).getByText(/个人人工智能联接基金/)).toBe(ownFund);
+  await userEvent.click(trackingDisclosure.summary);
+  await userEvent.click(historicalDisclosure.summary);
+  await userEvent.click(macroDisclosure.summary);
+  await userEvent.click(currentDisclosure.summary);
+  expect(ownFund).toBeVisible();
+  expect(fund).toBeVisible();
+  expect(macroFact).toBeVisible();
+  expect(currentDisclosure.details).not.toHaveAttribute("open");
+});
+
+it("keeps current fund observations expanded when there is no valid display report", async () => {
+  const research = daily("UNCERTAIN");
+  research.report = null;
+  research.reportRunId = null;
+  research.reportCompletedAt = null;
+  const currentMatching = recommendations(currentId);
+  currentMatching.items[0].recommendedFunds[0].name = "本次机器人观察基金";
+  api.opportunity.mockResolvedValue(context(research));
+  api.recommendations.mockResolvedValue(currentMatching);
+  mountPage();
+  const current = await screen.findByRole("region", {
+    name: "本次研究基金观察",
+  });
+  expect(
+    sectionDisclosure(current, "本次研究基金观察").details,
+  ).toHaveAttribute("open");
+  expect(
+    await within(current).findByText(/000001.*本次机器人观察基金/),
+  ).toBeVisible();
+  expect(screen.queryByRole("region", { name: "高价值机会" })).toBeNull();
 });
 
 it("preserves displayed report opportunities and personal fund nodes across a current timeout and an HTTP refetch failure", async () => {
