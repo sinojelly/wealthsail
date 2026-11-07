@@ -72,6 +72,7 @@ COPY scripts/ ./scripts/
 RUN groupadd --gid 10001 appuser \
     && useradd --create-home --uid 10001 --gid 10001 appuser \
     && install -d -m 0700 -o 10001 -g 10001 /home/appuser/.codex \
+    && install -d -m 0755 -o 10001 -g 10001 /app/backend/static/avatars \
     && chown -R appuser:appuser /app
 COPY --chown=10001:10001 deployment/codex/config.toml /home/appuser/.codex/config.toml
 RUN chmod 0600 /home/appuser/.codex/config.toml

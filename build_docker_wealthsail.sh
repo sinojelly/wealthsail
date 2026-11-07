@@ -55,6 +55,7 @@ for name in ("api","worker","frontend","codex-runner"):
  check(name in services, "service exists: "+name)
 for name in ("api","worker","codex-runner"):
  check(services[name].get("image")=="wealthsail-backend:latest", "shared backend image: "+name)
+check(services["frontend"].get("image")=="wealthsail-frontend:latest", "frontend image")
 check(not any(service.get("ports") for service in services.values()), "NO service publishes NAS host ports")
 check("wealth_edge" in services["frontend"].get("networks",{}), "frontend connected to Cloudflare edge")
 check("postgres_shared" in services["api"].get("networks",{}), "API connected to existing PostgreSQL network")
@@ -96,7 +97,7 @@ fail() {
 EXPECTED_COMMIT="$(git -C "$WEALTH_ROOT" rev-parse --verify HEAD)"
 [[ "$EXPECTED_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
   || fail 'Cannot determine a complete Git commit for this operation'
-BACKEND_IMAGE_ID=''
+declare -A VERIFIED_IMAGE_IDS=()
 
 verify_source_commit() {
   local current
@@ -104,33 +105,39 @@ verify_source_commit() {
     || fail 'Cannot read Git HEAD while verifying deployment'
   [[ "$current" == "$EXPECTED_COMMIT" ]] \
     || fail "Git HEAD changed during this operation (expected $EXPECTED_COMMIT, got $current)"
+  python3 "$WEALTH_ROOT/scripts/check_build_sources.py" --root "$WEALTH_ROOT" \
+    || fail 'Build inputs do not match committed source; see the source check above'
 }
 
-verify_backend_image() {
-  local metadata image_id revision
-  metadata="$(sudo docker image inspect wealthsail-backend:latest \
-    --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}')" \
-    || fail 'Cannot inspect the backend image; build it before deploying'
-  [[ "$metadata" != *$'\n'* ]] || fail 'Backend image metadata contains multiple records'
-  read -r image_id revision <<< "$metadata"
-  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || fail 'Backend image ID is missing or invalid'
-  [[ "$revision" == "$EXPECTED_COMMIT" ]] \
-    || fail "Backend image Git commit mismatch (expected $EXPECTED_COMMIT, got ${revision:-<missing>})"
-  [[ -z "$BACKEND_IMAGE_ID" || "$image_id" == "$BACKEND_IMAGE_ID" ]] \
-    || fail 'Backend image tag changed during this operation'
-  BACKEND_IMAGE_ID="$image_id"
-  echo "OK: backend image matches Git commit $EXPECTED_COMMIT"
+verify_images() {
+  local kind metadata image_id revision
+  for kind in backend frontend; do
+    metadata="$(sudo docker image inspect "wealthsail-$kind:latest" \
+      --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+      || fail "Cannot inspect the $kind image; build it before deploying"
+    [[ "$metadata" != *$'\n'* ]] || fail "$kind image metadata contains multiple records"
+    read -r image_id revision <<< "$metadata"
+    [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || fail "$kind image ID is missing or invalid"
+    [[ "$revision" == "$EXPECTED_COMMIT" ]] \
+      || fail "$kind image Git commit mismatch (expected $EXPECTED_COMMIT, got ${revision:-<missing>})"
+    [[ -z "${VERIFIED_IMAGE_IDS[$kind]:-}" || "$image_id" == "${VERIFIED_IMAGE_IDS[$kind]}" ]] \
+      || fail "$kind image tag changed during this operation"
+    VERIFIED_IMAGE_IDS["$kind"]="$image_id"
+    echo "OK: $kind image matches Git commit $EXPECTED_COMMIT"
+  done
 }
 
-verify_running_backends() {
-  local service container_ids container_id metadata image_id running project actual_service oneoff revision found current_ids
+verify_running_services() {
+  local service kind container_ids container_id metadata image_id running project actual_service oneoff revision runtime_count current_ids
   local -A verified_ids=()
-  for service in api worker codex-runner; do
+  for service in api worker codex-runner frontend; do
+    kind=backend
+    [[ "$service" != frontend ]] || kind=frontend
     container_ids="$(sudo "$COMPOSE" ws ps --all -q "$service" | LC_ALL=C sort)" \
       || fail "Cannot list containers for $service"
     verified_ids["$service"]="$container_ids"
-    found=false
+    runtime_count=0
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
       metadata="$(sudo docker container inspect "$container_id" \
@@ -142,20 +149,21 @@ verify_running_backends() {
       [[ "${oneoff,,}" != true ]] || continue
       [[ "${oneoff,,}" == false && "$running" == true ]] \
         || fail "Runtime container for $service is not confirmed running"
-      [[ "$image_id" == "$BACKEND_IMAGE_ID" ]] \
-        || fail "Running $service uses a different backend image"
+      runtime_count=$((runtime_count + 1))
+      [[ "$runtime_count" == 1 ]] || fail "More than one runtime container found for $service"
+      [[ "$image_id" == "${VERIFIED_IMAGE_IDS[$kind]}" ]] \
+        || fail "Running $service uses a different $kind image"
       revision="$(sudo docker image inspect "$image_id" \
         --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
         || fail "Cannot inspect the running image for $service"
       [[ "$revision" == "$EXPECTED_COMMIT" ]] \
         || fail "Running $service image Git commit mismatch"
-      found=true
     done <<< "$container_ids"
-    [[ "$found" == true ]] || fail "No runtime container found for $service"
+    [[ "$runtime_count" == 1 ]] || fail "Exactly one runtime container is required for $service"
     echo "OK: running $service matches Git commit $EXPECTED_COMMIT"
   done
   # A healthy old instance must not certify a concurrent replacement.
-  for service in api worker codex-runner; do
+  for service in api worker codex-runner frontend; do
     current_ids="$(sudo "$COMPOSE" ws ps --all -q "$service" | LC_ALL=C sort)" \
       || fail "Cannot recheck containers for $service"
     [[ "$current_ids" == "${verified_ids[$service]}" ]] \
@@ -164,11 +172,12 @@ verify_running_backends() {
 }
 
 if [[ "$MODE" != deploy ]]; then
+  verify_source_commit
   printf '\n[3/5] Build backend (shared API/Worker/Runner) and frontend\n'
   sudo env BUILD_COMMIT="$EXPECTED_COMMIT" "$COMPOSE" ws build api worker codex-runner frontend
 fi
 verify_source_commit
-verify_backend_image
+verify_images
 if [[ "$MODE" == build ]]; then
   echo '[build-only] Images ready; running service unchanged.'
   exit 0
@@ -183,8 +192,8 @@ sudo "$COMPOSE" ws exec -T frontend nginx -t
 sudo "$COMPOSE" ws exec -T codex-runner codex --version
 sudo "$COMPOSE" ws exec -T codex-runner codex login status
 verify_source_commit
-verify_backend_image
-verify_running_backends
+verify_images
+verify_running_services
 verify_source_commit
-verify_backend_image
+verify_images
 echo 'WealthSail deployment checks complete. Check Web login and Codex chat in browser.'

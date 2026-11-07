@@ -25,3 +25,5 @@ backups
 ai-review
 temp
 external-access
+**/*.log
+backend/static/avatars

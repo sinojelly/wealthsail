@@ -3,3 +3,12 @@ dist
 scripts
 *.log
 .env
+.pnpm-store
+coverage
+**/*.tsbuildinfo
+temp
+**/.env*
+**/*.env
+**/.codex
+**/auth.json
+**/*.log

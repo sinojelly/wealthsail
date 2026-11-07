@@ -41,6 +41,13 @@ def finish(value="", code=0):
  raise SystemExit(code)
 head, other = "a" * 40, "b" * 40
 image, old_image = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+frontend_image, old_frontend_image = "sha256:" + "3" * 64, "sha256:" + "4" * 64
+if kind == "sources":
+ if config.get("sources_error"): finish(code=2)
+ if (config.get("dirty_sources") or
+     (config.get("dirty_after_build") and state.get("built")) or
+     (config.get("dirty_after_up") and state.get("up"))): finish(code=1)
+ finish()
 if kind == "git":
  if config.get("git_unavailable"): finish(code=128)
  changed = ((config.get("head_changes_after_build") and state.get("built")) or
@@ -55,7 +62,7 @@ if kind == "compose":
   merged = {"name":"wealthsail", "services":{
    "api":{"image":"wealthsail-backend:latest","build":{"context":root},"networks":{"postgres_shared":{}}},
    "worker":{"image":"wealthsail-backend:latest"},"codex-runner":{"image":"wealthsail-backend:latest"},
-   "frontend":{"build":{"context":root+"/frontend"},"networks":{"wealth_edge":{}}}},
+   "frontend":{"image":"wealthsail-frontend:latest","build":{"context":root+"/frontend"},"networks":{"wealth_edge":{}}}},
    "volumes":{
     "avatar_data":{"driver_opts":{"device":state["expected_avatars"]}},
     "codex_auth":{"driver_opts":{"device":state["expected_auth"]}}}}
@@ -66,6 +73,7 @@ if kind == "compose":
   state["built"] = True
   state["build_commit"] = os.environ.get("BUILD_COMMIT")
   state["tag_revision"] = other if config.get("build_wrong_revision") else os.environ.get("BUILD_COMMIT", "unknown")
+  state["frontend_tag_revision"] = other if config.get("build_wrong_frontend_revision") else os.environ.get("BUILD_COMMIT", "unknown")
   finish()
  if command == "up":
   state["up"] = True
@@ -80,6 +88,7 @@ if kind == "compose":
   if config.get("oneoff_only_service") == service: finish("fixture-"+service+"-oneoff")
   if config.get("extra_oneoff_instance") == service: finish("fixture-"+service+"\nfixture-"+service+"-oneoff")
   if config.get("old_extra_instance") == service: finish("fixture-"+service+"\nfixture-"+service+"-old")
+  if config.get("duplicate_same_instance") == service: finish("fixture-"+service+"\nfixture-"+service+"-second")
   finish("fixture-"+service)
  if command == "exec": finish()
  finish(code=96)
@@ -92,8 +101,15 @@ if args[:2] == ["image", "inspect"]:
   revision = state.get("tag_revision", config.get("tag_revision", head))
   selected = old_image if config.get("tag_drifts_after_up") and state.get("up") else image
   finish(selected + " " + revision, code=1 if config.get("tag_inspect_error") else 0)
+ if target == "wealthsail-frontend:latest":
+  if config.get("frontend_tag_missing"): finish(code=1)
+  revision = state.get("frontend_tag_revision", config.get("frontend_tag_revision", head))
+  selected = old_frontend_image if config.get("frontend_tag_drifts_after_up") and state.get("up") else frontend_image
+  finish(selected + " " + revision, code=1 if config.get("frontend_tag_inspect_error") else 0)
  if target in {image, old_image}:
   finish(other if target == old_image else config.get("actual_image_revision", head), code=1 if config.get("runtime_image_inspect_error") else 0)
+ if target in {frontend_image, old_frontend_image}:
+  finish(other if target == old_frontend_image else config.get("frontend_actual_image_revision", head))
  finish(code=96)
 if args[:2] == ["container", "inspect"]:
  target = args[2]
@@ -101,13 +117,14 @@ if args[:2] == ["container", "inspect"]:
  service = target.removeprefix("fixture-")
  oneoff = service.endswith("-oneoff")
  old = oneoff or service.endswith("-old") or config.get("old_service") == service
- service = service.removesuffix("-old").removesuffix("-oneoff")
+ service = service.removesuffix("-old").removesuffix("-oneoff").removesuffix("-second")
  running = "false" if oneoff or config.get("stopped_service") == service else "true"
  project = "foreign-project" if config.get("foreign_project") == service else "wealthsail"
  label = "foreign-service" if config.get("foreign_service") == service else service
  oneoff_label = "True" if oneoff else ("unknown" if config.get("unknown_oneoff_service") == service else "False")
  state.setdefault("inspected_services", []).append(service)
- finish(" ".join((old_image if old else image,running,project,label,oneoff_label)), code=1 if config.get("container_inspect_error") == service else 0)
+ selected_image = (old_frontend_image if old else frontend_image) if service == "frontend" else (old_image if old else image)
+ finish(" ".join((selected_image,running,project,label,oneoff_label)), code=1 if config.get("container_inspect_error") == service else 0)
 finish(code=96)
 """
 
@@ -128,6 +145,11 @@ sudo() {
  esac
 }
 python3() {
+ if [[ "${1:-}" == */scripts/check_build_sources.py ]]; then
+  shift
+  fixture_dispatch sources "$@"
+  return
+ fi
  local arg
  local -a native=()
  for arg in "$@"; do
@@ -215,7 +237,17 @@ def test_default_deploy_requires_explicit_no_build_and_checks_every_runtime_imag
     assert state["build_commit"] == HEAD
     up = next(call for call in state["calls"] if call[:3] == ["compose", "ws", "up"])
     assert "--no-build" in up
-    for service in ("api", "worker", "codex-runner"):
+    events = [
+        call[0]
+        if call[0] == "sources"
+        else call[2]
+        if call[:2] == ["compose", "ws"]
+        else call[0]
+        for call in state["calls"]
+    ]
+    assert events.index("sources") < events.index("build")
+    assert "sources" in events[events.index("up") + 1 :]
+    for service in ("api", "worker", "codex-runner", "frontend"):
         assert any(
             call[:4] == ["docker", "container", "inspect", "fixture-" + service]
             for call in state["calls"]
@@ -225,7 +257,12 @@ def test_default_deploy_requires_explicit_no_build_and_checks_every_runtime_imag
 
 @pytest.mark.parametrize("mode", [None, "--build-only"])
 @pytest.mark.parametrize(
-    "scenario", [{"build_wrong_revision": True}, {"head_changes_after_build": True}]
+    "scenario",
+    [
+        {"build_wrong_revision": True},
+        {"build_wrong_frontend_revision": True},
+        {"head_changes_after_build": True},
+    ],
 )
 def test_build_revision_failure_prevents_up_and_success_message(
     tmp_path, mode, scenario
@@ -261,6 +298,9 @@ def test_deploy_only_refuses_unknown_missing_or_wrong_tag_before_up(tmp_path, sc
         {"tag_drifts_after_up": True},
         {"oneoff_only_service": "api"},
         {"unknown_oneoff_service": "worker"},
+        {"missing_service": "frontend"},
+        {"stopped_service": "frontend"},
+        {"frontend_tag_drifts_after_up": True},
     ],
 )
 def test_runtime_mismatch_fails_verification_without_claiming_completed_deployment(
@@ -276,7 +316,10 @@ def test_build_only_validates_image_without_starting_containers(tmp_path):
     result, state = run_script(tmp_path, mode="--build-only")
     assert result.returncode == 0, result.stdout + result.stderr
     assert state["build_commit"] == HEAD and not state.get("up")
-    assert any(call[:3] == ["docker", "image", "inspect"] for call in state["calls"])
+    for tag in ("wealthsail-backend:latest", "wealthsail-frontend:latest"):
+        assert any(
+            call[:4] == ["docker", "image", "inspect", tag] for call in state["calls"]
+        )
     assert "Images ready" in result.stdout and not completed(result)
 
 
@@ -335,15 +378,16 @@ def test_check_remains_read_only_without_git_or_build_requirement(tmp_path):
     result, state = run_script(
         tmp_path,
         mode="--check",
-        scenario={"git_unavailable": True, "tag_missing": True},
+        scenario={"git_unavailable": True, "tag_missing": True, "dirty_sources": True},
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert not state.get("built") and not state.get("up")
     assert not any(call[0] == "git" for call in state["calls"])
+    assert not any(call[0] == "sources" for call in state["calls"])
     assert "Read-only checks complete." in result.stdout and not completed(result)
 
 
-@pytest.mark.parametrize("service", ["api", "worker", "codex-runner"])
+@pytest.mark.parametrize("service", ["api", "worker", "codex-runner", "frontend"])
 def test_overlay_cannot_select_another_backend_tag_before_any_build_or_up(
     tmp_path, service
 ):
@@ -362,3 +406,71 @@ def test_multiline_tag_metadata_cannot_hide_untrusted_trailing_record(tmp_path):
     assert result.returncode != 0
     assert not state.get("built") and not state.get("up")
     assert not completed(result)
+
+
+@pytest.mark.parametrize("service", ["api", "worker", "codex-runner", "frontend"])
+def test_duplicate_same_version_runtime_is_rejected_instead_of_confirming_multiple_consumers(
+    tmp_path,
+    service,
+):
+    result, state = run_script(
+        tmp_path, mode="--deploy-only", scenario={"duplicate_same_instance": service}
+    )
+    assert state.get("up") is True
+    assert result.returncode != 0
+    assert not completed(result)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        {"old_service": "frontend"},
+        {"frontend_actual_image_revision": OTHER_HEAD},
+    ],
+)
+def test_frontend_runtime_must_use_the_verified_frontend_image_and_revision(
+    tmp_path, scenario
+):
+    result, state = run_script(tmp_path, mode="--deploy-only", scenario=scenario)
+    assert state.get("up") is True
+    assert result.returncode != 0
+    assert not completed(result)
+
+
+def test_frontend_tag_must_match_head_before_deploy_only_up(tmp_path):
+    result, state = run_script(
+        tmp_path, mode="--deploy-only", scenario={"frontend_tag_revision": OTHER_HEAD}
+    )
+    assert result.returncode != 0
+    assert not state.get("up") and not completed(result)
+
+
+@pytest.mark.parametrize("mode", [None, "--build-only", "--deploy-only"])
+@pytest.mark.parametrize("scenario", [{"dirty_sources": True}, {"sources_error": True}])
+def test_dirty_or_unreadable_build_sources_block_before_build_or_up(
+    tmp_path, mode, scenario
+):
+    result, state = run_script(tmp_path, mode=mode, scenario=scenario)
+    assert result.returncode != 0
+    assert not state.get("built") and not state.get("up")
+    assert not completed(result) and "Images ready" not in result.stdout
+
+
+@pytest.mark.parametrize("mode", [None, "--build-only"])
+def test_sources_modified_during_build_cannot_produce_ready_or_deploy_success(
+    tmp_path, mode
+):
+    result, state = run_script(
+        tmp_path, mode=mode, scenario={"dirty_after_build": True}
+    )
+    assert result.returncode != 0
+    assert state.get("built") is True and not state.get("up")
+    assert not completed(result) and "Images ready" not in result.stdout
+
+
+def test_sources_modified_after_up_cannot_claim_completed_deployment(tmp_path):
+    result, state = run_script(
+        tmp_path, mode="--deploy-only", scenario={"dirty_after_up": True}
+    )
+    assert state.get("up") is True
+    assert result.returncode != 0 and not completed(result)

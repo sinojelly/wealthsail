@@ -18,6 +18,9 @@ RUN pnpm build
 # ---- 运行层：nginx ----
 FROM nginx:1.27-alpine
 
+ARG BUILD_COMMIT=""
+LABEL org.opencontainers.image.revision="${BUILD_COMMIT}"
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 

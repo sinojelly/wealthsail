@@ -31,18 +31,20 @@ python -m scripts.research_archive_storage \
 构建可同时保存完整代码提交号：
 
 ```sh
-docker build -f backend/Dockerfile --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t wealthsail-backend .
+python3 scripts/check_build_sources.py --root . && \
+  docker build -f backend/Dockerfile --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t wealthsail-backend .
 ```
 
-`docker-compose.yml` 的 api、worker、codex-runner 共用后端镜像，三者统一传递 `BUILD_COMMIT` 构建参数。现有 `build_docker_wealthsail.sh` 在构建时自动读取源码目录的完整 Git HEAD，并通过 `sudo env` 传给 Compose。`--check` 保持只读，不要求已有镜像等于当前 HEAD；`--deploy-only` 读取并核对已有镜像，不改写标签。
+`docker-compose.yml` 的 api、worker、codex-runner 共用后端镜像；前端独立使用 `wealthsail-frontend:latest`，两类镜像统一传递 `BUILD_COMMIT` 构建参数并写入 OCI revision 标签。现有 `build_docker_wealthsail.sh` 在构建时自动读取源码目录的完整 Git HEAD，并通过 `sudo env` 传给 Compose。`--check` 保持只读，不要求已有镜像等于当前 HEAD；`--deploy-only` 读取并核对已有镜像，不改写标签。
 
 NAS overlay 中可单独构建同一镜像的 db-init 工具也传递相同参数，避免后续单独构建工具时覆盖提交标签。
 
-直接使用 NAS 包装器时，在 WealthSail 源码目录执行：
+正式构建优先使用 `bash build_docker_wealthsail.sh --build-only`，会自动检查源码、构建两类镜像并核对标签。直接使用 NAS 包装器时，在 WealthSail 源码目录先检查构建输入：
 
 ```sh
-sudo env BUILD_COMMIT="$(git rev-parse --verify HEAD)" \
-  "$NAS_TOOLS/nas-compose" ws build api worker codex-runner
+python3 scripts/check_build_sources.py --root . && \
+  sudo env BUILD_COMMIT="$(git rev-parse --verify HEAD)" \
+  "$NAS_TOOLS/nas-compose" ws build api worker codex-runner frontend
 ```
 
 构建后核对镜像标签，应与本次构建源码的 `git rev-parse HEAD` 一致，不固定为某个旧提交：
@@ -57,10 +59,13 @@ sudo docker image inspect wealthsail-backend:latest \
 正式构建/部署脚本执行以下版本门禁：
 
 - 默认模式和 `--build-only` 构建后，镜像 revision 必须等于本次开始时读取的完整 Git HEAD；标签缺失、unknown、镜像缺失或 Git HEAD 中途变化均退出失败。`--build-only` 不要求仍在线的旧容器先升级。
+- 构建前、构建后及部署前后运行构建输入检查，拒绝会进入镜像的未提交源码（包括暂存、未暂存和新增文件），而不以全仓库 dirty 为判断。构建输入清单由 `scripts/check_build_sources.py` 维护，覆盖 Dockerfile、相关构建配置、后端 COPY 输入和前端上下文；Review、文档、根目录补丁等无关材料不阻塞构建。Git 忽略不等于 Docker 忽略，未被 Docker 排除的新增源码同样不得混入镜像；检查只输出路径，不输出正文。
 - `--deploy-only` 在启动服务前完成同样核对。所有部署 `up` 均带 `--pull never --no-build`，镜像缺失不会触发隐式构建。
-- 部署后的 API、Worker、Runner 每个正式服务实例必须运行，容器 `.Image` 的不可变镜像 ID 必须等于已核对的后端镜像 ID，再按该实际 ID 读取 revision 与 HEAD 对比。每个服务至少有一个正式实例；历史一次性 `run` 容器不充当正式实例。
-- 通过健康/认证检查及版本核对后才输出部署完成。操作期间 HEAD 或共享后端镜像标签漂移、容器集合变化均拒绝宣布成功；失败时保留非零退出码，不自动重建或回滚。
+- 部署后的 API、Worker、Runner、前端各服务必须恰好有一个非 oneoff 的运行实例；历史一次性 `run` 容器不充当正式实例。容器 `.Image` 的不可变镜像 ID 必须等于已核对的对应镜像 ID，再按实际 ID 读取 revision 与 HEAD 对比。同版本的重复 Worker 也会拒绝验收，不自动停止或删除额外容器。
+- 通过健康/认证检查及两类镜像、四个服务的版本核对后才输出部署完成。操作期间 HEAD、源码、镜像标签或容器集合漂移均拒绝宣布成功；失败时保留非零退出码，不自动重建或回滚。
 
-这套门禁覆盖 `build_docker_wealthsail.sh` 的构建和部署边界，数据库升级脚本调用它时沿用同样门禁；它不为两次调用之间的迁移过程锁定 Git 或可变镜像标签，期间应避免并发更新源码/构建镜像。前端不在本次后端三版本标签核对范围内，继续执行既有健康检查。
+构建输入检查采用当前两份 Dockerfile 的明确清单，不是通用 Dockerfile/ignore 解释器。调整 COPY、ADD、上下文挂载或 `.dockerignore` 有效规则时，须同步检查清单和回归；未知布局、单独的 Dockerfile ignore 覆盖、构建输入内的子模块或隐藏工作区修改的 Git 索引标志都会拒绝。两份 Docker ignore 明确排除相关缓存、日志、私有 env/auth 和运行时头像数据；不会仅凭 `.gitignore` 就放过新源码。此检查不承诺外部基础镜像和包下载逐字节可重现。
+
+这套门禁覆盖 `build_docker_wealthsail.sh` 的构建和部署边界，数据库升级脚本调用它时沿用同样门禁；它不为两次调用之间的迁移过程锁定 Git 或可变镜像标签，期间应避免并发更新源码/构建镜像。旧前端镜像没有 revision 标签，需要在下次正式构建中连同前端重建，才能通过新的部署验收。
 
 以上示例不代表已构建或部署。可将标签修复合并到下次正式构建；构建镜像不会更新现有运行容器，部署继续按既有流程执行。
