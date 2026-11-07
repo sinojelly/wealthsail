@@ -22,7 +22,7 @@ import {
 } from "../latest-quote-resource";
 import { studyConditionLabel, studyStates } from "./study-display";
 import { FundWatchQuote } from "./PriceWatchSummary";
-import FundNavTrendChart from "./FundNavTrendChart";
+import ViewportFundChart from "./ViewportFundChart";
 import "../my-funds.css";
 
 export interface MyFundsWorkspaceProps {
@@ -283,7 +283,7 @@ function FundCard({
       </div>
       <div className="op-my-fund-chart">
         {publicCode ? (
-          <FundNavTrendChart
+          <ViewportFundChart
             fundCode={publicCode}
             track={overlay}
             confirmedNavAsOf={confirmed?.asOf ?? undefined}

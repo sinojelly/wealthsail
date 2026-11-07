@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import FundNavTrendChart from "./FundNavTrendChart";
 
-function ChartSlot({ fundCode }: { fundCode: string }) {
+type ChartProps = ComponentProps<typeof FundNavTrendChart>;
+
+function ChartSlot(props: ChartProps) {
+  const { fundCode } = props;
   const container = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(
     () => typeof IntersectionObserver === "undefined",
@@ -34,7 +37,7 @@ function ChartSlot({ fundCode }: { fundCode: string }) {
       aria-label={`${fundCode}净值走势图区域`}
     >
       {active ? (
-        <FundNavTrendChart fundCode={fundCode} />
+        <FundNavTrendChart {...props} />
       ) : (
         <div className="op-match-chart-placeholder">
           <strong>单位净值走势</strong>
@@ -45,6 +48,6 @@ function ChartSlot({ fundCode }: { fundCode: string }) {
   );
 }
 
-export default function ViewportFundChart({ fundCode }: { fundCode: string }) {
-  return <ChartSlot key={fundCode} fundCode={fundCode} />;
+export default function ViewportFundChart(props: ChartProps) {
+  return <ChartSlot key={props.fundCode} {...props} />;
 }

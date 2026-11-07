@@ -288,7 +288,7 @@ it("loads personal fund cards while the display report is pending and preserves 
   expect(card).toHaveTextContent("止损 0.9000 · T1 1.1200 / T2 1.2000");
   expect(card).toHaveTextContent("仅跟踪");
   expect(
-    within(card).getByRole("region", { name: "012733单位净值图" }),
+    within(card).getByRole("region", { name: "012733净值走势图区域" }),
   ).toBeVisible();
   expect(api.tracks).toHaveBeenCalledTimes(1);
   await act(async () => report.resolve(context()));
@@ -355,7 +355,7 @@ it.each([4, 5])(
     if (count === 4) {
       expect(within(funds).getAllByRole("article")).toHaveLength(4);
       expect(
-        within(funds).getAllByRole("region", { name: /单位净值图/ }),
+        within(funds).getAllByRole("region", { name: /净值走势图区域/ }),
       ).toHaveLength(4);
       expect(
         within(funds).queryByRole("list", { name: "基金紧凑列表" }),
@@ -370,7 +370,7 @@ it.each([4, 5])(
         within(funds).getByRole("article", { name: "私人基金012735" }),
       ).toBeVisible();
       expect(
-        within(funds).getAllByRole("region", { name: /单位净值图/ }),
+        within(funds).getAllByRole("region", { name: /净值走势图区域/ }),
       ).toHaveLength(1);
     }
   },

@@ -1,12 +1,24 @@
 import { act, render, screen } from "@testing-library/react";
 import ViewportFundChart from "./components/ViewportFundChart";
+import type { ActionableZoneTrack } from "../../api/investment";
+import { frozenPlan } from "./personal-funds.test-data";
 
 vi.mock("./components/FundNavTrendChart", () => ({
-  default: ({ fundCode, track }: { fundCode: string; track?: unknown }) => (
+  default: ({
+    fundCode,
+    track,
+    confirmedNavAsOf,
+  }: {
+    fundCode: string;
+    track?: ActionableZoneTrack;
+    confirmedNavAsOf?: string;
+  }) => (
     <div
       role="img"
       aria-label={`${fundCode}单位净值走势`}
       data-has-price-plan={track !== undefined}
+      data-entry-min={track?.entryZoneMin}
+      data-confirmed-nav-as-of={confirmedNavAsOf}
     />
   ),
 }));
@@ -84,6 +96,34 @@ it("preserves the mounted chart after scrolling away and rerendering the same fu
 
   expect(screen.getByRole("img", { name: "000001单位净值走势" })).toBe(chart);
   expect(observations).toHaveLength(1);
+});
+
+it("passes the selected frozen track and confirmed NAV date through activation and later updates", () => {
+  const first = frozenPlan("000001").tracks[0];
+  const second = frozenPlan("000001", "1.0800").tracks[0];
+  const { rerender } = render(
+    <ViewportFundChart
+      fundCode="000001"
+      track={first}
+      confirmedNavAsOf="2026-11-06"
+    />,
+  );
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  intersect(0);
+  const chart = screen.getByRole("img");
+  expect(chart).toHaveAttribute("data-entry-min", first.entryZoneMin);
+  expect(chart).toHaveAttribute("data-confirmed-nav-as-of", "2026-11-06");
+
+  rerender(
+    <ViewportFundChart
+      fundCode="000001"
+      track={second}
+      confirmedNavAsOf="2026-11-07"
+    />,
+  );
+  expect(screen.getByRole("img")).toBe(chart);
+  expect(chart).toHaveAttribute("data-entry-min", second.entryZoneMin);
+  expect(chart).toHaveAttribute("data-confirmed-nav-as-of", "2026-11-07");
 });
 
 it("disconnects a pending observer on unmount", () => {

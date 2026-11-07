@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { act, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -46,6 +46,9 @@ function show(ui: React.ReactNode, path = "/fund-screener?keep=yes") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  // Most cases exercise plan/quote behavior in the no-IO browser fallback.
+  // Viewport cases below install an observer and enter individual chart slots.
+  vi.stubGlobal("IntersectionObserver", undefined);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
@@ -113,6 +116,91 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it("requests only nearby personal NAV charts and keeps an activated chart across scrolling and plan changes", async () => {
+  const user = userEvent.setup();
+  const observations: Array<{
+    callback: IntersectionObserverCallback;
+    target?: Element;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    vi.fn(function (callback: IntersectionObserverCallback) {
+      const observation = {
+        callback,
+        target: undefined as Element | undefined,
+        observe: (target: Element) => {
+          observation.target = target;
+        },
+        disconnect: vi.fn(),
+      };
+      observations.push(observation);
+      return observation;
+    }),
+  );
+  const first = fundTrack("near-first", "006531");
+  const alternate = fundTrack("near-alternate", "006531");
+  alternate.priceWatch!.frozenPlan = frozenPlan("006531", "1.0800");
+  const offscreen = fundTrack("offscreen", "006532");
+  vi.mocked(api.getStudyTracks).mockResolvedValue({
+    items: [first, alternate, offscreen],
+    total: 3,
+  });
+  show(<MyFundsWorkspace actor="viewport" />);
+  const nearCard = await screen.findByRole("article", { name: "基金006531" });
+  const farCard = screen.getByRole("article", { name: "基金006532" });
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
+  expect(within(nearCard).queryByRole("img")).not.toBeInTheDocument();
+  expect(within(farCard).queryByRole("img")).not.toBeInTheDocument();
+
+  function intersect(card: HTMLElement, isIntersecting: boolean) {
+    const observation = observations.find((row) =>
+      row.target ? card.contains(row.target) : false,
+    );
+    expect(observation).toBeDefined();
+    act(() => {
+      observation!.callback(
+        [
+          {
+            target: observation!.target,
+            isIntersecting,
+          } as IntersectionObserverEntry,
+        ],
+        observation as unknown as IntersectionObserver,
+      );
+    });
+  }
+
+  intersect(nearCard, false);
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
+  intersect(nearCard, true);
+  const graph = await within(nearCard).findByRole("img", {
+    name: "006531单位净值走势",
+  });
+  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(1);
+  expect(funds.getFundNavHistory).toHaveBeenCalledWith(
+    "006531",
+    "2y",
+    expect.any(AbortSignal),
+  );
+  expect(nearCard).toHaveTextContent("曲线末点早于最新确认净值");
+  intersect(nearCard, false);
+  await user.click(
+    within(nearCard).getByRole("button", {
+      name: /选择计划 研究near-alternate/,
+    }),
+  );
+  expect(nearCard).toHaveTextContent("1.0800–1.1500");
+  expect(within(nearCard).getByRole("img")).toBe(graph);
+  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(1);
+  expect(within(farCard).queryByRole("img")).not.toBeInTheDocument();
+
+  intersect(farCard, true);
+  expect(await within(farCard).findByRole("img")).toBeInTheDocument();
+  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(2);
 });
 
 it("loads private holding and original plans independently of a failed public report and only reads the chosen detail", async () => {
