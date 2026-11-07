@@ -114,8 +114,10 @@ def configure(args: argparse.Namespace) -> dict[str, str]:
         "ROUTING_ENCRYPTION_KEY": settings["routing"],
         "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "4",
         "WEB_BASE_URL": url, "CORS_ORIGINS": json.dumps([url]),
-        "TIANTIAN_IMPORT_ENABLED": "true",
+        "TIANTIAN_IMPORT_ENABLED": os.environ.get("TIANTIAN_IMPORT_ENABLED", "true"),
         "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "false"),
+        "DAILY_RESEARCH_MANUAL_ENABLED": os.environ.get("DAILY_RESEARCH_MANUAL_ENABLED", "false"),
+        "DAILY_RESEARCH_TIMEOUT_SECONDS": os.environ.get("DAILY_RESEARCH_TIMEOUT_SECONDS", "900"),
         "DAILY_RESEARCH_SCHEDULE_MODE": os.environ.get("DAILY_RESEARCH_SCHEDULE_MODE", "DAILY"),
         "DAILY_RESEARCH_SCHEDULE_TIME": os.environ.get("DAILY_RESEARCH_SCHEDULE_TIME", "07:00"),
         "DAILY_RESEARCH_START_WINDOW_MINUTES": os.environ.get("DAILY_RESEARCH_START_WINDOW_MINUTES", "120"),
@@ -161,6 +163,8 @@ def configure_macro(settings: dict[str, str], db_port: int) -> None:
         "WORKER_DATABASE_POOL_MODE": "direct",
         "DB_POOL_MIN_SIZE": "1", "DB_POOL_MAX_SIZE": "2",
         "DAILY_RESEARCH_ENABLED": os.environ.get("DAILY_RESEARCH_ENABLED", "false"),
+        "DAILY_RESEARCH_MANUAL_ENABLED": os.environ.get("DAILY_RESEARCH_MANUAL_ENABLED", "false"),
+        "DAILY_RESEARCH_TIMEOUT_SECONDS": os.environ.get("DAILY_RESEARCH_TIMEOUT_SECONDS", "900"),
         "DAILY_RESEARCH_SCHEDULE_MODE": os.environ.get("DAILY_RESEARCH_SCHEDULE_MODE", "DAILY"),
         "DAILY_RESEARCH_SCHEDULE_TIME": os.environ.get("DAILY_RESEARCH_SCHEDULE_TIME", "07:00"),
         "DAILY_RESEARCH_START_WINDOW_MINUTES": os.environ.get("DAILY_RESEARCH_START_WINDOW_MINUTES", "120"),
@@ -616,6 +620,7 @@ def prepare_runtime(args: argparse.Namespace, env: dict[str, str]) -> tuple[dict
     # this supervisor. Generate configuration with that prepared interpreter.
     configuration_keys = (
         "DAILY_RESEARCH_ENABLED", "DAILY_RESEARCH_SCHEDULE_MODE",
+        "DAILY_RESEARCH_MANUAL_ENABLED", "DAILY_RESEARCH_TIMEOUT_SECONDS", "TIANTIAN_IMPORT_ENABLED",
         "DAILY_RESEARCH_SCHEDULE_TIME", "DAILY_RESEARCH_START_WINDOW_MINUTES",
         "DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS", "DAILY_RESEARCH_DEBUG_ENABLED",
         "DAILY_RESEARCH_CODEX_PATH", "DAILY_RESEARCH_MODEL", "DAILY_RESEARCH_AUDIT_DIR",

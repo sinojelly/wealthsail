@@ -26,6 +26,40 @@ def test_local_generated_api_and_worker_keep_the_selected_research_schedule(tmp_
         assert settings["DAILY_RESEARCH_PIPELINE_TIMEOUT_SECONDS"] == "9000"
 
 
+@pytest.mark.parametrize("overrides,expected", [
+    ({}, ("false", "900", "true")),
+    ({"DAILY_RESEARCH_MANUAL_ENABLED": "true", "DAILY_RESEARCH_TIMEOUT_SECONDS": "1200",
+      "TIANTIAN_IMPORT_ENABLED": "true"}, ("true", "1200", "true")),
+    ({"DAILY_RESEARCH_MANUAL_ENABLED": "false", "DAILY_RESEARCH_TIMEOUT_SECONDS": "1800",
+      "TIANTIAN_IMPORT_ENABLED": "false"}, ("false", "1800", "false")),
+])
+def test_local_runtime_flags_follow_launch_environment(tmp_path, monkeypatch, overrides, expected):
+    from types import SimpleNamespace
+    from dotenv import dotenv_values
+    from scripts import local_dev
+    from backend.integrations import codex_research
+
+    monkeypatch.setattr(local_dev, "LOCAL", tmp_path)
+    monkeypatch.setattr(codex_research, "resolve_codex_executable", lambda *_: None)
+    for key in ("DAILY_RESEARCH_MANUAL_ENABLED", "DAILY_RESEARCH_TIMEOUT_SECONDS", "TIANTIAN_IMPORT_ENABLED"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+    for filename in ("api.env", "macro.env"):
+        (tmp_path / filename).write_text(
+            "DAILY_RESEARCH_MANUAL_ENABLED=true\nDAILY_RESEARCH_TIMEOUT_SECONDS=600\n",
+            encoding="utf-8",
+        )
+
+    local_dev.configure(SimpleNamespace(db_port=55432, web_port=5173))
+
+    for filename in ("api.env", "macro.env"):
+        settings = dotenv_values(tmp_path / filename)
+        assert settings["DAILY_RESEARCH_MANUAL_ENABLED"] == expected[0]
+        assert settings["DAILY_RESEARCH_TIMEOUT_SECONDS"] == expected[1]
+    assert dotenv_values(tmp_path / "api.env")["TIANTIAN_IMPORT_ENABLED"] == expected[2]
+
+
 def test_local_fixture_accepts_only_its_dedicated_loopback_database():
     validate_local_target("postgresql://postgres:secret@127.0.0.1:55432/wealthsail_local")
     for dsn in (
@@ -130,6 +164,9 @@ def test_runtime_configures_with_selected_python_after_installation(
     monkeypatch.setenv("DAILY_RESEARCH_ENABLED", "false")
     monkeypatch.setenv("DAILY_RESEARCH_SCHEDULE_TIME", "08:15")
     monkeypatch.setenv("CODEX_MODEL", "configured-local-model")
+    monkeypatch.setenv("DAILY_RESEARCH_MANUAL_ENABLED", "false")
+    monkeypatch.setenv("DAILY_RESEARCH_TIMEOUT_SECONDS", "1200")
+    monkeypatch.setenv("TIANTIAN_IMPORT_ENABLED", "false")
     monkeypatch.setenv("DATABASE_URL", "remote-authority-must-not-be-inherited")
     monkeypatch.setenv("MODEL_API_KEY", "private-key-must-not-be-inherited")
 
@@ -142,6 +179,9 @@ def test_runtime_configures_with_selected_python_after_installation(
             assert env["DAILY_RESEARCH_SCHEDULE_TIME"] == "08:15"
             assert env["DAILY_RESEARCH_ENABLED"] == "false"
             assert env["CODEX_MODEL"] == "configured-local-model"
+            assert env["DAILY_RESEARCH_MANUAL_ENABLED"] == "false"
+            assert env["DAILY_RESEARCH_TIMEOUT_SECONDS"] == "1200"
+            assert env["TIANTIAN_IMPORT_ENABLED"] == "false"
             assert "DATABASE_URL" not in env and "MODEL_API_KEY" not in env
             (tmp_path / "secrets.json").write_text(json.dumps(settings), encoding="utf-8")
         return ""
