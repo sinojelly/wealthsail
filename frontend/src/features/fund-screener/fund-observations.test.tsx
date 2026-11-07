@@ -242,8 +242,8 @@ function registry(researchId = run): TopicRegistryPage {
     },
   };
 }
-function renderDaily(data = daily()) {
-  return renderWithSession(
+async function renderDaily(data = daily()) {
+  const view = renderWithSession(
     <MacroContextStrip
       error={false}
       data={
@@ -255,6 +255,8 @@ function renderDaily(data = daily()) {
       }
     />,
   );
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
+  return view;
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -264,7 +266,7 @@ beforeEach(() => {
 });
 
 it("leads with all saved AI topics, independent top-ten fund observations and strict plans before the retained success summary", async () => {
-  renderDaily();
+  await renderDaily();
   const topics = await screen.findByRole("region", {
     name: "高价值机会",
   });
@@ -292,8 +294,9 @@ it("leads with all saved AI topics, independent top-ten fund observations and st
   ).not.toHaveTextContent("正式报告主题目录");
   await userEvent.click(screen.getByText("完整研究主题目录"));
   const catalog = await screen.findByRole("region", {
-    name: "本次研究主题目录",
+    name: "正式报告主题目录",
   });
+  expect(catalog).toHaveTextContent(run);
   expect(catalog).toHaveTextContent("来源核验状态未提供");
   expect(catalog).toHaveTextContent("行业范围关联尚未核实");
   expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
@@ -302,7 +305,7 @@ it("leads with all saved AI topics, independent top-ten fund observations and st
 it("keeps all three levels with no holdings, no formal report and no formal directions", async () => {
   const data = daily();
   Object.assign(data, { state: "FAILED", report: null, reportRunId: null });
-  renderDaily(data);
+  await renderDaily(data);
   expect(await screen.findByText("有价值的研究主题仍保留。")).toBeVisible();
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   expect(funds).toHaveTextContent("观察基金0");
@@ -313,7 +316,7 @@ it("keeps all three levels with no holdings, no formal report and no formal dire
 });
 
 it("shows reference prices, missing tracks, high-level exits and unresolved risks without turning a technical hit into a recommendation", async () => {
-  renderDaily();
+  await renderDaily();
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -348,7 +351,7 @@ it("shows reference prices, missing tracks, high-level exits and unresolved risk
 });
 
 it("defaults to at most ten highlights and makes the complete 46-fund inventory readable without another request", async () => {
-  renderDaily();
+  await renderDaily();
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -369,7 +372,7 @@ it("rejects an unrelated observation identity and preserves the explicit retaine
   Object.assign(data.fundObservation!, {
     researchId: "00000000-0000-0000-0000-000000000001",
   });
-  renderDaily(data);
+  await renderDaily(data);
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -394,7 +397,7 @@ it("keeps server high-exit guards and original historical risk dates visible eve
     persistedRiskFlags: ["PRODUCTION_DELAY"],
     confirmedRiskAt: { PRODUCTION_DELAY: "2026-10-30T08:00:00+08:00" },
   });
-  renderDaily(data);
+  await renderDaily(data);
   const first = await screen.findByRole("article", {
     name: "观察基金0 005000",
   });
@@ -418,7 +421,7 @@ it("allows explicitly retained observations while preserving the old READY topic
     researchId: old,
     researchAsOf: "2026-11-05T08:00:00+08:00",
   });
-  renderDaily(data);
+  await renderDaily(data);
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -454,7 +457,7 @@ it("renders actual server-projected NAV independently of incomplete reference tr
       executionVerifiedCheckCount: 0,
     },
   });
-  renderDaily(data);
+  await renderDaily(data);
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -502,7 +505,7 @@ it("keeps an unavailable frozen-observation receipt visible with its evidence ga
       "本轮基金观察冻结数据不完整，不影响其他研究成果；请核对原始资料。",
     missingEvidence: ["FROZEN_OBSERVATION_INVALID"],
   });
-  renderDaily(data);
+  await renderDaily(data);
   const funds = await screen.findByRole("region", {
     name: "服务器代表池基金观察",
   });
@@ -519,7 +522,7 @@ it("explains unverified NAV provenance without promoting a reference track to cu
   Object.assign(data.fundObservation!.highlights[0], {
     missingEvidence: ["NAV_PROVENANCE_UNVERIFIED", "INVALID_SCAN_STRUCTURE"],
   });
-  renderDaily(data);
+  await renderDaily(data);
   const first = await screen.findByRole("article", {
     name: "观察基金0 005000",
   });

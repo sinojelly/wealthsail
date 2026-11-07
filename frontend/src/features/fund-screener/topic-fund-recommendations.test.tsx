@@ -12,11 +12,12 @@ const session = vi.hoisted(() => ({
   tenantId: "reader-tenant",
   userId: "reader",
   role: "MEMBER",
+  authenticated: true,
 }));
 
 vi.mock("../../app/auth-session", async (original) => ({
   ...(await original<typeof import("../../app/auth-session")>()),
-  useAuthSession: () => session,
+  useAuthSession: () => (session.authenticated ? session : null),
 }));
 vi.mock("../../api/research-topic-registry", () => ({
   getResearchTopicRegistry: vi
@@ -135,6 +136,7 @@ function ui(data = daily()) {
 }
 beforeEach(() => {
   session.tenantId = "reader-tenant";
+  session.authenticated = true;
   vi.mocked(getResearchTopicRegistry).mockClear();
   vi.stubGlobal(
     "fetch",
@@ -146,6 +148,174 @@ beforeEach(() => {
     ),
   );
 });
+
+it("keeps a missing matching archive visible without calling it zero opportunities", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(
+      JSON.stringify({ error: { code: "NOT_FOUND", message: "missing" } }),
+      { status: 404 },
+    ),
+  );
+  renderWithSession(
+    <TopicFundRecommendations runId={run} state="READY" historical />,
+  );
+  const region = screen.getByRole("region", { name: "高价值机会" });
+  expect(
+    await within(region).findByText(/未找到该研究的基金匹配归档记录/),
+  ).toBeVisible();
+  expect(within(region).getByText(/缺少记录不代表没有基金机会/)).toBeVisible();
+  expect(within(region).getByText("最近有效报告 · 历史 · 只读")).toBeVisible();
+  expect(
+    within(region).getByRole("button", { name: "重新检查机会基金匹配" }),
+  ).toBeEnabled();
+});
+
+it("shows the current research source while waiting without reading unfinished matching", () => {
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="RUNNING"
+      source="CURRENT"
+      completedAt={at}
+    />,
+  );
+  const region = screen.getByRole("region", { name: "本次研究基金观察" });
+  expect(within(region).getByText("本次研究 · 只读观察线索")).toBeVisible();
+  expect(
+    within(region).getByText(/研究尚未完成，基金匹配等待研究结果归档/),
+  ).toBeVisible();
+  expect(within(region).getByText(new RegExp(run))).toBeVisible();
+  expect(within(region).getByText(/来源时间/)).toBeVisible();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["PARTIAL", "ARCHIVED", "部分来源或匹配资料尚待补齐"],
+  ["UNAVAILABLE", "UNRECOVERABLE", "不能据此判断没有机会或基金"],
+  ["UNAVAILABLE", "TOPIC_ARCHIVE_PENDING", "主题归档或基金匹配正在完成"],
+  ["UNAVAILABLE", "ARCHIVING", "主题归档或基金匹配正在完成"],
+  ["AVAILABLE", "ARCHIVED", "已归档的匹配结果为零"],
+])(
+  "distinguishes %s/%s from a confirmed zero-match result",
+  async (status, archiveState, message) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fetchData({
+        ...response(),
+        status,
+        archiveState,
+        items: [],
+        missingEvidence: [],
+        coverage: {
+          topicCount: 0,
+          matchedTopicCount: 0,
+          recommendedFundCount: 0,
+        },
+      }),
+    );
+    renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+    expect(await screen.findByText(new RegExp(message))).toBeVisible();
+    if (status !== "AVAILABLE")
+      expect(
+        screen.queryByText(/已归档的匹配结果为零/),
+      ).not.toBeInTheDocument();
+  },
+);
+
+it.each([
+  ["UNRECOVERABLE", []],
+  ["ARCHIVED", ["FUND_RECALL_FAILED"]],
+  [undefined, []],
+])(
+  "does not infer zero opportunities from incomplete AVAILABLE matching (%s)",
+  async (archiveState, missingEvidence) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fetchData({
+        ...response(),
+        status: "AVAILABLE",
+        archiveState,
+        missingEvidence,
+        items: [],
+        coverage: {
+          topicCount: 0,
+          matchedTopicCount: 0,
+          recommendedFundCount: 0,
+        },
+      }),
+    );
+    renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+    expect(
+      await screen.findByText(
+        /基金匹配资料或归档状态尚待补齐，不能据此判断没有基金机会/,
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/已归档的匹配结果为零/)).not.toBeInTheDocument();
+  },
+);
+
+it("retains matched funds during a lifecycle refresh and after the refresh returns 404", async () => {
+  let finishRefresh: (value: Response) => void = () => {};
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(fetchData(response()))
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+  function Lifecycle() {
+    const [updated, setUpdated] = useState(false);
+    return (
+      <>
+        <button onClick={() => setUpdated(true)}>更新终态</button>
+        <TopicFundRecommendations
+          runId={run}
+          state={updated ? "FAILED" : "READY"}
+          completedAt={updated ? at : null}
+        />
+      </>
+    );
+  }
+  renderWithSession(<Lifecycle />);
+  const originalFund = await screen.findByText(/000001.*机器人主题基金/);
+  await userEvent.click(screen.getByRole("button", { name: "更新终态" }));
+  expect(screen.getByText(/000001.*机器人主题基金/)).toBe(originalFund);
+  expect(
+    screen.getByText(/正在刷新基金匹配，继续显示此前已读取的资料/),
+  ).toBeVisible();
+  await act(async () => {
+    finishRefresh(
+      new Response(
+        JSON.stringify({ error: { code: "NOT_FOUND", message: "missing" } }),
+        { status: 404 },
+      ),
+    );
+  });
+  expect(
+    await screen.findByText(/未找到该研究的基金匹配归档记录/),
+  ).toBeVisible();
+  expect(screen.getByText(/000001.*机器人主题基金/)).toBe(originalFund);
+  expect(
+    screen.getByText(/刷新未完成，继续显示此前已读取的匹配资料/),
+  ).toBeVisible();
+});
+
+it.each(["identity", "session"])(
+  "explains an unavailable %s without requesting private data",
+  (unavailable) => {
+    if (unavailable === "session") session.authenticated = false;
+    renderWithSession(
+      <TopicFundRecommendations
+        runId={unavailable === "identity" ? "invalid" : run}
+        state="READY"
+      />,
+    );
+    const region = screen.getByRole("region", { name: "高价值机会" });
+    expect(within(region).getByRole("status")).toHaveTextContent(
+      unavailable === "session" ? "登录" : "来源尚未确定",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -154,7 +324,7 @@ afterEach(() => {
 it("connects news opportunities to funds despite no formal report or incomplete risk checks", async () => {
   renderWithSession(ui());
   const region = await screen.findByRole("region", {
-    name: "高价值机会",
+    name: "本次研究基金观察",
   });
   expect(await within(region).findByText("机器人订单机会")).toBeVisible();
   expect(within(region).getByText(/000001.*机器人主题基金/)).toBeVisible();
@@ -179,7 +349,7 @@ it("does not request recommendations until the investment panel opens", async ()
   expect(fetch).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: /今日投资观察/ }));
   expect(
-    await screen.findByRole("region", { name: "高价值机会" }),
+    await screen.findByRole("region", { name: "本次研究基金观察" }),
   ).toBeVisible();
 });
 
@@ -422,13 +592,14 @@ it("shows association evidence, alternative shares and technical position withou
 it("renders one opportunity headline and loads the full topic catalog only after explicit expansion", async () => {
   renderWithSession(ui());
   await screen.findByText("机器人订单机会");
-  expect(screen.getAllByRole("heading", { name: "高价值机会" })).toHaveLength(
-    1,
-  );
+  expect(
+    screen.getAllByRole("heading", { name: "本次研究基金观察" }),
+  ).toHaveLength(1);
   expect(
     screen.queryByRole("heading", { name: /值得关注的 AI 投资主题/ }),
   ).not.toBeInTheDocument();
   expect(getResearchTopicRegistry).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   await userEvent.click(screen.getByText("完整研究主题目录"));
   expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
 });

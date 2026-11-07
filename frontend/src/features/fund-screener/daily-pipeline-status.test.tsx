@@ -251,6 +251,7 @@ it("uses the same status for the compact header and full execution details while
   );
   const label = "正式报告未通过（触发：2026年10月30日 07:01 北京时间）";
   expect(screen.getAllByText(label)).toHaveLength(2);
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   expect(screen.getByText(/当前显示历史报告及原始日期/)).toBeVisible();
   await userEvent.click(screen.getByText("执行与报告状态"));
   const details = screen.getByText("执行与报告状态").closest("details")!;

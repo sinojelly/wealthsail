@@ -185,6 +185,11 @@ function refetchOpportunity(client: QueryClient) {
   });
 }
 
+async function openFullResearch() {
+  const summary = await screen.findByText("展开查看完整研究");
+  if (!summary.closest("details")?.open) await userEvent.click(summary);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   Object.values(api).forEach((mock) => mock.mockReset());
@@ -265,6 +270,7 @@ it("waits for the selected opportunity report, including direction/index depende
     within(macro).getByRole("heading", { name: "当前宏观事实" }),
   ).toBeVisible();
   expect(within(macro).getByText("50.2")).toBeVisible();
+  await openFullResearch();
   expect(
     screen.getByRole("region", { name: "服务器代表池基金观察" }),
   ).toBeVisible();
@@ -281,6 +287,7 @@ it("preserves the current macro section before fund observations when a later re
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const heading = within(macro).getByRole("heading", { name: "当前宏观事实" });
   const pmi = within(macro).getByText("50.2");
+  await openFullResearch();
 
   let refreshing!: Promise<void>;
   act(() => {
@@ -335,6 +342,7 @@ it("keeps an already loaded valid report and its macro facts throughout backgrou
   const { client } = mountPage();
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const summary = within(macro).getByText("上一份有效报告的稳定宏观研判");
+  await openFullResearch();
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   const source = screen.getByLabelText("展示报告来源");
   expect(source).toHaveTextContent(previousId);
@@ -401,6 +409,7 @@ it("separates a timed-out current execution from the previous valid report and k
   ).toBeVisible();
   expect(within(macro).getByText("上一份有效报告的稳定宏观研判")).toBeVisible();
   expect(within(macro).getByText("50.2")).toBeVisible();
+  await openFullResearch();
   expect(
     screen.getByRole("region", { name: "服务器代表池基金观察" }),
   ).toBeVisible();
@@ -438,6 +447,7 @@ it("shows a loading state on a full page remount until the same selected report 
   expect(
     (await screen.findByRole("region", { name: "今日宏观总纲" })).textContent,
   ).toBe(originalText);
+  await openFullResearch();
   expect(
     screen.getByRole("region", { name: "服务器代表池基金观察" }),
   ).toBeVisible();

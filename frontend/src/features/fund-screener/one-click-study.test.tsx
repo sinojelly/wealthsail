@@ -129,6 +129,7 @@ it("shows saved historical news without offering single-news tracking", async ()
     <FundScreenerPage />,
     "/fund-screener?direction=a-share:broad&index=hs300&researchTab=events",
   );
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
   expect(
     await within(
       await screen.findByRole("list", { name: "重要事件" }),

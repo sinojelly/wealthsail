@@ -1,4 +1,4 @@
-import { useContext, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { QueryClientContext, useQuery } from "@tanstack/react-query";
 import { HttpError } from "../../../api/client";
 import {
@@ -61,7 +61,10 @@ function isMatchingPending(data?: TopicFundRecommendationsPage) {
         code === "TOPIC_ARCHIVE_PENDING" || code === "FUND_RECALL_PENDING",
     ) ||
       data?.archiveState === "TOPIC_ARCHIVE_PENDING" ||
-      data?.archiveState === "FUND_RECALL_PENDING")
+      data?.archiveState === "FUND_RECALL_PENDING" ||
+      data?.archiveState === "PENDING_ARCHIVE" ||
+      data?.archiveState === "AUDIT_PENDING" ||
+      data?.archiveState === "ARCHIVING")
   );
 }
 
@@ -257,7 +260,11 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
         <p>
           {topic.recommendationStatus === "SOURCE_PENDING"
             ? "正面来源待核验，基金匹配仍待补充。"
-            : "当前没有满足匹配条件的基金，机会逻辑与待补资料继续保留。"}
+            : topic.missingEvidence?.length
+              ? "基金匹配资料待补齐，不能据此判断没有基金机会。"
+              : topic.recommendationStatus === "NO_MATCH"
+                ? "当前没有满足匹配条件的基金，机会逻辑与待补资料继续保留。"
+                : "此主题尚无已归档的基金匹配条目，不能据此判断没有基金机会。"}
         </p>
       )}
       {topic.matchMessage && <p>基金匹配说明：{topic.matchMessage}</p>}
@@ -273,33 +280,61 @@ export default function TopicFundRecommendations({
   runId,
   state,
   completedAt,
+  source = "REPORT",
+  historical = false,
 }: {
   runId?: string | null;
   state?: string | null;
   completedAt?: string | null;
+  source?: "REPORT" | "CURRENT";
+  historical?: boolean;
 }) {
   const client = useContext(QueryClientContext);
   const session = useAuthSession();
-  if (!client || !session || !runId || !uuid.test(runId)) return null;
   const terminal =
     state === "READY" ||
     state === "FAILED" ||
     (state === "UNCERTAIN" &&
       !!completedAt &&
       Number.isFinite(Date.parse(completedAt)));
-  if (!terminal) return null;
+  const title = source === "CURRENT" ? "本次研究基金观察" : "高价值机会";
   return (
-    <RecommendationsData
-      key={`${session.tenantId}:${session.userId}:${session.role}:${runId}:${state}:${completedAt ?? "undated"}`}
-      runId={runId}
-      lifecycle={`${state}:${completedAt ?? "undated"}`}
-      queryKey={privateQueryKey(
-        session,
-        "topic-fund-recommendations",
-        session.role,
-        runId,
+    <section aria-label={title} style={box}>
+      <h3>{title}</h3>
+      <p>
+        {source === "CURRENT"
+          ? "本次研究 · 只读观察线索"
+          : historical
+            ? "最近有效报告 · 历史 · 只读"
+            : "展示报告 · 只读"}
+      </p>
+      <p>
+        来源研究ID：{runId && uuid.test(runId) ? runId : "尚未确定"} ·
+        来源时间：
+        {completedAt ? timeLabel(completedAt) : "尚未确定"}
+      </p>
+      <p>
+        由对应研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
+      </p>
+      {!client || !session ? (
+        <p role="status">请先登录以读取当前账户的基金匹配资料。</p>
+      ) : !runId || !uuid.test(runId) ? (
+        <p role="status">基金匹配来源尚未确定，等待展示报告或研究记录。</p>
+      ) : (
+        <RecommendationsData
+          key={`${session.tenantId}:${session.userId}:${session.role}:${runId}`}
+          runId={runId}
+          terminal={terminal}
+          lifecycle={`${state}:${completedAt ?? "undated"}`}
+          queryKey={privateQueryKey(
+            session,
+            "topic-fund-recommendations",
+            session.role,
+            runId,
+          )}
+        />
       )}
-    />
+    </section>
   );
 }
 
@@ -307,19 +342,25 @@ function RecommendationsData({
   runId,
   lifecycle,
   queryKey,
+  terminal,
 }: {
   runId: string;
   lifecycle: string;
   queryKey: readonly (string | number)[];
+  terminal: boolean;
 }) {
   const reads = useRef(0);
-  const [pollingExhausted, setPollingExhausted] = useState(false);
+  const previousLifecycle = useRef(lifecycle);
+  const [exhaustedLifecycle, setExhaustedLifecycle] = useState<string | null>(
+    null,
+  );
   const query = useQuery({
-    queryKey: [...queryKey, lifecycle],
+    queryKey,
+    enabled: terminal,
     queryFn: async ({ signal }) => {
       reads.current++;
       const data = await getTopicFundRecommendations(runId, signal);
-      if (reads.current > 10) setPollingExhausted(true);
+      if (reads.current > 10) setExhaustedLifecycle(lifecycle);
       return data;
     },
     retry: false,
@@ -341,8 +382,13 @@ function RecommendationsData({
         : false;
     },
   });
-  if (query.error instanceof HttpError && query.error.status === 404)
-    return null;
+  const { refetch } = query;
+  useEffect(() => {
+    if (previousLifecycle.current === lifecycle) return;
+    previousLifecycle.current = lifecycle;
+    reads.current = 0;
+    if (terminal) void refetch({ cancelRefetch: false });
+  }, [lifecycle, terminal, refetch]);
   const data = query.data;
   const valid =
     data &&
@@ -362,15 +408,36 @@ function RecommendationsData({
         funds?.some((fund) => fund.pricePosition?.status === "DATA_PENDING"),
       ),
     );
+  const confirmedZero =
+    valid &&
+    data.status === "AVAILABLE" &&
+    data.archiveState === "ARCHIVED" &&
+    !isMatchingPending(data) &&
+    !data.missingEvidence?.length &&
+    data.coverage.matchedTopicCount === 0 &&
+    data.coverage.recommendedFundCount === 0;
   return (
-    <section aria-label="高价值机会" style={box}>
-      <h3>高价值机会</h3>
-      <p>
-        由本次研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
-      </p>
-      {query.isPending && <p role="status">正在读取机会与基金匹配…</p>}
+    <>
+      {!terminal && (
+        <p role="status">研究尚未完成，基金匹配等待研究结果归档。</p>
+      )}
+      {terminal && query.isPending && (
+        <p role="status">正在读取机会与基金匹配…</p>
+      )}
+      {query.isFetching && valid && (
+        <p role="status">正在刷新基金匹配，继续显示此前已读取的资料。</p>
+      )}
       {query.isError && (
-        <p role="alert">机会基金匹配暂不可读取，请稍后重新检查。</p>
+        <>
+          <p role="alert">
+            {query.error instanceof HttpError && query.error.status === 404
+              ? "未找到该研究的基金匹配归档记录；缺少记录不代表没有基金机会。"
+              : "机会基金匹配暂不可读取，请稍后重新检查。"}
+          </p>
+          {valid && (
+            <p role="status">刷新未完成，继续显示此前已读取的匹配资料。</p>
+          )}
+        </>
       )}
       {data && !valid && (
         <p role="alert">机会基金匹配身份或结构不完整，暂不展示内容。</p>
@@ -398,7 +465,7 @@ function RecommendationsData({
           )}
           {isMatchingPending(data) && !query.isError && (
             <p role="status">
-              {pollingExhausted
+              {exhaustedLifecycle === lifecycle
                 ? "自动检查已达上限，可手动重新检查主题归档或基金匹配。"
                 : "主题归档或基金匹配正在完成，每3秒自动检查，最多10次；也可手动重新检查。"}
             </p>
@@ -419,29 +486,39 @@ function RecommendationsData({
               ))}
             </details>
           )}
-          {!data.items.length && data.status !== "UNAVAILABLE" && (
-            <p>本次尚无可展示的机会主题，研究主题目录仍可阅读。</p>
+          {!data.items.length && confirmedZero && (
+            <p>
+              已归档的匹配结果为零；这仅表示该研究未匹配到基金，不代表市场没有机会。
+            </p>
           )}
+          {!data.items.length &&
+            data.status !== "UNAVAILABLE" &&
+            !isMatchingPending(data) &&
+            !confirmedZero && (
+              <p>基金匹配资料或归档状态尚待补齐，不能据此判断没有基金机会。</p>
+            )}
         </>
       )}
-      {(query.isError ||
-        (valid &&
-          (pricesPending ||
-            data.status === "UNAVAILABLE" ||
-            isMatchingPending(data) ||
-            data.missingEvidence?.includes("FUND_RECALL_FAILED")))) && (
-        <button
-          type="button"
-          disabled={query.isFetching}
-          onClick={() => {
-            reads.current = 0;
-            setPollingExhausted(false);
-            void query.refetch();
-          }}
-        >
-          重新检查机会基金匹配
-        </button>
-      )}
-    </section>
+      {terminal &&
+        (query.isError ||
+          (valid &&
+            (pricesPending ||
+              data.status === "UNAVAILABLE" ||
+              (!data.items.length && !confirmedZero) ||
+              isMatchingPending(data) ||
+              data.missingEvidence?.includes("FUND_RECALL_FAILED")))) && (
+          <button
+            type="button"
+            disabled={query.isFetching}
+            onClick={() => {
+              reads.current = 0;
+              setExhaustedLifecycle(null);
+              void query.refetch();
+            }}
+          >
+            重新检查机会基金匹配
+          </button>
+        )}
+    </>
   );
 }

@@ -26,9 +26,12 @@ function TopicCatalog(
 ) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <details
+      id={`topic-catalog-${props.runId}`}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
       <summary>完整研究主题目录</summary>
-      {expanded && <ResearchTopicRegistry {...props} variant="CURRENT" />}
+      {expanded && <ResearchTopicRegistry {...props} />}
     </details>
   );
 }
@@ -254,10 +257,13 @@ export default function MacroContextStrip({
   const currentResearchId = daily?.pipeline
     ? daily.pipeline.researchRunId
     : daily?.runId;
-  const topicResearchId =
-    currentResearchId || (daily?.report ? daily.reportRunId : undefined);
-  const retainedTopics =
-    !!topicResearchId && topicResearchId !== currentResearchId;
+  const displayedReportId = daily?.report ? daily.reportRunId : undefined;
+  const isHistoricalReport =
+    !!displayedReportId &&
+    (displayedReportId !== currentResearchId || daily?.state !== "READY");
+  const currentResearchCompletedAt = daily?.pipeline
+    ? daily.pipeline.finishedAt
+    : daily?.completedAt;
   const confirmedBreach =
     portfolio?.state === "READY" &&
     portfolio.heldSelected === true &&
@@ -313,13 +319,22 @@ export default function MacroContextStrip({
             type="button"
             onClick={() => {
               open("events", true);
-              requestAnimationFrame(() =>
-                document
-                  .getElementById(
-                    `research-topic-registry-${ready.dailyResearch!.reportRunId}`,
-                  )
-                  ?.scrollIntoView?.({ behavior: "smooth", block: "start" }),
-              );
+              requestAnimationFrame(() => {
+                const details = document.getElementById(
+                  `${panelId}-full-research`,
+                ) as HTMLDetailsElement | null;
+                const catalog = document.getElementById(
+                  `topic-catalog-${displayedReportId}`,
+                ) as HTMLDetailsElement | null;
+                if (details) details.open = true;
+                if (catalog) {
+                  catalog.open = true;
+                  catalog.scrollIntoView?.({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                }
+              });
             }}
           >
             查看展示报告的主题目录
@@ -396,142 +411,163 @@ export default function MacroContextStrip({
             aria-labelledby={`${panelId}-${tab}`}
             className="op-research-topic-body"
           >
-            {tab === "events" && ready && (
+            {tab === "events" && (
               <>
-                <MacroOverview data={ready} />
-                {retainedTopics && (
-                  <p>
-                    以下主题来自最近成功报告，保留原研究日期；今日主题尚未更新。
-                  </p>
-                )}
-                <TopicFundRecommendations
-                  runId={topicResearchId}
-                  state={
-                    retainedTopics
-                      ? "READY"
-                      : (daily?.pipeline?.state ?? daily?.state)
-                  }
-                  completedAt={
-                    retainedTopics
-                      ? daily?.reportCompletedAt
-                      : daily?.pipeline
-                        ? daily.pipeline.finishedAt
-                        : daily?.completedAt
-                  }
-                />
-                <TopicCatalog
-                  key={`catalog:${topicResearchId}`}
-                  runId={topicResearchId}
-                  state={
-                    retainedTopics
-                      ? "READY"
-                      : (daily?.pipeline?.state ?? daily?.state)
-                  }
-                  completedAt={
-                    retainedTopics
-                      ? daily?.reportCompletedAt
-                      : daily?.pipeline
-                        ? daily.pipeline.finishedAt
-                        : daily?.completedAt
-                  }
-                />
-                <FundObservations
-                  key={`observation:${daily?.fundObservation?.researchId ?? "no-observation"}`}
-                  data={daily}
-                />
-                <ValueDirections
-                  key={`formal:${daily?.reportRunId ?? "no-report"}`}
-                  data={daily}
-                  onTrack={onStudyDirection}
-                  onViewMacro={() => open("macro")}
-                  presentation="FORMAL"
-                />
-                {ready?.dailyResearch?.report &&
-                  ready.dailyResearch.reportRunId && (
-                    <section
-                      className="op-daily-report"
-                      aria-label="最近一次成功研究"
-                    >
-                      <h3>最近一次成功研究</h3>
-                      <p>
-                        完成：{timeLabel(ready.dailyResearch.reportCompletedAt)}
-                        （北京时间）
-                        {ready.dailyResearch.state === "READY"
-                          ? " · 本研究日已完成"
-                          : " · 今日尚无新的正式研究；此为最近一次成功报告"}
-                      </p>
-                      <p>
-                        {researchSummary(
-                          ready.dailyResearch.report.summary || "",
-                          380,
-                        )}
-                      </p>
-                      {!!ready.dailyResearch.report.events.length && (
-                        <ul
-                          className="op-daily-events"
-                          aria-label="最近成功研究的主要事件"
-                        >
-                          {ready.dailyResearch.report.events
-                            .slice(0, 3)
-                            .map((event) => (
-                              <li key={event.id}>
-                                <article className="op-daily-event">
-                                  <strong>{event.title}</strong>
-                                  <p>
-                                    {researchSummary(event.summary || "", 220)}
-                                  </p>
-                                </article>
-                              </li>
-                            ))}
-                        </ul>
-                      )}
-                      <a href="#latest-successful-daily-report">
-                        查看完整成功报告、新闻、主题与来源
-                      </a>
-                      <p>
-                        <small>
-                          历史研究仅供阅读；当前价格、风险及基金操作资格须重新核验。
-                        </small>
-                      </p>
-                    </section>
-                  )}
+                {ready && <MacroOverview data={ready} />}
                 {renderTrackedFunds?.()}
-                <QuantitativeScan
-                  data={ready?.dailyResearch}
-                  onTrack={onStudyQuantScan}
-                />
-                {!ready?.dailyResearch?.report &&
-                  !!ready?.actionableZones?.length && (
-                    <section aria-label="程序价格观察">
-                      <h3>程序价格观察 · 尚非今日综合研判</h3>
-                      {ready.actionableZones.map((result) => (
-                        <ActionablePlan
-                          key={`${result.subjectKind}:${result.subjectId}`}
-                          result={result}
+                {ready && (
+                  <>
+                    {daily?.report && (
+                      <TopicFundRecommendations
+                        runId={displayedReportId}
+                        state="READY"
+                        completedAt={daily.reportCompletedAt}
+                        source="REPORT"
+                        historical={isHistoricalReport}
+                      />
+                    )}
+                    {currentResearchId &&
+                      currentResearchId !== displayedReportId && (
+                        <TopicFundRecommendations
+                          runId={currentResearchId}
+                          state={daily?.pipeline?.state ?? daily?.state}
+                          completedAt={currentResearchCompletedAt}
+                          source="CURRENT"
                         />
-                      ))}
-                    </section>
-                  )}
-                <DailyResearchReport
-                  data={ready?.dailyResearch}
-                  directions={directions}
-                  onDirectionSelect={onDirectionSelect}
-                  topicRegistryElsewhereRunId={topicResearchId}
-                />
-                {!!ready?.events?.filter((event) => !reportIds.has(event.id))
-                  .length && (
-                  <details
-                    className="op-print-disclosure"
-                    key={`official:${ready.dailyResearch?.reportRunId ?? ready.dailyResearch?.report?.asOf ?? "no-report"}`}
-                  >
-                    <summary>官方发布与其他观察</summary>
-                    <MacroEvents
-                      events={ready.events.filter(
-                        (event) => !reportIds.has(event.id),
                       )}
-                      state={ready.eventState}
-                    />
-                  </details>
+                    {!daily?.report && !currentResearchId && (
+                      <p role="status">
+                        基金机会来源尚未确定，等待有效报告或本次研究记录。
+                      </p>
+                    )}
+                    <details
+                      id={`${panelId}-full-research`}
+                      className="op-print-disclosure"
+                    >
+                      <summary>展开查看完整研究</summary>
+                      {displayedReportId ? (
+                        <TopicCatalog
+                          key={`report-catalog:${displayedReportId}`}
+                          runId={displayedReportId}
+                          state="READY"
+                          completedAt={daily?.reportCompletedAt}
+                          variant="FORMAL"
+                        />
+                      ) : (
+                        <TopicCatalog
+                          key={`current-catalog:${currentResearchId}`}
+                          runId={currentResearchId}
+                          state={daily?.pipeline?.state ?? daily?.state}
+                          completedAt={currentResearchCompletedAt}
+                          variant="CURRENT"
+                        />
+                      )}
+                      <FundObservations
+                        key={`observation:${daily?.fundObservation?.researchId ?? "no-observation"}`}
+                        data={daily}
+                      />
+                      <ValueDirections
+                        key={`formal:${daily?.reportRunId ?? "no-report"}`}
+                        data={daily}
+                        onTrack={onStudyDirection}
+                        onViewMacro={() => open("macro")}
+                        presentation="FORMAL"
+                      />
+                      {ready?.dailyResearch?.report &&
+                        ready.dailyResearch.reportRunId && (
+                          <section
+                            className="op-daily-report"
+                            aria-label="最近一次成功研究"
+                          >
+                            <h3>最近一次成功研究</h3>
+                            <p>
+                              完成：
+                              {timeLabel(ready.dailyResearch.reportCompletedAt)}
+                              （北京时间）
+                              {ready.dailyResearch.state === "READY"
+                                ? " · 本研究日已完成"
+                                : " · 今日尚无新的正式研究；此为最近一次成功报告"}
+                            </p>
+                            <p>
+                              {researchSummary(
+                                ready.dailyResearch.report.summary || "",
+                                380,
+                              )}
+                            </p>
+                            {!!ready.dailyResearch.report.events.length && (
+                              <ul
+                                className="op-daily-events"
+                                aria-label="最近成功研究的主要事件"
+                              >
+                                {ready.dailyResearch.report.events
+                                  .slice(0, 3)
+                                  .map((event) => (
+                                    <li key={event.id}>
+                                      <article className="op-daily-event">
+                                        <strong>{event.title}</strong>
+                                        <p>
+                                          {researchSummary(
+                                            event.summary || "",
+                                            220,
+                                          )}
+                                        </p>
+                                      </article>
+                                    </li>
+                                  ))}
+                              </ul>
+                            )}
+                            <a href="#latest-successful-daily-report">
+                              查看完整成功报告、新闻、主题与来源
+                            </a>
+                            <p>
+                              <small>
+                                历史研究仅供阅读；当前价格、风险及基金操作资格须重新核验。
+                              </small>
+                            </p>
+                          </section>
+                        )}
+                      <QuantitativeScan
+                        data={ready?.dailyResearch}
+                        onTrack={onStudyQuantScan}
+                      />
+                      {!ready?.dailyResearch?.report &&
+                        !!ready?.actionableZones?.length && (
+                          <section aria-label="程序价格观察">
+                            <h3>程序价格观察 · 尚非今日综合研判</h3>
+                            {ready.actionableZones.map((result) => (
+                              <ActionablePlan
+                                key={`${result.subjectKind}:${result.subjectId}`}
+                                result={result}
+                              />
+                            ))}
+                          </section>
+                        )}
+                      <DailyResearchReport
+                        data={ready?.dailyResearch}
+                        directions={directions}
+                        onDirectionSelect={onDirectionSelect}
+                        topicRegistryElsewhereRunId={
+                          displayedReportId ?? currentResearchId
+                        }
+                      />
+                      {!!ready?.events?.filter(
+                        (event) => !reportIds.has(event.id),
+                      ).length && (
+                        <details
+                          className="op-print-disclosure"
+                          key={`official:${ready.dailyResearch?.reportRunId ?? ready.dailyResearch?.report?.asOf ?? "no-report"}`}
+                        >
+                          <summary>官方发布与其他观察</summary>
+                          <MacroEvents
+                            events={ready.events.filter(
+                              (event) => !reportIds.has(event.id),
+                            )}
+                            state={ready.eventState}
+                          />
+                        </details>
+                      )}
+                    </details>
+                  </>
                 )}
               </>
             )}

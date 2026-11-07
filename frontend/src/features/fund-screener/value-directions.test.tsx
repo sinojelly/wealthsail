@@ -139,6 +139,11 @@ const context = (extra = {}) => ({
   },
   ...extra,
 });
+async function renderFullResearch() {
+  const view = renderWithSession(<FundScreenerPage />);
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
+  return view;
+}
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.context.mockResolvedValue(context());
@@ -148,7 +153,7 @@ beforeEach(() => {
 });
 
 it("keeps current macro facts first and strict plans ahead of compact news without user selection", async () => {
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const directions = await screen.findByRole("region", {
     name: "今日价值方向与买卖计划",
@@ -194,7 +199,7 @@ it.each([
       currentChangePct: value,
     });
     mocks.context.mockResolvedValue(data);
-    renderWithSession(<FundScreenerPage />);
+    await renderFullResearch();
     const card = await screen.findByRole("article", {
       name: "医药研究基金006000买卖计划",
     });
@@ -214,7 +219,7 @@ it.each([undefined, null, "", "NaN", "Infinity"])(
       currentChangePct: value,
     });
     mocks.context.mockResolvedValue(data);
-    renderWithSession(<FundScreenerPage />);
+    await renderFullResearch();
     const card = await screen.findByRole("article", {
       name: "医药研究基金006000买卖计划",
     });
@@ -225,7 +230,7 @@ it.each([undefined, null, "", "NaN", "Infinity"])(
 );
 
 it("freezes each direction and fund directly without prices or confirmation and retains the daily list", async () => {
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
   const buttons = within(card).getAllByRole("button", {
     name: /跟踪该方向与买卖点/,
@@ -283,7 +288,7 @@ it("saves a scan-only fund with the exact frozen report identity and no client p
     },
   });
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   await userEvent.click(await screen.findByText(/查看全市场 1 只/));
   await userEvent.click(screen.getByRole("button", { name: "+ 跟踪 007466" }));
   expect(study.createStudyTrack).toHaveBeenCalledExactlyOnceWith({
@@ -301,7 +306,7 @@ it("keeps a failed direct save retryable without borrowing another fund's status
   vi.mocked(study.createStudyTrack).mockRejectedValueOnce(
     new Error("保存失败，请重试"),
   );
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
   await userEvent.click(
     within(card).getAllByRole("button", { name: /跟踪该方向与买卖点/ })[0],
@@ -325,7 +330,7 @@ it("shows a direction with missing prices honestly and keeps legacy plans outsid
   data.dailyResearch.report.valueDirections = [{ ...direction, plans: [] }];
   data.dailyResearch.report.actionablePlans = [];
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
   expect(card).toHaveTextContent("等待真实价格依据");
   expect(
@@ -348,7 +353,7 @@ it("keeps dynamic price revisions readable on the compact plan before algorithm 
     priceRevisionNote: "订单兑现减弱，关注区间下调。",
   });
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const card = await screen.findByRole("article", {
     name: "医药研究基金006000买卖计划",
   });
@@ -377,7 +382,7 @@ it("does not turn an empty or conflicting macro observation into a current zero"
       },
     }),
   );
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   await screen.findByRole("region", { name: "创新药与医疗修复" });
   const macro = screen.getByRole("region", { name: "今日宏观总纲" });
   expect(macro).not.toHaveTextContent("0.0");
@@ -391,7 +396,7 @@ it("keeps a historical macro conclusion and directions dated instead of presenti
     asOf: "2026-10-16T09:00:00+08:00",
   });
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   await screen.findByRole("region", { name: "创新药与医疗修复" });
   const macro = screen.getByRole("region", { name: "今日宏观总纲" });
   expect(macro).toHaveTextContent("历史宏观研判");
@@ -426,7 +431,7 @@ it("keeps compact frozen macro references folded, formats zero and negatives, an
   });
   const original = JSON.stringify(data);
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
   const facts = within(card).getByText(/宏观参考：/);
   expect(facts).not.toBeVisible();
@@ -458,7 +463,7 @@ it("labels the displayed debug report and keeps secondary evidence collapsed", a
     calibrationNote: "strategyMemoryRules为空，无真实规则key",
   });
   mocks.context.mockResolvedValue(data);
-  renderWithSession(<FundScreenerPage />);
+  await renderFullResearch();
   expect(await screen.findByText(/当前报告：调试版/)).toBeVisible();
   for (const label of [
     "阅读完整日报",
