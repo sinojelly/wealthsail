@@ -1,8 +1,10 @@
 import type {
   HeldFundWatch,
+  StudyPriceWatch,
   StudyTrack,
   StudyTrackList,
 } from "../../api/study-api";
+import type { SellRiskAlert } from "../../api/investment";
 
 export interface PersonalFundGroup {
   key: string;
@@ -12,6 +14,86 @@ export interface PersonalFundGroup {
   holding?: HeldFundWatch;
   tracks: StudyTrack[];
   trackingSuppressed: boolean;
+}
+
+/** Display-only confidence: never infer a trigger from a different quote or plan. */
+export function personalWatchState(watch?: StudyPriceWatch | null) {
+  if (!watch) return undefined;
+  if (watch.state === "HOLDING" && watch.holding?.state !== "CONFIRMED")
+    return "UNKNOWN";
+  const quote =
+    watch.basis === "CONFIRMED_NAV"
+      ? watch.confirmedNav
+      : watch.basis === "ESTIMATE_1430"
+        ? watch.estimate1430
+        : watch.basis === "ESTIMATE_INTRADAY"
+          ? watch.currentEstimate
+          : undefined;
+  const plan = watch.frozenPlan;
+  const selected = plan?.tracks.find(
+    (row) => row.track === (plan.selectedTrack ?? plan.track),
+  );
+  if (
+    !selected ||
+    !watch.asOf ||
+    !quote?.asOf ||
+    quote.value == null ||
+    quote.usable !== true
+  )
+    return "UNKNOWN";
+  return watch.state;
+}
+
+/** A code alone cannot establish either fund identity or the same risk observation. */
+export function hasSameSellReminder(
+  group: PersonalFundGroup,
+  track: StudyTrack,
+  alerts: readonly SellRiskAlert[],
+) {
+  const watch = track.priceWatch;
+  const state = personalWatchState(watch);
+  if (
+    !watch ||
+    !group.code ||
+    (state !== "STOP_LOSS" && state !== "TAKE_PROFIT")
+  )
+    return false;
+  const plan = watch.frozenPlan;
+  const selected = plan?.tracks.find(
+    (row) => row.track === (plan.selectedTrack ?? plan.track),
+  );
+  const quote =
+    watch.basis === "CONFIRMED_NAV"
+      ? watch.confirmedNav
+      : watch.basis === "ESTIMATE_1430"
+        ? watch.estimate1430
+        : null;
+  if (!selected || !quote) return false;
+  return alerts.some(
+    (alert) =>
+      alert.planOrigin === "FROZEN_STUDY" &&
+      alert.relationship.includes("TRACKED") &&
+      !!alert.trackId &&
+      alert.trackId === track.id &&
+      alert.fundCode === group.code &&
+      alert.selectedTrack === selected.track &&
+      alert.basis === watch.basis &&
+      !!alert.asOf &&
+      alert.asOf === watch.asOf &&
+      alert.asOf === quote.asOf &&
+      alert.value != null &&
+      alert.value === quote.value &&
+      (state === "STOP_LOSS"
+        ? alert.state === "STOP_LOSS" &&
+          selected.stopLossPrice != null &&
+          alert.stopLossPrice === selected.stopLossPrice
+        : (alert.state === "TAKE_PROFIT_T1" ||
+            alert.state === "TAKE_PROFIT_T2") &&
+          selected.takeProfitT1 != null &&
+          selected.takeProfitT2 != null &&
+          alert.takeProfitT1 === selected.takeProfitT1 &&
+          alert.takeProfitT2 === selected.takeProfitT2),
+  );
 }
 
 export function groupPersonalFunds(

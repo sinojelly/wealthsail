@@ -6,6 +6,7 @@ import * as api from "../../api/study-api";
 import * as funds from "../../api/funds";
 import MyFundsWorkspace from "./components/MyFundsWorkspace";
 import PersonalActionReminders from "./components/PersonalActionReminders";
+import type { SellRiskAlert } from "../../api/investment";
 import {
   frozenPlan,
   fundTrack,
@@ -337,6 +338,198 @@ it("distinguishes reminder read failure, missing quotes and a successfully read 
   expect(await screen.findByText("暂无新触发")).toBeInTheDocument();
 });
 
+it("does not call unplanned real holdings a completed no-hit check", async () => {
+  vi.mocked(api.getStudyTracks).mockResolvedValue({
+    items: [],
+    total: 0,
+    heldFunds: [heldFund()],
+  });
+  show(
+    <PersonalActionReminders
+      actor="holding-only"
+      onViewFunds={() => undefined}
+    />,
+  );
+  expect(
+    await screen.findByText(/持仓基金024194.*尚无可评估的冻结计划/),
+  ).toBeVisible();
+  expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+});
+
+it.each(["UNKNOWN", "NONE"] as const)(
+  "keeps a %s holding identity pending in both reminders and fund details",
+  async (state) => {
+    const track = fundTrack();
+    track.priceWatch!.state = "HOLDING";
+    track.priceWatch!.holding.state = state;
+    vi.mocked(api.getStudyTracks).mockResolvedValue({
+      items: [track],
+      total: 1,
+    });
+    show(
+      <>
+        <PersonalActionReminders
+          actor="holding-identity"
+          onViewFunds={() => undefined}
+        />
+        <MyFundsWorkspace actor="holding-identity" />
+      </>,
+    );
+    const reminders = screen.getByRole("region", { name: "我的行动提醒" });
+    expect(await within(reminders).findByText(/持仓身份待核实/)).toBeVisible();
+    expect(within(reminders).queryByText("暂无新触发")).not.toBeInTheDocument();
+    const fundsRegion = screen.getByRole("region", { name: "我的基金" });
+    expect(await within(fundsRegion).findByText("行情待更新")).toBeVisible();
+  },
+);
+
+it("keeps a server observation with missing usable quote pending instead of declaring no triggers", async () => {
+  const track = fundTrack();
+  track.priceWatch!.state = "OBSERVING";
+  track.priceWatch!.confirmedNav = null;
+  vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [track], total: 1 });
+  show(
+    <PersonalActionReminders
+      actor="no-confirmed-quote"
+      onViewFunds={() => undefined}
+    />,
+  );
+  expect(await screen.findByText(/行情依据不足/)).toBeVisible();
+  expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+});
+
+function frozenSellAlert(track: api.StudyTrack): SellRiskAlert {
+  const watch = track.priceWatch!;
+  const plan = watch.frozenPlan!.tracks[0];
+  return {
+    fundCode: track.scope.fundCode!,
+    label: track.title,
+    relationship: ["TRACKED"],
+    state: "STOP_LOSS",
+    basis: "CONFIRMED_NAV",
+    value: watch.confirmedNav!.value,
+    asOf: watch.asOf,
+    sourceUri: null,
+    rsi14: null,
+    rsiAsOf: null,
+    planOrigin: "FROZEN_STUDY",
+    trackId: track.id,
+    selectedTrack: plan.track,
+    stopLossPrice: plan.stopLossPrice,
+    takeProfitT1: plan.takeProfitT1,
+    takeProfitT2: plan.takeProfitT2,
+  };
+}
+
+it.each(["missing-plan", "missing-track"])(
+  "keeps %s observations pending even when a quote exists",
+  async (gap) => {
+    const track = fundTrack();
+    track.priceWatch!.state = "OBSERVING";
+    if (gap === "missing-plan") track.priceWatch!.frozenPlan = null;
+    else track.priceWatch!.frozenPlan!.tracks = [];
+    vi.mocked(api.getStudyTracks).mockResolvedValue({
+      items: [track],
+      total: 1,
+    });
+    show(<PersonalActionReminders actor={gap} onViewFunds={() => undefined} />);
+    expect(await screen.findByText(/行情依据不足/)).toBeVisible();
+    expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+  },
+);
+
+it("keeps equal-code sell warnings from different markets and different research plans visible", async () => {
+  const domestic = fundTrack("domestic-stop", "000402");
+  domestic.priceWatch!.state = "STOP_LOSS";
+  const foreign = fundTrack("foreign-stop", "000402");
+  foreign.scope.fundMarket = "ETF_CN";
+  foreign.priceWatch!.state = "STOP_LOSS";
+  const otherPlan = fundTrack("another-stop", "000402");
+  otherPlan.priceWatch!.state = "STOP_LOSS";
+  vi.mocked(api.getStudyTracks).mockResolvedValue({
+    items: [domestic, foreign, otherPlan],
+    total: 3,
+  });
+  show(
+    <PersonalActionReminders
+      actor="same-code-alerts"
+      onViewFunds={() => undefined}
+      sellRiskAlerts={[frozenSellAlert(domestic)]}
+    />,
+  );
+  const region = screen.getByRole("region", { name: "我的行动提醒" });
+  expect(await within(region).findByText(/研究foreign-stop/)).toBeVisible();
+  expect(within(region).getByText(/研究another-stop/)).toBeVisible();
+  expect(
+    within(region).queryByText(/研究domestic-stop/),
+  ).not.toBeInTheDocument();
+  expect(within(region).getByText(/ETF_CN/)).toBeVisible();
+});
+
+it.each(["missing-id", "different-risk", "older-observation"])(
+  "does not suppress a sell reminder when the global alert has %s",
+  async (difference) => {
+    const track = fundTrack("visible-stop", "000402");
+    track.priceWatch!.state = "STOP_LOSS";
+    const alert = frozenSellAlert(track);
+    if (difference === "missing-id") delete alert.trackId;
+    if (difference === "different-risk") alert.state = "TAKE_PROFIT_T1";
+    if (difference === "older-observation") alert.asOf = "2026-11-05";
+    vi.mocked(api.getStudyTracks).mockResolvedValue({
+      items: [track],
+      total: 1,
+    });
+    show(
+      <PersonalActionReminders
+        actor={`sell-${difference}`}
+        onViewFunds={() => undefined}
+        sellRiskAlerts={[alert]}
+      />,
+    );
+    expect(await screen.findByText(/研究visible-stop/)).toBeVisible();
+  },
+);
+
+it.each(["UNKNOWN", "MANUAL_REVIEW_REQUIRED", "INVALIDATED"] as const)(
+  "retains a %s plan check even when its sell observation duplicates a global alert",
+  async (status) => {
+    const track = fundTrack("pending-stop", "000402");
+    track.status = status;
+    track.priceWatch!.state = "STOP_LOSS";
+    vi.mocked(api.getStudyTracks).mockResolvedValue({
+      items: [track],
+      total: 1,
+    });
+    show(
+      <PersonalActionReminders
+        actor={`pending-${status}`}
+        onViewFunds={() => undefined}
+        sellRiskAlerts={[frozenSellAlert(track)]}
+      />,
+    );
+    expect(await screen.findByText(/000402.*待核实/)).toBeVisible();
+    expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+  },
+);
+
+it("points to an already displayed risk instead of declaring no triggers after trusted deduplication", async () => {
+  const track = fundTrack("duplicate-stop", "000402");
+  track.priceWatch!.state = "STOP_LOSS";
+  vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [track], total: 1 });
+  show(
+    <PersonalActionReminders
+      actor="duplicate-risk"
+      onViewFunds={() => undefined}
+      sellRiskAlerts={[frozenSellAlert(track)]}
+    />,
+  );
+  expect(
+    await screen.findByText(/相同风险已在上方.*卖出与风控提醒/),
+  ).toBeVisible();
+  expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+  expect(screen.queryByText(/研究duplicate-stop/)).not.toBeInTheDocument();
+});
+
 it("shows only active trigger or explicit check reminders and suppresses duplicate global sell alerts", async () => {
   const user = userEvent.setup();
   const entry = fundTrack("entry", "000401");
@@ -359,7 +552,7 @@ it("shows only active trigger or explicit check reminders and suppresses duplica
     <PersonalActionReminders
       actor="reminders"
       onViewFunds={onViewFunds}
-      excludedSellFundCodes={["000402"]}
+      sellRiskAlerts={[frozenSellAlert(stop)]}
     />,
   );
   const region = await screen.findByRole("region", { name: "我的行动提醒" });

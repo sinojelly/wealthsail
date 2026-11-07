@@ -406,11 +406,11 @@ function ResearchWorkspace({ subject }: { subject: string }) {
             renderStudyTracking={renderStudyTracking}
           />
         )}
-        renderPersonalReminders={(onViewFunds, excludedSellFundCodes) => (
+        renderPersonalReminders={(onViewFunds, sellRiskAlerts) => (
           <PersonalActionReminders
             actor={subject}
             onViewFunds={onViewFunds}
-            excludedSellFundCodes={excludedSellFundCodes}
+            sellRiskAlerts={sellRiskAlerts}
           />
         )}
         renderResearchRefresh={() => <DailyResearchRefresh actor={subject} />}

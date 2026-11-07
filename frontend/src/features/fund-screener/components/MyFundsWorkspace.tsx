@@ -8,7 +8,10 @@ import {
   type StudyPriceWatch,
   type StudyTrack,
 } from "../../../api/study-api";
-import type { PersonalFundGroup } from "../personal-fund-model";
+import {
+  personalWatchState,
+  type PersonalFundGroup,
+} from "../personal-fund-model";
 import { usePersonalFunds } from "../use-personal-funds";
 import { fundDisplayName, planPrice, planUnit } from "../plan-display";
 import { sourceHref, timeLabel } from "../macro-display";
@@ -99,10 +102,7 @@ function FundCard({
     plan?.priceBasis === "UNIT_NAV" && navUnits.has(plan.unit ?? "")
       ? frozenTrack
       : undefined;
-  const state =
-    watch?.state === "HOLDING" && watch.holding.state !== "CONFIRMED"
-      ? "UNKNOWN"
-      : watch?.state;
+  const state = personalWatchState(watch);
   const chosenDetail =
     detail.data?.track.id === chosen?.id ? detail.data : undefined;
   function select(track: StudyTrack) {

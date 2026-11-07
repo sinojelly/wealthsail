@@ -5,6 +5,7 @@ import type {
   Direction,
   OpportunityContext,
   MacroEvent,
+  SellRiskAlert,
 } from "../../../api/investment";
 import { sourceHref, timeLabel, monthLabel } from "../macro-display";
 import DailyResearchReport, {
@@ -239,7 +240,7 @@ export default function MacroContextStrip({
   renderMyFunds?: (renderStudyTracking?: () => ReactNode) => ReactNode;
   renderPersonalReminders?: (
     onViewFunds: () => void,
-    excludedSellFundCodes: readonly string[],
+    sellRiskAlerts: readonly SellRiskAlert[],
   ) => ReactNode;
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
@@ -508,8 +509,7 @@ export default function MacroContextStrip({
                 )}
                 {renderPersonalReminders?.(
                   () => open("tracking"),
-                  ready?.sellRiskAlerts?.items?.map((item) => item.fundCode) ??
-                    [],
+                  ready?.sellRiskAlerts?.items ?? [],
                 )}
                 {ready && (
                   <>
