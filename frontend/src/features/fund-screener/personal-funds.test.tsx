@@ -489,6 +489,87 @@ it.each(["unknown-market", "invalid-code"])(
   },
 );
 
+it("refreshes partially cancelled studies and retries only the remaining original generation", async () => {
+  const user = userEvent.setup();
+  let items = [
+    fundTrack("first-partial", "legacy-symbol"),
+    fundTrack("second-partial", "legacy-symbol"),
+  ].map((track) => ({
+    ...track,
+    generation: 1,
+  }));
+  let secondFailed = false;
+  vi.mocked(api.getStudyTracks).mockImplementation(async () => ({
+    items,
+    total: items.length,
+  }));
+  vi.mocked(api.setStudyStatus).mockImplementation(async (id, request) => {
+    const track = items.find((row) => row.id === id)!;
+    if (request.expectedGeneration !== track.generation)
+      throw new Error("版本不一致");
+    if (id === "second-partial" && !secondFailed) {
+      secondFailed = true;
+      throw new Error("第二份研究取消失败，请重试。");
+    }
+    const updated = {
+      ...track,
+      enabled: request.enabled,
+      generation: track.generation + 1,
+    };
+    items = items.map((row) => (row.id === id ? updated : row));
+    return studyDetail(updated);
+  });
+  const view = show(<MyFundsWorkspace actor="partial-cancel" />);
+  await user.click(
+    await screen.findByRole("button", { name: "取消跟踪 legacy-symbol" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "第二份研究取消失败，请重试。",
+  );
+  expect(
+    screen.queryByText("已取消跟踪，历史研究记录保留。"),
+  ).not.toBeInTheDocument();
+  await waitFor(() => {
+    const card = screen.getByRole("article", { name: "基金legacy-symbol" });
+    expect(
+      within(card).queryByRole("button", {
+        name: /选择计划 研究first-partial/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).getByRole("button", { name: /选择计划 研究second-partial/ }),
+    ).toBeInTheDocument();
+  });
+  expect(
+    view.client
+      .getQueryData<api.StudyTrackList>(["study", "partial-cancel", "list"])
+      ?.items.find((track) => track.id === "first-partial"),
+  ).toMatchObject({ enabled: false, generation: 2 });
+  await user.click(
+    screen.getByRole("button", { name: "取消跟踪 legacy-symbol" }),
+  );
+  expect(
+    await screen.findByText(
+      "暂无持仓或活动基金跟踪；可从机会中保存研究，历史研究仍可查看。",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(api.setStudyStatus).toHaveBeenCalledTimes(3);
+  expect(api.setStudyStatus).toHaveBeenNthCalledWith(1, "first-partial", {
+    expectedGeneration: 1,
+    enabled: false,
+  });
+  expect(api.setStudyStatus).toHaveBeenNthCalledWith(2, "second-partial", {
+    expectedGeneration: 1,
+    enabled: false,
+  });
+  expect(api.setStudyStatus).toHaveBeenNthCalledWith(3, "second-partial", {
+    expectedGeneration: 1,
+    enabled: false,
+  });
+  expect(api.setFundWatchStatus).not.toHaveBeenCalled();
+});
+
 it("reports an unsafe held-only identity without creating an UNKNOWN market preference or claiming success", async () => {
   const user = userEvent.setup();
   const holding = { ...heldFund("006504"), fundMarket: "" };

@@ -10,6 +10,5 @@ export function marketJudgment(data: OpportunityContext): string[] {
   )
     .map((sentence) => sentence.trim())
     .filter(Boolean)
-    .slice(0, 3)
-    .map((sentence) => researchSummary(sentence, 160));
+    .slice(0, 3);
 }

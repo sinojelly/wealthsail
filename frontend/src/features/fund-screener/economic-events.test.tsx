@@ -158,6 +158,14 @@ it("shows at most eight cards before more and makes classification and loaded re
   expect(
     screen.getByRole("link", { name: "查看本份报告出处" }),
   ).toHaveAttribute("href", expect.stringContaining("researchTab=macro"));
+  const reportSource = new URL(
+    screen
+      .getByRole("link", { name: "查看本份报告出处" })
+      .getAttribute("href")!,
+    window.location.href,
+  );
+  expect(reportSource.searchParams.get("reportRunId")).toBe("historical-run");
+  expect(reportSource.hash).toBe("#latest-successful-daily-report");
   expect(screen.getByText(/报告出处不表示已核实的事件进展/)).toBeVisible();
 });
 

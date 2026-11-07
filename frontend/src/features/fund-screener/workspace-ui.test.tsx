@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { renderWithSession } from "../../test/render-with-session";
 import type { OpportunityContext } from "../../api/investment";
@@ -26,11 +27,6 @@ vi.mock("./components/MacroEvidencePanel", () => ({
   default: () => <p>市场证据数据</p>,
 }));
 vi.mock("./components/Phase2Evidence", () => ({ default: () => null }));
-vi.mock("./components/DailyResearchReport", async (original) => ({
-  ...(await original<typeof import("./components/DailyResearchReport")>()),
-  default: () => null,
-}));
-
 const data = {
   state: "READY",
   items: [],
@@ -50,7 +46,13 @@ const data = {
     },
   },
 } as unknown as OpportunityContext;
-function Ui({ loading = false }: { loading?: boolean }) {
+function Ui({
+  loading = false,
+  context = data,
+}: {
+  loading?: boolean;
+  context?: OpportunityContext;
+}) {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   return (
@@ -58,7 +60,7 @@ function Ui({ loading = false }: { loading?: boolean }) {
       <output aria-label="当前地址">{params.toString()}</output>
       <button onClick={() => navigate(-1)}>返回上一页</button>
       <MacroContextStrip
-        data={loading ? undefined : data}
+        data={loading ? undefined : context}
         loading={loading}
         error={false}
         renderMyFunds={(renderReview) => (
@@ -139,3 +141,76 @@ it("keeps execution diagnostics secondary to the displayed report", () => {
   ).not.toBeVisible();
   expect(screen.getByLabelText("展示报告来源")).toBeVisible();
 });
+
+it.each(["", "&reportRunId=old-valid"])(
+  "reveals the saved report on an initial source hash link %s",
+  async (identity) => {
+    renderWithSession(
+      <Ui />,
+      `/fund-screener?researchTab=macro&researchOpen=1${identity}#latest-successful-daily-report`,
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "每日事件研究" }),
+      ).toBeVisible(),
+    );
+    expect(
+      screen.getByRole("group", { name: "展示报告的买卖计划" }),
+    ).toHaveAttribute("data-report-run-id", "old-valid");
+  },
+);
+
+it("waits for the linked report to load and preserves the user's collapse on a same-route refresh", async () => {
+  function AsyncReport() {
+    const [loaded, setLoaded] = useState(false);
+    const [revision, setRevision] = useState(0);
+    return (
+      <>
+        <button onClick={() => setLoaded(true)}>报告加载完成</button>
+        <button onClick={() => setRevision(revision + 1)}>报告数据刷新</button>
+        <Ui loading={!loaded} context={{ ...data, items: [...data.items] }} />
+      </>
+    );
+  }
+  renderWithSession(
+    <AsyncReport />,
+    "/fund-screener?researchTab=macro&researchOpen=1&reportRunId=old-valid#latest-successful-daily-report",
+  );
+  expect(screen.queryByText("展开查看完整研究")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("报告加载完成"));
+  await waitFor(() =>
+    expect(screen.getByRole("region", { name: "每日事件研究" })).toBeVisible(),
+  );
+  await userEvent.click(screen.getByText("展开查看完整研究"));
+  expect(
+    screen.getByText("展开查看完整研究").closest("details"),
+  ).not.toHaveAttribute("open");
+  await userEvent.click(screen.getByText("报告数据刷新"));
+  expect(
+    screen.getByText("展开查看完整研究").closest("details"),
+  ).not.toHaveAttribute("open");
+  expect(
+    screen.getByRole("region", { name: "每日事件研究" }),
+  ).not.toBeVisible();
+});
+
+it.each([data, { state: "READY", items: [] } as OpportunityContext])(
+  "explains that an explicitly linked report is unavailable instead of revealing another report",
+  async (context) => {
+    renderWithSession(
+      <Ui context={context} />,
+      "/fund-screener?researchTab=macro&researchOpen=1&reportRunId=not-loaded#latest-successful-daily-report",
+    );
+    expect(
+      await screen.findByText(
+        "所选报告出处未加载；当前内容不能作为这份报告的出处。",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText("展开查看完整研究").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(
+      screen.getByRole("region", { name: "每日事件研究" }),
+    ).not.toBeVisible();
+  },
+);

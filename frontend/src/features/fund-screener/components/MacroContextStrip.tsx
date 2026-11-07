@@ -1,6 +1,6 @@
 import SellRiskAlerts from "./SellRiskAlerts";
-import { useId, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import type {
   Direction,
   OpportunityContext,
@@ -246,6 +246,8 @@ export default function MacroContextStrip({
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
 }) {
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const revealedReportRoute = useRef<string | null>(null);
   const panelId = useId();
   const tabs = [
     ["events", "今日重点"],
@@ -290,6 +292,38 @@ export default function MacroContextStrip({
     ? daily.pipeline.researchRunId
     : daily?.runId;
   const displayedReportId = daily?.report ? daily.reportRunId : undefined;
+  const reportSourceLink = location.hash === "#latest-successful-daily-report";
+  const requestedReportId = params.get("reportRunId");
+  const reportSourceUnavailable =
+    reportSourceLink &&
+    !!ready &&
+    (!displayedReportId ||
+      (!!requestedReportId && requestedReportId !== displayedReportId));
+  useEffect(() => {
+    if (
+      !reportSourceLink ||
+      !ready ||
+      !expanded ||
+      tab !== "macro" ||
+      reportSourceUnavailable ||
+      revealedReportRoute.current === location.key
+    )
+      return;
+    const details = document.getElementById(`${panelId}-full-research`);
+    const target = document.getElementById("latest-successful-daily-report");
+    if (!(details instanceof HTMLDetailsElement) || !target) return;
+    revealedReportRoute.current = location.key;
+    details.open = true;
+    target.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [
+    reportSourceLink,
+    ready,
+    expanded,
+    tab,
+    reportSourceUnavailable,
+    location.key,
+    panelId,
+  ]);
   const isHistoricalReport =
     !!displayedReportId &&
     (displayedReportId !== currentResearchId || daily?.state !== "READY");
@@ -403,6 +437,11 @@ export default function MacroContextStrip({
       )}
       {error && <p role="alert">展示报告读取失败，请稍后重试。</p>}
       {loading && <p role="status">正在加载展示报告…</p>}
+      {reportSourceUnavailable && (
+        <p role="status">
+          所选报告出处未加载；当前内容不能作为这份报告的出处。
+        </p>
+      )}
       {refreshing && (
         <p role="status">正在更新展示报告，继续显示上一份已加载内容。</p>
       )}

@@ -62,10 +62,12 @@ function originLabel(story: EconomicStory) {
         ? "历史有效报告"
         : "已保存研究报告";
 }
-function reportHref() {
+function reportHref(reportRunId: string | null) {
   const params = new URLSearchParams(window.location.search);
   params.set("researchTab", "macro");
   params.set("researchOpen", "1");
+  if (reportRunId) params.set("reportRunId", reportRunId);
+  else params.delete("reportRunId");
   return `?${params}#latest-successful-daily-report`;
 }
 function StoryDates({ story }: { story: EconomicStory }) {
@@ -322,7 +324,7 @@ function StoryCard({
             <p>原研究 ID：{story.researchId ?? "独立公开记录，无研究 ID"}</p>
             {story.origin === "REPORT" && (
               <>
-                <a href={reportHref()}>查看本份报告出处</a>
+                <a href={reportHref(story.researchId)}>查看本份报告出处</a>
                 <p>报告出处不表示已核实的事件进展。</p>
               </>
             )}

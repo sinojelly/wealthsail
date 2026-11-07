@@ -30,6 +30,16 @@ it("does not split decimal observations into sentences or pad a short judgment",
   );
 });
 
+it("preserves a long judgment's final negation and conditions within the three-sentence limit", () => {
+  const first =
+    "需求侧的设备更新订单较此前增加，部分企业披露新增项目和产能安排，信贷与库存的变化仍需结合后续月度统计核对，外部需求和能源成本也可能影响不同产业的利润修复，当前记录只说明若干观察线索出现改善，不能把单一企业公告等同于整个行业的盈利拐点，资金流向与终端销售仍缺少同期完整证据，相关基金的技术条件和价格区间也须分别读取原研究，所以现有资料并不能证明需求已经全面复苏，只有后续订单和价格持续验证时才讨论趋势确认。";
+  const second = "信用条件仍有分化，尚不支持无条件入场。";
+  const third = "下一期数据公布后再核对。";
+  expect(
+    marketJudgment(data(`${first}${second}${third}第四句不进入首页。`)),
+  ).toEqual([first, second, third]);
+});
+
 it("labels retained report judgment and links to full evidence", async () => {
   const open = vi.fn();
   renderWithSession(

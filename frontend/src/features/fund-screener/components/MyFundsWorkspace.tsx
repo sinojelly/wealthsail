@@ -386,7 +386,6 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         throw new Error(
           "基金市场或标的身份尚未确认，无法取消跟踪；持仓记录保留。",
         );
-      await client.invalidateQueries({ queryKey: ["study", actor] });
       setNotice(
         group.holding
           ? "已取消跟踪，持仓记录保留。"
@@ -397,6 +396,11 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         failure instanceof Error ? failure.message : "取消跟踪失败，请重试。",
       );
     } finally {
+      // A preceding study may already be disabled when a later request fails.
+      // Refresh its generation without replacing the original mutation error.
+      await client
+        .invalidateQueries({ queryKey: ["study", actor] })
+        .catch(() => undefined);
       setPending(null);
     }
   }
