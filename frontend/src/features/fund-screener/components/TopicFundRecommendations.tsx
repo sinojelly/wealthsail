@@ -291,12 +291,15 @@ export default function TopicFundRecommendations({
 }) {
   const client = useContext(QueryClientContext);
   const session = useAuthSession();
+  const hasCompletion =
+    !!completedAt && Number.isFinite(Date.parse(completedAt));
+  const completedStaleResearch =
+    source === "CURRENT" && state === "STALE" && hasCompletion;
   const terminal =
     state === "READY" ||
     state === "FAILED" ||
-    (state === "UNCERTAIN" &&
-      !!completedAt &&
-      Number.isFinite(Date.parse(completedAt)));
+    (state === "UNCERTAIN" && hasCompletion) ||
+    completedStaleResearch;
   const title = source === "CURRENT" ? "本次研究基金观察" : "高价值机会";
   return (
     <section aria-label={title} style={box}>
@@ -316,6 +319,9 @@ export default function TopicFundRecommendations({
       <p>
         由对应研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
       </p>
+      {completedStaleResearch && (
+        <p>最近一次研究已结束；今日尚未更新，仅显示该次研究的只读归档状态。</p>
+      )}
       {!client || !session ? (
         <p role="status">请先登录以读取当前账户的基金匹配资料。</p>
       ) : !runId || !uuid.test(runId) ? (

@@ -189,6 +189,69 @@ it("shows the current research source while waiting without reading unfinished m
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it("reads the last completed current research archive when today's state is stale", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(
+      JSON.stringify({ error: { code: "NOT_FOUND", message: "missing" } }),
+      { status: 404 },
+    ),
+  );
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="STALE"
+      source="CURRENT"
+      completedAt={at}
+    />,
+  );
+  const region = screen.getByRole("region", { name: "本次研究基金观察" });
+  expect(
+    await within(region).findByText(/未找到该研究的基金匹配归档记录/),
+  ).toBeVisible();
+  expect(
+    within(region).getByText(/最近一次研究已结束；今日尚未更新/),
+  ).toBeVisible();
+  expect(within(region).queryByText(/研究尚未完成/)).not.toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain(
+    `/topic-fund-recommendations/${run}`,
+  );
+});
+
+it.each([null, "invalid-date"])(
+  "waits for proof of completion before reading stale current research (%s)",
+  (completedAt) => {
+    renderWithSession(
+      <TopicFundRecommendations
+        runId={run}
+        state="STALE"
+        source="CURRENT"
+        completedAt={completedAt}
+      />,
+    );
+    expect(
+      screen.getByText(/研究尚未完成，基金匹配等待研究结果归档/),
+    ).toBeVisible();
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it("does not treat stale report metadata as a completed report", () => {
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="STALE"
+      source="REPORT"
+      completedAt={at}
+    />,
+  );
+  expect(screen.getByRole("region", { name: "高价值机会" })).toBeVisible();
+  expect(
+    screen.getByText(/研究尚未完成，基金匹配等待研究结果归档/),
+  ).toBeVisible();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 it.each([
   ["PARTIAL", "ARCHIVED", "部分来源或匹配资料尚待补齐"],
   ["UNAVAILABLE", "UNRECOVERABLE", "不能据此判断没有机会或基金"],

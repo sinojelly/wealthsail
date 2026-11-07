@@ -94,7 +94,7 @@ function deferred<T>() {
 }
 
 function daily(
-  state: "READY" | "RUNNING" | "FAILED" | "UNCERTAIN" = "UNCERTAIN",
+  state: "READY" | "RUNNING" | "FAILED" | "UNCERTAIN" | "STALE" = "UNCERTAIN",
 ): DailyResearch {
   return {
     methodVersion: "daily-research-v1",
@@ -301,7 +301,7 @@ it("keeps personal funds readable after an initial report HTTP failure", async (
   ).toBeVisible();
 });
 
-it.each(["RUNNING", "FAILED", "UNCERTAIN"] as const)(
+it.each(["RUNNING", "FAILED", "UNCERTAIN", "STALE"] as const)(
   "uses the displayed READY report's matching while the current research is %s",
   async (state) => {
     api.opportunity.mockResolvedValue(context(daily(state)));
