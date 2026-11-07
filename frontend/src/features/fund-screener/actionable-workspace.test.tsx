@@ -76,6 +76,11 @@ const zones = {
     },
   ],
 };
+async function openProgramPriceObservations() {
+  await userEvent.click(await screen.findByRole("tab", { name: "市场证据" }));
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.funds.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
@@ -128,6 +133,7 @@ it.each([true, false])(
       },
     });
     renderWithSession(<FundScreenerPage />);
+    await openProgramPriceObservations();
     expect(
       await within(screen.getByRole("tabpanel")).findByText(
         /3750\.00.*3800\.00/,
@@ -144,7 +150,7 @@ it.each([true, false])(
   },
 );
 
-it("shows three categories and independent price coordinates without a legacy board or PB/PIT gate", async () => {
+it("shows four workspaces and preserves independent price coordinates in market evidence without a PB/PIT gate", async () => {
   renderWithSession(
     <FundScreenerPage />,
     "/fund-screener?researchOpen=1&researchTab=events",
@@ -153,15 +159,17 @@ it("shows three categories and independent price coordinates without a legacy bo
     await screen.findByRole("tab", { name: "今日重点" }),
   ).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场证据" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "我的基金" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "经济事件" })).toBeInTheDocument();
+  expect(screen.getAllByRole("tab")).toHaveLength(4);
+  expect(screen.queryByText(/3750\.00.*3800\.00/)).not.toBeInTheDocument();
+  await openProgramPriceObservations();
+  const evidence = screen.getByRole("tabpanel");
   expect(
-    screen.getByRole("tab", { name: "我的跟踪与复盘" }),
+    await within(evidence).findByText(/3750\.00.*3800\.00/),
   ).toBeInTheDocument();
-  const today = screen.getByRole("tabpanel");
-  expect(
-    await within(today).findByText(/3750\.00.*3800\.00/),
-  ).toBeInTheDocument();
-  expect(within(today).getByText(/3900\.00.*3950\.00/)).toBeInTheDocument();
-  expect(within(today).getByText(/指数点.*不可.*挂单/)).toBeInTheDocument();
+  expect(within(evidence).getByText(/3900\.00.*3950\.00/)).toBeInTheDocument();
+  expect(within(evidence).getByText(/指数点.*不可.*挂单/)).toBeInTheDocument();
 });
 
 it("confirms a selected track then saves the exact identity and horizon without client supplied prices", async () => {
@@ -310,6 +318,7 @@ it("keeps missing prices empty and labels NAV coordinates without implying a liv
     actionableZones: nav,
   });
   renderWithSession(<FundScreenerPage />, "/fund-screener?researchOpen=1");
+  await openProgramPriceObservations();
   const panel = await screen.findByRole("tabpanel");
   await waitFor(() => expect(panel).toHaveTextContent(/净值.*不可.*挂单/));
   expect(panel).toHaveTextContent("实际观察：—");
@@ -345,6 +354,7 @@ it("keeps a candidate with partial ATR prices and formats the supplied decimal s
     ],
   });
   renderWithSession(<FundScreenerPage />);
+  await openProgramPriceObservations();
   const panel = screen.getByRole("tabpanel");
   expect(await within(panel).findByText(/1\.2345–1\.2355/)).toBeInTheDocument();
   expect(panel).toHaveTextContent("候选条件成立");

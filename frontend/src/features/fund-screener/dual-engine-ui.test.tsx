@@ -505,6 +505,8 @@ it("resets the report calendar, full report, execution and official disclosures 
     </MemoryRouter>
   );
   const { rerender } = render(show(data));
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   const labels = [
     /接下来关注什么/,
     "阅读完整日报",

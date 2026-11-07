@@ -183,6 +183,8 @@ it("shows the actual scan size, sorts entered then nearest and tracks only froze
       />
     </MemoryRouter>,
   );
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   const summary = screen.getByText(/查看全市场 3 只核心赛道基金量化扫描总表/);
   expect(summary.closest("details")).not.toHaveAttribute("open");
   await userEvent.click(summary);

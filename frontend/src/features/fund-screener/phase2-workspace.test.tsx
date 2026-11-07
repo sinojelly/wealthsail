@@ -126,6 +126,8 @@ it("shows the structured daily plan revision and bounded calibration separately 
     },
   });
   renderWithSession(<FundScreenerPage />);
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
   const today = await screen.findByRole("tabpanel");
   expect(
     await within(today).findByText("信用修复仍需后续事实确认。"),

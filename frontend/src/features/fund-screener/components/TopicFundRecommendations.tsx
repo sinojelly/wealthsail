@@ -65,22 +65,23 @@ function isMatchingPending(data?: TopicFundRecommendationsPage) {
   );
 }
 
-function Fund({ fund }: { fund: TopicRecommendedFund }) {
+function subscriptionLabel(fund: TopicRecommendedFund): string {
   const subscription = fund.subscription;
-  const subscriptionLabel =
-    !subscription || subscription.status === "UNKNOWN"
-      ? "申购状态待核验"
-      : subscription.status === "LIMITED"
-        ? "申购限额，需核对销售渠道"
-        : subscription?.status === "SUSPENDED" ||
-            subscription?.status === "PAUSED"
-          ? "暂停申购"
-          : subscription?.restricted === true
-            ? "申购受限，需核对销售渠道"
-            : subscription?.restricted === false &&
-                subscription.status === "OPEN"
-              ? "资料记录可申购，仍需核对最新状态"
-              : "申购状态待核验";
+  return !subscription || subscription.status === "UNKNOWN"
+    ? "申购状态待核验"
+    : subscription.status === "LIMITED"
+      ? "申购限额，需核对销售渠道"
+      : subscription?.status === "SUSPENDED" ||
+          subscription?.status === "PAUSED"
+        ? "暂停申购"
+        : subscription?.restricted === true
+          ? "申购受限，需核对销售渠道"
+          : subscription?.restricted === false && subscription.status === "OPEN"
+            ? "资料记录可申购，仍需核对最新状态"
+            : "申购状态待核验";
+}
+
+function Fund({ fund }: { fund: TopicRecommendedFund }) {
   return (
     <li className="op-match-fund">
       <header>
@@ -102,7 +103,7 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
           <div className="op-match-fund-metrics">
             <p>
               <span>申购状态</span>
-              <strong>{subscriptionLabel}</strong>
+              <strong>{subscriptionLabel(fund)}</strong>
             </p>
             <p>
               <span>量化评分</span>
@@ -198,8 +199,7 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
   );
 }
 
-function Topic({ topic }: { topic: TopicFundRecommendation }) {
-  const thesisPreview = researchSummary(topic.thesis, 240);
+function topicFundGroups(topic: TopicFundRecommendation) {
   const direct = topic.recommendedFunds.filter((fund) => !isIndirect(fund));
   const negative = topic.topicPolarity === "NEGATIVE_RISK";
   const observation =
@@ -224,6 +224,12 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
     { title: "相关观察基金", label: "相关观察基金", funds: observationFunds },
     { title: "间接敞口观察", label: "间接观察基金", funds: indirect },
   ];
+  return { groups, recommended, negative };
+}
+
+function Topic({ topic }: { topic: TopicFundRecommendation }) {
+  const thesisPreview = researchSummary(topic.thesis, 240);
+  const { groups, recommended, negative } = topicFundGroups(topic);
   return (
     <article className="op-match-topic">
       <div className="op-match-thesis">
@@ -323,6 +329,78 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
   );
 }
 
+function TopicSummary({ topic }: { topic: TopicFundRecommendation }) {
+  const [expanded, setExpanded] = useState(false);
+  const { groups } = topicFundGroups(topic);
+  const funds = groups.flatMap((group) =>
+    group.funds.map((fund) => ({ fund, title: group.title })),
+  );
+  return (
+    <article className="op-opportunity-summary">
+      <header>
+        <h4>{topic.title}</h4>
+        <span className="op-match-badge">
+          {topic.topicPolarity
+            ? polarityLabels[topic.topicPolarity]
+            : "主题研究观察"}
+        </span>
+      </header>
+      <p>{researchSummary(topic.thesis, 150)}</p>
+      <p className="op-match-risk" data-risk={topic.riskStatus}>
+        {riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}
+      </p>
+      {topic.riskWarnings?.length > 0 && (
+        <p className="op-match-warning">{topic.riskWarnings[0]}</p>
+      )}
+      {topic.recommendationStatus === "SOURCE_PENDING" && (
+        <p className="op-match-warning">正面来源待核验，仅供研究观察。</p>
+      )}
+      {funds.length ? (
+        <ul
+          className="op-summary-funds"
+          aria-label={`${topic.title}的基金摘要`}
+        >
+          {funds.slice(0, 3).map(({ fund, title }) => (
+            <li key={`${title}:${fund.fundCode}`}>
+              <strong>
+                {fund.name} {fund.fundCode}
+              </strong>
+              <span>
+                {title} ·{" "}
+                {fund.associationLevel
+                  ? associationLabels[fund.associationLevel]
+                  : (matchLabels[fund.matchLevel] ?? "关联待核验")}{" "}
+                · {subscriptionLabel(fund)}
+              </span>
+              <span>
+                价格观察：{fund.pricePosition?.label ?? "当前价格资料待核验"}
+                {fund.pricePosition?.asOf
+                  ? ` · 数据时间：${timeLabel(fund.pricePosition.asOf)}`
+                  : " · 数据时间未提供"}
+              </span>
+              {!!fund.missingEvidence?.length && (
+                <span className="op-match-warning">基金资料待补齐</span>
+              )}
+              {!!fund.riskWarnings?.length && (
+                <span className="op-match-warning">{fund.riskWarnings[0]}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>基金匹配尚无完整条目，展开核查资料状态。</p>
+      )}
+      {funds.length > 3 && (
+        <small>另有{funds.length - 3}项基金观察，展开查看。</small>
+      )}
+      <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+        <summary>查看{topic.title}的基金与走势图</summary>
+        {expanded && <Topic topic={topic} />}
+      </details>
+    </article>
+  );
+}
+
 export default function TopicFundRecommendations({
   runId,
   state,
@@ -330,6 +408,7 @@ export default function TopicFundRecommendations({
   source = "REPORT",
   historical = false,
   defaultExpanded = true,
+  presentation = "FULL",
 }: {
   runId?: string | null;
   state?: string | null;
@@ -337,6 +416,7 @@ export default function TopicFundRecommendations({
   source?: "REPORT" | "CURRENT";
   historical?: boolean;
   defaultExpanded?: boolean;
+  presentation?: "FULL" | "SUMMARY";
 }) {
   const client = useContext(QueryClientContext);
   const session = useAuthSession();
@@ -390,6 +470,7 @@ export default function TopicFundRecommendations({
           key={`${session.tenantId}:${session.userId}:${session.role}:${runId}`}
           runId={runId}
           terminal={terminal}
+          presentation={presentation}
           lifecycle={`${state}:${completedAt ?? "undated"}`}
           queryKey={privateQueryKey(
             session,
@@ -408,12 +489,15 @@ function RecommendationsData({
   lifecycle,
   queryKey,
   terminal,
+  presentation,
 }: {
   runId: string;
   lifecycle: string;
   queryKey: readonly (string | number)[];
   terminal: boolean;
+  presentation: "FULL" | "SUMMARY";
 }) {
+  const [showAll, setShowAll] = useState(false);
   const reads = useRef(0);
   const previousLifecycle = useRef(lifecycle);
   const [exhaustedLifecycle, setExhaustedLifecycle] = useState<string | null>(
@@ -542,10 +626,34 @@ function RecommendationsData({
                 : "主题归档或基金匹配正在完成，每3秒自动检查，最多10次；也可手动重新检查。"}
             </p>
           )}
-          {data.items.slice(0, 10).map((topic) => (
-            <Topic key={topic.topicId} topic={topic} />
-          ))}
-          {data.items.length > 10 && (
+          {data.items
+            .slice(
+              0,
+              presentation === "SUMMARY"
+                ? showAll
+                  ? data.items.length
+                  : 3
+                : 10,
+            )
+            .map((topic) =>
+              presentation === "SUMMARY" ? (
+                <TopicSummary key={topic.topicId} topic={topic} />
+              ) : (
+                <Topic key={topic.topicId} topic={topic} />
+              ),
+            )}
+          {presentation === "SUMMARY" && data.items.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAll(!showAll)}
+              aria-expanded={showAll}
+            >
+              {showAll
+                ? "收起其余机会"
+                : `查看全部${data.items.length}个机会主题`}
+            </button>
+          )}
+          {presentation === "FULL" && data.items.length > 10 && (
             <details>
               <summary>
                 查看其余{data.items.length - 10}个机会主题与匹配基金

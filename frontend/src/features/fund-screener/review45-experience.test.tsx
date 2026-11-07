@@ -76,7 +76,7 @@ it("lets the user read and collapse the full macro thesis and resets for a new r
     "宏观风险与机会需要结合信用和产业兑现。".repeat(30) + "最后完整风险边界。";
   const data = daily(text);
   const { rerender } = render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/fund-screener?researchTab=macro"]}>
       <MacroContextStrip data={context(data)} error={false} />
     </MemoryRouter>,
   );
@@ -97,7 +97,7 @@ it("lets the user read and collapse the full macro thesis and resets for a new r
     within(overview).getByRole("button", { name: "展开今日总纲" }),
   );
   rerender(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/fund-screener?researchTab=macro"]}>
       <MacroContextStrip
         data={context({ ...data, reportRunId: "new-run" })}
         error={false}
@@ -115,7 +115,7 @@ it("lets the user read and collapse the full macro thesis and resets for a new r
 
 it("does not offer a meaningless expand button for a short macro thesis", () => {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/fund-screener?researchTab=macro"]}>
       <MacroContextStrip data={context(daily())} error={false} />
     </MemoryRouter>,
   );
@@ -127,7 +127,7 @@ it("does not offer a meaningless expand button for a short macro thesis", () => 
 it("reads the NAV risk method in Chinese without rewriting the saved report", () => {
   const data = daily("净值风险尺度为NAV_ABS_CHANGE_STD_V1，非真实ATR。");
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/fund-screener?researchTab=macro"]}>
       <MacroContextStrip data={context(data)} error={false} />
     </MemoryRouter>,
   );

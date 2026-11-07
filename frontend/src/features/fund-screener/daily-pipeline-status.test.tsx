@@ -216,7 +216,7 @@ it("shows success only after READY and never appends a dispatch-slot status", ()
   expect(screen.queryByText(/登记|派发/)).not.toBeInTheDocument();
 });
 
-it("uses the same status for the compact header and full execution details while keeping an old report", async () => {
+it("keeps compact execution wording visible and reveals the precise same status in default-closed diagnostics and retained report", async () => {
   const data = daily({
     state: "FAILED",
     scheduleState: "DISPATCHED",
@@ -250,8 +250,15 @@ it("uses the same status for the compact header and full execution details while
     </MemoryRouter>,
   );
   const label = "正式报告未通过（触发：2026年10月30日 07:01 北京时间）";
-  expect(screen.getAllByText(label)).toHaveLength(2);
+  expect(screen.getByText(/本次执行：未通过/)).toBeVisible();
+  const execution = screen.getByText("执行与调度详情").closest("details")!;
+  expect(execution).not.toHaveAttribute("open");
+  expect(within(execution).getByText(label)).not.toBeVisible();
+  await userEvent.click(screen.getByText("执行与调度详情"));
+  expect(within(execution).getByText(label)).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
   await userEvent.click(screen.getByText("展开查看完整研究"));
+  expect(screen.getAllByText(label)).toHaveLength(2);
   expect(screen.getByText(/当前显示历史报告及原始日期/)).toBeVisible();
   await userEvent.click(screen.getByText("执行与报告状态"));
   const details = screen.getByText("执行与报告状态").closest("details")!;

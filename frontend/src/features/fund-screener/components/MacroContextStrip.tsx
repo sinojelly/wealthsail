@@ -21,7 +21,15 @@ import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
 import TopicFundRecommendations from "./TopicFundRecommendations";
 import ObservationSection from "./ObservationSection";
+import TodayFocus from "./TodayFocus";
+import { EconomicEvents, EconomicEventTeasers } from "./EconomicEvents";
+import {
+  resolveResearchWorkspace,
+  workspaceParams,
+  type ResearchWorkspace,
+} from "../workspace-navigation";
 import "../research-header.css";
+import "../workspaces.css";
 
 function TopicCatalog(
   props: React.ComponentProps<typeof ResearchTopicRegistry>,
@@ -208,6 +216,8 @@ export default function MacroContextStrip({
   selectedIndexId,
   renderStudyTracking,
   renderTrackedFunds,
+  renderMyFunds,
+  renderPersonalReminders,
   renderResearchRefresh,
   onStudyDirection,
   onStudyQuantScan,
@@ -226,6 +236,11 @@ export default function MacroContextStrip({
   scopeKey?: string;
   renderStudyTracking?: () => ReactNode;
   renderTrackedFunds?: () => ReactNode;
+  renderMyFunds?: (renderStudyTracking?: () => ReactNode) => ReactNode;
+  renderPersonalReminders?: (
+    onViewFunds: () => void,
+    excludedSellFundCodes: readonly string[],
+  ) => ReactNode;
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
@@ -234,19 +249,15 @@ export default function MacroContextStrip({
   const panelId = useId();
   const tabs = [
     ["events", "今日重点"],
+    ["stories", "经济事件"],
+    ["tracking", "我的基金"],
     ["macro", "市场证据"],
-    ["tracking", "我的跟踪与复盘"],
   ] as const;
-  const tab =
-    params.get("researchTab") === "quality" ||
-    params.get("researchData") === "1"
-      ? "macro"
-      : (tabs.find(([id]) => id === params.get("researchTab"))?.[0] ??
-        "events");
+  const tab = resolveResearchWorkspace(params);
   const expanded = params.get("researchOpen") !== "0";
-  function open(target = tab, visible = true) {
+  function open(target: ResearchWorkspace = tab, visible = true) {
     setParams((current) => {
-      const next = new URLSearchParams(current);
+      const next = workspaceParams(current, target);
       next.set("researchOpen", visible ? "1" : "0");
       next.set("researchTab", target);
       next.delete("researchData");
@@ -254,7 +265,7 @@ export default function MacroContextStrip({
     });
   }
   function revealResearch(targetId: string) {
-    open("events", true);
+    open("macro", true);
     requestAnimationFrame(() => {
       const details = document.getElementById(
         `${panelId}-full-research`,
@@ -265,10 +276,14 @@ export default function MacroContextStrip({
       target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     });
   }
+  function openEvent(id: string) {
+    setParams((current) => {
+      const next = workspaceParams(current, "stories");
+      next.set("economicEvent", id);
+      return next;
+    });
+  }
   const ready = !error && !loading ? data : undefined;
-  const reportIds = new Set(
-    ready?.dailyResearch?.report?.events.map((event) => event.id) ?? [],
-  );
   const portfolio = ready?.portfolio;
   const daily = ready?.dailyResearch;
   const currentResearchId = daily?.pipeline
@@ -303,31 +318,50 @@ export default function MacroContextStrip({
           <strong>今日投资观察</strong>
           <span>{expanded ? "收起研究" : "展开研究"}</span>
         </button>
-        <p
-          className="op-observation-meta"
-          role="group"
-          aria-label="本次执行状态"
-        >
-          {daily && (
-            <>
-              本次执行：
-              <DailyResearchStatus data={daily} /> · 执行ID：
-              {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
-            </>
-          )}
-        </p>
-        {ready?.dailyResearch?.nextRunAt && (
-          <small className="op-observation-next-run">
-            下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
-          </small>
+        {daily && (
+          <p className="op-research-execution-summary">
+            本次执行：
+            {(
+              {
+                READY: "已完成",
+                RUNNING: "进行中",
+                FAILED: "未通过",
+                UNCERTAIN: "结果待核实",
+                STALE: "本研究日尚未更新",
+                NOT_RUN: "尚未启动",
+              } as Record<string, string>
+            )[daily.pipeline?.state ?? daily.state] ?? "状态待核实"}{" "}
+            · 展示内容以报告来源为准
+          </p>
         )}
+        <details className="op-execution-disclosure">
+          <summary>执行与调度详情</summary>
+          <p
+            className="op-observation-meta"
+            role="group"
+            aria-label="本次执行状态"
+          >
+            {daily && (
+              <>
+                本次执行：
+                <DailyResearchStatus data={daily} /> · 执行ID：
+                {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
+              </>
+            )}
+          </p>
+          {ready?.dailyResearch?.nextRunAt && (
+            <small className="op-observation-next-run">
+              下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
+            </small>
+          )}
+        </details>
       </header>
       {renderResearchRefresh?.()}
       {ready && (
         <div className="op-research-report-source">
           <p aria-label="展示报告来源" aria-live="polite">
             {daily?.report
-              ? `展示报告：${daily.reportRunId ?? "身份未记录"} · 完成：${timeLabel(daily.reportCompletedAt)}`
+              ? `展示报告：${isHistoricalReport ? "最近有效报告 · 历史 · 只读" : "本研究日有效报告 · 只读"} · 完成：${timeLabel(daily.reportCompletedAt)}`
               : "展示报告：尚无有效报告；以下为当前已采集事实与只读观察。"}
           </p>
           {daily?.reportRunId && (
@@ -348,7 +382,10 @@ export default function MacroContextStrip({
               >
                 查看展示报告的主题目录
               </button>
-              <small>报告ID：{daily.reportRunId} · 只读</small>
+              <details>
+                <summary>报告身份</summary>
+                <small>报告ID：{daily.reportRunId} · 只读</small>
+              </details>
             </div>
           )}
         </div>
@@ -424,8 +461,17 @@ export default function MacroContextStrip({
           >
             {tab === "events" && (
               <>
-                {ready && <MacroOverview data={ready} />}
-                {renderTrackedFunds?.()}
+                {ready && (
+                  <TodayFocus
+                    data={ready}
+                    onViewEvidence={() => open("macro")}
+                  />
+                )}
+                {renderPersonalReminders?.(
+                  () => open("tracking"),
+                  ready?.sellRiskAlerts?.items?.map((item) => item.fundCode) ??
+                    [],
+                )}
                 {ready && (
                   <>
                     {daily?.report && (
@@ -435,6 +481,7 @@ export default function MacroContextStrip({
                         completedAt={daily.reportCompletedAt}
                         source="REPORT"
                         historical={isHistoricalReport}
+                        presentation="SUMMARY"
                       />
                     )}
                     {currentResearchId &&
@@ -444,6 +491,7 @@ export default function MacroContextStrip({
                           state={daily?.pipeline?.state ?? daily?.state}
                           completedAt={currentResearchCompletedAt}
                           source="CURRENT"
+                          presentation="SUMMARY"
                           defaultExpanded={!daily?.report}
                         />
                       )}
@@ -452,6 +500,49 @@ export default function MacroContextStrip({
                         基金机会来源尚未确定，等待有效报告或本次研究记录。
                       </p>
                     )}
+                  </>
+                )}
+                {ready && (
+                  <EconomicEventTeasers data={ready} onOpenEvent={openEvent} />
+                )}
+              </>
+            )}
+            {tab === "stories" && ready && (
+              <EconomicEvents
+                data={ready}
+                selectedEventId={params.get("economicEvent") ?? undefined}
+                onSelectEvent={openEvent}
+              />
+            )}
+            {tab === "macro" && (
+              <>
+                <label className="op-macro-window">
+                  宏观观察窗口{" "}
+                  <select
+                    aria-label="宏观观察窗口"
+                    value={months}
+                    onChange={(event) =>
+                      onMonthsChange?.(Number(event.target.value))
+                    }
+                  >
+                    {[12, 36, 60].map((value) => (
+                      <option key={value} value={value}>
+                        {value} 个月
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {ready && (
+                  <>
+                    <MacroOverview data={ready} />
+                    <MacroEvidencePanel
+                      data={ready}
+                      marketId={selectedDirection?.marketId}
+                      directionId={selectedDirection?.id}
+                      selectedIndexId={selectedIndexId}
+                      months={months}
+                    />
+                    <Phase2Evidence data={ready} />
                     <details
                       id={`${panelId}-full-research`}
                       className="op-print-disclosure"
@@ -570,18 +661,14 @@ export default function MacroContextStrip({
                           displayedReportId ?? currentResearchId
                         }
                       />
-                      {!!ready?.events?.filter(
-                        (event) => !reportIds.has(event.id),
-                      ).length && (
+                      {!!ready?.events?.length && (
                         <details
                           className="op-print-disclosure"
                           key={`official:${ready.dailyResearch?.reportRunId ?? ready.dailyResearch?.report?.asOf ?? "no-report"}`}
                         >
                           <summary>官方发布与其他观察</summary>
                           <MacroEvents
-                            events={ready.events.filter(
-                              (event) => !reportIds.has(event.id),
-                            )}
+                            events={ready.events ?? []}
                             state={ready.eventState}
                           />
                         </details>
@@ -591,42 +678,12 @@ export default function MacroContextStrip({
                 )}
               </>
             )}
-            {tab === "macro" && (
-              <>
-                <label className="op-macro-window">
-                  宏观观察窗口{" "}
-                  <select
-                    aria-label="宏观观察窗口"
-                    value={months}
-                    onChange={(event) =>
-                      onMonthsChange?.(Number(event.target.value))
-                    }
-                  >
-                    {[12, 36, 60].map((value) => (
-                      <option key={value} value={value}>
-                        {value} 个月
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {ready && (
-                  <>
-                    <MacroEvidencePanel
-                      data={ready}
-                      marketId={selectedDirection?.marketId}
-                      directionId={selectedDirection?.id}
-                      selectedIndexId={selectedIndexId}
-                      months={months}
-                    />
-                    <Phase2Evidence data={ready} />
-                  </>
-                )}
-              </>
-            )}
             {tab === "tracking" &&
-              (renderStudyTracking?.() ?? (
-                <p>从今日重点或当前标的保存研究，后续在此核对与复盘。</p>
-              ))}
+              (renderMyFunds?.(renderStudyTracking) ??
+                renderTrackedFunds?.() ??
+                renderStudyTracking?.() ?? (
+                  <p>从今日重点或当前标的保存研究，后续在此核对与复盘。</p>
+                ))}
           </div>
         </div>
       )}

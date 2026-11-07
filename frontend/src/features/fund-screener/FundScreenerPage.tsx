@@ -20,7 +20,8 @@ import FundResultsTable from "./components/FundResultsTable";
 import ActionablePlan from "./components/ActionablePlan";
 import { metricValue, timeLabel } from "./macro-display";
 import StudyTracking from "./components/StudyTracking";
-import TrackedFundWatch from "./components/TrackedFundWatch";
+import MyFundsWorkspace from "./components/MyFundsWorkspace";
+import PersonalActionReminders from "./components/PersonalActionReminders";
 import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
 import { useEconomicArchivePolling } from "./economic-archive-polling";
@@ -399,7 +400,19 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       </header>
       <MacroContextStrip
         data={radarData}
-        renderTrackedFunds={() => <TrackedFundWatch actor={subject} />}
+        renderMyFunds={(renderStudyTracking) => (
+          <MyFundsWorkspace
+            actor={subject}
+            renderStudyTracking={renderStudyTracking}
+          />
+        )}
+        renderPersonalReminders={(onViewFunds, excludedSellFundCodes) => (
+          <PersonalActionReminders
+            actor={subject}
+            onViewFunds={onViewFunds}
+            excludedSellFundCodes={excludedSellFundCodes}
+          />
+        )}
         renderResearchRefresh={() => <DailyResearchRefresh actor={subject} />}
         renderStudyTracking={() => (
           <StudyTracking

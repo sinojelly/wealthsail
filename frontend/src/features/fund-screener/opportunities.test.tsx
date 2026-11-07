@@ -666,32 +666,31 @@ function trackedFund(
   };
 }
 
-it("keeps my tracked fund prices in today's focus without a daily report and opens its review", async () => {
-  const tracked = trackedFund("ai");
+it("keeps valid personal reminders in Today without a report and opens the independent fund workspace and review", async () => {
   vi.mocked(study.getStudyTracks).mockResolvedValue({
-    items: [tracked],
+    items: [trackedFund("ai")],
     total: 1,
   });
   vi.mocked(study.getStudyDetail).mockRejectedValue(new Error("详情暂不可用"));
   renderWithSession(<FundScreenerPage />, "/fund-screener?macroMonths=60");
-  const region = await screen.findByRole("region", {
-    name: "我的持续跟踪基金",
-  });
-  expect(await within(region).findByText("🎯已入买入击球区")).toBeVisible();
-  expect(region).toHaveTextContent("冻结买入区间：0.9800–1.0200");
+  const reminders = await screen.findByRole("region", { name: "我的行动提醒" });
+  expect(await within(reminders).findByText(/已入买入击球区/)).toBeVisible();
   expect(
-    within(region).getByRole("columnheader", { name: "最新确认净值" }),
-  ).toBeVisible();
-  expect(within(region).getByRole("cell", { name: /1.0100/ })).toBeVisible();
-  expect(
-    screen.queryByRole("region", { name: "研究主题跟踪与复盘" }),
+    screen.queryByRole("region", { name: "我的基金" }),
   ).not.toBeInTheDocument();
   await userEvent.click(
-    within(region).getByRole("button", { name: "查看 ai 冻结研究 与复盘" }),
+    within(reminders).getByRole("button", { name: "查看我的基金" }),
   );
-  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "我的基金" })).toHaveAttribute(
     "aria-selected",
     "true",
+  );
+  const funds = await screen.findByRole("region", { name: "我的基金" });
+  expect(await within(funds).findByText("原冻结买入区间：")).toBeVisible();
+  expect(funds).toHaveTextContent("0.9800–1.0200");
+  expect(funds).toHaveTextContent("1.0100");
+  await userEvent.click(
+    within(funds).getByRole("button", { name: "研究与复盘：ai 冻结研究" }),
   );
   await waitFor(() =>
     expect(study.getStudyDetail).toHaveBeenCalledWith(
@@ -702,8 +701,8 @@ it("keeps my tracked fund prices in today's focus without a daily report and ope
   );
   await userEvent.click(screen.getByRole("tab", { name: "今日重点" }));
   expect(
-    await screen.findByRole("region", { name: "我的持续跟踪基金" }),
-  ).toHaveTextContent("1.0100");
+    await screen.findByRole("region", { name: "我的行动提醒" }),
+  ).toHaveTextContent("ai 冻结研究");
 });
 
 it("groups repeated fund identities while keeping each active frozen plan and review state", async () => {
@@ -728,7 +727,7 @@ it("groups repeated fund identities while keeping each active frozen plan and re
     items: tracks,
     total: tracks.length,
   });
-  renderWithSession(<FundScreenerPage />);
+  renderWithSession(<TrackedFundWatch actor="legacy-tracking-test" />);
   const region = await screen.findByRole("region", {
     name: "我的持续跟踪基金",
   });
@@ -750,11 +749,11 @@ it("groups repeated fund identities while keeping each active frozen plan and re
   ).not.toBeInTheDocument();
 });
 
-it("lets a failed personal tracking list retry without hiding today's research", async () => {
+it("lets the legacy personal tracking table retry a failed list", async () => {
   vi.mocked(study.getStudyTracks)
     .mockRejectedValueOnce(new Error("暂不可用"))
     .mockResolvedValue({ items: [trackedFund("retry")], total: 1 });
-  renderWithSession(<FundScreenerPage />);
+  renderWithSession(<TrackedFundWatch actor="legacy-tracking-test" />);
   const region = await screen.findByRole("region", {
     name: "我的持续跟踪基金",
   });
@@ -766,10 +765,7 @@ it("lets a failed personal tracking list retry without hiding today's research",
       name: "查看 retry 冻结研究 与复盘",
     }),
   ).toBeVisible();
-  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  expect(region).toBeVisible();
 });
 
 it("keeps the expiry day active until Shanghai midnight and hides expired fund studies", async () => {
@@ -786,7 +782,7 @@ it("keeps the expiry day active until Shanghai midnight and hides expired fund s
       items: tracks,
       total: 3,
     });
-    renderWithSession(<FundScreenerPage />);
+    renderWithSession(<TrackedFundWatch actor="legacy-tracking-test" />);
     const region = await screen.findByRole("region", {
       name: "我的持续跟踪基金",
     });
@@ -816,7 +812,7 @@ it("refreshes cached tracking independently and keeps unavailable current prices
     items: [active],
     total: 1,
   });
-  renderWithSession(<FundScreenerPage />);
+  renderWithSession(<TrackedFundWatch actor="legacy-tracking-test" />);
   const region = await screen.findByRole("region", {
     name: "我的持续跟踪基金",
   });

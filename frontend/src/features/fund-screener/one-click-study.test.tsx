@@ -118,7 +118,7 @@ it("confirms a current selection before saving its full identity and chosen hori
     }),
   );
   await waitFor(() =>
-    expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "我的基金" })).toHaveAttribute(
       "aria-selected",
       "true",
     ),
@@ -129,6 +129,7 @@ it("shows saved historical news without offering single-news tracking", async ()
     <FundScreenerPage />,
     "/fund-screener?direction=a-share:broad&index=hs300&researchTab=events",
   );
+  await userEvent.click(await screen.findByRole("tab", { name: "市场证据" }));
   await userEvent.click(await screen.findByText("展开查看完整研究"));
   expect(
     await within(
@@ -179,7 +180,7 @@ it("does not navigate a different scope after a late successful create", async (
   await act(async () => {
     finish({ track: { id: "old-saved" } } as never);
   });
-  expect(screen.getByRole("tab", { name: "我的跟踪与复盘" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "我的基金" })).toHaveAttribute(
     "aria-selected",
     "false",
   );

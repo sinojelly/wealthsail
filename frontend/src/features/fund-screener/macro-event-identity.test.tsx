@@ -58,17 +58,18 @@ const data: OpportunityContext = {
 
 function show(context: OpportunityContext) {
   render(
-    <MemoryRouter initialEntries={["/?researchOpen=1&researchTab=events"]}>
+    <MemoryRouter initialEntries={["/?researchOpen=1&researchTab=macro"]}>
       <MacroContextStrip data={context} error={false} />
     </MemoryRouter>,
   );
 }
 
-it("keeps the daily event as the main copy by ID while retaining a separate fact with the same title", async () => {
+it("does not hide an independent official fact just because a report reuses its ID", async () => {
   show(data);
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   await userEvent.click(screen.getByText("官方发布与其他观察"));
   const official = screen.getByRole("region", { name: "官方关键事件" });
-  expect(within(official).queryByText("宏观重复正文")).not.toBeInTheDocument();
+  expect(within(official).getByText("宏观重复正文")).toBeVisible();
   expect(within(official).getByText("独立事实正文")).toBeInTheDocument();
   expect(screen.getByText("日报主项正文")).toBeInTheDocument();
   expect(
@@ -76,11 +77,12 @@ it("keeps the daily event as the main copy by ID while retaining a separate fact
       "同名官方公告",
     ),
   ).toHaveLength(1);
-  expect(within(official).getAllByText("同名官方公告")).toHaveLength(1);
+  expect(within(official).getAllByText("同名官方公告")).toHaveLength(2);
 });
 
 it("retains the official fact when no saved daily report contains that ID", async () => {
   show({ ...data, dailyResearch: undefined });
+  await userEvent.click(screen.getByText("展开查看完整研究"));
   await userEvent.click(screen.getByText("官方发布与其他观察"));
   expect(screen.getByText("宏观重复正文")).toBeInTheDocument();
   expect(screen.getByText("独立事实正文")).toBeInTheDocument();

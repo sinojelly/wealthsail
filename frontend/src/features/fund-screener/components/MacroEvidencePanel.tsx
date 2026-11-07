@@ -17,6 +17,7 @@ import { EvidenceCard, SeriesCard } from "./EvidenceCards";
 import EnergyEvidence from "./EnergyEvidence";
 import { energyUnit } from "../energy-display";
 import "../macro-evidence.css";
+import { indicatorMeaning } from "../indicator-meaning";
 
 const categories = [
   { id: "growth", label: "经济增长", codes: ["PMI"] },
@@ -236,7 +237,7 @@ function evidenceRows({
         item.benchmark && finite(item.benchmark.value)
           ? `${item.benchmark.label}：${metricValue(item.benchmark.value)} ${macroUnit(item)}`
           : undefined,
-      summary: item.interpretation?.summary ?? "已采集事实，经济含义仍需核查。",
+      summary: item.interpretation?.summary || indicatorMeaning(item.code),
       detail: () =>
         renderMacro ? renderMacro(item) : <EvidenceCard item={item} />,
     })),
@@ -266,7 +267,9 @@ function evidenceRows({
         reference: finite(item.changes.median)
           ? `历史样本中位数：${metricValue(item.changes.median)} ${unitLabel(item.unit, "")}`
           : undefined,
-        summary: "实际市场观察，需结合当前资产与其他证据独立判断。",
+        summary:
+          indicatorMeaning(item.code) ??
+          "实际市场观察，需结合当前资产与其他证据独立判断。",
         detail: () => <SeriesCard series={item} />,
       };
     }),

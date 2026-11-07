@@ -171,7 +171,7 @@ function mountPage() {
   clients.push(client);
   const view = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/fund-screener"]}>
+      <MemoryRouter initialEntries={["/fund-screener?researchTab=macro"]}>
         <FundScreenerPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -345,7 +345,7 @@ it("keeps an already loaded valid report and its macro facts throughout backgrou
   await openFullResearch();
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   const source = screen.getByLabelText("展示报告来源");
-  expect(source).toHaveTextContent(previousId);
+  expect(screen.getByText(`报告ID：${previousId} · 只读`)).toBeInTheDocument();
   expect(
     within(macro).getByRole("heading", { name: "当前宏观事实" }),
   ).toBeVisible();
@@ -394,9 +394,11 @@ it("separates a timed-out current execution from the previous valid report and k
   mountPage();
 
   const source = await screen.findByLabelText("展示报告来源");
-  expect(source).toHaveTextContent(`展示报告：${previousId}`);
+  expect(source).toHaveTextContent("最近有效报告 · 历史 · 只读");
+  expect(screen.getByText(`报告ID：${previousId} · 只读`)).toBeInTheDocument();
   expect(source).toHaveTextContent("完成：2026年11月6日 08:00");
   expect(source).not.toHaveTextContent(currentId);
+  await userEvent.click(screen.getByText("执行与调度详情"));
   const execution = screen.getByRole("group", { name: "本次执行状态" });
   expect(execution).toHaveTextContent(currentId);
   expect(execution).toHaveTextContent("执行异常 · 待核实");
@@ -417,7 +419,7 @@ it("separates a timed-out current execution from the previous valid report and k
   const diagnosis = screen.getByRole("group", { name: "研究失败诊断" });
   expect(diagnosis).toHaveTextContent("执行超时");
   expect(diagnosis).toHaveTextContent("原因代码：TIMEOUT");
-  expect(screen.getByLabelText("展示报告来源")).toHaveTextContent(previousId);
+  expect(screen.getByText(`报告ID：${previousId} · 只读`)).toBeInTheDocument();
 });
 
 it("shows a loading state on a full page remount until the same selected report returns, with no temporary fallback version", async () => {

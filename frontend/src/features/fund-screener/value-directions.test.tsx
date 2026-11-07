@@ -141,6 +141,7 @@ const context = (extra = {}) => ({
 });
 async function renderFullResearch() {
   const view = renderWithSession(<FundScreenerPage />);
+  await userEvent.click(await screen.findByRole("tab", { name: "市场证据" }));
   await userEvent.click(await screen.findByText("展开查看完整研究"));
   return view;
 }
@@ -152,7 +153,7 @@ beforeEach(() => {
   } as never);
 });
 
-it("keeps current macro facts first and strict plans ahead of compact news without user selection", async () => {
+it("keeps macro facts and strict plans before complete news in the market evidence workspace", async () => {
   await renderFullResearch();
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const directions = await screen.findByRole("region", {
@@ -229,7 +230,7 @@ it.each([undefined, null, "", "NaN", "Infinity"])(
   },
 );
 
-it("freezes each direction and fund directly without prices or confirmation and retains the daily list", async () => {
+it("freezes each direction and fund directly without client prices or confirmation and retains the evidence list", async () => {
   await renderFullResearch();
   const card = await screen.findByRole("region", { name: "创新药与医疗修复" });
   const buttons = within(card).getAllByRole("button", {
@@ -250,7 +251,7 @@ it("freezes each direction and fund directly without prices or confirmation and 
   expect(
     within(card).getByRole("button", { name: /已跟踪.*006000/ }),
   ).toBeDisabled();
-  expect(screen.getByRole("tab", { name: "今日重点" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "市场证据" })).toHaveAttribute(
     "aria-selected",
     "true",
   );

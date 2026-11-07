@@ -242,7 +242,7 @@ function registry(researchId = run): TopicRegistryPage {
     },
   };
 }
-async function renderDaily(data = daily()) {
+async function renderDaily(data = daily(), openEvidence = true) {
   const view = renderWithSession(
     <MacroContextStrip
       error={false}
@@ -255,9 +255,14 @@ async function renderDaily(data = daily()) {
       }
     />,
   );
-  await userEvent.click(await screen.findByText("展开查看完整研究"));
+  if (openEvidence) await openFullEvidence();
   return view;
 }
+async function openFullEvidence() {
+  await userEvent.click(await screen.findByRole("tab", { name: "市场证据" }));
+  await userEvent.click(await screen.findByText("展开查看完整研究"));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getResearchTopicRegistry).mockImplementation(async (id) =>
@@ -265,20 +270,24 @@ beforeEach(() => {
   );
 });
 
-it("leads with all saved AI topics, independent top-ten fund observations and strict plans before the retained success summary", async () => {
-  await renderDaily();
+it("keeps saved AI opportunity summaries on Today and independent observations, strict plans and retained report in market evidence", async () => {
+  await renderDaily(daily(), false);
   const topics = await screen.findByRole("region", {
     name: "高价值机会",
   });
+  expect(await within(topics).findByText("机器人商业化观察")).toBeVisible();
+  expect(topics).toHaveTextContent("负面风险待核验");
+  expect(
+    screen.queryByRole("region", { name: "服务器代表池基金观察" }),
+  ).not.toBeInTheDocument();
+  await openFullEvidence();
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   const plans = screen.getByRole("region", { name: "今日价值方向与买卖计划" });
   const retained = screen.getByRole("region", { name: "最近一次成功研究" });
-  expect(await within(topics).findByText("机器人商业化观察")).toBeVisible();
-  expect(topics).toHaveTextContent("负面风险待核验");
-  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
   expect(
-    topics.compareDocumentPosition(funds) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
+    screen.queryByRole("region", { name: "高价值机会" }),
+  ).not.toBeInTheDocument();
+  expect(getResearchTopicRegistry).not.toHaveBeenCalled();
   expect(
     funds.compareDocumentPosition(plans) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -305,8 +314,9 @@ it("leads with all saved AI topics, independent top-ten fund observations and st
 it("keeps all three levels with no holdings, no formal report and no formal directions", async () => {
   const data = daily();
   Object.assign(data, { state: "FAILED", report: null, reportRunId: null });
-  await renderDaily(data);
+  await renderDaily(data, false);
   expect(await screen.findByText("有价值的研究主题仍保留。")).toBeVisible();
+  await openFullEvidence();
   const funds = screen.getByRole("region", { name: "服务器代表池基金观察" });
   expect(funds).toHaveTextContent("观察基金0");
   expect(screen.getByText("暂无通过完整风控的正式计划")).toBeVisible();

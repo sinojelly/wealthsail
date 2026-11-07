@@ -159,6 +159,104 @@ beforeEach(() => {
   );
 });
 
+it("limits Today summaries to three topics and mounts original right-hand charts only when requested", async () => {
+  const payload = response();
+  payload.items.push({
+    ...payload.items[0],
+    topicId: "fourth",
+    title: "第四个机会主题",
+  });
+  vi.mocked(fetch).mockResolvedValue(
+    new Response(JSON.stringify({ data: payload, meta: {} }), { status: 200 }),
+  );
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="READY"
+      presentation="SUMMARY"
+    />,
+  );
+  await screen.findByRole("heading", { name: "机器人订单机会" });
+  expect(
+    screen.queryByRole("heading", { name: "第四个机会主题" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("region", { name: "000001净值走势图区域" }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("查看机器人订单机会的基金与走势图"));
+  expect(
+    screen.getByRole("region", { name: "000001净值走势图区域" }),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByText("查看全部4个机会主题"));
+  expect(screen.getByRole("heading", { name: "第四个机会主题" })).toBeVisible();
+});
+
+it("preserves candidate, indirect, source and current-price qualifications in Today summaries", async () => {
+  const payload = response();
+  Object.assign(payload.items[0], { recommendationStatus: "SOURCE_PENDING" });
+  Object.assign(payload.items[0].recommendedFunds[0], {
+    associationLevel: "NAME_CANDIDATE",
+    pricePosition: {
+      actionable: false,
+      status: "OVERHEATED",
+      label: "处于高位，勿追高",
+      asOf: at,
+      reasons: [],
+    },
+    subscription: { status: "LIMITED", restricted: true },
+  });
+  vi.mocked(fetch).mockResolvedValue(fetchData(payload));
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="READY"
+      presentation="SUMMARY"
+    />,
+  );
+  const title = await screen.findByRole("heading", { name: "机器人订单机会" });
+  const card = title.closest("article")!;
+  expect(within(card).getByText(/正面来源待核验/)).toBeVisible();
+  expect(within(card).getByText(/名称匹配候选/)).toBeVisible();
+  expect(within(card).getByText(/申购限额/)).toBeVisible();
+  expect(within(card).getByText(/处于高位，勿追高/)).toBeVisible();
+  expect(within(card).getByText(/2026年11月6日/)).toBeVisible();
+  expect(within(card).getByText(/基金资料待补齐/)).toBeVisible();
+  const indirect = screen
+    .getByRole("heading", { name: "宏观需求改善" })
+    .closest("article")!;
+  expect(within(indirect).getByText(/间接敞口观察/)).toBeVisible();
+  expect(within(indirect).getByText(/宽基间接观察/)).toBeVisible();
+});
+
+it.each([
+  ["OPEN", "申购受限"],
+  ["SUSPENDED", "暂停申购"],
+  ["PAUSED", "暂停申购"],
+])(
+  "preserves a known %s subscription restriction in the summary",
+  async (status, expected) => {
+    const payload = response();
+    Object.assign(payload.items[0].recommendedFunds[0].subscription, {
+      status,
+      restricted: status === "OPEN",
+    });
+    vi.mocked(fetch).mockResolvedValue(fetchData(payload));
+    renderWithSession(
+      <TopicFundRecommendations
+        runId={run}
+        state="READY"
+        presentation="SUMMARY"
+      />,
+    );
+    const title = await screen.findByRole("heading", {
+      name: "机器人订单机会",
+    });
+    expect(
+      within(title.closest("article")!).getByText(new RegExp(expected)),
+    ).toBeVisible();
+  },
+);
+
 it("keeps a missing matching archive visible without calling it zero opportunities", async () => {
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(
@@ -397,7 +495,14 @@ afterEach(() => {
 });
 
 it("connects news opportunities to funds despite no formal report or incomplete risk checks", async () => {
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   const region = await screen.findByRole("region", {
     name: "本次研究基金观察",
   });
@@ -437,7 +542,14 @@ it("keeps subscription restrictions visible and does not present incomplete matc
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(await screen.findByText(/申购限额，需核对销售渠道/)).toBeVisible();
 });
 
@@ -488,7 +600,14 @@ it("can reread a pending archive after it completes without reopening the panel"
       }),
     ),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   await screen.findByText(/不能据此判断没有机会或基金/);
   await userEvent.click(
     screen.getByRole("button", { name: "重新检查机会基金匹配" }),
@@ -506,7 +625,14 @@ it("retains matched funds while identifying missing positive source verification
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(
     await screen.findByText("正面来源待核验，以下基金仅为主题匹配候选。"),
   ).toBeVisible();
@@ -563,7 +689,14 @@ it("shows an unknown subscription as unverified even when purchase protection is
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(await screen.findByText(/申购状态待核验/)).toBeVisible();
   expect(
     screen.queryByText(/申购受限，需核对销售渠道/),
@@ -579,7 +712,14 @@ it("shows the adverse risk deduction alongside the news thesis and matched fund"
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(await screen.findByText("负面风险扣分：-20")).toBeVisible();
   expect(screen.getByText(/量化得分：75（扣分前95分）/)).toBeVisible();
   expect(screen.getByText(/000002.*芯片精选基金/)).toBeVisible();
@@ -596,7 +736,14 @@ it("shows the concrete matching reason when no explainable asset mapping exists"
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(
     await screen.findByText(/当前缺少可说明的地域或资产关联/),
   ).toBeVisible();
@@ -613,7 +760,14 @@ it("keeps negative news in risk funds and separates broad exposure from direct r
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   const risk = await screen.findByRole("list", {
     name: "芯片产业机会的风险涉及基金",
   });
@@ -657,7 +811,14 @@ it("shows association evidence, alternative shares and technical position withou
   vi.mocked(fetch).mockResolvedValueOnce(
     new Response(JSON.stringify({ data, meta: {} })),
   );
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   expect(await screen.findByText("指数直配")).toBeVisible();
   expect(screen.getByText(/核验跟踪指数为中证机器人/)).toBeVisible();
   expect(screen.getByText(/场外基金/)).toBeVisible();
@@ -679,6 +840,7 @@ it("renders one opportunity headline and loads the full topic catalog only after
     screen.queryByRole("heading", { name: /值得关注的 AI 投资主题/ }),
   ).not.toBeInTheDocument();
   expect(getResearchTopicRegistry).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));
   await userEvent.click(screen.getByText("展开查看完整研究"));
   await userEvent.click(screen.getByText("完整研究主题目录"));
   expect(getResearchTopicRegistry).toHaveBeenCalledOnce();
@@ -696,7 +858,14 @@ it("shows the server-selected importance and checked source coverage on the same
     },
   });
   vi.mocked(fetch).mockResolvedValueOnce(fetchData(data));
-  renderWithSession(ui());
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="FAILED"
+      completedAt={at}
+      source="CURRENT"
+    />,
+  );
   const title = await screen.findByText("机器人订单机会");
   const card = title.closest("article")!;
   expect(within(card).getByText(/高重要性事件关联/)).toBeVisible();
@@ -1093,7 +1262,14 @@ it.each(["MACRO_OBSERVATION", "UNDETERMINED"])(
     data.items = [data.items[0]];
     Object.assign(data.items[0], { topicPolarity });
     vi.mocked(fetch).mockResolvedValueOnce(fetchData(data));
-    renderWithSession(ui());
+    renderWithSession(
+      <TopicFundRecommendations
+        runId={run}
+        state="FAILED"
+        completedAt={at}
+        source="CURRENT"
+      />,
+    );
     const list = await screen.findByRole("list", {
       name: "机器人订单机会的相关观察基金",
     });
