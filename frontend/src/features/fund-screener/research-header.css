@@ -1,0 +1,134 @@
+.op-daily-observation .op-observation-meta {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.op-daily-observation .op-research-report-source {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--op-line);
+  color: var(--op-muted);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.op-daily-observation .op-research-report-source > p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.op-daily-observation .op-research-report-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.op-daily-observation .op-research-report-links button {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--op-teal);
+  font: inherit;
+  cursor: pointer;
+}
+
+.op-daily-observation .op-research-report-links button:hover {
+  border-bottom-color: currentColor;
+}
+
+.op-daily-observation .op-research-report-links small {
+  font-size: 12px;
+}
+
+.op-debug-refresh.op-debug-refresh {
+  display: grid;
+  gap: 10px;
+  padding: 14px 20px;
+  color: var(--op-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.op-debug-refresh .op-research-refresh-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.op-debug-refresh .op-research-refresh-action > button {
+  font: inherit;
+  font-weight: 500;
+}
+
+.op-debug-refresh.op-debug-refresh p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.op-debug-refresh.op-debug-refresh > p[role] {
+  padding: 9px 12px;
+  border-left: 3px solid #d5b77c;
+  border-radius: 4px;
+  background: #fffbf3;
+  color: #76551c;
+}
+
+.op-debug-refresh.op-debug-refresh[data-state="READY"] > p[role="status"],
+.op-debug-refresh.op-debug-refresh[data-state="RUNNING"] > p[role="status"],
+.op-debug-refresh.op-debug-refresh[data-state="QUEUED"] > p[role="status"] {
+  border-left-color: #79b5ab;
+  background: #f0faf7;
+  color: #28675e;
+}
+
+.op-debug-refresh .op-research-execution-diagnostics {
+  min-width: 0;
+  font-size: 12px;
+}
+
+.op-debug-refresh .op-research-execution-diagnostics > summary {
+  width: fit-content;
+  color: var(--op-teal);
+  cursor: pointer;
+}
+
+.op-debug-refresh .op-research-execution-diagnostics > div {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--op-line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.op-debug-refresh .op-research-execution-diagnostics p {
+  font-size: 12px;
+}
+
+.op-debug-refresh .op-research-request-time {
+  display: block;
+}
+
+.op-daily-observation .op-report-plan-target {
+  scroll-margin-top: 88px;
+}
+
+@media (max-width: 640px) {
+  .op-daily-observation .op-research-report-source,
+  .op-debug-refresh.op-debug-refresh {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .op-daily-observation .op-research-report-links {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}

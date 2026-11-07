@@ -971,3 +971,31 @@ it("adds a lightweight actual-report entry without fetching the registry while t
   ).toBeVisible();
   expect(api.getResearchTopicRegistry).not.toHaveBeenCalled();
 });
+
+it("opens the displayed report's buy/sell plans independently of the current run", async () => {
+  renderWithSession(
+    <MacroContextStrip
+      error={false}
+      data={
+        {
+          state: "READY",
+          items: [],
+          dailyResearch: daily(),
+        } as OpportunityContext
+      }
+    />,
+    "/fund-screener?researchOpen=0",
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "查看展示报告的买卖计划" }),
+  );
+  const plans = await screen.findByRole("group", {
+    name: "展示报告的买卖计划",
+  });
+  await waitFor(() => expect(plans.closest("details")).toHaveAttribute("open"));
+  expect(plans).toHaveAttribute("data-report-run-id", daily().reportRunId);
+  expect(plans).toBeVisible();
+  expect(
+    document.getElementById(`topic-catalog-${daily().reportRunId}`),
+  ).not.toHaveAttribute("open");
+});

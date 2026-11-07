@@ -126,9 +126,11 @@ it("does not let an unmounted request's late acknowledgment clear a newer unackn
     acknowledgeOld = resolve;
   });
   let failNew!: (reason: Error) => void;
-  const newResponse = new Promise<api.DebugResearchRequest>((_resolve, reject) => {
-    failNew = reject;
-  });
+  const newResponse = new Promise<api.DebugResearchRequest>(
+    (_resolve, reject) => {
+      failNew = reject;
+    },
+  );
   const ready = { ...request("READY"), reportRunId: currentRunId };
   vi.mocked(api.startResearchRefresh)
     .mockReturnValueOnce(oldResponse)
@@ -208,7 +210,9 @@ it("lets an explicit forbidden submission clear only the saved intent before sta
   const clear = await screen.findByRole("button", {
     name: "清除未确认提交记录",
   });
-  expect(vi.mocked(api.startResearchRefresh).mock.calls[1][0]).toBe(originalKey);
+  expect(vi.mocked(api.startResearchRefresh).mock.calls[1][0]).toBe(
+    originalKey,
+  );
   expect(
     screen.getByText(
       "只清除此页记录，不会取消后台任务。下一次启动将使用新请求。",
@@ -236,21 +240,24 @@ it.each([
   ["other HTTP status", new HttpError("unavailable", 503, "FORBIDDEN")],
   ["other error code", new HttpError("other code", 403, "OTHER")],
   ["untyped error", { status: 403, code: "FORBIDDEN" }],
-])("does not discard an unacknowledged intent for %s", async (_label, failure) => {
-  vi.mocked(api.startResearchRefresh).mockRejectedValue(failure);
-  renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  await userEvent.click(
-    await screen.findByRole("button", { name: "手动启动研究" }),
-  );
-  const retry = await screen.findByRole("button", { name: "重试本次提交" });
-  expect(
-    screen.queryByRole("button", { name: "清除未确认提交记录" }),
-  ).not.toBeInTheDocument();
-  await userEvent.click(retry);
-  expect(vi.mocked(api.startResearchRefresh).mock.calls[1][0]).toBe(
-    vi.mocked(api.startResearchRefresh).mock.calls[0][0],
-  );
-});
+])(
+  "does not discard an unacknowledged intent for %s",
+  async (_label, failure) => {
+    vi.mocked(api.startResearchRefresh).mockRejectedValue(failure);
+    renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "手动启动研究" }),
+    );
+    const retry = await screen.findByRole("button", { name: "重试本次提交" });
+    expect(
+      screen.queryByRole("button", { name: "清除未确认提交记录" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(retry);
+    expect(vi.mocked(api.startResearchRefresh).mock.calls[1][0]).toBe(
+      vi.mocked(api.startResearchRefresh).mock.calls[0][0],
+    );
+  },
+);
 
 it.each(["QUEUED", "RUNNING", "UNCERTAIN"] as const)(
   "does not permit a second model while an unfinished %s request is pending, including after 35 minutes",
@@ -332,6 +339,7 @@ it.each(["FAILED", "UNCERTAIN"] as const)(
     await userEvent.click(
       await screen.findByRole("button", { name: "手动启动研究" }),
     );
+    await userEvent.click(await screen.findByText("查看执行诊断"));
     const diagnostics = within(
       await screen.findByRole("group", { name: "研究失败诊断" }),
     );
@@ -374,6 +382,7 @@ it("shows safe industry diagnostics from the manual request without borrowing th
   await userEvent.click(
     await screen.findByRole("button", { name: "手动启动研究" }),
   );
+  await userEvent.click(await screen.findByText("查看执行诊断"));
   const diagnosis = within(
     await screen.findByRole("group", { name: "研究失败诊断" }),
   );

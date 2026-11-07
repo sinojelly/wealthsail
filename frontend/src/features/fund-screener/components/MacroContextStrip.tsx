@@ -21,6 +21,7 @@ import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
 import TopicFundRecommendations from "./TopicFundRecommendations";
 import ObservationSection from "./ObservationSection";
+import "../research-header.css";
 
 function TopicCatalog(
   props: React.ComponentProps<typeof ResearchTopicRegistry>,
@@ -252,6 +253,18 @@ export default function MacroContextStrip({
       return next;
     });
   }
+  function revealResearch(targetId: string) {
+    open("events", true);
+    requestAnimationFrame(() => {
+      const details = document.getElementById(
+        `${panelId}-full-research`,
+      ) as HTMLDetailsElement | null;
+      const target = document.getElementById(targetId);
+      if (details) details.open = true;
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+  }
   const ready = !error && !loading ? data : undefined;
   const reportIds = new Set(
     ready?.dailyResearch?.report?.events.map((event) => event.id) ?? [],
@@ -311,40 +324,34 @@ export default function MacroContextStrip({
       </header>
       {renderResearchRefresh?.()}
       {ready && (
-        <p aria-label="展示报告来源" aria-live="polite">
-          {daily?.report
-            ? `展示报告：${daily.reportRunId ?? "身份未记录"} · 完成：${timeLabel(daily.reportCompletedAt)}`
-            : "展示报告：尚无有效报告；以下为当前已采集事实与只读观察。"}
-        </p>
-      )}
-      {ready?.dailyResearch?.reportRunId && (
-        <p>
-          <button
-            type="button"
-            onClick={() => {
-              open("events", true);
-              requestAnimationFrame(() => {
-                const details = document.getElementById(
-                  `${panelId}-full-research`,
-                ) as HTMLDetailsElement | null;
-                const catalog = document.getElementById(
-                  `topic-catalog-${displayedReportId}`,
-                ) as HTMLDetailsElement | null;
-                if (details) details.open = true;
-                if (catalog) {
-                  catalog.open = true;
-                  catalog.scrollIntoView?.({
-                    behavior: "smooth",
-                    block: "start",
-                  });
+        <div className="op-research-report-source">
+          <p aria-label="展示报告来源" aria-live="polite">
+            {daily?.report
+              ? `展示报告：${daily.reportRunId ?? "身份未记录"} · 完成：${timeLabel(daily.reportCompletedAt)}`
+              : "展示报告：尚无有效报告；以下为当前已采集事实与只读观察。"}
+          </p>
+          {daily?.reportRunId && (
+            <div className="op-research-report-links">
+              {displayedReportId && (
+                <button
+                  type="button"
+                  onClick={() => revealResearch(`${panelId}-report-plans`)}
+                >
+                  查看展示报告的买卖计划
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  revealResearch(`topic-catalog-${displayedReportId}`)
                 }
-              });
-            }}
-          >
-            查看展示报告的主题目录
-          </button>
-          <small> · 报告ID：{ready.dailyResearch.reportRunId} · 只读</small>
-        </p>
+              >
+                查看展示报告的主题目录
+              </button>
+              <small>报告ID：{daily.reportRunId} · 只读</small>
+            </div>
+          )}
+        </div>
       )}
       <DeterministicRepairNotice
         repair={ready?.dailyResearch?.report?.deterministicRepair}
@@ -471,13 +478,21 @@ export default function MacroContextStrip({
                         key={`observation:${daily?.fundObservation?.researchId ?? "no-observation"}`}
                         data={daily}
                       />
-                      <ValueDirections
-                        key={`formal:${daily?.reportRunId ?? "no-report"}`}
-                        data={daily}
-                        onTrack={onStudyDirection}
-                        onViewMacro={() => open("macro")}
-                        presentation="FORMAL"
-                      />
+                      <div
+                        id={`${panelId}-report-plans`}
+                        role="group"
+                        aria-label="展示报告的买卖计划"
+                        data-report-run-id={displayedReportId}
+                        className="op-report-plan-target"
+                      >
+                        <ValueDirections
+                          key={`formal:${daily?.reportRunId ?? "no-report"}`}
+                          data={daily}
+                          onTrack={onStudyDirection}
+                          onViewMacro={() => open("macro")}
+                          presentation="FORMAL"
+                        />
+                      </div>
                       {ready?.dailyResearch?.report &&
                         ready.dailyResearch.reportRunId && (
                           <section

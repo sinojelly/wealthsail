@@ -165,6 +165,28 @@ it("does not keep polling a terminal uncertain execution", async () => {
   expect(api.getResearchRefreshStatus).not.toHaveBeenCalled();
 });
 
+it("keeps the execution outcome visible while technical diagnostics are collapsed", async () => {
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: {
+      ...request("UNCERTAIN"),
+      completedAt: new Date().toISOString(),
+      errorClass: "TimeoutError",
+      failureStage: "MODEL_EXECUTION",
+      failureReasonCode: "TIMEOUT",
+    } as never,
+  });
+  renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  expect(await screen.findByText(/执行结果待确认.*TimeoutError/)).toBeVisible();
+  const details = screen.getByText("查看执行诊断").closest("details");
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByText("原因代码：TIMEOUT")).not.toBeVisible();
+  await userEvent.click(screen.getByText("查看执行诊断"));
+  expect(details).toHaveAttribute("open");
+  expect(screen.getByText("原因代码：TIMEOUT")).toBeVisible();
+  expect(api.startResearchRefresh).not.toHaveBeenCalled();
+});
+
 it("counts execution from the worker start rather than time spent queued", async () => {
   const running = {
     ...request("RUNNING"),

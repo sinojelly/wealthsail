@@ -4,6 +4,7 @@ import * as api from "../../../api/daily-research-debug";
 import { HttpError } from "../../../api/client";
 import { timeLabel } from "../macro-display";
 import { DailyResearchFailureDiagnosis } from "./DailyResearchReport";
+import "../research-header.css";
 
 const LIMIT = 35 * 60 * 1000;
 const active = (status?: string) => status === "QUEUED" || status === "RUNNING";
@@ -154,19 +155,26 @@ function RefreshControl({ actor, onReady }: Props) {
       ? result.errorClass
       : "原因待核查";
   return (
-    <section className="op-debug-refresh" aria-label="手动研究">
-      <button
-        type="button"
-        disabled={busy || submit.isPending}
-        onClick={() =>
-          submit.mutate(commandKey.current ?? crypto.randomUUID())
-        }
-      >
-        {unconfirmedKey ? "重试本次提交" : "手动启动研究"}
-      </button>
-      <small>
-        将重新采集最新公共信息并调用一次 Codex，产生新的用量；普通刷新不会重跑。
-      </small>
+    <section
+      className="op-debug-refresh"
+      aria-label="手动研究"
+      data-state={result?.status}
+    >
+      <div className="op-research-refresh-action">
+        <button
+          type="button"
+          disabled={busy || submit.isPending}
+          onClick={() =>
+            submit.mutate(commandKey.current ?? crypto.randomUUID())
+          }
+        >
+          {unconfirmedKey ? "重试本次提交" : "手动启动研究"}
+        </button>
+        <small>
+          将重新采集最新公共信息并调用一次
+          Codex，产生新的用量；普通刷新不会重跑。
+        </small>
+      </div>
       {unconfirmedKey && !submit.isPending && (
         <p role="alert">
           提交结果待确认，可重试本次提交；相同请求不会重复运行。
@@ -213,21 +221,28 @@ function RefreshControl({ actor, onReady }: Props) {
         </p>
       ) : null}
       {(result?.status === "FAILED" || result?.status === "UNCERTAIN") && (
-        <DailyResearchFailureDiagnosis
-          data={{
-            failureStage: result.failureStage,
-            failureReasonCode: result.failureReasonCode,
-            failureRuleId: result.failureRuleId,
-            failureItemIndex: result.failureItemIndex,
-            failureIndustryCodes: result.failureIndustryCodes,
-            runId: result.reportRunId,
-          }}
-        />
+        <details className="op-research-execution-diagnostics">
+          <summary>查看执行诊断</summary>
+          <DailyResearchFailureDiagnosis
+            data={{
+              failureStage: result.failureStage,
+              failureReasonCode: result.failureReasonCode,
+              failureRuleId: result.failureRuleId,
+              failureItemIndex: result.failureItemIndex,
+              failureIndustryCodes: result.failureIndustryCodes,
+              runId: result.reportRunId,
+            }}
+          />
+        </details>
       )}
       {status.isError && (
         <p role="alert">任务状态读取失败，将继续查询；不会自动重跑模型。</p>
       )}
-      {result && <small>本次请求：{timeLabel(result.requestedAt)}</small>}
+      {result && (
+        <small className="op-research-request-time">
+          本次请求：{timeLabel(result.requestedAt)}
+        </small>
+      )}
     </section>
   );
 }
