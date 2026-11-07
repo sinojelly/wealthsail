@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { OpportunityContext } from "../../../api/investment";
 import {
   buildEconomicStories,
+  economicCalendarDate,
+  selectEconomicEventTeasers,
   type EconomicCategory,
   type EconomicStory,
 } from "../economic-story-model";
@@ -70,16 +72,25 @@ function reportHref(reportRunId: string | null) {
   else params.delete("reportRunId");
   return `?${params}#latest-successful-daily-report`;
 }
+function storyTimeLabel(raw: string | null) {
+  return raw !== null && !economicCalendarDate(raw)
+    ? `日期不可核实（原记录：${readingText(raw, 180)}）`
+    : timeLabel(raw);
+}
 function StoryDates({ story }: { story: EconomicStory }) {
   return (
     <div className="economic-event-dates">
       <span>事件发生时间未单独提供</span>
-      {story.researchAsOf ? (
+      {story.researchAsOf !== null ? (
         <span>
           研究日期：
-          <time dateTime={story.researchAsOf}>
-            {timeLabel(story.researchAsOf)}
-          </time>
+          {economicCalendarDate(story.researchAsOf) ? (
+            <time dateTime={story.researchAsOf}>
+              {timeLabel(story.researchAsOf)}
+            </time>
+          ) : (
+            storyTimeLabel(story.researchAsOf)
+          )}
         </span>
       ) : (
         <span>
@@ -88,21 +99,26 @@ function StoryDates({ story }: { story: EconomicStory }) {
             : "研究证据日期未提供"}
         </span>
       )}
-      {!story.researchAsOf &&
-        story.researchDateBasis === "REPORT_COMPLETED" && (
+      {story.researchDateBasis !== "AS_OF" &&
+        story.reportCompletedAt !== null && (
           <span>
-            报告完成日期：{timeLabel(story.reportCompletedAt)}
-            （仅用于归档日期浏览）
+            报告完成日期：{storyTimeLabel(story.reportCompletedAt)}
+            {story.researchDateBasis === "REPORT_COMPLETED" &&
+              "（仅用于归档日期浏览）"}
           </span>
         )}
-      {!story.researchAsOf && story.researchDateBasis === "REPORT_SLOT" && (
-        <span>
-          报告所属日期：{timeLabel(story.researchDate)}（仅用于归档日期浏览）
-        </span>
-      )}
+      {story.researchDateBasis !== "AS_OF" &&
+        story.researchDateBasis !== "REPORT_COMPLETED" &&
+        story.reportSlotDate !== null && (
+          <span>
+            报告所属日期：{storyTimeLabel(story.reportSlotDate)}
+            {story.researchDateBasis === "REPORT_SLOT" &&
+              "（仅用于归档日期浏览）"}
+          </span>
+        )}
       {story.kind === "UPCOMING" && (
         <span>
-          原研究计划时间：{timeLabel(story.scheduledAt)}（是否发生未确认）
+          原研究计划时间：{storyTimeLabel(story.scheduledAt)}（是否发生未确认）
         </span>
       )}
     </div>
@@ -277,8 +293,9 @@ function StoryCard({
                           : "原文引用尚未核对"}
                     </p>
                     <p>
-                      来源发布时间：{timeLabel(source.publishedAt)}；采集时间：
-                      {timeLabel(source.retrievedAt)}
+                      来源发布时间：{storyTimeLabel(source.publishedAt)}
+                      ；采集时间：
+                      {storyTimeLabel(source.retrievedAt)}
                     </p>
                     {source.quote && (
                       <blockquote>{readingText(source.quote, 1400)}</blockquote>
@@ -545,7 +562,9 @@ export function EconomicEventTeasers({
   data,
   onOpenEvent,
 }: EconomicEventTeasersProps) {
-  const stories = buildEconomicStories(data, todayInShanghai()).slice(0, 3);
+  const stories = selectEconomicEventTeasers(
+    buildEconomicStories(data, todayInShanghai()),
+  );
   return (
     <section className="economic-event-teasers" aria-label="经济事件简讯">
       <h3>经济事件简讯</h3>
@@ -554,14 +573,24 @@ export function EconomicEventTeasers({
           {stories.map((story) => (
             <li key={story.id}>
               <span className="economic-event-muted">
-                {originLabel(story)} · {story.researchDate ?? "独立公开记录"}
+                {originLabel(story)} ·{" "}
+                {story.researchDate ??
+                  (story.origin === "OFFICIAL"
+                    ? "独立公开记录"
+                    : [
+                          story.researchAsOf,
+                          story.reportCompletedAt,
+                          story.reportSlotDate,
+                        ].some((date) => date !== null)
+                      ? "日期不可核实"
+                      : "研究日期未提供")}
               </span>
               <h4>{readingText(story.title, 100)}</h4>
               <p>{readingText(story.summary, 140)}</p>
               <p className="economic-event-muted">事件事实未独立核验</p>
               <p className="economic-event-muted">
                 {story.sources[0]
-                  ? `${sourceTitle(story.sources[0].title, 70)} · 来源发布 ${timeLabel(story.sources[0].publishedAt)}`
+                  ? `${sourceTitle(story.sources[0].title, 70)} · 来源发布 ${storyTimeLabel(story.sources[0].publishedAt)}`
                   : "来源尚未提供"}
               </p>
               <button

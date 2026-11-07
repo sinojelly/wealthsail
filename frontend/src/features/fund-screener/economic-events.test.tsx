@@ -385,3 +385,158 @@ it("shows unverified event facts before details even when original phase is impl
     within(event).getByText(/原事件事实核验标记：UNVERIFIED/),
   ).toBeVisible();
 });
+
+it("prioritizes later high-importance teasers with stable ties while retaining archive input order", () => {
+  const data = context(5);
+  const events = data.dailyResearch!.economicResearch!.observations.events;
+  events.forEach((event, index) => {
+    event.importance = index < 3 ? "LOW" : "HIGH";
+  });
+  const original = structuredClone(data);
+  const view = render(
+    <EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />,
+  );
+  expect(
+    screen
+      .getAllByRole("heading", { level: 4 })
+      .map((item) => item.textContent),
+  ).toEqual(["本次事项4", "本次事项5", "本次事项1"]);
+  view.rerender(<EconomicEvents data={data} />);
+  expect(
+    screen
+      .getAllByRole("article")
+      .map((item) => item.getAttribute("aria-label")),
+  ).toEqual([
+    "本次事项1",
+    "本次事项2",
+    "本次事项3",
+    "本次事项4",
+    "本次事项5",
+    "历史独立事项",
+  ]);
+  expect(data).toEqual(original);
+});
+
+it("uses known research recency after importance and keeps new independent sources separate from retained facts", async () => {
+  const data = context();
+  data.dailyResearch!.economicResearch!.observations.events[0].importance =
+    "HIGH";
+  data.dailyResearch!.report!.events[0].importance = "HIGH";
+  const before = buildEconomicStories(data);
+  data.events = [
+    {
+      id: "history",
+      title: "历史独立事项",
+      summary: "刚采集的独立官方资料，不替换旧事实",
+      category: "DATA_RELEASE",
+      sourceType: "OFFICIAL_FACT",
+      publisher: "独立发布机构",
+      sourceUri: "https://example.test/new-official",
+      publishedAt: "2026-11-07T10:00:00+08:00",
+      retrievedAt: "2026-11-07T10:01:00+08:00",
+      directionIds: [],
+    },
+  ];
+  const onOpen = vi.fn();
+  const view = render(
+    <EconomicEventTeasers data={data} onOpenEvent={onOpen} />,
+  );
+  const items = screen.getAllByRole("listitem");
+  expect(
+    items.map(
+      (item) => within(item).getByRole("heading", { level: 4 }).textContent,
+    ),
+  ).toEqual(["本次事项1", "历史独立事项", "历史独立事项"]);
+  expect(within(items[0]).getByText(/2026-11-07/)).toBeVisible();
+  expect(within(items[1]).getByText(/2026-11-05/)).toBeVisible();
+  expect(within(items[2]).getByText(/独立公开记录/)).toBeVisible();
+  await userEvent.click(within(items[1]).getByRole("button"));
+  expect(onOpen).toHaveBeenCalledWith(before[1].id);
+  view.rerender(<EconomicEvents data={data} selectedEventId={before[1].id} />);
+  const archive = screen.getAllByRole("article");
+  expect(archive[0]).toHaveAttribute("data-event-id", before[0].id);
+  expect(archive[1]).toHaveAttribute("data-event-id", before[1].id);
+  expect(within(archive[1]).getByText("历史事实保留")).toBeVisible();
+  expect(
+    within(archive[2]).getByText("刚采集的独立官方资料，不替换旧事实"),
+  ).toBeVisible();
+  expect(
+    within(archive[2]).getByText("独立发布，不隶属研究日期"),
+  ).toBeVisible();
+});
+
+it("breaks equal-importance teaser ties by known research date rather than insertion origin", () => {
+  const data = context();
+  data.dailyResearch!.economicResearch!.observations.events[0].importance =
+    "HIGH";
+  data.dailyResearch!.economicResearch!.asOf = "2026-11-04T08:00:00+08:00";
+  data.dailyResearch!.report!.events[0].importance = "HIGH";
+  render(<EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />);
+  expect(
+    screen
+      .getAllByRole("heading", { level: 4 })
+      .map((item) => item.textContent),
+  ).toEqual(["历史独立事项", "本次事项1"]);
+});
+
+it("labels impossible evidence and archive dates as unverifiable while preserving raw records and missing dates", () => {
+  const data = context();
+  data.dailyResearch!.economicResearch!.asOf = "2026-02-30T08:00:00+08:00";
+  delete data.dailyResearch!.report!.asOf;
+  data.dailyResearch!.reportCompletedAt = "2026-02-30T23:00:00Z";
+  data.dailyResearch!.reportSlotDate = "2026-02-30";
+  render(<EconomicEvents data={data} />);
+  const options = within(
+    screen.getByLabelText("研究日期（仅已加载归档）"),
+  ).getAllByRole("option");
+  expect(options).toHaveLength(1);
+  const current = screen.getByRole("article", { name: "本次事项1" });
+  expect(
+    within(current).getByText(/日期不可核实.*2026-02-30T08:00:00\+08:00/),
+  ).toBeVisible();
+  expect(within(current).queryByText(/2026年3月/)).not.toBeInTheDocument();
+  const report = screen.getByRole("article", { name: "历史独立事项" });
+  expect(within(report).getByText("研究证据日期未提供")).toBeVisible();
+  expect(
+    within(report).getByText(
+      /报告完成日期：.*日期不可核实.*2026-02-30T23:00:00Z/,
+    ),
+  ).toBeVisible();
+  expect(
+    within(report).getByText(/报告所属日期：.*日期不可核实.*2026-02-30/),
+  ).toBeVisible();
+});
+
+it("labels an invalid original research date separately from a valid completion-date fallback", () => {
+  const data = context();
+  data.dailyResearch!.report!.asOf = "2026-02-30";
+  data.dailyResearch!.reportCompletedAt = "2026-02-28T23:00:00Z";
+  render(<EconomicEvents data={data} />);
+  const report = screen.getByRole("article", { name: "历史独立事项" });
+  expect(
+    within(report).getByText(/研究日期：.*日期不可核实.*2026-02-30/),
+  ).toBeVisible();
+  expect(within(report).getByText(/报告完成日期：2026年3月1日/)).toBeVisible();
+  expect(
+    within(screen.getByLabelText("研究日期（仅已加载归档）")).getByRole(
+      "option",
+      { name: "2026-03-01" },
+    ),
+  ).toBeInTheDocument();
+});
+
+it.each(["", "invalid-date"])(
+  "distinguishes a supplied invalid evidence date %j from a missing date in cards and teasers",
+  (asOf) => {
+    const data = context();
+    data.dailyResearch!.economicResearch!.asOf = asOf;
+    const view = render(<EconomicEvents data={data} />);
+    const card = screen.getByRole("article", { name: "本次事项1" });
+    expect(within(card).getByText(/日期不可核实/)).toBeVisible();
+    expect(
+      within(card).queryByText("研究证据日期未提供"),
+    ).not.toBeInTheDocument();
+    view.rerender(<EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />);
+    expect(screen.getByText(/本次安全经济观察.*日期不可核实/)).toBeVisible();
+  },
+);

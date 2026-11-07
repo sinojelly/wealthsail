@@ -31,11 +31,13 @@ export interface EconomicStory {
   title: string;
   summary: string;
   phase: string | null;
+  importance: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN" | null;
   category: EconomicCategory;
   researchAsOf: string | null;
   researchDate: string | null;
   researchDateBasis: "AS_OF" | "REPORT_COMPLETED" | "REPORT_SLOT" | null;
   reportCompletedAt: string | null;
+  reportSlotDate: string | null;
   occurredAt: null;
   scheduledAt: string | null;
   historical: boolean;
@@ -151,10 +153,22 @@ type StoryObservation = Omit<AcceptanceObservation, "importance"> & {
   factVerification?: "UNVERIFIED";
 };
 
-function calendarDate(raw: string | null | undefined): string | null {
+export function economicCalendarDate(
+  raw: string | null | undefined,
+): string | null {
   if (!raw) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw))
-    return Number.isFinite(Date.parse(raw)) ? raw : null;
+  const calendar = /^(\d{4})-(\d{2})-(\d{2})(?=$|T)/.exec(raw);
+  if (!calendar) return null;
+  const [, yearText, monthText, dayText] = calendar;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  // Date.parse normalizes February 30 in both dates and timestamp prefixes.
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1])
+    return null;
+  if (raw.length === 10) return raw;
   const time = new Date(raw);
   if (!Number.isFinite(time.getTime())) return null;
   const parts = Object.fromEntries(
@@ -167,7 +181,44 @@ function calendarDate(raw: string | null | undefined): string | null {
       .formatToParts(time)
       .map((part) => [part.type, part.value]),
   );
-  return `${parts.year}-${parts.month}-${parts.day}`;
+  return `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}`;
+}
+function importanceValue(raw: string | undefined): EconomicStory["importance"] {
+  return raw === "HIGH" ||
+    raw === "MEDIUM" ||
+    raw === "LOW" ||
+    raw === "UNKNOWN"
+    ? raw
+    : null;
+}
+
+/** Teasers only: supplied importance, then known research date (newest first), then input order.
+ * Unknown/missing importance share the last rank; publication dates never substitute for research dates.
+ * This selects existing records without mutating the archive or changing any verification/qualification.
+ */
+export function selectEconomicEventTeasers(
+  stories: readonly EconomicStory[],
+  limit = 3,
+): EconomicStory[] {
+  const rank: Record<NonNullable<EconomicStory["importance"]>, number> = {
+    HIGH: 0,
+    MEDIUM: 1,
+    LOW: 2,
+    UNKNOWN: 3,
+  };
+  return stories
+    .map((story, order) => ({ story, order }))
+    .sort(
+      (a, b) =>
+        rank[a.story.importance ?? "UNKNOWN"] -
+          rank[b.story.importance ?? "UNKNOWN"] ||
+        (b.story.researchDate ?? "").localeCompare(
+          a.story.researchDate ?? "",
+        ) ||
+        a.order - b.order,
+    )
+    .slice(0, limit)
+    .map(({ story }) => story);
 }
 function fingerprint(value: unknown): string {
   const text = JSON.stringify(value);
@@ -268,6 +319,7 @@ export function buildEconomicStories(
       duplicate.contentComplete =
         duplicate.contentComplete && story.contentComplete;
       duplicate.factVerification ??= story.factVerification;
+      duplicate.importance ??= story.importance;
       return;
     }
     // Source verification and retrieval change on refresh; they are not event identity.
@@ -291,18 +343,17 @@ export function buildEconomicStories(
     reportSlot: string | null = null,
   ) {
     const researchDate =
-      calendarDate(asOf) ??
-      calendarDate(reportCompletedAt) ??
-      calendarDate(reportSlot);
-    const researchDateBasis: EconomicStory["researchDateBasis"] = calendarDate(
-      asOf,
-    )
-      ? "AS_OF"
-      : calendarDate(reportCompletedAt)
-        ? "REPORT_COMPLETED"
-        : calendarDate(reportSlot)
-          ? "REPORT_SLOT"
-          : null;
+      economicCalendarDate(asOf) ??
+      economicCalendarDate(reportCompletedAt) ??
+      economicCalendarDate(reportSlot);
+    const researchDateBasis: EconomicStory["researchDateBasis"] =
+      economicCalendarDate(asOf)
+        ? "AS_OF"
+        : economicCalendarDate(reportCompletedAt)
+          ? "REPORT_COMPLETED"
+          : economicCalendarDate(reportSlot)
+            ? "REPORT_SLOT"
+            : null;
     const allSources = sources.map(sourceProjection);
     function add(event: StoryObservation, kind: EconomicStory["kind"]) {
       const sourceIds = [...new Set(event.sourceIds ?? [])];
@@ -366,6 +417,7 @@ export function buildEconomicStories(
         title: event.title ?? "未提供事件标题",
         summary: event.summary ?? event.thesis ?? "原研究未提供事实摘要",
         phase: event.phase ?? null,
+        importance: importanceValue(event.importance),
         category: lessons.length
           ? mechanisms[lessons[0].channel].category
           : "待分类",
@@ -373,6 +425,7 @@ export function buildEconomicStories(
         researchDate,
         researchDateBasis,
         reportCompletedAt,
+        reportSlotDate: reportSlot,
         occurredAt: null,
         scheduledAt:
           kind === "UPCOMING"
@@ -459,6 +512,7 @@ export function buildEconomicStories(
       title: event.title,
       summary: event.summary,
       phase: null,
+      importance: null,
       category: Object.hasOwn(categoryCodes, event.category)
         ? categoryCodes[event.category]
         : "待分类",
@@ -466,6 +520,7 @@ export function buildEconomicStories(
       researchDate: null,
       researchDateBasis: null,
       reportCompletedAt: null,
+      reportSlotDate: null,
       occurredAt: null,
       scheduledAt: null,
       historical: false,

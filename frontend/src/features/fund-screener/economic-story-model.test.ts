@@ -381,6 +381,7 @@ it("deduplicates equal accepted and formal copies with identical evidence from t
   expect(stories).toHaveLength(1);
   expect(stories[0].origin).toBe("CURRENT_ACCEPTED");
   expect(stories[0].factVerification).toBe("UNVERIFIED");
+  expect(stories[0]).toMatchObject({ importance: "HIGH" });
 });
 
 it("handles unknown official category labels without reading object prototype properties", () => {
@@ -419,4 +420,95 @@ it("preserves original fact-verification scope independently of reported phase a
   delete event.factVerification;
   expect(buildEconomicStories(data)[1].factVerification).toBeNull();
   expect(buildEconomicStories(data)[1].id).toBe(originalId);
+});
+
+it("preserves supplied importance and leaves missing or independent official importance unknown", () => {
+  const data = storyContext();
+  const event = data.dailyResearch!.report!.events[0];
+  data.dailyResearch!.report!.events = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"].map(
+    (importance) => ({ ...event, id: importance, importance }),
+  );
+  data.events = [
+    {
+      id: "official",
+      title: "独立官方事实",
+      summary: "不提供重要性评级",
+      category: "DATA_RELEASE",
+      sourceType: "OFFICIAL_FACT",
+      publisher: "统计机构",
+      sourceUri: null,
+      publishedAt: "2026-11-07T09:00:00+08:00",
+      retrievedAt: null,
+      directionIds: [],
+    },
+  ];
+  expect(buildEconomicStories(data)).toMatchObject([
+    { importance: null },
+    { importance: "HIGH" },
+    { importance: "MEDIUM" },
+    { importance: "LOW" },
+    { importance: "UNKNOWN" },
+    { origin: "OFFICIAL", importance: null, researchDate: null },
+  ]);
+});
+
+it.each([
+  "2026-02-30",
+  "2026-02-29",
+  "2026-04-31",
+  "2026-00-10",
+  "2026-13-01",
+  "2026-11-00",
+  "0000-01-01",
+  "1900-02-29",
+  "2026-02-30T08:00:00+08:00",
+  "2026-02-29T23:00:00Z",
+])(
+  "rejects impossible research calendar date %s without normalizing it",
+  (asOf) => {
+    const data = storyContext();
+    data.dailyResearch!.economicResearch!.asOf = asOf;
+    const [story] = buildEconomicStories(data);
+    expect(story.researchDate).toBeNull();
+    expect(story.researchDateBasis).toBeNull();
+    expect(story.researchAsOf).toBe(asOf);
+  },
+);
+
+it.each([
+  ["2024-02-29", "2024-02-29"],
+  ["2000-02-29", "2000-02-29"],
+  ["0001-01-01T12:00:00Z", "0001-01-01"],
+  ["2026-02-28", "2026-02-28"],
+  ["2026-12-31", "2026-12-31"],
+  ["2026-02-28T23:00:00Z", "2026-03-01"],
+])(
+  "retains real calendar date %s and valid Shanghai timestamp conversion",
+  (asOf, expected) => {
+    const data = storyContext();
+    data.dailyResearch!.economicResearch!.asOf = asOf;
+    expect(buildEconomicStories(data)[0].researchDate).toBe(expected);
+  },
+);
+
+it("rejects impossible completion and report-slot dates as archive fallbacks", () => {
+  const data = storyContext();
+  delete data.dailyResearch!.report!.asOf;
+  data.dailyResearch!.reportCompletedAt = "2026-02-30T08:00:00+08:00";
+  data.dailyResearch!.reportSlotDate = "2026-02-30";
+  const report = buildEconomicStories(data)[1];
+  expect(report.researchDate).toBeNull();
+  expect(report.researchDateBasis).toBeNull();
+  expect(report.reportCompletedAt).toBe("2026-02-30T08:00:00+08:00");
+});
+
+it("uses only a valid explicit fallback when the original evidence date is invalid", () => {
+  const data = storyContext();
+  data.dailyResearch!.report!.asOf = "2026-02-30";
+  data.dailyResearch!.reportCompletedAt = "2026-02-28T23:00:00Z";
+  const report = buildEconomicStories(data)[1];
+  expect(report.researchAsOf).toBe("2026-02-30");
+  expect(report.researchDate).toBe("2026-03-01");
+  expect(report.researchDateBasis).toBe("REPORT_COMPLETED");
+  expect(report.occurredAt).toBeNull();
 });
