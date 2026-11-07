@@ -753,14 +753,42 @@ it("keeps fund summaries visible while report provenance and extended fund evide
   expect(within(fund).getByText("当前净值尚未进入技术观察区间")).toBeVisible();
 });
 
-it("loads a fund's real NAV chart only after expansion and does not invent trade levels", async () => {
+it("shows each fund's inline NAV panel and loads its chart on entering the viewport without inventing trade levels", async () => {
+  const observed = new Map<
+    Element,
+    { callback: IntersectionObserverCallback; observer: IntersectionObserver }
+  >();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends IntersectionObserver {
+      private callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        super(callback);
+        this.callback = callback;
+      }
+      observe(target: Element) {
+        observed.set(target, { callback: this.callback, observer: this });
+      }
+    },
+  );
   renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
   const fund = (await screen.findByText(/000001.*机器人主题基金/)).closest(
     "li",
   )!;
+  const panel = fund.querySelector(".op-match-chart")!;
+  expect(panel).toBeVisible();
+  expect(fund.querySelector("details.op-match-chart")).toBeNull();
+  expect(within(fund).queryByText("查看单位净值走势")).not.toBeInTheDocument();
   expect(within(fund).queryByRole("img")).not.toBeInTheDocument();
   expect(within(fund).getByText(/匹配归档未提供买卖价位/)).toBeVisible();
-  await userEvent.click(within(fund).getByText("查看单位净值走势"));
+  const intersection = observed.get(panel)!;
+  expect(intersection).toBeDefined();
+  act(() => {
+    intersection.callback(
+      [{ target: panel, isIntersecting: true } as IntersectionObserverEntry],
+      intersection.observer,
+    );
+  });
   expect(
     within(fund).getByRole("img", { name: "000001单位净值走势" }),
   ).toHaveAttribute("data-has-price-plan", "false");

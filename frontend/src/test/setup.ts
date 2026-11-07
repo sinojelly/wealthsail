@@ -11,6 +11,26 @@ Object.defineProperty(globalThis, "ResizeObserver", {
   configurable: true,
 });
 
+// JSDOM has no viewport layout. Tests opt into intersections explicitly instead
+// of mounting offscreen charts and requesting unrelated fund histories.
+class IntersectionObserverStub implements IntersectionObserver {
+  readonly root = null;
+  readonly rootMargin = "0px";
+  readonly thresholds = [0];
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
+Object.defineProperty(globalThis, "IntersectionObserver", {
+  value: IntersectionObserverStub,
+  configurable: true,
+  writable: true,
+});
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({

@@ -10,7 +10,7 @@ import {
 import { privateQueryKey, useAuthSession } from "../../../app/auth-session";
 import { timeLabel } from "../macro-display";
 import ObservationSection from "./ObservationSection";
-import FundNavTrendChart from "./FundNavTrendChart";
+import ViewportFundChart from "./ViewportFundChart";
 import { readingText, researchSummary } from "../research-reading";
 import "../topic-fund-cards.css";
 
@@ -66,7 +66,6 @@ function isMatchingPending(data?: TopicFundRecommendationsPage) {
 }
 
 function Fund({ fund }: { fund: TopicRecommendedFund }) {
-  const [chartOpen, setChartOpen] = useState(false);
   const subscription = fund.subscription;
   const subscriptionLabel =
     !subscription || subscription.status === "UNKNOWN"
@@ -94,109 +93,107 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
             : (matchLabels[fund.matchLevel] ?? "匹配等级待核验")}
         </span>
       </header>
-      <p className="op-match-reason">
-        匹配依据：
-        {fund.associationReason || fund.matchReason || "关联依据待补充"}
-      </p>
-      <div className="op-match-fund-metrics">
-        <p>
-          <span>申购状态</span>
-          <strong>{subscriptionLabel}</strong>
-        </p>
-        <p>
-          <span>量化评分</span>
-          <strong>
-            量化得分：
-            {typeof fund.quantitativeScore === "number" &&
-            Number.isFinite(fund.quantitativeScore)
-              ? fund.quantitativeScore
-              : "资料不足，尚未评分"}
-            {typeof fund.quantitativeScore === "number" &&
-              Number.isFinite(fund.quantitativeScore) &&
-              typeof fund.unadjustedQuantitativeScore === "number" &&
-              Number.isFinite(fund.unadjustedQuantitativeScore) &&
-              `（扣分前${fund.unadjustedQuantitativeScore}分）`}
-          </strong>
-        </p>
-        {fund.pricePosition?.actionable === false && (
-          <p>
-            <span>价格观察</span>
-            <strong>技术位置：{fund.pricePosition.label}</strong>
-            {fund.pricePosition.asOf && (
-              <small>数据时间：{timeLabel(fund.pricePosition.asOf)}</small>
+      <div className="op-match-fund-layout">
+        <div className="op-match-fund-info">
+          <p className="op-match-reason">
+            匹配依据：
+            {fund.associationReason || fund.matchReason || "关联依据待补充"}
+          </p>
+          <div className="op-match-fund-metrics">
+            <p>
+              <span>申购状态</span>
+              <strong>{subscriptionLabel}</strong>
+            </p>
+            <p>
+              <span>量化评分</span>
+              <strong>
+                量化得分：
+                {typeof fund.quantitativeScore === "number" &&
+                Number.isFinite(fund.quantitativeScore)
+                  ? fund.quantitativeScore
+                  : "资料不足，尚未评分"}
+                {typeof fund.quantitativeScore === "number" &&
+                  Number.isFinite(fund.quantitativeScore) &&
+                  typeof fund.unadjustedQuantitativeScore === "number" &&
+                  Number.isFinite(fund.unadjustedQuantitativeScore) &&
+                  `（扣分前${fund.unadjustedQuantitativeScore}分）`}
+              </strong>
+            </p>
+            {fund.pricePosition?.actionable === false && (
+              <p>
+                <span>价格观察</span>
+                <strong>技术位置：{fund.pricePosition.label}</strong>
+                {fund.pricePosition.asOf && (
+                  <small>数据时间：{timeLabel(fund.pricePosition.asOf)}</small>
+                )}
+              </p>
             )}
+            {fund.salesChannel && (
+              <p>
+                <span>交易渠道</span>
+                <strong>
+                  销售场景：
+                  {fund.salesChannel === "OFF_EXCHANGE"
+                    ? "场外基金"
+                    : fund.salesChannel === "EXCHANGE"
+                      ? "场内ETF，需证券交易渠道"
+                      : "渠道待核实"}
+                </strong>
+              </p>
+            )}
+          </div>
+          <p className="op-match-note">
+            匹配归档未提供买卖价位，操作条件需另行核验。
           </p>
-        )}
-        {fund.salesChannel && (
-          <p>
-            <span>交易渠道</span>
-            <strong>
-              销售场景：
-              {fund.salesChannel === "OFF_EXCHANGE"
-                ? "场外基金"
-                : fund.salesChannel === "EXCHANGE"
-                  ? "场内ETF，需证券交易渠道"
-                  : "渠道待核实"}
-            </strong>
-          </p>
-        )}
-      </div>
-      <p className="op-match-note">
-        匹配归档未提供买卖价位，操作条件需另行核验。
-      </p>
-      {!!fund.missingEvidence?.length && (
-        <p className="op-match-warning">
-          基金资料待补齐，请核对最新净值、历史价格与申购限制。
-        </p>
-      )}
-      {!!fund.riskWarnings?.length && (
-        <p className="op-match-warning">
-          另有{fund.riskWarnings.length}项基金风险提示，请展开核对。
-        </p>
-      )}
-      <details className="op-match-details">
-        <summary>基金资料与风险详情</summary>
-        {!!fund.alternativeShareClasses?.length && (
-          <p>
-            其他份额：
-            {fund.alternativeShareClasses
-              .map((share) => `${share.fundCode} · ${share.name}`)
-              .join("；")}
-          </p>
-        )}
-        {fund.pricePosition?.actionable === false && (
-          <div>
-            {!!fund.pricePosition.reasons.length && (
-              <ul aria-label="技术位置依据">
-                {fund.pricePosition.reasons.map((reason, index) => (
-                  <li key={index}>
-                    {reason === "OUTSIDE_TECHNICAL_ENTRY_ZONE"
-                      ? "当前净值尚未进入技术观察区间"
-                      : readingText(reason, Infinity)}
-                  </li>
+          {!!fund.missingEvidence?.length && (
+            <p className="op-match-warning">
+              基金资料待补齐，请核对最新净值、历史价格与申购限制。
+            </p>
+          )}
+          {!!fund.riskWarnings?.length && (
+            <p className="op-match-warning">
+              另有{fund.riskWarnings.length}项基金风险提示，请展开核对。
+            </p>
+          )}
+          <details className="op-match-details">
+            <summary>基金资料与风险详情</summary>
+            {!!fund.alternativeShareClasses?.length && (
+              <p>
+                其他份额：
+                {fund.alternativeShareClasses
+                  .map((share) => `${share.fundCode} · ${share.name}`)
+                  .join("；")}
+              </p>
+            )}
+            {fund.pricePosition?.actionable === false && (
+              <div>
+                {!!fund.pricePosition.reasons.length && (
+                  <ul aria-label="技术位置依据">
+                    {fund.pricePosition.reasons.map((reason, index) => (
+                      <li key={index}>
+                        {reason === "OUTSIDE_TECHNICAL_ENTRY_ZONE"
+                          ? "当前净值尚未进入技术观察区间"
+                          : readingText(reason, Infinity)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p>技术位置仅供观察，不代表估值结论或买入许可。</p>
+              </div>
+            )}
+            {!!fund.riskWarnings?.length && (
+              <ul aria-label="基金风险提示">
+                {fund.riskWarnings.map((warning, index) => (
+                  <li key={index}>{warning}</li>
                 ))}
               </ul>
             )}
-            <p>技术位置仅供观察，不代表估值结论或买入许可。</p>
-          </div>
+          </details>
+        </div>
+        {/^[0-9]{6}$/.test(fund.fundCode) && (
+          <ViewportFundChart fundCode={fund.fundCode} />
         )}
-        {!!fund.riskWarnings?.length && (
-          <ul aria-label="基金风险提示">
-            {fund.riskWarnings.map((warning, index) => (
-              <li key={index}>{warning}</li>
-            ))}
-          </ul>
-        )}
-      </details>
-      {/^[0-9]{6}$/.test(fund.fundCode) && (
-        <details
-          className="op-match-chart"
-          onToggle={(event) => setChartOpen(event.currentTarget.open)}
-        >
-          <summary>查看单位净值走势</summary>
-          {chartOpen && <FundNavTrendChart fundCode={fund.fundCode} />}
-        </details>
-      )}
+      </div>
     </li>
   );
 }
