@@ -1,0 +1,241 @@
+.op-topic-recommendations {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--op-line);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.op-topic-recommendations > .op-observation-section > summary h3 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.op-topic-recommendations p {
+  margin: 0;
+}
+
+.op-match-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+  color: var(--op-muted);
+  font-size: 12px;
+}
+
+.op-match-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: #40676a;
+  background: #edf5f5;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.op-topic-recommendations .op-match-note {
+  color: var(--op-muted);
+  font-size: 12px;
+}
+
+.op-match-details,
+.op-match-chart {
+  margin-top: 10px;
+  color: var(--op-muted);
+  font-size: 12px;
+}
+
+.op-match-details > summary,
+.op-match-chart > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--op-teal);
+}
+
+.op-match-details[open] > summary,
+.op-match-chart[open] > summary {
+  margin-bottom: 8px;
+}
+
+.op-match-details p + p {
+  margin-top: 6px;
+}
+
+.op-topic-recommendations .op-match-coverage {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #dce8e8;
+  border-radius: 6px;
+  background: #f5fafa;
+  color: #365c60;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.op-match-topic {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.6fr);
+  margin-top: 16px;
+  border: 1px solid #ccd9e1;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.op-match-thesis {
+  min-width: 0;
+  padding: 18px;
+  background: #f6f9fc;
+}
+
+.op-match-thesis > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.op-match-thesis h4 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.55;
+  font-weight: 600;
+}
+
+.op-match-thesis > p + p,
+.op-match-thesis > ul {
+  margin-top: 10px;
+}
+
+.op-match-risk {
+  color: #936529;
+}
+
+.op-match-risk[data-risk="VERIFIED_SAFE"] {
+  color: #327468;
+}
+
+.op-match-risk[data-risk="RISK_ALERT"],
+.op-match-warning {
+  color: #9b4b38;
+}
+
+.op-match-funds {
+  min-width: 0;
+  padding: 18px;
+}
+
+.op-match-group > h5 {
+  margin: 0 0 8px;
+  color: var(--op-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.op-match-group + .op-match-group {
+  margin-top: 20px;
+}
+
+.op-match-group > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.op-match-fund {
+  min-width: 0;
+  padding: 0 0 16px;
+}
+
+.op-match-fund + .op-match-fund {
+  padding-top: 16px;
+  border-top: 1px solid var(--op-line);
+}
+
+.op-match-fund:last-child {
+  padding-bottom: 0;
+}
+
+.op-match-fund > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.op-match-fund > header > strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.op-match-reason {
+  color: #536477;
+  font-size: 12px;
+}
+
+.op-match-fund-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin: 14px 0 10px;
+}
+
+.op-match-fund-metrics > p {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.op-match-fund-metrics span,
+.op-match-fund-metrics small {
+  color: var(--op-muted);
+  font-size: 11px;
+}
+
+.op-match-fund-metrics strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.op-match-fund > .op-match-warning {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.op-match-chart .op-nav-trend {
+  margin-top: 10px;
+}
+
+@media (max-width: 960px) {
+  .op-match-topic {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .op-match-funds {
+    border-top: 1px solid var(--op-line);
+  }
+}
+
+@media (max-width: 640px) {
+  .op-topic-recommendations {
+    padding: 12px;
+  }
+
+  .op-match-thesis,
+  .op-match-funds {
+    padding: 14px;
+  }
+
+  .op-match-thesis h4,
+  .op-match-fund > header > strong {
+    font-size: 14px;
+  }
+}

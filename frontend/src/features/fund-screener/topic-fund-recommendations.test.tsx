@@ -15,6 +15,16 @@ const session = vi.hoisted(() => ({
   authenticated: true,
 }));
 
+vi.mock("./components/FundNavTrendChart", () => ({
+  default: ({ fundCode, track }: { fundCode: string; track?: unknown }) => (
+    <div
+      role="img"
+      aria-label={`${fundCode}单位净值走势`}
+      data-has-price-plan={track !== undefined}
+    />
+  ),
+}));
+
 vi.mock("../../app/auth-session", async (original) => ({
   ...(await original<typeof import("../../app/auth-session")>()),
   useAuthSession: () => (session.authenticated ? session : null),
@@ -170,7 +180,7 @@ it("keeps a missing matching archive visible without calling it zero opportuniti
   ).toBeEnabled();
 });
 
-it("shows the current research source while waiting without reading unfinished matching", () => {
+it("shows the current research source while waiting without reading unfinished matching", async () => {
   renderWithSession(
     <TopicFundRecommendations
       runId={run}
@@ -184,6 +194,8 @@ it("shows the current research source while waiting without reading unfinished m
   expect(
     within(region).getByText(/研究尚未完成，基金匹配等待研究结果归档/),
   ).toBeVisible();
+  expect(within(region).getByText(new RegExp(run))).not.toBeVisible();
+  await userEvent.click(within(region).getByText("报告来源与匹配说明"));
   expect(within(region).getByText(new RegExp(run))).toBeVisible();
   expect(within(region).getByText(/来源时间/)).toBeVisible();
   expect(fetch).not.toHaveBeenCalled();
@@ -607,6 +619,9 @@ it("keeps negative news in risk funds and separates broad exposure from direct r
   });
   expect(within(risk).getByText(/000002.*芯片精选基金/)).toBeVisible();
   expect(screen.getByText("负面风险线索")).toBeVisible();
+  await userEvent.click(
+    within(risk.closest("article")!).getByText("研究依据与核查详情"),
+  );
   expect(screen.getByText("产能过剩风险正在扩大")).toBeVisible();
   expect(
     screen.queryByRole("list", { name: "芯片产业机会的匹配基金" }),
@@ -646,6 +661,8 @@ it("shows association evidence, alternative shares and technical position withou
   expect(await screen.findByText("指数直配")).toBeVisible();
   expect(screen.getByText(/核验跟踪指数为中证机器人/)).toBeVisible();
   expect(screen.getByText(/场外基金/)).toBeVisible();
+  const fund = screen.getByText(/000001.*机器人主题基金/).closest("li")!;
+  await userEvent.click(within(fund).getByText("基金资料与风险详情"));
   expect(screen.getByText(/其他份额：000004.*机器人主题基金C/)).toBeVisible();
   expect(screen.getByText(/技术位置接近区间下沿/)).toBeVisible();
   expect(screen.getByText("净值处于历史区间较低位置")).toBeVisible();
@@ -683,6 +700,7 @@ it("shows the server-selected importance and checked source coverage on the same
   const title = await screen.findByText("机器人订单机会");
   const card = title.closest("article")!;
   expect(within(card).getByText(/高重要性事件关联/)).toBeVisible();
+  await userEvent.click(within(card).getByText("研究依据与核查详情"));
   expect(within(card).getByText(/引文核对覆盖50%/)).toBeVisible();
   expect(within(card).getByText(/行业范围关联待核实/)).toBeVisible();
   expect(getResearchTopicRegistry).not.toHaveBeenCalled();
@@ -700,6 +718,56 @@ function pending(code = "TOPIC_ARCHIVE_PENDING") {
 function fetchData(data: unknown) {
   return new Response(JSON.stringify({ data, meta: {} }));
 }
+
+it("keeps fund summaries visible while report provenance and extended fund evidence are folded", async () => {
+  const data = response();
+  Object.assign(data.items[0].recommendedFunds[0], {
+    alternativeShareClasses: [{ fundCode: "000004", name: "机器人主题基金C" }],
+    pricePosition: {
+      status: "NEUTRAL",
+      label: "中性观察",
+      asOf: at,
+      reasons: ["OUTSIDE_TECHNICAL_ENTRY_ZONE"],
+      actionable: false,
+    },
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(fetchData(data));
+  renderWithSession(
+    <TopicFundRecommendations runId={run} state="READY" historical />,
+  );
+  const region = screen.getByRole("region", { name: "高价值机会" });
+  const fund = (
+    await within(region).findByText(/000001.*机器人主题基金/)
+  ).closest("li")!;
+  expect(fund).toBeVisible();
+  expect(within(fund).getByText(/技术位置：中性观察/)).toBeVisible();
+  expect(within(region).getByText(/来源研究ID/)).not.toBeVisible();
+  expect(within(fund).getByText(/其他份额/)).not.toBeVisible();
+  expect(
+    within(fund).getByText("当前净值尚未进入技术观察区间"),
+  ).not.toBeVisible();
+  await userEvent.click(within(region).getByText("报告来源与匹配说明"));
+  expect(within(region).getByText(/来源研究ID/)).toBeVisible();
+  await userEvent.click(within(fund).getByText("基金资料与风险详情"));
+  expect(within(fund).getByText(/其他份额/)).toBeVisible();
+  expect(within(fund).getByText("当前净值尚未进入技术观察区间")).toBeVisible();
+});
+
+it("loads a fund's real NAV chart only after expansion and does not invent trade levels", async () => {
+  renderWithSession(<TopicFundRecommendations runId={run} state="READY" />);
+  const fund = (await screen.findByText(/000001.*机器人主题基金/)).closest(
+    "li",
+  )!;
+  expect(within(fund).queryByRole("img")).not.toBeInTheDocument();
+  expect(within(fund).getByText(/匹配归档未提供买卖价位/)).toBeVisible();
+  await userEvent.click(within(fund).getByText("查看单位净值走势"));
+  expect(
+    within(fund).getByRole("img", { name: "000001单位净值走势" }),
+  ).toHaveAttribute("data-has-price-plan", "false");
+  expect(
+    within(fund).queryByText(/建议买入区间|止损参考|止盈目标/),
+  ).not.toBeInTheDocument();
+});
 async function advance(ms = 3000) {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);

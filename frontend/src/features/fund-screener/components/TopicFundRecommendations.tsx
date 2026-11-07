@@ -10,15 +10,11 @@ import {
 import { privateQueryKey, useAuthSession } from "../../../app/auth-session";
 import { timeLabel } from "../macro-display";
 import ObservationSection from "./ObservationSection";
+import FundNavTrendChart from "./FundNavTrendChart";
+import { readingText, researchSummary } from "../research-reading";
+import "../topic-fund-cards.css";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const box = {
-  border: "1px solid var(--op-line)",
-  borderRadius: 10,
-  padding: 14,
-  marginTop: 12,
-  overflowWrap: "anywhere" as const,
-};
 const riskLabels = {
   VERIFIED_SAFE: "风险核查已完成",
   RISK_ALERT: "存在负面分歧",
@@ -70,6 +66,7 @@ function isMatchingPending(data?: TopicFundRecommendationsPage) {
 }
 
 function Fund({ fund }: { fund: TopicRecommendedFund }) {
+  const [chartOpen, setChartOpen] = useState(false);
   const subscription = fund.subscription;
   const subscriptionLabel =
     !subscription || subscription.status === "UNKNOWN"
@@ -86,85 +83,126 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
               ? "资料记录可申购，仍需核对最新状态"
               : "申购状态待核验";
   return (
-    <li>
-      <strong>
-        {fund.fundCode} · {fund.name}
-      </strong>
-      <p>
-        <span>
+    <li className="op-match-fund">
+      <header>
+        <strong>
+          {fund.fundCode} · {fund.name}
+        </strong>
+        <span className="op-match-badge">
           {fund.associationLevel
             ? associationLabels[fund.associationLevel]
             : (matchLabels[fund.matchLevel] ?? "匹配等级待核验")}
-        </span>{" "}
-        · {subscriptionLabel}
-      </p>
-      <p>
+        </span>
+      </header>
+      <p className="op-match-reason">
         匹配依据：
         {fund.associationReason || fund.matchReason || "关联依据待补充"}
       </p>
-      {fund.salesChannel && (
+      <div className="op-match-fund-metrics">
         <p>
-          销售场景：
-          {fund.salesChannel === "OFF_EXCHANGE"
-            ? "场外基金"
-            : fund.salesChannel === "EXCHANGE"
-              ? "场内ETF，需证券交易渠道"
-              : "渠道待核实"}
+          <span>申购状态</span>
+          <strong>{subscriptionLabel}</strong>
         </p>
-      )}
-      {!!fund.alternativeShareClasses?.length && (
         <p>
-          其他份额：
-          {fund.alternativeShareClasses
-            .map((share) => `${share.fundCode} · ${share.name}`)
-            .join("；")}
+          <span>量化评分</span>
+          <strong>
+            量化得分：
+            {typeof fund.quantitativeScore === "number" &&
+            Number.isFinite(fund.quantitativeScore)
+              ? fund.quantitativeScore
+              : "资料不足，尚未评分"}
+            {typeof fund.quantitativeScore === "number" &&
+              Number.isFinite(fund.quantitativeScore) &&
+              typeof fund.unadjustedQuantitativeScore === "number" &&
+              Number.isFinite(fund.unadjustedQuantitativeScore) &&
+              `（扣分前${fund.unadjustedQuantitativeScore}分）`}
+          </strong>
         </p>
-      )}
-      {fund.pricePosition?.actionable === false && (
-        <div>
+        {fund.pricePosition?.actionable === false && (
           <p>
-            技术位置：{fund.pricePosition.label}
-            {fund.pricePosition.asOf
-              ? ` · 数据时间：${timeLabel(fund.pricePosition.asOf)}`
-              : ""}
+            <span>价格观察</span>
+            <strong>技术位置：{fund.pricePosition.label}</strong>
+            {fund.pricePosition.asOf && (
+              <small>数据时间：{timeLabel(fund.pricePosition.asOf)}</small>
+            )}
           </p>
-          {!!fund.pricePosition.reasons.length && (
-            <ul aria-label="技术位置依据">
-              {fund.pricePosition.reasons.map((reason, index) => (
-                <li key={index}>{reason}</li>
-              ))}
-            </ul>
-          )}
-          <p>技术位置仅供观察，不代表估值结论或买入许可。</p>
-        </div>
-      )}
-      <p>
-        量化得分：
-        {typeof fund.quantitativeScore === "number" &&
-        Number.isFinite(fund.quantitativeScore)
-          ? fund.quantitativeScore
-          : "资料不足，尚未评分"}
-        {typeof fund.quantitativeScore === "number" &&
-          Number.isFinite(fund.quantitativeScore) &&
-          typeof fund.unadjustedQuantitativeScore === "number" &&
-          Number.isFinite(fund.unadjustedQuantitativeScore) &&
-          `（扣分前${fund.unadjustedQuantitativeScore}分）`}
+        )}
+        {fund.salesChannel && (
+          <p>
+            <span>交易渠道</span>
+            <strong>
+              销售场景：
+              {fund.salesChannel === "OFF_EXCHANGE"
+                ? "场外基金"
+                : fund.salesChannel === "EXCHANGE"
+                  ? "场内ETF，需证券交易渠道"
+                  : "渠道待核实"}
+            </strong>
+          </p>
+        )}
+      </div>
+      <p className="op-match-note">
+        匹配归档未提供买卖价位，操作条件需另行核验。
       </p>
       {!!fund.missingEvidence?.length && (
-        <p>基金资料待补齐，请核对最新净值、历史价格与申购限制。</p>
+        <p className="op-match-warning">
+          基金资料待补齐，请核对最新净值、历史价格与申购限制。
+        </p>
       )}
       {!!fund.riskWarnings?.length && (
-        <ul aria-label="基金风险提示">
-          {fund.riskWarnings.map((warning, index) => (
-            <li key={index}>{warning}</li>
-          ))}
-        </ul>
+        <p className="op-match-warning">
+          另有{fund.riskWarnings.length}项基金风险提示，请展开核对。
+        </p>
+      )}
+      <details className="op-match-details">
+        <summary>基金资料与风险详情</summary>
+        {!!fund.alternativeShareClasses?.length && (
+          <p>
+            其他份额：
+            {fund.alternativeShareClasses
+              .map((share) => `${share.fundCode} · ${share.name}`)
+              .join("；")}
+          </p>
+        )}
+        {fund.pricePosition?.actionable === false && (
+          <div>
+            {!!fund.pricePosition.reasons.length && (
+              <ul aria-label="技术位置依据">
+                {fund.pricePosition.reasons.map((reason, index) => (
+                  <li key={index}>
+                    {reason === "OUTSIDE_TECHNICAL_ENTRY_ZONE"
+                      ? "当前净值尚未进入技术观察区间"
+                      : readingText(reason, Infinity)}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p>技术位置仅供观察，不代表估值结论或买入许可。</p>
+          </div>
+        )}
+        {!!fund.riskWarnings?.length && (
+          <ul aria-label="基金风险提示">
+            {fund.riskWarnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        )}
+      </details>
+      {/^[0-9]{6}$/.test(fund.fundCode) && (
+        <details
+          className="op-match-chart"
+          onToggle={(event) => setChartOpen(event.currentTarget.open)}
+        >
+          <summary>查看单位净值走势</summary>
+          {chartOpen && <FundNavTrendChart fundCode={fund.fundCode} />}
+        </details>
       )}
     </li>
   );
 }
 
 function Topic({ topic }: { topic: TopicFundRecommendation }) {
+  const thesisPreview = researchSummary(topic.thesis, 240);
   const direct = topic.recommendedFunds.filter((fund) => !isIndirect(fund));
   const negative = topic.topicPolarity === "NEGATIVE_RISK";
   const observation =
@@ -190,89 +228,100 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
     { title: "间接敞口观察", label: "间接观察基金", funds: indirect },
   ];
   return (
-    <article style={box}>
-      <h4>{topic.title}</h4>
-      <p>{topic.thesis}</p>
-      {topic.priority && (
-        <p>
-          {importanceLabels[topic.priority.importance ?? "UNKNOWN"]} ·{" "}
-          {topic.priority.checkedSourceCoveragePercent == null
-            ? "引文核对覆盖未知"
-            : `引文核对覆盖${topic.priority.checkedSourceCoveragePercent}%（不代表主题推理已证实）`}
-          {topic.priority.scopeVerified
-            ? " · 行业范围关联已核实"
-            : " · 行业范围关联待核实"}
-        </p>
-      )}
-      {topic.topicPolarity && (
-        <p>
-          <strong>{polarityLabels[topic.topicPolarity]}</strong>
-        </p>
-      )}
-      {!!topic.polarityReasons?.length && (
-        <ul aria-label="主题方向依据">
-          {topic.polarityReasons.map((reason, index) => (
-            <li key={index}>{reason}</li>
-          ))}
-        </ul>
-      )}
-      <p>
-        <strong
-          style={{
-            color:
-              topic.riskStatus === "RISK_ALERT"
-                ? "var(--op-warning, #9a6700)"
-                : undefined,
-          }}
-        >
-          {riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}
-        </strong>
-      </p>
-      {Number.isFinite(topic.riskScorePenalty) &&
-        topic.riskScorePenalty > 0 && (
-          <p>负面风险扣分：-{topic.riskScorePenalty}</p>
+    <article className="op-match-topic">
+      <div className="op-match-thesis">
+        <header>
+          <h4>{topic.title}</h4>
+          {topic.topicPolarity && (
+            <span className="op-match-badge">
+              {polarityLabels[topic.topicPolarity]}
+            </span>
+          )}
+        </header>
+        <p>{thesisPreview}</p>
+        {topic.priority && (
+          <p className="op-match-note">
+            {importanceLabels[topic.priority.importance ?? "UNKNOWN"]}
+          </p>
         )}
-      {!!topic.riskWarnings?.length && (
-        <ul aria-label="风险提示">
-          {topic.riskWarnings.map((warning, index) => (
-            <li key={index}>{warning}</li>
-          ))}
-        </ul>
-      )}
-      {topic.recommendationStatus === "SOURCE_PENDING" &&
-        recommended.length > 0 && (
-          <p>正面来源待核验，以下基金仅为主题匹配候选。</p>
-        )}
-      {groups.map(
-        ({ title, label, funds }) =>
-          funds.length > 0 && (
-            <div key={label}>
-              <h5>{title}</h5>
-              <ul aria-label={`${topic.title}的${label}`}>
-                {funds.map((fund) => (
-                  <Fund key={fund.fundCode} fund={fund} />
-                ))}
-              </ul>
-            </div>
-          ),
-      )}
-      {negative && <p>仅提示相关行业风险，风险涉及基金不作为推荐。</p>}
-      {!groups.some((group) => group.funds.length > 0) && (
-        <p>
-          {topic.recommendationStatus === "SOURCE_PENDING"
-            ? "正面来源待核验，基金匹配仍待补充。"
-            : topic.missingEvidence?.length
-              ? "基金匹配资料待补齐，不能据此判断没有基金机会。"
-              : topic.recommendationStatus === "NO_MATCH"
-                ? "当前没有满足匹配条件的基金，机会逻辑与待补资料继续保留。"
-                : "此主题尚无已归档的基金匹配条目，不能据此判断没有基金机会。"}
+        <p className="op-match-risk" data-risk={topic.riskStatus}>
+          <strong>
+            {riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}
+          </strong>
         </p>
-      )}
-      {topic.matchMessage && <p>基金匹配说明：{topic.matchMessage}</p>}
-      {!!topic.missingEvidence?.length && (
-        <p>此机会仍有待补证资料，风险未核验不代表不存在风险。</p>
-      )}
-      <p>同次研究来源：{topic.sourceIds.join("、") || "尚未提供"}</p>
+        {Number.isFinite(topic.riskScorePenalty) &&
+          topic.riskScorePenalty > 0 && (
+            <p>负面风险扣分：-{topic.riskScorePenalty}</p>
+          )}
+        {!!topic.riskWarnings?.length && (
+          <ul className="op-match-warning" aria-label="风险提示">
+            {topic.riskWarnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        )}
+        {topic.recommendationStatus === "SOURCE_PENDING" &&
+          recommended.length > 0 && (
+            <p>正面来源待核验，以下基金仅为主题匹配候选。</p>
+          )}
+        <details className="op-match-details">
+          <summary>研究依据与核查详情</summary>
+          {thesisPreview !== topic.thesis && <p>{topic.thesis}</p>}
+          {topic.priority && (
+            <p>
+              {topic.priority.checkedSourceCoveragePercent == null
+                ? "引文核对覆盖未知"
+                : `引文核对覆盖${topic.priority.checkedSourceCoveragePercent}%（不代表主题推理已证实）`}
+              {topic.priority.scopeVerified
+                ? " · 行业范围关联已核实"
+                : " · 行业范围关联待核实"}
+            </p>
+          )}
+          {!!topic.polarityReasons?.length && (
+            <ul aria-label="主题方向依据">
+              {topic.polarityReasons.map((reason, index) => (
+                <li key={index}>{reason}</li>
+              ))}
+            </ul>
+          )}
+          {!!topic.missingEvidence?.length && (
+            <p>此机会仍有待补证资料，风险未核验不代表不存在风险。</p>
+          )}
+          <p>同次研究来源：{topic.sourceIds.join("、") || "尚未提供"}</p>
+        </details>
+        {negative && (
+          <p className="op-match-warning">
+            仅提示相关行业风险，风险涉及基金不作为推荐。
+          </p>
+        )}
+      </div>
+      <div className="op-match-funds">
+        {groups.map(
+          ({ title, label, funds }) =>
+            funds.length > 0 && (
+              <div className="op-match-group" key={label}>
+                <h5>{title}</h5>
+                <ul aria-label={`${topic.title}的${label}`}>
+                  {funds.map((fund) => (
+                    <Fund key={fund.fundCode} fund={fund} />
+                  ))}
+                </ul>
+              </div>
+            ),
+        )}
+        {!groups.some((group) => group.funds.length > 0) && (
+          <p>
+            {topic.recommendationStatus === "SOURCE_PENDING"
+              ? "正面来源待核验，基金匹配仍待补充。"
+              : topic.missingEvidence?.length
+                ? "基金匹配资料待补齐，不能据此判断没有基金机会。"
+                : topic.recommendationStatus === "NO_MATCH"
+                  ? "当前没有满足匹配条件的基金，机会逻辑与待补资料继续保留。"
+                  : "此主题尚无已归档的基金匹配条目，不能据此判断没有基金机会。"}
+          </p>
+        )}
+        {topic.matchMessage && <p>基金匹配说明：{topic.matchMessage}</p>}
+      </div>
     </article>
   );
 }
@@ -307,24 +356,31 @@ export default function TopicFundRecommendations({
   return (
     <ObservationSection
       title={title}
-      style={box}
+      className="op-topic-recommendations"
       defaultExpanded={defaultExpanded}
     >
-      <p>
-        {source === "CURRENT"
-          ? "本次研究 · 只读观察线索"
-          : historical
-            ? "最近有效报告 · 历史 · 只读"
-            : "展示报告 · 只读"}
+      <div className="op-match-source">
+        <span className="op-match-badge">
+          {source === "CURRENT"
+            ? "本次研究 · 只读观察线索"
+            : historical
+              ? "最近有效报告 · 历史 · 只读"
+              : "展示报告 · 只读"}
+        </span>
+        <span>
+          来源时间：{completedAt ? timeLabel(completedAt) : "尚未确定"}
+        </span>
+      </div>
+      <p className="op-match-note">
+        主题匹配仅供研究观察，买卖条件需独立核验。
       </p>
-      <p>
-        来源研究ID：{runId && uuid.test(runId) ? runId : "尚未确定"} ·
-        来源时间：
-        {completedAt ? timeLabel(completedAt) : "尚未确定"}
-      </p>
-      <p>
-        由对应研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
-      </p>
+      <details className="op-match-details">
+        <summary>报告来源与匹配说明</summary>
+        <p>来源研究ID：{runId && uuid.test(runId) ? runId : "尚未确定"}</p>
+        <p>
+          由对应研究主题匹配基金；风险核查结果与基金匹配并列展示。匹配不等于实时可交易，仍需核对最新价格和申购条件。
+        </p>
+      </details>
       {completedStaleResearch && (
         <p>最近一次研究已结束；今日尚未更新，仅显示该次研究的只读归档状态。</p>
       )}
@@ -456,14 +512,21 @@ function RecommendationsData({
       )}
       {valid && (
         <>
-          <p>
-            研究ID：{data.researchId} · 证据时间：{timeLabel(data.validatedAt)}{" "}
-            · 匹配时间：{timeLabel(data.evaluatedAt)}
-          </p>
+          <details className="op-match-details op-match-archive">
+            <summary>匹配归档详情</summary>
+            <p>
+              研究ID：{data.researchId} · 证据时间：
+              {timeLabel(data.validatedAt)} · 匹配时间：
+              {timeLabel(data.evaluatedAt)}
+            </p>
+            <p>
+              优先展示具备直接基金匹配的主题，结合事件重要性、来源支持、关联程度与风险核查完成度排序；重点展示不增加投资资格。
+            </p>
+          </details>
           {data.status === "UNAVAILABLE" ? (
             <p>本次机会基金匹配资料尚不完整，不能据此判断没有机会或基金。</p>
           ) : (
-            <p>
+            <p className="op-match-coverage">
               研究主题{data.coverage.topicCount}个 · 直接匹配
               {data.coverage.matchedTopicCount}个 · 直接候选基金
               {data.coverage.recommendedFundCount}只
@@ -482,9 +545,6 @@ function RecommendationsData({
                 : "主题归档或基金匹配正在完成，每3秒自动检查，最多10次；也可手动重新检查。"}
             </p>
           )}
-          <p>
-            优先展示具备直接基金匹配的主题，结合事件重要性、来源支持、关联程度与风险核查完成度排序；重点展示不增加投资资格。
-          </p>
           {data.items.slice(0, 10).map((topic) => (
             <Topic key={topic.topicId} topic={topic} />
           ))}
