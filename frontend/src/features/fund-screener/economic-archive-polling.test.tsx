@@ -98,7 +98,7 @@ it.each(["PARTIAL", "AVAILABLE"] as const)(
       "PENDING",
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_020);
+      await vi.advanceTimersByTimeAsync(60_020);
     });
     expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
       status,
@@ -113,12 +113,45 @@ it.each(["PARTIAL", "AVAILABLE"] as const)(
   },
 );
 
+it("limits full context reads to one per minute during the first five minutes and still refreshes completed archives", async () => {
+  vi.mocked(api.getOpportunityContext).mockResolvedValue(context("PENDING"));
+  renderWithSession(<FundScreenerPage />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(20);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(300_000);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(6);
+  expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
+    "PENDING",
+  );
+
+  vi.mocked(api.getOpportunityContext).mockResolvedValue(context("PARTIAL"));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(119_000);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(6);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_020);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(7);
+  expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
+    "PARTIAL",
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(240_000);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(7);
+  expect(api.refreshResearch).not.toHaveBeenCalled();
+});
+
 it("slows pending GETs after five minutes and refuses terminal, mismatched, missing-ID or errored polling", async () => {
   const { economicArchivePollInterval } =
     await import("./economic-archive-polling");
-  expect(economicArchivePollInterval(daily(), 0)).toBe(15_000);
-  expect(economicArchivePollInterval(daily(), 299_999)).toBe(15_000);
-  expect(economicArchivePollInterval(daily(), 300_000)).toBe(60_000);
+  expect(economicArchivePollInterval(daily(), 0)).toBe(60_000);
+  expect(economicArchivePollInterval(daily(), 299_999)).toBe(60_000);
+  expect(economicArchivePollInterval(daily(), 300_000)).toBe(120_000);
   expect(economicArchivePollInterval(daily("PARTIAL"), 0)).toBe(false);
   const unavailable = daily();
   unavailable.economicResearch!.archiveState = "UNRECOVERABLE";
@@ -139,7 +172,7 @@ it("stops after three delayed recoveries following final context errors without 
     .mockRejectedValue(new TypeError("offline"));
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(15_050);
+    await vi.advanceTimersByTimeAsync(60_050);
   });
   expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
   await act(async () => {
@@ -160,7 +193,7 @@ it("recovers from a final temporary GET error after a bounded delay and stops on
     .mockResolvedValue(context("PARTIAL"));
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(15_050);
+    await vi.advanceTimersByTimeAsync(60_050);
   });
   expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
     "PENDING",
@@ -207,7 +240,7 @@ it("permits only one controlled reconnection check for the same pending run with
     .mockRejectedValue(new TypeError("offline"));
   renderWithSession(<FundScreenerPage />);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(15_050);
+    await vi.advanceTimersByTimeAsync(60_050);
   });
   await act(async () => {
     onlineManager.setOnline(false);

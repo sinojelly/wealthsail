@@ -22,7 +22,7 @@ export function economicArchivePollInterval(
     (!economic.archivePending && economic.status !== "PENDING")
   )
     return false;
-  return elapsedMs < 5 * 60_000 ? 15_000 : 60_000;
+  return elapsedMs < 5 * 60_000 ? 60_000 : 120_000;
 }
 
 interface ArchiveQuery {
