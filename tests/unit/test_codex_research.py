@@ -301,7 +301,7 @@ async def test_cancel_terminates_and_awaits_child(monkeypatch):
 
     child.wait.side_effect = await_child
     monkeypatch.setattr(
-        mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+        mod, "spawn_research_process", AsyncMock(return_value=child)
     )
     task = asyncio.create_task(
         mod._run(["fake"], cwd=".", env={}, input_data=b"", timeout=10)
@@ -337,7 +337,7 @@ async def test_timeout_in_stdin_drain_also_terminates_and_awaits_child(monkeypat
     child.stdin.drain.side_effect = drain
     child.wait.side_effect = wait
     monkeypatch.setattr(
-        mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+        mod, "spawn_research_process", AsyncMock(return_value=child)
     )
     started = time.monotonic()
     with pytest.raises(TimeoutError):
@@ -363,7 +363,7 @@ async def test_cli_timeout_preserves_bound_exit_state_and_origin(monkeypatch):
     assert error.value.timeout_origin == "CLI_MODEL_TIMEOUT"
     assert state.snapshot()["reaped"] is True
     assert state.snapshot()["terminationRequested"] is True
-    assert state.snapshot()["exitConfirmed"] is (sys.platform == "linux")
+    assert state.snapshot()["exitConfirmed"] is (sys.platform in {"linux", "win32"})
 
 
 @pytest.mark.asyncio
@@ -388,7 +388,7 @@ async def test_cancel_during_spawn_still_disposes_created_child(monkeypatch):
         return child.returncode
 
     child.wait.side_effect = wait
-    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(mod, "spawn_research_process", spawn)
     active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}))
     await started.wait()
     active.cancel()
@@ -413,7 +413,7 @@ async def test_cancel_during_stuck_os_spawn_is_bounded_and_never_confirms_exit(m
         started.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(mod, "spawn_research_process", spawn)
     state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
     active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}, lifecycle=state))
     await started.wait()
@@ -455,7 +455,7 @@ async def test_late_spawn_handle_is_owned_and_disposed_after_caller_returns(monk
         await release.wait()
         return child
 
-    monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(mod, "spawn_research_process", spawn)
     state = ResearchLifecycle({key: str(uuid4()) for key in ("runId", "ownerToken", "callId")})
     active = asyncio.create_task(mod._run(["fake"], cwd=".", env={}, lifecycle=state))
     await started.wait()

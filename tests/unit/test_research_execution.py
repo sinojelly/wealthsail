@@ -324,7 +324,7 @@ async def test_real_subprocess_reader_observes_before_process_exit(monkeypatch):
         observed.set()
 
     monkeypatch.setattr(
-        codex_research.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+        codex_research, "spawn_research_process", AsyncMock(return_value=child)
     )
     task = asyncio.create_task(
         codex_research._run(["native"], cwd=".", env={}, stdout_observer=record)

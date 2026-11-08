@@ -18,7 +18,7 @@ from backend.integrations.research_execution import (
     sanitize_execution_progress,
     sanitize_execution_statistics,
 )
-from backend.integrations.research_process import cleanup_process
+from backend.integrations.research_process import cleanup_process, spawn_research_process
 from backend.integrations.research_lifecycle import CLEANUP_SECONDS
 
 _LATE_SPAWNS = set()
@@ -353,7 +353,7 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=N
         control_read, control_write = os.pipe()
         options["pass_fds"] = (control_write,)
         args = [sys.executable, str(Path(__file__).with_name("research_supervisor.py")), str(control_write), str(timeout), str(os.getpid()), *args]
-    spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+    spawn = asyncio.create_task(spawn_research_process(
             *args,
             cwd=cwd,
             env=env,
