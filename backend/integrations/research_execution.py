@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from time import monotonic
+import unicodedata
 
 VERSION = "research-execution-v2"
 LEGACY_VERSION = "research-execution-v1"
@@ -75,6 +76,125 @@ _TOOL_ITEMS = {
 _PROGRESS_PHASES = frozenset(
     {"MODEL_RUNNING", "WAITING_TOOL", "MODEL_MESSAGE", "TURN_COMPLETED", "TURN_FAILED"}
 )
+
+# Closed, whole-query scope aliases: supplier/customer terms and overlapping
+# news buckets must not stand in for a frozen industry's own search scope.
+_QUERY_SCOPES = {
+    "ROBOT": (
+        "机器人 具身智能",
+        "具身智能 机器人",
+        "机器人",
+        "人形机器人",
+        "具身机器人",
+        "robot",
+        "robotics",
+    ),
+    "ROBOTICS_MOBILITY": ("机器人 智能驾驶",),
+    "SEMICONDUCTOR_AI": ("半导体 AI算力", "半导体", "semiconductor"),
+    "AI": ("人工智能 算力", "人工智能", "artificial intelligence"),
+    "RARE_EARTH": ("稀土 永磁 磁材", "稀土", "rare earth"),
+    "NONFERROUS": ("有色金属 工业金属 铜 铝", "有色金属", "工业金属", "nonferrous"),
+    "RARE_EARTH_METALS": ("稀土 有色金属 产业链",),
+    "BROAD": ("宽基 指数 沪深300", "宽基指数"),
+    "BANK": ("银行", "banking"),
+    "BROKER": ("证券 券商", "券商"),
+    "FINTECH": ("金融科技",),
+    "ACTIVE_GROWTH": ("成长行业 科技产业",),
+    "DEFENCE": ("军工 国防", "军工"),
+    "COMMUNICATION": ("通信 5G 光通信", "通信"),
+    # Identical labels deliberately stay ambiguous for normalized matching.
+    "INNOVATIVE_DRUG": ("创新药 生物医药", "创新药"),
+    "DRUG": ("创新药 生物医药", "创新药"),
+    "GOLD": ("黄金 金矿", "黄金"),
+    "GLOBAL_ENERGY": ("全球能源 石油 天然气", "全球能源"),
+    "US_TECH": ("美国科技 纳斯达克", "美国科技"),
+    "FINANCIAL": ("银行 券商",),
+    "FINANCE_POLICY": ("金融政策 银行 券商",),
+    "HEALTHCARE_CLINICAL": ("医药 临床",),
+    "GOLD_ENERGY": ("黄金 能源 油气",),
+    "AEROSPACE": ("航天 军工", "航天"),
+    "CONSUMPTION": ("消费 食品饮料", "消费"),
+    "MEMORY": ("存储芯片",),
+    "PCB": ("印制电路板", "pcb"),
+    "POWER": ("电力 电网", "电力"),
+    "SOLID_BATTERY": ("固态电池",),
+    "SATELLITE": ("卫星互联网",),
+    "LOW_ALTITUDE": ("低空经济",),
+    "HK_TECH": ("港股科技",),
+    "DIVIDEND": ("红利 低波", "红利"),
+    "TRADITIONAL_MEDICINE": ("中药",),
+    "COAL": ("煤炭",),
+    "GAMING": ("游戏",),
+    "CHEMICAL": ("化工",),
+}
+_QUERY_RISKS = {
+    "FINANCING_COOLING": re.compile(
+        r"(?:一级市场)?(?:融资|募资)(?:降温/断代|降温|断代|断层|减少|下降|下滑|收缩|放缓|困难)"
+        r"|(?:funding|financing)\s+(?:cooling|decline|declining|decrease|decreasing|slowdown)",
+        re.I,
+    ),
+    "LAYOFFS_CLOSURES": re.compile(
+        r"欠薪|拖欠(?:工资|薪资)|裁员|倒闭|破产|停业|关停|layoffs?|unpaid wages|bankruptcy|closures?",
+        re.I,
+    ),
+    "ORDER_CUTS": re.compile(
+        r"(?:下游)?(?:砍单|削单)|(?:订单|采购)(?:取消|减少|下降|下滑)|取消订单|order cuts?|cancelled orders|canceled orders",
+        re.I,
+    ),
+    "OVERCAPACITY_PRICE_WAR": re.compile(
+        r"产能过剩|过剩产能|价格战|降价竞争|price wars?|overcapacity|excess capacity",
+        re.I,
+    ),
+    "PRODUCTION_DELAY": re.compile(
+        r"(?:商业化)?(?:量产|商业化|交付)(?:推迟|延期|延后|延迟)|production delays?|commercialization delays?",
+        re.I,
+    ),
+}
+_QUERY_NOISE = re.compile(r"最近90天|过去90天|近90天|近期|最新|行业|企业|产业链")
+_QUERY_YEAR = re.compile(r"(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])年?")
+
+
+def _compact_query_scope(value):
+    value = _QUERY_NOISE.sub("", unicodedata.normalize("NFKC", value).casefold())
+    return "".join(char for char in value if char.isalnum())
+
+
+def _query_core(query):
+    """Recognize one closed industry/risk core; unknown qualifiers stay unbound.
+
+    Explicit years are retained in the digest. A historical-year search or an
+    unsupported date/range cannot certify the frozen current-window task.
+    """
+    if not isinstance(query, str) or not 1 <= len(query) <= 8192:
+        return None
+    text = unicodedata.normalize("NFKC", query).casefold()
+    risks = [kind for kind, pattern in _QUERY_RISKS.items() if pattern.search(text)]
+    if len(risks) != 1:
+        return None
+    kind = risks[0]
+    years = sorted(
+        {match.group().removesuffix("年") for match in _QUERY_YEAR.finditer(text)}
+    )
+    text = _QUERY_YEAR.sub("", _QUERY_RISKS[kind].sub("", text))
+    scope = _compact_query_scope(text)
+    industries = [
+        industry
+        for industry, aliases in _QUERY_SCOPES.items()
+        if scope in {_compact_query_scope(alias) for alias in aliases}
+    ]
+    if len(industries) != 1:
+        return None
+    return industries[0], kind, years
+
+
+def _query_core_hash(query, task=None):
+    core = _query_core(query)
+    if core is None or (
+        task is not None
+        and (task.get("industryId") != core[0] or task.get("kind") != core[1])
+    ):
+        return None
+    return _hash(json.dumps(core, separators=(",", ":")))
 
 
 def _hash(value):
@@ -210,6 +330,7 @@ class ExecutionObserver:
         self.counts = dict.fromkeys(_COUNTS, 0)
         self.unknown_actions = False
         self.unknown_events = False
+        self.unknown_event_count = 0
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.started_clock = monotonic()
         self.last_event_at = None
@@ -334,6 +455,29 @@ class ExecutionObserver:
         self.partial = self.unknown_events = True
         self.proof_barrier = self.proof_barrier or reason
 
+    def _unknown_event(self, item=None):
+        # An intact but unknown event is a diagnostic gap, not evidence that an
+        # independently completed action did not execute. Its own identity can
+        # never acquire a proof, including if another event reuses that ID.
+        self.partial = self.unknown_events = True
+        self.unknown_event_count = min(1_000_000, self.unknown_event_count + 1)
+        identity = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(identity, str) or not 1 <= len(identity) <= 200:
+            return
+        try:
+            identity = _hash(identity)
+        except UnicodeError:
+            self._damage()
+            return
+        if identity not in self.non_web_ids and len(self.non_web_ids) >= MAX_ITEMS:
+            self._damage("ITEM_LIMIT_EXCEEDED")
+            return
+        self.non_web_ids.add(identity)
+        if identity in self.items:
+            self.items[identity].update(
+                status="CONFLICT", queryHashes=[], queryCoreHashes={}
+            )
+
     def feed(self, chunk):
         if not isinstance(chunk, bytes):
             self._damage()
@@ -382,11 +526,10 @@ class ExecutionObserver:
                 self._damage()
                 return
             if item.get("type") != "web_search":
-                if (
-                    not isinstance(item.get("type"), str)
-                    or item["type"] not in _NON_WEB_ITEMS
-                ):
+                if not isinstance(item.get("type"), str):
                     self._damage()
+                elif item["type"] not in _NON_WEB_ITEMS:
+                    self._unknown_event(item)
                 elif isinstance(item.get("id"), str):
                     try:
                         non_web_id = _hash(item["id"])
@@ -400,7 +543,9 @@ class ExecutionObserver:
                             return
                         self.non_web_ids.add(non_web_id)
                     if previous is not None:
-                        previous.update(status="CONFLICT", queryHashes=[])
+                        previous.update(
+                            status="CONFLICT", queryHashes=[], queryCoreHashes={}
+                        )
                         self.partial = True
                 return
             identity = item.get("id")
@@ -420,10 +565,13 @@ class ExecutionObserver:
                     "fingerprint": None,
                     "status": "INCOMPLETE",
                     "queryHashes": [],
+                    "queryCoreHashes": {},
                 }
                 self.counts["webToolCalls"] += 1
             if identity in self.non_web_ids:
-                self.items[identity].update(status="CONFLICT", queryHashes=[])
+                self.items[identity].update(
+                    status="CONFLICT", queryHashes=[], queryCoreHashes={}
+                )
                 self.partial = True
                 return
             if kind != "item.completed":
@@ -433,7 +581,9 @@ class ExecutionObserver:
             previous = self.items[identity]
             if previous["fingerprint"] is not None:
                 if previous["fingerprint"] != fingerprint:
-                    previous.update(status="CONFLICT", queryHashes=[])
+                    previous.update(
+                        status="CONFLICT", queryHashes=[], queryCoreHashes={}
+                    )
                     self.partial = True
                 return
             previous["fingerprint"] = fingerprint
@@ -474,7 +624,13 @@ class ExecutionObserver:
                     self.partial = True
                 else:
                     previous.update(
-                        status="COMPLETED_SEARCH", queryHashes=list(query_hashes)
+                        status="COMPLETED_SEARCH",
+                        queryHashes=list(query_hashes),
+                        queryCoreHashes={
+                            _hash(query): core
+                            for query in queries
+                            if (core := _query_core_hash(query)) is not None
+                        },
                     )
             elif action_type == "openPage":
                 self.counts["pageOpens"] += 1
@@ -496,7 +652,7 @@ class ExecutionObserver:
                 self.partial = self.unknown_actions = True
                 previous["status"] = "UNKNOWN_ACTION"
         else:
-            self._damage()
+            self._unknown_event(value.get("item"))
 
     def finish(self):
         # A trailing unterminated event is not a fully observed JSONL record.
@@ -536,6 +692,11 @@ class ExecutionObserver:
                 "completedItemId": identity,
                 "status": row["status"],
                 "queryHashes": list(row["queryHashes"]),
+                **(
+                    {"queryCoreHashes": dict(row["queryCoreHashes"])}
+                    if row["queryCoreHashes"]
+                    else {}
+                ),
             }
             for identity, row in self.items.items()
         ]
@@ -560,6 +721,11 @@ class ExecutionObserver:
             "queryReceipts": receipts,
             "actionProofs": proofs,
             "proofBarrier": barrier,
+            **(
+                {"unknownEventCount": self.unknown_event_count}
+                if self.unknown_event_count
+                else {}
+            ),
             "softQueryLimit": SOFT_QUERY_LIMIT,
             "softQueryLimitExceeded": counts["searchQueries"] > SOFT_QUERY_LIMIT
             if counts["searchQueries"] is not None
@@ -695,10 +861,17 @@ def sanitize_execution_receipt(value):
     base = {
         key: row
         for key, row in value.items()
-        if key not in {"actionProofs", "proofBarrier"}
+        if key not in {"actionProofs", "proofBarrier", "unknownEventCount"}
     }
     base["version"] = LEGACY_VERSION
     if _sanitize_v1(base) is None:
+        return None
+    unknown_count = value.get("unknownEventCount", 0)
+    if (
+        type(unknown_count) is not int
+        or not 0 <= unknown_count <= 1_000_000
+        or (unknown_count and value["coverage"] != "PARTIAL")
+    ):
         return None
     barrier = value["proofBarrier"]
     if barrier is not None and (
@@ -710,11 +883,10 @@ def sanitize_execution_receipt(value):
         return None
     identities, projected = set(), []
     for proof in proofs:
-        if not isinstance(proof, dict) or set(proof) != {
-            "completedItemId",
-            "status",
-            "queryHashes",
-        }:
+        if not isinstance(proof, dict) or set(proof) not in (
+            {"completedItemId", "status", "queryHashes"},
+            {"completedItemId", "status", "queryHashes", "queryCoreHashes"},
+        ):
             return None
         identity, status, hashes = (
             proof["completedItemId"],
@@ -736,6 +908,18 @@ def sanitize_execution_receipt(value):
             or (bool(hashes) != (status == "COMPLETED_SEARCH"))
         ):
             return None
+        cores = proof.get("queryCoreHashes", {})
+        if (
+            not isinstance(cores, dict)
+            or len(cores) > len(hashes)
+            or any(
+                query_hash not in hashes
+                or not isinstance(core, str)
+                or not _HASH.fullmatch(core)
+                for query_hash, core in cores.items()
+            )
+        ):
+            return None
         identities.add(identity)
         projected.extend(
             {"completedItemId": identity, "queryHash": query_hash}
@@ -749,7 +933,10 @@ def sanitize_execution_receipt(value):
     if barrier is None and (
         not value["turnCompleted"]
         or value["coverage"] == "UNAVAILABLE"
-        or counts["webToolCalls"] != len(proofs)
+        or (
+            counts["webToolCalls"] != len(proofs)
+            and not (unknown_count and counts["webToolCalls"] is None)
+        )
     ):
         return None
     if value["coverage"] == "COMPLETE" and (
@@ -789,7 +976,7 @@ def _usable_query_hashes(receipt):
 
 
 def executed_task_ids(receipt, manifest):
-    """Bind exact queries from usable host proofs, never a model assertion."""
+    """Bind observed exact queries or a closed frozen industry/risk query core."""
     receipt = sanitize_execution_receipt(receipt)
     hashes = _usable_query_hashes(receipt)
     if hashes is None:
@@ -797,14 +984,33 @@ def executed_task_ids(receipt, manifest):
     tasks = manifest.get("tasks") if isinstance(manifest, dict) else None
     if not isinstance(tasks, list) or len(tasks) > 50:
         return set()
-    return {
-        task["taskId"]
-        for task in tasks
-        if isinstance(task, dict)
-        and isinstance(task.get("taskId"), str)
-        and isinstance(task.get("query"), str)
-        and _hash(task["query"]) in hashes
-    }
+    return _matched_query_tasks(receipt, tasks, hashes)[0]
+
+
+def _matched_query_tasks(receipt, tasks, hashes):
+    cores = {}
+    if receipt["version"] == VERSION:
+        for proof in receipt["actionProofs"]:
+            for query_hash, core in proof.get("queryCoreHashes", {}).items():
+                cores.setdefault(core, set()).add(query_hash)
+    matched_tasks, matched_hashes = set(), set()
+    for task in tasks:
+        if (
+            not isinstance(task, dict)
+            or not isinstance(task.get("taskId"), str)
+            or not isinstance(task.get("query"), str)
+        ):
+            continue
+        try:
+            query_hash = _hash(task["query"])
+            core = _query_core_hash(task["query"], task)
+        except UnicodeError:
+            continue
+        matching = ({query_hash} & hashes) | cores.get(core, set())
+        if matching:
+            matched_tasks.add(task["taskId"])
+            matched_hashes.update(matching)
+    return matched_tasks, matched_hashes
 
 
 def sanitize_execution_transport_reason(value):
@@ -817,7 +1023,7 @@ def sanitize_execution_transport_reason(value):
 
 
 def execution_match_stats(receipt, manifest):
-    """Describe exact-query association; this never grants an audit permission.
+    """Describe observed exact/core associations, never a model assertion.
 
     Hash counts are unique query hashes, while observedQueryCount retains the
     actual query counter. Unmatched searches can include general macro research.
@@ -846,7 +1052,8 @@ def execution_match_stats(receipt, manifest):
     ):
         return output
     try:
-        planned_hashes = {_hash(row["query"]) for row in tasks}
+        for row in tasks:
+            row["query"].encode("utf-8")
     except UnicodeError:
         return output
     output["plannedTaskCount"] = len(tasks)
@@ -855,8 +1062,11 @@ def execution_match_stats(receipt, manifest):
         not observed_hashes and receipt["coverage"] != "COMPLETE"
     ):
         return output
-    unmatched = observed_hashes - planned_hashes
-    matched_task_count = len(executed_task_ids(receipt, manifest))
+    matched_tasks, matched_hashes = _matched_query_tasks(
+        receipt, tasks, observed_hashes
+    )
+    unmatched = observed_hashes - matched_hashes
+    matched_task_count = len(matched_tasks)
     output.update(
         classification="EXECUTION_UNMATCHED"
         if unmatched
@@ -866,7 +1076,7 @@ def execution_match_stats(receipt, manifest):
         if observed_hashes
         else "EXECUTION_NOT_OBSERVED",
         matchedTaskCount=matched_task_count,
-        matchedQueryHashCount=len(observed_hashes & planned_hashes),
+        matchedQueryHashCount=len(matched_hashes),
         unmatchedQueryHashCount=len(unmatched),
     )
     return output

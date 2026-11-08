@@ -190,3 +190,34 @@ def test_ambiguous_duplicate_json_identity_is_unattributed_damage():
     )
     observer.feed(encoded({"type": "turn.completed"}))
     assert not execution.executed_task_ids(observer.finish(), manifest("good"))
+
+
+def test_unknown_complete_json_event_keeps_completed_search_and_safe_diagnostic():
+    receipt = observe(event("good"), {"type": "future.privateEvent", "text": "PRIVATE"})
+    assert receipt["coverage"] == "PARTIAL"
+    assert receipt["eventsComplete"] is False
+    assert receipt.get("unknownEventCount") == 1
+    assert receipt["proofBarrier"] is None
+    assert receipt["counts"]["searchQueries"] is None
+    assert len(receipt["queryReceipts"]) == 1
+    assert execution.sanitize_execution_receipt(receipt) == receipt
+    assert execution.executed_task_ids(receipt, manifest("good")) == {"task-0"}
+    assert "PRIVATE" not in json.dumps(receipt)
+    assert "privateEvent" not in json.dumps(receipt)
+
+
+@pytest.mark.parametrize("unknown_first", [True, False])
+def test_unknown_item_type_only_revokes_a_reused_identity(unknown_first):
+    unknown = {
+        "type": "item.completed",
+        "item": {"id": "shared", "type": "futureTool", "text": "PRIVATE"},
+    }
+    search = event("shared", {"type": "search", "query": "conflicted"})
+    pair = [unknown, search] if unknown_first else [search, unknown]
+    receipt = observe(*pair, event("independent"))
+    assert receipt.get("unknownEventCount") == 1
+    assert execution.executed_task_ids(
+        receipt, manifest("conflicted", "independent")
+    ) == {"task-1"}
+    assert len(receipt["queryReceipts"]) == 1
+    assert "PRIVATE" not in json.dumps(receipt)
