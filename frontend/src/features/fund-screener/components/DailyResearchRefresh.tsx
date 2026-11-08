@@ -143,6 +143,35 @@ function RefreshControl({ actor, onReady }: Props) {
       }
     },
   });
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.cancelResearchRefresh(id),
+    retry: false,
+    onSuccess: (value) => {
+      setSubmitted(value);
+      client.setQueryData(
+        [actor, "daily-research-debug-status", value.id],
+        value,
+      );
+    },
+    onError: () => {
+      void status.refetch();
+    },
+  });
+  const phases: Record<string, string> = {
+    COLLECTING: "正在采集公共数据",
+    WAITING_MODEL_SLOT: "等待模型槽，尚未调用 AI",
+    MODEL_RUNNING: "AI 分析中",
+    VERIFYING_OUTPUT: "正在核对引用来源",
+    REPORT_VALIDATION: "报告验证中",
+    PERSISTING: "正在保存报告",
+  };
+  const exitEvidence: Record<string, string> = {
+    LOCAL_RUNNING: "本机研究进程仍在运行，需要等待退出确认",
+    LOCAL_EXIT_CONFIRMED: "已取得本机退出证明，等待释放模型槽",
+    LOCAL_EXIT_UNCONFIRMED: "本机退出证明仍不完整，需要受控恢复",
+    LOCAL_EVIDENCE_NOT_RETAINED: "旧研究退出证据未保留，需要本机受控维护",
+    LOCAL_PLATFORM_UNSUPPORTED: "本地退出证明不可用，需要受控维护",
+  };
   const canClearUnconfirmed =
     !!unconfirmedKey &&
     submit.error instanceof HttpError &&
@@ -163,7 +192,7 @@ function RefreshControl({ actor, onReady }: Props) {
       <div className="op-research-refresh-action">
         <button
           type="button"
-          disabled={busy || submit.isPending}
+          disabled={busy || submit.isPending || cancel.isPending}
           onClick={() =>
             submit.mutate(commandKey.current ?? crypto.randomUUID())
           }
@@ -175,6 +204,20 @@ function RefreshControl({ actor, onReady }: Props) {
           Codex，产生新的用量；普通刷新不会重跑。
         </small>
       </div>
+      {result?.status === "QUEUED" && result.canCancel === true && (
+        <button
+          type="button"
+          disabled={cancel.isPending}
+          onClick={() => cancel.mutate(result.id)}
+        >
+          {cancel.isPending ? "正在取消排队…" : "取消排队研究"}
+        </button>
+      )}
+      {cancel.isError && (
+        <p role="alert">
+          取消未生效，已重新查询状态；若研究已开始则不能取消排队。不会重新提交研究。
+        </p>
+      )}
       {unconfirmedKey && !submit.isPending && (
         <p role="alert">
           提交结果待确认，可重试本次提交；相同请求不会重复运行。
@@ -200,11 +243,37 @@ function RefreshControl({ actor, onReady }: Props) {
         <p role="status">
           超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，本次执行结束前不会启动新的模型。
         </p>
-      ) : result?.status === "QUEUED" || result?.status === "RUNNING" ? (
+      ) : result?.status === "QUEUED" ? (
         <p role="status">
-          正在采集与分析 ·{" "}
-          {result.status === "QUEUED" ? "等待后台处理" : "后台处理中"}
+          排队等待模型槽 ·{" "}
+          {result.blockedReasonCode === "MODEL_GUARD_ACTIVE"
+            ? "上次研究仍占用模型槽，需要等待退出确认"
+            : result.blockedReasonCode === "REQUEST_RUNNING"
+              ? "另一次研究正在运行"
+              : "等待后台认领"}
+          。尚未采集或调用 AI，保留上一份有效报告。
+          排队最多5分钟，超时终止且不自动重试。
+          {result.queueExpiresAt && (
+            <> 排队截止：{timeLabel(result.queueExpiresAt)}。</>
+          )}
+        </p>
+      ) : result?.status === "RUNNING" ? (
+        <p role="status">
+          {phases[result.executionStage ?? ""] ?? "后台处理中 · 阶段待确认"}
           。保留上一份有效报告。
+        </p>
+      ) : result?.status === "CANCELLED" ? (
+        <p role="status">
+          排队研究已取消，记录已保留，未调用
+          AI。不会自动重试；需要研究时请重新点击。
+        </p>
+      ) : result?.status === "EXPIRED" ? (
+        <p role="status">
+          {result.errorClass === "QueueInvalidatedByMaintenance" ||
+          result.errorClass === "LocalRebootQueueExpired"
+            ? "旧排队请求已在本机维护中终止"
+            : "排队等待超过5分钟，已终止"}
+          ；未开始采集或调用 AI。不会自动重试；需要研究时请重新点击。
         </p>
       ) : result?.status === "READY" ? (
         <p role="status">手动研究已完成，页面将加载最新有效报告。</p>
@@ -220,6 +289,23 @@ function RefreshControl({ actor, onReady }: Props) {
             : "正在继续查询后台结果，保留上一份有效报告，不会启动新的模型。"}
         </p>
       ) : null}
+      {result?.status === "QUEUED" &&
+        result.blockedReasonCode === "MODEL_GUARD_ACTIVE" && (
+          <div>
+            {result.modelExitEvidenceCheckedAt &&
+              exitEvidence[result.modelExitEvidenceState ?? ""] && (
+                <p>
+                  {exitEvidence[result.modelExitEvidenceState!]}（核对于{" "}
+                  {timeLabel(result.modelExitEvidenceCheckedAt)}）。
+                </p>
+              )}
+            <p>
+              若原研究已结束仍长期阻塞，请在运行研究的 Windows
+              主机执行本地受控恢复。等待超时不会释放旧锁；不要按进程名结束全部
+              Codex。
+            </p>
+          </div>
+        )}
       {(result?.status === "FAILED" || result?.status === "UNCERTAIN") && (
         <details className="op-research-execution-diagnostics">
           <summary>查看执行诊断</summary>

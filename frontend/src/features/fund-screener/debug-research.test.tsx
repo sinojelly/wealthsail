@@ -43,7 +43,7 @@ it("only explicitly starts collection and one model analysis, disabling an activ
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
   await userEvent.click(button);
   expect(button).toBeDisabled();
-  expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
+  expect(await screen.findByText(/后台处理中 · 阶段待确认/)).toBeVisible();
   expect(api.startResearchRefresh).toHaveBeenCalledWith(
     expect.stringMatching(/^[0-9a-f-]{36}$/),
   );
@@ -72,7 +72,7 @@ it("recovers the current user's active request without starting another model", 
   expect(
     await screen.findByRole("button", { name: "手动启动研究" }),
   ).toBeDisabled();
-  expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
+  expect(await screen.findByText(/后台处理中 · 阶段待确认/)).toBeVisible();
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
 });
 it("shows failed analysis with its safe reason and keeps the previous report", async () => {
@@ -199,7 +199,7 @@ it("counts execution from the worker start rather than time spent queued", async
   });
   vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(running as never);
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
-  expect(await screen.findByText(/正在采集与分析/)).toBeVisible();
+  expect(await screen.findByText(/后台处理中 · 阶段待确认/)).toBeVisible();
   expect(screen.getByRole("button", { name: "手动启动研究" })).toBeDisabled();
   expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
 });
