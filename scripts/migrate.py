@@ -2780,6 +2780,8 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "batch_id",
         "report_run_id",
         "error_class",
+        "execution_stage",
+        "stage_updated_at",
     }
     for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
         for privilege in ("SELECT", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
