@@ -339,12 +339,36 @@ def _accepted(value):
         projected.pop("riskLevel", None)
         projected.update(_cycle_projection(original))
     directions = value.get("valueDirections")
+    from backend.macro.research_diagnostics import RULE_IDS
+    from backend.macro.research_topics import FORMAL_ELIGIBILITY_REASONS
+
+    eligibility_reasons = (
+        FORMAL_ELIGIBILITY_REASONS
+        | RULE_IDS
+        | {"FUND_PLAN_INVALID", "OBSERVATION_ONLY"}
+    )
     for projected, original in zip(
         output["valueDirections"],
         [row for row in directions if isinstance(row, dict)]
         if isinstance(directions, list)
         else [],
     ):
+        signal = original.get("signal")
+        if isinstance(signal, str) and signal in {
+            "LEFT_VALUE", "RIGHT_TREND", "TAKE_PROFIT", "WATCH", "AVOID"
+        }:
+            projected["signal"] = signal
+        if original.get("qualificationStatus") == "OBSERVATION_ONLY":
+            projected["qualificationStatus"] = "OBSERVATION_ONLY"
+        # This DTO carries observations only and can never grant investment
+        # permission, even when projecting a fully qualified formal direction.
+        if original.get("investmentEligible") is False:
+            projected["investmentEligible"] = False
+        if isinstance(original.get("formalEligibilityReasons"), list):
+            projected["formalEligibilityReasons"] = list(dict.fromkeys(
+                reason for reason in original["formalEligibilityReasons"]
+                if isinstance(reason, str) and reason in eligibility_reasons
+            ))[:12]
         cycle = original.get("industryCycle")
         if not isinstance(cycle, dict):
             continue

@@ -49,7 +49,7 @@ class ValueDirectionProposal(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     title: str = Field(min_length=1, max_length=100)
     thesis: str = Field(min_length=1, max_length=600)
-    signal: Literal["LEFT_VALUE", "RIGHT_TREND", "TAKE_PROFIT", "WATCH"]
+    signal: Literal["LEFT_VALUE", "RIGHT_TREND", "TAKE_PROFIT", "WATCH", "AVOID"]
     sourceIds: list[str] = Field(max_length=8)
     macroCodes: list[str] = Field(max_length=8)
     quantitativeFundCodes: list[str] = Field(default_factory=list, max_length=2)
@@ -60,6 +60,65 @@ class ValueDirectionProposal(BaseModel):
     industryCycle: IndustryCycleProposal | None = None
     reviewIndustryIds: list[str] = Field(default_factory=list, max_length=8)
     plans: list[ValuePlanProposal] = Field(max_length=2)
+
+
+def _observation_proposal(row, packet, reviews):
+    """Drop trading authority without dropping known product-industry risks."""
+    linked = set(row.get("reviewIndustryIds", []))
+    plans = row.get("plans")
+    if isinstance(plans, list):
+        linked.update(
+            industry
+            for plan in plans
+            if isinstance(plan, dict)
+            and isinstance(plan.get("subjectKind"), str)
+            and isinstance(plan.get("subjectId"), str)
+            for industry in plan_industry_ids(packet, {
+                "subjectKind": plan["subjectKind"], "subjectId": plan["subjectId"],
+            })
+            if industry in reviews
+        )
+    return {
+        **row,
+        "signal": "AVOID" if row.get("signal") == "AVOID" else "WATCH",
+        "plans": [],
+        "quantitativeFundCodes": [],
+        "reviewIndustryIds": sorted(linked),
+    }
+
+
+def downgrade_invalid_plan_shapes(raw, packet):
+    """Remove malformed investment authority, keeping the direction for review.
+
+    Only errors inside fund/quantitative proposals are recoverable here. The
+    normal report schema still checks all narrative, source and identity fields.
+    """
+    rows = raw.get("valueDirections") if isinstance(raw, dict) else None
+    if not isinstance(rows, list) or len(rows) > MAX_VALUE_DIRECTIONS:
+        return raw, set()
+    corrected, downgraded = [], set()
+    reviews = {
+        row.get("industry") for row in raw.get("industryCycleReviews", [])
+        if isinstance(row, dict) and isinstance(row.get("industry"), str)
+    } if isinstance(raw.get("industryCycleReviews"), list) else set()
+    for row in rows:
+        try:
+            ValueDirectionProposal.model_validate(row)
+        except ValidationError as error:
+            if not isinstance(row, dict) or any(
+                not detail["loc"]
+                or detail["loc"][0] not in {"plans", "quantitativeFundCodes"}
+                for detail in error.errors()
+            ):
+                corrected.append(row)
+                continue
+            candidate = _observation_proposal(row, packet, reviews)
+            ValueDirectionProposal.model_validate(candidate)
+            corrected.append(candidate)
+            downgraded.add(candidate["key"])
+        else:
+            corrected.append(row)
+    return ({**raw, "valueDirections": corrected} if downgraded else raw), downgraded
 
 
 def plan_identity(plan):
@@ -315,17 +374,75 @@ def validate_value_directions(
 
     active_index = [None]
     try:
-        return _validate_value_directions(
-            proposals,
-            packet,
-            now,
-            source_aliases,
-            sources=sources,
-            industry_reviews=industry_reviews,
-            historical_cycles=historical_cycles,
-            audit_completed_scopes=audit_completed_scopes,
-            _diagnostic_index=active_index,
-        )
+        from backend.macro.research_topics import is_v2
+
+        candidates = deepcopy(proposals)
+        downgraded = {}
+        # Each failed product can remove authority from its own direction once.
+        # Schema, source, identity and historical protection failures still fail.
+        while True:
+            active_index[0] = None
+            try:
+                output = _validate_value_directions(
+                    candidates,
+                    packet,
+                    now,
+                    source_aliases,
+                    sources=sources,
+                    industry_reviews=industry_reviews,
+                    historical_cycles=historical_cycles,
+                    audit_completed_scopes=audit_completed_scopes,
+                    _diagnostic_index=active_index,
+                )
+            except ValueError as exc:
+                index = active_index[0]
+                formal_error = (
+                    (
+                        exc.reason_code == "FUND_PLAN_INVALID"
+                        or exc.rule_id
+                        in {
+                            "DIRECTION_PLAN_SECTOR_UNREVIEWED",
+                            "DIRECTION_CALIBRATION_RULE_UNKNOWN",
+                        }
+                    )
+                    if isinstance(exc, ResearchValidationError)
+                    else True
+                )
+                if (
+                    not is_v2(packet)
+                    or index is None
+                    or index in downgraded
+                    or not formal_error
+                    or not (
+                        candidates[index].get("plans")
+                        or candidates[index].get("quantitativeFundCodes")
+                    )
+                ):
+                    raise
+                proposal = ValueDirectionProposal.model_validate(
+                    candidates[index]
+                ).model_dump()
+                candidates[index] = _observation_proposal(
+                    proposal, packet, {row["industry"] for row in industry_reviews or []},
+                )
+                downgraded[index] = (
+                    (exc.rule_id or exc.reason_code)
+                    if isinstance(exc, ResearchValidationError)
+                    else "FUND_PLAN_INVALID"
+                )
+                continue
+            for index, reason in downgraded.items():
+                direction = output[index]
+                direction.update(
+                    qualificationStatus="OBSERVATION_ONLY", investmentEligible=False
+                )
+                direction["formalEligibilityReasons"] = sorted(
+                    {
+                        *direction.get("formalEligibilityReasons", []),
+                        reason,
+                    }
+                )
+            return output
     except ResearchValidationError as exc:
         if exc.item_index is not None or active_index[0] is None:
             raise
@@ -434,14 +551,24 @@ def _validate_value_directions(
                 rule_id="DIRECTION_PLAN_SECTOR_UNREVIEWED",
                 missing_industry_codes=sorted(missing & STANDARD_INDUSTRY_CODES),
             )
-        if audit_completed_scopes is not None and (review_ids | plan_sectors) - audit_completed_scopes:
-            raise ResearchValidationError(
-                "DIRECTION_VALIDATION_FAILED",
-                "industry checks require execution or verified supporting facts",
-                rule_id="DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED",
-                missing_industry_codes=sorted(
-                    (review_ids | plan_sectors) - audit_completed_scopes
-                ),
+        eligibility_reasons = []
+        if (
+            audit_completed_scopes is not None
+            and (review_ids | plan_sectors) - audit_completed_scopes
+        ):
+            eligibility_reasons.append("DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED")
+        from backend.macro.research_topics import is_v2
+
+        observation_only = bool(eligibility_reasons) or (
+            is_v2(packet) and direction["signal"] == "AVOID"
+        )
+        if observation_only:
+            # Keep declared risks and evidence exactly as proposed; only remove
+            # fund/price authority. Missing searches never become NOT_FOUND.
+            direction.update(
+                signal="AVOID" if direction["signal"] == "AVOID" else "WATCH",
+                plans=[],
+                quantitativeFundCodes=[],
             )
         cycle_proposal = direction.get("industryCycle")
         from backend.macro.research_topics import is_v2
@@ -761,6 +888,16 @@ def _validate_value_directions(
                 "macroEvidence": [deepcopy(macro_codes[code]) for code in macros],
                 "quantitativeEvidence": quantitative,
                 "plans": plans,
+                **(
+                    {
+                        "qualificationStatus": "OBSERVATION_ONLY",
+                        "investmentEligible": False,
+                        "formalEligibilityReasons": eligibility_reasons
+                        or ["OBSERVATION_ONLY"],
+                    }
+                    if observation_only
+                    else {}
+                ),
             }
         )
     return output

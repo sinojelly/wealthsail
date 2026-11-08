@@ -110,8 +110,12 @@ def evaluate_research_batch(
         "autoBlockers": [],
         "quarantined": [],
     }
+    malformed_plan_directions = set()
     try:
         parsed = _parse(raw)
+        from backend.macro.value_directions import downgrade_invalid_plan_shapes
+
+        parsed, malformed_plan_directions = downgrade_invalid_plan_shapes(parsed, packet)
         from backend.macro.daily_research import _safe_narrative
 
         _safe_narrative(parsed)
@@ -144,6 +148,9 @@ def evaluate_research_batch(
             completed_at=stamp,
             _strict_validator=_strict_validator,
         ).accepted
+    accepted_directions = {
+        row["key"]: row for row in accepted.get("valueDirections", [])
+    }
     from backend.macro.industry_cycle import RISK_CHECKS
 
     structured_reviews = {
@@ -187,7 +194,7 @@ def evaluate_research_batch(
     )
     if systemic_unresolved:
         result["autoBlockers"].append(_block("NARRATIVE_RISK_REVIEW_REQUIRED"))
-    retained, removed, changed = [], set(), False
+    retained, removed, changed = [], set(), bool(malformed_plan_directions)
     direction_states = {}
     direction_required = {}
     history = _previous_industry_states(packet, stamp)
@@ -259,7 +266,22 @@ def evaluate_research_batch(
             plan_industry_ids(packet, plan) for plan in direction["plans"]
         )
         declared = set(direction["reviewIndustryIds"])
-        if exact and required <= reviews:
+        accepted_direction = accepted_directions.get(direction["key"], {})
+        if (
+            accepted_direction.get("qualificationStatus") == "OBSERVATION_ONLY"
+            or direction["key"] in malformed_plan_directions
+        ):
+            # A strict observation keeps its original risks, sources and news
+            # dependencies. Removing its plans is not removing the direction.
+            direction.update(
+                signal=accepted_direction.get("signal", direction["signal"]),
+                reviewIndustryIds=accepted_direction.get("reviewIndustryIds", direction["reviewIndustryIds"]),
+                plans=[],
+                quantitativeFundCodes=[],
+            )
+            changed |= direction != raw_direction
+            retained.append(direction)
+        elif exact and required <= reviews:
             # The only automatic link repair comes from exact server products.
             corrected = sorted((declared & reviews) | required)
             changed |= set(corrected) != declared
@@ -313,6 +335,7 @@ def evaluate_research_batch(
                 sources=canonical_sources,
                 industry_reviews=accepted.get("industryCycleReviews", []),
                 historical_cycles=history,
+                audit_completed_scopes=reviews,
             )
         except ValueError:
             index = next(
@@ -431,6 +454,23 @@ def evaluate_research_batch(
         except ResearchValidationError:
             result["hardBlockers"].append(_block("STRICT_REVALIDATION_FAILED"))
         else:
+            for direction in formal.get("valueDirections", []):
+                previous = accepted_directions.get(direction["key"], {})
+                if (
+                    previous.get("qualificationStatus") == "OBSERVATION_ONLY"
+                    or direction["key"] in malformed_plan_directions
+                ):
+                    direction.update(
+                        qualificationStatus="OBSERVATION_ONLY",
+                        investmentEligible=False,
+                        formalEligibilityReasons=sorted(
+                            {
+                                *direction.get("formalEligibilityReasons", []),
+                                *previous.get("formalEligibilityReasons", []),
+                                *(["FUND_PLAN_INVALID"] if direction["key"] in malformed_plan_directions else []),
+                            }
+                        ),
+                    )
             if not _protection_unchanged(accepted, formal, candidate):
                 result["hardBlockers"].append(_block("RETAINED_PROTECTION_CHANGED"))
     result["candidateRaw"] = candidate if formal is not None else None
@@ -717,7 +757,6 @@ def evaluate_research_batch(
         )
         for row in directions
         if isinstance(row, dict) and isinstance(row.get("key"), str)
-        and direction_states.get(row["key"]) == "FORMAL_DIRECTION_PENDING"
     )
     if len(json.dumps(registry, ensure_ascii=False).encode()) > 1024 * 1024:
         registry["items"] = []
@@ -753,6 +792,12 @@ def evaluate_research_batch(
             reasons["FUND_PLAN_MISSING"] += 1
         elif row.get("key") not in formal_by_key:
             reasons["FORMAL_VALIDATION_FAILED"] += 1
+    for direction in formal_by_key.values():
+        for reason in direction.get("formalEligibilityReasons", []):
+            if reason == "DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED":
+                reasons["INDUSTRY_AUDIT_PENDING"] += 1
+            elif reason != "OBSERVATION_ONLY":
+                reasons["FORMAL_VALIDATION_FAILED"] += 1
     for item in registry["items"]:
         reason = {
             "SOURCE_SCOPE_UNVERIFIED": "SOURCE_EVIDENCE_PENDING",

@@ -192,10 +192,11 @@ async def test_real_collector_plan_failure_keeps_checked_news_and_verified_bad_n
         validated_at=NOW,
     )
     original = batch["originalOutcome"].to_dict()
-    assert [(row["itemType"], row["ruleId"]) for row in original["issues"]] == [
-        ("FUND_PLAN", "ACCEPTANCE_FUND_PLAN_INVALID"),
-        ("VALUE_DIRECTION", "ACCEPTANCE_DEPENDENCY_BLOCKED"),
-    ]
+    assert original["issues"] == []
+    observation = original["accepted"]["valueDirections"][0]
+    assert observation["signal"] == "WATCH"
+    assert observation["investmentEligible"] is False
+    assert "FUND_PLAN_INVALID" in observation["formalEligibilityReasons"]
     value = {
         **safe_outcome_summary(original),
         "kind": "INITIAL",
@@ -212,5 +213,6 @@ async def test_real_collector_plan_failure_keeps_checked_news_and_verified_bad_n
         row["riskLevel"] == "CONFIRMED"
         for row in result["observations"]["industryCycleReviews"]
     )
-    assert batch["autoPublishAllowed"] is False
-    assert original["decision"] == "PARTIAL" and original["formalPublishable"] is False
+    assert batch["autoPublishAllowed"] is True
+    assert not batch["formalReport"]["valueDirections"][0]["plans"]
+    assert original["decision"] == "COMPLETE" and original["formalPublishable"] is True

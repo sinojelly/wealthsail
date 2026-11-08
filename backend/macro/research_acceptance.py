@@ -307,7 +307,16 @@ def _projection(report):
     """A closed observation DTO, deliberately excluding plans and trade origins."""
     output = _empty()
     fields = {
-        "sources": ("id", "title", "url", "quote", "publishedDate", "publishedAt", "retrievedAt", "verification"),
+        "sources": (
+            "id",
+            "title",
+            "url",
+            "quote",
+            "publishedDate",
+            "publishedAt",
+            "retrievedAt",
+            "verification",
+        ),
         "industryCycleReviews": (
             "industry",
             "stage",
@@ -325,6 +334,10 @@ def _projection(report):
         ),
         "valueDirections": (
             "key",
+            "signal",
+            "qualificationStatus",
+            "investmentEligible",
+            "formalEligibilityReasons",
             "title",
             "thesis",
             "sourceIds",

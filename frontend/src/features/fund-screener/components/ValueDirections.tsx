@@ -48,6 +48,7 @@ const labels = {
   RIGHT_TREND: "右侧趋势观察",
   TAKE_PROFIT: "止盈复核",
   WATCH: "继续观察",
+  AVOID: "回避观察",
 };
 
 type MacroFact = NonNullable<ValueDirection["macroEvidence"]>[number];

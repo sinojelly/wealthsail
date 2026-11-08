@@ -1883,6 +1883,11 @@ def _validate_report_core(
         raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
     if "discoveryUniverse" not in packet:
         raw = {"valueDirections": [], **raw}
+    malformed_plan_directions = set()
+    if is_v2(packet):
+        from backend.macro.value_directions import downgrade_invalid_plan_shapes
+
+        raw, malformed_plan_directions = downgrade_invalid_plan_shapes(raw, packet)
     try:
         report = _Report.model_validate(raw).model_dump()
     except Exception as exc:
@@ -2065,6 +2070,17 @@ def _validate_report_core(
         historical_cycles=historical_cycles,
         audit_completed_scopes=audit_completed_scopes,
     )
+    for direction in value_directions:
+        if direction["key"] in malformed_plan_directions:
+            direction.update(
+                qualificationStatus="OBSERVATION_ONLY", investmentEligible=False
+            )
+            direction["formalEligibilityReasons"] = sorted(
+                {
+                    *direction.get("formalEligibilityReasons", []),
+                    "FUND_PLAN_INVALID",
+                }
+            )
     if execution_scopes is not None:
         for direction in value_directions:
             linked = set(direction["reviewIndustryIds"])

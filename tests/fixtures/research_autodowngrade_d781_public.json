@@ -1,0 +1,3692 @@
+{
+  "provenance": {
+    "description": "Reduced public evidence from the original local failed run. No successful searches or source verification has been synthesized.",
+    "originalRunId": "d7810690-ef13-44ad-8591-d3699f3f589a",
+    "reductions": [
+      "Only ROBOT direction, its real risk checks, public NAV plan anchor, dependent event and topic are retained.",
+      "Other original model directions, events, upcoming items and source references are omitted; explicit narrative references are filtered accordingly.",
+      "The original public audit manifest is unchanged so its execution binding remains exact.",
+      "Macro narrative is retained; the original ROBOT historical context is empty. Credentials, tenant data and deployment configuration are excluded."
+    ],
+    "auditWrittenAt": "2026-11-07T21:50:47.777553+08:00"
+  },
+  "researchId": "d7810690-ef13-44ad-8591-d3699f3f589a",
+  "validatedAt": "2026-11-07T21:50:28.937926+08:00",
+  "packet": {
+    "asOf": "2026-11-07T21:29:50.857432+08:00",
+    "methodVersion": "daily-research-v1",
+    "energy": [
+      {
+        "id": "DCOILBRENTEU",
+        "asOf": "2026-11-03",
+        "code": "DCOILBRENTEU",
+        "unit": "USD/barrel",
+        "label": "布伦特原油现货",
+        "state": "READY",
+        "value": 107.03,
+        "change": -0.35999999999999943,
+        "changePct": -0.33522674364465654,
+        "frequency": "DAILY",
+        "sourceUri": "https://fred.stlouisfed.org/series/DCOILBRENTEU",
+        "timeBasis": "OBSERVATION_ONLY",
+        "publishedAt": null,
+        "retrievedAt": "2026-11-07T21:29:14.592392+08:00",
+        "sampleCount": 61,
+        "previousDate": "2026-11-02",
+        "previousValue": 107.39
+      },
+      {
+        "id": "GASDESW",
+        "asOf": "2026-11-02",
+        "code": "GASDESW",
+        "unit": "USD/gallon",
+        "label": "美国柴油零售价格",
+        "state": "READY",
+        "value": 6.292,
+        "change": -0.0600000000000005,
+        "changePct": -0.9445843828715494,
+        "frequency": "WEEKLY",
+        "sourceUri": "https://fred.stlouisfed.org/series/GASDESW",
+        "timeBasis": "OBSERVATION_ONLY",
+        "publishedAt": null,
+        "retrievedAt": "2026-11-07T21:29:15.872719+08:00",
+        "sampleCount": 13,
+        "previousDate": "2026-10-26",
+        "previousValue": 6.352
+      }
+    ],
+    "macros": [
+      {
+        "asOf": "2026-08-31T16:00:00+00:00",
+        "code": "CPI_YOY",
+        "unit": "%",
+        "label": "CPI 同比",
+        "state": "READY",
+        "value": 0.9,
+        "sourceUri": "https://data.eastmoney.com/cjsj/cpi.html",
+        "statistics": {
+          "median": 0.5,
+          "lastPeriod": "2026-09",
+          "percentile": 66.37931034482759,
+          "firstPeriod": "2021-12",
+          "sampleCount": 58,
+          "change3Months": -0.1,
+          "change6Months": -0.1,
+          "previousValue": 0.8
+        },
+        "publishedAt": "2026-10-14T01:30:00+00:00",
+        "retrievedAt": "2026-10-14T12:10:21.668569+00:00",
+        "periodChange": 0.1,
+        "referencePeriod": "2026-09",
+        "publicationStatus": "CONFIRMED",
+        "valueVerification": "VERIFIED"
+      },
+      {
+        "asOf": "2026-08-31T16:00:00+00:00",
+        "code": "M2_YOY",
+        "unit": "%",
+        "label": "M2 同比",
+        "state": "READY",
+        "value": 7.2,
+        "sourceUri": "https://data.eastmoney.com/cjsj/hbgyl.html",
+        "statistics": {
+          "median": 8.75,
+          "lastPeriod": "2026-09",
+          "percentile": 17.24137931034483,
+          "firstPeriod": "2021-12",
+          "sampleCount": 58,
+          "change3Months": -0.8,
+          "change6Months": -1.3,
+          "previousValue": 7.5
+        },
+        "publishedAt": "2026-10-14T09:00:04+00:00",
+        "retrievedAt": "2026-10-14T12:10:21.668569+00:00",
+        "periodChange": -0.3,
+        "referencePeriod": "2026-09",
+        "publicationStatus": "CONFIRMED",
+        "valueVerification": "VERIFIED"
+      },
+      {
+        "asOf": "2026-09-30T16:00:00+00:00",
+        "code": "PMI",
+        "unit": "",
+        "label": "制造业 PMI",
+        "state": "READY",
+        "value": 49.3,
+        "sourceUri": "https://data.eastmoney.com/cjsj/pmi.html",
+        "statistics": {
+          "median": 49.5,
+          "lastPeriod": "2026-10",
+          "percentile": 33.898305084745765,
+          "firstPeriod": "2021-12",
+          "sampleCount": 59,
+          "change3Months": 0.1,
+          "change6Months": -1.0,
+          "previousValue": 50.1
+        },
+        "publishedAt": "2026-10-31T01:30:00+00:00",
+        "retrievedAt": "2026-11-07T10:52:53.972363+00:00",
+        "periodChange": -0.8,
+        "referencePeriod": "2026-10",
+        "publicationStatus": "CONFIRMED",
+        "valueVerification": "VERIFIED"
+      },
+      {
+        "asOf": "2026-08-31T16:00:00+00:00",
+        "code": "PPI_YOY",
+        "unit": "%",
+        "label": "PPI 同比",
+        "state": "READY",
+        "value": 5.0,
+        "sourceUri": "https://data.eastmoney.com/cjsj/ppi.html",
+        "statistics": {
+          "median": -2.0,
+          "lastPeriod": "2026-09",
+          "percentile": 87.06896551724138,
+          "firstPeriod": "2021-12",
+          "sampleCount": 58,
+          "change3Months": 0.9,
+          "change6Months": 4.5,
+          "previousValue": 3.8
+        },
+        "publishedAt": "2026-10-14T01:30:00+00:00",
+        "retrievedAt": "2026-10-14T12:10:21.668569+00:00",
+        "periodChange": 1.2,
+        "referencePeriod": "2026-09",
+        "publicationStatus": "CONFIRMED",
+        "valueVerification": "VERIFIED"
+      }
+    ],
+    "series": [
+      {
+        "asOf": "2026-11-06",
+        "code": "CN_T10",
+        "unit": "%",
+        "label": "中国10年期国债收益率（东方财富）",
+        "state": "READY",
+        "value": 1.5868,
+        "changes": {
+          "changeUnit": "bp",
+          "percentile": 0.8620689655172413,
+          "sampleCount": 58,
+          "periodChange": -1.7,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": -6.32
+        },
+        "frequency": "DAILY",
+        "sourceUri": "https://data.eastmoney.com/cjsj/zmgzsyl.html",
+        "timeBasis": "RETRIEVAL_ONLY",
+        "definition": {
+          "definitionKey": "CN_T10",
+          "definitionVersion": "ALPHA_REPORTED_V1"
+        },
+        "sourceName": "东方财富公开数据（AKShare上游适配）",
+        "availableAt": "2026-11-07T21:28:17.622604+08:00",
+        "publishedAt": null,
+        "retrievedAt": "2026-11-07T21:28:17.622604+08:00"
+      },
+      {
+        "asOf": "2026-11-06",
+        "code": "US_T10_NOMINAL",
+        "unit": "%",
+        "label": "美国10年期名义国债收益率",
+        "state": "READY",
+        "value": 4.86,
+        "changes": {
+          "changeUnit": "bp",
+          "percentile": 94.73333333333333,
+          "sampleCount": 750,
+          "periodChange": 2.0,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": -8.0
+        },
+        "frequency": "DAILY",
+        "sourceUri": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=2026",
+        "timeBasis": "RETRIEVAL_ONLY",
+        "definition": {
+          "definitionKey": "UST_PAR_YIELD_10Y",
+          "definitionVersion": "UST_MONOTONE_CONVEX_2021_12_06"
+        },
+        "sourceName": "U.S. Department of the Treasury",
+        "availableAt": "2026-11-07T10:53:04.976332+00:00",
+        "publishedAt": null,
+        "retrievedAt": "2026-11-07T10:53:04.976332+00:00"
+      },
+      {
+        "asOf": "2026-11-06",
+        "code": "US_T10_REAL",
+        "unit": "%",
+        "label": "美国10年期实际国债收益率",
+        "state": "READY",
+        "value": 2.63,
+        "changes": {
+          "changeUnit": "bp",
+          "percentile": 95.93333333333334,
+          "sampleCount": 750,
+          "periodChange": 3.0,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": 3.0
+        },
+        "frequency": "DAILY",
+        "sourceUri": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_real_yield_curve&field_tdr_date_value=2026",
+        "timeBasis": "RETRIEVAL_ONLY",
+        "definition": {
+          "definitionKey": "UST_TIPS_PAR_REAL_YIELD_10Y",
+          "definitionVersion": "UST_MONOTONE_CONVEX_2021_12_06"
+        },
+        "sourceName": "U.S. Department of the Treasury",
+        "availableAt": "2026-11-07T10:53:04.976332+00:00",
+        "publishedAt": null,
+        "retrievedAt": "2026-11-07T10:53:04.976332+00:00"
+      },
+      {
+        "asOf": "2026-09-01",
+        "code": "M1_YOY",
+        "unit": "%",
+        "label": "M1同比（2025新口径）",
+        "state": "READY",
+        "value": 3.2,
+        "changes": {
+          "changeUnit": "pp",
+          "percentile": 82.14285714285714,
+          "sampleCount": 14,
+          "periodChange": -0.9,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "MONTHLY",
+        "sourceUri": "https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html",
+        "timeBasis": "OFFICIAL_PUBLICATION",
+        "definition": {
+          "definitionKey": "PBOC_M1_YOY",
+          "definitionVersion": "PBOC_M1_2025"
+        },
+        "sourceName": "中国人民银行",
+        "availableAt": "2026-10-18T11:48:00.705082+00:00",
+        "publishedAt": "2026-10-14T09:00:04+00:00",
+        "retrievedAt": "2026-10-18T11:48:00.705082+00:00"
+      },
+      {
+        "asOf": "2026-09-01",
+        "code": "TSF_STOCK_YOY",
+        "unit": "%",
+        "label": "社融存量同比",
+        "state": "READY",
+        "value": 7.1,
+        "changes": {
+          "changeUnit": "pp",
+          "percentile": null,
+          "sampleCount": 2,
+          "periodChange": -0.1,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "MONTHLY",
+        "sourceUri": "https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html",
+        "timeBasis": "OFFICIAL_PUBLICATION",
+        "definition": {
+          "definitionKey": "PBOC_TSF_STOCK_YOY",
+          "definitionVersion": "PBOC_TSF_2023_COMPARABLE"
+        },
+        "sourceName": "中国人民银行",
+        "availableAt": "2026-10-18T11:48:00.705082+00:00",
+        "publishedAt": "2026-10-14T09:00:04+00:00",
+        "retrievedAt": "2026-10-18T11:48:00.705082+00:00"
+      },
+      {
+        "asOf": "2026-09-01",
+        "code": "CORP_MEDLONG_LOANS_YTD",
+        "unit": "万亿元",
+        "label": "企业中长期贷款累计新增",
+        "state": "READY",
+        "value": 6.53,
+        "changes": {
+          "changeUnit": null,
+          "percentile": null,
+          "sampleCount": 2,
+          "periodChange": null,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "YTD",
+        "sourceUri": "https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html",
+        "timeBasis": "OFFICIAL_PUBLICATION",
+        "definition": {
+          "definitionKey": "PBOC_CORPORATE_MEDLONG_LOANS_NET_INCREASE_YTD",
+          "accumulationEnd": "2026-09-30",
+          "accumulationStart": "2026-01-01",
+          "definitionVersion": "PBOC_FINANCIAL_STATISTICS_2023"
+        },
+        "sourceName": "中国人民银行",
+        "availableAt": "2026-10-18T11:48:00.705082+00:00",
+        "publishedAt": "2026-10-14T09:00:04+00:00",
+        "retrievedAt": "2026-10-18T11:48:00.705082+00:00"
+      },
+      {
+        "asOf": null,
+        "code": "DR007",
+        "unit": "%",
+        "label": "DR007资金价格",
+        "state": "PERMISSION_REQUIRED",
+        "value": null,
+        "changes": {
+          "changeUnit": "bp",
+          "percentile": null,
+          "sampleCount": 0,
+          "periodChange": null,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "DAILY",
+        "sourceUri": "https://www.chinamoney.com.cn/",
+        "timeBasis": null,
+        "definition": {},
+        "sourceName": null,
+        "availableAt": null,
+        "publishedAt": null,
+        "retrievedAt": null
+      },
+      {
+        "asOf": null,
+        "code": "A50_CHANGE_PCT",
+        "unit": "%",
+        "label": "A50盘前变化",
+        "state": "NOT_COLLECTED",
+        "value": null,
+        "changes": {
+          "changeUnit": "pp",
+          "percentile": null,
+          "sampleCount": 0,
+          "periodChange": null,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "DAILY",
+        "timeBasis": null,
+        "definition": {},
+        "sourceName": null,
+        "availableAt": null,
+        "publishedAt": null,
+        "retrievedAt": null
+      },
+      {
+        "asOf": null,
+        "code": "US_SP500_CHANGE_PCT",
+        "unit": "%",
+        "label": "标普500隔夜变化",
+        "state": "NOT_COLLECTED",
+        "value": null,
+        "changes": {
+          "changeUnit": "pp",
+          "percentile": null,
+          "sampleCount": 0,
+          "periodChange": null,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "DAILY",
+        "timeBasis": null,
+        "definition": {},
+        "sourceName": null,
+        "availableAt": null,
+        "publishedAt": null,
+        "retrievedAt": null
+      },
+      {
+        "asOf": null,
+        "code": "US_NASDAQ_CHANGE_PCT",
+        "unit": "%",
+        "label": "纳斯达克隔夜变化",
+        "state": "NOT_COLLECTED",
+        "value": null,
+        "changes": {
+          "changeUnit": "pp",
+          "percentile": null,
+          "sampleCount": 0,
+          "periodChange": null,
+          "change3Months": null,
+          "change6Months": null,
+          "change5Samples": null
+        },
+        "frequency": "DAILY",
+        "timeBasis": null,
+        "definition": {},
+        "sourceName": null,
+        "availableAt": null,
+        "publishedAt": null,
+        "retrievedAt": null
+      }
+    ],
+    "researchDiscovery": {
+      "budget": {
+        "maxScopes": 10,
+        "maxTopics": 64,
+        "maxQueries": 50,
+        "maxSources": 24,
+        "maxInputBytes": 4194304,
+        "maxModelCalls": 1,
+        "maxOutputBytes": 2097152,
+        "maxExecutionSeconds": 1200,
+        "maxFormalDirections": 8
+      },
+      "version": "research-discovery-v2",
+      "auditManifest": {
+        "asOf": "2026-11-07T21:29:50.857432+08:00",
+        "tasks": [
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "金融政策 银行 券商 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:6f8d85a3f4ad0931a50435eeb32fa805",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINANCE_POLICY"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "金融政策 银行 券商 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:a878b9bdc34a6ca7be1caf1a10d0780a",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINANCE_POLICY"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "金融政策 银行 券商 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:9aded8607c3b88974745cbcefbce68d6",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINANCE_POLICY"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "金融政策 银行 券商 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:83bb14de39987778b3aad4f9035f30ac",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINANCE_POLICY"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "金融政策 银行 券商 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:57afbc04b14f050a020a3888e3c1b8fe",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINANCE_POLICY"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "GOLD_GEO_ENERGY 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:51111a21f3a8d68c04dae29f7b2ec5a4",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "GOLD_GEO_ENERGY"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "GOLD_GEO_ENERGY 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:3b2c67af4d5c49668bbd095a4163b43a",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "GOLD_GEO_ENERGY"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "GOLD_GEO_ENERGY 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:001e6b2a1a3dd6f55db0aa7321f5a069",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "GOLD_GEO_ENERGY"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "GOLD_GEO_ENERGY 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:2982eb121c39fa6472ac500cb13494f7",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "GOLD_GEO_ENERGY"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "GOLD_GEO_ENERGY 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:836e76193e05b55676dd73b2e70a344b",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "GOLD_GEO_ENERGY"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "HEALTHCARE 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7d77549f89f09af252669ad78e2de89c",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "HEALTHCARE"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "HEALTHCARE 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7327b5f161fb2f5a9046990d6c5482b1",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "HEALTHCARE"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "HEALTHCARE 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:6a0966b162960d37820aac069babeee9",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "HEALTHCARE"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "HEALTHCARE 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:1179bc0781a1615db8127f3108c083dd",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "HEALTHCARE"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "HEALTHCARE 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7edd58a3c98c8f006ca25264a13e2279",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "HEALTHCARE"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "机器人 智能驾驶 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:77adc4066bc787ae8d251c9adb7683b0",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOTICS_MOBILITY"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "机器人 智能驾驶 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:de7610793847c667bb37b0c012a741c6",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOTICS_MOBILITY"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "机器人 智能驾驶 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7dbb269d84beaaceb5a8953c3b357063",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOTICS_MOBILITY"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "机器人 智能驾驶 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:4b1a8519cf91c92fb649c7d0adc2d067",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOTICS_MOBILITY"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "机器人 智能驾驶 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:b1a13bfbff446db8ef36c24ab2a24ef1",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOTICS_MOBILITY"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "金融科技 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:899460ad5347c4bd8cff241a38f112b2",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINTECH"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "金融科技 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7fcab1435d5bbc17b4baa09c4f5b4364",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINTECH"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "金融科技 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:a334cd6cf8ab9633a16a763fb91aa9d7",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINTECH"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "金融科技 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:af91b0413609cb24b58a40ac107cf451",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINTECH"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "金融科技 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:64aaa6eb1dec1ec07405f542ee6b7fa5",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "FINTECH"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "军工 国防 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:ac599509219e0b77a553af4360172520",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "DEFENCE"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "军工 国防 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:827b828afc0d487bb8cf55bda10a71da",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "DEFENCE"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "军工 国防 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:7287aa54e7a86942da1073d182950cb3",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "DEFENCE"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "军工 国防 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:954d3d5f7de910e8045bad1d5ebb948e",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "DEFENCE"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "军工 国防 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:3feca964b9c28b41c285f2d9a49a8718",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "DEFENCE"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "稀土 永磁 磁材 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:1fe7fae3feb24f06c4cdf86ea16f7447",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "稀土 永磁 磁材 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:a02d4c02f1339a7a8903f200b20ba0b2",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "稀土 永磁 磁材 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:6c18afe4b8f521640fdaef40d75bec75",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "稀土 永磁 磁材 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:d41c715a24104e4719d4001aa2d2e1ff",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "稀土 永磁 磁材 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:3fa322b5c068c27a308708fd5b59c075",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "机器人 具身智能 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:2b63d096d9760680a497cea307e0bee6",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOT"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "机器人 具身智能 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:a06b8919a05c76c92f9d1204245197f6",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOT"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "机器人 具身智能 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:a39be636cb9b9687c936608ba77d3f74",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOT"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "机器人 具身智能 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:4bc1e86759492b92e9e63a9204d02249",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOT"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "机器人 具身智能 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:64ecb39bdd7e7d8e6bf91931f2895a8a",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "ROBOT"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "AI_COMPUTE_SEMICONDUCTOR 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:b5896c493c6c6f5c681c44bf0aec1a56",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "AI_COMPUTE_SEMICONDUCTOR 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:8e70421a80723b18154a459d28945903",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "AI_COMPUTE_SEMICONDUCTOR 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:39c4c665f6774c0539429591a65c3e08",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "AI_COMPUTE_SEMICONDUCTOR 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:b1d3e9511821a67e6928ab86540742e1",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "AI_COMPUTE_SEMICONDUCTOR 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:565894600993fcc572bcd40bcc81eff6",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          {
+            "kind": "FINANCING_COOLING",
+            "query": "稀土 有色金属 产业链 一级市场融资降温/断代 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:1974e56f171c755c746ca7fa5d19bfa3",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH_METALS"
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "query": "稀土 有色金属 产业链 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:d41bd3081d0d61bfbb4eeae9a6ea3dbe",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH_METALS"
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "query": "稀土 有色金属 产业链 下游砍单 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:156c885cdf1c2182ba48a659afdc8062",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH_METALS"
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "query": "稀土 有色金属 产业链 产能过剩/价格战 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:1d38d1ce78d3086a3c4e8d5ffefb1739",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH_METALS"
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "query": "稀土 有色金属 产业链 商业化量产推迟 2026 近期 近90天",
+            "status": "PLANNED",
+            "taskId": "audit:5fcd305aced3be364ce0617b4f871d8f",
+            "window": {
+              "end": "2026-11-07",
+              "start": "2026-08-09",
+              "lookbackDays": 90
+            },
+            "industryId": "RARE_EARTH_METALS"
+          }
+        ],
+        "budget": {
+          "maxScopes": 10,
+          "maxTopics": 64,
+          "maxQueries": 50,
+          "maxSources": 24,
+          "maxInputBytes": 4194304,
+          "maxModelCalls": 1,
+          "maxOutputBytes": 2097152,
+          "maxExecutionSeconds": 1200,
+          "maxFormalDirections": 8
+        },
+        "window": {
+          "end": "2026-11-07",
+          "start": "2026-08-09",
+          "lookbackDays": 90
+        },
+        "version": "research-audit-manifest-v1",
+        "manifestHash": "79a633e3b9688ecef1918705e41efb9ed76eda6e1202d212200fabd9a2d64997",
+        "deferredScopes": [
+          "BROAD",
+          "NONFERROUS",
+          "GOLD",
+          "AI",
+          "COMMUNICATION",
+          "BROKER",
+          "CONSUMPTION",
+          "INNOVATIVE_DRUG",
+          "ACTIVE_GROWTH",
+          "US_TECH",
+          "BANK",
+          "GLOBAL_ENERGY",
+          "SPACE_DEFENSE"
+        ],
+        "selectedScopes": [
+          "FINANCE_POLICY",
+          "GOLD_GEO_ENERGY",
+          "HEALTHCARE",
+          "ROBOTICS_MOBILITY",
+          "FINTECH",
+          "DEFENCE",
+          "RARE_EARTH",
+          "ROBOT",
+          "AI_COMPUTE_SEMICONDUCTOR",
+          "RARE_EARTH_METALS"
+        ],
+        "registryVersion": "industry-registry-v1",
+        "allocationVersion": "industry-allocation-v2",
+        "candidateContract": {
+          "asOf": "2026-11-07T21:29:50.857432+08:00",
+          "required": true,
+          "execution": "PUBLIC_WEB_SEARCH",
+          "candidates": [
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "金融政策 银行 券商 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "金融政策 银行 券商 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "金融政策 银行 券商 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "金融政策 银行 券商 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "金融政策 银行 券商 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "FINANCE_POLICY"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "GOLD_GEO_ENERGY 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "GOLD_GEO_ENERGY 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "GOLD_GEO_ENERGY 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "GOLD_GEO_ENERGY 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "GOLD_GEO_ENERGY 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "GOLD_GEO_ENERGY"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "HEALTHCARE 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "HEALTHCARE 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "HEALTHCARE 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "HEALTHCARE 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "HEALTHCARE 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "HEALTHCARE"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "机器人 智能驾驶 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "机器人 智能驾驶 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "机器人 智能驾驶 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "机器人 智能驾驶 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "机器人 智能驾驶 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "ROBOTICS_MOBILITY"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "金融科技 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "金融科技 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "金融科技 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "金融科技 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "金融科技 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "FINTECH"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "军工 国防 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "军工 国防 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "军工 国防 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "军工 国防 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "军工 国防 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "DEFENCE"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "稀土 永磁 磁材 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "稀土 永磁 磁材 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "稀土 永磁 磁材 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "稀土 永磁 磁材 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "稀土 永磁 磁材 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "RARE_EARTH"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "机器人 具身智能 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "机器人 具身智能 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "机器人 具身智能 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "机器人 具身智能 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "机器人 具身智能 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "ROBOT"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "AI_COMPUTE_SEMICONDUCTOR 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "AI_COMPUTE_SEMICONDUCTOR 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "AI_COMPUTE_SEMICONDUCTOR 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "AI_COMPUTE_SEMICONDUCTOR 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "AI_COMPUTE_SEMICONDUCTOR 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "AI_COMPUTE_SEMICONDUCTOR"
+            },
+            {
+              "queries": [
+                {
+                  "kind": "FINANCING_COOLING",
+                  "query": "稀土 有色金属 产业链 一级市场融资降温/断代 2026 近期 近90天"
+                },
+                {
+                  "kind": "LAYOFFS_CLOSURES",
+                  "query": "稀土 有色金属 产业链 企业欠薪/裁员/倒闭 2026 近期 近90天"
+                },
+                {
+                  "kind": "ORDER_CUTS",
+                  "query": "稀土 有色金属 产业链 下游砍单 2026 近期 近90天"
+                },
+                {
+                  "kind": "OVERCAPACITY_PRICE_WAR",
+                  "query": "稀土 有色金属 产业链 产能过剩/价格战 2026 近期 近90天"
+                },
+                {
+                  "kind": "PRODUCTION_DELAY",
+                  "query": "稀土 有色金属 产业链 商业化量产推迟 2026 近期 近90天"
+                }
+              ],
+              "industry": "RARE_EARTH_METALS"
+            }
+          ],
+          "lookbackDays": 90,
+          "allIndustries": [
+            "FINANCE_POLICY",
+            "GOLD_GEO_ENERGY",
+            "HEALTHCARE",
+            "ROBOTICS_MOBILITY",
+            "FINTECH",
+            "DEFENCE",
+            "RARE_EARTH",
+            "ROBOT",
+            "AI_COMPUTE_SEMICONDUCTOR",
+            "RARE_EARTH_METALS",
+            "BROAD",
+            "NONFERROUS",
+            "GOLD",
+            "AI",
+            "COMMUNICATION",
+            "BROKER",
+            "CONSUMPTION",
+            "INNOVATIVE_DRUG",
+            "ACTIVE_GROWTH",
+            "US_TECH",
+            "BANK",
+            "GLOBAL_ENERGY",
+            "SPACE_DEFENSE"
+          ],
+          "deferredPages": [
+            [
+              "BROAD",
+              "NONFERROUS",
+              "GOLD",
+              "AI",
+              "COMMUNICATION",
+              "BROKER",
+              "CONSUMPTION",
+              "INNOVATIVE_DRUG",
+              "ACTIVE_GROWTH",
+              "US_TECH"
+            ],
+            [
+              "BANK",
+              "GLOBAL_ENERGY",
+              "SPACE_DEFENSE"
+            ]
+          ],
+          "excludedScopes": [
+            {
+              "industryId": "DIVIDEND_LOW_VOL",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "MOBILITY",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "BROAD_500",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_GOLD_ENERGY",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "SCI_TECH_CHIP",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_FINANCIAL",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_AI",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_ROBOT",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "SEMICONDUCTOR",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_SATELLITE",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            },
+            {
+              "industryId": "EVENT_LOW_ALTITUDE",
+              "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+              "searchTerm": null,
+              "riskPreserved": false
+            }
+          ],
+          "scopeSearchTerms": {
+            "AI": "人工智能 算力",
+            "BANK": "银行",
+            "GOLD": "黄金 金矿",
+            "BROAD": "宽基 指数 沪深300",
+            "ROBOT": "机器人 具身智能",
+            "BROKER": "证券 券商",
+            "DEFENCE": "军工 国防",
+            "FINTECH": "金融科技",
+            "US_TECH": "美国科技 纳斯达克",
+            "HEALTHCARE": "HEALTHCARE",
+            "NONFERROUS": "有色金属 工业金属 铜 铝",
+            "RARE_EARTH": "稀土 永磁 磁材",
+            "CONSUMPTION": "消费 食品饮料",
+            "ACTIVE_GROWTH": "成长行业 科技产业",
+            "COMMUNICATION": "通信 5G 光通信",
+            "GLOBAL_ENERGY": "全球能源 石油 天然气",
+            "SPACE_DEFENSE": "SPACE_DEFENSE",
+            "FINANCE_POLICY": "金融政策 银行 券商",
+            "GOLD_GEO_ENERGY": "GOLD_GEO_ENERGY",
+            "INNOVATIVE_DRUG": "创新药 生物医药",
+            "RARE_EARTH_METALS": "稀土 有色金属 产业链",
+            "ROBOTICS_MOBILITY": "机器人 智能驾驶",
+            "AI_COMPUTE_SEMICONDUCTOR": "AI_COMPUTE_SEMICONDUCTOR"
+          },
+          "selectionReasons": [
+            {
+              "selected": true,
+              "industryId": "FINANCE_POLICY",
+              "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "GOLD_GEO_ENERGY",
+              "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "HEALTHCARE",
+              "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "ROBOTICS_MOBILITY",
+              "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "FINTECH",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "DEFENCE",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "RARE_EARTH",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "ROBOT",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": true,
+              "industryId": "AI_COMPUTE_SEMICONDUCTOR",
+              "reasonCode": "NEWS_ROTATION"
+            },
+            {
+              "selected": true,
+              "industryId": "RARE_EARTH_METALS",
+              "reasonCode": "NEWS_ROTATION"
+            },
+            {
+              "selected": false,
+              "industryId": "BROAD",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "NONFERROUS",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "GOLD",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "AI",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "COMMUNICATION",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "BROKER",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "CONSUMPTION",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "INNOVATIVE_DRUG",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "ACTIVE_GROWTH",
+              "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "US_TECH",
+              "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "BANK",
+              "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "GLOBAL_ENERGY",
+              "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+            },
+            {
+              "selected": false,
+              "industryId": "SPACE_DEFENSE",
+              "reasonCode": "NEWS_ROTATION"
+            }
+          ],
+          "allocationVersion": "industry-allocation-v2",
+          "maximumCandidates": 10,
+          "omittedIndustries": [
+            "BROAD",
+            "NONFERROUS",
+            "GOLD",
+            "AI",
+            "COMMUNICATION",
+            "BROKER",
+            "CONSUMPTION",
+            "INNOVATIVE_DRUG",
+            "ACTIVE_GROWTH",
+            "US_TECH",
+            "BANK",
+            "GLOBAL_ENERGY",
+            "SPACE_DEFENSE"
+          ],
+          "excludedScopeCount": 11,
+          "omittedCandidateCount": 13,
+          "planReviewEligibility": [
+            {
+              "subjectId": "a72c7f2a-f3b1-4c6c-839f-04f7ccd5d265",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "ACTIVE_GROWTH"
+              ]
+            },
+            {
+              "subjectId": "008281",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "SEMICONDUCTOR"
+              ]
+            },
+            {
+              "subjectId": "005609",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "161129",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "008975",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "008298",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "BANK"
+              ]
+            },
+            {
+              "subjectId": "000051",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "BROAD"
+              ]
+            },
+            {
+              "subjectId": "bb00e98f-554f-46af-97f6-48c85d508cf7",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "AI"
+              ]
+            },
+            {
+              "subjectId": "011035",
+              "subjectKind": "nav",
+              "industryReviewEligible": true,
+              "requiredReviewIndustryIds": [
+                "RARE_EARTH"
+              ]
+            },
+            {
+              "subjectId": "004432",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "NONFERROUS"
+              ]
+            },
+            {
+              "subjectId": "24ecec0f-48b5-4b4c-b801-7b28ad7f4566",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "BROKER"
+              ]
+            },
+            {
+              "subjectId": "013477",
+              "subjectKind": "nav",
+              "industryReviewEligible": true,
+              "requiredReviewIndustryIds": [
+                "FINTECH"
+              ]
+            },
+            {
+              "subjectId": "0d3786d4-5475-45dd-bd3f-31f3016e793f",
+              "subjectKind": "fund",
+              "industryReviewEligible": true,
+              "requiredReviewIndustryIds": [
+                "ROBOT"
+              ]
+            },
+            {
+              "subjectId": "003017",
+              "subjectKind": "nav",
+              "industryReviewEligible": true,
+              "requiredReviewIndustryIds": [
+                "DEFENCE"
+              ]
+            },
+            {
+              "subjectId": "008086",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "COMMUNICATION"
+              ]
+            },
+            {
+              "subjectId": "012737",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "INNOVATIVE_DRUG"
+              ]
+            },
+            {
+              "subjectId": "009179",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "CONSUMPTION"
+              ]
+            },
+            {
+              "subjectId": "000216",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "GOLD"
+              ]
+            },
+            {
+              "subjectId": "162411",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "GLOBAL_ENERGY"
+              ]
+            },
+            {
+              "subjectId": "270042",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "US_TECH"
+              ]
+            },
+            {
+              "subjectId": "021607",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "SCI_TECH_CHIP"
+              ]
+            },
+            {
+              "subjectId": "45e0255e-034e-4b1a-92d8-839f094d3c9f",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "MOBILITY"
+              ]
+            },
+            {
+              "subjectId": "007466",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "DIVIDEND_LOW_VOL"
+              ]
+            },
+            {
+              "subjectId": "000962",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "BROAD_500"
+              ]
+            },
+            {
+              "subjectId": "110020",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "202015",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "14b4ed05-8ecc-442f-9793-228d4d1ba7bf",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "2cac8e1d-d8ef-4ba7-be6e-ff8fe38bf675",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "6d106c30-ab2a-4343-85c1-05d082ddda66",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "dd335900-c20a-41a2-94e3-6f75bf8af08e",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "006756",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "001361",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "001629",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "016185",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "018027",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "528ae86b-babb-47d3-81bb-9da6a913f9c6",
+              "subjectKind": "fund",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "007300",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "014880",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "000218",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "023530",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": []
+            },
+            {
+              "subjectId": "000307",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "EVENT_GOLD_ENERGY"
+              ]
+            },
+            {
+              "subjectId": "008020",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "EVENT_AI"
+              ]
+            },
+            {
+              "subjectId": "000950",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "EVENT_FINANCIAL"
+              ]
+            },
+            {
+              "subjectId": "018094",
+              "subjectKind": "nav",
+              "industryReviewEligible": false,
+              "requiredReviewIndustryIds": [
+                "EVENT_ROBOT"
+              ]
+            }
+          ],
+          "standardIndustryCodes": [
+            "ACTIVE_GROWTH",
+            "AEROSPACE",
+            "AI",
+            "BANK",
+            "BROAD",
+            "BROKER",
+            "CHEMICAL",
+            "COAL",
+            "COMMUNICATION",
+            "CONSUMPTION",
+            "DEFENCE",
+            "DIVIDEND",
+            "DRUG",
+            "FINANCE_POLICY",
+            "FINANCIAL",
+            "FINTECH",
+            "GAMING",
+            "GLOBAL_ENERGY",
+            "GOLD",
+            "GOLD_ENERGY",
+            "HEALTHCARE_CLINICAL",
+            "HK_TECH",
+            "INNOVATIVE_DRUG",
+            "LOW_ALTITUDE",
+            "MEMORY",
+            "NONFERROUS",
+            "PCB",
+            "POWER",
+            "RARE_EARTH",
+            "RARE_EARTH_METALS",
+            "ROBOT",
+            "ROBOTICS_MOBILITY",
+            "SATELLITE",
+            "SEMICONDUCTOR_AI",
+            "SOLID_BATTERY",
+            "TRADITIONAL_MEDICINE",
+            "US_TECH"
+          ],
+          "omittedPlanIndustryIds": [
+            "ACTIVE_GROWTH",
+            "AI",
+            "BANK",
+            "BROAD",
+            "BROAD_500",
+            "BROKER",
+            "COMMUNICATION",
+            "CONSUMPTION",
+            "DIVIDEND_LOW_VOL",
+            "EVENT_AI",
+            "EVENT_FINANCIAL",
+            "EVENT_GOLD_ENERGY",
+            "EVENT_ROBOT",
+            "GLOBAL_ENERGY",
+            "GOLD",
+            "INNOVATIVE_DRUG",
+            "MOBILITY",
+            "NONFERROUS",
+            "SCI_TECH_CHIP",
+            "SEMICONDUCTOR",
+            "US_TECH"
+          ],
+          "omittedRiskCandidateCount": 0,
+          "newDirectionRequiresSameChecks": true
+        },
+        "topicMatchVersion": "topic-identity-v2"
+      },
+      "allocationVersion": "industry-allocation-v2",
+      "topicMatchVersion": "topic-identity-v2"
+    },
+    "industryCycleResearch": {
+      "asOf": "2026-11-07T21:29:50.857432+08:00",
+      "required": true,
+      "execution": "PUBLIC_WEB_SEARCH",
+      "candidates": [
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "金融政策 银行 券商 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "金融政策 银行 券商 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "金融政策 银行 券商 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "金融政策 银行 券商 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "金融政策 银行 券商 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "FINANCE_POLICY"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "GOLD_GEO_ENERGY 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "GOLD_GEO_ENERGY 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "GOLD_GEO_ENERGY 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "GOLD_GEO_ENERGY 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "GOLD_GEO_ENERGY 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "GOLD_GEO_ENERGY"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "HEALTHCARE 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "HEALTHCARE 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "HEALTHCARE 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "HEALTHCARE 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "HEALTHCARE 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "HEALTHCARE"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "机器人 智能驾驶 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "机器人 智能驾驶 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "机器人 智能驾驶 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "机器人 智能驾驶 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "机器人 智能驾驶 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "ROBOTICS_MOBILITY"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "金融科技 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "金融科技 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "金融科技 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "金融科技 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "金融科技 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "FINTECH"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "军工 国防 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "军工 国防 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "军工 国防 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "军工 国防 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "军工 国防 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "DEFENCE"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "稀土 永磁 磁材 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "稀土 永磁 磁材 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "稀土 永磁 磁材 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "稀土 永磁 磁材 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "稀土 永磁 磁材 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "RARE_EARTH"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "机器人 具身智能 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "机器人 具身智能 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "机器人 具身智能 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "机器人 具身智能 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "机器人 具身智能 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "ROBOT"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "AI_COMPUTE_SEMICONDUCTOR 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "AI_COMPUTE_SEMICONDUCTOR 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "AI_COMPUTE_SEMICONDUCTOR 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "AI_COMPUTE_SEMICONDUCTOR 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "AI_COMPUTE_SEMICONDUCTOR 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "AI_COMPUTE_SEMICONDUCTOR"
+        },
+        {
+          "queries": [
+            {
+              "kind": "FINANCING_COOLING",
+              "query": "稀土 有色金属 产业链 一级市场融资降温/断代 2026 近期 近90天"
+            },
+            {
+              "kind": "LAYOFFS_CLOSURES",
+              "query": "稀土 有色金属 产业链 企业欠薪/裁员/倒闭 2026 近期 近90天"
+            },
+            {
+              "kind": "ORDER_CUTS",
+              "query": "稀土 有色金属 产业链 下游砍单 2026 近期 近90天"
+            },
+            {
+              "kind": "OVERCAPACITY_PRICE_WAR",
+              "query": "稀土 有色金属 产业链 产能过剩/价格战 2026 近期 近90天"
+            },
+            {
+              "kind": "PRODUCTION_DELAY",
+              "query": "稀土 有色金属 产业链 商业化量产推迟 2026 近期 近90天"
+            }
+          ],
+          "industry": "RARE_EARTH_METALS"
+        }
+      ],
+      "lookbackDays": 90,
+      "allIndustries": [
+        "FINANCE_POLICY",
+        "GOLD_GEO_ENERGY",
+        "HEALTHCARE",
+        "ROBOTICS_MOBILITY",
+        "FINTECH",
+        "DEFENCE",
+        "RARE_EARTH",
+        "ROBOT",
+        "AI_COMPUTE_SEMICONDUCTOR",
+        "RARE_EARTH_METALS",
+        "BROAD",
+        "NONFERROUS",
+        "GOLD",
+        "AI",
+        "COMMUNICATION",
+        "BROKER",
+        "CONSUMPTION",
+        "INNOVATIVE_DRUG",
+        "ACTIVE_GROWTH",
+        "US_TECH",
+        "BANK",
+        "GLOBAL_ENERGY",
+        "SPACE_DEFENSE"
+      ],
+      "deferredPages": [
+        [
+          "BROAD",
+          "NONFERROUS",
+          "GOLD",
+          "AI",
+          "COMMUNICATION",
+          "BROKER",
+          "CONSUMPTION",
+          "INNOVATIVE_DRUG",
+          "ACTIVE_GROWTH",
+          "US_TECH"
+        ],
+        [
+          "BANK",
+          "GLOBAL_ENERGY",
+          "SPACE_DEFENSE"
+        ]
+      ],
+      "excludedScopes": [
+        {
+          "industryId": "DIVIDEND_LOW_VOL",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "MOBILITY",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "BROAD_500",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_GOLD_ENERGY",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "SCI_TECH_CHIP",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_FINANCIAL",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_AI",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_ROBOT",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "SEMICONDUCTOR",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_SATELLITE",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        },
+        {
+          "industryId": "EVENT_LOW_ALTITUDE",
+          "reasonCode": "UNKNOWN_PRODUCT_SCOPE",
+          "searchTerm": null,
+          "riskPreserved": false
+        }
+      ],
+      "scopeSearchTerms": {
+        "AI": "人工智能 算力",
+        "BANK": "银行",
+        "GOLD": "黄金 金矿",
+        "BROAD": "宽基 指数 沪深300",
+        "ROBOT": "机器人 具身智能",
+        "BROKER": "证券 券商",
+        "DEFENCE": "军工 国防",
+        "FINTECH": "金融科技",
+        "US_TECH": "美国科技 纳斯达克",
+        "HEALTHCARE": "HEALTHCARE",
+        "NONFERROUS": "有色金属 工业金属 铜 铝",
+        "RARE_EARTH": "稀土 永磁 磁材",
+        "CONSUMPTION": "消费 食品饮料",
+        "ACTIVE_GROWTH": "成长行业 科技产业",
+        "COMMUNICATION": "通信 5G 光通信",
+        "GLOBAL_ENERGY": "全球能源 石油 天然气",
+        "SPACE_DEFENSE": "SPACE_DEFENSE",
+        "FINANCE_POLICY": "金融政策 银行 券商",
+        "GOLD_GEO_ENERGY": "GOLD_GEO_ENERGY",
+        "INNOVATIVE_DRUG": "创新药 生物医药",
+        "RARE_EARTH_METALS": "稀土 有色金属 产业链",
+        "ROBOTICS_MOBILITY": "机器人 智能驾驶",
+        "AI_COMPUTE_SEMICONDUCTOR": "AI_COMPUTE_SEMICONDUCTOR"
+      },
+      "selectionReasons": [
+        {
+          "selected": true,
+          "industryId": "FINANCE_POLICY",
+          "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "GOLD_GEO_ENERGY",
+          "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "HEALTHCARE",
+          "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "ROBOTICS_MOBILITY",
+          "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "FINTECH",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "DEFENCE",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "RARE_EARTH",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "ROBOT",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": true,
+          "industryId": "AI_COMPUTE_SEMICONDUCTOR",
+          "reasonCode": "NEWS_ROTATION"
+        },
+        {
+          "selected": true,
+          "industryId": "RARE_EARTH_METALS",
+          "reasonCode": "NEWS_ROTATION"
+        },
+        {
+          "selected": false,
+          "industryId": "BROAD",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "NONFERROUS",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "GOLD",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "AI",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "COMMUNICATION",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "BROKER",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "CONSUMPTION",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "INNOVATIVE_DRUG",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "ACTIVE_GROWTH",
+          "reasonCode": "QUANTITATIVE_FUND_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "US_TECH",
+          "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "BANK",
+          "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "GLOBAL_ENERGY",
+          "reasonCode": "SERVER_FUND_SCOPE_PRIORITY"
+        },
+        {
+          "selected": false,
+          "industryId": "SPACE_DEFENSE",
+          "reasonCode": "NEWS_ROTATION"
+        }
+      ],
+      "allocationVersion": "industry-allocation-v2",
+      "maximumCandidates": 10,
+      "omittedIndustries": [
+        "BROAD",
+        "NONFERROUS",
+        "GOLD",
+        "AI",
+        "COMMUNICATION",
+        "BROKER",
+        "CONSUMPTION",
+        "INNOVATIVE_DRUG",
+        "ACTIVE_GROWTH",
+        "US_TECH",
+        "BANK",
+        "GLOBAL_ENERGY",
+        "SPACE_DEFENSE"
+      ],
+      "excludedScopeCount": 11,
+      "omittedCandidateCount": 13,
+      "planReviewEligibility": [
+        {
+          "subjectId": "a72c7f2a-f3b1-4c6c-839f-04f7ccd5d265",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "ACTIVE_GROWTH"
+          ]
+        },
+        {
+          "subjectId": "008281",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "SEMICONDUCTOR"
+          ]
+        },
+        {
+          "subjectId": "005609",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "161129",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "008975",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "008298",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "BANK"
+          ]
+        },
+        {
+          "subjectId": "000051",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "BROAD"
+          ]
+        },
+        {
+          "subjectId": "bb00e98f-554f-46af-97f6-48c85d508cf7",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "AI"
+          ]
+        },
+        {
+          "subjectId": "011035",
+          "subjectKind": "nav",
+          "industryReviewEligible": true,
+          "requiredReviewIndustryIds": [
+            "RARE_EARTH"
+          ]
+        },
+        {
+          "subjectId": "004432",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "NONFERROUS"
+          ]
+        },
+        {
+          "subjectId": "24ecec0f-48b5-4b4c-b801-7b28ad7f4566",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "BROKER"
+          ]
+        },
+        {
+          "subjectId": "013477",
+          "subjectKind": "nav",
+          "industryReviewEligible": true,
+          "requiredReviewIndustryIds": [
+            "FINTECH"
+          ]
+        },
+        {
+          "subjectId": "0d3786d4-5475-45dd-bd3f-31f3016e793f",
+          "subjectKind": "fund",
+          "industryReviewEligible": true,
+          "requiredReviewIndustryIds": [
+            "ROBOT"
+          ]
+        },
+        {
+          "subjectId": "003017",
+          "subjectKind": "nav",
+          "industryReviewEligible": true,
+          "requiredReviewIndustryIds": [
+            "DEFENCE"
+          ]
+        },
+        {
+          "subjectId": "008086",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "COMMUNICATION"
+          ]
+        },
+        {
+          "subjectId": "012737",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "INNOVATIVE_DRUG"
+          ]
+        },
+        {
+          "subjectId": "009179",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "CONSUMPTION"
+          ]
+        },
+        {
+          "subjectId": "000216",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "GOLD"
+          ]
+        },
+        {
+          "subjectId": "162411",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "GLOBAL_ENERGY"
+          ]
+        },
+        {
+          "subjectId": "270042",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "US_TECH"
+          ]
+        },
+        {
+          "subjectId": "021607",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "SCI_TECH_CHIP"
+          ]
+        },
+        {
+          "subjectId": "45e0255e-034e-4b1a-92d8-839f094d3c9f",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "MOBILITY"
+          ]
+        },
+        {
+          "subjectId": "007466",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "DIVIDEND_LOW_VOL"
+          ]
+        },
+        {
+          "subjectId": "000962",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "BROAD_500"
+          ]
+        },
+        {
+          "subjectId": "110020",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "202015",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "14b4ed05-8ecc-442f-9793-228d4d1ba7bf",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "2cac8e1d-d8ef-4ba7-be6e-ff8fe38bf675",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "6d106c30-ab2a-4343-85c1-05d082ddda66",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "dd335900-c20a-41a2-94e3-6f75bf8af08e",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "006756",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "001361",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "001629",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "016185",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "018027",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "528ae86b-babb-47d3-81bb-9da6a913f9c6",
+          "subjectKind": "fund",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "007300",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "014880",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "000218",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "023530",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": []
+        },
+        {
+          "subjectId": "000307",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "EVENT_GOLD_ENERGY"
+          ]
+        },
+        {
+          "subjectId": "008020",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "EVENT_AI"
+          ]
+        },
+        {
+          "subjectId": "000950",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "EVENT_FINANCIAL"
+          ]
+        },
+        {
+          "subjectId": "018094",
+          "subjectKind": "nav",
+          "industryReviewEligible": false,
+          "requiredReviewIndustryIds": [
+            "EVENT_ROBOT"
+          ]
+        }
+      ],
+      "standardIndustryCodes": [
+        "ACTIVE_GROWTH",
+        "AEROSPACE",
+        "AI",
+        "BANK",
+        "BROAD",
+        "BROKER",
+        "CHEMICAL",
+        "COAL",
+        "COMMUNICATION",
+        "CONSUMPTION",
+        "DEFENCE",
+        "DIVIDEND",
+        "DRUG",
+        "FINANCE_POLICY",
+        "FINANCIAL",
+        "FINTECH",
+        "GAMING",
+        "GLOBAL_ENERGY",
+        "GOLD",
+        "GOLD_ENERGY",
+        "HEALTHCARE_CLINICAL",
+        "HK_TECH",
+        "INNOVATIVE_DRUG",
+        "LOW_ALTITUDE",
+        "MEMORY",
+        "NONFERROUS",
+        "PCB",
+        "POWER",
+        "RARE_EARTH",
+        "RARE_EARTH_METALS",
+        "ROBOT",
+        "ROBOTICS_MOBILITY",
+        "SATELLITE",
+        "SEMICONDUCTOR_AI",
+        "SOLID_BATTERY",
+        "TRADITIONAL_MEDICINE",
+        "US_TECH"
+      ],
+      "omittedPlanIndustryIds": [
+        "ACTIVE_GROWTH",
+        "AI",
+        "BANK",
+        "BROAD",
+        "BROAD_500",
+        "BROKER",
+        "COMMUNICATION",
+        "CONSUMPTION",
+        "DIVIDEND_LOW_VOL",
+        "EVENT_AI",
+        "EVENT_FINANCIAL",
+        "EVENT_GOLD_ENERGY",
+        "EVENT_ROBOT",
+        "GLOBAL_ENERGY",
+        "GOLD",
+        "INNOVATIVE_DRUG",
+        "MOBILITY",
+        "NONFERROUS",
+        "SCI_TECH_CHIP",
+        "SEMICONDUCTOR",
+        "US_TECH"
+      ],
+      "omittedRiskCandidateCount": 0,
+      "newDirectionRequiresSameChecks": true
+    },
+    "discoveryUniverse": [
+      {
+        "label": "华夏中证机器人ETF发起式联接A",
+        "market": "FUND_CN",
+        "fundCode": "018344",
+        "subjectId": "0d3786d4-5475-45dd-bd3f-31f3016e793f",
+        "subjectKind": "fund",
+        "discoverySector": "ROBOT",
+        "identitySourceUri": "https://www.chinaamc.com/fund/018344/index.shtml",
+        "identityVerifiedAt": "2026-10-18 16:00:00+00:00",
+        "overseasCalendarRequired": false
+      }
+    ],
+    "discoveryActionableZones": [
+      {
+        "asOf": "2026-11-06",
+        "unit": "CNY",
+        "label": "华夏中证机器人ETF发起式联接A",
+        "market": "FUND_CN",
+        "tracks": [
+          {
+            "state": "CANDIDATE",
+            "track": "LEFT_VALUE",
+            "reasons": [
+              "收盘偏离真实MA200不高于-8%：满足",
+              "Wilder RSI14不高于38：未触发",
+              "收盘处于布林下轨的1.02倍以内：未触发",
+              "中低位买区采用布林下轨与现价回落参考，上沿不超过近两年40%历史分位价及周期跨度35%位置，下沿不低于周期低点的98%。",
+              "卖区下沿目标取买区上沿至少12%空间、MA200、近两年75%分位价与周期跨度60%位置的最大值；上沿结合92%分位价与跨度82%位置，并严格封顶于周期最高价的99.2%。",
+              "历史跨度分支不套用旧1.5R/2.4R抬价下限；止损独立低于买区，预估盈利仅按区间测算。"
+            ],
+            "candidate": true,
+            "inBuyZone": false,
+            "entryReady": false,
+            "inSellZone": false,
+            "priceState": "READY",
+            "sellZoneMax": "1.3537",
+            "sellZoneMin": "1.2390",
+            "entryBlocked": false,
+            "entryZoneMax": "1.0369",
+            "entryZoneMin": "0.9710",
+            "takeProfitT1": "1.2390",
+            "takeProfitT2": "1.3537",
+            "buyZoneAnchor": "TWO_YEAR_LOW_SUPPORT",
+            "stopLossPrice": "0.8918",
+            "technicalTriggered": true,
+            "currentToSellMaxPct": null,
+            "estimatedProfitMaxPct": "39.41",
+            "estimatedProfitMinPct": "19.49"
+          },
+          {
+            "state": "WATCH",
+            "track": "RIGHT_TREND",
+            "reasons": [
+              "收盘不低于MA20：满足",
+              "20期动量为正：未触发",
+              "Wilder RSI14不高于60：满足",
+              "中低位买区采用布林下轨与现价回落参考，上沿不超过近两年40%历史分位价及周期跨度35%位置，下沿不低于周期低点的98%。",
+              "卖区下沿目标取买区上沿至少12%空间、MA200、近两年75%分位价与周期跨度60%位置的最大值；上沿结合92%分位价与跨度82%位置，并严格封顶于周期最高价的99.2%。",
+              "历史跨度分支不套用旧1.5R/2.4R抬价下限；止损独立低于买区，预估盈利仅按区间测算。"
+            ],
+            "candidate": false,
+            "inBuyZone": false,
+            "entryReady": false,
+            "inSellZone": false,
+            "priceState": "READY",
+            "entryStatus": "🚀 高于买区 1.87%·等待回落买区",
+            "sellZoneMax": "1.3537",
+            "sellZoneMin": "1.2390",
+            "entryBlocked": false,
+            "entryZoneMax": "1.0369",
+            "entryZoneMin": "0.9710",
+            "takeProfitT1": "1.2390",
+            "takeProfitT2": "1.3537",
+            "buyZoneAnchor": "TWO_YEAR_LOW_SUPPORT",
+            "stopLossPrice": "0.8918",
+            "entryStatusTone": "amber",
+            "technicalTriggered": false,
+            "currentToSellMaxPct": null,
+            "estimatedProfitMaxPct": "39.41",
+            "estimatedProfitMinPct": "19.49"
+          }
+        ],
+        "fundCode": "018344",
+        "sourceUri": "https://fund.eastmoney.com/018344.html",
+        "subjectId": "0d3786d4-5475-45dd-bd3f-31f3016e793f",
+        "indicators": {
+          "p30": 1.0755,
+          "p35": 1.0984,
+          "p40": 1.1237,
+          "p45": 1.14225,
+          "p50": 1.1544,
+          "p55": 1.169425,
+          "p60": 1.1875,
+          "p65": 1.207875,
+          "p75": 1.239025,
+          "p85": 1.300325,
+          "p92": 1.33982,
+          "p95": 1.3728,
+          "ma20": 1.036945,
+          "ma60": 1.11682,
+          "atr14": null,
+          "ma200": 1.2292305,
+          "rsi14": 48.81132499017743,
+          "peakHigh": 1.4532,
+          "bollLower": 0.9710497050238031,
+          "bollUpper": 1.1028402949761968,
+          "priceSpan": 0.5526,
+          "troughLow": 0.9006,
+          "bollMiddle": 1.036945,
+          "momentum20": -0.0023611635814129173,
+          "drawdown60d": 16.026711185308848,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "navPercentile1y": 6.8181818181818175,
+          "navVolatility14": 0.0396
+        },
+        "parameters": {
+          "ma": null,
+          "atr": 14,
+          "rsi": 14,
+          "momentum": 20,
+          "bollinger": null,
+          "oversoldRSI": 38,
+          "navStdWindow": 20,
+          "maximumMA200Gap": -0.08,
+          "maximumTrendRSI": 60,
+          "rewardRiskBasis": "DISPLAYED_ENTRY_MID_AND_STOP",
+          "navStdMultiplier": 0.65,
+          "navRiskFloorRatio": 0.012,
+          "navRewardRiskBasis": "TWO_YEAR_SPAN_SUPPORT_RESISTANCE_PEAK_CAPPED",
+          "trendEntryLowScale": 0.55,
+          "maximumPePercentile": 40,
+          "minimumRewardRiskT1": 1.5,
+          "minimumRewardRiskT2": 2.4,
+          "navPercentileWindow": 220,
+          "trendEntryHighScale": 0.25,
+          "maximumNavPercentile": 85,
+          "historicalPriceWindow": [
+            120,
+            500
+          ],
+          "maximumHighNavMA20Ratio": 1.02,
+          "middleHighNavPercentile": 65,
+          "navAbsoluteChangeWindow": 14,
+          "middleHighPriceSpanRatio": 0.6,
+          "minimumTargetProfitRatio": 0.12,
+          "minimumSellPriceSpanRatio": 0.6,
+          "historicalPeakSellCapRatio": 0.992,
+          "historicalPercentileMethod": "LINEAR_INTERPOLATION",
+          "maximumLowBuyPriceSpanRatio": 0.35,
+          "navAbsoluteChangeMultiplier": 1.4,
+          "maximumHighBuyPriceSpanRatio": 0.45,
+          "maximumLowBuyPricePercentile": 40,
+          "sellZoneLowerPricePercentile": 75,
+          "sellZoneUpperPricePercentile": 92,
+          "maximumHighBuyPricePercentile": 45
+        },
+        "priceBasis": "UNIT_NAV",
+        "availableAt": "2026-11-07T18:53:17.539395+08:00",
+        "retrievedAt": "2026-11-07T18:53:17.539395+08:00",
+        "subjectKind": "fund",
+        "currentPrice": "1.0563",
+        "industryCycle": null,
+        "methodVersion": "actionable-zones-v6",
+        "historyQuality": "READY",
+        "discoverySector": "ROBOT",
+        "historyCoverage": "SUFFICIENT",
+        "indicatorStates": {
+          "p30": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p35": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p40": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p45": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p50": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p55": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p60": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p65": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p75": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p85": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p92": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "p95": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "ma20": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 20
+          },
+          "ma60": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 60
+          },
+          "atr14": {
+            "state": "MISSING_OHLC",
+            "sampleCount": 0,
+            "requiredSamples": 14
+          },
+          "ma200": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 200
+          },
+          "rsi14": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 15
+          },
+          "peakHigh": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "bollLower": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 20
+          },
+          "bollUpper": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 20
+          },
+          "priceSpan": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "troughLow": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 120
+          },
+          "bollMiddle": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 20
+          },
+          "momentum20": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 21
+          },
+          "drawdown60d": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 60
+          },
+          "excessReturn20d": {
+            "state": "INSUFFICIENT",
+            "sampleCount": 486,
+            "requiredSamples": 21
+          },
+          "excessReturn60d": {
+            "state": "INSUFFICIENT",
+            "sampleCount": 486,
+            "requiredSamples": 61
+          },
+          "navPercentile1y": {
+            "state": "READY",
+            "sampleCount": 220,
+            "requiredSamples": 220
+          },
+          "navVolatility14": {
+            "state": "READY",
+            "sampleCount": 486,
+            "requiredSamples": 20
+          }
+        },
+        "currentChangePct": "-2.91",
+        "relativeStrength": {
+          "asOf": "2026-11-06",
+          "state": "INSUFFICIENT",
+          "reasons": [],
+          "benchmark": "沪深300",
+          "weakening": null,
+          "lowerHighs": true,
+          "drawdown60d": 16.026711185308848,
+          "sampleCount": 486,
+          "drawdownUnit": "PERCENT",
+          "breakdownDate": null,
+          "trendWeakening": null,
+          "excessReturn20d": null,
+          "excessReturn60d": null,
+          "missingEvidence": [
+            "缺少连续有效、日期有序的沪深300基准或基金价格。"
+          ],
+          "excessReturnUnit": "PERCENTAGE_POINTS",
+          "consecutiveWeakDays": null,
+          "benchmarkSampleCount": 0
+        },
+        "volatilityMethod": "NAV_ABS_CHANGE_STD_V1",
+        "historySampleCount": 486,
+        "orderPriceAvailable": false,
+        "historyTargetSamples": 500,
+        "historicalPriceWindow": {
+          "end": "2026-11-06",
+          "start": "2024-11-06",
+          "state": "READY",
+          "sampleCount": 486,
+          "requiredSamples": 120
+        },
+        "industryAdjustmentBase": {
+          "close": "1.0563",
+          "scale": "0.0396",
+          "places": 4,
+          "navBasis": true,
+          "navScale": true,
+          "leftTrack": {
+            "asOf": "2026-11-06",
+            "state": "CANDIDATE",
+            "track": "LEFT_VALUE",
+            "reasons": [
+              "收盘偏离真实MA200不高于-8%：满足",
+              "Wilder RSI14不高于38：未触发",
+              "收盘处于布林下轨的1.02倍以内：未触发",
+              "中低位买区采用布林下轨与现价回落参考，上沿不超过近两年40%历史分位价及周期跨度35%位置，下沿不低于周期低点的98%。",
+              "卖区下沿目标取买区上沿至少12%空间、MA200、近两年75%分位价与周期跨度60%位置的最大值；上沿结合92%分位价与跨度82%位置，并严格封顶于周期最高价的99.2%。",
+              "历史跨度分支不套用旧1.5R/2.4R抬价下限；止损独立低于买区，预估盈利仅按区间测算。"
+            ],
+            "candidate": true,
+            "inBuyZone": false,
+            "entryReady": false,
+            "inSellZone": false,
+            "priceState": "READY",
+            "sellZoneMax": "1.3537",
+            "sellZoneMin": "1.2390",
+            "entryBlocked": false,
+            "entryZoneMax": "1.0369",
+            "entryZoneMin": "0.9710",
+            "takeProfitT1": "1.2390",
+            "takeProfitT2": "1.3537",
+            "buyZoneAnchor": "TWO_YEAR_LOW_SUPPORT",
+            "stopLossPrice": "0.8918",
+            "missingEvidence": [
+              "PE历史分位不高于40%"
+            ],
+            "technicalTriggered": true,
+            "currentToSellMaxPct": null,
+            "estimatedProfitMaxPct": "39.41",
+            "estimatedProfitMinPct": "19.49"
+          },
+          "navHistory": {
+            "p30": "1.07550",
+            "p35": "1.098400",
+            "p40": "1.1237",
+            "p45": "1.142250",
+            "p50": "1.15440",
+            "p55": "1.169425",
+            "p60": "1.1875",
+            "p65": "1.207875",
+            "p75": "1.239025",
+            "p85": "1.300325",
+            "p92": "1.33982",
+            "p95": "1.372800",
+            "peakHigh": "1.4532",
+            "priceSpan": "0.5526",
+            "troughLow": "0.9006"
+          },
+          "conditionReasons": [
+            "收盘偏离真实MA200不高于-8%：满足",
+            "Wilder RSI14不高于38：未触发",
+            "收盘处于布林下轨的1.02倍以内：未触发"
+          ],
+          "technicalCandidate": true
+        },
+        "overseasCalendarRequired": false
+      }
+    ],
+    "previousValueDirections": [],
+    "themeActionableZones": []
+  },
+  "raw": {
+    "summary": "截至2026年11月7日，国内制造业景气回落、信用活化偏弱，与稳市政策及通信建设形成分化；海外科技股反弹尚未扭转周线调整，AI融资、设备代际替换及数据中心信贷风险需同时保留。中东军事升级、航运障碍与外交斡旋并存，黄金和油气不能按同一逻辑追涨。本轮仅保留机器人、金融科技和稀土三个条件观察方向。冻结查询已发起50条，其中4条所在调用未取得返回，不声称全部审核完成。无私有持仓信息，不推测实际持仓。",
+    "coverage": [
+      {
+        "topic": "DOMESTIC_GROWTH",
+        "status": "FOUND",
+        "summary": "10月制造业PMI为49.3%，较上月下降0.8个百分点。输入9月M1为3.2%、M2为7.2%、剪刀差为负4个百分点，社融存量同比7.1%；信用活化仍弱。房价仅覆盖指定四城，不能外推全国。"
+      },
+      {
+        "topic": "US_RATES",
+        "status": "FOUND",
+        "summary": "输入11月6日美国10年名义及实际收益率分别为4.86%、2.63%；媒体报道10月非农增加16.5万人及联储官员偏紧表态。BLS原始抓取失败，FOMC文件现有短引文不足以确认政策决定，不补写利率结论。"
+      },
+      {
+        "topic": "ENERGY_SHIPPING",
+        "status": "FOUND",
+        "summary": "海峡重开条件、军事交火及俄乌能源设施风险继续存在，外交沟通尚未等于恢复通航。布伦特现货为日频美元/桶，柴油零售为周频美元/加仑；两者观察日期不同，不拼接为同步趋势，不新增能源数值。"
+      },
+      {
+        "topic": "GEOPOLITICS_POLICY",
+        "status": "FOUND",
+        "summary": "中美11月6日晚举行经贸通话，中方同时对近期限制措施表达关切。美伊打击与沟通并存；俄乌谈判仍属计划。选举结果及制裁细节现主要来自媒体报道，未冒充独立官网核验。"
+      },
+      {
+        "topic": "GLOBAL_EQUITIES",
+        "status": "FOUND",
+        "summary": "媒体收盘报道纳指上涨1.09%、费城半导体指数上涨4.2%，但纳斯达克100本周下跌4.91%且连续四周下跌。盘初6%以上涨幅与收盘不同，不作为不同交易日的连续上涨证据。"
+      },
+      {
+        "topic": "CALENDAR",
+        "status": "FOUND",
+        "summary": "输入安排11月9日公布国内10月CPI、PPI，11月10日举行俄美乌会谈；创业板指数权重调整拟于12月14日生效。均保留计划属性，实际发布及实施待确认。"
+      }
+    ],
+    "energy": [
+      "DCOILBRENTEU",
+      "GASDESW"
+    ],
+    "macroCycle": "定位为国内需求与信用活化偏弱、政策托底推进，海外能源供给冲击及AI投资需求增加通胀和估值约束的分化阶段。10月PMI跌回荣枯线下；9月M1-M2差为负，不能跨2025年M1定义断点推导长期趋势。国内10年收益率下行与上海、深圳及海南房价分化同时存在，低利率不证明需求已反转；社融单点与企业中长期贷款累计值不足以确认私人信用扩张。美国实际利率仍高，限制黄金与远期科技现金流估值。操作总纲为降低追涨，优先核验经营回款与合法价格条件。013477左轨触发且入区仍需经营验证；018344、011035左轨触发但尚未入区。008298、007466、161129、162411已有卖区提示，若持有优先分批止盈评估，空仓勿追；这不等于已达到前次同口径T1。270042净值滞后且服务器标记外盘急跌，继续暂缓入场。全部相对强弱证据不足，不编造历史胜率。ETF清算份额变化与二级主力订单流分别看待，不能识别机构身份；芯片相关ETF份额增减分化，也不能概括成全链净申购。",
+    "sources": [
+      {
+        "id": "s01",
+        "url": "https://www.stats.gov.cn/sj/zxfb/202610/t20261031_1965718.html",
+        "title": "国家统计局：2026年10月中国采购经理指数运行情况",
+        "quote": "10 月份,制造业采购经理指数( PMI )为 49.3% ,比上月下降 0.8 个百分点,制造业景气水平有所回落。",
+        "publishedDate": "2026-10-31",
+        "publishedAt": null
+      },
+      {
+        "id": "s05",
+        "url": "https://www.cls.cn/detail/2528079",
+        "title": "苹果机器人自主控制研究进展及限制",
+        "quote": "另在一个真实环境中，对3种组合任务分别开展10次测试，平均成功率为70%。",
+        "publishedDate": "2026-11-07",
+        "publishedAt": "2026-11-07T17:21:57+08:00"
+      },
+      {
+        "id": "s06",
+        "url": "https://finance.eastmoney.com/a/202610213902859756.html",
+        "title": "第一财经：具身智能融资降温，投资人不“上头”了",
+        "quote": "企业融资信息发布有一定的滞后性，往往要晚于融资敲定的时间节点。",
+        "publishedDate": "2026-10-21",
+        "publishedAt": "2026-10-21T20:21:00+08:00"
+      },
+      {
+        "id": "s07",
+        "url": "https://finance.eastmoney.com/a/202610173898796364.html",
+        "title": "中国经营网：机器人创业浪潮中的三个破产样本",
+        "quote": "今年9月，泳池机器人企业智橙动力被申请破产审查，公司声明强调系“预重整”而非破产清算。",
+        "publishedDate": "2026-10-17",
+        "publishedAt": "2026-10-17T03:37:00+08:00"
+      }
+    ],
+    "events": [
+      {
+        "relatedTopicKeys": [
+          "robotics_mobility"
+        ],
+        "relatedFormalDirectionKeys": [
+          "robotics_mobility"
+        ],
+        "relatedMacroConcepts": [
+          "技术商业化",
+          "一级市场融资"
+        ],
+        "candidateConceptLabels": [
+          "机器人控制",
+          "具身智能"
+        ],
+        "title": "机器人控制研究进展需要接受真实交付检验",
+        "summary": "苹果研究报道披露单项任务91%、组合任务70%，其中一项组合仅50%，并保留人工设计和接触感知限制。近期融资降温及服务机器人企业法律程序已核对媒体正文；不能以技术演示或扩产抵消资金及经营风险。",
+        "phase": "REPORTED",
+        "importance": "HIGH",
+        "sourceIds": [
+          "s05",
+          "s06",
+          "s07"
+        ],
+        "channels": [
+          "控制算法",
+          "传感与接触感知",
+          "商业交付及资金链"
+        ],
+        "affectedDirectionIds": [
+          "robotics_mobility"
+        ],
+        "scenarios": [
+          {
+            "condition": "复杂环境稳定性改善且形成独立客户付费交付",
+            "impact": "控制、感知和系统集成环节可能获得订单",
+            "counter": "实验成功率不等于产线可靠性；融资信息披露滞后，不能拼接不同统计机构数据"
+          }
+        ],
+        "watchFor": [
+          "复杂任务可靠性",
+          "外部客户复购与回款",
+          "融资到账及现金消耗"
+        ],
+        "unknowns": [
+          "盈合与深兰子公司主要涉及服务机器人，不能覆盖所有人形企业",
+          "智橙声明为预重整并持续经营，不能写成已倒闭",
+          "前次大业股份尚未量产风险未核验解除"
+        ],
+        "marketReaction": "UNVERIFIED"
+      }
+    ],
+    "upcoming": [],
+    "narrativeDirectionIds": {
+      "summary": [
+        "robotics_mobility"
+      ],
+      "macroCycle": [
+        "robotics_mobility"
+      ],
+      "coverage": []
+    },
+    "actionablePlans": [],
+    "valueDirections": [
+      {
+        "key": "robotics_mobility",
+        "title": "机器人：控制进展与资金约束并看",
+        "thesis": "苹果研究提供控制与感知验证线索，但融资降温、服务机器人法律程序和复杂任务限制要求折价观察。018344左轨为CANDIDATE，技术已触发而价格未入区；等待服务器买区与真实交付验证。",
+        "signal": "WATCH",
+        "sourceIds": [
+          "s05",
+          "s06",
+          "s07"
+        ],
+        "macroCodes": [
+          "PMI"
+        ],
+        "quantitativeFundCodes": [
+          "018344"
+        ],
+        "watchFor": [
+          "独立客户付费交付与回款",
+          "复杂场景可靠性",
+          "价格入区且技术条件保持",
+          "融资与经营恶化使逻辑失效"
+        ],
+        "catalysts": [
+          {
+            "summary": "苹果研究披露真实环境控制测试进展，为控制、感知和系统集成提供技术观察；实验结果尚未证明规模商用。",
+            "sourceIds": [
+              "s05"
+            ]
+          }
+        ],
+        "risks": [
+          {
+            "summary": "近期融资降温且披露时间滞后；部分服务机器人企业进入法律程序，不能外推所有人形企业，也不能忽略资金链风险。",
+            "sourceIds": [
+              "s06",
+              "s07"
+            ]
+          },
+          {
+            "summary": "组合任务平均成功率70%，部分任务50%；人工设计和视觉接触感知限制仍在。前次尚未量产风险未获解除证据。",
+            "sourceIds": [
+              "s05"
+            ]
+          }
+        ],
+        "industryCycle": null,
+        "reviewIndustryIds": [
+          "ROBOT"
+        ],
+        "plans": [
+          {
+            "subjectKind": "fund",
+            "subjectId": "0d3786d4-5475-45dd-bd3f-31f3016e793f",
+            "track": "LEFT_VALUE",
+            "priceRevisionStatus": "INITIAL",
+            "priceRevisionBasis": "PRICE",
+            "priceRevisionSourceIds": [],
+            "priceRevisionNote": "无本基金同轨可比前次计划，保留未入区的左轨观察。",
+            "calibrationRuleKeys": [],
+            "calibrationNote": "未提供可引用策略记忆规则；不将技术候选解释为盈利胜率。"
+          }
+        ]
+      }
+    ],
+    "industryCycleReviews": [
+      {
+        "industry": "ROBOT",
+        "sourceIds": [
+          "s06",
+          "s07",
+          "s05"
+        ],
+        "riskChecks": [
+          {
+            "kind": "FINANCING_COOLING",
+            "status": "FOUND",
+            "query": "机器人 具身智能 一级市场融资降温/断代 2026 近期 近90天",
+            "summary": "核对10月21日第一财经正文，第三季度及9月融资披露、项目过会和投资人反馈显示降温；头部融资仍在，口径和披露滞后不可忽略。",
+            "sourceIds": [
+              "s06"
+            ]
+          },
+          {
+            "kind": "LAYOFFS_CLOSURES",
+            "status": "FOUND",
+            "query": "机器人 具身智能 企业欠薪/裁员/倒闭 2026 近期 近90天",
+            "summary": "核对10月17日正文：盈合8月进入法律程序，智橙9月申请审查并称预重整，深兰9月回应子公司清算；服务机器人主体与人形企业有别，旧欠薪不冒充近期新发生。",
+            "sourceIds": [
+              "s07"
+            ]
+          },
+          {
+            "kind": "ORDER_CUTS",
+            "status": "UNVERIFIED",
+            "query": "机器人 具身智能 下游砍单 2026 近期 近90天",
+            "summary": "已搜索，演示与收入差距不等同真实客户取消订单，未确认近期具体砍单正文。",
+            "sourceIds": []
+          },
+          {
+            "kind": "OVERCAPACITY_PRICE_WAR",
+            "status": "UNVERIFIED",
+            "query": "机器人 具身智能 产能过剩/价格战 2026 近期 近90天",
+            "summary": "已搜索，企业扩张失败和受访者未来出清判断不能单独证明当前全行业过剩；仍保留经营和资金风险。",
+            "sourceIds": [
+              "s07"
+            ]
+          },
+          {
+            "kind": "PRODUCTION_DELAY",
+            "status": "UNVERIFIED",
+            "query": "机器人 具身智能 商业化量产推迟 2026 近期 近90天",
+            "summary": "已搜索，存在演示向商用转换约束，但未确认具名企业相对既定时间表延期；苹果测试限制不冒充量产延期。",
+            "sourceIds": [
+              "s05"
+            ]
+          }
+        ]
+      }
+    ],
+    "topicCatalog": [
+      {
+        "key": "robotics_mobility",
+        "title": "机器人控制与商业兑现",
+        "thesis": "技术测试进展与融资降温并存，优先核验复杂任务可靠性、独立订单和回款，保留服务机器人经营及历史未量产风险。",
+        "industryClaims": [
+          "ROBOT"
+        ],
+        "relatedIndustryIds": [
+          "ROBOTICS_MOBILITY"
+        ],
+        "sourceIds": [
+          "s05",
+          "s06",
+          "s07"
+        ],
+        "unknowns": [
+          "研究主体不等于基金持仓",
+          "018344技术触发但未入区"
+        ],
+        "pendingTasks": [
+          "更新真实付费交付",
+          "核验前次大业股份量产状态",
+          "ROBOTICS_MOBILITY四条查询未返回，留待后续批次完成"
+        ]
+      }
+    ]
+  },
+  "sourceChecks": {
+    "s01": {
+      "verification": "SOURCE_CHECKED",
+      "quoteMatched": true,
+      "url": "https://www.stats.gov.cn/sj/zxfb/202610/t20261031_1965718.html",
+      "publishedDate": "2026-10-31",
+      "publishedAt": null,
+      "title": "2026年10月中国采购经理指数运行情况 - 国家统计局",
+      "retrievedAt": "2026-11-07T21:50:27.714666+08:00",
+      "contentHash": "d34431943a93ecf9bcf7586772a4b36ac2bdd718244e74e7a2fc62cde4165a6a"
+    },
+    "s05": {
+      "verification": "UNVERIFIED",
+      "quoteMatched": false,
+      "url": "https://www.cls.cn/detail/2528079",
+      "publishedDate": null,
+      "publishedAt": null,
+      "reason": "SOURCE_NOT_ALLOWLISTED"
+    },
+    "s06": {
+      "verification": "UNVERIFIED",
+      "quoteMatched": false,
+      "url": "https://finance.eastmoney.com/a/202610213902859756.html",
+      "publishedDate": null,
+      "publishedAt": null,
+      "reason": "SOURCE_NOT_ALLOWLISTED"
+    },
+    "s07": {
+      "verification": "UNVERIFIED",
+      "quoteMatched": false,
+      "url": "https://finance.eastmoney.com/a/202610173898796364.html",
+      "publishedDate": null,
+      "publishedAt": null,
+      "reason": "SOURCE_NOT_ALLOWLISTED"
+    },
+    "__wealthsail_execution_v1": {
+      "version": "research-execution-binding-v1",
+      "researchId": "d7810690-ef13-44ad-8591-d3699f3f589a",
+      "manifestHash": "79a633e3b9688ecef1918705e41efb9ed76eda6e1202d212200fabd9a2d64997",
+      "inputAsOf": "2026-11-07T21:29:50.857432+08:00",
+      "validatedAt": "2026-11-07T21:50:28.937926+08:00",
+      "receipt": {
+        "version": "research-execution-v2",
+        "observer": "CODEX_EXEC_JSONL",
+        "coverage": "PARTIAL",
+        "turnCompleted": true,
+        "eventsComplete": false,
+        "capabilities": {
+          "preDispatchEnforcement": false,
+          "providerRetriesObservable": false
+        },
+        "counts": {
+          "webToolCalls": null,
+          "searchActions": null,
+          "searchQueries": null,
+          "pageOpens": null,
+          "pageFinds": null,
+          "otherWebActions": null,
+          "providerRetries": null,
+          "clientRetries": 0
+        },
+        "queryReceipts": [],
+        "actionProofs": [],
+        "proofBarrier": "UNATTRIBUTED_EVENT",
+        "softQueryLimit": 50,
+        "softQueryLimitExceeded": null
+      }
+    }
+  }
+}

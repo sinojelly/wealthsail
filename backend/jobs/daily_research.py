@@ -1204,7 +1204,9 @@ async def _execute_daily_research(
                     "coverage": topic_registry["coverage"],
                     "registryRunId": str(run_id),
                 }
-                if outcome.formal_payload is None:
+                if outcome.formal_payload is None or batch["repairSummary"].get(
+                    "changed"
+                ):
                     deterministic_repair = batch["repairSummary"]
                     payload["deterministicRepair"] = deterministic_repair
                     repaired_formal_published = True

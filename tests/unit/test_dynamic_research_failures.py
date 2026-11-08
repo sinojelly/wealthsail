@@ -9,7 +9,7 @@ from tests.unit.test_daily_research import NOW
 from tests.unit.test_industrial_metals_research_regression import case
 
 
-def test_missing_nonferrous_audit_is_pending_and_never_invents_trade_permission():
+def test_missing_nonferrous_audit_preserves_observation_without_trade_permission():
     from backend.macro.research_batch import evaluate_research_batch
     from backend.macro.research_topics import freeze_discovery_packet
 
@@ -30,25 +30,42 @@ def test_missing_nonferrous_audit_is_pending_and_never_invents_trade_permission(
         for row in result["registry"]["items"]
         if row["key"] == "industrial-metals-repricing"
     )
-    assert topic["status"] == "PENDING_REVIEW" and topic["investmentEligible"] is False
-    assert any(task["industryId"] == "NONFERROUS" for task in topic["pendingTasks"])
+    assert topic["status"] == "OBSERVATION_ONLY"
+    assert topic["investmentEligible"] is False
+    assert any(
+        task["industryId"] == "NONFERROUS" for task in result["registry"]["auditTasks"]
+    )
     assert result["registry"]["coverage"]["pendingScopeCount"] >= 1
-    if result["formalReport"] is not None:
-        assert result["formalReport"]["valueDirections"] == []
-        assert (
-            result["candidateRaw"]["industryCycleReviews"]
-            == raw["industryCycleReviews"]
-        )
-        assert any(
-            review["confirmedRiskFlags"]
-            for review in result["formalReport"]["industryCycleReviews"]
-        )
-        assert (
-            validate_report(result["candidateRaw"], packet, checks, completed_at=NOW)[
-                "valueDirections"
-            ]
-            == []
-        )
+    assert (
+        result["registry"]["coverage"]["executionMatchStatus"] == "EXECUTION_UNVERIFIED"
+    )
+    assert result["registry"]["coverage"]["searchExecutionVerified"] is False
+    assert result["autoPublishAllowed"] is True
+    directions = result["formalReport"]["valueDirections"]
+    assert len(directions) == 1
+    direction = directions[0]
+    assert direction["key"] == "industrial-metals-repricing"
+    assert direction["qualificationStatus"] == "OBSERVATION_ONLY"
+    assert direction["signal"] == "WATCH"
+    assert direction["investmentEligible"] is False
+    assert direction["plans"] == direction["quantitativeFundCodes"] == []
+    assert direction["industryCycle"]["searchExecutionVerified"] is False
+    assert "DIRECTION_PLAN_SECTOR_UNREVIEWED" in direction["formalEligibilityReasons"]
+    assert result["candidateRaw"]["industryCycleReviews"] == raw["industryCycleReviews"]
+    assert any(
+        review["confirmedRiskFlags"]
+        for review in result["formalReport"]["industryCycleReviews"]
+    )
+    assert (
+        validate_report(
+            result["candidateRaw"],
+            packet,
+            checks,
+            completed_at=NOW,
+            research_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )["valueDirections"][0]["plans"]
+        == []
+    )
     assert before == (packet, raw, checks)
 
 
@@ -71,7 +88,20 @@ def test_unrelated_sector_and_composite_never_replace_product_audit():
     )
     assert not any(row["investmentEligible"] for row in value["registry"]["items"])
     assert "NONFERROUS" not in {row["industry"] for row in raw["industryCycleReviews"]}
-    assert not value["formalReport"] or not value["formalReport"]["valueDirections"]
+    assert value["autoPublishAllowed"] is True
+    direction = value["formalReport"]["valueDirections"][0]
+    assert direction["qualificationStatus"] == "OBSERVATION_ONLY"
+    assert direction["investmentEligible"] is False
+    assert direction["signal"] == "WATCH"
+    assert direction["plans"] == direction["quantitativeFundCodes"] == []
+    assert direction["industryCycle"]["searchExecutionVerified"] is False
+    assert "DIRECTION_PLAN_SECTOR_UNREVIEWED" in direction["formalEligibilityReasons"]
+    assert (
+        value["registry"]["coverage"]["executionMatchStatus"] == "EXECUTION_UNVERIFIED"
+    )
+    assert any(
+        task["industryId"] == "NONFERROUS" for task in value["registry"]["auditTasks"]
+    )
 
 
 def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direction():
@@ -97,6 +127,7 @@ def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direct
     packet["pendingTopicScopes"] = [{"industryId": "BROKER", "searchTerm": "券商"}]
     packet = freeze_discovery_packet(packet, NOW)
     from tests.unit.test_research_cost_review75 import executed_checks
+
     checks = executed_checks(packet, checks)
     result = evaluate_research_batch(
         raw,
@@ -124,6 +155,7 @@ def test_unhashable_topic_key_is_one_quarantined_item_not_a_system_failure():
     packet = freeze_discovery_packet(packet, NOW)
     raw["topicCatalog"] = [{"key": ["malformed-key"], "title": "坏主题"}]
     from tests.unit.test_research_cost_review75 import executed_checks
+
     checks = executed_checks(packet, checks)
     result = evaluate_research_batch(
         raw,

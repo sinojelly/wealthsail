@@ -567,7 +567,10 @@ export interface ValueDirection extends OpportunityPriority {
   key: string;
   title: string;
   thesis: string;
-  signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH";
+  signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH" | "AVOID";
+  qualificationStatus?: "OBSERVATION_ONLY";
+  investmentEligible?: boolean;
+  formalEligibilityReasons?: string[];
   sourceIds: string[];
   catalysts?: Array<{ summary: string; sourceIds: string[] }>;
   risks?: Array<{ summary: string; sourceIds: string[] }>;

@@ -142,9 +142,12 @@ def test_missing_fund_industry_review_moves_whole_direction_pending_and_never_em
         for row in result["registry"]["items"]
         if row["key"] == raw["valueDirections"][0]["key"]
     )
-    assert item["status"] == "PENDING_REVIEW" and not item["investmentEligible"]
+    assert item["status"] == "OBSERVATION_ONLY" and not item["investmentEligible"]
     assert "plans" not in item
-    assert not result["formalReport"] or not result["formalReport"]["valueDirections"]
+    direction = result["formalReport"]["valueDirections"][0]
+    assert direction["signal"] == "WATCH" and not direction["plans"]
+    assert direction["investmentEligible"] is False
+    assert "DIRECTION_PLAN_SECTOR_UNREVIEWED" in direction["formalEligibilityReasons"]
 
 
 def test_exact_server_plan_scope_can_repair_model_review_label_without_alias_guess():
@@ -516,7 +519,10 @@ def test_unverified_review_rows_do_not_close_scope_or_authorize_formal_funds():
     assert registry["coverage"]["reviewedScopeCount"] == 0
     assert registry["coverage"]["pendingScopeCount"] == 3
     assert not any(row["investmentEligible"] for row in registry["items"])
-    assert not result["strictFormalReport"]["valueDirections"]
+    direction = result["strictFormalReport"]["valueDirections"][0]
+    assert direction["signal"] == "WATCH" and not direction["plans"]
+    assert direction["investmentEligible"] is False
+    assert "DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED" in direction["formalEligibilityReasons"]
     assert result["candidateRaw"]["industryCycleReviews"] == raw["industryCycleReviews"]
 
 
