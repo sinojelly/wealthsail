@@ -150,6 +150,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Install an empty database and exercise real identity/tenant flows
         run: python -m pytest tests/integration/test_nas_postgres_installation.py -q -p no:cacheprovider
+      - name: Verify migration 104 recovery through 106 and read-only deployment readback
+        run: python -m pytest tests/integration/test_research_migration_recovery.py -q -p no:cacheprovider
 
   # Opt-in against a separately configured self-hosted target. Old Supabase
   # variables/secrets cannot accidentally enable or supply this connection.

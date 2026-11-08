@@ -7,6 +7,15 @@ Usage:
 Development seeds are intentionally outside ``migrations/`` and can never be
 selected by this command.
 
+Recovery after all migrations committed but final verification failed:
+  MIGRATION_DATABASE_URL=... python scripts/migrate.py \\
+      --environment production --confirm-target db.example:5432/wealthsail \\
+      --readback-only
+
+This mode takes the migration lock, requires an exact existing ledger, and
+checks the schema in a read-only transaction. It never applies migration SQL
+or changes the ledger, and cannot be combined with drift reconciliation.
+
 Checksum drift reconciliation (rare, deliberate):
   --reconcile-drift 054
   MIGRATION_DATABASE_URL=... python scripts/migrate.py \
@@ -2973,12 +2982,258 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=104)"
     ):
         await _readback_opportunity_fund_cache(conn)
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=105)"
+    ):
+        await _readback_research_queue_control(conn)
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=106)"
+    ):
+        await _readback_local_research_recovery(conn)
 
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
     )
     if seed_versions:
         raise RuntimeError("development seed entered the production migration ledger")
+
+
+async def _readback_research_checks(
+    conn: asyncpg.Connection, table: str, expected: Mapping[str, str], boundary: str
+) -> None:
+    """Read validated CHECK definitions, preserving their boolean grouping."""
+    actual = {
+        row["conname"]: re.sub(r"\s+", "", row["definition"]).replace("::text", "")
+        for row in await conn.fetch(
+            """SELECT conname, pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint WHERE conrelid=to_regclass($1)
+            AND contype='c' AND convalidated""",
+            table,
+        )
+    }
+    if any(
+        actual.get(name) != re.sub(r"\s+", "", definition)
+        for name, definition in expected.items()
+    ):
+        raise RuntimeError(f"{boundary} constraints are missing or unsafe")
+
+
+async def _readback_research_control_function(
+    conn: asyncpg.Connection,
+    function: str,
+    table: str,
+    execute_roles: tuple[str, ...],
+    boundary: str,
+) -> None:
+    safe = await conn.fetchval(
+        """SELECT p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog']
+        AND p.proowner=c.relowner
+        AND p.proowner NOT IN (SELECT oid FROM pg_roles WHERE rolname IN (
+          'authenticated','wealthsail_api','wealthsail_worker',
+          'wealthsail_api_login','wealthsail_worker_login'))
+        AND NOT EXISTS(
+          SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+          LEFT JOIN pg_roles r ON r.oid=a.grantee
+          WHERE a.grantee<>p.proowner AND
+            (a.grantee=0 OR r.rolname::text<>ALL($3::text[]) OR a.is_grantable))
+        FROM pg_proc p JOIN pg_class c ON c.oid=to_regclass($2)
+        WHERE p.oid=to_regprocedure($1)""",
+        function,
+        table,
+        list(execute_roles),
+    )
+    if not safe:
+        raise RuntimeError(f"{boundary} function boundary is missing or unsafe")
+    for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+        if await conn.fetchval(
+            "SELECT has_function_privilege($1,$2,'EXECUTE')",
+            role,
+            function,
+        ) != (role in execute_roles):
+            raise RuntimeError(f"{boundary} function boundary is missing or unsafe")
+
+
+async def _readback_research_owner_policy(
+    conn: asyncpg.Connection, table: str, policy: str, command: str
+) -> None:
+    """FORCE RLS owner helpers need their exact migration-owned policy."""
+    safe = await conn.fetchval(
+        """SELECT p.polpermissive AND p.polroles=ARRAY[c.relowner]
+        AND p.polcmd::text=$3 AND pg_get_expr(p.polqual,p.polrelid)='true'
+        AND pg_get_expr(p.polwithcheck,p.polrelid) IS NOT DISTINCT FROM $4::text
+        FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+        WHERE c.oid=to_regclass($1) AND p.polname=$2""",
+        table,
+        policy,
+        command,
+        "true" if command == "*" else None,
+    )
+    if not safe:
+        raise RuntimeError(f"research owner policy boundary is missing or unsafe: {policy}")
+
+
+async def _readback_research_queue_control(conn: asyncpg.Connection) -> None:
+    table = "research.daily_research_refresh_requests"
+    for policy_table, policy in (
+        (table, "research_refresh_control_owner"),
+        ("research.daily_research_model_guards", "research_guard_control_owner"),
+    ):
+        await _readback_research_owner_policy(conn, policy_table, policy, "*")
+    await _readback_research_checks(
+        conn,
+        table,
+        {
+            "research_refresh_status": """CHECK ((status = ANY (ARRAY[
+              'QUEUED', 'RUNNING', 'READY', 'FAILED', 'UNCERTAIN', 'CANCELLED', 'EXPIRED'])))""",
+            "research_refresh_state_shape": """CHECK (
+              (((status = 'QUEUED') AND (started_at IS NULL) AND (completed_at IS NULL))
+              OR ((status = 'RUNNING') AND (started_at IS NOT NULL) AND (completed_at IS NULL))
+              OR ((status = ANY (ARRAY['READY', 'FAILED', 'UNCERTAIN'])) AND (completed_at IS NOT NULL))
+              OR ((status = ANY (ARRAY['CANCELLED', 'EXPIRED'])) AND (started_at IS NULL)
+                AND (completed_at IS NOT NULL) AND (batch_id IS NULL)
+                AND (report_run_id IS NULL) AND (error_class IS NOT NULL))))""",
+            "daily_research_refresh_requests_execution_stage_check": """CHECK (
+              (execution_stage = ANY (ARRAY['COLLECTING', 'WAITING_MODEL_SLOT',
+              'MODEL_RUNNING', 'VERIFYING_OUTPUT', 'REPORT_VALIDATION', 'PERSISTING'])))""",
+            "research_refresh_stage_shape": """CHECK (
+              (((execution_stage IS NULL) AND (stage_updated_at IS NULL))
+              OR ((execution_stage IS NOT NULL) AND (stage_updated_at IS NOT NULL)
+                AND (started_at IS NOT NULL) AND (stage_updated_at >= started_at))))""",
+        },
+        "research queue control",
+    )
+    for function, roles in (
+        ("research.research_refresh_control_actor(uuid,uuid,boolean)", ()),
+        (
+            "research.expire_queued_research_refresh(uuid,uuid,timestamptz)",
+            ("wealthsail_api", "wealthsail_worker"),
+        ),
+        (
+            "research.cancel_queued_research_refresh(uuid,uuid,uuid,timestamptz)",
+            ("wealthsail_api", "wealthsail_worker"),
+        ),
+        (
+            "research.research_refresh_queue_observation(uuid,uuid,uuid,timestamptz)",
+            ("wealthsail_api", "wealthsail_worker"),
+        ),
+    ):
+        await _readback_research_control_function(
+            conn, function, table, roles, "research queue control"
+        )
+
+
+async def _readback_local_research_recovery(conn: asyncpg.Connection) -> None:
+    guards = "research.daily_research_model_guards"
+    audit = "research.local_research_recovery_audit"
+    await _readback_research_owner_policy(
+        conn, audit, "local_research_recovery_owner_cutoff", "r"
+    )
+    await _readback_research_checks(
+        conn,
+        guards,
+        {
+            "daily_research_model_guards_exit_evidence_check": """CHECK (
+              ((exit_evidence IS NULL) OR (jsonb_typeof(exit_evidence) = 'object')))""",
+            "daily_research_model_guards_release_proof_check": """CHECK (
+              ((release_proof IS NULL) OR ((jsonb_typeof(release_proof) = 'object')
+              AND (release_proof ? 'kind') AND ((release_proof ->> 'kind') = ANY
+              (ARRAY['LOCAL_WINDOWS_JOB', 'LOCAL_WINDOWS_REBOOT', 'REMOTE_RUNNER'])))))""",
+        },
+        "local research guard boundary",
+    )
+    await _readback_research_checks(
+        conn,
+        audit,
+        {
+            "local_research_recovery_audit_guard_snapshot_check": """CHECK (
+              (guard_snapshot ~ '^[0-9a-f]{64}$'))""",
+            "local_research_recovery_audit_check": "CHECK ((released_at > acquired_at))",
+            "local_research_recovery_audit_check1": """CHECK (
+              ((queue_cutoff_at >= acquired_at) AND (queue_cutoff_at <= released_at)))""",
+            "local_research_recovery_audit_expired_queued_check": "CHECK ((expired_queued >= 0))",
+            "local_research_recovery_audit_proof_check": """CHECK (
+              ((jsonb_typeof(proof) = 'object') AND (proof ? 'kind')
+              AND ((proof ->> 'kind') = 'LOCAL_WINDOWS_REBOOT')
+              AND (NOT (proof ? 'exitConfirmed'))))""",
+        },
+        "local research recovery audit boundary",
+    )
+    for table, allowed_update, boundary in (
+        (
+            guards,
+            {"released_at", "exit_evidence", "release_proof"},
+            "local research guard",
+        ),
+        (
+            audit,
+            set(),
+            "local research recovery audit",
+        ),
+    ):
+        if not await conn.fetchval(
+            "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid=to_regclass($1)",
+            table,
+        ):
+            raise RuntimeError(f"{boundary} boundary is missing or unsafe")
+        columns = await conn.fetch(
+            "SELECT attname FROM pg_attribute WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped",
+            table,
+        )
+        for role in ("wealthsail_api", "wealthsail_worker", "authenticated"):
+            for privilege in (
+                "SELECT",
+                "INSERT",
+                "DELETE",
+                "TRUNCATE",
+                "REFERENCES",
+                "TRIGGER",
+            ):
+                expected = role == "wealthsail_worker" and privilege in {
+                    "SELECT",
+                    "INSERT",
+                }
+                query = (
+                    "SELECT has_any_column_privilege($1,$2,$3)"
+                    if not expected and privilege in {"SELECT", "INSERT", "REFERENCES"}
+                    else "SELECT has_table_privilege($1,$2,$3)"
+                )
+                if await conn.fetchval(query, role, table, privilege) != expected:
+                    raise RuntimeError(f"{boundary} boundary is missing or unsafe")
+            for column in columns:
+                expected = (
+                    role == "wealthsail_worker" and column["attname"] in allowed_update
+                )
+                if (
+                    await conn.fetchval(
+                        "SELECT has_column_privilege($1,$2,$3,'UPDATE')",
+                        role,
+                        table,
+                        column["attname"],
+                    )
+                    != expected
+                ):
+                    raise RuntimeError(f"{boundary} boundary is missing or unsafe")
+        if await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM pg_class c
+            CROSS JOIN LATERAL aclexplode(c.relacl) a
+            LEFT JOIN pg_roles r ON r.oid=a.grantee
+            WHERE c.oid=$1::regclass AND a.grantee<>c.relowner
+              AND (r.rolname IS DISTINCT FROM 'wealthsail_worker' OR a.is_grantable))
+            OR EXISTS(SELECT 1 FROM pg_attribute col JOIN pg_class c ON c.oid=col.attrelid
+            CROSS JOIN LATERAL aclexplode(col.attacl) a
+            LEFT JOIN pg_roles r ON r.oid=a.grantee
+            WHERE c.oid=$1::regclass AND a.grantee<>c.relowner
+              AND (r.rolname IS DISTINCT FROM 'wealthsail_worker' OR a.is_grantable))""",
+            table,
+        ):
+            raise RuntimeError(f"{boundary} boundary is missing or unsafe")
+    await _readback_research_control_function(
+        conn,
+        "research.lock_local_research_maintenance()",
+        guards,
+        ("wealthsail_worker",),
+        "local research maintenance",
+    )
 
 
 async def _readback_opportunity_fund_cache(conn: asyncpg.Connection) -> None:
@@ -3042,10 +3297,49 @@ async def migrate(
     *,
     dry_run: bool,
     reconcile_drift: int | None = None,
+    readback_only: bool = False,
 ) -> None:
+    if readback_only and (dry_run or reconcile_drift is not None):
+        raise ValueError("readback-only cannot use dry-run or reconcile-drift")
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute("SELECT pg_advisory_lock($1)", LOCK_KEY)
+        if readback_only:
+            # Recheck after taking the same lock as normal upgrades. A shell
+            # preflight alone cannot prevent a later ledger change from
+            # causing a recovery command to apply SQL unexpectedly.
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                if not await conn.fetchval(
+                    "SELECT to_regclass('public.wealthsail_schema_migrations')"
+                ):
+                    raise RuntimeError("readback-only migration ledger is missing")
+                applied = {
+                    row["version"]: row
+                    for row in await conn.fetch(
+                        "SELECT version, filename, checksum_sha256 FROM public.wealthsail_schema_migrations"
+                    )
+                }
+                expected_versions = {migration.version for migration in migrations}
+                unknown = sorted(applied.keys() - expected_versions)
+                missing = sorted(expected_versions - applied.keys())
+                if unknown:
+                    raise RuntimeError(f"readback-only ledger contains unknown migrations: {unknown}")
+                if missing:
+                    raise RuntimeError(f"readback-only ledger is missing migrations: {missing}")
+                for migration in migrations:
+                    previous = applied[migration.version]
+                    if previous["filename"] != migration.path.name:
+                        raise RuntimeError(f"filename drift at migration {migration.version:03d}: {migration.path.name}")
+                    if previous["checksum_sha256"].strip() != migration.checksum:
+                        raise RuntimeError(f"checksum drift at migration {migration.version:03d}: {migration.path.name}")
+                for migration in migrations:
+                    print(f"SKIP {migration.path.name} (already applied)")
+                await _readback(conn)
+            print(
+                "READBACK OK: roles, RLS, runtime grants, Tiantian import/status, "
+                "identity session, tenant governance and trade-integrity contracts"
+            )
+            return
         await _ensure_ledger(conn)
         applied = {
             row["version"]: row
@@ -3120,7 +3414,13 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Exact host[:port]/database printed by this command",
     )
-    parser.add_argument("--dry-run", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument(
+        "--readback-only",
+        action="store_true",
+        help="Require an exact existing migration ledger and run readback in a read-only transaction; never apply SQL or reconcile drift",
+    )
     parser.add_argument(
         "--reconcile-drift",
         type=int,
@@ -3133,7 +3433,10 @@ def parse_args() -> argparse.Namespace:
             "migration. Drift on any other version still fails the run."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.readback_only and args.reconcile_drift is not None:
+        parser.error("--readback-only cannot be combined with --reconcile-drift")
+    return args
 
 
 def main() -> None:
@@ -3151,6 +3454,8 @@ def main() -> None:
     target_line = f"TARGET environment={args.environment} database={target} dry_run={args.dry_run}"
     if args.reconcile_drift is not None:
         target_line += f" reconcile_drift={args.reconcile_drift:03d}"
+    if args.readback_only:
+        target_line += " readback_only=True"
     print(target_line)
     asyncio.run(
         migrate(
@@ -3158,6 +3463,7 @@ def main() -> None:
             load_migrations(ROOT / "migrations"),
             dry_run=args.dry_run,
             reconcile_drift=args.reconcile_drift,
+            readback_only=args.readback_only,
         )
     )
 
