@@ -123,12 +123,16 @@ async def operations_jobs(
     request_id: str = Depends(get_request_id),
 ) -> dict:
     """作业定义与最近运行状态（含耗时与失败类别）。"""
+    from backend.macro.research_preview import list_preview_runs
+
     _require_owner_admin(ctx)
     as_of = now_shanghai()
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         jobs = await repository.list_jobs(conn, ctx.tenant_id)
         runs = await repository.list_job_runs(conn, ctx.tenant_id, limit=30)
+        research_runs = await list_preview_runs(conn, limit=30, now=as_of)
     data = {
+        "researchRuns": research_runs,
         "jobs": [
             {
                 "id": str(j["id"]),

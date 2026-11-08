@@ -34,6 +34,7 @@ from backend.investment.fund_watch_api import router as fund_watch_router
 from backend.investment.research_debug_api import router as research_debug_router
 from backend.investment.research_acceptance_api import router as research_acceptance_router
 from backend.investment.research_history_repair_api import router as research_history_repair_router
+from backend.investment.research_preview_api import router as research_preview_router
 from backend.investment.research_topic_api import router as research_topic_router
 from backend.investment.research_fund_recommendation_api import router as research_fund_recommendation_router
 from backend.chat.api import router as chat_router
@@ -190,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(research_debug_router, prefix=prefix)
     app.include_router(research_acceptance_router, prefix=prefix)
     app.include_router(research_history_repair_router, prefix=prefix)
+    app.include_router(research_preview_router, prefix=prefix)
     app.include_router(research_topic_router, prefix=prefix)
     app.include_router(research_fund_recommendation_router, prefix=prefix)
     app.include_router(debug_router, prefix=prefix)
