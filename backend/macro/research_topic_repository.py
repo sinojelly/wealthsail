@@ -226,6 +226,7 @@ def prepare_topic_registry(value, run_id, validated_at):
         "plannedScopeCount",
         "reviewedScopeCount",
         "pendingScopeCount",
+        "observationScopeCount",
         "deferredScopeCount",
         "maxTopics",
         "maxFormalDirections",

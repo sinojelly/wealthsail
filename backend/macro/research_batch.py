@@ -27,9 +27,11 @@ from backend.macro.research_topics import (
     TOPIC_MESSAGES,
     TopicProposal,
     digest,
+    direction_limit,
     freeze_discovery_packet,
     frozen_manifest,
     match_topic,
+    is_targeted_research,
     topic_match_version,
     topic_tasks,
 )
@@ -134,7 +136,7 @@ def evaluate_research_batch(
         not isinstance(raw_topics, list)
         or len(raw_topics) > 64
         or not isinstance(directions, list)
-        or len(directions) > 8
+        or len(directions) > direction_limit(packet)
     ):
         result["hardBlockers"].append(_block("UNSAFE_INPUT"))
         raw_topics, directions = [], []
@@ -697,6 +699,7 @@ def evaluate_research_batch(
         )
     from backend.macro.research_topics import make_task
 
+    audit_scopes = set(manifest["selectedScopes"]) if is_targeted_research(packet) else all_scopes
     registry["auditTasks"] = [
         make_task(
             industry,
@@ -711,10 +714,18 @@ def evaluate_research_batch(
             else "AUDIT_INCOMPLETE",
             search_term=dynamic_search_terms.get(industry),
         )
-        for industry in sorted(all_scopes - reviews)
+        for industry in sorted(audit_scopes - reviews)
         for kind, terms in RISK_CHECKS.items()
         if kind not in completed_kinds.get(industry, set())
     ]
+    if is_targeted_research(packet):
+        registry["auditTasks"] = [
+            {**deepcopy(task),
+             "status": "PLANNED_DEFERRED" if task["industryId"].startswith("TOPIC_SCOPE:") else "PENDING_REVIEW",
+             "reasonCode": "INDUSTRY_IDENTITY_PENDING" if task["industryId"].startswith("TOPIC_SCOPE:") else "AUDIT_INCOMPLETE"}
+            for task in manifest["tasks"]
+            if task["kind"] not in completed_kinds.get(task["industryId"], set())
+        ]
     task_by_id = {task["taskId"]: task for task in registry["auditTasks"]}
     for item in registry["items"]:
         for task in item["pendingTasks"]:
@@ -735,7 +746,8 @@ def evaluate_research_batch(
         },
         "plannedScopeCount": len(manifest["selectedScopes"]),
         "reviewedScopeCount": len(set(manifest["selectedScopes"]) & reviews),
-        "pendingScopeCount": len(all_scopes - reviews),
+        "pendingScopeCount": len(audit_scopes - reviews),
+        **({"observationScopeCount": len(all_scopes - audit_scopes)} if is_targeted_research(packet) else {}),
         "deferredScopeCount": len(manifest["deferredScopes"]),
         **{key: value for key, value in assurance.items() if key != "completedKinds"},
         "hasMore": bool(discovered_count and not registry["items"]),

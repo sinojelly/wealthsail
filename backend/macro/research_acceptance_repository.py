@@ -269,6 +269,9 @@ def _accepted(value):
             "channels",
             "watchFor",
             "unknowns",
+            "category",
+            "sourcePublishedAt",
+            "sourcePublicationBasis",
         ),
         "upcoming": (
             "id",
@@ -280,13 +283,16 @@ def _accepted(value):
             "sourceIds",
             "affectedDirectionIds",
             "watchFor",
+            "category",
+            "sourcePublishedAt",
+            "sourcePublicationBasis",
         ),
     }
     output = {}
     limits = {
         "sources": 24,
         "industryCycleReviews": 64,
-        "valueDirections": 8,
+        "valueDirections": 10,
         "events": 12,
         "upcoming": 12,
     }
@@ -313,6 +319,13 @@ def _accepted(value):
                 row["url"] = _url(row["url"])
             except (ValueError, TypeError):
                 row.pop("url")
+    originals = value.get("sources")
+    for projected, original in zip(output["sources"],
+                                   [row for row in originals if isinstance(row, dict)][:24]
+                                   if isinstance(originals, list) else []):
+        for field in ("frozenTitleMatched", "frozenQuoteMatched"):
+            if isinstance(original.get(field), bool):
+                projected[field] = original[field]
     from backend.macro.research_event_links import safe_event_links
 
     for component in ("events", "upcoming"):

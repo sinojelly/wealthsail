@@ -7,6 +7,7 @@ import pytest
 
 from tests.unit.test_industrial_metals_research_regression import case
 from tests.unit.test_daily_research import NOW
+from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet as freeze_v2
 
 RUN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 ADDITIONAL_CATALOG_INDUSTRIES = [
@@ -46,7 +47,7 @@ def topic(index, industry="NONFERROUS"):
 
 def evaluate(count=12):
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [topic(i) for i in range(count)]
     return evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -79,7 +80,7 @@ def test_manifest_preserves_all_scopes_but_only_allocates_ten_times_five_queries
         {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
     original = deepcopy(packet)
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     manifest = frozen["researchDiscovery"]["auditManifest"]
     assert len(manifest["selectedScopes"]) == 10 and len(manifest["tasks"]) == 50
     assert len(manifest["deferredScopes"]) >= 10
@@ -92,7 +93,7 @@ def test_multiple_funds_in_one_sector_share_exactly_five_tasks_and_frozen_contra
     from backend.integrations.daily_sources import industry_cycle_research_tasks
 
     packet, _, _ = case()
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     frozen["discoveryUniverse"].append({"discoverySector": "UNPLANNED_LATER"})
     tasks = industry_cycle_research_tasks(frozen, NOW)
     assert (
@@ -132,7 +133,7 @@ def test_unrelated_checked_source_does_not_verify_topic_industry_scope():
 
 def test_missing_fund_industry_review_moves_whole_direction_pending_and_never_emits_plans():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["industryCycleReviews"] = raw["industryCycleReviews"][:2]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -152,7 +153,7 @@ def test_missing_fund_industry_review_moves_whole_direction_pending_and_never_em
 
 def test_exact_server_plan_scope_can_repair_model_review_label_without_alias_guess():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["valueDirections"][0]["reviewIndustryIds"] = ["UNKNOWN_MODEL_LABEL"]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -169,7 +170,7 @@ def test_deferred_topic_is_pending_not_failed_or_silently_omitted():
     packet["discoveryUniverse"] += [
         {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     deferred = packet["researchDiscovery"]["auditManifest"]["deferredScopes"][-1]
     raw["topicCatalog"] = [topic(1, deferred)]
     result = evaluate_with_execution(
@@ -187,14 +188,14 @@ def test_v1_coverage_gate_remains_strict_while_v2_tracks_missing_batch_reviews()
     packet["discoveryUniverse"].append({"discoverySector": "BANK"})
     with pytest.raises(ResearchValidationError):
         validate_report(raw, packet, checks, completed_at=NOW)
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     from tests.unit.test_research_cost_review75 import executed_checks
     assert validate_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW, research_id=RUN)
 
 
 def test_one_bad_topic_does_not_destroy_independent_formal_projection():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [topic(1), {"key": "bad-topic", "title": "缺失其他字段"}]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -205,7 +206,7 @@ def test_one_bad_topic_does_not_destroy_independent_formal_projection():
 
 def test_unsafe_topic_text_is_global_hard_failure_not_repaired_by_deleting_catalog():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [{**topic(1), "thesis": "<script>unsafe</script>"}]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -215,7 +216,7 @@ def test_unsafe_topic_text_is_global_hard_failure_not_repaired_by_deleting_catal
 
 def test_catalog_label_cannot_borrow_an_unrelated_formal_direction_investment_permission():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [
         {**topic(1, "ROBOT"), "key": raw["valueDirections"][0]["key"]}
     ]
@@ -231,7 +232,7 @@ def test_backlog_contains_deferred_scopes_and_does_not_repeat_completed_review_t
     packet["discoveryUniverse"] += [
         {"discoverySector": industry} for industry in ADDITIONAL_CATALOG_INDUSTRIES
     ]
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
@@ -243,7 +244,7 @@ def test_backlog_contains_deferred_scopes_and_does_not_repeat_completed_review_t
 
 def test_64_catalog_entries_and_eight_distinct_formal_keys_keep_all_72_registry_items():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [topic(i) for i in range(64)]
     raw["valueDirections"] = [
         {**deepcopy(raw["valueDirections"][0]), "key": f"formal-{i}"} for i in range(8)
@@ -259,7 +260,7 @@ def test_high_dependency_allows_strict_historical_observation_but_never_auto_rea
     from tests.unit.test_research_repair import event
 
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     orphan = deepcopy(raw["valueDirections"][0])
     orphan.update(
         key="orphan-watch",
@@ -280,7 +281,7 @@ def test_high_dependency_allows_strict_historical_observation_but_never_auto_rea
 
 def test_unreviewed_systemic_topic_keeps_the_fact_but_blocks_automatic_formal_publication():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [
         {**topic(1), "thesis": "系统性风险及金融危机影响尚待进一步核实。"}
     ]
@@ -293,7 +294,7 @@ def test_unreviewed_systemic_topic_keeps_the_fact_but_blocks_automatic_formal_pu
 
 def test_new_explicit_scope_gets_five_real_search_terms_without_inventing_an_alias():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [topic(1, "硅光互连")]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -323,7 +324,7 @@ def test_industrial_metals_is_related_not_a_strict_broader_nonferrous_alias():
 
 def test_client_rule_version_cannot_impersonate_a_validator_fingerprint():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     with pytest.raises(ValueError, match="rule version"):
         evaluate_with_execution(
             raw,
@@ -339,7 +340,7 @@ def test_deferred_dynamic_scope_next_batch_uses_explicit_chinese_search_term():
     packet, _, _ = case()
     proposed = topics().match_topic(topic(1, "硅光互连"))["proposedScopes"][0]
     packet["pendingTopicScopes"] = [proposed]
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     manifest = frozen["researchDiscovery"]["auditManifest"]
     assert proposed["industryId"] in manifest["selectedScopes"]
     assert all(
@@ -351,7 +352,7 @@ def test_deferred_dynamic_scope_next_batch_uses_explicit_chinese_search_term():
 
 def test_frozen_manifest_cannot_be_reused_with_a_different_packet_clock():
     packet, _, _ = case()
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     frozen["asOf"] = "2026-10-16T10:00:00+08:00"
     with pytest.raises(ValueError, match="manifest"):
         topics().freeze_discovery_packet(frozen, NOW)
@@ -361,7 +362,7 @@ def test_v2_model_cannot_exchange_frozen_scope_budget_for_an_unallocated_review(
     from backend.macro.daily_research import ResearchValidationError, validate_report
 
     packet, raw, checks = case()
-    frozen = topics().freeze_discovery_packet(packet, NOW)
+    frozen = freeze_v2(packet, NOW)
     raw["industryCycleReviews"].append(
         {**deepcopy(raw["industryCycleReviews"][-1]), "industry": "BROKER"}
     )
@@ -372,7 +373,7 @@ def test_v2_model_cannot_exchange_frozen_scope_budget_for_an_unallocated_review(
 
 def test_invalid_direction_schema_with_reliable_key_keeps_independent_formal_work():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["narrativeDirectionIds"] = {"summary": [], "macroCycle": [], "coverage": []}
     invalid = {
         **deepcopy(raw["valueDirections"][0]),
@@ -394,7 +395,7 @@ def test_invalid_direction_schema_with_reliable_key_keeps_independent_formal_wor
 
 def test_scalar_topic_is_quarantined_without_poisoning_independent_source_proofs():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [42]
     result = evaluate_with_execution(
         raw, packet, checks, research_id=RUN, validated_at=NOW
@@ -411,7 +412,7 @@ def test_new_scope_with_checked_same_scope_review_can_close_as_observation_only(
     packet, raw, checks = case()
     proposed = topics().match_topic(topic(1, "硅光互连"))["proposedScopes"][0]
     packet["pendingTopicScopes"] = [proposed]
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     event(raw, checks, summary="近期硅光互连行业融资规模下降30%。")
     raw["sources"][-1]["title"] = "硅光互连行业融资观察"
     checks["s3"]["title"] = raw["sources"][-1]["title"]
@@ -434,7 +435,7 @@ def test_new_scope_with_checked_same_scope_review_can_close_as_observation_only(
 
 def test_systemic_source_signal_blocks_auto_without_promoting_a_confirmed_fact():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["sources"][1]["quote"] = "全行业信用违约影响尚待核实。"
     raw["topicCatalog"] = [topic(1, "新型服务行业")]
     result = evaluate_with_execution(
@@ -446,7 +447,7 @@ def test_systemic_source_signal_blocks_auto_without_promoting_a_confirmed_fact()
 
 def test_unresolved_negative_source_related_to_retained_scope_blocks_auto():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [
         {
             **topic(1, "新型磁材服务"),
@@ -471,7 +472,7 @@ def test_registry_overflow_is_explicit_and_includes_task_storage_budget():
     import json
 
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     raw["topicCatalog"] = [
         {
             **topic(index),
@@ -504,7 +505,7 @@ def test_unverified_review_rows_do_not_close_scope_or_authorize_formal_funds():
         "retrievedAt": NOW.isoformat(),
         "contentHash": "b" * 64,
     }
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     for review in raw["industryCycleReviews"]:
         for check in review["riskChecks"]:
             check.update(status="UNVERIFIED", sourceIds=[])
@@ -535,7 +536,7 @@ def test_only_unverified_risk_category_remains_in_scope_tasks():
         "retrievedAt": NOW.isoformat(),
         "contentHash": "b" * 64,
     }
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     review = next(
         row for row in raw["industryCycleReviews"] if row["industry"] == "NONFERROUS"
     )
@@ -556,7 +557,7 @@ def test_only_unverified_risk_category_remains_in_scope_tasks():
 
 def test_oversize_item_preserves_dynamic_search_terms_in_global_tasks():
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     claims = [f"第{index}产业" + "独立技术范围" * 5 for index in range(8)]
     raw["topicCatalog"] = [{**topic(1), "industryClaims": claims}]
     result = evaluate_with_execution(
@@ -577,7 +578,7 @@ def test_oversize_item_preserves_dynamic_search_terms_in_global_tasks():
 @pytest.mark.parametrize("field", ["malformed-key", "unknowns", "pendingTasks"])
 def test_original_catalog_systemic_signal_blocks_auto_before_item_isolation(field):
     packet, raw, checks = case()
-    packet = topics().freeze_discovery_packet(packet, NOW)
+    packet = freeze_v2(packet, NOW)
     proposal = topic(1, "新型服务产业")
     signal = "全行业信用违约影响尚待核实。"
     if field == "malformed-key":

@@ -84,7 +84,7 @@ async def test_complete_original_d781_preserves_every_researched_fund_price_and_
         ExportConnection(), UUID(RUN), now=at + timedelta(days=1)
     )
     assert result["readOnly"] is True and result["investmentEligible"] is False
-    assert result["state"] == "COMPLETE" and result["sourceDigests"] == HASHES
+    assert result["state"] == "PARTIAL" and result["sourceDigests"] == HASHES
     assert datetime.fromisoformat(result["validatedAt"]) == at
     assert (
         datetime.fromisoformat(
@@ -92,14 +92,27 @@ async def test_complete_original_d781_preserves_every_researched_fund_price_and_
         )
         == at
     )
-    assert {fund["fundCode"] for fund in result["funds"]} == {
+    assert {fund["fundCode"] for fund in result["funds"]} >= {
         "018344",
         "013477",
         "011035",
+        "008298",
+        "007466",
+        "161129",
     }
-    assert len(result["funds"]) == 3
+    assert (
+        len(result["funds"])
+        == len({fund["fundCode"] for fund in result["funds"]})
+        == 43
+    )
+    assert sum(fund["analysis"] is not None for fund in result["funds"]) == 41
     for fund in result["funds"]:
-        assert fund["investmentEligible"] is False and not fund["missingReasons"]
+        assert fund["investmentEligible"] is False
+        if fund["fundCode"] in {"024688", "028764"}:
+            assert fund["anchor"] is None and fund["analysis"] is None
+            assert "FROZEN_ANCHOR_MISSING" in fund["missingReasons"]
+            continue
+        assert not fund["missingReasons"]
         anchor = next(
             row
             for row in frozen.packet["discoveryActionableZones"]
@@ -112,7 +125,9 @@ async def test_complete_original_d781_preserves_every_researched_fund_price_and_
         )
         assert fund["anchor"]["currentPrice"] == anchor["currentPrice"]
         assert fund["anchor"]["orderPriceAvailable"] is False
-        assert len(fund["analysis"]["points"]) == len(series["points"]) == 550
+        assert len(fund["analysis"]["points"]) == len(series["points"])
+        if fund["fundCode"] in {"018344", "013477", "011035"}:
+            assert len(series["points"]) == 550
         assert [
             (row["date"], Decimal(str(row["close"])))
             for row in fund["analysis"]["points"]

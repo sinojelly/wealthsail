@@ -14,17 +14,17 @@ from backend.macro.industry_contract import (
     STANDARD_INDUSTRY_CODES,
 )
 
-DISCOVERY_VERSION = "research-discovery-v2"
+DISCOVERY_VERSION = "research-discovery-v3"
 REGISTRY_VERSION = "research-topics-v2"
 MAX_REGISTRY_ITEMS = 72
 INDUSTRY_REGISTRY_VERSION = "industry-registry-v1"
 TOPIC_MATCH_VERSION = "topic-identity-v2"
-ALLOCATION_VERSION = "industry-allocation-v2"
+ALLOCATION_VERSION = "industry-allocation-v3"
 BUDGET = {
     "maxTopics": 64,
-    "maxFormalDirections": 8,
-    "maxScopes": 10,
-    "maxQueries": 50,
+    "maxFormalDirections": 10,
+    "maxScopes": 5,
+    "maxQueries": 25,
     "maxSources": 24,
     "maxModelCalls": 1,
     "maxInputBytes": 4 * 1024 * 1024,
@@ -37,6 +37,7 @@ _DISCOVERY_CONTRACTS = {
     "research-discovery-v2": {
         "manifestVersion": "research-audit-manifest-v1",
         "registryVersion": "industry-registry-v1",
+        "allocationVersions": {None, "industry-allocation-v1", "industry-allocation-v2"},
         "budgetProfiles": (
             {
                 "maxTopics": 64,
@@ -67,6 +68,21 @@ _DISCOVERY_CONTRACTS = {
             }
         ),
     },
+    "research-discovery-v3": {
+        "manifestVersion": "research-audit-manifest-v1",
+        "registryVersion": "industry-registry-v1",
+        "allocationVersions": {"industry-allocation-v3"},
+        "budgetProfiles": ({
+            "maxTopics": 64, "maxFormalDirections": 10, "maxScopes": 5,
+            "maxQueries": 25, "maxSources": 24, "maxModelCalls": 1,
+            "maxInputBytes": 4194304, "maxOutputBytes": 2097152,
+            "maxExecutionSeconds": 1200,
+        },),
+        "riskKinds": frozenset({
+            "FINANCING_COOLING", "LAYOFFS_CLOSURES", "ORDER_CUTS",
+            "OVERCAPACITY_PRICE_WAR", "PRODUCTION_DELAY",
+        }),
+    },
 }
 
 
@@ -92,7 +108,7 @@ def _discovery_contract(packet):
     manifest = discovery.get("auditManifest")
     for field, supported in (
         ("topicMatchVersion", {None, "topic-identity-v1", TOPIC_MATCH_VERSION}),
-        ("allocationVersion", {None, "industry-allocation-v1", ALLOCATION_VERSION}),
+        ("allocationVersion", contract["allocationVersions"]),
     ):
         version = discovery.get(field)
         frozen_version = manifest.get(field) if isinstance(manifest, dict) else None
@@ -215,10 +231,19 @@ def digest(value):
 
 
 def is_v2(packet):
-    return (
-        _discovery_contract(packet) is not None
-        and packet["researchDiscovery"]["version"] == "research-discovery-v2"
-    )
+    """Compatibility name for the frozen discovery core introduced in v2."""
+    return _discovery_contract(packet) is not None
+
+
+def is_targeted_research(packet):
+    manifest = frozen_manifest(packet)
+    return manifest is not None and packet["researchDiscovery"]["version"] == "research-discovery-v3"
+
+
+def direction_limit(packet):
+    """An old frozen budget never follows today's wider observation limit."""
+    manifest = frozen_manifest(packet)
+    return manifest["budget"]["maxFormalDirections"] if manifest is not None else 8
 
 
 def topic_match_version(packet):
@@ -421,6 +446,11 @@ def frozen_manifest(packet):
     contract = manifest.get("candidateContract") or {}
     if contract.get("allocationVersion") != manifest.get("allocationVersion"):
         raise FrozenDiscoveryCompatibilityError()
+    if discovery["version"] == "research-discovery-v3" and (
+        contract.get("maximumCandidates") != budget["maxScopes"]
+        or contract.get("observationScopes") != manifest.get("deferredScopes")
+    ):
+        raise ValueError("inconsistent targeted discovery policy")
     if (
         not same_clock
         or discovery.get("budget") != budget
@@ -519,6 +549,23 @@ def topic_tasks(match, manifest):
         for industry in match["industryIds"]
     ]
     required += match.get("proposedScopes", [])
+    if manifest.get("allocationVersion") == "industry-allocation-v3":
+        # A display task must keep the exact frozen query and identity. Only
+        # status/reason change; observations schedule no additional searches.
+        scopes = {scope["industryId"] for scope in required} & selected
+        return [
+            {
+                **deepcopy(task),
+                "status": "PLANNED_DEFERRED"
+                if task["industryId"].startswith("TOPIC_SCOPE:")
+                else "PENDING_REVIEW",
+                "reasonCode": "INDUSTRY_IDENTITY_PENDING"
+                if task["industryId"].startswith("TOPIC_SCOPE:")
+                else "AUDIT_INCOMPLETE",
+            }
+            for task in manifest["tasks"]
+            if task["industryId"] in scopes
+        ]
     return [
         make_task(
             scope["industryId"],

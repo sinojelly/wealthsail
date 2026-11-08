@@ -213,6 +213,7 @@ async def _histories(conn, frozen, record):
 
 def _inventory(raw, packet):
     from backend.macro.industry_contract import same_fund_identity
+    from backend.macro.research_mentions import extract_mentioned_funds
 
     universe = [
         row for row in packet.get("discoveryUniverse", []) if isinstance(row, dict)
@@ -224,7 +225,7 @@ def _inventory(raw, packet):
     ]
     funds = []
 
-    def add(proposal, direction_key):
+    def add(proposal, direction_key, *, mention_location=None):
         if not isinstance(proposal, dict):
             return
         kind, subject, code = (
@@ -264,11 +265,16 @@ def _inventory(raw, packet):
                 **identity,
                 "directionKeys": [],
                 "originalProposals": [],
+                "mentionLocations": [],
                 "_identityConflict": len(codes) > 1,
             }
             funds.append(previous)
         if direction_key and direction_key not in previous["directionKeys"]:
             previous["directionKeys"].append(direction_key)
+        if mention_location is not None:
+            if mention_location not in previous["mentionLocations"]:
+                previous["mentionLocations"].append(mention_location)
+            return
         reference = {"directionKey": direction_key}
         for field in ("track", "note"):
             if isinstance(proposal.get(field), str):
@@ -306,12 +312,28 @@ def _inventory(raw, packet):
                     else None,
                 )
     walk({key: row for key, row in raw.items() if key != "valueDirections"})
+    for mention in extract_mentioned_funds(raw, packet):
+        for direction_key in mention["directionKeys"] or [None]:
+            for location in mention["mentionLocations"]:
+                add(mention, direction_key, mention_location=location)
     return funds, anchors, universe
 
 
 def _analysis(history, anchor, at):
     from backend.funds.nav_history import full_history_proven, valid_points
     from backend.investment.theme_graph import _disclosed_nav_quality
+    from backend.investment.live_fund_plans import _safe_history
+
+    if (
+        anchor.get("priceBasis") != "UNIT_NAV"
+        or anchor.get("market") not in (None, "FUND_CN")
+        or anchor.get("currency", "CNY") != "CNY"
+        or not isinstance(anchor.get("unit"), str)
+        or not isinstance(history.get("unit", "CNY"), str)
+        or not _safe_history(history)
+        or not _safe_history({"unit": anchor["unit"], "label": anchor.get("label")})
+    ):
+        return None
 
     points = valid_points(history, anchor.get("fundCode"), at)
     if not points:
@@ -430,6 +452,7 @@ def _fund_views(raw, frozen, report, histories):
                 or identity["subjectId"],
                 "directionKeys": identity["directionKeys"],
                 "originalProposals": identity["originalProposals"],
+                "mentionLocations": identity["mentionLocations"],
                 "investmentEligible": False,
                 "formalEligibilityReasons": reasons,
                 "anchor": anchor,
@@ -458,6 +481,7 @@ def _report_view(value):
             "industryResearchCoverage",
             "topicCatalog",
             "topicRegistry",
+            "mentionedFunds",
         }
         report = {key: _readonly(row) for key, row in formal.items() if key in allowed}
     else:

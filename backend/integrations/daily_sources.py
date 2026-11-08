@@ -114,7 +114,7 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         allocation_version is not None
         and (
             not isinstance(allocation_version, str)
-            or allocation_version not in {"industry-allocation-v1", ALLOCATION_VERSION}
+            or allocation_version not in {"industry-allocation-v1", "industry-allocation-v2", ALLOCATION_VERSION}
         )
     ):
         raise FrozenDiscoveryCompatibilityError()
@@ -130,6 +130,8 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         )
 
         return industry_cycle_research_tasks_legacy(packet, now)
+    targeted = allocation_version == "industry-allocation-v3"
+    scope_limit = 5 if targeted else MAX_INDUSTRY_CYCLE_CANDIDATES
     from backend.macro.industry_cycle import RISK_CHECKS
     from backend.macro.industry_contract import (
         NEWS_RELATED_INDUSTRIES,
@@ -386,10 +388,20 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
                 if not auditable_product_scope(sector):
                     continue
                 add(sector)
-                quantitative[sector] = min(quantitative.get(sector, priority), priority)
+                if not targeted:
+                    quantitative[sector] = min(quantitative.get(sector, priority), priority)
+            eligible_signals = [
+                signal for signal in signals
+                if not any(
+                    signal.get(field) is True
+                    for field in ("entryBlocked", "subscriptionRestricted", "inSellZone")
+                )
+                and signal.get("preferredEntryEligible") is not False
+            ]
             if (
                 exact_sectors
                 and row.get("historyQuality") == "READY"
+                and (not targeted or row.get("preferredEntryEligible") is not False)
                 and signals
                 and not any(
                     row.get(field) is True
@@ -399,19 +411,41 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
                         "inSellZone",
                     )
                 )
-                and any(
+                and (bool(eligible_signals) if targeted else any(
                     not any(
                         signal.get(field) is True
                         for field in ("entryBlocked", "inSellZone")
                     )
                     for signal in signals
-                )
+                ))
             ):
-                eligible_quantitative.update(
+                eligible_sectors = {
                     sector
                     for sector in exact_sectors
                     if auditable_product_scope(sector)
-                )
+                }
+                eligible_quantitative.update(eligible_sectors)
+                if targeted:
+                    # Bind rank to one usable track of one usable fund before
+                    # taking a sector minimum; bad sibling rows/tracks cannot
+                    # lend their candidate state or proximity to a good fund.
+                    priorities = []
+                    for signal in eligible_signals:
+                        value = signal.get("distanceToEntryPct")
+                        try:
+                            distance = float(value) if not isinstance(value, bool) else math.inf
+                            if not math.isfinite(distance) or distance < 0:
+                                distance = math.inf
+                        except (ValueError, TypeError):
+                            distance = math.inf
+                        priorities.append((
+                            signal.get("entryReady") is not True,
+                            not (signal.get("candidate") is True or signal.get("triggerState") == "CANDIDATE"),
+                            distance,
+                        ))
+                    usable_priority = min(priorities)
+                    for sector in eligible_sectors:
+                        quantitative[sector] = min(quantitative.get(sector, usable_priority), usable_priority)
     for row in packet.get("discoveryUniverse", []):
         if isinstance(row, dict):
             sector = row.get("discoverySector") or row.get("sector")
@@ -460,17 +494,17 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         for value in pair
         if value is not None
     ]
-    selected_order = priority_order[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    selected_order = priority_order[:scope_limit]
     historical_count = min(
-        len(historical), MAX_INDUSTRY_CYCLE_CANDIDATES - len(selected_order)
+        len(historical), scope_limit - len(selected_order)
     )
     selected_order += historical[:historical_count]
-    remaining = MAX_INDUSTRY_CYCLE_CANDIDATES - len(selected_order)
-    rotate_count = min(2, len(rotation), max(0, remaining - bool(quant)))
-    quant_count = min(6, len(quant), remaining - rotate_count)
+    remaining = scope_limit - len(selected_order)
+    rotate_count = 0 if targeted else min(2, len(rotation), max(0, remaining - bool(quant)))
+    quant_count = min(scope_limit if targeted else 6, len(quant), remaining - rotate_count)
     selected_order += quant[:quant_count] + rotation[:rotate_count]
     leftovers = (
-        priority_order[MAX_INDUSTRY_CYCLE_CANDIDATES:]
+        priority_order[scope_limit:]
         + historical[historical_count:]
         + quant[quant_count:]
         + rotation[rotate_count:]
@@ -483,20 +517,45 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
             ),
         )
     )
+    actionable_quantitative = []
+    if targeted:
+        actionable_quantitative = sorted(
+            (
+                sector for sector in eligible_quantitative & set(order)
+                if quantitative.get(sector, (True, True, math.inf)) != (True, True, math.inf)
+            ),
+            key=lambda sector: (*quantitative[sector], order[sector]),
+        )
+        # Spend the smaller new-policy budget on actual holdings, current fund
+        # entry/proximity and unresolved risks before broad positive news.
+        selected_order = [
+            *[sector for sector in holding_order if sector in order],
+            *actionable_quantitative,
+            *[sector for sector in risk_order if sector in order],
+            *[sector for sector in candidates if sector in opportunities],
+            *selected_order,
+        ]
     candidates = list(dict.fromkeys([*selected_order, *leftovers]))
     all_industries = list(candidates)
-    omitted_industries = candidates[MAX_INDUSTRY_CYCLE_CANDIDATES:]
-    candidates = candidates[:MAX_INDUSTRY_CYCLE_CANDIDATES]
+    omitted_industries = candidates[scope_limit:]
+    candidates = candidates[:scope_limit]
     selected = set(candidates)
     return {
-        "allocationVersion": ALLOCATION_VERSION,
+        "allocationVersion": allocation_version,
+        **({"observationScopes": omitted_industries} if targeted else {}),
         "excludedScopes": list(excluded.values()),
         "excludedScopeCount": len(excluded),
         "selectionReasons": [
             {
                 "industryId": industry,
                 "selected": industry in selected,
-                "reasonCode": "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
+                "reasonCode": "HOLDING_INDUSTRY_PRIORITY"
+                if targeted and industry in holdings
+                else "QUANTITATIVE_FUND_PRIORITY"
+                if targeted and industry in actionable_quantitative
+                else "HISTORICAL_RISK_PRIORITY"
+                if targeted and industry in previous_risks
+                else "CURRENT_POSITIVE_OPPORTUNITY_PRIORITY"
                 if industry in opportunities
                 else "HOLDING_INDUSTRY_PRIORITY"
                 if industry in holdings
@@ -518,7 +577,7 @@ def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
         "execution": "PUBLIC_WEB_SEARCH",
         "asOf": now.isoformat(),
         "lookbackDays": 90,
-        "maximumCandidates": MAX_INDUSTRY_CYCLE_CANDIDATES,
+        "maximumCandidates": scope_limit,
         "omittedCandidateCount": len(omitted_industries),
         "omittedRiskCandidateCount": len(previous_risks - selected),
         "omittedIndustries": omitted_industries,

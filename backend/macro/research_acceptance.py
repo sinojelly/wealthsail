@@ -68,7 +68,7 @@ MAX_RECEIPT_BYTES = 768 * 1024
 COMPONENTS = {
     "sources": ("SOURCE", strict._Source, 24),
     "industryCycleReviews": ("INDUSTRY_REVIEW", IndustryCycleReview, 64),
-    "valueDirections": ("VALUE_DIRECTION", ValueDirectionProposal, 8),
+    "valueDirections": ("VALUE_DIRECTION", ValueDirectionProposal, 10),
     "events": ("EVENT", strict._Event, 12),
     "upcoming": ("UPCOMING", strict._Upcoming, 12),
 }
@@ -316,6 +316,8 @@ def _projection(report):
             "publishedAt",
             "retrievedAt",
             "verification",
+            "frozenTitleMatched",
+            "frozenQuoteMatched",
         ),
         "industryCycleReviews": (
             "industry",
@@ -365,6 +367,9 @@ def _projection(report):
             "watchFor",
             "unknowns",
             "factVerification",
+            "category",
+            "sourcePublishedAt",
+            "sourcePublicationBasis",
         ),
         "upcoming": (
             "id",
@@ -381,6 +386,9 @@ def _projection(report):
             "candidateConceptLabels",
             "referenceResolution",
             "watchFor",
+            "category",
+            "sourcePublishedAt",
+            "sourcePublicationBasis",
         ),
     }
     for key, names in fields.items():
@@ -560,8 +568,12 @@ def validate_report_outcome(
             )
         )
 
+    from backend.macro.research_topics import direction_limit
+
     if set(parsed) - set(strict._Report.model_fields) or any(
-        not isinstance(parsed.get(key, []), list) or len(parsed.get(key, [])) > limit
+        not isinstance(parsed.get(key, []), list) or len(parsed.get(key, [])) > (
+            direction_limit(packet) if key == "valueDirections" else limit
+        )
         for key, (_, _, limit) in COMPONENTS.items()
     ):
         return rejected_outcome(

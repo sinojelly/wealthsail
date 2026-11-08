@@ -11,7 +11,7 @@ from tests.unit.test_industrial_metals_research_regression import case
 
 def test_missing_nonferrous_audit_preserves_observation_without_trade_permission():
     from backend.macro.research_batch import evaluate_research_batch
-    from backend.macro.research_topics import freeze_discovery_packet
+    from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
     packet = freeze_discovery_packet(packet, NOW)
@@ -71,7 +71,7 @@ def test_missing_nonferrous_audit_preserves_observation_without_trade_permission
 
 def test_unrelated_sector_and_composite_never_replace_product_audit():
     from backend.macro.research_batch import evaluate_research_batch
-    from backend.macro.research_topics import freeze_discovery_packet
+    from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
     packet = freeze_discovery_packet(packet, NOW)
@@ -106,7 +106,7 @@ def test_unrelated_sector_and_composite_never_replace_product_audit():
 
 def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direction():
     from backend.macro.research_batch import evaluate_research_batch
-    from backend.macro.research_topics import freeze_discovery_packet
+    from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
     raw["industryCycleReviews"].append(
@@ -149,7 +149,7 @@ def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direct
 
 def test_unhashable_topic_key_is_one_quarantined_item_not_a_system_failure():
     from backend.macro.research_batch import evaluate_research_batch
-    from backend.macro.research_topics import freeze_discovery_packet
+    from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
     packet = freeze_discovery_packet(packet, NOW)

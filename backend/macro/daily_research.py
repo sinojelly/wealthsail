@@ -37,10 +37,11 @@ from backend.macro.value_directions import (
     ValueDirectionProposal,
     validate_value_directions,
 )
-from backend.macro.research_topics import TopicProposal, is_v2
+from backend.macro.research_topics import TopicProposal, direction_limit, is_v2
+from backend.macro.event_metadata import event_metadata, source_metadata
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-input-v22"
+PROMPT_VERSION = "daily-research-input-v23"
 MAX_REPORT_SOURCES = 24
 
 
@@ -1878,6 +1879,10 @@ def _validate_report_core(
             "SCHEMA_VALIDATION_FAILED",
             "research report must be an object",
         )
+    if isinstance(raw.get("valueDirections"), list) and len(raw["valueDirections"]) > direction_limit(packet):
+        raise ResearchValidationError(
+            "SCHEMA_VALIDATION_FAILED", "value directions exceed the frozen direction budget"
+        )
     if "themeActionableZones" not in packet:
         # Compatibility for pre-Phase2 packets only, never a new model request.
         raw = {"macroCycle": "宏观周期证据待核查。", "actionablePlans": [], **raw}
@@ -1967,6 +1972,7 @@ def _validate_report_core(
             if checked.get("verification") == "UNAVAILABLE"
             else "UNVERIFIED",
             "contentHash": checked.get("contentHash") if good else None,
+            **source_metadata(row, packet, completed_at),
         }
         if identity not in sources or proof["verification"] == "SOURCE_CHECKED":
             sources[identity] = proof
@@ -2239,6 +2245,10 @@ def _validate_report_core(
                 old["referenceResolution"], item["referenceResolution"]
             )
         upcoming[identity] = item
+    for observation in [*events.values(), *upcoming.values()]:
+        observation.update(event_metadata(
+            observation, [sources[ref] for ref in observation["sourceIds"]], completed_at,
+        ))
     energy = {
         row["code"]: row
         for row in packet.get("energy", [])
@@ -2255,6 +2265,7 @@ def _validate_report_core(
 
     scan = public_quantitative_scan(packet.get("quantitativeScan"), completed_at)
     from backend.investment.opportunity_scoring import rank_report
+    from backend.macro.research_mentions import extract_mentioned_funds
 
     return rank_report(
         apply_entry_guards(
@@ -2268,6 +2279,7 @@ def _validate_report_core(
                 "upcoming": sorted(upcoming.values(), key=lambda r: r["id"]),
                 "energy": [energy[code] for code in dict.fromkeys(report["energy"])],
                 "valueDirections": value_directions,
+                "mentionedFunds": extract_mentioned_funds(report, packet),
                 "industryCycleReviews": industry_reviews,
                 "industryResearchCoverage": {
                     "maximumCandidates": industry_tasks["maximumCandidates"],
@@ -2282,7 +2294,7 @@ def _validate_report_core(
                     if industry_tasks["omittedCandidateCount"]
                     or (
                         industry_tasks.get("allocationVersion")
-                        == "industry-allocation-v2"
+                        in {"industry-allocation-v2", "industry-allocation-v3"}
                         and (
                             industry_tasks["omittedRiskCandidateCount"]
                             or industry_tasks.get("excludedScopeCount", 0)

@@ -99,7 +99,8 @@ def test_more_than_ten_today_opportunities_keep_overflow_and_holdings_as_deferre
 def test_frozen_manifest_keeps_its_original_selection_after_input_priority_changes():
     frozen = freeze_discovery_packet(packet(), NOW)
     original = deepcopy(frozen_manifest(frozen))
-    assert original["selectedScopes"][:2] == ["NONFERROUS", "DEFENCE"]
+    assert original["allocationVersion"] == "industry-allocation-v3"
+    assert original["selectedScopes"][:2] == ["DEFENCE", "ROBOT"]
     frozen["holdingIndustryIds"] = ["COMMUNICATION"]
     frozen["alphaPublic"] = {}
     result = allocate(frozen)

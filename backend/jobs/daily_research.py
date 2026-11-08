@@ -893,9 +893,9 @@ async def _execute_daily_research(
         packet["inputQuality"] = source_quality(manual_bundle, local(now_shanghai()))
         packet["sourceBatchId"] = str(source_batch_id)
     prompt = build_prompt(packet)
-    if (packet.get("researchDiscovery") or {}).get(
-        "version"
-    ) == "research-discovery-v2":
+    from backend.macro.research_topics import is_v2
+
+    if is_v2(packet):
         from backend.macro.research_topics import BUDGET
 
         if len(prompt.encode("utf-8")) > BUDGET["maxInputBytes"]:
@@ -1185,9 +1185,7 @@ async def _execute_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "REPORT_VALIDATION"
-        if (packet.get("researchDiscovery") or {}).get(
-            "version"
-        ) == "research-discovery-v2":
+        if is_v2(packet):
             from backend.macro.research_batch import evaluate_research_batch
 
             batch = evaluate_research_batch(
@@ -1200,7 +1198,7 @@ async def _execute_daily_research(
             )
             if payload is not None:
                 payload["researchDiscovery"] = {
-                    "version": "research-discovery-v2",
+                    "version": packet["researchDiscovery"]["version"],
                     "coverage": topic_registry["coverage"],
                     "registryRunId": str(run_id),
                 }

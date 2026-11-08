@@ -8,6 +8,7 @@ import pytest
 
 from backend.macro import research_topics as topics
 from backend.macro.daily_research import build_prompt
+from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet as freeze_v2
 
 NOW = datetime(2026, 11, 6, 8, tzinfo=ZoneInfo("Asia/Shanghai"))
 V2 = "topic-identity-v2"
@@ -125,7 +126,7 @@ def test_related_code_case_normalization_still_cannot_establish_topic_identity()
 
 
 def test_future_freeze_versions_both_match_and_allocation_in_hashed_manifest():
-    frozen = topics.freeze_discovery_packet({"asOf": NOW.isoformat()}, NOW)
+    frozen = freeze_v2({"asOf": NOW.isoformat()}, NOW)
     manifest = frozen["researchDiscovery"]["auditManifest"]
     assert topics.topic_match_version(frozen) == V2
     assert (
@@ -143,7 +144,7 @@ def test_future_freeze_versions_both_match_and_allocation_in_hashed_manifest():
 
 
 def test_old_frozen_missing_policy_fields_replays_unchanged_with_old_matching():
-    frozen = topics.freeze_discovery_packet({"asOf": NOW.isoformat()}, NOW)
+    frozen = freeze_v2({"asOf": NOW.isoformat()}, NOW)
     discovery = frozen["researchDiscovery"]
     manifest = discovery["auditManifest"]
     for obj in (discovery, manifest, manifest["candidateContract"]):
@@ -164,7 +165,7 @@ def test_old_frozen_missing_policy_fields_replays_unchanged_with_old_matching():
 
 @pytest.mark.parametrize("field", ["topicMatchVersion", "allocationVersion"])
 def test_unknown_frozen_policy_version_is_rejected(field):
-    frozen = topics.freeze_discovery_packet({"asOf": NOW.isoformat()}, NOW)
+    frozen = freeze_v2({"asOf": NOW.isoformat()}, NOW)
     frozen["researchDiscovery"][field] = "future-unknown"
     with pytest.raises(topics.FrozenDiscoveryCompatibilityError):
         topics.freeze_discovery_packet(frozen, NOW)

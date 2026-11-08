@@ -22,7 +22,7 @@ from backend.macro.price_revision import (
     same_coordinate,
 )
 
-MAX_VALUE_DIRECTIONS = 8
+MAX_VALUE_DIRECTIONS = 10
 
 
 class DirectionEvidence(BaseModel):
@@ -93,8 +93,10 @@ def downgrade_invalid_plan_shapes(raw, packet):
     Only errors inside fund/quantitative proposals are recoverable here. The
     normal report schema still checks all narrative, source and identity fields.
     """
+    from backend.macro.research_topics import direction_limit
+
     rows = raw.get("valueDirections") if isinstance(raw, dict) else None
-    if not isinstance(rows, list) or len(rows) > MAX_VALUE_DIRECTIONS:
+    if not isinstance(rows, list) or len(rows) > direction_limit(packet):
         return raw, set()
     corrected, downgraded = [], set()
     reviews = {
@@ -476,6 +478,13 @@ def _validate_value_directions(
     _diagnostic_index=None,
 ):
     from backend.macro.daily_research import ResearchValidationError, _TZ
+    from backend.macro.research_topics import direction_limit, frozen_manifest, is_targeted_research
+
+    targeted = is_targeted_research(packet)
+    manifest = frozen_manifest(packet) if targeted else None
+    observation_scopes = set(manifest["selectedScopes"] + manifest["deferredScopes"]) if manifest else set()
+    if targeted and audit_completed_scopes is None:
+        audit_completed_scopes = set()
 
     anchors = {}
     for plan in packet.get("discoveryActionableZones", []):
@@ -499,7 +508,7 @@ def _validate_value_directions(
     reviews = {row["industry"]: row for row in industry_reviews or []}
     rules = {rule["key"]: rule for rule in packet.get("strategyMemoryRules", [])}
     macro_codes, seen, output = _macro_codes(packet, now), set(), []
-    if len(proposals) > MAX_VALUE_DIRECTIONS:
+    if len(proposals) > direction_limit(packet):
         raise ResearchValidationError(
             "DIRECTION_VALIDATION_FAILED", "too many value directions"
         )
@@ -525,7 +534,7 @@ def _validate_value_directions(
         refs = sorted({source_aliases[ref] for ref in direction["sourceIds"]})
         review_ids = set(direction["reviewIndustryIds"])
         required = bool((packet.get("industryCycleResearch") or {}).get("required"))
-        if review_ids - reviews.keys():
+        if review_ids - reviews.keys() - observation_scopes:
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "unknown declared direction industry review",
@@ -544,7 +553,7 @@ def _validate_value_directions(
                 )
             plan_sectors.update(industries)
         missing = plan_sectors - reviews.keys()
-        if missing and (required or reviews):
+        if missing and (required or reviews) and not (targeted and missing <= observation_scopes):
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "server fund sectors require their own industry reviews",
@@ -552,6 +561,8 @@ def _validate_value_directions(
                 missing_industry_codes=sorted(missing & STANDARD_INDUSTRY_CODES),
             )
         eligibility_reasons = []
+        if targeted and not (review_ids | plan_sectors):
+            eligibility_reasons.append("INDUSTRY_IDENTITY_PENDING")
         if (
             audit_completed_scopes is not None
             and (review_ids | plan_sectors) - audit_completed_scopes
@@ -570,6 +581,10 @@ def _validate_value_directions(
                 plans=[],
                 quantitativeFundCodes=[],
             )
+        if targeted:
+            # Product scope remains attached after stripping an unaudited plan.
+            # A deferred observation does not invent a five-kind audit record.
+            review_ids.update(plan_sectors)
         cycle_proposal = direction.get("industryCycle")
         from backend.macro.research_topics import is_v2
 
@@ -594,7 +609,7 @@ def _validate_value_directions(
                     # Prefer structured links and server product sectors.
                     expected_industries=sorted(review_ids | plan_sectors)
                     or [direction["title"]],
-                    require_checks=required,
+                    require_checks=required and not (targeted and observation_only),
                 )
         except ValidationError as exc:
             raise ResearchValidationError("SCHEMA_VALIDATION_FAILED", str(exc)) from exc
@@ -612,7 +627,7 @@ def _validate_value_directions(
                 "industry-cycle sources must belong to the direction",
                 rule_id="INDUSTRY_CYCLE_SOURCE_INVALID",
             )
-        if (packet.get("industryCycleResearch") or {}).get("required") and not reviews:
+        if (packet.get("industryCycleResearch") or {}).get("required") and not reviews and not (targeted and observation_only):
             raise ResearchValidationError(
                 "DIRECTION_VALIDATION_FAILED",
                 "direction requires an explicit industry review link",
@@ -622,13 +637,13 @@ def _validate_value_directions(
             review_ids.update(plan_sectors)
             if (packet.get("industryCycleResearch") or {}).get(
                 "required"
-            ) and not review_ids:
+            ) and not review_ids and not (targeted and observation_only):
                 raise ResearchValidationError(
                     "DIRECTION_VALIDATION_FAILED",
                     "direction requires an explicit industry review link",
                     rule_id="DIRECTION_INDUSTRY_REVIEW_UNKNOWN",
                 )
-            for identity in sorted(review_ids):
+            for identity in sorted(review_ids & reviews.keys()):
                 cycle = merge_industry_cycles(cycle, reviews[identity])
             refs = sorted(set(refs) | set(cycle["sourceIds"]))
         if historical_cycles:
@@ -786,7 +801,13 @@ def _validate_value_directions(
             for track in plan.get("tracks", [])
             if track.get("track") == plan.get("selectedTrack")
         )
-        if not refs:
+        if targeted and observation_only:
+            if not refs and not macros:
+                raise ResearchValidationError(
+                    "DIRECTION_VALIDATION_FAILED", "observation needs an available source or macro fact",
+                    rule_id="DIRECTION_EVIDENCE_INSUFFICIENT",
+                )
+        elif not refs:
             if not quantitative or not qualifying_track:
                 raise ResearchValidationError(
                     "FUND_PLAN_INVALID",

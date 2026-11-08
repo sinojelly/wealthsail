@@ -178,7 +178,9 @@ def test_prompt_uses_versioned_compact_view_and_five_sections():
         "五、结构化输出",
     ):
         assert heading in prompt
-    assert "64与8都是上限" in prompt
+    assert "topicCatalog每批最多64" in prompt
+    assert "总量最多10，旧冻结v2仍最多8" in prompt
+    assert "上限与目标不作凑数要求" in prompt
     assert "原始Packet" in prompt and "服务器" in prompt
 
 

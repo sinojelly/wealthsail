@@ -214,7 +214,8 @@ def test_packet_whitelists_public_facts_without_discarding_current_partial_resea
 
 def test_prompt_prioritizes_media_and_quantitative_dual_engine_without_active_fund_veto():
     prompt = engine().build_prompt(packet())
-    assert "topicCatalog每批最多64" in prompt and "最多8个" in prompt
+    assert "topicCatalog每批最多64" in prompt
+    assert "总量最多10，旧冻结v2仍最多8" in prompt
     assert "quantitativeScan" in prompt and "quantitativeFundCodes" in prompt
     assert "核心一等催化线索" in prompt
     assert "严禁因未二次抓取官网原文而丢弃或降权" in prompt
@@ -233,7 +234,7 @@ def test_prompt_selects_available_fund_tracks_without_dropping_watch_candidates(
 
 def test_prompt_prioritizes_current_cross_industry_catalysts_before_extra_technical_slots():
     prompt = engine().build_prompt(packet())
-    assert engine().PROMPT_VERSION == "daily-research-input-v22"
+    assert engine().PROMPT_VERSION == "daily-research-input-v23"
     assert "sources总预算最多24条" in prompt
     assert "先跨行业覆盖本次输入中真实存在的核心催化" in prompt
     assert "再分配同链补充来源和纯量化方向" in prompt

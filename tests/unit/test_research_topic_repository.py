@@ -62,6 +62,25 @@ def test_topic_projection_keeps_status_explanation_and_never_copies_plans():
     assert "PRIVATE_PRICE" not in str(projected) and "plans" not in str(projected)
 
 
+@pytest.mark.parametrize("count", [0, 12, 10000])
+def test_topic_projection_preserves_targeted_observation_scope_count(count):
+    run_id = uuid4()
+    value = registry(run_id, 1)
+    value["coverage"]["observationScopeCount"] = count
+    projected = repository().prepare_topic_registry(value, run_id, NOW)
+    assert projected["coverage"]["observationScopeCount"] == count
+    assert projected["items"][0]["investmentEligible"] is False
+
+
+@pytest.mark.parametrize("count", [-1, 10001, True])
+def test_topic_projection_rejects_invalid_observation_scope_counts(count):
+    run_id = uuid4()
+    value = registry(run_id, 1)
+    value["coverage"]["observationScopeCount"] = count
+    with pytest.raises(ValidationError_):
+        repository().prepare_topic_registry(value, run_id, NOW)
+
+
 @pytest.mark.parametrize("count", [73])
 def test_topic_archive_rejects_over_budget_instead_of_silent_top_n(count):
     run_id = uuid4()

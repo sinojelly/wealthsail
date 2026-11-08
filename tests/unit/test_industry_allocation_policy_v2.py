@@ -3,13 +3,25 @@
 from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 import pytest
 
 from backend.integrations.daily_sources import industry_cycle_research_tasks as _tasks
-from backend.macro.research_topics import digest, freeze_discovery_packet
+from backend.macro.research_topics import digest
+from backend.macro import research_topics as topics
 
 NOW = datetime(2026, 11, 6, 8, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+def freeze_discovery_packet(packet, now):
+    """Build this historical-policy fixture under its literal original writer."""
+    with patch.multiple(topics, DISCOVERY_VERSION="research-discovery-v2", ALLOCATION_VERSION="industry-allocation-v2", BUDGET={
+        "maxTopics": 64, "maxFormalDirections": 8, "maxScopes": 10, "maxQueries": 50,
+        "maxSources": 24, "maxModelCalls": 1, "maxInputBytes": 4194304,
+        "maxOutputBytes": 2097152, "maxExecutionSeconds": 1200,
+    }):
+        return topics.freeze_discovery_packet(packet, now)
 
 
 def industry_cycle_research_tasks(packet, now):
@@ -307,7 +319,7 @@ def test_unanchored_unknown_product_scope_is_excluded_and_coverage_remains_parti
 
 def test_unknown_product_scope_in_legacy_frozen_manifest_is_not_reallocated():
     from backend.macro.industry_cycle import RISK_CHECKS
-    from backend.macro.research_topics import freeze_discovery_packet, make_task
+    from backend.macro.research_topics import make_task
 
     packet = freeze_discovery_packet({"asOf": NOW.isoformat()}, NOW)
     discovery = packet["researchDiscovery"]
@@ -373,7 +385,6 @@ def test_excluded_scope_coverage_is_partial_even_without_query_budget_omissions(
 
 def test_legacy_frozen_coverage_keeps_original_status_semantics():
     from backend.macro.daily_research import validate_report
-    from backend.macro.research_topics import freeze_discovery_packet
     from test_daily_research import report
 
     packet = freeze_discovery_packet({"asOf": NOW.isoformat(), "directions": []}, NOW)

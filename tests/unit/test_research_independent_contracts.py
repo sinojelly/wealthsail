@@ -9,8 +9,8 @@ import pytest
 from backend.integrations.research_execution import ExecutionObserver
 from backend.macro.research_assurance import bind_execution
 from backend.macro.research_batch import evaluate_research_batch
-from backend.macro.research_topics import freeze_discovery_packet
 from tests.unit.test_daily_research import NOW, report
+from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 from tests.unit.test_industrial_metals_research_regression import case
 
 RUN = "ef47f9fd-88a3-424a-8584-a562843805cc"
@@ -28,8 +28,12 @@ def combined_case():
             "GOLD", "COAL", "CHEMICAL", "INNOVATIVE_DRUG", "COMMUNICATION",
         )
     ]
+    # ef47 shape reproduces the original ten-scope v2 contract. Today's v3
+    # writer deliberately schedules fewer tasks and must not rewrite this case.
     packet = freeze_discovery_packet(packet, NOW)
     manifest = packet["researchDiscovery"]["auditManifest"]
+    assert packet["researchDiscovery"]["version"] == "research-discovery-v2"
+    assert manifest["budget"]["maxScopes"] == 10
     assert len(manifest["tasks"]) == 50
     raw["valueDirections"] = []
     raw["narrativeDirectionIds"] = {"summary": [], "macroCycle": [], "coverage": []}

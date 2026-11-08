@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -13,7 +14,14 @@ from tests.unit.test_daily_research import NOW
 
 def frozen():
     packet, _, _ = case()
-    return topics.freeze_discovery_packet(packet, NOW)
+    # Compatibility tests must retain the historical writer after new runtime
+    # defaults change, rather than labelling a v3 packet as an old profile.
+    with patch.multiple(topics, DISCOVERY_VERSION="research-discovery-v2", ALLOCATION_VERSION="industry-allocation-v2", BUDGET={
+        "maxTopics": 64, "maxFormalDirections": 8, "maxScopes": 10, "maxQueries": 50,
+        "maxSources": 24, "maxModelCalls": 1, "maxInputBytes": 4194304,
+        "maxOutputBytes": 2097152, "maxExecutionSeconds": 1200,
+    }):
+        return topics.freeze_discovery_packet(packet, NOW)
 
 
 def rehash(packet):
