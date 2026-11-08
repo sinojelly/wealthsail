@@ -31,6 +31,7 @@ from backend.investment.radar_api import router as opportunity_router
 from backend.investment.decision_api import router as decision_router
 from backend.investment.study_api import router as study_router
 from backend.investment.fund_watch_api import router as fund_watch_router
+from backend.investment.personal_funds_api import router as personal_funds_router
 from backend.investment.research_debug_api import router as research_debug_router
 from backend.investment.research_acceptance_api import router as research_acceptance_router
 from backend.investment.research_history_repair_api import router as research_history_repair_router
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(decision_router, prefix=prefix)
     app.include_router(study_router, prefix=prefix)
     app.include_router(fund_watch_router, prefix=prefix)
+    app.include_router(personal_funds_router, prefix=prefix)
     app.include_router(research_debug_router, prefix=prefix)
     app.include_router(research_acceptance_router, prefix=prefix)
     app.include_router(research_history_repair_router, prefix=prefix)
