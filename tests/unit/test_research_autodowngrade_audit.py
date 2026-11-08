@@ -147,11 +147,21 @@ async def test_worker_entry_persists_real_failed_sample_as_safe_ready_observatio
     value, at = public_failure()
     packet, raw, checks = value["packet"], value["raw"], value["sourceChecks"]
     before = deepcopy(value)
+    stages = []
 
     class Conn:
         @asynccontextmanager
         async def transaction(self):
             yield
+
+        async def fetchval(self, sql, request_id, stamp, stage, ordered_stages):
+            assert sql.startswith(
+                "UPDATE research.daily_research_refresh_requests SET execution_stage=$3,stage_updated_at=$2"
+            )
+            assert "status='RUNNING'" in sql and "RETURNING id" in sql
+            assert stamp == at and stage in ordered_stages
+            stages.append(stage)
+            return request_id
 
     @asynccontextmanager
     async def connection(_pool):
@@ -243,4 +253,10 @@ async def test_worker_entry_persists_real_failed_sample_as_safe_ready_observatio
         is False
     )
     worker.run_codex_research.assert_awaited_once()
+    assert stages == [
+        "MODEL_RUNNING",
+        "VERIFYING_OUTPUT",
+        "REPORT_VALIDATION",
+        "PERSISTING",
+    ]
     assert value == before

@@ -12,7 +12,7 @@ import asyncpg
 import pytest
 
 from backend.common.database import apply_tenant_context
-from backend.errors import ForbiddenError, NotFoundError
+from backend.errors import ForbiddenError
 from backend.macro import research_debug_repository as repo
 from backend.macro.alpha_repository import (
     claim_alpha_batch,
@@ -25,6 +25,7 @@ from backend.macro.daily_repository import (
     finish_daily_run,
     read_daily_research,
 )
+from tests.unit.research_database_actor import actor_call
 
 DSN = os.environ.get("INVESTMENT_TEST_DATABASE_URL")
 pytestmark = [
@@ -39,7 +40,17 @@ async def fixture(*, committed=False):
     parts = urlsplit(DSN)
     assert parts.hostname == "127.0.0.1" and (
         parts.path.startswith("/wealthsail_manual_research")
-        or (parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"})
+        or (parts.port == 29035 and parts.path == "/wealthsail_queue_control_test")
+        or (
+            parts.port == 29034
+            and parts.path
+            in {
+                "/wealthsail_acceptance_review100_v1",
+                "/wealthsail_acceptance_repair101_v1",
+                "/wealthsail_acceptance_repair101_v2",
+                "/wealthsail_dynamic_research102_v1",
+            }
+        )
         or (
             parts.port in {55434, 55436}
             and (
@@ -90,7 +101,14 @@ async def fixture(*, committed=False):
                 tenant,
             )
             if parts.path.startswith("/wealthsail_manual_research_acceptance") or (
-                parts.port == 29034 and parts.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"}
+                parts.port == 29034
+                and parts.path
+                in {
+                    "/wealthsail_acceptance_review100_v1",
+                    "/wealthsail_acceptance_repair101_v1",
+                    "/wealthsail_acceptance_repair101_v2",
+                    "/wealthsail_dynamic_research102_v1",
+                }
             ):
                 run_ids = [
                     row["run_id"]
@@ -105,7 +123,9 @@ async def fixture(*, committed=False):
                     "research_validation_records",
                     "research_validation_artifacts",
                 ):
-                    if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                    if await conn.fetchval(
+                        "SELECT to_regclass($1) IS NOT NULL", f"research.{table}"
+                    ):
                         await conn.execute(
                             f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
                             run_ids,
@@ -141,10 +161,23 @@ async def fixture(*, committed=False):
 
 
 async def enqueue(conn, tenant, actor, key=None, now=NOW):
-    return await repo.enqueue_refresh(conn, tenant, actor, key or uuid4(), now)
+    return await actor_call(
+        conn, repo.enqueue_refresh, tenant, actor, key or uuid4(), now
+    )
+
+
+async def read_refresh(conn, tenant, actor, request, now):
+    return await actor_call(conn, repo.read_refresh, tenant, actor, request, now)
 
 
 async def batch_and_report(conn, request, stamp=NOW):
+    status = await conn.fetchval(
+        "SELECT status FROM research.daily_research_refresh_requests WHERE id=$1",
+        request,
+    )
+    if status == "QUEUED":
+        claimed = await repo.claim_refresh(conn, stamp)
+        assert claimed is not None and claimed["id"] == request
     batch = await claim_alpha_batch(conn, stamp, debug_request_id=request)
     await finish_alpha_batch(
         conn, batch["id"], stamp, "READY", {"catalysts": [{"id": str(request)}]}
@@ -184,23 +217,39 @@ async def test_same_actor_active_request_reused_and_completed_command_never_repl
 async def test_debug_sources_are_mandatory_and_cannot_use_another_requests_batch():
     async with fixture() as (conn, tenant, owner, other):
         first = await enqueue(conn, tenant, owner)
-        second = await enqueue(conn, tenant, other)
+        second_stamp = NOW + timedelta(seconds=1)
+        second = await enqueue(conn, tenant, other, now=second_stamp)
         first_id, second_id = map(UUID, (first["id"], second["id"]))
+        assert (await repo.claim_refresh(conn, NOW))["id"] == first_id
         batch = await claim_alpha_batch(conn, NOW, debug_request_id=first_id)
-        for batch_id in (None, batch["id"]):
-            with pytest.raises(
-                (asyncpg.CheckViolationError, asyncpg.ForeignKeyViolationError)
-            ):
-                async with conn.transaction():
-                    await claim_daily_run(
-                        conn,
-                        NOW,
-                        {},
-                        input_hash="fixture",
-                        prompt_version="fixture",
-                        debug_request_id=second_id,
-                        source_batch_id=batch_id,
-                    )
+        await finish_alpha_batch(conn, batch["id"], NOW, "READY", {})
+        await repo.finish_refresh(conn, first_id, NOW, status="FAILED")
+        assert (await repo.claim_refresh(conn, second_stamp))["id"] == second_id
+        with pytest.raises(ValueError):
+            await claim_daily_run(
+                conn,
+                second_stamp,
+                {},
+                input_hash="fixture",
+                prompt_version="fixture",
+                debug_request_id=second_id,
+            )
+        assert (
+            await claim_daily_run(
+                conn,
+                second_stamp,
+                {},
+                input_hash="fixture",
+                prompt_version="fixture",
+                debug_request_id=second_id,
+                source_batch_id=batch["id"],
+            )
+            is None
+        )
+        assert not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM research.daily_research_runs WHERE debug_request_id=$1)",
+            second_id,
+        )
 
 
 async def test_same_day_debug_versions_do_not_consume_scheduled_slot_and_failed_latest_keeps_ready():
@@ -220,8 +269,14 @@ async def test_same_day_debug_versions_do_not_consume_scheduled_slot_and_failed_
         assert not await consumed(conn, NOW)
         second = await enqueue(conn, tenant, owner, now=NOW + timedelta(minutes=1))
         second_id = UUID(second["id"])
+        assert (await repo.claim_refresh(conn, NOW + timedelta(minutes=1)))[
+            "id"
+        ] == second_id
         batch2 = await claim_alpha_batch(
             conn, NOW + timedelta(minutes=1), debug_request_id=second_id
+        )
+        await finish_alpha_batch(
+            conn, batch2["id"], NOW + timedelta(minutes=1), "READY", {}
         )
         run2 = await claim_daily_run(
             conn,
@@ -268,9 +323,18 @@ async def test_exact_debug_batch_never_returns_other_success_or_future_completio
     async with fixture() as (conn, tenant, owner, other):
         first = await enqueue(conn, tenant, owner)
         first_id = UUID(first["id"])
-        await batch_and_report(conn, first_id)
+        first_batch, first_report = await batch_and_report(conn, first_id)
+        await repo.finish_refresh(
+            conn,
+            first_id,
+            NOW,
+            status="READY",
+            batch_id=first_batch["id"],
+            report_run_id=first_report["run_id"],
+        )
         second = await enqueue(conn, tenant, other)
         second_id = UUID(second["id"])
+        assert (await repo.claim_refresh(conn, NOW))["id"] == second_id
         batch = await claim_alpha_batch(conn, NOW, debug_request_id=second_id)
         await finish_alpha_batch(
             conn,
@@ -294,11 +358,12 @@ async def test_operator_rls_hides_other_requests_and_forbids_terminal_or_metadat
         mine = await enqueue(conn, tenant, owner)
         theirs = await enqueue(conn, tenant, other)
         await apply_tenant_context(conn, str(owner), str(tenant))
-        assert (await repo.read_refresh(conn, tenant, owner, UUID(mine["id"]), NOW))[
+        assert (await read_refresh(conn, tenant, owner, UUID(mine["id"]), NOW))[
             "id"
         ] == mine["id"]
-        with pytest.raises(NotFoundError):
-            await repo.read_refresh(conn, tenant, other, UUID(theirs["id"]), NOW)
+        with pytest.raises(ForbiddenError):
+            async with conn.transaction():
+                await read_refresh(conn, tenant, other, UUID(theirs["id"]), NOW)
         for statement in (
             "UPDATE research.daily_research_refresh_requests SET status='FAILED'",
             "DELETE FROM research.daily_research_refresh_requests",
@@ -334,7 +399,7 @@ async def test_claim_revalidates_operator_and_expired_running_request_is_never_r
         assert await repo.claim_refresh(conn, NOW + timedelta(minutes=1)) is None
         assert await repo.claim_refresh(conn, NOW + timedelta(minutes=36)) is None
         assert (
-            await repo.read_refresh(
+            await read_refresh(
                 conn, tenant, other, selected["id"], NOW + timedelta(minutes=36)
             )
         )["status"] == "UNCERTAIN"
@@ -359,6 +424,7 @@ async def test_late_ready_requires_the_original_requests_completed_report(proof)
         )
         report_request = identity
         if proof == "other_request":
+            await repo.finish_refresh(conn, identity, NOW, status="UNCERTAIN")
             report_request = UUID((await enqueue(conn, tenant, other))["id"])
         batch, report = await batch_and_report(conn, report_request)
         if proof == "unfinished":
@@ -375,7 +441,7 @@ async def test_late_ready_requires_the_original_requests_completed_report(proof)
             batch_id=batch["id"],
             report_run_id=report["run_id"],
         )
-        actual = await repo.read_refresh(conn, tenant, owner, identity, finished)
+        actual = await read_refresh(conn, tenant, owner, identity, finished)
         assert actual["status"] == ("READY" if proof == "matching" else "UNCERTAIN")
         assert actual["reportRunId"] == (
             str(report["run_id"]) if proof == "matching" else None
@@ -440,8 +506,8 @@ async def test_api_role_can_enqueue_own_request_and_persist_coalesced_command_ke
 
 async def test_clock_regression_cannot_claim_another_request_while_future_started_run_exists():
     async with fixture() as (conn, tenant, owner, other):
-        first = await enqueue(conn, tenant, owner)
-        await enqueue(conn, tenant, other, now=NOW + timedelta(minutes=1))
+        first = await enqueue(conn, tenant, owner, now=NOW + timedelta(minutes=6))
+        await enqueue(conn, tenant, other, now=NOW + timedelta(minutes=7))
         claimed = await repo.claim_refresh(conn, NOW + timedelta(minutes=10))
         assert str(claimed["id"]) == first["id"]
         assert await repo.claim_refresh(conn, NOW + timedelta(minutes=2)) is None
@@ -455,7 +521,9 @@ async def test_model_slot_revalidates_current_operator_authority_and_request_vis
         requested = NOW + timedelta(minutes=1) if change == "future_request" else NOW
         request = await enqueue(conn, tenant, owner, now=requested)
         identity = UUID(request["id"])
+        assert (await repo.claim_refresh(conn, requested))["id"] == identity
         batch = await claim_alpha_batch(conn, requested, debug_request_id=identity)
+        await finish_alpha_batch(conn, batch["id"], requested, "READY", {})
         if change == "role":
             await conn.execute(
                 "UPDATE identity.tenant_members SET role='VIEWER' WHERE tenant_id=$1 AND user_id=$2",
@@ -498,6 +566,7 @@ async def test_revocation_during_official_collection_never_starts_model(monkeypa
     async with fixture(committed=True) as (admin, tenant, owner, other):
         request = await enqueue(admin, tenant, owner)
         identity = UUID(request["id"])
+        assert (await repo.claim_refresh(admin, NOW))["id"] == identity
         batch = await claim_alpha_batch(admin, NOW, debug_request_id=identity)
         await finish_alpha_batch(admin, batch["id"], NOW, "READY", {"catalysts": []})
 

@@ -13,6 +13,7 @@ import asyncpg
 import pytest
 
 from backend.macro import research_debug_repository as requests
+from tests.unit.research_database_actor import actor_call
 
 DSN = os.environ.get("INVESTMENT_TEST_DATABASE_URL")
 pytestmark = [
@@ -29,8 +30,19 @@ async def fixture(*, committed=False):
         target.hostname == "localhost"
         or ipaddress.ip_address(target.hostname).is_loopback
     )
-    assert target.path.startswith("/wealthsail_manual_research") or (
-        target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"}
+    assert (
+        target.path.startswith("/wealthsail_manual_research")
+        or (target.port == 29035 and target.path == "/wealthsail_queue_control_test")
+        or (
+            target.port == 29034
+            and target.path
+            in {
+                "/wealthsail_acceptance_review100_v1",
+                "/wealthsail_acceptance_repair101_v1",
+                "/wealthsail_acceptance_repair101_v2",
+                "/wealthsail_dynamic_research102_v1",
+            }
+        )
     )
     conn = await asyncpg.connect(DSN)
     tenant, actor, other = uuid4(), uuid4(), uuid4()
@@ -71,7 +83,14 @@ async def fixture(*, committed=False):
             # Immutable acceptance rows restrict deletion of their owning run.
             # Only this committed fixture's tenant/run identities are removed.
             if target.path.startswith("/wealthsail_manual_research_acceptance") or (
-                target.port == 29034 and target.path in {"/wealthsail_acceptance_review100_v1", "/wealthsail_acceptance_repair101_v1", "/wealthsail_acceptance_repair101_v2", "/wealthsail_dynamic_research102_v1"}
+                target.port == 29034
+                and target.path
+                in {
+                    "/wealthsail_acceptance_review100_v1",
+                    "/wealthsail_acceptance_repair101_v1",
+                    "/wealthsail_acceptance_repair101_v2",
+                    "/wealthsail_dynamic_research102_v1",
+                }
             ):
                 run_ids = [
                     row["run_id"]
@@ -86,7 +105,9 @@ async def fixture(*, committed=False):
                     "research_validation_records",
                     "research_validation_artifacts",
                 ):
-                    if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"research.{table}"):
+                    if await conn.fetchval(
+                        "SELECT to_regclass($1) IS NOT NULL", f"research.{table}"
+                    ):
                         await conn.execute(
                             f"DELETE FROM research.{table} WHERE run_id=ANY($1::uuid[])",
                             run_ids,
@@ -121,24 +142,38 @@ async def fixture(*, committed=False):
         await conn.close()
 
 
+async def enqueue_refresh(conn, tenant, actor, *args, **kwargs):
+    return await actor_call(
+        conn, requests.enqueue_refresh, tenant, actor, *args, **kwargs
+    )
+
+
+async def read_refresh(conn, tenant, actor, *args, **kwargs):
+    return await actor_call(conn, requests.read_refresh, tenant, actor, *args, **kwargs)
+
+
+async def latest_refresh(conn, tenant, actor, *args, **kwargs):
+    return await actor_call(
+        conn, requests.latest_refresh, tenant, actor, *args, **kwargs
+    )
+
+
 async def make_run(conn, tenant, actor, *, mode="MANUAL", now=NOW):
-    from backend.macro.alpha_repository import claim_alpha_batch
+    from backend.macro.alpha_repository import claim_alpha_batch, finish_alpha_batch
     from backend.macro.daily_repository import claim_daily_run
 
-    request = await requests.enqueue_refresh(
+    request = await enqueue_refresh(
         conn, tenant, actor, uuid4(), now, request_mode=mode
     )
     identity = UUID(request["id"])
-    await conn.execute(
-        "UPDATE research.daily_research_refresh_requests SET status='RUNNING',started_at=$2 WHERE id=$1",
-        identity,
-        now,
-    )
+    claimed = await requests.claim_refresh(conn, now, allowed_modes=[mode])
+    assert claimed is not None and claimed["id"] == identity
     arguments = {
         "manual_request_id" if mode == "MANUAL" else "debug_request_id": identity
     }
     batch = await claim_alpha_batch(conn, now, **arguments)
     assert batch is not None and batch["run_mode"] == mode
+    await finish_alpha_batch(conn, batch["id"], now, "READY", {})
     run = await claim_daily_run(
         conn,
         now,
@@ -183,19 +218,19 @@ async def test_097_adds_frozen_request_mode_and_persistent_guard_permissions():
 async def test_command_replay_is_permanent_across_modes_and_coalescing_stays_in_mode():
     async with fixture() as (conn, tenant, actor, _other):
         key = uuid4()
-        manual = await requests.enqueue_refresh(
+        manual = await enqueue_refresh(
             conn, tenant, actor, key, NOW, request_mode="MANUAL"
         )
-        debug = await requests.enqueue_refresh(conn, tenant, actor, uuid4(), NOW)
+        debug = await enqueue_refresh(conn, tenant, actor, uuid4(), NOW)
         assert debug["id"] != manual["id"]
         assert (
-            await requests.enqueue_refresh(
+            await enqueue_refresh(
                 conn, tenant, actor, uuid4(), NOW, request_mode="MANUAL"
             )
         )["id"] == manual["id"]
         assert await requests.claim_refresh(conn, NOW, allowed_modes=["MANUAL"])
         await requests.finish_refresh(conn, UUID(manual["id"]), NOW, status="FAILED")
-        replay = await requests.enqueue_refresh(
+        replay = await enqueue_refresh(
             conn, tenant, actor, key, NOW, request_mode="DEBUG"
         )
         assert (
@@ -204,7 +239,7 @@ async def test_command_replay_is_permanent_across_modes_and_coalescing_stays_in_
             and replay["status"] == "FAILED"
         )
         assert (
-            await requests.enqueue_refresh(
+            await enqueue_refresh(
                 conn, tenant, actor, uuid4(), NOW, request_mode="MANUAL"
             )
         )["id"] != manual["id"]
@@ -212,10 +247,10 @@ async def test_command_replay_is_permanent_across_modes_and_coalescing_stays_in_
 
 async def test_manual_running_request_never_expires_into_a_new_claim_or_new_command():
     async with fixture() as (conn, tenant, actor, other):
-        first = await requests.enqueue_refresh(
+        first = await enqueue_refresh(
             conn, tenant, actor, uuid4(), NOW, request_mode="MANUAL"
         )
-        await requests.enqueue_refresh(
+        await enqueue_refresh(
             conn,
             tenant,
             other,
@@ -225,7 +260,7 @@ async def test_manual_running_request_never_expires_into_a_new_claim_or_new_comm
         )
         assert await requests.claim_refresh(conn, NOW, allowed_modes=["MANUAL"])
         later = NOW + timedelta(minutes=36)
-        same = await requests.enqueue_refresh(
+        same = await enqueue_refresh(
             conn, tenant, actor, uuid4(), later, request_mode="MANUAL"
         )
         assert same["id"] == first["id"] and same["status"] == "UNCERTAIN"
@@ -243,13 +278,13 @@ async def test_manual_running_request_never_expires_into_a_new_claim_or_new_comm
 
 async def test_allowed_modes_filter_claim_and_latest_without_reinterpreting_saved_mode():
     async with fixture() as (conn, tenant, actor, _other):
-        manual = await requests.enqueue_refresh(
+        manual = await enqueue_refresh(
             conn, tenant, actor, uuid4(), NOW, request_mode="MANUAL"
         )
-        debug = await requests.enqueue_refresh(
+        debug = await enqueue_refresh(
             conn, tenant, actor, uuid4(), NOW + timedelta(seconds=1)
         )
-        latest = await requests.latest_refresh(
+        latest = await latest_refresh(
             conn, tenant, actor, NOW + timedelta(seconds=2), allowed_modes=["MANUAL"]
         )
         assert latest["id"] == manual["id"]
@@ -269,9 +304,7 @@ async def test_allowed_modes_filter_claim_and_latest_without_reinterpreting_save
 async def test_mode_request_and_batch_identity_cannot_be_mixed(mismatch):
     async with fixture() as (conn, tenant, actor, other):
         identity, batch, _run = await make_run(conn, tenant, actor)
-        debug = UUID(
-            (await requests.enqueue_refresh(conn, tenant, other, uuid4(), NOW))["id"]
-        )
+        debug = UUID((await enqueue_refresh(conn, tenant, other, uuid4(), NOW))["id"])
         with pytest.raises(
             (asyncpg.ForeignKeyViolationError, asyncpg.CheckViolationError)
         ):
@@ -356,7 +389,7 @@ async def test_finish_can_discover_only_its_own_completed_run_and_diagnosis():
         await requests.finish_refresh(
             conn, identity, NOW + timedelta(minutes=36), status="UNCERTAIN"
         )
-        result = await requests.read_refresh(
+        result = await read_refresh(
             conn, tenant, actor, identity, NOW + timedelta(minutes=36)
         )
         assert result["reportRunId"] == str(run)
@@ -366,7 +399,7 @@ async def test_finish_can_discover_only_its_own_completed_run_and_diagnosis():
         )
         missing = UUID(
             (
-                await requests.enqueue_refresh(
+                await enqueue_refresh(
                     conn, tenant, other, uuid4(), NOW, request_mode="MANUAL"
                 )
             )["id"]
@@ -377,7 +410,7 @@ async def test_finish_can_discover_only_its_own_completed_run_and_diagnosis():
             NOW,
         )
         await requests.finish_refresh(conn, missing, NOW, status="FAILED")
-        absent = await requests.read_refresh(conn, tenant, other, missing, NOW)
+        absent = await read_refresh(conn, tenant, other, missing, NOW)
         assert absent["reportRunId"] is None and absent["failureReasonCode"] is None
 
 
@@ -393,6 +426,7 @@ async def test_manual_ready_requires_exact_completed_request_mode_and_source(pro
             NOW,
         )
         if proof == "other_request":
+            await requests.finish_refresh(conn, identity, NOW, status="UNCERTAIN")
             _other_id, batch, run = await make_run(conn, tenant, other)
         await conn.execute(
             "UPDATE market.alpha_public_batches SET status='READY',completed_at=$2,payload='{}' WHERE id=$1",
@@ -411,7 +445,7 @@ async def test_manual_ready_requires_exact_completed_request_mode_and_source(pro
             batch_id=batch,
             report_run_id=run,
         )
-        result = await requests.read_refresh(
+        result = await read_refresh(
             conn, tenant, actor, identity, NOW + timedelta(minutes=36)
         )
         assert result["status"] == ("READY" if proof == "matching" else "UNCERTAIN")
@@ -435,9 +469,7 @@ async def test_persistent_guard_survives_observation_timeout_and_only_matching_o
             conn, run, NOW, status="UNCERTAIN", error_class="TimeoutError"
         )
         await requests.finish_refresh(conn, request, NOW, status="UNCERTAIN")
-        await requests.enqueue_refresh(
-            conn, tenant, other, uuid4(), NOW, request_mode="MANUAL"
-        )
+        await enqueue_refresh(conn, tenant, other, uuid4(), NOW, request_mode="MANUAL")
         assert (
             await requests.claim_refresh(
                 conn, NOW + timedelta(minutes=36), allowed_modes=["MANUAL"]
@@ -465,7 +497,7 @@ async def test_scheduled_and_manual_atomic_model_claims_cannot_overlap():
         create_model_guard,
         lock_model_dispatch,
     )
-    from backend.macro.alpha_repository import claim_alpha_batch
+    from backend.macro.alpha_repository import claim_alpha_batch, finish_alpha_batch
     from backend.macro.daily_repository import claim_daily_run
 
     marker = "concurrent-" + uuid4().hex
@@ -473,17 +505,16 @@ async def test_scheduled_and_manual_atomic_model_claims_cannot_overlap():
     async with fixture(committed=True) as (admin, tenant, actor, _other):
         request = UUID(
             (
-                await requests.enqueue_refresh(
+                await enqueue_refresh(
                     admin, tenant, actor, uuid4(), now, request_mode="MANUAL"
                 )
             )["id"]
         )
-        await admin.execute(
-            "UPDATE research.daily_research_refresh_requests SET status='RUNNING',started_at=$2 WHERE id=$1",
-            request,
-            now,
-        )
+        assert (await requests.claim_refresh(admin, now, allowed_modes=["MANUAL"]))[
+            "id"
+        ] == request
         batch = await claim_alpha_batch(admin, now, manual_request_id=request)
+        await finish_alpha_batch(admin, batch["id"], now, "READY", {})
 
         async def attempt(mode):
             conn = await asyncpg.connect(DSN)
@@ -542,22 +573,23 @@ async def test_scheduled_and_manual_atomic_model_claims_cannot_overlap():
 
 async def test_api_can_queue_own_manual_request_but_cannot_rewrite_mode_or_read_guard():
     from backend.common.database import apply_tenant_context
-    from backend.errors import NotFoundError
+    from backend.errors import ForbiddenError
 
     async with fixture() as (conn, tenant, actor, other):
-        theirs = await requests.enqueue_refresh(
+        theirs = await enqueue_refresh(
             conn, tenant, other, uuid4(), NOW, request_mode="MANUAL"
         )
         await apply_tenant_context(conn, str(actor), str(tenant))
-        mine = await requests.enqueue_refresh(
+        mine = await enqueue_refresh(
             conn, tenant, actor, uuid4(), NOW, request_mode="MANUAL"
         )
         assert mine["requestMode"] == "MANUAL"
-        assert (
-            await requests.read_refresh(conn, tenant, actor, UUID(mine["id"]), NOW)
-        )["id"] == mine["id"]
-        with pytest.raises(NotFoundError):
-            await requests.read_refresh(conn, tenant, other, UUID(theirs["id"]), NOW)
+        assert (await read_refresh(conn, tenant, actor, UUID(mine["id"]), NOW))[
+            "id"
+        ] == mine["id"]
+        with pytest.raises(ForbiddenError):
+            async with conn.transaction():
+                await read_refresh(conn, tenant, other, UUID(theirs["id"]), NOW)
         for statement in (
             "SELECT * FROM research.daily_research_model_guards",
             "UPDATE research.daily_research_refresh_requests SET request_mode='DEBUG'",

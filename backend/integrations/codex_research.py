@@ -355,6 +355,7 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=N
         args = [sys.executable, str(Path(__file__).with_name("research_supervisor.py")), str(control_write), str(timeout), str(os.getpid()), *args]
     spawn = asyncio.create_task(spawn_research_process(
             *args,
+            research_identity=lifecycle.identity if lifecycle is not None else None,
             cwd=cwd,
             env=env,
             stdin=asyncio.subprocess.PIPE,

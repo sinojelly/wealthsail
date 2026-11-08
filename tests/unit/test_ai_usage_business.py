@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,15 @@ async def transaction(*args, **kwargs):
         @asynccontextmanager
         async def transaction(self):
             yield self
+
+        async def fetchval(self, sql, request_id, stamp, stage, stages):
+            assert sql.startswith(
+                "UPDATE research.daily_research_refresh_requests SET execution_stage=$3,stage_updated_at=$2"
+            )
+            assert "status='RUNNING'" in sql and "RETURNING id" in sql
+            assert isinstance(stamp, datetime) and stamp.utcoffset() is not None
+            assert stage in stages
+            return request_id
 
     yield Connection()
 
@@ -297,21 +306,24 @@ async def test_daily_public_task_keeps_inference_on_business_validation_failure_
             "lifecycle": lifecycle.snapshot(),
         }
 
-    monkeypatch.setattr(daily_research, "run_codex_research", local_response)
+    local_model = AsyncMock(side_effect=local_response)
+    remote_model = AsyncMock(side_effect=remote_response)
+    monkeypatch.setattr(daily_research, "run_codex_research", local_model)
     monkeypatch.setattr(
         codex_client,
         "_request_json",
-        AsyncMock(side_effect=remote_response),
+        remote_model,
     )
 
-    def reject(*args, **kwargs):
-        raise ValueError("source validation failed")
-
+    reject = Mock(side_effect=ValueError("source validation failed"))
     monkeypatch.setattr(daily_research, "validate_report", reject)
     result = await daily_research.sync_daily_research(
         object(), settings, stamp, debug_request_id="debug", source_batch_id="batch"
     )
     assert result["status"] == "FAILED"
+    assert reject.called, "business failure must reach report validation"
+    (remote_model if remote else local_model).assert_awaited_once()
+    (local_model if remote else remote_model).assert_not_awaited()
     calls, tasks = finished(observed, "finish_call"), finished(observed, "finish_task")
     assert len(calls) == len(tasks) == 1
     assert calls[0]["status"] == "SUCCEEDED" and calls[0]["tokens"]["totalTokens"] == 79

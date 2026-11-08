@@ -86,6 +86,11 @@ def isolate(monkeypatch):
     mod, state = job(), {"consumed": False, "active": 0, "terminal": []}
 
     class Conn:
+        async def fetchval(self, sql, *args):
+            assert "UPDATE research.daily_research_refresh_requests SET execution_stage" in sql
+            state.setdefault("request_stages", []).append((args[0], args[2]))
+            return args[0]
+
         @asynccontextmanager
         async def transaction(self):
             state["in_transaction"] = True

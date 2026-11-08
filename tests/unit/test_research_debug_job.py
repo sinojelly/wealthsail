@@ -41,6 +41,7 @@ def isolate(monkeypatch):
     monkeypatch.setattr(mod, "_claim", AsyncMock(side_effect=[request, None]))
     monkeypatch.setattr(mod, "_finish", AsyncMock())
     monkeypatch.setattr(mod, "_operator_active", AsyncMock(return_value=True))
+    monkeypatch.setattr(mod, "_stage", AsyncMock(return_value=True))
     monkeypatch.setattr(
         mod,
         "sync_alpha_public",
@@ -53,6 +54,23 @@ def isolate(monkeypatch):
     )
     monkeypatch.setattr(mod, "now_shanghai", lambda: NOW)
     return mod, request
+
+
+@pytest.mark.asyncio
+async def test_collection_stage_is_saved_before_collection_and_a_lost_request_costs_nothing(monkeypatch):
+    mod, request = isolate(monkeypatch)
+
+    async def collect(*args, **kwargs):
+        mod._stage.assert_awaited_once_with(args[0], request["id"], "COLLECTING")
+        return {"status": "PARTIAL", "batchId": str(uuid4())}
+
+    mod.sync_alpha_public.side_effect = collect
+    assert (await mod.sync_debug_refresh(object(), settings()))["status"] == "READY"
+    mod, _ = isolate(monkeypatch)
+    mod._stage.return_value = False
+    assert (await mod.sync_debug_refresh(object(), settings()))["status"] == "FAILED"
+    mod.sync_alpha_public.assert_not_awaited()
+    mod.sync_daily_research.assert_not_awaited()
 
 
 @pytest.mark.asyncio

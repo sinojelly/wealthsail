@@ -57,6 +57,13 @@ async def _operator_active(pool, request):
         )
 
 
+async def _stage(pool, request_id, stage):
+    from backend.macro.research_debug_repository import set_refresh_stage
+
+    async with system_connection(pool) as conn:
+        return await set_refresh_stage(conn, request_id, now_shanghai(), stage)
+
+
 async def sync_debug_refresh(pool, settings):
     if not enabled(settings):
         return {"status": "DISABLED"}
@@ -82,6 +89,8 @@ async def _run_request(pool, settings, request, started):
                 raise PermissionError("saved request mode is disabled")
             if not await _operator_active(pool, request):
                 raise PermissionError("operator membership revoked")
+            if not await _stage(pool, identity, "COLLECTING"):
+                raise PermissionError("research request is no longer running")
             request_arguments = (
                 {"manual_request_id": identity}
                 if mode == "MANUAL"

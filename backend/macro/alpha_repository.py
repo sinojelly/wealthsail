@@ -86,8 +86,17 @@ async def claim_alpha_batch(
     mode = "MANUAL" if manual_request_id is not None else "DEBUG"
     if request_id is not None:
         return await conn.fetchrow(
-            f"""INSERT INTO market.alpha_public_batches(run_date,claimed_at,status,run_mode,debug_request_id)
-            VALUES($1,$2,'CLAIMED','{mode}',$3)
+            f"""WITH locked_request AS MATERIALIZED (
+              SELECT q.* FROM research.daily_research_refresh_requests q
+              JOIN identity.tenant_members m ON m.tenant_id=q.tenant_id AND m.user_id=q.user_id
+              JOIN identity.tenants t ON t.id=m.tenant_id
+              WHERE q.id=$3 AND q.request_mode='{mode}' AND q.requested_at<=$2
+                AND m.status='ACTIVE' AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE'
+              FOR UPDATE OF q)
+            INSERT INTO market.alpha_public_batches(run_date,claimed_at,status,run_mode,debug_request_id)
+            SELECT $1,$2,'CLAIMED','{mode}',$3 FROM locked_request q
+            WHERE q.status='RUNNING' AND q.started_at<=$2 AND q.completed_at IS NULL
+              AND GREATEST($2,clock_timestamp())<q.started_at+interval '35 minutes'
             ON CONFLICT(debug_request_id) WHERE run_mode='{mode}' DO NOTHING RETURNING *""",
             stamp.date(),
             stamp,

@@ -34,7 +34,9 @@ async def read_automatic_research_cooldown(conn, now):
     # Include all modes and terminal outcomes, independently of best-effort usage
     # telemetry. Do not filter by a stale caller clock: a manual dispatch may
     # have committed while the automatic caller was waiting for the global lock.
-    last = await conn.fetchval("SELECT max(dispatched_at) FROM research.daily_research_runs")
+    last = await conn.fetchval(
+        "SELECT max(dispatched_at) FROM research.daily_research_runs"
+    )
     return automatic_research_cooldown(last, now)
 
 
@@ -88,24 +90,29 @@ async def claim_daily_run(
         manual_request_id if manual_request_id is not None else debug_request_id
     )
     mode = "MANUAL" if manual_request_id is not None else "DEBUG"
-    if manual_request_id is not None and source_batch_id is None:
-        raise ValueError("manual research requires its exact source batch")
+    if request_id is not None and source_batch_id is None:
+        raise ValueError("explicit research requires its exact source batch")
     slot = stamp if request_id is not None else scheduled_for(stamp, schedule_time)
     if stamp < slot:
         return None
     if request_id is not None:
         return await conn.fetchrow(
-            f"""INSERT INTO research.daily_research_runs
-            (slot_date,scheduled_for,dispatched_at,input_hash,prompt_version,public_packet,cli_version,run_mode,debug_request_id,source_batch_id)
-            SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,'{mode}',$8,$9
-            WHERE EXISTS(
-              SELECT 1 FROM research.daily_research_refresh_requests q
+            f"""WITH locked_request AS MATERIALIZED (
+              SELECT q.* FROM research.daily_research_refresh_requests q
               JOIN identity.tenant_members m ON m.tenant_id=q.tenant_id AND m.user_id=q.user_id
               JOIN identity.tenants t ON t.id=m.tenant_id
-              WHERE q.id=$8 AND q.requested_at<=$3 AND m.status='ACTIVE'
-                AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE'
-                AND q.request_mode='{mode}'
-                {"AND q.status='RUNNING'" if mode == "MANUAL" else ""})
+              WHERE q.id=$8 AND q.request_mode='{mode}' AND q.requested_at<=$3
+                AND m.status='ACTIVE' AND m.role IN ('OWNER','ADMIN') AND t.status='ACTIVE'
+              FOR UPDATE OF q)
+            INSERT INTO research.daily_research_runs
+            (slot_date,scheduled_for,dispatched_at,input_hash,prompt_version,public_packet,cli_version,run_mode,debug_request_id,source_batch_id)
+            SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,'{mode}',$8,$9
+            FROM locked_request q JOIN market.alpha_public_batches b ON b.id=$9
+              AND b.debug_request_id=q.id AND b.run_mode='{mode}'
+            WHERE q.status='RUNNING' AND q.started_at<=$3 AND q.completed_at IS NULL
+              AND GREATEST($3,clock_timestamp())<q.started_at+interval '35 minutes'
+              AND b.status IN ('READY','PARTIAL') AND b.claimed_at>=q.started_at
+              AND b.claimed_at<=$3 AND b.completed_at<=$3
             ON CONFLICT(debug_request_id) WHERE run_mode='{mode}' DO NOTHING RETURNING *""",
             stamp.date(),
             slot,
@@ -352,13 +359,22 @@ async def read_daily_research(
         else None,
     )
     economic_research = await read_economic_research(conn, displayed_run_id, stamp)
-    fund_observation = await read_fund_observation(conn, latest, displayed_run_id, stamp)
-    cooldown = automatic_research_cooldown(latest["dispatched_at"] if latest else None, stamp)
+    fund_observation = await read_fund_observation(
+        conn, latest, displayed_run_id, stamp
+    )
+    cooldown = automatic_research_cooldown(
+        latest["dispatched_at"] if latest else None, stamp
+    )
     next_automatic = next_run(stamp, schedule_mode, schedule_time)
-    if enabled and cooldown["active"] and next_automatic < cooldown["automaticEligibleAt"]:
+    if (
+        enabled
+        and cooldown["active"]
+        and next_automatic < cooldown["automaticEligibleAt"]
+    ):
         next_automatic = next_run(
             cooldown["automaticEligibleAt"] - timedelta(microseconds=1),
-            schedule_mode, schedule_time,
+            schedule_mode,
+            schedule_time,
         )
     return {
         "methodVersion": METHOD,

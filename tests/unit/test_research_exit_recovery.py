@@ -20,7 +20,13 @@ def boundary(monkeypatch, count=1):
         {"run_id": uuid4(), "owner_token": uuid4(), "released": False}
         for _ in range(count)
     ]
-    state = {"connections": 0, "reads": [], "writes": 0, "releaseTimes": []}
+    state = {
+        "connections": 0,
+        "reads": [],
+        "writes": 0,
+        "releaseTimes": [],
+        "evidence": [],
+    }
 
     class Conn:
         async def fetch(self, sql, limit):
@@ -28,7 +34,7 @@ def boundary(monkeypatch, count=1):
             assert "released_at IS NULL" in sql and "LIMIT $1" in sql
             return [row.copy() for row in records if not row["released"]][:limit]
 
-        async def fetchval(self, sql, run, owner, now):
+        async def fetchval(self, sql, run, owner, now, *proof):
             assert "UPDATE research.daily_research_model_guards" in sql
             assert "owner_token=$2" in sql and "released_at IS NULL" in sql
             state["writes"] += 1
@@ -42,6 +48,11 @@ def boundary(monkeypatch, count=1):
                     row["released"] = True
                     return run
             return None
+
+        async def execute(self, sql, run, owner, evidence):
+            assert "exit_evidence" in sql and "owner_token=$2" in sql
+            state["evidence"].append(evidence)
+            return "UPDATE 1"
 
     @asynccontextmanager
     async def connection(_pool):
@@ -159,17 +170,62 @@ async def test_recovery_is_bounded_and_one_transport_failure_does_not_skip_other
 
 
 @pytest.mark.asyncio
-async def test_local_cli_has_no_cross_process_proof_and_does_not_touch_guards(
+async def test_local_missing_proof_diagnoses_without_releasing_guards(
     monkeypatch,
 ):
     mod, records, state = boundary(monkeypatch)
     status = AsyncMock(side_effect=AssertionError("local cannot query runner"))
     monkeypatch.setattr(mod.codex_client, "research_status", status)
+    monkeypatch.setattr(
+        mod,
+        "local_research_exit_status",
+        lambda _: {
+            "version": "research-local-exit-v1",
+            "evidenceState": "LOCAL_EVIDENCE_NOT_RETAINED",
+            "exitConfirmed": False,
+            "canRelease": False,
+            "maintenanceRequired": True,
+            "reasonCodes": ["LOCAL_EVIDENCE_NOT_RETAINED"],
+        },
+    )
     result = await mod.recover_research_exits(
         object(), SimpleNamespace(codex_runner_url="")
     )
-    assert result["checked"] == 0 and result["status"] == "LOCAL_UNSUPPORTED"
-    assert not state["reads"] and records[0]["released"] is False
+    assert result["checked"] == 1 and result["status"] == "LOCAL_CHECKED"
+    assert result["evidenceStates"] == {"LOCAL_EVIDENCE_NOT_RETAINED": 1}
+    assert records[0]["released"] is False and state["writes"] == 0
+    assert len(state["evidence"]) == 1
+    status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_exact_owned_kernel_proof_recovers_without_runner(monkeypatch):
+    mod, records, state = boundary(monkeypatch)
+    status = AsyncMock(side_effect=AssertionError("no runner"))
+    monkeypatch.setattr(mod.codex_client, "research_status", status)
+    monkeypatch.setattr(
+        mod,
+        "local_research_exit_status",
+        lambda _: {
+            "version": "research-local-exit-v1",
+            "evidenceState": "LOCAL_EXIT_CONFIRMED",
+            "exitConfirmed": True,
+            "canRelease": True,
+            "maintenanceRequired": False,
+            "reasonCodes": [],
+        },
+    )
+    monkeypatch.setattr(mod, "local_research_exit_proof", proof)
+    forgotten = []
+    monkeypatch.setattr(mod, "forget_local_research_exit", forgotten.append)
+    result = await mod.recover_research_exits(
+        object(), SimpleNamespace(codex_runner_url="")
+    )
+    assert result["released"] == 1 and records[0]["released"] is True
+    assert forgotten == [
+        mod.invocation_identity(records[0]["run_id"], records[0]["owner_token"])
+    ]
+    status.assert_not_awaited()
 
 
 @pytest.mark.asyncio

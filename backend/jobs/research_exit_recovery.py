@@ -13,7 +13,15 @@ from backend.common.database import system_connection
 from backend.dependencies import now_shanghai
 from backend.integrations import codex_client
 from backend.integrations.research_lifecycle import sanitize_lifecycle
-from backend.macro.model_dispatch_repository import release_model_guard
+from backend.integrations.research_process import (
+    forget_local_research_exit,
+    local_research_exit_proof,
+    local_research_exit_status,
+)
+from backend.macro.model_dispatch_repository import (
+    release_model_guard,
+    record_model_exit_evidence,
+)
 from backend.macro.research_diagnostics import safe_error_class
 
 logger = logging.getLogger("wealthsail.research_exit_recovery")
@@ -48,8 +56,9 @@ async def recover_research_exits(pool, settings):
         "pending": 0,
         "errors": 0,
     }
-    if not getattr(settings, "codex_runner_url", ""):
-        return {**summary, "status": "LOCAL_UNSUPPORTED"}
+    remote = bool(getattr(settings, "codex_runner_url", ""))
+    if not remote:
+        summary.update(status="LOCAL_CHECKED", evidenceStates={})
     async with system_connection(pool) as conn:
         rows = await conn.fetch(
             """SELECT run_id,owner_token FROM research.daily_research_model_guards
@@ -61,16 +70,44 @@ async def recover_research_exits(pool, settings):
         summary["checked"] += 1
         try:
             identity = invocation_identity(row["run_id"], row["owner_token"])
-            received = await codex_client.research_status(settings, identity)
+            if remote:
+                received = await codex_client.research_status(settings, identity)
+            else:
+                diagnosis = local_research_exit_status(identity)
+                code = diagnosis["evidenceState"]
+                summary["evidenceStates"][code] = (
+                    summary["evidenceStates"].get(code, 0) + 1
+                )
+                async with system_connection(pool) as conn:
+                    await record_model_exit_evidence(
+                        conn,
+                        row["run_id"],
+                        row["owner_token"],
+                        {
+                            **diagnosis,
+                            "checkedAt": now_shanghai().isoformat(),
+                        },
+                    )
+                received = local_research_exit_proof(identity)
             proof = sanitize_lifecycle(received, identity)
             if proof is None or not proof["exitConfirmed"]:
                 summary["pending"] += 1
                 continue
             async with system_connection(pool) as conn:
                 released = await release_model_guard(
-                    conn, row["run_id"], row["owner_token"], now_shanghai()
+                    conn,
+                    row["run_id"],
+                    row["owner_token"],
+                    now_shanghai(),
+                    proof={
+                        "kind": "REMOTE_RUNNER" if remote else "LOCAL_WINDOWS_JOB",
+                        "identityBinding": proof["identityBinding"],
+                        "completedAt": proof.get("completedAt"),
+                    },
                 )
             summary["released"] += int(released)
+            if released and not remote:
+                forget_local_research_exit(identity)
         except Exception as error:  # noqa: BLE001 -- one receipt cannot block another
             summary["errors"] += 1
             logger.warning(

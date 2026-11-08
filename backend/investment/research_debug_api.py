@@ -28,6 +28,10 @@ class RefreshCommand(BaseModel):
     commandKey: UUID
 
 
+class CancelCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 def debug_enabled(settings):
     return research_request_mode_allowed(settings, "DEBUG")
 
@@ -134,4 +138,30 @@ async def status(
         )
         if not _request_visible(settings, value):
             raise ForbiddenError("当前未启用此已保存研究请求的模式")
+    return ok(value, request_id=request_id, as_of=now)
+
+
+@router.post("/{run_id}/cancel")
+async def cancel(
+    run_id: UUID,
+    body: CancelCommand,
+    pool=Depends(get_pool),
+    ctx=Depends(get_tenant_context),
+    settings=Depends(get_settings_dep),
+    request_id=Depends(get_request_id),
+):
+    if preferred_research_request_mode(settings) is None or ctx.tenant_role != "OWNER":
+        raise ForbiddenError("仅当前有效 OWNER 可以取消尚未开始的排队研究")
+    now = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        if not await _enabled(conn, ctx, settings):
+            raise ForbiddenError("当前成员已无手动研究权限")
+        current = await repository.read_refresh(
+            conn, UUID(ctx.tenant_id), UUID(ctx.user_id), run_id, now
+        )
+        if not _request_visible(settings, current):
+            raise ForbiddenError("当前未启用此已保存研究请求的模式")
+        value = await repository.cancel_refresh(
+            conn, UUID(ctx.tenant_id), UUID(ctx.user_id), run_id, now
+        )
     return ok(value, request_id=request_id, as_of=now)

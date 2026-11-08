@@ -1,5 +1,6 @@
 """Durable, fail-closed model occupation shared by all public research entries."""
 
+import json
 from uuid import UUID, uuid4
 
 from backend.macro.daily_repository import local
@@ -43,16 +44,30 @@ async def create_model_guard(conn, run_id, now):
     return inserted
 
 
-async def release_model_guard(conn, run_id, owner_token, now):
+async def record_model_exit_evidence(conn, run_id, owner_token, evidence):
+    """Persist safe diagnosis, never treating a stored status as exit authority."""
+    await conn.execute(
+        """UPDATE research.daily_research_model_guards SET exit_evidence=$3::jsonb
+        WHERE run_id=$1 AND owner_token=$2 AND released_at IS NULL""",
+        UUID(str(run_id)),
+        UUID(str(owner_token)),
+        json.dumps(evidence),
+    )
+
+
+async def release_model_guard(conn, run_id, owner_token, now, *, proof=None):
     """Call only after confirmed model exit; clocks alone never release a guard."""
     return (
         await conn.fetchval(
-            """UPDATE research.daily_research_model_guards SET released_at=$3
+            """UPDATE research.daily_research_model_guards SET released_at=$3"""
+            + (",release_proof=$4::jsonb" if proof is not None else "")
+            + """
             WHERE run_id=$1 AND owner_token=$2 AND released_at IS NULL
               AND acquired_at<=$3 RETURNING run_id""",
             UUID(str(run_id)),
             UUID(str(owner_token)),
             local(now),
+            *([json.dumps(proof)] if proof is not None else []),
         )
         is not None
     )

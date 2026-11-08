@@ -5,7 +5,96 @@ import os
 import signal
 import time
 
-from backend.integrations.research_lifecycle import CLEANUP_SECONDS
+from backend.integrations.research_lifecycle import (
+    CLEANUP_SECONDS,
+    ResearchLifecycle,
+    _binding,
+    call_identity,
+)
+
+# Only identities admitted by the immutable dispatch barrier reach this registry.
+# Unknown entries never expire or lose their handles to make room for new work.
+_LOCAL_JOBS = {}
+_LOCAL_JOB_LIMIT = 256
+
+
+def _local_key(identity):
+    return _binding(call_identity(identity))
+
+
+def local_research_exit_status(identity):
+    """Read retained private kernel evidence; never signal or reopen a PID."""
+    key = _local_key(identity)
+    entry = _LOCAL_JOBS.get(key)
+    state = (
+        "LOCAL_PLATFORM_UNSUPPORTED"
+        if os.name != "nt"
+        else "LOCAL_EVIDENCE_NOT_RETAINED"
+    )
+    if entry is not None:
+        process, job = entry["process"], entry["job"]
+        try:
+            if (
+                not job.confirmed
+                and job.handle
+                and process.returncode is not None
+                and job.drained()
+            ):
+                job.confirmed = True
+                entry["lifecycle"].exited(
+                    reaped=True,
+                    descendants_confirmed=True,
+                    returncode=process.returncode,
+                )
+                job.close()
+            state = (
+                "LOCAL_EXIT_CONFIRMED"
+                if job.confirmed
+                else "LOCAL_RUNNING"
+                if process.returncode is None
+                else "LOCAL_EXIT_UNCONFIRMED"
+            )
+        except (PermissionError, OSError):
+            state = "LOCAL_EXIT_UNCONFIRMED"
+    confirmed = state == "LOCAL_EXIT_CONFIRMED"
+    return {
+        "version": "research-local-exit-v1",
+        "evidenceState": state,
+        "exitConfirmed": confirmed,
+        "canRelease": confirmed,
+        "maintenanceRequired": state
+        in {
+            "LOCAL_EVIDENCE_NOT_RETAINED",
+            "LOCAL_PLATFORM_UNSUPPORTED",
+            "LOCAL_EXIT_UNCONFIRMED",
+        },
+        "reasonCodes": [] if confirmed else [state],
+    }
+
+
+def local_research_exit_proof(identity):
+    if not local_research_exit_status(identity)["exitConfirmed"]:
+        return None
+    return _LOCAL_JOBS[_local_key(identity)]["lifecycle"].snapshot()
+
+
+def forget_local_research_exit(identity):
+    """Discard only affirmative evidence, after a successful durable guard CAS."""
+    key = _local_key(identity)
+    entry = _LOCAL_JOBS.get(key)
+    if entry is not None and entry["job"].confirmed:
+        del _LOCAL_JOBS[key]
+
+
+async def _observe_windows_job(job):
+    # Drain the private kernel port promptly to pin identities while alive.
+    # Failure remains uncertain. The task never terminates any process.
+    while job.handle:
+        try:
+            job.drained()
+        except (PermissionError, OSError):
+            pass
+        await asyncio.sleep(0.05)
 
 
 if os.name == "nt":
@@ -14,32 +103,44 @@ if os.name == "nt":
 
     class _BasicLimits(ctypes.Structure):
         _fields_ = [
-            ("process_time", ctypes.c_longlong), ("job_time", ctypes.c_longlong),
-            ("flags", wintypes.DWORD), ("minimum", ctypes.c_size_t),
-            ("maximum", ctypes.c_size_t), ("processes", wintypes.DWORD),
-            ("affinity", ctypes.c_size_t), ("priority", wintypes.DWORD),
+            ("process_time", ctypes.c_longlong),
+            ("job_time", ctypes.c_longlong),
+            ("flags", wintypes.DWORD),
+            ("minimum", ctypes.c_size_t),
+            ("maximum", ctypes.c_size_t),
+            ("processes", wintypes.DWORD),
+            ("affinity", ctypes.c_size_t),
+            ("priority", wintypes.DWORD),
             ("scheduling", wintypes.DWORD),
         ]
 
     class _ExtendedLimits(ctypes.Structure):
         _fields_ = [
-            ("basic", _BasicLimits), ("io", ctypes.c_ulonglong * 6),
-            ("process_memory", ctypes.c_size_t), ("job_memory", ctypes.c_size_t),
-            ("peak_process", ctypes.c_size_t), ("peak_job", ctypes.c_size_t),
+            ("basic", _BasicLimits),
+            ("io", ctypes.c_ulonglong * 6),
+            ("process_memory", ctypes.c_size_t),
+            ("job_memory", ctypes.c_size_t),
+            ("peak_process", ctypes.c_size_t),
+            ("peak_job", ctypes.c_size_t),
         ]
 
     class _Accounting(ctypes.Structure):
         _fields_ = [
-            ("times", ctypes.c_longlong * 4), ("faults", wintypes.DWORD),
-            ("total", wintypes.DWORD), ("active", wintypes.DWORD),
+            ("times", ctypes.c_longlong * 4),
+            ("faults", wintypes.DWORD),
+            ("total", wintypes.DWORD),
+            ("active", wintypes.DWORD),
             ("terminated", wintypes.DWORD),
         ]
 
     class _ThreadEntry(ctypes.Structure):
         _fields_ = [
-            ("size", wintypes.DWORD), ("usage", wintypes.DWORD),
-            ("thread_id", wintypes.DWORD), ("process_id", wintypes.DWORD),
-            ("base_priority", wintypes.LONG), ("delta_priority", wintypes.LONG),
+            ("size", wintypes.DWORD),
+            ("usage", wintypes.DWORD),
+            ("thread_id", wintypes.DWORD),
+            ("process_id", wintypes.DWORD),
+            ("base_priority", wintypes.LONG),
+            ("delta_priority", wintypes.LONG),
             ("flags", wintypes.DWORD),
         ]
 
@@ -49,20 +150,59 @@ if os.name == "nt":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     for _name, (_result, _arguments) in {
         "CreateJobObjectW": (wintypes.HANDLE, [ctypes.c_void_p, wintypes.LPCWSTR]),
-        "SetInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]),
-        "QueryInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]),
+        "SetInformationJobObject": (
+            wintypes.BOOL,
+            [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD],
+        ),
+        "QueryInformationJobObject": (
+            wintypes.BOOL,
+            [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+            ],
+        ),
         "AssignProcessToJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
         "TerminateJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
-        "CreateIoCompletionPort": (wintypes.HANDLE, [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_size_t, wintypes.DWORD]),
-        "GetQueuedCompletionStatus": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_void_p), wintypes.DWORD]),
+        "CreateIoCompletionPort": (
+            wintypes.HANDLE,
+            [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_size_t, wintypes.DWORD],
+        ),
+        "GetQueuedCompletionStatus": (
+            wintypes.BOOL,
+            [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+                ctypes.POINTER(ctypes.c_size_t),
+                ctypes.POINTER(ctypes.c_void_p),
+                wintypes.DWORD,
+            ],
+        ),
         "CreateToolhelp32Snapshot": (wintypes.HANDLE, [wintypes.DWORD, wintypes.DWORD]),
-        "Thread32First": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
-        "Thread32Next": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
-        "OpenThread": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+        "Thread32First": (
+            wintypes.BOOL,
+            [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)],
+        ),
+        "Thread32Next": (
+            wintypes.BOOL,
+            [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)],
+        ),
+        "OpenThread": (
+            wintypes.HANDLE,
+            [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD],
+        ),
         "GetProcessIdOfThread": (wintypes.DWORD, [wintypes.HANDLE]),
         "ResumeThread": (wintypes.DWORD, [wintypes.HANDLE]),
-        "OpenProcess": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
-        "IsProcessInJob": (wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]),
+        "OpenProcess": (
+            wintypes.HANDLE,
+            [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD],
+        ),
+        "IsProcessInJob": (
+            wintypes.BOOL,
+            [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)],
+        ),
         "WaitForSingleObject": (wintypes.DWORD, [wintypes.HANDLE, wintypes.DWORD]),
         "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
     }.items():
@@ -84,6 +224,7 @@ class _WindowsJob:
         self.members = []
         self.observation_error = False
         self.zero_notified = False
+        self.observer = None
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
         limits = _ExtendedLimits()
@@ -94,7 +235,9 @@ class _WindowsJob:
             error = ctypes.WinError(ctypes.get_last_error())
             self.close()
             raise error
-        self.port = _kernel32.CreateIoCompletionPort(ctypes.c_void_p(-1).value, None, 0, 1)
+        self.port = _kernel32.CreateIoCompletionPort(
+            ctypes.c_void_p(-1).value, None, 0, 1
+        )
         port = _CompletionPort(self.handle, self.port)
         if not self.port or not _kernel32.SetInformationJobObject(
             self.handle, 7, ctypes.byref(port), ctypes.sizeof(port)
@@ -162,14 +305,20 @@ class _WindowsJob:
                 handle = _kernel32.OpenProcess(0x100000 | 0x1000, False, value.value)
                 if handle:
                     belongs = wintypes.BOOL()
-                    checked = _kernel32.IsProcessInJob(handle, self.handle, ctypes.byref(belongs))
+                    checked = _kernel32.IsProcessInJob(
+                        handle, self.handle, ctypes.byref(belongs)
+                    )
                     if not checked or not belongs.value:
                         self.observation_error |= not checked
                         _kernel32.CloseHandle(handle)
                         handle = None
-                elif ctypes.get_last_error() != 87:  # Already exited / INVALID_PARAMETER
+                elif (
+                    ctypes.get_last_error() != 87
+                ):  # Already exited / INVALID_PARAMETER
                     self.observation_error = True
-                self.members.append({"pid": value.value, "handle": handle, "exited": False})
+                self.members.append(
+                    {"pid": value.value, "handle": handle, "exited": False}
+                )
                 self.zero_notified = False
             elif code.value in {7, 8}:  # EXIT_PROCESS / ABNORMAL_EXIT_PROCESS
                 for member in self.members:
@@ -184,12 +333,15 @@ class _WindowsJob:
         ):
             raise ctypes.WinError(ctypes.get_last_error())
         return (
-            value.active == 0 and self.zero_notified
-            and len(self.members) == value.total and value.total > 0
+            value.active == 0
+            and self.zero_notified
+            and len(self.members) == value.total
+            and value.total > 0
             and not self.observation_error
             and all(
                 _kernel32.WaitForSingleObject(member["handle"], 0) == 0
-                if member["handle"] else member["exited"]
+                if member["handle"]
+                else member["exited"]
                 for member in self.members
             )
         )
@@ -199,6 +351,9 @@ class _WindowsJob:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def close(self):
+        if self.observer is not None:
+            self.observer.cancel()
+            self.observer = None
         if self.handle:
             _kernel32.CloseHandle(self.handle)
             self.handle = None
@@ -211,19 +366,42 @@ class _WindowsJob:
                 member["handle"] = None
 
 
-async def spawn_research_process(*args, **options):
+async def spawn_research_process(*args, research_identity=None, **options):
     """Contain Windows descendants before allowing the subprocess to run."""
     if os.name != "nt":
         return await asyncio.create_subprocess_exec(*args, **options)
+    key = _local_key(research_identity) if research_identity is not None else None
+    if key is not None:
+        # Losing an old proof is fail-closed, but throwing away an unconfirmed
+        # job would also throw away its only trusted process identities.
+        if len(_LOCAL_JOBS) >= _LOCAL_JOB_LIMIT and key not in _LOCAL_JOBS:
+            for old_key, entry in list(_LOCAL_JOBS.items()):
+                if entry is not None and entry["job"].confirmed:
+                    del _LOCAL_JOBS[old_key]
+                    break
+        if key in _LOCAL_JOBS or len(_LOCAL_JOBS) >= _LOCAL_JOB_LIMIT:
+            raise ValueError("local research evidence registry occupied or full")
     job, process = _WindowsJob(), None
+    if key is not None:
+        _LOCAL_JOBS[key] = None  # Reserve before the asynchronous spawn.
     try:
-        options["creationflags"] = options.get("creationflags", 0) | 0x4  # CREATE_SUSPENDED
+        options["creationflags"] = (
+            options.get("creationflags", 0) | 0x4
+        )  # CREATE_SUSPENDED
         process = await asyncio.create_subprocess_exec(*args, **options)
         job.assign(process)
         job.resume(process)
         process._research_windows_job = job
+        if key is not None:
+            lifecycle = ResearchLifecycle(research_identity)
+            lifecycle.started()
+            _LOCAL_JOBS[key] = {"process": process, "job": job, "lifecycle": lifecycle}
+            process._research_local_key = key
+            job.observer = asyncio.create_task(_observe_windows_job(job))
         return process
     except BaseException:
+        if key is not None:
+            _LOCAL_JOBS.pop(key, None)
         # A failed assignment/resume never runs the invocation uncontained or
         # leaves an indefinitely suspended child. kill() uses its owned handle.
         try:
@@ -249,12 +427,22 @@ async def _cleanup_windows(process, job, deadline):
                 return process.returncode is not None, False
             await asyncio.sleep(0.02)
         job.confirmed = process.returncode is not None
+        entry = _LOCAL_JOBS.get(getattr(process, "_research_local_key", None))
+        if entry is not None and job.confirmed:
+            entry["lifecycle"].exited(
+                reaped=True, descendants_confirmed=True, returncode=process.returncode
+            )
         return job.confirmed, job.confirmed
     except (TimeoutError, PermissionError, OSError):
         return process.returncode is not None, False
     finally:
-        # KILL_ON_JOB_CLOSE is a final disposal attempt, never exit evidence.
-        job.close()
+        # Retain uncertain private handles so a late kernel receipt can recover
+        # this exact invocation. No timeout or parent returncode closes the gap.
+        # Helpers without a dispatched research identity cannot export proof or
+        # use recovery. Dispose their exclusively owned job without certifying
+        # descendants, rather than leaking handles after the helper is dropped.
+        if job.confirmed or not hasattr(process, "_research_local_key"):
+            job.close()
 
 
 async def cleanup_process(process, *, isolated_group=False, supervisor=False):

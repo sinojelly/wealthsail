@@ -9,6 +9,7 @@ import errno
 import hashlib
 import json
 import logging
+import os
 import socket
 from time import monotonic
 
@@ -471,6 +472,18 @@ async def _stop_pipeline_heartbeat(claim):
 
 async def _wait_model_slot():
     await asyncio.sleep(3)
+
+
+async def _explicit_request_stage(pool, request_id, stage):
+    if request_id is None:
+        return
+    from backend.macro.research_debug_repository import set_refresh_stage
+
+    try:
+        async with system_connection(pool) as conn:
+            await set_refresh_stage(conn, request_id, local(now_shanghai()), stage)
+    except Exception as exc:  # noqa: BLE001 -- display telemetry cannot reject valid research
+        logger.warning("research_request_stage_failed stage=%s error_class=%s", stage, type(exc).__name__)
 
 
 async def _pipeline_stage(pool, claim, *, stage, state="RUNNING", **fields):
@@ -1003,6 +1016,14 @@ async def _execute_daily_research(
                         if claim is not None
                         else None
                     )
+                    if explicit and claim is not None:
+                        from backend.macro.research_debug_repository import set_refresh_stage
+
+                        if not await set_refresh_stage(
+                            conn, manual_request_id if manual else debug_request_id,
+                            dispatched, "MODEL_RUNNING",
+                        ):
+                            raise PermissionError("research request no longer owns execution")
                     if (
                         pipeline
                         and claim is not None
@@ -1017,6 +1038,11 @@ async def _execute_daily_research(
                         raise PipelineOwnershipLost()
             break
         except ResearchModelBusy:
+            if explicit:
+                await _explicit_request_stage(
+                    pool, manual_request_id if manual else debug_request_id,
+                    "WAITING_MODEL_SLOT",
+                )
             if not explicit:
                 async with system_connection(pool) as conn:
                     cooldown = await read_automatic_research_cooldown(conn, local(now_shanghai()))
@@ -1160,6 +1186,10 @@ async def _execute_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "SOURCE_VERIFICATION"
+        await _explicit_request_stage(
+            pool, manual_request_id if manual else debug_request_id,
+            "VERIFYING_OUTPUT",
+        )
         if pipeline:
             await _pipeline_stage(pool, pipeline, stage="VERIFYING_OUTPUT")
         sources = sources_for_verification(raw, now=local(now_shanghai()))
@@ -1185,6 +1215,10 @@ async def _execute_daily_research(
             completed_at=local(now_shanghai()),
         )
         current_stage = "REPORT_VALIDATION"
+        await _explicit_request_stage(
+            pool, manual_request_id if manual else debug_request_id,
+            "REPORT_VALIDATION",
+        )
         if is_v2(packet):
             from backend.macro.research_batch import evaluate_research_batch
 
@@ -1363,6 +1397,10 @@ async def _execute_daily_research(
                     reason_code=diagnostics.get("failure_reason_code")
                     or "UNEXPECTED_ERROR",
                 )
+            await _explicit_request_stage(
+                pool, manual_request_id if manual else debug_request_id,
+                "PERSISTING",
+            )
             if pipeline and result["status"] == "READY":
                 await _pipeline_stage(pool, pipeline, stage="PERSISTING")
             if pipeline:
@@ -1466,10 +1504,22 @@ async def _execute_daily_research(
             if model_exit_confirmed or not model_operation_entered:
                 try:
                     async with system_connection(pool) as conn:
+                        proof = None
+                        if model_exit_confirmed and isinstance(execution_state, dict) and (remote_codex or os.name == "nt"):
+                            proof = {
+                                "kind": "REMOTE_RUNNER" if remote_codex else "LOCAL_WINDOWS_JOB",
+                                "identityBinding": execution_state.get("identityBinding"),
+                                "completedAt": execution_state.get("completedAt"),
+                            }
                         if not await release_model_guard(
-                            conn, run_id, owner_token, local(now_shanghai())
+                            conn, run_id, owner_token, local(now_shanghai()),
+                            **({"proof": proof} if proof is not None else {}),
                         ):
                             raise PipelineOwnershipLost()
+                        if model_exit_confirmed and not remote_codex:
+                            from backend.integrations.research_process import forget_local_research_exit
+
+                            forget_local_research_exit(identity)
                 except Exception as exc:  # noqa: BLE001 -- retain occupation on failure
                     logger.warning(
                         "daily_research_model_release_failed error_class=%s run_id=%s",

@@ -23,12 +23,14 @@ async def test_confirmed_cli_timeout_releases_only_its_guard_without_reinference
     monkeypatch,
 ):
     mod, state, run, owner = worker(monkeypatch)
+    received = []
 
     async def provider(*args, lifecycle=None, **kwargs):
         if lifecycle is not None:
             lifecycle.started()
             lifecycle.terminating("CLI_MODEL_TIMEOUT")
             lifecycle.exited(reaped=True, descendants_confirmed=True, returncode=-9)
+            received.append(lifecycle.snapshot())
         error = TimeoutError("PRIVATE provider body")
         error.timeout_origin = "CLI_MODEL_TIMEOUT"
         raise error
@@ -37,7 +39,15 @@ async def test_confirmed_cli_timeout_releases_only_its_guard_without_reinference
     result = await mod.sync_daily_research(object(), settings(), NOW)
     assert result["status"] == "UNCERTAIN"
     assert state["terminal"][0]["failure_reason_code"] == "CLI_MODEL_TIMEOUT"
-    mod.release_model_guard.assert_awaited_once_with(ANY, run, owner, NOW)
+    assert len(received) == 1
+    kwargs = {}
+    if mod.os.name == "nt":
+        kwargs["proof"] = {
+            "kind": "LOCAL_WINDOWS_JOB",
+            "identityBinding": received[0]["identityBinding"],
+            "completedAt": received[0]["completedAt"],
+        }
+    mod.release_model_guard.assert_awaited_once_with(ANY, run, owner, NOW, **kwargs)
     mod.run_codex_research.assert_awaited_once()
 
 

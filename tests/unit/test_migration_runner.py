@@ -32,8 +32,10 @@ def test_production_migrations_have_one_file_per_version() -> None:
 
     versions = [migration.version for migration in migrations]
     assert len(versions) == len(set(versions))
-    assert versions[-1] == 104
-    assert migrations[-1].path.name == "104_opportunity_fund_cache.sql"
+    assert versions[-1] == 106
+    assert migrations[-1].path.name == "106_research_local_exit_evidence.sql"
+    assert migrations[-2].path.name == "105_research_queue_control.sql"
+    assert migrations[-3].path.name == "104_opportunity_fund_cache.sql"
     assert any(
         m.path.name == "088_research_fund_subscription_status.sql" for m in migrations
     )
