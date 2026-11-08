@@ -59,6 +59,8 @@ if kind == "build":
  finish(code=96)
 if kind == "compose":
  if not args or args.pop(0) != "ws": finish(code=96)
+ tools_profile = args[:2] == ["--profile", "tools"]
+ if tools_profile: del args[:2]
  command = args.pop(0)
  if command == "config":
   database = "other" if scenario.get("wrong_target") else "wealthsail"
@@ -71,6 +73,10 @@ if kind == "compose":
    services["worker"]["environment"]["WORKER_DATABASE_URL"] = "postgresql://runtime:fixture@other:5432/wealthsail"
   if scenario.get("wrong_db_init_image"): services["db-init"]["image"] = "foreign-backend:latest"
   if scenario.get("wrong_admin"): services["db-init"]["environment"]["POSTGRES_ADMIN_USER"] = "foreign-admin"
+  # Compose excludes inactive profile services from its resolved model.
+  if not tools_profile or scenario.get("missing_db_init"): services.pop("db-init")
+  if scenario.get("wrong_db_init_target"):
+   services["db-init"]["environment"]["DATABASE_URL"] = "postgresql://runtime:fixture@other:5432/wealthsail"
   finish(json.dumps({"name": "wealthsail", "services": services}), code=1 if scenario.get("config_failure") else 0)
  if command == "ps":
   if "-q" in args:
@@ -340,3 +346,24 @@ def test_resume_refuses_running_writers_instead_of_turning_it_into_upgrade(tmp_p
     assert result.returncode != 0
     assert not state.get("built") and not state.get("readback") and not state.get("deployed")
     assert state["writers_running"]
+
+
+def test_resume_reports_missing_tool_service_before_build_or_database_changes(tmp_path):
+    result, state = run_resume(tmp_path, {"missing_db_init": True})
+    assert result.returncode != 0
+    assert "Required Compose service missing: db-init" in result.stderr
+    assert "Configured database target mismatch" not in result.stderr
+    assert not state.get("built") and not state.get("dry_run")
+    assert not state.get("readback") and not state.get("deployed")
+    assert not state.get("ledger_checks")
+    assert not state["writers_running"]
+
+
+def test_resume_still_rejects_wrong_tool_database_after_activating_profile(tmp_path):
+    result, state = run_resume(tmp_path, {"wrong_db_init_target": True})
+    assert result.returncode != 0
+    assert "Configured database target mismatch for db-init" in result.stderr
+    assert not state.get("built") and not state.get("dry_run")
+    assert not state.get("readback") and not state.get("deployed")
+    assert not state.get("ledger_checks")
+    assert not state["writers_running"]

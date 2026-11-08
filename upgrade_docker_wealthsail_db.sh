@@ -274,7 +274,9 @@ PY_PLAN
 # No running API process is needed to verify the recovery target. Check all
 # consumers, especially the one-off db-init service, without logging secrets.
 verify_configured_database() {
-  sudo "$COMPOSE" ws config --format json | python3 -c '
+  # db-init belongs to the tools profile and is absent from the default model.
+  # Enable it only for this read-only query, not for runtime deployment.
+  sudo "$COMPOSE" ws --profile tools config --format json | python3 -c '
 import json, sys
 from urllib.parse import urlsplit
 c = json.load(sys.stdin)
@@ -282,6 +284,8 @@ if c.get("name") != "wealthsail":
     raise SystemExit("Unexpected Compose project for migration recovery")
 services = c.get("services", {})
 for name, key in (("api", "DATABASE_URL"), ("worker", "WORKER_DATABASE_URL"), ("db-init", "DATABASE_URL")):
+    if name not in services:
+        raise SystemExit("Required Compose service missing: " + name + " (check profiles and NAS overlays)")
     service = services.get(name, {})
     try:
         url = urlsplit(service.get("environment", {}).get(key, ""))

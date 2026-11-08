@@ -19,6 +19,8 @@ sudo bash upgrade_docker_wealthsail_db.sh --resume-readback
 
 该模式检查现有 Compose 配置中的数据库目标、数据库身份及全部迁移文件/账本校验和，要求没有待执行 SQL，且 API/Worker 已停止。它构建已提交源码的镜像，通过现有受保护的管理员凭据启动一次性 `db-init`，先预览，再在迁移锁内执行只读 readback。不会执行初始化安装、迁移 SQL 或账本修复。
 
+`db-init` 属于 `tools` profile，恢复预检仅在读取 Compose 配置时显式启用它，不会启动工具服务。旧版恢复脚本遗漏这一点，会把被过滤的 `db-init` 误报为 `Configured database target mismatch for db-init`；同步修复后重新执行同一恢复命令即可，无需修改数据库连接配置。新版会分别报告服务缺失和数据库目标不匹配，实际目标校验仍然保留。
+
 日志必须包含每个版本的 `SKIP ... (already applied)`，以及：
 
 ```text
