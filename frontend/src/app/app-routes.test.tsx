@@ -251,3 +251,17 @@ it("blocks a viewer who enters the operations URL directly", async () => {
     screen.queryByRole("heading", { name: "运维中心" }),
   ).not.toBeInTheDocument();
 });
+
+it("blocks a viewer who enters a historical simulation URL directly", async () => {
+  testSession.role = "VIEWER";
+  renderWithSession(
+    <AppRoutes />,
+    "/operations/research-preview/d7810690-ef13-44ad-8591-d3699f3f589a",
+  );
+  expect(
+    await screen.findByRole("heading", { name: "无权访问运维页面" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "打开 AI 对话" }),
+  ).not.toBeInTheDocument();
+});

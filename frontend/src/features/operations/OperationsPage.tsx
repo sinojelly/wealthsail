@@ -297,7 +297,11 @@ export default function OperationsPage() {
           </button>
         </div>
         {tab === "jobs" ? (
-          <JobRunsTable jobs={jobs.data?.jobs ?? []} runs={runs} />
+          <JobRunsTable
+            jobs={jobs.data?.jobs ?? []}
+            runs={runs}
+            researchRuns={jobs.data?.researchRuns ?? []}
+          />
         ) : tab === "audit" ? (
           <AuditLogTable rows={audit.data ?? []} />
         ) : tab === "research-repair" ? (

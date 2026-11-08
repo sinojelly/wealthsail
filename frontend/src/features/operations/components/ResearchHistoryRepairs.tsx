@@ -490,6 +490,27 @@ function RepairManager({
           >
             检查修复条件（只读）
           </button>
+          {uuid.test(source) ? (
+            <a
+              href={`/operations/research-preview/${source}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ ...buttonStyle, display: "inline-block", marginLeft: 8 }}
+            >
+              预览投资机会页面
+            </a>
+          ) : (
+            <button
+              type="button"
+              style={{ ...buttonStyle, marginLeft: 8 }}
+              disabled
+            >
+              预览投资机会页面
+            </button>
+          )}
+          <p>
+            模拟预览直接读取完整冻结材料，不生成草稿，不需要独立审核，所有投资操作均禁用。
+          </p>
         </form>
       )}
       {list.isError && <p role="alert">历史修复列表暂不可读取。</p>}

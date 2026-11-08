@@ -54,6 +54,9 @@ export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const session = useAuthSession();
+  const isHistoricalPreview = location.pathname.startsWith(
+    "/operations/research-preview/",
+  );
 
   const visibleItems = navItems.filter(
     (item) => !item.admin || canViewOperations(session),
@@ -155,7 +158,11 @@ export default function AppShell() {
           <div className="breadcrumb">
             <span>工作台</span>
             <ChevronRight size={14} />
-            <strong>{pageTitles[location.pathname] ?? "资产看板"}</strong>
+            <strong>
+              {isHistoricalPreview
+                ? "运维监控 · 历史研究模拟预览"
+                : (pageTitles[location.pathname] ?? "资产看板")}
+            </strong>
           </div>
           <div className="topbar-meta">
             <span>Asia/Shanghai</span>
@@ -169,7 +176,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
-      <ChatDrawer />
+      {!isHistoricalPreview && <ChatDrawer />}
     </div>
   );
 }

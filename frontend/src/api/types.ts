@@ -681,6 +681,17 @@ export interface OpsJobRun {
 export interface OpsJobsResponse {
   jobs: OpsJob[];
   runs: OpsJobRun[];
+  researchRuns?: OpsResearchRun[];
+}
+
+export interface OpsResearchRun {
+  runId: string;
+  status: "READY" | "FAILED" | "RUNNING" | "UNCERTAIN";
+  startedAt: string;
+  finishedAt: string | null;
+  errorClass: string | null;
+  canPreview: boolean;
+  previewMissingReasons?: string[];
 }
 
 export interface FreshnessInfo {

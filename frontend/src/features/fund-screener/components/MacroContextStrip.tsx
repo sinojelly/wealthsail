@@ -31,6 +31,14 @@ import {
 } from "../workspace-navigation";
 import "../research-header.css";
 import "../workspaces.css";
+import type { FundNavHistory } from "../../../api/funds";
+
+export interface HistoricalResearchSlots {
+  validatedAt: string;
+  recommendations: ReactNode;
+  topics: ReactNode;
+  navHistories: Record<string, FundNavHistory | null>;
+}
 
 function TopicCatalog(
   props: React.ComponentProps<typeof ResearchTopicRegistry>,
@@ -47,7 +55,13 @@ function TopicCatalog(
   );
 }
 
-function MacroOverview({ data }: { data: OpportunityContext }) {
+function MacroOverview({
+  data,
+  historical = false,
+}: {
+  data: OpportunityContext;
+  historical?: boolean;
+}) {
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const reportKey =
     data.dailyResearch?.reportRunId ?? data.dailyResearch?.asOf ?? "no-report";
@@ -89,7 +103,7 @@ function MacroOverview({ data }: { data: OpportunityContext }) {
     <ObservationSection
       className="op-macro-overview"
       label="今日宏观总纲"
-      title="当前宏观事实"
+      title={historical ? "历史宏观事实" : "当前宏观事实"}
     >
       {report && (
         <h4>
@@ -222,6 +236,7 @@ export default function MacroContextStrip({
   renderResearchRefresh,
   onStudyDirection,
   onStudyQuantScan,
+  historicalPreview,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -245,8 +260,14 @@ export default function MacroContextStrip({
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
+  historicalPreview?: HistoricalResearchSlots;
 }) {
   const [params, setParams] = useSearchParams();
+  const historicalDate = historicalPreview
+    ? new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(
+        new Date(historicalPreview.validatedAt),
+      )
+    : undefined;
   const location = useLocation();
   const revealedReportRoute = useRef<string | null>(null);
   const panelId = useId();
@@ -350,53 +371,61 @@ export default function MacroContextStrip({
           aria-controls={panelId}
           onClick={() => open(tab, !expanded)}
         >
-          <strong>今日投资观察</strong>
+          <strong>{historicalPreview ? "历史投资观察" : "今日投资观察"}</strong>
           <span>{expanded ? "收起研究" : "展开研究"}</span>
         </button>
-        {daily && (
+        {daily && historicalPreview ? (
           <p className="op-research-execution-summary">
-            本次执行：
-            {(
-              {
-                READY: "已完成",
-                RUNNING: "进行中",
-                FAILED: "未通过",
-                UNCERTAIN: "结果待核实",
-                STALE: "本研究日尚未更新",
-                NOT_RUN: "尚未启动",
-              } as Record<string, string>
-            )[daily.pipeline?.state ?? daily.state] ?? "状态待核实"}{" "}
-            · 展示内容以报告来源为准
+            原时点材料复验 · 历史只读；不代表新的研究执行或发布。
           </p>
+        ) : (
+          daily && (
+            <p className="op-research-execution-summary">
+              本次执行：
+              {(
+                {
+                  READY: "已完成",
+                  RUNNING: "进行中",
+                  FAILED: "未通过",
+                  UNCERTAIN: "结果待核实",
+                  STALE: "本研究日尚未更新",
+                  NOT_RUN: "尚未启动",
+                } as Record<string, string>
+              )[daily.pipeline?.state ?? daily.state] ?? "状态待核实"}{" "}
+              · 展示内容以报告来源为准
+            </p>
+          )
         )}
-        <details className="op-execution-disclosure">
-          <summary>执行与调度详情</summary>
-          <p
-            className="op-observation-meta"
-            role="group"
-            aria-label="本次执行状态"
-          >
-            {daily && (
-              <>
-                本次执行：
-                <DailyResearchStatus data={daily} /> · 执行ID：
-                {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
-              </>
+        {!historicalPreview && (
+          <details className="op-execution-disclosure">
+            <summary>执行与调度详情</summary>
+            <p
+              className="op-observation-meta"
+              role="group"
+              aria-label="本次执行状态"
+            >
+              {daily && (
+                <>
+                  本次执行：
+                  <DailyResearchStatus data={daily} /> · 执行ID：
+                  {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
+                </>
+              )}
+            </p>
+            {ready?.dailyResearch?.nextRunAt && (
+              <small className="op-observation-next-run">
+                下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
+              </small>
             )}
-          </p>
-          {ready?.dailyResearch?.nextRunAt && (
-            <small className="op-observation-next-run">
-              下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
-            </small>
-          )}
-        </details>
+          </details>
+        )}
       </header>
       {renderResearchRefresh?.()}
       {ready && (
         <div className="op-research-report-source">
           <p aria-label="展示报告来源" aria-live="polite">
             {daily?.report
-              ? `展示报告：${isHistoricalReport ? "最近有效报告 · 历史 · 只读" : "本研究日有效报告 · 只读"} · 完成：${timeLabel(daily.reportCompletedAt)}`
+              ? `展示报告：${historicalPreview ? "历史模拟 · 只读" : isHistoricalReport ? "最近有效报告 · 历史 · 只读" : "本研究日有效报告 · 只读"} · 完成：${timeLabel(daily.reportCompletedAt)}`
               : "展示报告：尚无有效报告；以下为当前已采集事实与只读观察。"}
           </p>
           {daily?.reportRunId && (
@@ -425,11 +454,13 @@ export default function MacroContextStrip({
           )}
         </div>
       )}
-      <DeterministicRepairNotice
-        repair={ready?.dailyResearch?.report?.deterministicRepair}
-        reportRunId={ready?.dailyResearch?.reportRunId}
-      />
-      <SellRiskAlerts data={ready?.sellRiskAlerts} />
+      {!historicalPreview && (
+        <DeterministicRepairNotice
+          repair={ready?.dailyResearch?.report?.deterministicRepair}
+          reportRunId={ready?.dailyResearch?.reportRunId}
+        />
+      )}
+      {!historicalPreview && <SellRiskAlerts data={ready?.sellRiskAlerts} />}
       {confirmedBreach && (
         <p role="alert" className="op-confirmed-risk">
           已确认持仓风险预算超限。市场双轨计划继续独立展示；请先核对个人持仓与风险预算。{" "}
@@ -511,44 +542,51 @@ export default function MacroContextStrip({
                   () => open("tracking"),
                   ready?.sellRiskAlerts?.items ?? [],
                 )}
-                {ready && (
-                  <>
-                    {daily?.report && (
-                      <TopicFundRecommendations
-                        runId={displayedReportId}
-                        state="READY"
-                        completedAt={daily.reportCompletedAt}
-                        source="REPORT"
-                        historical={isHistoricalReport}
-                        presentation="SUMMARY"
-                      />
+                {ready && historicalPreview
+                  ? historicalPreview.recommendations
+                  : ready && (
+                      <>
+                        {daily?.report && (
+                          <TopicFundRecommendations
+                            runId={displayedReportId}
+                            state="READY"
+                            completedAt={daily.reportCompletedAt}
+                            source="REPORT"
+                            historical={isHistoricalReport}
+                            presentation="SUMMARY"
+                          />
+                        )}
+                        {currentResearchId &&
+                          currentResearchId !== displayedReportId && (
+                            <TopicFundRecommendations
+                              runId={currentResearchId}
+                              state={daily?.pipeline?.state ?? daily?.state}
+                              completedAt={currentResearchCompletedAt}
+                              source="CURRENT"
+                              presentation="SUMMARY"
+                              defaultExpanded={!daily?.report}
+                            />
+                          )}
+                        {!daily?.report && !currentResearchId && (
+                          <p role="status">
+                            基金机会来源尚未确定，等待有效报告或本次研究记录。
+                          </p>
+                        )}
+                      </>
                     )}
-                    {currentResearchId &&
-                      currentResearchId !== displayedReportId && (
-                        <TopicFundRecommendations
-                          runId={currentResearchId}
-                          state={daily?.pipeline?.state ?? daily?.state}
-                          completedAt={currentResearchCompletedAt}
-                          source="CURRENT"
-                          presentation="SUMMARY"
-                          defaultExpanded={!daily?.report}
-                        />
-                      )}
-                    {!daily?.report && !currentResearchId && (
-                      <p role="status">
-                        基金机会来源尚未确定，等待有效报告或本次研究记录。
-                      </p>
-                    )}
-                  </>
-                )}
                 {ready && (
-                  <EconomicEventTeasers data={ready} onOpenEvent={openEvent} />
+                  <EconomicEventTeasers
+                    data={ready}
+                    onOpenEvent={openEvent}
+                    referenceDate={historicalDate}
+                  />
                 )}
               </>
             )}
             {tab === "stories" && ready && (
               <EconomicEvents
                 data={ready}
+                referenceDate={historicalDate}
                 selectedEventId={params.get("economicEvent") ?? undefined}
                 onSelectEvent={openEvent}
               />
@@ -560,6 +598,12 @@ export default function MacroContextStrip({
                   <select
                     aria-label="宏观观察窗口"
                     value={months}
+                    disabled={!!historicalPreview}
+                    title={
+                      historicalPreview
+                        ? "历史模拟仅使用冻结观察窗口"
+                        : undefined
+                    }
                     onChange={(event) =>
                       onMonthsChange?.(Number(event.target.value))
                     }
@@ -573,7 +617,10 @@ export default function MacroContextStrip({
                 </label>
                 {ready && (
                   <>
-                    <MacroOverview data={ready} />
+                    <MacroOverview
+                      data={ready}
+                      historical={!!historicalPreview}
+                    />
                     <MacroEvidencePanel
                       data={ready}
                       marketId={selectedDirection?.marketId}
@@ -587,7 +634,9 @@ export default function MacroContextStrip({
                       className="op-print-disclosure"
                     >
                       <summary>展开查看完整研究</summary>
-                      {displayedReportId ? (
+                      {historicalPreview ? (
+                        historicalPreview.topics
+                      ) : displayedReportId ? (
                         <TopicCatalog
                           key={`report-catalog:${displayedReportId}`}
                           runId={displayedReportId}
@@ -621,9 +670,11 @@ export default function MacroContextStrip({
                           onTrack={onStudyDirection}
                           onViewMacro={() => open("macro")}
                           presentation="FORMAL"
+                          frozenNavHistories={historicalPreview?.navHistories}
                         />
                       </div>
-                      {ready?.dailyResearch?.report &&
+                      {!historicalPreview &&
+                        ready?.dailyResearch?.report &&
                         ready.dailyResearch.reportRunId && (
                           <section
                             className="op-daily-report"
@@ -676,11 +727,14 @@ export default function MacroContextStrip({
                             </p>
                           </section>
                         )}
-                      <QuantitativeScan
-                        data={ready?.dailyResearch}
-                        onTrack={onStudyQuantScan}
-                      />
-                      {!ready?.dailyResearch?.report &&
+                      {!historicalPreview && (
+                        <QuantitativeScan
+                          data={ready?.dailyResearch}
+                          onTrack={onStudyQuantScan}
+                        />
+                      )}
+                      {!historicalPreview &&
+                        !ready?.dailyResearch?.report &&
                         !!ready?.actionableZones?.length && (
                           <section aria-label="程序价格观察">
                             <h3>程序价格观察 · 尚非今日综合研判</h3>
@@ -692,14 +746,16 @@ export default function MacroContextStrip({
                             ))}
                           </section>
                         )}
-                      <DailyResearchReport
-                        data={ready?.dailyResearch}
-                        directions={directions}
-                        onDirectionSelect={onDirectionSelect}
-                        topicRegistryElsewhereRunId={
-                          displayedReportId ?? currentResearchId
-                        }
-                      />
+                      {!historicalPreview && (
+                        <DailyResearchReport
+                          data={ready?.dailyResearch}
+                          directions={directions}
+                          onDirectionSelect={onDirectionSelect}
+                          topicRegistryElsewhereRunId={
+                            displayedReportId ?? currentResearchId
+                          }
+                        />
+                      )}
                       {!!ready?.events?.length && (
                         <details
                           className="op-print-disclosure"

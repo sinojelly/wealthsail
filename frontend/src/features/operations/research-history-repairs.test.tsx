@@ -131,6 +131,25 @@ beforeEach(() => {
   vi.mocked(api.getHistoricalRepair).mockResolvedValue(fixture());
 });
 
+it("opens the original opportunity simulation directly in a new tab without creating a repair", async () => {
+  renderWithSession(<ResearchHistoryRepairs sourceRunId={source} />);
+  const link = await screen.findByRole("link", { name: "预览投资机会页面" });
+  expect(link).toHaveAttribute("href", `/operations/research-preview/${source}`);
+  expect(link).toHaveAttribute("target", "_blank");
+  expect(link.getAttribute("rel")).toContain("noopener");
+  expect(api.previewHistoricalRepair).not.toHaveBeenCalled();
+  expect(api.generateHistoricalRepair).not.toHaveBeenCalled();
+  expect(api.reviewHistoricalRepair).not.toHaveBeenCalled();
+  expect(api.publishHistoricalRepair).not.toHaveBeenCalled();
+});
+
+it("keeps direct simulation disabled until a valid original research identity is entered", async () => {
+  renderWithSession(<ResearchHistoryRepairs />);
+  expect(await screen.findByRole("button", { name: "预览投资机会页面" })).toBeDisabled();
+  await userEvent.type(screen.getByRole("textbox", { name: "原始研究 ID" }), source);
+  expect(screen.getByRole("link", { name: "预览投资机会页面" })).toHaveAttribute("href", `/operations/research-preview/${source}`);
+});
+
 it("shows only published historical observations and public quarantine evidence without trading or admin details", async () => {
   session.role = "MEMBER";
   const published = fixture("PUBLISHED");

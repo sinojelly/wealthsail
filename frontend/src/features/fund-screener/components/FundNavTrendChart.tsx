@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { FundNavPeriod } from "../../../api/funds";
+import type { FundNavHistory, FundNavPeriod } from "../../../api/funds";
 import type { ActionableZoneTrack } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { useFundNavHistory } from "../nav-history-resource";
@@ -27,20 +27,24 @@ const number = (value: unknown) =>
     ? Number(value)
     : null;
 const price = (value: unknown) => number(value)?.toFixed(4) ?? "—";
-function Trend({
+function TrendView({
   fundCode,
   track,
   confirmedNavAsOf,
+  period,
+  onPeriodChange,
+  history,
+  historical = false,
 }: {
   fundCode: string;
   track?: ActionableZoneTrack;
   confirmedNavAsOf?: string;
+  period: FundNavPeriod;
+  onPeriodChange: (period: FundNavPeriod) => void;
+  history: ReturnType<typeof useFundNavHistory>;
+  historical?: boolean;
 }) {
-  const [period, setPeriod] = useState<FundNavPeriod>("2y");
-  const { data, loading, failed, exhausted, retry } = useFundNavHistory(
-    fundCode,
-    period,
-  );
+  const { data, loading, failed, exhausted, retry } = history;
   const points =
     data?.points.map((point) => ({ ...point, value: Number(point.unitNav) })) ??
     [];
@@ -74,9 +78,9 @@ function Trend({
               type="button"
               key={key}
               aria-pressed={period === key}
-              onClick={() => setPeriod(key)}
+              onClick={() => onPeriodChange(key)}
             >
-              {label}
+              {historical && key === "all" ? "冻结全窗口" : label}
             </button>
           ))}
         </div>
@@ -95,8 +99,8 @@ function Trend({
       {points.length ? (
         <>
           <p className="op-nav-summary">
-            图中最新净值：{timeLabel(latestPoint!.date)} ·{" "}
-            {price(latestPoint!.unitNav)} 元/份
+            {historical ? "研究时曲线末点" : "图中最新净值"}：
+            {timeLabel(latestPoint!.date)} · {price(latestPoint!.unitNav)} 元/份
           </p>
           {confirmedNavAsOf &&
             latestPoint!.date < confirmedNavAsOf.slice(0, 10) && (
@@ -219,7 +223,8 @@ function Trend({
           </div>
           <p className="op-nav-summary">
             区间最低 {price(data?.summary.minimumNav)} · 最高{" "}
-            {price(data?.summary.maximumNav)} · 当前处于该周期{" "}
+            {price(data?.summary.maximumNav)} ·{" "}
+            {historical ? "研究时处于" : "当前处于"}该周期{" "}
             {percentile != null &&
             Number.isFinite(percentile) &&
             percentile >= 0 &&
@@ -255,15 +260,17 @@ function Trend({
       )}
       {data && !data.coverage.fullHistory && period === "all" && (
         <small>
-          当前仅覆盖{timeLabel(data.coverage.startDate)}起的
-          {data.coverage.sampleCount}个真实样本，完整披露历史待补齐。
+          {historical ? "冻结窗口仅覆盖" : "当前仅覆盖"}
+          {timeLabel(data.coverage.startDate)}起的
+          {data.coverage.sampleCount}个真实样本，
+          {historical ? "此页不会补抓其他历史数据。" : "完整披露历史待补齐。"}
         </small>
       )}
       {(failed || exhausted || data?.refresh.state === "FAILED") && (
         <button
           type="button"
           className="op-nav-retry"
-          disabled={loading}
+          disabled={historical || loading}
           onClick={retry}
         >
           重新读取净值
@@ -272,11 +279,83 @@ function Trend({
     </section>
   );
 }
-export default function FundNavTrendChart(props: {
+type Props = {
   fundCode: string;
   track?: ActionableZoneTrack;
   confirmedNavAsOf?: string;
-}) {
+  snapshot?: FundNavHistory | null;
+};
+function LiveTrend(props: Props) {
+  const [period, setPeriod] = useState<FundNavPeriod>("2y");
+  const history = useFundNavHistory(props.fundCode, period);
+  return (
+    <TrendView
+      {...props}
+      period={period}
+      onPeriodChange={setPeriod}
+      history={history}
+    />
+  );
+}
+function FrozenTrend({ snapshot, ...props }: Props) {
+  const [period, setPeriod] = useState<FundNavPeriod>("2y");
+  const end = snapshot?.asOf ?? snapshot?.points.at(-1)?.date;
+  const start = end ? new Date(`${end.slice(0, 10)}T00:00:00Z`) : null;
+  if (start && period !== "all")
+    start.setUTCMonth(
+      start.getUTCMonth() - { "6m": 6, "1y": 12, "2y": 24 }[period],
+    );
+  const points =
+    snapshot?.points.filter(
+      (point) =>
+        !start ||
+        period === "all" ||
+        point.date >= start.toISOString().slice(0, 10),
+    ) ?? [];
+  const values = points.map((point) => Number(point.unitNav));
+  const data = snapshot
+    ? {
+        ...snapshot,
+        period,
+        points,
+        coverage: {
+          ...snapshot.coverage,
+          startDate: points[0]?.date ?? null,
+          endDate: points.at(-1)?.date ?? null,
+          sampleCount: points.length,
+          fullHistory: false,
+        },
+        summary: {
+          ...snapshot.summary,
+          minimumNav: values.length ? String(Math.min(...values)) : null,
+          maximumNav: values.length ? String(Math.max(...values)) : null,
+          currentNav: points.at(-1)?.unitNav ?? null,
+          percentilePct: null,
+        },
+        refresh: { state: "IDLE" as const, runId: null, pollAfterMs: null },
+      }
+    : undefined;
+  return (
+    <TrendView
+      {...props}
+      historical
+      period={period}
+      onPeriodChange={setPeriod}
+      history={{
+        data,
+        loading: false,
+        failed: false,
+        exhausted: false,
+        retry: () => undefined,
+      }}
+    />
+  );
+}
+export default function FundNavTrendChart(props: Props) {
   if (!/^\d{6}$/.test(props.fundCode)) return null;
-  return <Trend key={props.fundCode} {...props} />;
+  return props.snapshot !== undefined ? (
+    <FrozenTrend key={props.fundCode} {...props} />
+  ) : (
+    <LiveTrend key={props.fundCode} {...props} />
+  );
 }

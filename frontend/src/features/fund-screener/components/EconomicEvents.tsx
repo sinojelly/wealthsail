@@ -18,11 +18,13 @@ import "../economic-events.css";
 
 export interface EconomicEventsProps {
   data: OpportunityContext;
+  referenceDate?: string;
   selectedEventId?: string;
   onSelectEvent?: (id: string) => void;
 }
 export interface EconomicEventTeasersProps {
   data: OpportunityContext;
+  referenceDate?: string;
   onOpenEvent: (id: string) => void;
 }
 const categories: Array<EconomicCategory | "全部"> = [
@@ -453,10 +455,14 @@ function EnergyObservations({ data }: { data: OpportunityContext }) {
 }
 export function EconomicEvents({
   data,
+  referenceDate,
   selectedEventId,
   onSelectEvent,
 }: EconomicEventsProps) {
-  const stories = buildEconomicStories(data, todayInShanghai());
+  const stories = buildEconomicStories(
+    data,
+    referenceDate ?? todayInShanghai(),
+  );
   const [category, setCategory] = useState<EconomicCategory | "全部">("全部");
   const [researchDate, setResearchDate] = useState("ALL");
   const [showAll, setShowAll] = useState(false);
@@ -560,10 +566,11 @@ export function EconomicEvents({
 }
 export function EconomicEventTeasers({
   data,
+  referenceDate,
   onOpenEvent,
 }: EconomicEventTeasersProps) {
   const stories = selectEconomicEventTeasers(
-    buildEconomicStories(data, todayInShanghai()),
+    buildEconomicStories(data, referenceDate ?? todayInShanghai()),
   );
   return (
     <section className="economic-event-teasers" aria-label="经济事件简讯">

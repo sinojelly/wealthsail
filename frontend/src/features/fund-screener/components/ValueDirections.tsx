@@ -35,6 +35,7 @@ import { FundWatchQuote } from "./PriceWatchSummary";
 import EstimatedProfitRange from "./EstimatedProfitRange";
 import PlanPriceRefresh from "./PlanPriceRefresh";
 import { IndustryCycleBadge, IndustryCycleWarning } from "./IndustryCycle";
+import type { FundNavHistory } from "../../../api/funds";
 
 export interface DirectionTrackInput {
   reportRunId: string;
@@ -151,13 +152,16 @@ function FundPlan({
   sources,
   reportRunId,
   onTrack,
+  frozenNavHistories,
 }: {
   plan: ActionableZoneResult;
   direction: ValueDirection;
   sources: NonNullable<DailyResearch["report"]>["sources"];
   reportRunId?: string | null;
   onTrack?: (input: DirectionTrackInput) => Promise<void>;
+  frozenNavHistories?: Record<string, FundNavHistory | null>;
 }) {
+  const historical = frozenNavHistories !== undefined;
   const [state, setState] = useState<"idle" | "pending" | "saved">("idle");
   const [error, setError] = useState("");
   const selected = plan.selectedTrack ?? plan.track;
@@ -176,7 +180,7 @@ function FundPlan({
     track.entryZoneMax != null;
   const code = plan.fundCode || plan.subjectId;
   const latest = useLatestFundQuote(
-    plan.priceBasis === "UNIT_NAV" ? code : undefined,
+    !historical && plan.priceBasis === "UNIT_NAV" ? code : undefined,
   );
   const liveConfirmed = latest.data?.confirmedNav;
   const confirmed =
@@ -241,7 +245,12 @@ function FundPlan({
       <div className="op-value-fund-layout">
         <div className="op-value-price-column">
           <p className="op-value-current">
-            {plan.priceBasis === "UNIT_NAV" ? "最新确认净值" : "最新实际点位"}：
+            {historical
+              ? "研究时确认净值"
+              : plan.priceBasis === "UNIT_NAV"
+                ? "最新确认净值"
+                : "最新实际点位"}
+            ：
             <span className="op-price-amount">
               <strong>{price(displayedPrice)}</strong> {planUnit(plan.unit)}
               {dailyChange !== null && (
@@ -337,13 +346,15 @@ function FundPlan({
           )}
           {inSellZone && (
             <p className="op-sell-zone-conclusion">
-              {plan.priceRefresh && plan.priceRefresh.state !== "READY"
-                ? "已触发卖出观察条件；当前买卖区间依据尚未完整，仅供参考，请核对最新净值与价格依据后再评估。"
-                : updatedConfirmed
-                  ? "研究时已进入建议卖出区间；最新净值已更新，请按当前价格重新评估。"
-                  : updatedEstimate
-                    ? "研究时已进入建议卖出区间；当前估值仅供参考，请核对最新行情后重新评估。"
-                    : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
+              {historical
+                ? "研究时处于卖出观察区间，仅供历史核验，不能用于当前交易。"
+                : plan.priceRefresh && plan.priceRefresh.state !== "READY"
+                  ? "已触发卖出观察条件；当前买卖区间依据尚未完整，仅供参考，请核对最新净值与价格依据后再评估。"
+                  : updatedConfirmed
+                    ? "研究时已进入建议卖出区间；最新净值已更新，请按当前价格重新评估。"
+                    : updatedEstimate
+                      ? "研究时已进入建议卖出区间；当前估值仅供参考，请核对最新行情后重新评估。"
+                      : "当前净值已进入建议卖出区间，持仓可分批止盈兑现；空仓请等待回落至建议买入区间再评估。"}
             </p>
           )}
           {!!plan.calibrationRuleKeys?.length && plan.calibrationNote && (
@@ -352,10 +363,11 @@ function FundPlan({
           {plan.subjectKind === "index" && (
             <small>指数点位用于指数研究，基金提醒须使用基金净值。</small>
           )}
-          {canTrack && (
+          {(canTrack || historical) && (
             <button
               type="button"
-              disabled={state !== "idle"}
+              disabled={historical || state !== "idle"}
+              title={historical ? "历史模拟不能保存跟踪或设置提醒" : undefined}
               aria-label={`${state === "saved" ? "已跟踪" : "跟踪该方向与买卖点"} · ${code}`}
               onClick={() => void save()}
             >
@@ -375,7 +387,13 @@ function FundPlan({
           </details>
         </div>
         {plan.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
-          <FundNavTrendChart fundCode={code} track={track} />
+          <FundNavTrendChart
+            fundCode={code}
+            track={track}
+            snapshot={
+              historical ? (frozenNavHistories?.[code] ?? null) : undefined
+            }
+          />
         )}
       </div>
     </article>
@@ -387,11 +405,13 @@ export default function ValueDirections({
   onTrack,
   onViewMacro,
   presentation = "DEFAULT",
+  frozenNavHistories,
 }: {
   data?: DailyResearch | null;
   onTrack?: (input: DirectionTrackInput) => Promise<void>;
   onViewMacro?: () => void;
   presentation?: "DEFAULT" | "FORMAL";
+  frozenNavHistories?: Record<string, FundNavHistory | null>;
 }) {
   const report = data?.report;
   if (!report)
@@ -423,17 +443,25 @@ export default function ValueDirections({
     >
       <header>
         <h3>
-          {presentation === "FORMAL"
-            ? data?.state === "READY"
-              ? "严格正式计划"
-              : "历史严格正式计划"
-            : data?.state === "READY"
-              ? "今日价值方向与买卖计划"
-              : "历史价值方向与买卖计划"}
+          {frozenNavHistories
+            ? "历史价值方向与买卖计划"
+            : presentation === "FORMAL"
+              ? data?.state === "READY"
+                ? "严格正式计划"
+                : "历史严格正式计划"
+              : data?.state === "READY"
+                ? "今日价值方向与买卖计划"
+                : "历史价值方向与买卖计划"}
         </h3>
         <small>
-          {researchScheduleLabel(data?.schedule)} ·
-          交易日14:30独立核对场外基金（北京时间）
+          {frozenNavHistories ? (
+            "仅使用原研究时点的冻结证据；不核对实时行情。"
+          ) : (
+            <>
+              {researchScheduleLabel(data?.schedule)} ·
+              交易日14:30独立核对场外基金（北京时间）
+            </>
+          )}
         </small>
       </header>
       {report.industryResearchCoverage &&
@@ -540,10 +568,15 @@ export default function ValueDirections({
                     sources={report.sources}
                     reportRunId={data.reportRunId}
                     onTrack={onTrack}
+                    frozenNavHistories={frozenNavHistories}
                   />
                 ))
               ) : (
-                <p>等待真实价格依据，暂不提供到价跟踪。</p>
+                <p>
+                  {frozenNavHistories
+                    ? "方向仅供历史观察；原研究提及基金的冻结价格与曲线可在“我的基金”核验。"
+                    : "等待真实价格依据，暂不提供到价跟踪。"}
+                </p>
               )}
             </div>
           </section>
@@ -555,13 +588,14 @@ export default function ValueDirections({
           <p>
             此份报告未生成综合方向，以下展示研究价格计划；最新买卖区间以价格依据中的计算日期与算法版本为准。
           </p>
-          {report.actionablePlans?.map((plan) => (
-            <ActionablePlan
-              key={`${plan.subjectKind}:${plan.subjectId}:${plan.selectedTrack ?? plan.track}`}
-              result={plan}
-              sources={report.sources}
-            />
-          ))}
+          {!frozenNavHistories &&
+            report.actionablePlans?.map((plan) => (
+              <ActionablePlan
+                key={`${plan.subjectKind}:${plan.subjectId}:${plan.selectedTrack ?? plan.track}`}
+                result={plan}
+                sources={report.sources}
+              />
+            ))}
         </>
       )}
     </section>

@@ -12,6 +12,9 @@ const OnboardingPage = lazy(
 const OperationsPage = lazy(
   () => import("../features/operations/OperationsPage"),
 );
+const ResearchPreviewPage = lazy(
+  () => import("../features/operations/ResearchPreviewPage"),
+);
 const ReportsPage = lazy(() => import("../features/reports/ReportsPage"));
 const RiskPolicyPage = lazy(
   () => import("../features/risk-policy/RiskPolicyPage"),
@@ -154,6 +157,16 @@ export function AppRoutes() {
             <LazyPage>
               <SettingsPage />
             </LazyPage>
+          }
+        />
+        <Route
+          path="operations/research-preview/:runId"
+          element={
+            <RequireOperationsRole>
+              <LazyPage>
+                <ResearchPreviewPage />
+              </LazyPage>
+            </RequireOperationsRole>
           }
         />
         <Route
