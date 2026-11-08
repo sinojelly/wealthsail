@@ -1,4 +1,4 @@
-import FundNavTrendChart from "./FundNavTrendChart";
+import ViewportFundChart from "./ViewportFundChart";
 import {
   bestDirectionPriority,
   buyZoneStatus,
@@ -387,7 +387,7 @@ function FundPlan({
           </details>
         </div>
         {plan.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
-          <FundNavTrendChart
+          <ViewportFundChart
             fundCode={code}
             track={track}
             snapshot={

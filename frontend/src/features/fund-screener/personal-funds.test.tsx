@@ -312,28 +312,38 @@ it("loads private holding and original plans independently of a failed public re
   expect(card).toHaveTextContent("版本 2");
 });
 
-it("shows five funds as a searchable compact list and mounts only the selected chart", async () => {
+it("shows every fund's complete prices and chart slot by default while deferring offscreen charts", async () => {
   const user = userEvent.setup();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    vi.fn(function () {
+      return { observe: vi.fn(), disconnect: vi.fn() };
+    }),
+  );
   const items = ["000101", "000102", "000103", "000104", "000105"].map((code) =>
     fundTrack(code, code),
   );
   vi.mocked(api.getStudyTracks).mockResolvedValue({ items, total: 5 });
   show(<MyFundsWorkspace actor="five" />);
-  const list = await screen.findByRole("list", { name: "基金紧凑列表" });
-  expect(within(list).getAllByRole("button")).toHaveLength(5);
-  expect(
-    screen.queryAllByRole("img", { name: /单位净值走势/ }).length,
-  ).toBeLessThanOrEqual(1);
+  const cards = await screen.findAllByRole("article", { name: /基金00010/ });
+  expect(cards).toHaveLength(5);
+  for (const card of cards) {
+    expect(card).toHaveTextContent("最新确认净值");
+    expect(card).toHaveTextContent("原冻结买入区间");
+    expect(
+      within(card).getByRole("region", { name: /净值走势图区域/ }),
+    ).toBeInTheDocument();
+  }
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   await user.type(
     screen.getByRole("searchbox", { name: "搜索我的基金" }),
     "000105",
   );
-  expect(within(list).getAllByRole("button")).toHaveLength(1);
-  await user.click(within(list).getByRole("button", { name: /000105/ }));
+  expect(screen.getAllByRole("article", { name: /基金00010/ })).toHaveLength(1);
   expect(
-    await screen.findByRole("img", { name: "000105单位净值走势" }),
+    screen.getByRole("article", { name: "基金000105" }),
   ).toBeInTheDocument();
-  expect(screen.getAllByRole("img", { name: /单位净值走势/ })).toHaveLength(1);
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
 });
 
 it("separates held and tracked filters and preserves ended and non-fund research in history", async () => {

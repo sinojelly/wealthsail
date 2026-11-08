@@ -8,6 +8,7 @@ import type {
 } from "../../../api/investment";
 import { ActionablePlanEvidence } from "../../fund-screener/components/ActionablePlan";
 import ViewportFundChart from "../../fund-screener/components/ViewportFundChart";
+import FundPriceTracks from "../../fund-screener/components/FundPriceTracks";
 import {
   fundDisplayName,
   planPrice,
@@ -124,68 +125,13 @@ export function PreviewFundCard({
             冻结价格口径：{anchor?.priceBasis ?? "缺少价格口径"}
             ；当前净值未读取。
           </p>
-          <div
-            className="research-preview-tracks"
-            role="group"
-            aria-label={`${code}历史轨道`}
-          >
-            {(
-              [
-                ["LEFT_VALUE", "左侧低吸"],
-                ["RIGHT_TREND", "右侧趋势"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                type="button"
-                key={key}
-                aria-pressed={selected === key}
-                onClick={() => setSelected(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {track ? (
-            <>
-              <p>
-                研究时轨道状态：
-                {{
-                  CANDIDATE: "候选条件成立",
-                  WATCH: "等待触发",
-                  INSUFFICIENT: "证据不足",
-                }[track.state] ?? "待核验"}
-              </p>
-              <dl className="op-value-prices">
-                <div>
-                  <dt>研究时买入区间</dt>
-                  <dd>
-                    {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>研究时卖出区间</dt>
-                  <dd>
-                    {price(track.sellZoneMin ?? track.takeProfitT1)}–
-                    {price(track.sellZoneMax ?? track.takeProfitT2)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>止损参考</dt>
-                  <dd>{price(track.stopLossPrice)}</dd>
-                </div>
-                <div>
-                  <dt>止盈 T1 / T2</dt>
-                  <dd>
-                    {price(track.takeProfitT1)} / {price(track.takeProfitT2)}
-                  </dd>
-                </div>
-              </dl>
-              {track.missingEvidence?.length ? (
-                <p role="status">
-                  缺少依据：{track.missingEvidence.join("；")}
-                </p>
-              ) : null}
-            </>
+          {anchor ? (
+            <FundPriceTracks
+              plan={anchor}
+              basis="研究时"
+              selected={selected}
+              onSelect={setSelected}
+            />
           ) : (
             <p role="status">原材料未保存该轨道的价格区间</p>
           )}

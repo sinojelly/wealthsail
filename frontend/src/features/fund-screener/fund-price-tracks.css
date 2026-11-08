@@ -1,0 +1,66 @@
+.op-fund-price-tracks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-block: 0.6rem;
+}
+.op-fund-price-track {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.65rem;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.op-fund-price-track[data-selected="true"] {
+  border-color: #63b7b6;
+  background: #f4fcfb;
+}
+.op-fund-price-track header {
+  display: grid;
+  gap: 0.4rem;
+}
+.op-fund-price-track button {
+  width: 100%;
+  padding: 0.4rem;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  color: #243b53;
+  font: inherit;
+  cursor: pointer;
+}
+.op-fund-price-track button[aria-pressed="true"] {
+  border-color: #087e8b;
+  color: #075c66;
+  background: #eaf7f7;
+}
+.op-fund-price-tracks .op-fund-price-track .op-value-prices {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.65rem;
+  margin-bottom: 0;
+}
+.op-fund-price-track .op-value-prices dt,
+.op-fund-price-track header small,
+.op-fund-price-summary > small,
+.op-fund-price-gap {
+  color: #526070;
+  font-size: 0.78rem;
+}
+.op-fund-price-track .op-value-prices dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.op-fund-price-summary {
+  container-type: inline-size;
+}
+@container (max-width: 360px) {
+  .op-fund-price-tracks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .op-fund-price-tracks .op-fund-price-track .op-value-prices {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

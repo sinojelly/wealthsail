@@ -3,10 +3,10 @@ import type { PersonalFundReference } from "../../../api/personal-funds";
 import type { PlanTrack } from "../../../api/investment";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import ViewportFundChart from "./ViewportFundChart";
-import { planPrice, planUnit } from "../plan-display";
 import { sourceHref, timeLabel } from "../macro-display";
 import { ActionablePlanEvidence } from "./ActionablePlan";
 import { relationshipLabels } from "../personal-fund-model";
+import FundPriceTracks from "./FundPriceTracks";
 
 const missingLabels: Record<string, string> = {
   LOCAL_NAV_HISTORY_UNAVAILABLE: "本地尚无可核验净值历史",
@@ -29,8 +29,6 @@ export default function FundReferenceDetails({
   const [selected, setSelected] = useState<PlanTrack>("LEFT_VALUE");
   const plan = fund.plan;
   const track = plan?.tracks.find((row) => row.track === selected);
-  const price = (value: string | number | null | undefined) =>
-    plan ? planPrice(value, plan) : "—";
   return (
     <section
       className="op-current-fund-reference"
@@ -41,105 +39,62 @@ export default function FundReferenceDetails({
         {fund.relationships.map((key) => relationshipLabels[key]).join(" · ")}
         ；程序价位不授予投资资格。
       </p>
-      <FundWatchQuote row={fund.confirmedNav} label="本地最新确认净值" />
-      <FundWatchQuote
-        row={fund.currentEstimate}
-        label="本地当日估算净值（非最终净值）"
-        estimate
-      />
-      {fund.currentEstimate?.sourceVerification === "LOCAL_RECORD_ONLY" && (
-        <p role="note">
-          本地Worker记录，原公开来源未保存/待核；此估算不用于价格计划、触发判断或投资资格。
-        </p>
-      )}
-      <div
-        className="research-preview-tracks"
-        role="group"
-        aria-label={`${fund.fundCode}当前轨道`}
-      >
-        {(
-          [
-            ["LEFT_VALUE", "左侧低吸"],
-            ["RIGHT_TREND", "右侧趋势"],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            type="button"
-            key={key}
-            aria-pressed={selected === key}
-            onClick={() => setSelected(key)}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="op-value-fund-layout">
+        <div className="op-value-price-column">
+          <FundWatchQuote row={fund.confirmedNav} label="本地最新确认净值" />
+          <FundWatchQuote
+            row={fund.currentEstimate}
+            label="本地当日估算净值（非最终净值）"
+            estimate
+          />
+          {fund.currentEstimate?.sourceVerification === "LOCAL_RECORD_ONLY" && (
+            <p role="note">
+              本地Worker记录，原公开来源未保存/待核；此估算不用于价格计划、触发判断或投资资格。
+            </p>
+          )}
+          {plan ? (
+            <>
+              <FundPriceTracks
+                plan={plan}
+                basis="当前"
+                selected={selected}
+                onSelect={setSelected}
+              />
+              <details>
+                <summary>价格依据与风险说明</summary>
+                <ActionablePlanEvidence result={plan} />
+              </details>
+            </>
+          ) : (
+            <p>本地资料尚不能形成完整双轨价格区间。</p>
+          )}
+        </div>
+        <div className="op-my-fund-chart">
+          {fund.fundMarket === "FUND_CN" && fund.fundCode ? (
+            <ViewportFundChart
+              fundCode={fund.fundCode}
+              snapshot={fund.history}
+              snapshotMode="CURRENT_LOCAL"
+              track={track}
+              confirmedNavAsOf={fund.confirmedNav?.asOf ?? undefined}
+            />
+          ) : (
+            <p>该市场尚无对应单位净值曲线，未混用其他市场价格。</p>
+          )}
+          {fund.history?.sourceUri && sourceHref(fund.history.sourceUri) && (
+            <small>
+              <a
+                href={sourceHref(fund.history.sourceUri)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                净值原来源
+              </a>{" "}
+              · 获取于{timeLabel(fund.history.retrievedAt)}
+            </small>
+          )}
+        </div>
       </div>
-      {track ? (
-        <>
-          <p>
-            当前程序轨道：
-            {track.state === "CANDIDATE"
-              ? "候选"
-              : track.state === "WATCH"
-                ? "观察"
-                : "资料不足"}{" "}
-            · {timeLabel(plan!.asOf)} · {planUnit(plan!.unit)}
-          </p>
-          <dl className="op-value-prices">
-            <div>
-              <dt>当前买入区间参考</dt>
-              <dd>
-                {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
-              </dd>
-            </div>
-            <div>
-              <dt>当前卖出区间参考</dt>
-              <dd>
-                {price(track.sellZoneMin ?? track.takeProfitT1)}–
-                {price(track.sellZoneMax ?? track.takeProfitT2)}
-              </dd>
-            </div>
-            <div>
-              <dt>当前止损参考</dt>
-              <dd>{price(track.stopLossPrice)}</dd>
-            </div>
-            <div>
-              <dt>当前止盈 T1 / T2</dt>
-              <dd>
-                {price(track.takeProfitT1)} / {price(track.takeProfitT2)}
-              </dd>
-            </div>
-          </dl>
-          <details>
-            <summary>价格依据与风险说明</summary>
-            <ActionablePlanEvidence result={plan!} />
-          </details>
-        </>
-      ) : (
-        <p>本地资料尚不能形成完整双轨价格区间。</p>
-      )}
-      {fund.fundMarket === "FUND_CN" && fund.fundCode ? (
-        <ViewportFundChart
-          fundCode={fund.fundCode}
-          snapshot={fund.history}
-          snapshotMode="CURRENT_LOCAL"
-          track={track}
-          confirmedNavAsOf={fund.confirmedNav?.asOf ?? undefined}
-        />
-      ) : (
-        <p>该市场尚无对应单位净值曲线，未混用其他市场价格。</p>
-      )}
-      {fund.history?.sourceUri && sourceHref(fund.history.sourceUri) && (
-        <small>
-          <a
-            href={sourceHref(fund.history.sourceUri)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            净值原来源
-          </a>{" "}
-          · 获取于{timeLabel(fund.history.retrievedAt)}
-        </small>
-      )}
       {fund.comments?.map((comment, index) => (
         <aside key={index}>
           <strong>原研究点评：{comment.title}</strong>

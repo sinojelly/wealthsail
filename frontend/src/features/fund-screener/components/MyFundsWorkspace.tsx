@@ -14,7 +14,7 @@ import {
   type PersonalFundGroup,
 } from "../personal-fund-model";
 import { usePersonalFunds } from "../use-personal-funds";
-import { fundDisplayName, planPrice, planUnit } from "../plan-display";
+import { fundDisplayName, planUnit } from "../plan-display";
 import { sourceHref, timeLabel } from "../macro-display";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
 import {
@@ -25,6 +25,7 @@ import { studyConditionLabel, studyStates } from "./study-display";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import ViewportFundChart from "./ViewportFundChart";
 import FundReferenceDetails from "./FundReferenceDetails";
+import FundPriceTracks from "./FundPriceTracks";
 import "../my-funds.css";
 
 export interface MyFundsWorkspaceProps {
@@ -194,19 +195,11 @@ function FundCard({
             )}
             {frozenTrack ? (
               <>
-                <p>
-                  原冻结买入区间：
-                  <strong>
-                    {planPrice(frozenTrack.entryZoneMin, plan!)}–
-                    {planPrice(frozenTrack.entryZoneMax, plan!)}{" "}
-                    {planUnit(plan!.unit)}
-                  </strong>
-                </p>
-                <p>
-                  止损 {planPrice(frozenTrack.stopLossPrice, plan!)} · T1{" "}
-                  {planPrice(frozenTrack.takeProfitT1, plan!)} / T2{" "}
-                  {planPrice(frozenTrack.takeProfitT2, plan!)}
-                </p>
+                <FundPriceTracks
+                  plan={plan!}
+                  basis="原冻结"
+                  selected={frozenTrack.track}
+                />
                 <small>
                   冻结轨道：
                   {frozenTrack.track === "LEFT_VALUE"
@@ -334,7 +327,6 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -358,9 +350,6 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         row.reference?.relationships.includes("RESEARCH_MENTIONED")) &&
       matches(row),
   );
-  const compact = groups.length > 4;
-  const chosenGroup = filtered.find((row) => row.key === selected);
-  const cards = compact ? (chosenGroup ? [chosenGroup] : []) : filtered;
   const history = (list.data?.items ?? []).filter(
     (track) =>
       !term ||
@@ -513,40 +502,7 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         </section>
       ) : (
         <>
-          {compact && (
-            <>
-              <ul className="op-my-funds-list" aria-label="基金紧凑列表">
-                {filtered.map((group) => (
-                  <li key={group.key}>
-                    <button
-                      type="button"
-                      aria-pressed={selected === group.key}
-                      onClick={() => setSelected(group.key)}
-                    >
-                      <strong>
-                        {fundDisplayName(group.label, group.code)}
-                      </strong>
-                      <span>
-                        {group.code ?? "代码待核对"} · {group.market} ·{" "}
-                        {group.holding
-                          ? "已持仓"
-                          : group.tracks.length
-                            ? "仅跟踪"
-                            : group.reference?.relationships
-                                .map((key) => relationshipLabels[key])
-                                .join("、")}{" "}
-                        · {group.tracks.length}份计划
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {filtered.length > 0 && !chosenGroup && (
-                <p>选择一只基金查看净值图与完整计划。</p>
-              )}
-            </>
-          )}
-          {cards.map((group) => (
+          {filtered.map((group) => (
             <FundCard
               key={group.key}
               group={group}

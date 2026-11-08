@@ -11,6 +11,7 @@
   background: #f8fafc;
   color: #0f172a;
   min-width: 0;
+  container-type: inline-size;
 }
 .op-current-fund-reference .research-preview-tracks {
   display: flex;
@@ -86,6 +87,7 @@
   border: 1px solid #dce5eb;
   border-radius: 0.8rem;
   background: #fff;
+  container-type: inline-size;
 }
 .op-my-fund-info,
 .op-my-fund-chart {

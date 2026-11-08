@@ -244,7 +244,7 @@ it("reuses four research workspaces and every original fund without live or writ
     screen.getByRole("article", { name: "历史基金 013477" }),
   ).toHaveTextContent("冻结材料未保存净值历史");
   await userEvent.click(within(fund).getByRole("button", { name: "右侧趋势" }));
-  expect(fund).toHaveTextContent("原材料未保存该轨道的价格区间");
+  expect(fund).toHaveTextContent("未保存右侧趋势的完整买卖点");
   await userEvent.click(within(fund).getByRole("button", { name: "左侧低吸" }));
   await userEvent.click(within(fund).getByRole("button", { name: "近1年" }));
   await userEvent.click(screen.getByRole("tab", { name: "市场证据" }));

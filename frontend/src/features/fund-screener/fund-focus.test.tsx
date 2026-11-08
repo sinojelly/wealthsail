@@ -256,6 +256,25 @@ function sectionDisclosure(section: HTMLElement, title: string) {
   return { summary: summary!, details: details as HTMLDetailsElement };
 }
 
+function expectFrozenPrices(card: HTMLElement) {
+  const prices = within(card).getByRole("region", {
+    name: "原冻结左侧低吸价格区间",
+  });
+  for (const [label, value] of [
+    ["原冻结买入区间", "0.9800–1.0200"],
+    ["原冻结卖出区间", "1.1200–1.2000"],
+    ["原冻结止损参考", "0.9000"],
+    ["原冻结止盈 T1 / T2", "1.1200 / 1.2000"],
+  ]) {
+    expect(within(prices).getByText(label).closest("div")).toHaveTextContent(
+      value,
+    );
+  }
+  expect(
+    within(card).getByRole("region", { name: "原冻结右侧趋势价格区间" }),
+  ).toHaveTextContent("未保存右侧趋势的完整买卖点");
+}
+
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.directions.mockResolvedValue([]);
@@ -284,8 +303,7 @@ it("loads personal fund cards while the display report is pending and preserves 
   const heading = within(card).getByRole("heading", {
     name: "个人人工智能联接基金",
   });
-  expect(card).toHaveTextContent("原冻结买入区间：0.9800–1.0200");
-  expect(card).toHaveTextContent("止损 0.9000 · T1 1.1200 / T2 1.2000");
+  expectFrozenPrices(card);
   expect(card).toHaveTextContent("仅跟踪");
   expect(
     within(card).getByRole("region", { name: "012733净值走势图区域" }),
@@ -312,14 +330,15 @@ it("keeps personal funds readable after an initial report HTTP failure", async (
     await screen.findByText("展示报告读取失败，请稍后重试。"),
   ).toHaveAttribute("role", "alert");
   const funds = await screen.findByRole("region", { name: "我的基金" });
-  expect(
-    await within(funds).findByRole("article", { name: "个人人工智能联接基金" }),
-  ).toBeVisible();
-  expect(funds).toHaveTextContent("原冻结买入区间：0.9800–1.0200");
+  const card = await within(funds).findByRole("article", {
+    name: "个人人工智能联接基金",
+  });
+  expect(card).toBeVisible();
+  expectFrozenPrices(card);
 });
 
 it.each([4, 5])(
-  "uses the personal card/list threshold for %s active funds while Today only shows reminders",
+  "shows all %s active fund price cards and chart shells while Today only shows reminders",
   async (count) => {
     const tracks = Array.from({ length: count }, (_, index) => {
       const track = trackedFund();
@@ -352,26 +371,18 @@ it.each([4, 5])(
       within(reminders).getByRole("button", { name: "查看我的基金" }),
     );
     const funds = await screen.findByRole("region", { name: "我的基金" });
-    if (count === 4) {
-      expect(within(funds).getAllByRole("article")).toHaveLength(4);
+    const cards = within(funds).getAllByRole("article");
+    expect(cards).toHaveLength(count);
+    expect(
+      within(funds).queryByRole("list", { name: "基金紧凑列表" }),
+    ).not.toBeInTheDocument();
+    for (const [index, card] of cards.entries()) {
+      const code = tracks[index].scope.fundCode;
+      expect(card).toBeVisible();
+      expectFrozenPrices(card);
       expect(
-        within(funds).getAllByRole("region", { name: /净值走势图区域/ }),
-      ).toHaveLength(4);
-      expect(
-        within(funds).queryByRole("list", { name: "基金紧凑列表" }),
-      ).not.toBeInTheDocument();
-    } else {
-      const list = within(funds).getByRole("list", { name: "基金紧凑列表" });
-      expect(within(list).getAllByRole("listitem")).toHaveLength(5);
-      expect(within(funds).queryByRole("article")).not.toBeInTheDocument();
-      await userEvent.click(within(list).getAllByRole("button")[2]);
-      expect(within(funds).getAllByRole("article")).toHaveLength(1);
-      expect(
-        within(funds).getByRole("article", { name: "私人基金012735" }),
+        within(card).getByRole("region", { name: `${code}净值走势图区域` }),
       ).toBeVisible();
-      expect(
-        within(funds).getAllByRole("region", { name: /净值走势图区域/ }),
-      ).toHaveLength(1);
     }
   },
 );
