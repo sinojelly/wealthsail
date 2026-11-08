@@ -9,6 +9,7 @@
 # USAGE:
 #   bash upgrade_docker_wealthsail_db.sh --check   # Read-only preflight + SQL PLAN/SKIP/DRIFT
 #   sudo bash upgrade_docker_wealthsail_db.sh --apply
+#   sudo bash upgrade_docker_wealthsail_db.sh --resume-readback
 #
 # AUTOMATED --apply ORDER:
 #   1. Check project, database, and local SQL files vs migration ledger (read-only).
@@ -70,6 +71,7 @@ LOCAL_PENDING_COUNT=''
 PLAN_LOG=''
 APPLY_LOG=''
 PG_ADMIN_PASSWORD=''
+export -n PG_ADMIN_PASSWORD
 DOWNTIME_STARTED=0
 MIGRATION_ATTEMPTED=0
 MIGRATION_SUCCESS=0
@@ -77,7 +79,7 @@ BACKUP_FILE=''
 
 usage() {
   cat <<'USAGE'
-Usage: bash upgrade_docker_wealthsail_db.sh [--check | --apply]
+Usage: bash upgrade_docker_wealthsail_db.sh [--check | --apply | --resume-readback]
 
   --check   Validate deployment and READ-ONLY compare migrations/*.sql to the
             live PostgreSQL migration ledger (PLAN pending / SKIP applied /
@@ -87,6 +89,12 @@ Usage: bash upgrade_docker_wealthsail_db.sh [--check | --apply]
             verified DB backup/migrate -> deploy -> verify. Without pending SQL,
             deploy code only (no database downtime or backup).
             Uses the protected admin credential file; no password prompt.
+  --resume-readback
+            Recover after all SQL committed but final readback failed. Requires
+            API/Worker STOPPED, matching ledger/checksums and NO pending SQL.
+            Build -> db-init dry-run -> read-only readback -> deploy only after
+            every migration SKIP and READBACK OK. No SQL or ledger changes.
+            Uses the existing protected admin file; no SSH TTY required.
   --help    Display these instructions.
 
 Recommended for changes with new SQL (e.g. migrations/091_ai_usage.sql):
@@ -108,6 +116,8 @@ For code-only updates with NO new SQL use build_docker_wealthsail.sh.
 Production safety: No automatic DB rollback. On a failed migration, do NOT
 restart old services without reviewing the failure and schema state.
 --check checks SQL files and checksums, NOT complete schema correctness.
+For stopped services after a failed readback, use --resume-readback instead.
+Keep the original pre-migration backup; do not reconcile or reapply old SQL.
 USAGE
 }
 
@@ -239,8 +249,8 @@ for version, (name, checksum) in sorted(source.items()):
         errors.append(version)
         print(f"DRIFT {name}: ledger={db_row[1][:12]} source={checksum[:12]}")
     elif db_row[0] != name:
-        # The real migration runner only guards checksum, but surface a rename.
-        print(f"NOTE {name}: ledger filename differs ({db_row[0]})")
+        errors.append(version)
+        print(f"DRIFT {name}: ledger filename differs ({db_row[0]})")
 for version, (name, _) in sorted(applied.items()):
     if version not in source:
         errors.append(version)
@@ -261,6 +271,71 @@ if errors:
 PY_PLAN
 }
 
+# No running API process is needed to verify the recovery target. Check all
+# consumers, especially the one-off db-init service, without logging secrets.
+verify_configured_database() {
+  sudo "$COMPOSE" ws config --format json | python3 -c '
+import json, sys
+from urllib.parse import urlsplit
+c = json.load(sys.stdin)
+if c.get("name") != "wealthsail":
+    raise SystemExit("Unexpected Compose project for migration recovery")
+services = c.get("services", {})
+for name, key in (("api", "DATABASE_URL"), ("worker", "WORKER_DATABASE_URL"), ("db-init", "DATABASE_URL")):
+    service = services.get(name, {})
+    try:
+        url = urlsplit(service.get("environment", {}).get(key, ""))
+        host = (url.hostname or "") + (":" + str(url.port) if url.port else "")
+        valid = host + "/" + url.path.strip("/") == "postgres:5432/wealthsail"
+    except (ValueError, AttributeError):
+        valid = False
+    if not valid:
+        raise SystemExit("Configured database target mismatch for " + name)
+    if service.get("image") != "wealthsail-backend:latest":
+        raise SystemExit("Unexpected backend image for " + name)
+    if name == "db-init" and service.get("environment", {}).get("POSTGRES_ADMIN_USER", "admin") != "admin":
+        raise SystemExit("Unexpected migration administrator")
+print("OK: API/Worker/db-init target is postgres:5432/wealthsail (credentials redacted)")
+'
+}
+
+verify_stopped_writers() {
+  local service ids cid running
+  for service in api worker; do
+    ids="$(sudo "$COMPOSE" ws ps -a -q "$service")" \
+      || fail "Unable to inspect stopped service $service"
+    while IFS= read -r cid; do
+      [[ -n "$cid" ]] || continue
+      running="$(sudo docker inspect -f '{{.State.Running}}' "$cid")" \
+        || fail "Unable to inspect container for $service"
+      [[ "$running" == false ]] || fail "Recovery requires $service stopped"
+    done <<< "$ids"
+  done
+}
+
+verify_skipped_migrations() {
+  python3 - "$ROOT/migrations" "$1" <<'PY_SKIP'
+import re
+import sys
+from pathlib import Path
+
+expected = sorted(p.name for p in Path(sys.argv[1]).iterdir()
+                  if p.is_file() and re.fullmatch(r"\d{3}_[a-zA-Z0-9_.-]+\.sql", p.name))
+lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+actual = []
+for line in lines:
+    if line.startswith(("PLAN ", "APPLIED ", "RECONCILE ", "DRIFT ")):
+        raise SystemExit("Recovery must only SKIP existing migrations")
+    if line.startswith("SKIP "):
+        match = re.fullmatch(r"SKIP (\S+) \(already applied\)", line)
+        if not match:
+            raise SystemExit("Unexpected recovery migration result")
+        actual.append(match.group(1))
+if not expected or sorted(actual) != expected:
+    raise SystemExit("Recovery SKIP results differ from the complete source migration list")
+PY_SKIP
+}
+
 on_exit() {
   local status="$?"
   trap - EXIT
@@ -270,6 +345,13 @@ on_exit() {
   if [[ -n "$APPLY_LOG" && -f "$APPLY_LOG" ]]; then rm -f -- "$APPLY_LOG"; fi
   if ((status != 0)); then
     printf '\nUPGRADE FAILED (exit %s).\n' "$status" >&2
+    if [[ "$MODE" == resume ]] && ((DOWNTIME_STARTED)); then
+      # Deployment may have started writers before a health check failed.
+      # Never leave a failed recovery serving requests or restart old images.
+      if ! sudo "$COMPOSE" ws stop worker api; then
+        printf 'ERROR: unable to stop API/Worker; stop them manually before retrying.\n' >&2
+      fi
+    fi
     if ((DOWNTIME_STARTED)); then
       printf 'API/Worker may be stopped. Migration attempted=%s, readback passed=%s.\n' \
         "$MIGRATION_ATTEMPTED" "$MIGRATION_SUCCESS" >&2
@@ -291,10 +373,11 @@ trap 'printf "Terminated.\n" >&2; exit 143' TERM
 case "${1:-}" in
   --check) MODE='check' ;;
   --apply) MODE='apply' ;;
+  --resume-readback) MODE='resume' ;;
   --help|-h|'') usage; exit 0 ;;
   *) usage >&2; fail "Unknown mode: $1" ;;
 esac
-[[ $# -eq 1 ]] || fail 'Choose exactly one mode: --check or --apply'
+[[ $# -eq 1 ]] || fail 'Choose exactly one mode: --check, --apply or --resume-readback'
 
 [[ -x "$COMPOSE" && -f "$DEPLOY_JSON" ]] || fail "Missing nas-compose or deploy.json under $NAS_TOOLS"
 [[ -f "$BUILD_SCRIPT" ]] || fail "Missing $BUILD_SCRIPT"
@@ -310,7 +393,12 @@ log '[1/7] Validate exact WealthSail Compose project and storage'
 bash "$BUILD_SCRIPT" --check
 
 # Verify expected PostgreSQL target WITHOUT printing its DATABASE_URL/password.
-sudo "$COMPOSE" ws exec -T api python -c '
+if [[ "$MODE" == resume ]]; then
+  verify_configured_database
+  verify_stopped_writers
+  DOWNTIME_STARTED=1
+else
+  sudo "$COMPOSE" ws exec -T api python -c '
 import os
 from urllib.parse import urlsplit
 v=urlsplit(os.environ.get("DATABASE_URL", ""))
@@ -319,6 +407,7 @@ target=host+"/"+v.path.strip("/")
 assert target == "postgres:5432/wealthsail", "Production API DB target mismatch"
 print("OK: API target is postgres:5432/wealthsail (credentials redacted)")
 '
+fi
 
 # Refuse to run on an unready or unexpected shared PostgreSQL database.
 sudo docker inspect -f '{{.State.Running}}' "$EXPECTED_PG_CONTAINER" | grep -qx true \
@@ -343,16 +432,21 @@ if [[ "$MODE" == check ]]; then
   exit 0
 fi
 
-[[ -t 0 && -t 1 ]] || fail '--apply requires an interactive SSH terminal'
-[[ -r /dev/tty ]] || fail 'No SSH TTY found; run this command interactively'
-for service in api worker codex-runner frontend; do
-  cid="$(sudo "$COMPOSE" ws ps -q "$service")"
-  [[ -n "$cid" ]] || fail "Service $service must be running before upgrade"
-  [[ "$(sudo docker inspect -f '{{.State.Running}}' "$cid")" == true ]] \
-    || fail "Service $service is not running"
-done
+if [[ "$MODE" == resume ]]; then
+  ((LOCAL_PENDING_COUNT == 0)) \
+    || fail 'Recovery requires all SQL already applied; pending migrations found'
+else
+  [[ -t 0 && -t 1 ]] || fail '--apply requires an interactive SSH terminal'
+  [[ -r /dev/tty ]] || fail 'No SSH TTY found; run this command interactively'
+  for service in api worker codex-runner frontend; do
+    cid="$(sudo "$COMPOSE" ws ps -q "$service")"
+    [[ -n "$cid" ]] || fail "Service $service must be running before upgrade"
+    [[ "$(sudo docker inspect -f '{{.State.Running}}' "$cid")" == true ]] \
+      || fail "Service $service is not running"
+  done
+fi
 
-log '[2/7] Build new backend/runner/frontend images while existing services stay online'
+log '[2/7] Build new backend/runner/frontend images without starting services'
 bash "$BUILD_SCRIPT" --build-only
 
 # The db-init Compose service is one-shot and on the existing postgres network.
@@ -373,6 +467,8 @@ password = sys.stdin.readline().rstrip("\r\n")
 if not password:
     raise SystemExit("Missing migration admin password on stdin")
 admin = os.environ.get("POSTGRES_ADMIN_USER", "admin")
+if admin != "admin":
+    raise SystemExit("Migration administrator mismatch")
 authority = url.netloc.rsplit("@", 1)[-1]
 admin_authority = quote(admin, safe="") + ":" + quote(password, safe="") + "@" + authority
 os.environ["MIGRATION_DATABASE_URL"] = urlunsplit(url._replace(netloc=admin_authority))
@@ -406,6 +502,38 @@ LOCAL_PLAN_FILES="$(printf '%s\n' "$LOCAL_PLAN" | sed -n 's/^PLAN \([^ ]*\).*/\1
 IMAGE_PLAN_FILES="$(sed -n 's/^PLAN \([^ ]*\).*/\1/p' "$PLAN_LOG" | sort)"
 [[ "$LOCAL_PLAN_FILES" == "$IMAGE_PLAN_FILES" ]] \
   || fail 'Built-image planned migration filenames differ from source SQL files'
+if [[ "$MODE" == resume ]]; then
+  verify_skipped_migrations "$PLAN_LOG"
+  verify_stopped_writers
+  log '[4/7] Recovery: preserve existing backup; no migration SQL will execute'
+  log '[5/7] Run complete readback in a read-only transaction under the migration lock'
+  MIGRATION_ATTEMPTED=1
+  APPLY_LOG="$(mktemp)"
+  run_migrations --readback-only 2>&1 | tee "$APPLY_LOG"
+  grep -qx 'TARGET environment=production database=postgres:5432/wealthsail dry_run=False readback_only=True' "$APPLY_LOG" \
+    || fail 'Recovery did not verify the expected production target'
+  verify_skipped_migrations "$APPLY_LOG"
+  grep -q '^READBACK OK:' "$APPLY_LOG" || fail 'Recovery ended without READBACK OK'
+  verify_stopped_writers
+  log '[6/7] Recheck migration ledger before deploying'
+  if ! POST_PLAN="$(show_migration_plan)"; then
+    printf '%s\n' "$POST_PLAN" >&2
+    fail 'Recovery ledger checksum validation failed'
+  fi
+  printf '%s\n' "$POST_PLAN"
+  grep -qx 'PENDING_COUNT=0' <<< "$POST_PLAN" \
+    || fail 'Recovery found unapplied SQL before deployment'
+  MIGRATION_SUCCESS=1
+  PG_ADMIN_PASSWORD=''
+  unset PG_ADMIN_PASSWORD
+  verify_stopped_writers
+  log '[7/7] Readback passed: deploy verified images and check services'
+  bash "$BUILD_SCRIPT" --deploy-only
+  sudo "$COMPOSE" ws ps
+  printf '\nSUCCESS: recovery readback passed, deployment checked; original backup preserved.\n'
+  printf 'NEXT: Verify HTTPS web login, research queue operations and worker logs.\n'
+  exit 0
+fi
 if ((IMAGE_PENDING_COUNT == 0)); then
   log '[4/7] No pending SQL: leave database online and deploy new images only'
   PG_ADMIN_PASSWORD=''
