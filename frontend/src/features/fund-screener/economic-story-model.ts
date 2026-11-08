@@ -21,6 +21,8 @@ export interface EconomicSource {
   publishedAt: string | null;
   retrievedAt: string | null;
   verification: string;
+  frozenTitleMatched?: boolean;
+  frozenQuoteMatched?: boolean;
 }
 export interface EconomicStory {
   id: string;
@@ -39,6 +41,7 @@ export interface EconomicStory {
   reportCompletedAt: string | null;
   reportSlotDate: string | null;
   occurredAt: null;
+  sourcePublishedAt: string | null;
   scheduledAt: string | null;
   historical: boolean;
   contentComplete: boolean;
@@ -116,6 +119,7 @@ const mechanisms: Record<
   },
 };
 const categoryCodes: Record<string, EconomicCategory> = {
+  UNCLASSIFIED: "待分类",
   GEOPOLITICS: "国际局势",
   GEOPOLITICS_POLICY: "国际局势",
   ENERGY_SHIPPING: "国际局势",
@@ -151,6 +155,9 @@ type StoryObservation = Omit<AcceptanceObservation, "importance"> & {
   importance?: string;
   affectedDirectionIds?: string[];
   factVerification?: "UNVERIFIED";
+  category?: string;
+  sourcePublishedAt?: string | null;
+  sourcePublicationBasis?: "SOURCE_PUBLICATION" | null;
 };
 
 export function economicCalendarDate(
@@ -240,13 +247,20 @@ function sourceStatus(
     checked: available.filter((id) =>
       sources
         .filter((source) => source.id === id)
-        .every((source) => source.verification === "SOURCE_CHECKED"),
+        .every(
+          (source) =>
+            source.verification === "SOURCE_CHECKED" ||
+            source.frozenQuoteMatched === true,
+        ),
     ).length,
     missing: sourceIds.length - available.length,
   };
 }
 function sourceProjection(
-  source: ResearchAcceptanceOutcome["accepted"]["sources"][number],
+  source: ResearchAcceptanceOutcome["accepted"]["sources"][number] & {
+    frozenTitleMatched?: boolean;
+    frozenQuoteMatched?: boolean;
+  },
 ): EconomicSource {
   return {
     id: source.id,
@@ -256,7 +270,25 @@ function sourceProjection(
     publishedAt: source.publishedAt ?? source.publishedDate ?? null,
     retrievedAt: source.retrievedAt ?? null,
     verification: source.verification ?? "UNVERIFIED",
+    frozenTitleMatched:
+      typeof source.frozenTitleMatched === "boolean"
+        ? source.frozenTitleMatched
+        : undefined,
+    frozenQuoteMatched:
+      typeof source.frozenQuoteMatched === "boolean"
+        ? source.frozenQuoteMatched
+        : undefined,
   };
+}
+function latestPublication(
+  values: Array<string | null | undefined>,
+): string | null {
+  const valid = values.filter(
+    (value): value is string => !!economicCalendarDate(value),
+  );
+  const instant = (value: string) =>
+    Date.parse(value.length === 10 ? `${value}T00:00:00+08:00` : value);
+  return valid.sort((a, b) => instant(b) - instant(a))[0] ?? null;
 }
 function factIdentity(story: EconomicStory) {
   return JSON.stringify([
@@ -418,15 +450,24 @@ export function buildEconomicStories(
         summary: event.summary ?? event.thesis ?? "原研究未提供事实摘要",
         phase: event.phase ?? null,
         importance: importanceValue(event.importance),
-        category: lessons.length
-          ? mechanisms[lessons[0].channel].category
-          : "待分类",
+        category:
+          event.category && Object.hasOwn(categoryCodes, event.category)
+            ? categoryCodes[event.category]
+            : lessons.length
+              ? mechanisms[lessons[0].channel].category
+              : "待分类",
         researchAsOf: asOf,
         researchDate,
         researchDateBasis,
         reportCompletedAt,
         reportSlotDate: reportSlot,
         occurredAt: null,
+        sourcePublishedAt: latestPublication([
+          ...(event.sourcePublicationBasis === "SOURCE_PUBLICATION"
+            ? [event.sourcePublishedAt]
+            : []),
+          ...matched.map((source) => source.publishedAt),
+        ]),
         scheduledAt:
           kind === "UPCOMING"
             ? (event.scheduledAt ?? event.scheduledDate ?? null)
@@ -522,6 +563,7 @@ export function buildEconomicStories(
       reportCompletedAt: null,
       reportSlotDate: null,
       occurredAt: null,
+      sourcePublishedAt: latestPublication([event.publishedAt]),
       scheduledAt: null,
       historical: false,
       contentComplete: true,

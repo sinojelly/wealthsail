@@ -12,6 +12,7 @@ import { timeLabel } from "../fund-screener/macro-display";
 import PreviewFunds from "./components/PreviewFunds";
 import { frozenNavHistory, previewMissingReason } from "./preview-data";
 import PreviewTopics from "./components/PreviewTopics";
+import CurrentPersonalFundsReference from "./components/CurrentPersonalFundsReference";
 import "../fund-screener/opportunities.css";
 import "./research-preview.css";
 
@@ -60,7 +61,7 @@ export default function ResearchPreviewPage() {
       <header className="research-preview-banner">
         <h1>历史模拟 · 非实时投资建议</h1>
         <p>
-          仅回放原研究时点的冻结证据。基金净值、买卖区间和风险结论均属于历史记录，当前行情与持仓未读取。
+          默认仅回放原研究时点的冻结证据。历史基金净值、买卖区间和风险结论保留原日期；当前持仓与跟踪可在“我的基金”独立开启本地只读参考。
         </p>
         {valid && (
           <dl>
@@ -124,8 +125,9 @@ export default function ResearchPreviewPage() {
             renderMyFunds={() => (
               <>
                 <p className="research-preview-muted">
-                  本页展示原研究提及基金，冻结材料未保存个人持仓；不读取当前持仓或跟踪记录。
+                  历史卡片展示原研究提及基金，冻结材料未保存个人持仓；当前持仓与跟踪参考须单独开启，并与历史资料分别展示。
                 </p>
+                <CurrentPersonalFundsReference />
                 <PreviewFunds
                   funds={value.funds}
                   validatedAt={value.validatedAt}

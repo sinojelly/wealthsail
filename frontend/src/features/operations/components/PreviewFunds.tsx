@@ -7,7 +7,7 @@ import type {
   ValueDirection,
 } from "../../../api/investment";
 import { ActionablePlanEvidence } from "../../fund-screener/components/ActionablePlan";
-import FundNavTrendChart from "../../fund-screener/components/FundNavTrendChart";
+import ViewportFundChart from "../../fund-screener/components/ViewportFundChart";
 import {
   fundDisplayName,
   planPrice,
@@ -233,7 +233,7 @@ export function PreviewFundCard({
         </div>
         <div className="research-preview-history">
           {fund.fundCode && (
-            <FundNavTrendChart
+            <ViewportFundChart
               fundCode={fund.fundCode}
               track={track}
               confirmedNavAsOf={anchor?.asOf ?? undefined}

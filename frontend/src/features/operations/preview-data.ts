@@ -1,5 +1,6 @@
 import type { FundNavHistory } from "../../api/funds";
 import type { PreviewFund } from "../../api/research-preview";
+import { navPercentile } from "../fund-screener/nav-percentile";
 
 const reasonLabels: Record<string, string> = {
   FROZEN_NAV_HISTORY_UNAVAILABLE: "冻结材料未保存净值历史",
@@ -61,8 +62,8 @@ export function frozenNavHistory(
       minimumNav: String(Math.min(...values)),
       maximumNav: String(Math.max(...values)),
       currentNav: points.at(-1)!.unitNav,
-      percentilePct: null,
-      percentileMethod: "FROZEN_SOURCE_ONLY",
+      percentilePct: navPercentile(values),
+      percentileMethod: "EMPIRICAL_MIDRANK_V1",
     },
     refresh: { state: "IDLE", runId: null, pollAfterMs: null },
   };

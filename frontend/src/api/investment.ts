@@ -968,6 +968,8 @@ export interface DailyResearch {
       retrievedAt: string | null;
       verification: string;
       contentHash?: string | null;
+      frozenTitleMatched?: boolean;
+      frozenQuoteMatched?: boolean;
     }>;
     events: Array<{
       id: string;

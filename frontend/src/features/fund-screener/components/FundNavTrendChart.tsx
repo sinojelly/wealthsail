@@ -15,6 +15,7 @@ import type { FundNavHistory, FundNavPeriod } from "../../../api/funds";
 import type { ActionableZoneTrack } from "../../../api/investment";
 import { sourceHref, timeLabel } from "../macro-display";
 import { useFundNavHistory } from "../nav-history-resource";
+import { navPercentile } from "../nav-percentile";
 
 const periods: Array<[FundNavPeriod, string]> = [
   ["6m", "近半年"],
@@ -35,6 +36,7 @@ function TrendView({
   onPeriodChange,
   history,
   historical = false,
+  allPeriodLabel,
 }: {
   fundCode: string;
   track?: ActionableZoneTrack;
@@ -43,6 +45,7 @@ function TrendView({
   onPeriodChange: (period: FundNavPeriod) => void;
   history: ReturnType<typeof useFundNavHistory>;
   historical?: boolean;
+  allPeriodLabel?: string;
 }) {
   const { data, loading, failed, exhausted, retry } = history;
   const points =
@@ -67,7 +70,9 @@ function TrendView({
   const minimum = values.length ? Math.min(...values) : 0,
     maximum = values.length ? Math.max(...values) : 1;
   const padding = Math.max((maximum - minimum) * 0.06, maximum * 0.01);
-  const percentile = data?.summary.percentilePct;
+  const percentile =
+    data?.summary.percentilePct ??
+    navPercentile(data?.points.map((point) => Number(point.unitNav)) ?? []);
   return (
     <section className="op-nav-trend" aria-label={`${fundCode}单位净值图`}>
       <header>
@@ -80,7 +85,11 @@ function TrendView({
               aria-pressed={period === key}
               onClick={() => onPeriodChange(key)}
             >
-              {historical && key === "all" ? "冻结全窗口" : label}
+              {key === "all"
+                ? historical
+                  ? "冻结全窗口"
+                  : (allPeriodLabel ?? label)
+                : label}
             </button>
           ))}
         </div>
@@ -284,6 +293,7 @@ type Props = {
   track?: ActionableZoneTrack;
   confirmedNavAsOf?: string;
   snapshot?: FundNavHistory | null;
+  snapshotMode?: "HISTORICAL" | "CURRENT_LOCAL";
 };
 function LiveTrend(props: Props) {
   const [period, setPeriod] = useState<FundNavPeriod>("2y");
@@ -323,14 +333,18 @@ function FrozenTrend({ snapshot, ...props }: Props) {
           startDate: points[0]?.date ?? null,
           endDate: points.at(-1)?.date ?? null,
           sampleCount: points.length,
-          fullHistory: false,
+          fullHistory:
+            props.snapshotMode === "CURRENT_LOCAL" &&
+            period === "all" &&
+            snapshot.coverage.fullHistory,
         },
         summary: {
           ...snapshot.summary,
           minimumNav: values.length ? String(Math.min(...values)) : null,
           maximumNav: values.length ? String(Math.max(...values)) : null,
           currentNav: points.at(-1)?.unitNav ?? null,
-          percentilePct: null,
+          percentilePct: navPercentile(values),
+          percentileMethod: "EMPIRICAL_MIDRANK_V1",
         },
         refresh: { state: "IDLE" as const, runId: null, pollAfterMs: null },
       }
@@ -338,7 +352,13 @@ function FrozenTrend({ snapshot, ...props }: Props) {
   return (
     <TrendView
       {...props}
-      historical
+      historical={props.snapshotMode !== "CURRENT_LOCAL"}
+      allPeriodLabel={
+        props.snapshotMode === "CURRENT_LOCAL" &&
+        !snapshot?.coverage.fullHistory
+          ? "本地全窗口"
+          : undefined
+      }
       period={period}
       onPeriodChange={setPeriod}
       history={{

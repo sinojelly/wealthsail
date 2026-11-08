@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getStudyTracks } from "../../api/study-api";
 import { groupPersonalFunds } from "./personal-fund-model";
 import { useStudyQuoteRefresh } from "./use-study-tracking";
+import { getPersonalFundsReference } from "../../api/personal-funds";
+import { privateQueryKey, useAuthSession } from "../../app/auth-session";
 
 function shanghaiDate() {
   return new Intl.DateTimeFormat("sv-SE", {
@@ -14,6 +16,7 @@ function shanghaiDate() {
 }
 
 export function usePersonalFunds(actor: string) {
+  const session = useAuthSession();
   useStudyQuoteRefresh(actor);
   const [today, setToday] = useState(shanghaiDate);
   useEffect(() => {
@@ -37,9 +40,25 @@ export function usePersonalFunds(actor: string) {
     refetchOnMount: "always",
     refetchOnWindowFocus: "always",
   });
+  const reference = useQuery({
+    queryKey: privateQueryKey(
+      session,
+      "personal-funds-reference",
+      actor,
+      "research-included",
+    ),
+    queryFn: ({ signal }) => getPersonalFundsReference(true, signal),
+    enabled: !!actor,
+    staleTime: 30_000,
+  });
   return {
     list,
+    reference,
     today,
-    groups: list.data ? groupPersonalFunds(list.data, today) : [],
+    groups: groupPersonalFunds(
+      list.data ?? { items: [], total: 0 },
+      today,
+      reference.data?.funds,
+    ),
   };
 }

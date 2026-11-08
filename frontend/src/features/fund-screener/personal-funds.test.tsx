@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as api from "../../api/study-api";
 import * as funds from "../../api/funds";
+import * as personal from "../../api/personal-funds";
 import MyFundsWorkspace from "./components/MyFundsWorkspace";
 import PersonalActionReminders from "./components/PersonalActionReminders";
 import type { SellRiskAlert } from "../../api/investment";
@@ -19,6 +20,9 @@ vi.mock("../../api/study-api", () => ({
   getStudyDetail: vi.fn(),
   setStudyStatus: vi.fn(),
   setFundWatchStatus: vi.fn(),
+}));
+vi.mock("../../api/personal-funds", () => ({
+  getPersonalFundsReference: vi.fn(),
 }));
 vi.mock("../../api/funds", async (original) => ({
   ...(await original<typeof import("../../api/funds")>()),
@@ -46,6 +50,13 @@ function show(ui: React.ReactNode, path = "/fund-screener?keep=yes") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
+    version: "personal-funds-reference-v1",
+    source: "LOCAL_DATABASE_ONLY",
+    readOnly: true,
+    asOf: "2026-11-07T12:00:00+08:00",
+    funds: [],
+  });
   // Most cases exercise plan/quote behavior in the no-IO browser fallback.
   // Viewport cases below install an observer and enter individual chart slots.
   vi.stubGlobal("IntersectionObserver", undefined);
@@ -112,6 +123,66 @@ beforeEach(() => {
       refresh: { state: "IDLE", runId: null, pollAfterMs: null },
     }),
   );
+});
+
+it("shows watchlist and current mentioned funds even when no formal research plan was saved", async () => {
+  vi.mocked(api.getStudyTracks).mockResolvedValue({
+    items: [],
+    heldFunds: [],
+    total: 0,
+  });
+  vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
+    version: "personal-funds-reference-v1",
+    source: "LOCAL_DATABASE_ONLY",
+    readOnly: true,
+    asOf: "2026-11-07T12:00:00+08:00",
+    funds: [
+      {
+        key: "FUND_CN:013477",
+        fundCode: "013477",
+        fundMarket: "FUND_CN",
+        label: "自选基金",
+        relationships: ["WATCHLIST"],
+        investmentEligible: false,
+        plan: frozenPlan("013477"),
+        history: null,
+        confirmedNav: null,
+        currentEstimate: null,
+        missingReasons: [],
+      },
+      {
+        key: "FUND_CN:011035",
+        fundCode: "011035",
+        fundMarket: "FUND_CN",
+        label: "提及观察基金",
+        relationships: ["RESEARCH_MENTIONED"],
+        investmentEligible: false,
+        plan: null,
+        history: null,
+        confirmedNav: null,
+        currentEstimate: null,
+        missingReasons: ["LOCAL_PRICE_PLAN_INCOMPLETE"],
+      },
+    ],
+  });
+  show(<MyFundsWorkspace actor="tenant:user" />);
+  const mentioned = await screen.findByRole("article", {
+    name: "提及观察基金",
+  });
+  expect(mentioned).toHaveTextContent("本期研究提及");
+  expect(screen.getByRole("article", { name: "自选基金" })).toHaveTextContent(
+    "当前买入区间参考",
+  );
+  expect(
+    within(mentioned).queryByRole("button", { name: /取消跟踪/ }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "本期提及" }));
+  expect(
+    screen.getByRole("article", { name: "提及观察基金" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("article", { name: "自选基金" }),
+  ).not.toBeInTheDocument();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -755,7 +826,7 @@ it.each(["unknown-market", "invalid-code"])(
     );
     expect(
       await screen.findByText(
-        "暂无持仓或活动基金跟踪；可从机会中保存研究，历史研究仍可查看。",
+        "暂无持仓、活动跟踪、自选或本期提及基金；历史研究仍可查看。",
       ),
     ).toBeInTheDocument();
     expect(api.setFundWatchStatus).not.toHaveBeenCalled();
@@ -831,7 +902,7 @@ it("refreshes partially cancelled studies and retries only the remaining origina
   );
   expect(
     await screen.findByText(
-      "暂无持仓或活动基金跟踪；可从机会中保存研究，历史研究仍可查看。",
+      "暂无持仓、活动跟踪、自选或本期提及基金；历史研究仍可查看。",
     ),
   ).toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();

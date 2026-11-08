@@ -105,7 +105,9 @@ it("separates fact dates, source checking and conditional details without certif
   render(<EconomicEvents data={context()} />);
   const card = screen.getByRole("article", { name: "本次事项1" });
   expect(within(card).getByText("独立事实1")).toBeVisible();
-  expect(within(card).getByText(/事件发生时间未单独提供/)).toBeVisible();
+  expect(within(card).queryByText(/事件发生时间未单独提供/)).not.toBeInTheDocument();
+  expect(within(card).getByText(/来源发布：2026年11月6日 09:00/)).toBeVisible();
+  expect(within(card).getByText(/非事件发生时间/)).toBeVisible();
   expect(within(card).getByText("2026年11月7日 08:00")).toHaveAttribute(
     "dateTime",
     "2026-11-07T08:00:00+08:00",

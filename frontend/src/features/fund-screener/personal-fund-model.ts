@@ -5,6 +5,13 @@ import type {
   StudyTrackList,
 } from "../../api/study-api";
 import type { SellRiskAlert } from "../../api/investment";
+import type { PersonalFundReference } from "../../api/personal-funds";
+export const relationshipLabels = {
+  HELD: "已持仓",
+  TRACKED: "已跟踪",
+  WATCHLIST: "自选关注",
+  RESEARCH_MENTIONED: "本期研究提及",
+};
 
 export interface PersonalFundGroup {
   key: string;
@@ -14,6 +21,7 @@ export interface PersonalFundGroup {
   holding?: HeldFundWatch;
   tracks: StudyTrack[];
   trackingSuppressed: boolean;
+  reference?: PersonalFundReference;
 }
 
 /** Display-only confidence: never infer a trigger from a different quote or plan. */
@@ -99,6 +107,7 @@ export function hasSameSellReminder(
 export function groupPersonalFunds(
   list: StudyTrackList,
   today: string,
+  references: readonly PersonalFundReference[] = [],
 ): PersonalFundGroup[] {
   const groups = new Map<string, PersonalFundGroup>();
   const suppressed = new Set(list.suppressedFundKeys ?? []);
@@ -166,6 +175,42 @@ export function groupPersonalFunds(
     if (!row.tracks.some((existing) => existing.id === track.id))
       row.tracks.push(track);
     groups.set(key, row);
+  }
+  for (const reference of references) {
+    const group =
+      groups.get(reference.key) ??
+      [...groups.values()].find(
+        (row) =>
+          reference.instrumentId &&
+          row.holding?.instrumentId === reference.instrumentId &&
+          row.market === reference.fundMarket &&
+          (!row.code || row.code === reference.fundCode),
+      );
+    if (group) {
+      groups.delete(group.key);
+      group.reference = reference;
+      group.key = reference.key;
+      group.code = reference.fundCode ?? group.code;
+      groups.set(group.key, group);
+    } else
+      groups.set(reference.key, {
+        key: reference.key,
+        market: reference.fundMarket,
+        code: reference.fundCode ?? undefined,
+        label: reference.label,
+        tracks: [],
+        trackingSuppressed: suppressed.has(reference.key),
+        reference,
+        holding: reference.relationships.includes("HELD")
+          ? {
+              instrumentId: reference.instrumentId ?? "",
+              fundCode: reference.fundCode,
+              fundMarket: reference.fundMarket,
+              label: reference.label,
+              confirmedNav: reference.confirmedNav,
+            }
+          : undefined,
+      });
   }
   return [...groups.values()];
 }

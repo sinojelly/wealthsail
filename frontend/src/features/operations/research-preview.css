@@ -160,3 +160,22 @@
     font-size: 19px;
   }
 }
+.research-preview-current-reference {
+  border-top: 3px solid #087e8b;
+  margin-block: 2rem;
+  padding-block: 1rem;
+}
+.research-preview-current-reference > label {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 1rem;
+  background: #edfafa;
+  color: #0f172a;
+  border: 1px solid #99d4d8;
+  border-radius: 0.65rem;
+}
+.research-preview-current-reference input {
+  width: 1.2rem;
+  height: 1.2rem;
+}

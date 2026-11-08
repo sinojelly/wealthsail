@@ -181,6 +181,7 @@ function fixture(): ResearchPreview {
   } as ResearchPreview;
 }
 beforeEach(() => {
+  vi.stubGlobal("IntersectionObserver", undefined);
   session.tenantId = "tenant-a";
   session.userId = "owner-a";
 });

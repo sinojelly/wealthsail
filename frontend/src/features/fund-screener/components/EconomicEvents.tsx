@@ -82,7 +82,13 @@ function storyTimeLabel(raw: string | null) {
 function StoryDates({ story }: { story: EconomicStory }) {
   return (
     <div className="economic-event-dates">
-      <span>事件发生时间未单独提供</span>
+      {!story.sourcePublishedAt && <span>事件发生时间未单独提供</span>}
+      {story.sourcePublishedAt && (
+        <span>
+          来源发布：{storyTimeLabel(story.sourcePublishedAt)}（引用中最新）
+          （非事件发生时间）
+        </span>
+      )}
       {story.researchAsOf !== null ? (
         <span>
           研究日期：
@@ -136,6 +142,13 @@ function StoryCard({
   onSelect?: (id: string) => void;
 }) {
   const count = story.sourceStatus;
+  const frozenMatched = story.sourceIds.filter((id) =>
+    story.sources.some(
+      (source) =>
+        source.id === id &&
+        (source.frozenTitleMatched || source.frozenQuoteMatched),
+    ),
+  ).length;
   return (
     <article
       className="economic-event-card"
@@ -162,8 +175,9 @@ function StoryCard({
         {readingText(story.summary, 700)}
       </p>
       <p className="economic-event-source-count">
-        引用来源 {count.referenced} 项 · 可读 {count.available} 项 · 原文核对{" "}
-        {count.checked} 项 · 缺失 {count.missing} 项
+        引用来源 {count.referenced} 项 · 可读 {count.available} 项 ·
+        冻结资料匹配 {frozenMatched} 项 · 原文核对 {count.checked} 项 · 缺失{" "}
+        {count.missing} 项
       </p>
       <p className="economic-event-gap">事件事实未独立核验</p>
       <p className="economic-event-gap">尚无可靠市场反应数据</p>
@@ -288,12 +302,21 @@ function StoryCard({
                       </span>
                     )}
                     <p>
-                      {source.verification === "SOURCE_CHECKED"
+                      {source.verification === "SOURCE_CHECKED" ||
+                      source.frozenQuoteMatched
                         ? "原文引用已核对"
-                        : source.verification === "OFFICIAL_COLLECTION"
-                          ? "官方资料采集记录，原文引用未单独核对"
-                          : "原文引用尚未核对"}
+                        : source.frozenTitleMatched
+                          ? "冻结目录标题已匹配，原文引用尚未核对"
+                          : source.verification === "OFFICIAL_COLLECTION"
+                            ? "官方资料采集记录，原文引用未单独核对"
+                            : "原文引用尚未核对"}
                     </p>
+                    {source.frozenTitleMatched === false &&
+                      source.frozenQuoteMatched === false && (
+                        <p>
+                          原包未保存可匹配的标题或正文；保留引用记录，不补作原文核对。
+                        </p>
+                      )}
                     <p>
                       来源发布时间：{storyTimeLabel(source.publishedAt)}
                       ；采集时间：
@@ -353,7 +376,13 @@ function StoryCard({
     </article>
   );
 }
-function DeliveryStatus({ data }: { data: OpportunityContext }) {
+function DeliveryStatus({
+  data,
+  readableCount,
+}: {
+  data: OpportunityContext;
+  readableCount: number;
+}) {
   const daily = data.dailyResearch;
   const currentId = daily?.pipeline
     ? daily.pipeline.researchRunId
@@ -382,7 +411,12 @@ function DeliveryStatus({ data }: { data: OpportunityContext }) {
       )}
       {matching ? (
         <>
-          <p>{labels[economic.status]}</p>
+          <p>
+            {readableCount > 0 &&
+            (economic.status === "PENDING" || economic.status === "UNAVAILABLE")
+              ? `本次经济观察${economic.status === "PENDING" ? "待归档" : "暂无本次成果"}；已加载 ${readableCount} 条其他可读经济事件。`
+              : labels[economic.status]}
+          </p>
           {!economic.acceptedContentComplete &&
             (economic.status === "AVAILABLE" ||
               economic.status === "PARTIAL") && (
@@ -396,9 +430,11 @@ function DeliveryStatus({ data }: { data: OpportunityContext }) {
         </>
       ) : (
         <p>
-          {economic?.researchId
-            ? "经济观察身份与本次执行未对应，未作为本次资料显示。"
-            : "尚无本次可读经济观察，以下只展示已加载资料。"}
+          {readableCount > 0
+            ? `已加载 ${readableCount} 条可读经济事件，按原研究记录展示。`
+            : economic?.researchId
+              ? "经济观察身份与本次执行未对应，未作为本次资料显示。"
+              : "尚无本次可读经济观察，以下只展示已加载资料。"}
         </p>
       )}
     </div>
@@ -491,7 +527,7 @@ export function EconomicEvents({
         <h3>读懂事件，分清事实与条件推演</h3>
         <p>按原研究分别归档；跨研究的相同事件 ID 仍独立展示。</p>
       </header>
-      <DeliveryStatus data={data} />
+      <DeliveryStatus data={data} readableCount={stories.length} />
       <div className="economic-event-filters">
         <div role="group" aria-label="事件阅读分类">
           {categories.map((value) => (
@@ -528,7 +564,7 @@ export function EconomicEvents({
         </label>
       </div>
       <p className="economic-event-muted">
-        仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在卡片单独标注。不代表完整历史检索；独立发布不冒充研究日期。分类来自显式类别或可对应的渠道，其余保留待分类。
+        仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在卡片单独标注。不代表完整历史检索；独立发布不冒充研究日期。分类来自已保存类别、标题主题或可对应的渠道，其余保留待分类。冻结资料匹配含目录标题，原文核对另列。
       </p>
       {selectedEventId &&
         !stories.some((story) => story.id === selectedEventId) && (

@@ -56,6 +56,14 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
           items: [fundTrack("one", "991042"), fundTrack("two", "991043")],
           total: 2,
         };
+      else if (path === "/v1/investment/personal-funds-reference")
+        data = {
+          version: "personal-funds-reference-v1",
+          source: "LOCAL_DATABASE_ONLY",
+          readOnly: true,
+          asOf: "2026-11-07T12:00:00+08:00",
+          funds: [],
+        };
       else if (path === "/v1/funds/quotes")
         data = { asOf: "2026-11-07T04:00:00Z", items: [] };
       else if (path === "/v1/funds/991042/nav-history")
