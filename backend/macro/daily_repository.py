@@ -257,12 +257,17 @@ async def read_daily_research(
         pipeline = None
     if (
         pipeline
-        and manual_latest
+        and (
+            manual_latest
+            or today
+            and latest.get("status") == "READY"
+            and bool(_object(latest.get("payload")))
+        )
         and pipeline.get("startedAt")
         and latest["dispatched_at"] >= local(pipeline["startedAt"])
     ):
-        # A later explicit research attempt owns the execution identity. Its
-        # retained READY report may still have a different, older provenance.
+        # A later explicit attempt or completed report owns its execution
+        # identity. A retained pipeline must not resurrect an older failure.
         pipeline = None
     scheduled_consumed = bool(
         latest
