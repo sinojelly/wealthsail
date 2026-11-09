@@ -268,6 +268,8 @@ class ActorFacts:
         if "ledger.position_snapshots" in sql:
             assert args[:2] == (TENANT, ACTOR)
             return self.holdings
+        if "market.market_observations" in sql:
+            return []
         if "reference.trading_calendars" in sql:
             start, end = args[-2:]
             return [

@@ -12,6 +12,7 @@ from backend.investment.study_price_watch import (
     _source_uri,
     _stamp,
     _track,
+    _trading_time,
     _UNITS,
 )
 
@@ -21,6 +22,7 @@ _STATES = {
     "TAKE_PROFIT_T1": 2,
     "RSI_OVERBOUGHT": 3,
 }
+_ACTION_STATES = {"STOP_LOSS": 0, "SELL_ZONE": 1, "BUY_ZONE": 2, "LARGE_DAILY_MOVE": 3}
 
 
 def _rsi(value):
@@ -35,7 +37,7 @@ def _rsi(value):
         return None
 
 
-def _valid_quote(quote, target, now, *, estimate=False):
+def _valid_quote(quote, target, now, *, estimate=False, intraday=False):
     if not isinstance(quote, dict) or quote.get("usable") is not True:
         return False
     day, retrieved = _day(quote.get("asOf")), _stamp(quote.get("retrievedAt"))
@@ -60,6 +62,19 @@ def _valid_quote(quote, target, now, *, estimate=False):
     if not estimate:
         return quote.get("quality") == "READY" and (now.date() - day).days <= 10
     stamp = _stamp(quote.get("asOf"))
+    if intraday:
+        checked = _stamp(quote.get("checkedAt"))
+        return bool(
+            quote.get("quality") == "ESTIMATED"
+            and quote.get("tradingDayConfirmed") is True
+            and stamp is not None
+            and checked is not None
+            and stamp <= checked <= now
+            and stamp.date() == now.date()
+            and _trading_time(stamp)
+            and _trading_time(now)
+            and now - stamp <= timedelta(minutes=30)
+        )
     if not (
         quote.get("quality") in {"ESTIMATED", "READY", "FRESH"}
         and stamp is not None
@@ -151,6 +166,167 @@ def evaluate_sell_risk(target, *, confirmed=None, estimate=None, now):
             result[key] = str(target[key])
     if track:
         result["selectedTrack"] = track["track"]
+    return result
+
+
+def _change(value):
+    try:
+        result = Decimal(str(value)) if not isinstance(value, bool) else None
+        return (
+            result
+            if result is not None and result.is_finite() and result > -100
+            else None
+        )
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _action_plan(target, confirmed, now):
+    """A private frozen track wins; unfrozen holdings use current public zones."""
+    plan, origin = target.get("plan"), target.get("planOrigin")
+    current = (confirmed or {}).get("actionableZones")
+    if (
+        origin != "FROZEN_STUDY"
+        and "HELD" in target["relationship"]
+        and isinstance(current, dict)
+    ):
+        plan, origin = current, "CURRENT_ACTIONABLE_ZONES"
+    if not isinstance(plan, dict):
+        return None, None, "NONE"
+    plan = deepcopy(plan)
+    if not plan.get("selectedTrack", plan.get("track")):
+        # The public chart lists the left-value track first. Use that same
+        # stable ordering rather than inventing a user preference.
+        plan["selectedTrack"] = next(
+            (
+                row.get("track")
+                for row in plan.get("tracks", [])
+                if isinstance(row, dict)
+                and row.get("priceState") == "READY"
+                and _track({**plan, "selectedTrack": row.get("track")}) is not None
+            ),
+            None,
+        )
+    plan = _comparable_plan(plan, target, now)
+    track = _track(plan) if plan else None
+    if (
+        track is None
+        or track.get("priceState") != "READY"
+        or plan.get("historyQuality", "READY") != "READY"
+    ):
+        return None, None, "NONE"
+    return plan, track, origin or "NONE"
+
+
+def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
+    """Project only price-zone hits and material daily moves for this actor."""
+    now = _stamp(now)
+    if now is None:
+        raise ValueError("personal reminders require an aware clock")
+    relations = target.get("relationship")
+    if (
+        not isinstance(relations, list)
+        or not relations
+        or not set(relations) <= {"HELD", "TRACKED"}
+    ):
+        return None
+    if not isinstance(target.get("fundCode"), str) or not re.fullmatch(
+        r"[0-9]{6}", target["fundCode"]
+    ):
+        return None
+    confirmed_ok = _valid_quote(confirmed, target, now)
+    intraday_ok = _valid_quote(estimate, target, now, estimate=True, intraday=True)
+    estimate_ok = intraday_ok or _valid_quote(estimate, target, now, estimate=True)
+    quote = estimate if estimate_ok else confirmed if confirmed_ok else None
+    if quote is None:
+        return None
+    value = _number(quote["value"])
+    plan, track, origin = _action_plan(target, confirmed if confirmed_ok else None, now)
+    if plan and _day(quote["asOf"]) < _day(plan["asOf"]):
+        plan, track, origin = None, None, "NONE"
+    change = _change(quote.get("dailyChangePct", quote.get("changePct")))
+    if (
+        estimate_ok
+        and change is None
+        and confirmed_ok
+        and _day(confirmed["asOf"]) < now.date()
+    ):
+        change = (value / _number(confirmed["value"]) - 1) * 100
+    low, high, sell, sell_max, stop = (
+        _number((track or {}).get(key))
+        for key in (
+            "entryZoneMin",
+            "entryZoneMax",
+            "sellZoneMin",
+            "sellZoneMax",
+            "stopLossPrice",
+        )
+    )
+    if track:
+        sell = sell or _number(track.get("takeProfitT1"))
+        sell_max = sell_max or _number(track.get("takeProfitT2"))
+    triggers = []
+    if stop is not None and value <= stop:
+        triggers.append("STOP_LOSS")
+    elif sell is not None and value >= sell:
+        triggers.append("SELL_ZONE")
+    elif (
+        low is not None
+        and low <= value <= high
+        and not any(
+            row.get("entryBlocked") is True or row.get("subscriptionRestricted") is True
+            for row in (plan, track)
+        )
+    ):
+        triggers.append("BUY_ZONE")
+    if change is not None and abs(change) >= Decimal("2.5"):
+        triggers.append("LARGE_DAILY_MOVE")
+    if not triggers and (track is None or "HELD" not in relations):
+        return None
+    buy_distance = (
+        max(low - value, value - high, Decimal(0)) if low is not None else None
+    )
+    result = {
+        "fundCode": target["fundCode"],
+        "label": target.get("label") or target["fundCode"],
+        "relationship": [key for key in ("HELD", "TRACKED") if key in relations],
+        "state": triggers[0] if triggers else "NORMAL",
+        "triggerStates": triggers,
+        "basis": "INTRADAY_ESTIMATE"
+        if intraday_ok
+        else "ESTIMATE_1430"
+        if estimate_ok
+        else "CONFIRMED_NAV",
+        "value": str(value),
+        "asOf": quote["asOf"],
+        "sourceUri": quote["sourceUri"],
+        "planOrigin": origin,
+        "planAsOf": plan.get("asOf") if plan else None,
+        "selectedTrack": track.get("track") if track else None,
+        "entryZoneMin": str(low) if low is not None else None,
+        "entryZoneMax": str(high) if high is not None else None,
+        "sellZoneMin": str(sell) if sell is not None else None,
+        "sellZoneMax": str(sell_max) if sell_max is not None else None,
+        "stopLossPrice": str(stop) if stop is not None else None,
+        "distanceToBuyPct": round(float(buy_distance / value * 100), 4)
+        if buy_distance is not None
+        else None,
+        "distanceToSellPct": round(
+            float(max(sell - value, Decimal(0)) / value * 100), 4
+        )
+        if sell is not None
+        else None,
+        "distanceToStopPct": round(
+            float(max(value - stop, Decimal(0)) / value * 100), 4
+        )
+        if stop is not None
+        else None,
+        "dailyChangePct": round(float(change), 4) if change is not None else None,
+        "dailyChangeAsOf": quote["asOf"] if change is not None else None,
+    }
+    for key in ("trackId", "reportRunId", "holdingsAsOf"):
+        if target.get(key) is not None:
+            result[key] = str(target[key])
     return result
 
 
@@ -330,6 +506,7 @@ async def load_risk_targets(
     ):
         plans = [
             *report.get("actionablePlans", []),
+            *report.get("actionableZones", []),
             *(
                 plan
                 for direction in report.get("valueDirections", [])
@@ -356,6 +533,7 @@ async def load_risk_targets(
 
 async def confirmed_quotes(conn, targets, now, *, calendar=None):
     from backend.investment.discovery import _cached_histories
+    from backend.investment.live_fund_plans import refresh_report_fund_plans
     from backend.investment.theme_graph import nav_plan
 
     if not targets:
@@ -365,7 +543,7 @@ async def confirmed_quotes(conn, targets, now, *, calendar=None):
     histories = await _cached_histories(
         conn, sorted({item["fundCode"] for item in targets}), now
     )
-    output = {}
+    output, supplied = {}, []
     for target in targets:
         history = deepcopy(histories.get(target["fundCode"]))
         if not isinstance(history, dict):
@@ -387,6 +565,7 @@ async def confirmed_quotes(conn, targets, now, *, calendar=None):
                 for row in calendar
             ],
         }
+        supplied.append(history)
         current = nav_plan(
             history,
             now=now,
@@ -410,6 +589,54 @@ async def confirmed_quotes(conn, targets, now, *, calendar=None):
             "usable": current.get("historyQuality") == "READY",
             "rsi14": current.get("indicators", {}).get("rsi14"),
             "rsiAsOf": current.get("asOf"),
+            "actionableZones": current,
+            "dailyChangePct": current.get("currentChangePct"),
+        }
+    # Read the same local chart/research history selection as the visible
+    # actionableZones. A newer chart must not leave reminders on older NAV.
+    refreshed = await refresh_report_fund_plans(
+        conn,
+        {
+            "actionablePlans": [
+                {
+                    "subjectKind": target["subjectKind"],
+                    "subjectId": target["subjectId"],
+                    "fundCode": target["fundCode"],
+                    "label": target["label"],
+                    "market": "FUND_CN",
+                    "priceBasis": "UNIT_NAV",
+                    "unit": "CNY/份",
+                    "tracks": [],
+                }
+                for target in targets
+            ]
+        },
+        now,
+        histories=supplied,
+    )
+    for current in refreshed["actionablePlans"]:
+        code = current["fundCode"]
+        if current.get("historyQuality") != "READY":
+            # An incomplete chart never promotes an old comparison to READY.
+            if code in output:
+                output[code]["actionableZones"] = current
+            continue
+        output[code] = {
+            "fundCode": code,
+            "subjectKind": current["subjectKind"],
+            "subjectId": current["subjectId"],
+            "value": current.get("currentPrice"),
+            "asOf": current.get("asOf"),
+            "retrievedAt": current.get("retrievedAt"),
+            "sourceUri": current.get("sourceUri"),
+            "priceBasis": "UNIT_NAV",
+            "unit": current["unit"],
+            "quality": "READY",
+            "usable": True,
+            "rsi14": current.get("indicators", {}).get("rsi14"),
+            "rsiAsOf": current.get("asOf"),
+            "actionableZones": current,
+            "dailyChangePct": current.get("currentChangePct"),
         }
     return output
 
@@ -445,6 +672,8 @@ def _saved_estimate(runs, target, now):
 
 
 async def sell_risk_alerts(conn, tenant_id, user_id, now, *, daily=None):
+    from backend.investment.personal_funds import _persisted_estimates
+
     now = _stamp(now)
     calendar = await _calendar(conn, now)
     targets = await load_risk_targets(
@@ -476,4 +705,59 @@ async def sell_risk_alerts(conn, tenant_id, user_id, now, *, daily=None):
         )
     ]
     items.sort(key=lambda row: (_STATES[row["state"]], row["fundCode"]))
-    return {"asOf": now.isoformat(), "items": items, "limitations": []}
+    public_estimates = await _persisted_estimates(
+        conn, sorted({row["fundCode"] for row in targets}), now
+    )
+    estimates = {}
+    for target in targets:
+        code = target["fundCode"]
+        saved = _saved_estimate(runs, target, now)
+        public = public_estimates.get(code)
+        if public:
+            public = {
+                **public,
+                "subjectKind": target["subjectKind"],
+                "subjectId": target["subjectId"],
+            }
+        estimates[code] = max(
+            (
+                quote
+                for quote in (saved, public)
+                if _valid_quote(quote, target, now, estimate=True)
+                or _valid_quote(quote, target, now, estimate=True, intraday=True)
+            ),
+            key=lambda quote: _stamp(quote["asOf"]),
+            default=None,
+        )
+    evaluated = [
+        reminder
+        for target in targets
+        if (
+            reminder := evaluate_action_reminder(
+                target,
+                confirmed=quotes.get(target["fundCode"]),
+                estimate=estimates.get(target["fundCode"]),
+                now=now,
+            )
+        )
+        is not None
+    ]
+    reminders = [row for row in evaluated if row["state"] != "NORMAL"]
+    reminders.sort(key=lambda row: (_ACTION_STATES[row["state"]], row["fundCode"]))
+    normal = [row for row in evaluated if row["state"] == "NORMAL"]
+    held_count = sum("HELD" in row["relationship"] for row in targets)
+    evaluated_held = sum("HELD" in row["relationship"] for row in evaluated)
+    return {
+        "asOf": now.isoformat(),
+        "items": items,
+        "limitations": [],
+        "actionReminders": reminders,
+        "normalHoldings": normal,
+        "summary": {
+            "heldCount": held_count,
+            "evaluatedCount": evaluated_held,
+            "alertCount": sum("HELD" in row["relationship"] for row in reminders),
+            "normalCount": len(normal),
+            "unavailableCount": held_count - evaluated_held,
+        },
+    }
