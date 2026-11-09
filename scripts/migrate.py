@@ -2782,6 +2782,7 @@ async def _readback(conn: asyncpg.Connection) -> None:
     # defaults. Continue rejecting every other new API/Worker INSERT privilege.
     if any(column["attname"] == "request_mode" for column in queue_columns):
         insert_columns.add("request_mode")
+    # 105 adds only Worker phase telemetry; API UPDATE remains forbidden.
     update_columns = {
         "status",
         "started_at",

@@ -1,7 +1,10 @@
 """Migration runner safety contract tests."""
 
+import ast
 import inspect
 from pathlib import Path
+
+import pytest
 
 import scripts.migrate as migration_runner
 from scripts.migrate import (
@@ -132,6 +135,122 @@ def test_readback_checks_watchlist_shape_rls_and_privileges() -> None:
     assert "watchlist ownership boundary is missing or unsafe" in source
     assert "identity.watchlist" in source
     assert '("SELECT", "INSERT", "DELETE", "UPDATE")' in source
+
+
+def _queue_column_readback(*, legacy=False):
+    """Run the real focused block without faking unrelated migration contracts."""
+    source = inspect.getsource(_readback)
+    if legacy:
+        source = source.replace('        "execution_stage",\n', "").replace(
+            '        "stage_updated_at",\n', ""
+        )
+    body = ast.parse(source).body[0].body
+    start = next(
+        index
+        for index, node in enumerate(body)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "insert_columns"
+    )
+    end = next(
+        index for index in range(start, len(body)) if isinstance(body[index], ast.For)
+    )
+    wrapper = ast.parse("async def check(conn, queue_table, queue_columns): pass")
+    wrapper.body[0].body = body[start : end + 1]
+    namespace = {}
+    exec(
+        compile(ast.fix_missing_locations(wrapper), "<queue column readback>", "exec"),
+        namespace,
+    )
+    return namespace["check"]
+
+
+class _QueuePrivileges:
+    columns = {
+        "id",
+        "tenant_id",
+        "user_id",
+        "command_key",
+        "requested_at",
+        "request_mode",
+        "status",
+        "started_at",
+        "completed_at",
+        "batch_id",
+        "report_run_id",
+        "error_class",
+        "execution_stage",
+        "stage_updated_at",
+    }
+    inserts = {"tenant_id", "user_id", "command_key", "requested_at", "request_mode"}
+    worker_updates = {
+        "status",
+        "started_at",
+        "completed_at",
+        "batch_id",
+        "report_run_id",
+        "error_class",
+        "execution_stage",
+        "stage_updated_at",
+    }
+
+    def __init__(self, unsafe=None):
+        self.unsafe = unsafe
+
+    async def fetchval(self, sql, role, table, column, privilege=None):
+        assert table == "research.daily_research_refresh_requests"
+        if sql == "SELECT has_table_privilege($1,$2,$3)":
+            return column == "SELECT" and role != "authenticated"
+        assert sql == "SELECT has_column_privilege($1,$2,$3,$4)"
+        if privilege == "INSERT":
+            return role != "authenticated" and column in self.inserts
+        assert privilege == "UPDATE"
+        if self.unsafe == "api_general" and role == "wealthsail_api":
+            return True
+        if self.unsafe == "worker_general" and role == "wealthsail_worker":
+            return True
+        if (
+            self.unsafe == "api_stage"
+            and role == "wealthsail_api"
+            and column == "execution_stage"
+        ):
+            return True
+        if (
+            self.unsafe == "browser_stage"
+            and role == "authenticated"
+            and column == "stage_updated_at"
+        ):
+            return True
+        return role == "wealthsail_worker" and column in self.worker_updates
+
+
+@pytest.mark.asyncio
+async def test_105_worker_stage_grants_pass_real_queue_readback_and_reproduce_old_blocker():
+    conn = _QueuePrivileges()
+    columns = [{"attname": column} for column in sorted(conn.columns)]
+    with pytest.raises(RuntimeError, match="request column boundary"):
+        await _queue_column_readback(legacy=True)(
+            conn, "research.daily_research_refresh_requests", columns
+        )
+    await _queue_column_readback()(
+        conn, "research.daily_research_refresh_requests", columns
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe", ["api_stage", "browser_stage", "api_general", "worker_general"]
+)
+async def test_queue_readback_still_rejects_extra_stage_or_general_update_grants(
+    unsafe,
+):
+    conn = _QueuePrivileges(unsafe)
+    with pytest.raises(RuntimeError, match="request column boundary"):
+        await _queue_column_readback()(
+            conn,
+            "research.daily_research_refresh_requests",
+            [{"attname": column} for column in sorted(conn.columns)],
+        )
 
 
 def test_checksum_drift_reconciliation_only_rewrites_the_ledger() -> None:
