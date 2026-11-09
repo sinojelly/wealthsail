@@ -3,6 +3,7 @@ import { planPrice, planUnit } from "../plan-display";
 import { timeLabel } from "../macro-display";
 import { quantitativePosition } from "../quantitative-position";
 import { ActionablePlanEvidence } from "./ActionablePlan";
+import EstimatedProfitRange from "./EstimatedProfitRange";
 import "../fund-price-tracks.css";
 
 export default function QuantitativePricePanel({
@@ -62,6 +63,12 @@ export default function QuantitativePricePanel({
             {percent(position.buyDistance)} / {percent(position.sellDistance)}
           </dd>
         </div>
+        {track && (
+          <EstimatedProfitRange
+            track={track}
+            priceRefresh={plan.priceRefresh}
+          />
+        )}
       </dl>
       <details>
         <summary>价格依据与风险说明</summary>

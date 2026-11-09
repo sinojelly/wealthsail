@@ -329,6 +329,7 @@ export default function ActionablePlan({
           warning={result.industryRiskWarning}
           sources={sources}
         />
+        <PlanPriceRefresh plan={result} />
         <QuantitativePricePanel
           plan={result}
           basis={frozen ? "研究时" : "当前"}
