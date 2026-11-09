@@ -266,13 +266,13 @@ def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
         sell = sell or _number(track.get("takeProfitT1"))
         sell_max = sell_max or _number(track.get("takeProfitT2"))
     triggers = []
-    if stop is not None and value <= stop:
+    if stop is not None and value < stop:
         triggers.append("STOP_LOSS")
     elif sell is not None and value >= sell:
         triggers.append("SELL_ZONE")
     elif (
         low is not None
-        and low <= value <= high
+        and value <= high
         and not any(
             row.get("entryBlocked") is True or row.get("subscriptionRestricted") is True
             for row in (plan, track)

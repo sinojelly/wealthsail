@@ -33,7 +33,9 @@ def held():
 @pytest.mark.parametrize(
     "value,change,state",
     [
-        ("0.8", 0, "STOP_LOSS"),
+        ("0.7999", 0, "STOP_LOSS"),
+        ("0.8", 0, "BUY_ZONE"),
+        ("0.85", 0, "BUY_ZONE"),
         ("1.0", 0, "BUY_ZONE"),
         ("1.2", 0, "SELL_ZONE"),
         ("1.5", 0, "SELL_ZONE"),
