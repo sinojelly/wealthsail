@@ -11,7 +11,7 @@ from backend.investment.discovery_limits import (
 )
 from backend.investment.live_fund_plans import _code, refresh_report_fund_plans
 from backend.investment.opportunity_scoring import high_zone, score_plan
-from backend.investment.opportunity_fund_matching import fund_price_priority
+from backend.investment.opportunity_fund_matching import displayed_funds, fund_price_priority
 
 
 def _number(value):
@@ -132,7 +132,7 @@ async def enrich_fund_price_positions(
         for recalled in selected.values():
             for field in ("funds", "indirectFunds"):
                 if field in recalled:
-                    del recalled[field][3:]
+                    recalled[field] = displayed_funds(recalled[field])
         codes = list(dict.fromkeys(
             fund["fundCode"] for recalled in selected.values()
             for field in ("funds", "indirectFunds") for fund in recalled.get(field, [])
@@ -200,7 +200,7 @@ async def enrich_fund_price_positions(
                     products.setdefault(code, plan)
     # Up to 24 independent product families per topic must be priced before the
     # display limit; a frozen score must not discard today's buy-zone candidate.
-    maximum = OPPORTUNITY_TOPIC_LIMIT * 24 * 2
+    maximum = OPPORTUNITY_TOPIC_LIMIT * 24 * 4
     if len(products) > maximum:
         raise ValueError("displayed fund price enrichment exceeds its budget")
     if not products:

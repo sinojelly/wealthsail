@@ -266,3 +266,56 @@ async def test_newer_confirmed_nav_prevents_stale_history_from_appearing_ready(m
     assert candidate["pricePosition"]["status"] == "DATA_PENDING"
     assert candidate["quantitativeScore"] is None
     assert candidate["confirmedNav"]["asOf"] == "2026-10-27"
+
+
+def test_explicit_mentions_all_survive_topic_display_cap_with_three_extra_matches():
+    row = topic()
+    explicit = [{**fund(30), "fundCode": f"{981000 + index:06}", "narrativeMention": True}
+                for index in range(4)]
+    automatic = [{**fund(90), "fundCode": f"{982000 + index:06}"} for index in range(4)]
+    items = project_topic_recommendations(
+        [row], {row["topicId"]: {"funds": [*automatic, *explicit]}},
+        sources=[source()], reviews=[], coverage={}, packet={}, validated_at=NOW, now=NOW,
+    )
+    displayed = items[0]["recommendedFunds"]
+    assert {item["fundCode"] for item in explicit} <= {item["fundCode"] for item in displayed}
+    assert len(displayed) == 7
+
+
+@pytest.mark.asyncio
+async def test_all_explicit_mentions_are_synced_before_their_plan_is_shown(monkeypatch):
+    from backend.investment.opportunity_fund_prices import enrich_fund_price_positions
+    from tests.unit.test_live_fund_plans_v6 import NOW as PRICE_NOW
+
+    explicit = [{**product(f"{981000 + index:06}"), "narrativeMention": True} for index in range(4)]
+    automatic = [product(f"{982000 + index:06}") for index in range(4)]
+    ensure = AsyncMock(return_value={"asOf": PRICE_NOW, "histories": [], "refresh": {}})
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", ensure)
+    result = await enrich_fund_price_positions(
+        LocalHistory([]), {"topic:new": {"funds": [*automatic, *explicit]}}, {}, PRICE_NOW,
+        tenant_id="tenant", user_id="actor",
+    )
+    assert {item["fundCode"] for item in explicit} <= set(ensure.await_args.args[1])
+    assert len(result["topic:new"]["funds"]) == 7
+
+
+@pytest.mark.asyncio
+async def test_exact_body_mentions_keep_both_share_classes_and_survive_cache():
+    from backend.investment.opportunity_fund_recall import discover_topic_funds, enrich_topic_funds
+    from backend.investment.opportunity_fund_cache import prepare_cached_candidates
+    from tests.unit.test_opportunity_fund_recall import Connection, product, status, topic, NOW
+
+    codes = ["981000", "981001", "981002", "981003"]
+    row = topic(topicId="topic:" + "a" * 32, summary="观察" + "、".join(codes))
+    connection = Connection(
+        [product(code, name, "") for code, name in zip(codes, [
+            "测试成长精选A", "测试成长精选C", "测试价值精选A", "测试周期精选A",
+        ])],
+        [status(code) for code in codes],
+    )
+    cached = prepare_cached_candidates(
+        await discover_topic_funds(connection, [row], {}, NOW), [row["topicId"]],
+    )
+    assert all(item.get("narrativeMention") is True for item in cached[row["topicId"]]["funds"])
+    result = await enrich_topic_funds(connection, cached, {}, NOW)
+    assert {item["fundCode"] for item in result[row["topicId"]]["funds"]} == set(codes)

@@ -30,10 +30,11 @@ from backend.investment.opportunity_fund_matching import (
     share_class_priority,
     terms as _terms,
     mentioned_codes,
+    displayed_funds,
     texts as _texts,
 )
 
-RECALL_MATCH_VERSION = "topic-fund-discovery-v3"
+RECALL_MATCH_VERSION = "topic-fund-discovery-v4"
 _DISCOVERY_GROUP_LIMIT = 24
 _SHARES_PER_GROUP = 4
 
@@ -305,14 +306,17 @@ def _bounded_candidates(candidates):
             for row in shares
         ),
     )
-    return [
+    automatic = [
         row
         for shares in ordered[:_DISCOVERY_GROUP_LIMIT]
         for row in sorted(
             shares,
             key=lambda row: (share_class_priority(row["name"]), row["fundCode"]),
         )[:_SHARES_PER_GROUP]
+        if row.get("narrativeMention") is not True
     ]
+    explicit = [row for row in candidates if row.get("narrativeMention") is True]
+    return [*explicit, *automatic[:max(0, _DISCOVERY_GROUP_LIMIT * _SHARES_PER_GROUP - len(explicit))]]
 
 
 def _outcome(key, funds, indirect, unavailable=None):
@@ -459,6 +463,7 @@ async def discover_topic_funds(conn, topics, packet, now):
                 "matchLevel": level,
                 "matchReason": reason[:600],
                 "sourceUri": (direct or broad or (None, None, _SOURCE))[2][:2000],
+                **({"narrativeMention": True} if code in mentions else {}),
             }
             target = (
                 indirect_candidates
@@ -520,10 +525,11 @@ def _display_groups(candidates, prices, *, limit=OPPORTUNITY_FUNDS_PER_TOPIC):
             }
             for row in shares[1:]
         ]
-        selected.append(preferred)
-    return sorted(selected, key=lambda row: _rank_candidate(row, prices))[
-        :limit
-    ]
+        explicit = [row for row in shares if row.get("narrativeMention") is True]
+        selected.extend(explicit or [preferred])
+    return displayed_funds(
+        sorted(selected, key=lambda row: _rank_candidate(row, prices)), automatic_limit=limit,
+    )
 
 
 async def enrich_topic_funds(conn, discovered, packet, now, *, display_limit=OPPORTUNITY_FUNDS_PER_TOPIC):

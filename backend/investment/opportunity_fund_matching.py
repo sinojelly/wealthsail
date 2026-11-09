@@ -30,6 +30,20 @@ def fund_price_priority(fund):
     distance = position.get("distanceToEntryPct")
     distance = distance if type(distance) in (int, float) and math.isfinite(distance) else math.inf
     return (category, distance if category == 1 else 0, -(score if score is not None else -1))
+
+
+def displayed_funds(funds, *, automatic_limit=3):
+    """All explicit narrative identities survive the automatic recall quota."""
+    if automatic_limit is None:
+        return list(funds)
+    result, automatic = [], 0
+    for fund in funds:
+        if fund.get("narrativeMention") is True:
+            result.append(fund)
+        elif automatic < automatic_limit:
+            result.append(fund)
+            automatic += 1
+    return result
 _SYNONYMS = (
     (r"光模块|光通信|\bCPO\b", ("光通信", "通信", "人工智能")),
     (r"电网设备|电网|特高压", ("电网设备", "特高压", "电力")),

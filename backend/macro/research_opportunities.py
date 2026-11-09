@@ -207,7 +207,7 @@ def project_topic_recommendations(
     from backend.macro.research_topics import frozen_manifest
     from backend.macro.research_topic_polarity import classify_topic_polarity
     from backend.macro.research_topic_priority import IMPORTANCE, topic_highlights
-    from backend.investment.opportunity_fund_matching import fund_price_priority
+    from backend.investment.opportunity_fund_matching import displayed_funds, fund_price_priority
 
     if not isinstance(topics, list) or len(topics) > 72:
         raise ValidationError_("机会推荐超过主题目录边界")
@@ -381,8 +381,8 @@ def project_topic_recommendations(
             )
         direct.sort(key=fund_price_priority)
         indirect.sort(key=fund_price_priority)
-        del direct[3:]
-        del indirect[3:]
+        direct[:] = displayed_funds(direct)
+        indirect[:] = displayed_funds(indirect)
         gaps = ([] if backed else ["POSITIVE_SOURCE_UNVERIFIED"]) + (
             [] if verified else ["RISK_AUDIT_INCOMPLETE"]
         )
