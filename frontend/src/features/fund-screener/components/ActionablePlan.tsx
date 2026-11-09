@@ -18,6 +18,8 @@ import PlanRevision from "./PlanRevision";
 import EstimatedProfitRange from "./EstimatedProfitRange";
 import PlanPriceRefresh from "./PlanPriceRefresh";
 import { IndustryCycleBadge, IndustryCycleWarning } from "./IndustryCycle";
+import QuantitativePricePanel from "./QuantitativePricePanel";
+import { referenceTrack } from "../quantitative-position";
 
 const planTrackLabel = (track: PlanTrack) =>
   track === "LEFT_VALUE" ? "左侧低吸" : "右侧趋势";
@@ -310,6 +312,46 @@ export default function ActionablePlan({
   sources?: NonNullable<DailyResearch["report"]>["sources"];
 }) {
   const price = (value: PlanPrice | undefined) => planPrice(value, result);
+  if (result.methodVersion.startsWith("actionable-zones-v6")) {
+    const track = referenceTrack(result);
+    const code = result.fundCode ?? result.subjectId;
+    return (
+      <section
+        className="op-actionable-plan"
+        aria-label={`${fundDisplayName(result.label, code)}参考买卖计划`}
+      >
+        <header className="op-plan-heading">
+          <h3>{fundDisplayName(result.label, code)} · 参考买卖计划</h3>
+          <IndustryCycleBadge cycle={result.industryCycle} />
+        </header>
+        <IndustryCycleWarning
+          cycle={result.industryCycle}
+          warning={result.industryRiskWarning}
+          sources={sources}
+        />
+        <QuantitativePricePanel
+          plan={result}
+          basis={frozen ? "研究时" : "当前"}
+        />
+        {onTrack && track && track.state !== "INSUFFICIENT" && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onTrack(track.track)}
+          >
+            跟踪当前参考计划
+          </button>
+        )}
+        {result.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
+          <FundNavTrendChart
+            fundCode={code}
+            track={track}
+            confirmedNavAsOf={result.asOf ?? undefined}
+          />
+        )}
+      </section>
+    );
+  }
   const unit = planUnit(result.unit);
   const selected = result.tracks.find(
     (row) => row.track === (result.selectedTrack ?? result.track),

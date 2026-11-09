@@ -1,6 +1,20 @@
 import { render, screen, within } from "@testing-library/react";
 import FundPriceTracks from "./components/FundPriceTracks";
+import ActionablePlan from "./components/ActionablePlan";
 import { frozenPlan } from "./personal-funds.test-data";
+vi.mock("./components/FundNavTrendChart", () => ({ default: () => null }));
+
+it("also consolidates standalone v6 plan cards instead of repeating both tracks", () => {
+  const plan = frozenPlan();
+  plan.methodVersion = "actionable-zones-v6";
+  plan.tracks.push({ ...plan.tracks[0], track: "RIGHT_TREND" });
+  render(<ActionablePlan result={plan} />);
+  expect(
+    screen.getByRole("region", { name: "参考买卖点与操作状态" }),
+  ).toBeVisible();
+  expect(screen.getAllByText("参考买入区间")).toHaveLength(1);
+  expect(screen.queryByRole("article", { name: "右侧趋势" })).toBeNull();
+});
 
 it("shows one current price grid with position, percentile and distances", () => {
   const plan = frozenPlan();
