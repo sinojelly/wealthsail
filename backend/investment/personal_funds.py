@@ -1,7 +1,6 @@
-"""Actor-owned fund inventory and prices read exclusively from persisted facts.
+"""Actor-owned fund references, automatically repaired from public NAV facts.
 
-This module never refreshes a provider, queues collection, or changes a study.
-Program price zones are display references and confer no investment eligibility.
+Only persisted history is priced; program zones confer no investment eligibility.
 """
 
 from copy import deepcopy
@@ -9,11 +8,15 @@ from datetime import timedelta
 from decimal import Decimal
 import re
 
-from backend.funds.nav_history import local, obj, select_history_view
+from backend.funds.nav_history import (
+    ensure_nav_histories,
+    local,
+    obj,
+    select_history_view,
+)
 from backend.investment import study_repository
 from backend.investment.fund_watch import list_watch_context
 from backend.investment.live_fund_plans import (
-    _local_histories,
     _safe_history,
     refresh_report_fund_plans,
 )
@@ -348,11 +351,16 @@ async def personal_funds_reference(
             and re.fullmatch(r"[0-9]{6}", row["fundCode"])
         }
     )
-    histories = (
-        [row async for row in _local_histories(conn, codes, now) if _safe_history(row)]
-        if codes
-        else []
+    prepared = await ensure_nav_histories(
+        conn,
+        codes,
+        now,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        provider_budget=max(1, len(codes)),
     )
+    now = prepared["asOf"]
+    histories = [row for row in prepared["histories"] if _safe_history(row)]
     skeletons = [
         {
             "subjectKind": "nav",
@@ -391,7 +399,21 @@ async def personal_funds_reference(
             else None
         )
         if view:
-            view["refresh"] = {"state": "IDLE", "runId": None, "pollAfterMs": None}
+            view["refresh"] = prepared["refresh"].get(code) or {
+                "state": "IDLE",
+                "runId": None,
+                "pollAfterMs": None,
+            }
+            latest = (prepared["latestConfirmed"].get(code) or {}).get("asOf", "")[:10]
+            if view.get("asOf") and view["asOf"] < latest:
+                view["state"] = "PARTIAL"
+                view["coverage"].update(
+                    reason="NEWER_CONFIRMED_NAV_AVAILABLE", latestKnownNavDate=latest
+                )
+                if plan:
+                    plan["priceRefresh"].update(
+                        state="PARTIAL", reason="NEWER_CONFIRMED_NAV_AVAILABLE"
+                    )
         missing = []
         if not eligible:
             missing.append(
@@ -437,6 +459,7 @@ async def personal_funds_reference(
                 track["entryReady"] = False
         fund.update(
             plan=plan,
+            actionableZones=deepcopy(plan),
             history=view,
             confirmedNav=confirmed,
             currentEstimate=estimate if eligible else None,
@@ -448,5 +471,9 @@ async def personal_funds_reference(
         "asOf": now.isoformat(),
         "source": "LOCAL_DATABASE_ONLY",
         "readOnly": True,
+        "navSync": {
+            "policy": "AUTO_BACKFILL_AND_REPRICE",
+            "states": prepared["refresh"],
+        },
         "funds": funds,
     }

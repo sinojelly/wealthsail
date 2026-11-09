@@ -1,4 +1,4 @@
-"""Current personal reference is an actor-scoped GET with a native read-only transaction."""
+"""Current references preserve tenant RLS while permitting a narrow public NAV append."""
 
 from contextlib import asynccontextmanager
 from importlib import import_module
@@ -20,15 +20,15 @@ def test_reference_uses_actor_scope_and_cannot_accept_commands(monkeypatch):
     seen = []
 
     @asynccontextmanager
-    async def readonly(pool, actual):
-        assert actual is ctx
-        seen.append("readonly")
+    async def transaction(pool, user_id, tenant_id):
+        assert (user_id, tenant_id) == (ctx.user_id, ctx.tenant_id)
+        seen.append("tenant")
         yield conn
 
     read = AsyncMock(
         return_value={"source": "LOCAL_DATABASE_ONLY", "readOnly": True, "funds": []}
     )
-    monkeypatch.setattr(module, "readonly_tenant_transaction", readonly)
+    monkeypatch.setattr(module, "tenant_transaction", transaction, raising=False)
     monkeypatch.setattr(module, "personal_funds_reference", read)
     app = FastAPI(default_response_class=MoneyJSONResponse)
     register_exception_handlers(app)
@@ -45,7 +45,7 @@ def test_reference_uses_actor_scope_and_cannot_accept_commands(monkeypatch):
         )
         assert read.await_args.args[:3] == (conn, ctx.tenant_id, ctx.user_id)
         assert read.await_args.kwargs == {"include_research_mentions": included}
-    assert seen == ["readonly", "readonly"]
+    assert seen == ["tenant", "tenant"]
     assert (
         client.post(
             "/api/v1/investment/personal-funds-reference", json={"enabled": True}

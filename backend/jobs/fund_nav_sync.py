@@ -9,9 +9,14 @@ reports continue to read and cache their own derived trend results.
 from __future__ import annotations
 
 import logging
+import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
+import re
 from typing import Awaitable, Callable, Sequence
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -29,6 +34,171 @@ from backend.integrations.market_data import (
 from backend.jobs.data_tasks import NavPersistenceStats, persist_nav_observations
 
 logger = logging.getLogger("wealthsail.fund_nav_sync")
+
+
+class OnDemandNavHistoryCache:
+    """Share public provider work across readers, with no DB/user data in tasks.
+
+    The deadline includes the concurrency queue. Even a large personal list
+    finishes within the same bound, and omitted funds retry after a short pause.
+    Persistence remains on each caller's authenticated connection.
+    """
+
+    def __init__(self, *, timeout=18, cooldown_seconds=30):
+        self.timeout = timeout
+        self.cooldown_seconds = cooldown_seconds
+        self.pending, self.recent = {}, {}
+        self.semaphores = WeakKeyDictionary()
+
+    async def get(self, code, now, *, fetcher=None, now_provider=None):
+        from backend.dependencies import now_shanghai
+        from backend.funds.nav_history import local
+
+        if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+            raise ValueError("NAV history requires a six-digit fund code")
+        now = local(now)
+        key = code, now.date()
+        recent = self.recent.get(key)
+        if recent and timedelta(0) <= now - recent[0] < timedelta(
+            seconds=self.cooldown_seconds
+        ):
+            if recent[1] is None:
+                raise RuntimeError("NAV source sync cooldown")
+            return deepcopy(recent[1])
+        task = self.pending.get(key)
+        if task is None:
+            loop = asyncio.get_running_loop()
+            semaphore = self.semaphores.setdefault(loop, asyncio.Semaphore(4))
+
+            async def load():
+                try:
+
+                    async def bounded():
+                        async with semaphore:
+                            return await self._fetch(
+                                code, now, fetcher, now_provider or now_shanghai
+                            )
+
+                    result = await asyncio.wait_for(bounded(), timeout=self.timeout)
+                    self.recent[key] = local((now_provider or now_shanghai)()), result
+                    return result
+                except Exception:
+                    self.recent[key] = local((now_provider or now_shanghai)()), None
+                    raise
+                finally:
+                    self.pending.pop(key, None)
+                    if len(self.recent) > 256:
+                        oldest = sorted(
+                            self.recent, key=lambda item: self.recent[item][0]
+                        )
+                        for item in oldest[: len(self.recent) - 256]:
+                            self.recent.pop(item, None)
+
+            task = asyncio.create_task(load())
+            # Retrieving an exception also covers a reader disconnecting while
+            # the shared, bounded public fetch is still finishing.
+            task.add_done_callback(
+                lambda done: done.exception() if not done.cancelled() else None
+            )
+            self.pending[key] = task
+        return deepcopy(await asyncio.shield(task))
+
+    async def _fetch(self, code, now, fetcher, clock):
+        from backend.funds.nav_history import local, valid_points
+        from backend.integrations.fund_nav_fallback import (
+            fetch_fund_nav_history_with_fallback,
+        )
+        from backend.integrations.nav_history_proof import nav_points_digest
+
+        start = now.date() - timedelta(days=NAV_HISTORY_FETCH_CALENDAR_DAYS)
+        async with httpx.AsyncClient(timeout=6, follow_redirects=False) as client:
+            observations = await (fetcher or fetch_fund_nav_history_with_fallback)(
+                code,
+                start,
+                now.date(),
+                client,
+                page_size=100,
+                max_pages=32,
+                minimum_points=NAV_SYNC_TARGET_SAMPLES,
+                timeout_seconds=8,
+            )
+        points, by_day, proofs = [], {}, []
+        for observation in observations:
+            value = observation.value
+            metadata = observation.metadata or {}
+            day = local(observation.as_of).date()
+            if (
+                observation.symbol != code
+                or observation.subject_type != "FUND"
+                or observation.field_code != "NAV"
+                or observation.currency != "CNY"
+                or metadata.get("officialUnitNav") is not True
+                or observation.quality_status not in {"FRESH", "STALE", "REVISED"}
+                or observation.unit
+                not in {"CNY/share", "CNY", "CNY/份", "元/份", "CNY/unit"}
+                or not isinstance(value, Decimal)
+                or not value.is_finite()
+                or value <= 0
+                or local(observation.as_of) > now
+                or not start <= day <= now.date()
+                or day in by_day
+                and by_day[day]["close"] != str(value)
+            ):
+                raise ValueError("invalid or conflicting official unit NAV history")
+            point = {"date": day.isoformat(), "close": str(value)}
+            change = metadata.get("returnPct")
+            if change is not None:
+                try:
+                    change = Decimal(str(change))
+                    if change.is_finite() and change > -100:
+                        point["returnPct"] = str(change)
+                except ArithmeticError:
+                    pass
+            by_day[day] = point
+            proofs.append(metadata.get("providerHistoryProof"))
+        points = [by_day[day] for day in sorted(by_day)][-NAV_SYNC_TARGET_SAMPLES:]
+        if not points:
+            raise ValueError("public sources returned no official unit NAV history")
+        finished = local(clock())
+        if finished < now:
+            raise ValueError("NAV retrieval clock regressed")
+        history = {
+            "fundCode": code,
+            "priceBasis": "UNIT_NAV",
+            "currency": "CNY",
+            "unit": "CNY/份",
+            "sourceUri": f"https://fund.eastmoney.com/{code}.html",
+            "asOf": points[-1]["date"],
+            "retrievedAt": finished.isoformat(),
+            "availableAt": finished.isoformat(),
+            "points": points,
+        }
+        if (
+            proofs
+            and isinstance(proofs[0], dict)
+            and all(proof == proofs[0] for proof in proofs)
+        ):
+            proof = proofs[0]
+            if (
+                proof.get("complete") is True
+                and proof.get("fundCode") == code
+                and proof.get("pointCount") == len(points)
+                and proof.get("pointsDigest") == nav_points_digest(points)
+            ):
+                history["providerHistoryProof"] = deepcopy(proof)
+        if "providerHistoryProof" not in history:
+            history["coverageReason"] = "SOURCE_HISTORY_INCOMPLETE"
+        if not valid_points(history, code, finished):
+            raise ValueError("invalid normalized unit NAV history")
+        return history
+
+
+on_demand_nav_history_cache = OnDemandNavHistoryCache()
+
+
+async def fetch_on_demand_nav_history(code, now):
+    return await on_demand_nav_history_cache.get(code, now)
+
 
 # Query past the storage target so a not-yet-disclosed current NAV (or a
 # delayed overseas disclosure) does not leave the first backfill at 549 rows.

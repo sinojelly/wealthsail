@@ -11,6 +11,21 @@ from backend.investment import personal_funds as service
 NOW = datetime(2026, 11, 8, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
+@pytest.fixture(autouse=True)
+def offline_nav_sync(monkeypatch):
+    async def local_only(conn, codes, now, **kwargs):
+        from backend.investment.live_fund_plans import _local_histories
+
+        return {
+            "histories": [row async for row in _local_histories(conn, codes, now)],
+            "asOf": now,
+            "refresh": {},
+            "latestConfirmed": {},
+        }
+
+    monkeypatch.setattr(service, "ensure_nav_histories", local_only, raising=False)
+
+
 def fund(code, relationship, **extra):
     return {
         "fundCode": code,
@@ -248,3 +263,52 @@ async def test_foreign_currency_cache_cannot_be_relabelled_as_cny_chart_or_confi
     )
     assert result["funds"][0]["history"]["points"] == []
     assert result["funds"][0]["confirmedNav"] is None
+
+
+@pytest.mark.asyncio
+async def test_personal_query_reprices_from_newly_persisted_history_for_every_relationship(
+    monkeypatch,
+):
+    from tests.unit.test_on_demand_nav_sync import history, NOW as current
+    from tests.unit.test_live_fund_plans_v6 import LocalHistory
+
+    rows = [
+        fund("011035", relationship)
+        for relationship in ("HELD", "TRACKED", "WATCHLIST", "RESEARCH_MENTIONED")
+    ]
+    monkeypatch.setattr(
+        service,
+        "_inventory",
+        AsyncMock(return_value=service.merge_fund_inventory(rows)),
+    )
+    fresh = history(count=550, lag=0)
+    repaired = AsyncMock(
+        return_value={
+            "histories": [fresh],
+            "asOf": current,
+            "refresh": {"011035": {"state": "READY"}},
+            "latestConfirmed": {},
+        }
+    )
+    monkeypatch.setattr(service, "ensure_nav_histories", repaired)
+    monkeypatch.setattr(service, "_persisted_estimates", AsyncMock(return_value={}))
+    data = await service.personal_funds_reference(
+        LocalHistory(), "tenant", "actor", current
+    )
+    row = data["funds"][0]
+    assert repaired.await_args.args[1] == ["011035"]
+    assert (
+        row["history"]["asOf"]
+        == row["actionableZones"]["asOf"]
+        == current.date().isoformat()
+    )
+    from decimal import Decimal
+
+    assert Decimal(row["confirmedNav"]["value"]) == Decimal(
+        row["actionableZones"]["currentPrice"]
+    )
+    assert row["plan"] == row["actionableZones"]
+    assert row["actionableZones"]["historySampleCount"] == 500
+    assert row["actionableZones"]["priceRefresh"]["state"] == "READY"
+    assert row["history"]["refresh"]["state"] == "READY"
+    assert row["investmentEligible"] is False

@@ -1,6 +1,7 @@
 """Authenticated disclosed unit-NAV chart cache and durable on-demand requests."""
 
 from calendar import monthrange
+import asyncio
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import json
@@ -15,6 +16,176 @@ from backend.macro.research_debug_repository import active_operator
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PERIODS = {"6m", "1y", "2y", "all"}
 MAX_POINTS = 20000
+
+
+async def fetch_on_demand_nav_history(code, now):
+    # Lazy import keeps the Worker persistence modules outside chart startup.
+    from backend.jobs.fund_nav_sync import fetch_on_demand_nav_history as fetch
+
+    return await fetch(code, now)
+
+
+async def load_nav_histories(conn, codes, now):
+    """Read the same bounded public cohorts as live repricing, once per batch."""
+    if not codes:
+        return []
+    rows = await conn.fetch(
+        """WITH chart AS (
+          SELECT fund_code,payload,
+            row_number() OVER(PARTITION BY fund_code ORDER BY retrieved_at DESC,id DESC) AS recent_rank
+          FROM market.fund_nav_chart_histories WHERE fund_code=ANY($1::text[])
+            AND retrieved_at<=$2 AND available_at<=$2
+        ), research AS (
+          SELECT fund_code,payload,
+            row_number() OVER(PARTITION BY fund_code ORDER BY retrieved_at DESC,id DESC) AS recent_rank
+          FROM market.fund_research_nav_histories WHERE fund_code=ANY($1::text[])
+            AND retrieved_at<=$2 AND available_at<=$2
+        ) SELECT fund_code,payload FROM chart WHERE recent_rank<=8
+          UNION ALL SELECT fund_code,payload FROM research WHERE recent_rank<=8""",
+        codes,
+        now,
+    )
+    return [
+        history
+        for row in rows
+        if (history := obj(row.get("payload")))
+        and row.get("fund_code") == history.get("fundCode") in codes
+        and history.get("currency", "CNY") == "CNY"
+        and history.get("unit", "CNY") in {"CNY", "CNY/份", "元/份", "CNY/unit"}
+        and valid_points(history, history["fundCode"], now)
+    ]
+
+
+async def ensure_nav_histories(
+    conn,
+    codes,
+    now,
+    *,
+    tenant_id,
+    user_id,
+    latest_confirmed=None,
+    now_provider=None,
+    provider_budget=32,
+):
+    """Repair thin or stale disclosed NAV before chart/plan computation.
+
+    Only successful, validated public histories enter the response after the
+    narrow authenticated persistence RPC succeeds. Provider and save failures
+    preserve the original cohort and expose a retryable status per fund.
+    """
+    from backend.dependencies import now_shanghai
+    from backend.funds.nav_window import NAV_RESEARCH_MIN_SAMPLES
+
+    now = local(now)
+    clock = now_provider or now_shanghai
+    codes = sorted(
+        {
+            code
+            for code in codes
+            if isinstance(code, str) and re.fullmatch(r"[0-9]{6}", code)
+        }
+    )
+    histories = await load_nav_histories(conn, codes, now)
+    if type(provider_budget) is not int or provider_budget < 1:
+        raise ValueError("NAV provider budget must be positive")
+    if latest_confirmed is None and codes:
+        from backend.funds.latest_quotes import latest_quote_cache
+
+        try:
+            quotes = await latest_quote_cache.get(
+                codes[:provider_budget], now, trading_day=False
+            )
+            latest_confirmed = {
+                row["fundCode"]: row["confirmedNav"]
+                for row in quotes["items"]
+                if row.get("confirmedNav")
+            }
+        except Exception:
+            latest_confirmed = {}
+    latest_confirmed = latest_confirmed or {}
+    needed, refresh = [], {}
+    for code in codes:
+        candidates = [history for history in histories if history["fundCode"] == code]
+        view = select_history_view(code, code, "2y", candidates, now)
+        confirmed = latest_confirmed.get(code) or {}
+        confirmed_date = confirmed.get("asOf", "")[:10]
+        try:
+            if (
+                not date(1900, 1, 1) <= date.fromisoformat(confirmed_date) <= now.date()
+                or confirmed.get("quality") == "ESTIMATED"
+            ):
+                confirmed_date = ""
+        except (TypeError, ValueError):
+            confirmed_date = ""
+        latest = max((row.get("asOf") or "" for row in candidates), default="")
+        checked = any(
+            recently_checked(row, now) and (row.get("asOf") or "") == latest
+            for row in candidates
+        )
+        if (
+            len(view["points"]) < NAV_RESEARCH_MIN_SAMPLES
+            or any(
+                row.get("coverageReason")
+                for row in candidates
+                if (row.get("asOf") or "") == latest
+            )
+            or (view.get("asOf") or "") < max(confirmed_date, latest)
+            or not checked
+        ):
+            needed.append(code)
+        refresh[code] = {"state": "IDLE", "runId": None, "pollAfterMs": None}
+    # All network requests complete before serial database writes; asyncpg
+    # connections cannot run simultaneous statements on one transaction.
+    for code in needed[provider_budget:]:
+        refresh[code].update(
+            state="PARTIAL", reason="NAV_SYNC_BUDGET_DEFERRED", retryAfterSeconds=2
+        )
+    needed = needed[:provider_budget]
+    fetched = await asyncio.gather(
+        *[fetch_on_demand_nav_history(code, now) for code in needed],
+        return_exceptions=True,
+    )
+    finished = max(now, local(clock()))
+    for code, history in zip(needed, fetched):
+        failure = "NAV_SOURCE_SYNC_FAILED"
+        if not isinstance(history, BaseException):
+            try:
+                points = valid_points(history, code, finished)
+                if not points:
+                    raise ValueError("invalid provider NAV cohort")
+                failure = "NAV_HISTORY_PERSIST_FAILED"
+                # A rejected or unavailable RPC rolls back its savepoint only.
+                async with conn.transaction():
+                    await conn.fetchval(
+                        "SELECT market.append_fund_nav_sync_history($1,$2,$3,$4::jsonb)",
+                        tenant_id,
+                        user_id,
+                        code,
+                        json.dumps(history, ensure_ascii=False, allow_nan=False),
+                    )
+                histories.append(history)
+                confirmed_date = (latest_confirmed.get(code) or {}).get("asOf", "")[:10]
+                reason = (
+                    "SOURCE_BEHIND_CONFIRMED_NAV"
+                    if points[-1]["date"] < confirmed_date
+                    else "LOCAL_NAV_HISTORY_INSUFFICIENT"
+                    if len(two_year_nav_points(points)) < NAV_RESEARCH_MIN_SAMPLES
+                    else history.get("coverageReason")
+                )
+                refresh[code].update(
+                    state="PARTIAL" if reason else "READY",
+                    **({"reason": reason} if reason else {}),
+                )
+                continue
+            except Exception:
+                pass
+        refresh[code].update(state="FAILED", reason=failure, retryAfterSeconds=30)
+    return {
+        "histories": histories,
+        "asOf": finished,
+        "refresh": refresh,
+        "latestConfirmed": latest_confirmed,
+    }
 
 
 def local(value):
@@ -170,7 +341,11 @@ def history_view(code, name, period, history, now):
         start = two_year_nav_start(date.fromisoformat(points[-1]["date"]))
     full = full_history_proven(history or {}, points, now)
     checked = recently_checked(history or {}, now)
-    covered = checked and (full or interval_proven(history or {}, points, start))
+    covered = (
+        checked
+        and not history.get("coverageReason")
+        and (full or interval_proven(history or {}, points, start))
+    )
     selected = (
         two_year_nav_points(points)
         if period == "2y"
@@ -237,6 +412,8 @@ def history_view(code, name, period, history, now):
 
     if points and not checked:
         result["coverage"]["reason"] = "SOURCE_RECHECK_DUE"
+    elif history.get("coverageReason"):
+        result["coverage"]["reason"] = history["coverageReason"]
     return result
 
 
@@ -296,6 +473,7 @@ def select_history_view(code, name, period, histories, now):
     result = max(
         candidates,
         key=lambda item: (
+            item.get("asOf") or "" if item["coverage"]["sampleCount"] >= 120 else "",
             item["state"] == "READY",
             item["coverage"]["fullHistory"] if period == "all" else False,
             item.get("asOf") or "",
@@ -333,23 +511,27 @@ async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, n
         or re.search(r"美元|港币|港元|外币|现汇|现钞", identities[0]["fund_name"])
     ):
         raise ValidationError_("基金身份不唯一或不是已核验人民币场外基金")
-    rows = await conn.fetch(
-        """SELECT payload FROM market.fund_nav_chart_histories WHERE fund_code=$1 AND retrieved_at<=$2 AND available_at<=$2 ORDER BY retrieved_at DESC,id DESC LIMIT 8""",
-        fund_code,
-        now,
+    prepared = await ensure_nav_histories(
+        conn, [fund_code], now, tenant_id=tenant_id, user_id=user_id
     )
-    rows += await conn.fetch(
-        """SELECT payload FROM market.fund_research_nav_histories WHERE fund_code=$1 AND retrieved_at<=$2 AND available_at<=$2 ORDER BY retrieved_at DESC,id DESC LIMIT 8""",
-        fund_code,
-        now,
-    )
+    now = prepared["asOf"]
     result = select_history_view(
         fund_code,
         identities[0]["fund_name"],
         period,
-        [row["payload"] for row in rows],
+        prepared["histories"],
         now,
     )
+    sync_state = prepared["refresh"].get(fund_code) or {}
+    latest = (prepared["latestConfirmed"].get(fund_code) or {}).get("asOf", "")[:10]
+    if result.get("asOf") and result["asOf"] < latest:
+        result["state"] = "PARTIAL"
+        result["coverage"].update(
+            reason="NEWER_CONFIRMED_NAV_AVAILABLE", latestKnownNavDate=latest
+        )
+    if sync_state.get("state") != "IDLE" and sync_state:
+        result["refresh"] = sync_state
+        return result
     if not result["points"] and result["coverage"]["fullHistory"]:
         result["state"] = "UNAVAILABLE"
         if result["coverage"].get("reason") != "SOURCE_RECHECK_DUE":

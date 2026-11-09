@@ -1,6 +1,8 @@
-"""Read-only actor fund references, including opt-in current historical context."""
+"""Actor fund references with authenticated public NAV cache repair."""
 
 from fastapi import APIRouter, Depends, Query
+
+from backend.common.database import tenant_transaction
 
 from backend.dependencies import (
     get_pool,
@@ -10,7 +12,6 @@ from backend.dependencies import (
 )
 from backend.errors import ok
 from backend.investment.personal_funds import personal_funds_reference
-from backend.investment.research_preview_api import readonly_tenant_transaction
 
 router = APIRouter(prefix="/investment/personal-funds-reference", tags=["investment"])
 
@@ -25,7 +26,7 @@ async def reference(
     request_id=Depends(get_request_id),
 ):
     now = now_shanghai()
-    async with readonly_tenant_transaction(pool, ctx) as conn:
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         data = await personal_funds_reference(
             conn,
             ctx.tenant_id,

@@ -17,6 +17,24 @@ def module():
     return import_module("backend.funds.nav_history")
 
 
+@pytest.fixture(autouse=True)
+def offline_sync(monkeypatch):
+    async def local_only(conn, codes, now, **kwargs):
+        rows = []
+        for table in ("fund_nav_chart_histories", "fund_research_nav_histories"):
+            rows.extend(
+                await conn.fetch(f"SELECT payload FROM market.{table}", codes[0], now)
+            )
+        return {
+            "histories": [module().obj(row["payload"]) for row in rows],
+            "asOf": now,
+            "refresh": {},
+            "latestConfirmed": {},
+        }
+
+    monkeypatch.setattr(module(), "ensure_nav_histories", local_only)
+
+
 def history(*, full=False):
     return {
         "fundCode": "008281",
