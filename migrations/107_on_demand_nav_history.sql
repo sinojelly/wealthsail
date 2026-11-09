@@ -1,5 +1,3 @@
-BEGIN;
-
 -- Only the trusted backend role can submit a normalized public NAV response.
 -- Browser authenticated clients retain SELECT-only market access, and the API
 -- never receives general INSERT rights or the ability to assume Worker roles.
@@ -100,5 +98,3 @@ REVOKE ALL ON FUNCTION market.append_fund_nav_sync_history(UUID,UUID,TEXT,JSONB)
     FROM PUBLIC,authenticated,wealthsail_worker;
 GRANT EXECUTE ON FUNCTION market.append_fund_nav_sync_history(UUID,UUID,TEXT,JSONB)
     TO wealthsail_api;
-
-COMMIT;
