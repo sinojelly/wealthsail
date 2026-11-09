@@ -198,7 +198,8 @@ export interface FundNavHistory {
     percentileMethod: string;
   };
   refresh: {
-    state: "IDLE" | "QUEUED" | "RUNNING" | "FAILED";
+    state: "IDLE" | "QUEUED" | "RUNNING" | "FAILED" | "READY" | "PARTIAL";
+    reason?: string;
     runId: string | null;
     pollAfterMs: number | null;
   };

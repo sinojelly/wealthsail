@@ -158,7 +158,7 @@ it("reads current personal funds only after opt-in, keeps all action controls di
   expect(
     within(fund).getByRole("button", { name: "设置当前提醒" }),
   ).toBeDisabled();
-  await userEvent.click(within(fund).getByRole("button", { name: "右侧趋势" }));
+  expect(within(fund).getByRole("region", { name: "参考买卖点与操作状态" })).toBeVisible();
   await userEvent.click(within(fund).getByRole("button", { name: "成立以来" }));
   expect(calls).toEqual([
     "GET /api/v1/investment/personal-funds-reference?includeResearchMentions=false",

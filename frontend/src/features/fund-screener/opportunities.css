@@ -2951,6 +2951,31 @@
   color: #64748b;
   font-size: 10px;
 }
+.op-nav-footer {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 1rem;
+  padding-top: 0.65rem;
+  clear: both;
+}
+.op-nav-footer > * {
+  position: static;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+@media print {
+  .op-nav-footer {
+    display: flex;
+    position: static;
+    break-inside: avoid;
+  }
+  .op-nav-plot {
+    overflow: hidden;
+  }
+}
 .op-nav-legend span::before {
   display: inline-block;
   width: 14px;
@@ -2964,7 +2989,7 @@
   height: 8px;
 }
 .op-nav-legend .sell::before {
-  background: #fdba8c;
+  background: #fca5a5;
   height: 8px;
 }
 .op-nav-legend .stop::before {

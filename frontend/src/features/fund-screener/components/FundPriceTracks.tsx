@@ -2,6 +2,7 @@ import type { ActionableZoneResult, PlanTrack } from "../../../api/investment";
 import { planPrice, planUnit } from "../plan-display";
 import { timeLabel } from "../macro-display";
 import "../fund-price-tracks.css";
+import QuantitativePricePanel from "./QuantitativePricePanel";
 
 /** Supplied prices only: selecting a track changes the chart, never permission. */
 export default function FundPriceTracks({
@@ -15,6 +16,8 @@ export default function FundPriceTracks({
   selected?: PlanTrack;
   onSelect?: (track: PlanTrack) => void;
 }) {
+  if (basis === "当前" || plan.methodVersion.startsWith("actionable-zones-v6"))
+    return <QuantitativePricePanel plan={plan} basis={basis} />;
   const price = (value: string | number | null | undefined) =>
     planPrice(value, plan);
   return (
@@ -63,17 +66,13 @@ export default function FundPriceTracks({
                 <>
                   <dl className="op-value-prices">
                     <div>
-                      <dt>
-                        {basis}买入区间{basis === "当前" ? "参考" : ""}
-                      </dt>
+                      <dt>{basis}买入区间</dt>
                       <dd>
                         {price(track.entryZoneMin)}–{price(track.entryZoneMax)}
                       </dd>
                     </div>
                     <div>
-                      <dt>
-                        {basis}卖出区间{basis === "当前" ? "参考" : ""}
-                      </dt>
+                      <dt>{basis}卖出区间</dt>
                       <dd>
                         {price(track.sellZoneMin ?? track.takeProfitT1)}–
                         {price(track.sellZoneMax ?? track.takeProfitT2)}

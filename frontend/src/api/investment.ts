@@ -504,6 +504,16 @@ export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
   };
   /** Percent return for currentPrice/asOf; 1.23 means 1.23%. */
   currentChangePct?: PlanPrice;
+  series?: {
+    state: string;
+    fundCode: string;
+    asOf: string | null;
+    unit: string;
+    priceBasis: string;
+    sourceUri: string | null;
+    retrievedAt: string | null;
+    points: Array<{ date: string; value: string | number }>;
+  };
   indicators: Record<string, PlanPrice>;
   historicalPriceWindow?: {
     state: string;
@@ -615,6 +625,42 @@ export interface SellRiskAlerts {
   holdingsAsOf?: string | null;
   items: SellRiskAlert[];
   limitations: string[];
+  actionReminders?: PersonalActionReminder[];
+  normalHoldings?: PersonalActionReminder[];
+  summary?: {
+    heldCount: number;
+    evaluatedCount: number;
+    alertCount: number;
+    normalCount: number;
+    unavailableCount: number;
+  };
+}
+export interface PersonalActionReminder {
+  planAsOf?: string | null;
+  fundCode: string;
+  label: string;
+  relationship: Array<"HELD" | "TRACKED">;
+  state: "BUY_ZONE" | "SELL_ZONE" | "STOP_LOSS" | "LARGE_DAILY_MOVE" | "NORMAL";
+  basis: "CONFIRMED_NAV" | "ESTIMATE_1430" | "INTRADAY_ESTIMATE";
+  value: PlanPrice;
+  asOf: string | null;
+  sourceUri?: string | null;
+  planOrigin:
+    "FROZEN_STUDY" | "DAILY_REPORT" | "CURRENT_ACTIONABLE_ZONES" | "NONE";
+  selectedTrack?: PlanTrack | null;
+  entryZoneMin: PlanPrice;
+  entryZoneMax: PlanPrice;
+  sellZoneMin: PlanPrice;
+  sellZoneMax: PlanPrice;
+  stopLossPrice: PlanPrice;
+  distanceToBuyPct: number | null;
+  distanceToSellPct: number | null;
+  distanceToStopPct: number | null;
+  dailyChangePct: number | null;
+  dailyChangeAsOf?: string | null;
+  triggerStates: Array<
+    "BUY_ZONE" | "SELL_ZONE" | "STOP_LOSS" | "LARGE_DAILY_MOVE"
+  >;
 }
 export interface OpportunityContext extends MacroContext {
   sellRiskAlerts?: SellRiskAlerts;
@@ -950,6 +996,13 @@ export interface DailyResearch {
     actionablePlans?: ActionableZoneResult[];
     quantitativeScan?: QuantitativeScan;
     valueDirections?: ValueDirection[];
+    mentionedFunds?: Array<{
+      fundCode: string;
+      name?: string;
+      label?: string;
+      directionKey?: string;
+      directionTitle?: string;
+    }>;
     industryResearchCoverage?: {
       maximumCandidates: number;
       candidateCount: number;

@@ -173,7 +173,7 @@ function TrendView({
                   <ReferenceArea
                     y1={sellLow!}
                     y2={sellHigh!}
-                    fill="#f97316"
+                    fill="#ef4444"
                     fillOpacity={0.18}
                     strokeOpacity={0}
                   />
@@ -219,29 +219,31 @@ function TrendView({
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div className="op-nav-legend">
-            {completeBand && <span className="buy">建议买入区间</span>}
-            {stop != null && <span className="stop">止损参考</span>}
-            {completeSellBand && <span className="sell">建议卖出区间</span>}
-            {!completeSellBand && sellLow != null && (
-              <span className="target">卖出参考下沿（T1）</span>
-            )}
-            {!completeSellBand && sellHigh != null && (
-              <span className="target">卖出参考上沿（T2）</span>
-            )}
+          <div className="op-nav-footer" aria-label="净值区间说明与图例">
+            <div className="op-nav-legend">
+              {completeBand && <span className="buy">建议买入区间</span>}
+              {stop != null && <span className="stop">止损参考</span>}
+              {completeSellBand && <span className="sell">建议卖出区间</span>}
+              {!completeSellBand && sellLow != null && (
+                <span className="target">卖出参考下沿（T1）</span>
+              )}
+              {!completeSellBand && sellHigh != null && (
+                <span className="target">卖出参考上沿（T2）</span>
+              )}
+            </div>
+            <p className="op-nav-summary">
+              区间最低 {price(data?.summary.minimumNav)} · 最高{" "}
+              {price(data?.summary.maximumNav)} ·{" "}
+              {historical ? "研究时处于" : "当前处于"}该周期{" "}
+              {percentile != null &&
+              Number.isFinite(percentile) &&
+              percentile >= 0 &&
+              percentile <= 100
+                ? `${percentile.toFixed(1)}%`
+                : "未知"}{" "}
+              分位
+            </p>
           </div>
-          <p className="op-nav-summary">
-            区间最低 {price(data?.summary.minimumNav)} · 最高{" "}
-            {price(data?.summary.maximumNav)} ·{" "}
-            {historical ? "研究时处于" : "当前处于"}该周期{" "}
-            {percentile != null &&
-            Number.isFinite(percentile) &&
-            percentile >= 0 &&
-            percentile <= 100
-              ? `${percentile.toFixed(1)}%`
-              : "未知"}{" "}
-            分位
-          </p>
         </>
       ) : (
         <p className="op-nav-empty" role="status">
@@ -259,9 +261,12 @@ function TrendView({
           {exhausted ? "，请稍后重新读取。" : "，当前保留已有真实记录。"}
         </p>
       )}
-      {(failed || data?.refresh.state === "FAILED") && points.length > 0 && (
-        <p role="status">补齐暂未完成，保留已确认净值。</p>
-      )}
+      {(failed ||
+        data?.refresh.state === "FAILED" ||
+        data?.refresh.state === "PARTIAL") &&
+        points.length > 0 && (
+          <p role="status">补齐暂未完成，保留已确认净值。</p>
+        )}
       {period === "all" && data?.coverage.fullHistory && (
         <small>
           来源完整披露历史，始于{timeLabel(data.coverage.startDate)}
@@ -275,7 +280,10 @@ function TrendView({
           {historical ? "此页不会补抓其他历史数据。" : "完整披露历史待补齐。"}
         </small>
       )}
-      {(failed || exhausted || data?.refresh.state === "FAILED") && (
+      {(failed ||
+        exhausted ||
+        data?.refresh.state === "FAILED" ||
+        data?.refresh.state === "PARTIAL") && (
         <button
           type="button"
           className="op-nav-retry"

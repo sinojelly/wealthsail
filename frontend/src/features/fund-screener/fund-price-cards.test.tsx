@@ -1,5 +1,4 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { PersonalFundReference } from "../../api/personal-funds";
 import type { PreviewFund } from "../../api/research-preview";
 import FundReferenceDetails from "./components/FundReferenceDetails";
@@ -51,24 +50,14 @@ function reference(): PersonalFundReference {
   };
 }
 
-it("shows both local price tracks before any selection and changes only the chart overlay", async () => {
+it("shows a single current reference panel and one matching chart overlay", () => {
   render(<FundReferenceDetails fund={reference()} />);
-  const left = screen.getByRole("region", { name: "当前左侧低吸价格区间" });
-  const right = screen.getByRole("region", { name: "当前右侧趋势价格区间" });
-  expect(left).toHaveTextContent("1.05");
-  expect(right).toHaveTextContent("2.05");
-  expect(right).toHaveTextContent("2.35");
+  const panel = screen.getByRole("region", { name: "参考买卖点与操作状态" });
+  expect(panel).toHaveTextContent("1.05");
+  expect(within(panel).getAllByText("参考买入区间")).toHaveLength(1);
   expect(
     screen.getByRole("img", { name: "CURRENT_LOCAL LEFT_VALUE图" }),
   ).toBeInTheDocument();
-  await userEvent.click(
-    within(right).getByRole("button", { name: "右侧趋势" }),
-  );
-  expect(
-    screen.getByRole("img", { name: "CURRENT_LOCAL RIGHT_TREND图" }),
-  ).toBeInTheDocument();
-  expect(left).toBeVisible();
-  expect(right).toBeVisible();
 });
 
 it("keeps both historical tracks and their own frozen date visible without current prices", () => {

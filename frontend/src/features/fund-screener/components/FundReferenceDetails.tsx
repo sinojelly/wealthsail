@@ -1,10 +1,8 @@
-import { useState } from "react";
 import type { PersonalFundReference } from "../../../api/personal-funds";
-import type { PlanTrack } from "../../../api/investment";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import ViewportFundChart from "./ViewportFundChart";
 import { sourceHref, timeLabel } from "../macro-display";
-import { ActionablePlanEvidence } from "./ActionablePlan";
+import { referenceTrack } from "../quantitative-position";
 import { relationshipLabels } from "../personal-fund-model";
 import FundPriceTracks from "./FundPriceTracks";
 
@@ -26,19 +24,17 @@ export default function FundReferenceDetails({
   fund: PersonalFundReference;
   historical?: boolean;
 }) {
-  const [selected, setSelected] = useState<PlanTrack>("LEFT_VALUE");
   const plan = fund.plan;
-  const track = plan?.tracks.find((row) => row.track === selected);
+  const track = plan ? referenceTrack(plan) : undefined;
   return (
     <section
       className="op-current-fund-reference"
       aria-label={`${fund.fundCode ?? fund.label}当前价格参考`}
     >
-      <strong>当前本地价格参考 · 仅供观察</strong>
-      <p>
+      <strong>当前价格参考</strong>
+      <small>
         {fund.relationships.map((key) => relationshipLabels[key]).join(" · ")}
-        ；程序价位不授予投资资格。
-      </p>
+      </small>
       <div className="op-value-fund-layout">
         <div className="op-value-price-column">
           <FundWatchQuote row={fund.confirmedNav} label="本地最新确认净值" />
@@ -54,19 +50,10 @@ export default function FundReferenceDetails({
           )}
           {plan ? (
             <>
-              <FundPriceTracks
-                plan={plan}
-                basis="当前"
-                selected={selected}
-                onSelect={setSelected}
-              />
-              <details>
-                <summary>价格依据与风险说明</summary>
-                <ActionablePlanEvidence result={plan} />
-              </details>
+              <FundPriceTracks plan={plan} basis="当前" />
             </>
           ) : (
-            <p>本地资料尚不能形成完整双轨价格区间。</p>
+            <p>正在补齐参考买卖点所需的净值资料。</p>
           )}
         </div>
         <div className="op-my-fund-chart">

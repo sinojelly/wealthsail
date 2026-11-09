@@ -34,6 +34,10 @@ export interface PersonalFundsReference {
   readOnly: true;
   asOf: string;
   funds: PersonalFundReference[];
+  navSync?: {
+    policy: "AUTO_BACKFILL_AND_REPRICE";
+    states: Record<string, { state: string; reason?: string }>;
+  };
 }
 export async function getPersonalFundsReference(
   includeResearchMentions: boolean,

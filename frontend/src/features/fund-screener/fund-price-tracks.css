@@ -56,6 +56,58 @@
 .op-fund-price-summary {
   container-type: inline-size;
 }
+.op-core-price-panel {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.65rem;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.op-core-price-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.op-core-price-panel > small,
+.op-core-price-grid dt {
+  color: #526070;
+  font-size: 0.78rem;
+}
+.op-core-price-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 0.75rem;
+  margin: 0.8rem 0;
+}
+.op-core-price-grid dd {
+  margin: 0.25rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.op-position-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.4rem;
+  background: #f1f5f9;
+  font-size: 0.8rem;
+}
+.op-position-badge[data-tone="buy"] {
+  color: #066555;
+  background: #e4f7ee;
+}
+.op-position-badge[data-tone="sell"],
+.op-position-badge[data-tone="near"] {
+  color: #92400e;
+  background: #fff4dc;
+}
+.op-position-badge[data-tone="stop"] {
+  color: #b42318;
+  background: #fff0ee;
+}
+.op-position-badge[data-tone="trend"] {
+  color: #175cd3;
+  background: #eff6ff;
+}
 @container (max-width: 360px) {
   .op-fund-price-tracks {
     grid-template-columns: minmax(0, 1fr);

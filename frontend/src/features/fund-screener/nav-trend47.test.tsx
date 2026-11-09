@@ -90,6 +90,10 @@ it("defaults to two-year real NAV and draws frozen buy and sell bands, including
     "最高 1.5000",
   );
   expect(screen.getByText(/该周期 50.0% 分位/)).toBeInTheDocument();
+  const footer = screen.getByRole("generic", { name: "净值区间说明与图例" });
+  expect(footer.querySelector("svg")).toBeNull();
+  expect(footer).toContainElement(screen.getByText(/区间最低 1.0000/));
+  expect(footer).toContainElement(screen.getByText("建议买入区间"));
   expect(screen.getByRole("button", { name: "近2年" })).toHaveAttribute(
     "aria-pressed",
     "true",
