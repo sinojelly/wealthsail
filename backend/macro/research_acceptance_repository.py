@@ -409,6 +409,9 @@ def _accepted(value):
                         item["summary"] = item["summary"][:300]
                     projected["coverage"].append(item)
         output["macroOverview"] = projected
+    from backend.macro.research_mentions import safe_mentioned_funds
+
+    output["mentionedFunds"] = safe_mentioned_funds(value.get("mentionedFunds"))
     return output
 
 

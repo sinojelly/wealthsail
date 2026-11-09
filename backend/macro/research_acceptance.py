@@ -435,6 +435,9 @@ def _projection(report):
     output["macroOverview"] = _overview(
         report, [row["id"] for row in output["sources"]]
     )
+    from backend.macro.research_mentions import safe_mentioned_funds
+
+    output["mentionedFunds"] = safe_mentioned_funds(report.get("mentionedFunds"))
     return output
 
 
@@ -1124,6 +1127,18 @@ def validate_report_outcome(
     intact = len(source_ids) == len(parsed.get("sources", [])) and bool(source_ids)
     observations["macroOverview"] = (
         _overview(parsed, [row["id"] for row in joint["sources"]]) if intact else {}
+    )
+    from backend.macro.research_mentions import extract_mentioned_funds
+
+    # Component probes use neutral headers. Resolve only the accepted original
+    # prose and accepted directions, rather than those internal placeholders.
+    overview = observations["macroOverview"]
+    observations["mentionedFunds"] = extract_mentioned_funds(
+        {
+            **(overview if isinstance(overview, dict) else {}),
+            **{key: observations[key] for key in ("valueDirections", "events", "upcoming")},
+        },
+        packet,
     )
     macro_fields = sum(name in parsed for name in ("summary", "macroCycle", "coverage"))
     if not intact and macro_fields:

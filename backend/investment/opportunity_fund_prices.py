@@ -7,11 +7,11 @@ import re
 
 from backend.funds.nav_history import local
 from backend.investment.discovery_limits import (
-    OPPORTUNITY_FUNDS_PER_TOPIC,
     OPPORTUNITY_TOPIC_LIMIT,
 )
 from backend.investment.live_fund_plans import _code, refresh_report_fund_plans
 from backend.investment.opportunity_scoring import high_zone, score_plan
+from backend.investment.opportunity_fund_matching import fund_price_priority
 
 
 def _number(value):
@@ -51,6 +51,14 @@ def price_position(plan, now):
         return result
     result["asOf"] = plan["asOf"]
     tracks = [row for row in plan.get("tracks", []) if isinstance(row, dict)]
+    distances = []
+    for track in tracks:
+        low, high = _number(track.get("entryZoneMin")), _number(track.get("entryZoneMax"))
+        if track.get("priceState") == "READY" and low is not None and high is not None and 0 < low <= high:
+            distance = max(low - current, current - high, Decimal(0)) / current * 100
+            distances.append(distance)
+    if distances:
+        result["distanceToEntryPct"] = float(min(distances))
     percentile = _number((plan.get("indicators") or {}).get("navPercentile1y"))
     overheated = (
         plan.get("inSellZone") is True
@@ -81,10 +89,30 @@ def price_position(plan, now):
             label="进入技术参考区间",
             reasons=["TECHNICAL_ENTRY_ZONE_ONLY"],
         )
+    elif distances and min(distances) <= 3:
+        result.update(
+            status="NEAR_ENTRY_ZONE", label="接近技术买区",
+            reasons=["WITHIN_THREE_PERCENT_OF_ENTRY_ZONE"],
+        )
     else:
         result.update(
             status="NEUTRAL", label="中性观察", reasons=["OUTSIDE_TECHNICAL_ENTRY_ZONE"]
         )
+    return result
+
+
+def _zone_contract(plan):
+    """Keep the complete refreshed calculation and expose chart coordinates."""
+    result = deepcopy(plan)
+    tracks = result.get("tracks") or []
+    track = next((row for row in tracks if row.get("priceState") == "READY"), {})
+    result.update(
+        buyZone={"min": track.get("entryZoneMin"), "max": track.get("entryZoneMax")},
+        sellZone={"min": track.get("sellZoneMin", track.get("takeProfitT1")),
+                  "max": track.get("sellZoneMax", track.get("takeProfitT2"))},
+        stopLoss=track.get("stopLossPrice"),
+        targets=[track[field] for field in ("takeProfitT1", "takeProfitT2") if track.get(field) is not None],
+    )
     return result
 
 
@@ -105,7 +133,9 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
                 }
                 if code := _code(plan):
                     products.setdefault(code, plan)
-    maximum = OPPORTUNITY_TOPIC_LIMIT * OPPORTUNITY_FUNDS_PER_TOPIC * 2
+    # Up to 24 independent product families per topic must be priced before the
+    # display limit; a frozen score must not discard today's buy-zone candidate.
+    maximum = OPPORTUNITY_TOPIC_LIMIT * 24 * 2
     if len(products) > maximum:
         raise ValueError("displayed fund price enrichment exceeds its budget")
     if not products:
@@ -116,6 +146,7 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
         {"discoveryActionableZones": list(products.values())},
         now,
         packet=packet,
+        include_series=True,
     )
     plans = {row["fundCode"]: row for row in refreshed["discoveryActionableZones"]}
     for recalled in result.values():
@@ -128,7 +159,8 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
                 ):
                     plan = {}
                 position = price_position(plan, now)
-                fund.update(pricePosition=position, canBuyNow=False, actionable=False)
+                fund.update(pricePosition=position, actionableZones=_zone_contract(plan),
+                            canBuyNow=False, actionable=False)
                 gaps = list(fund.get("missingEvidence", []))
                 if position["status"] == "DATA_PENDING":
                     fund.update(
@@ -171,4 +203,6 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
                     fund.pop("quantitativeRiskPenaltyApplied", None)
                     fund.pop("unadjustedQuantitativeScore", None)
                 fund["missingEvidence"] = list(dict.fromkeys(gaps))
+            if field in recalled:
+                recalled[field].sort(key=fund_price_priority)
     return result

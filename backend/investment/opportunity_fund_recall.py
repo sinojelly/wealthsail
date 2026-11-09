@@ -29,10 +29,11 @@ from backend.investment.opportunity_fund_matching import (
     regional_bond_terms as _regional_bond_terms,
     share_class_priority,
     terms as _terms,
+    mentioned_codes,
     texts as _texts,
 )
 
-RECALL_MATCH_VERSION = "topic-fund-discovery-v2"
+RECALL_MATCH_VERSION = "topic-fund-discovery-v3"
 _DISCOVERY_GROUP_LIMIT = 24
 _SHARES_PER_GROUP = 4
 
@@ -375,6 +376,7 @@ async def discover_topic_funds(conn, topics, packet, now):
         else {}
     )
     core_codes = set(CORE_FUND_CODES) | set(sectors)
+    narrative_codes = {code for _, row, _, _, _ in prepared for code in mentioned_codes(row)}
     keywords = list(
         dict.fromkeys(
             word for _, _, terms, fallback, _ in prepared for word in terms + fallback
@@ -384,12 +386,13 @@ async def discover_topic_funds(conn, topics, packet, now):
         _LOOKUP_SQL,
         now,
         keywords,
-        sorted(core_codes),
+        sorted(core_codes | narrative_codes),
         OPPORTUNITY_CANDIDATES_PER_KEYWORD,
     )
     products = _identities(rows, now)
     result = {}
     for key, topic, terms, fallback, fallback_label in prepared:
+        mentions = set(mentioned_codes(topic))
         match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
         industries = set(_texts(match.get("industryIds")))
         regional_bonds = _regional_bond_terms(topic) is not None
@@ -413,7 +416,10 @@ async def discover_topic_funds(conn, topics, packet, now):
                 None,
             )
             title = str(topic.get("title") or key)[:200]
-            if direct and direct[0] == "跟踪指数":
+            if code in mentions:
+                association = "NAME_CANDIDATE"
+                reason = f"主题「{title}」正文提及基金代码{code}，已核验基金主库身份；不代表已核验主题持仓。"
+            elif direct and direct[0] == "跟踪指数":
                 association = "DIRECT_INDEX"
                 reason = f"主题「{title}」匹配已核验跟踪指数「{direct[1]}」。"
             elif category:
@@ -485,7 +491,7 @@ def _rank_candidate(row, prices):
     )
 
 
-def _display_groups(candidates, prices):
+def _display_groups(candidates, prices, *, limit=OPPORTUNITY_FUNDS_PER_TOPIC):
     groups = {}
     for row in candidates:
         groups.setdefault(row["fundGroupKey"], []).append(row)
@@ -516,11 +522,11 @@ def _display_groups(candidates, prices):
         ]
         selected.append(preferred)
     return sorted(selected, key=lambda row: _rank_candidate(row, prices))[
-        :OPPORTUNITY_FUNDS_PER_TOPIC
+        :limit
     ]
 
 
-async def enrich_topic_funds(conn, discovered, packet, now):
+async def enrich_topic_funds(conn, discovered, packet, now, *, display_limit=OPPORTUNITY_FUNDS_PER_TOPIC):
     """Recheck cached identities and attach current local trade and price facts.
 
     Both database reads use the bounded candidate codes. Neither query repeats
@@ -626,12 +632,12 @@ async def enrich_topic_funds(conn, discovered, packet, now):
                         "referenceTracks": deepcopy(price["tracks"]) if price else [],
                     }
                 )
-        funds = _display_groups(enriched["funds"], prices)
+        funds = _display_groups(enriched["funds"], prices, limit=display_limit)
         # Never reinterpret a formerly specific mapping as broad after live removal.
         indirect = (
             []
             if discovery.get("funds")
-            else _display_groups(enriched["indirectFunds"], prices)
+            else _display_groups(enriched["indirectFunds"], prices, limit=display_limit)
         )
         unavailable = discovery.get("unavailableReason")
         if unavailable == "INDIRECT_EXPOSURE_ONLY":

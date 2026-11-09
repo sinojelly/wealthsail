@@ -330,7 +330,7 @@ def _cached_nav_plan(code, view, points, benchmark):
     return plan
 
 
-async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet=None):
+async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet=None, include_series=False):
     """Update response-only CNY fund coordinates without provider I/O or DB writes."""
     if not isinstance(report, dict):
         return report
@@ -424,6 +424,17 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
                 **({"reason": reason} if reason else {}),
             },
         )
+        if include_series:
+            plan["series"] = {
+                "state": view["state"],
+                "fundCode": code,
+                "asOf": view.get("asOf"),
+                "unit": "CNY/份",
+                "priceBasis": "UNIT_NAV",
+                "sourceUri": view.get("sourceUri"),
+                "retrievedAt": view.get("retrievedAt"),
+                "points": [{"date": row["date"], "value": row["close"]} for row in points],
+            }
         calculated[code] = plan
     for original, code in plans:
         previous_as_of, previous_method, previous_source = (

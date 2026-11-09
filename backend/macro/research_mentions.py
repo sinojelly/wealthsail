@@ -38,7 +38,7 @@ def mentioned_fund_codes(report):
         return []
     rows = OrderedDict()
 
-    def scan(value, location, direction=None):
+    def scan(value, location, direction=None, topics=()):
         for text in _body_texts(value):
             for match in _CODE.finditer(_URL.sub(" ", text[:65536])):
                 code = match.group()
@@ -50,6 +50,11 @@ def mentioned_fund_codes(report):
                     row["directionKeys"].append(direction)
                 if location not in row["mentionLocations"]:
                     row["mentionLocations"].append(location)
+                for topic in topics:
+                    if isinstance(topic, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", topic):
+                        linked = row.setdefault("topicKeys", [])
+                        if topic not in linked:
+                            linked.append(topic)
 
     for field in ("summary", "macroCycle"):
         scan(report.get(field), field)
@@ -68,8 +73,47 @@ def mentioned_fund_codes(report):
     topics = report.get("topicCatalog", [])
     if isinstance(topics, list):
         for index, topic in enumerate(topics[:72]):
-            scan(topic, f"topicCatalog.{index}")
+            keys = [topic["key"]] if isinstance(topic, dict) and isinstance(topic.get("key"), str) else []
+            scan(topic, f"topicCatalog.{index}", topics=keys)
+    for field in ("coverage", "events", "upcoming"):
+        items = report.get(field)
+        for index, item in enumerate(items[:72] if isinstance(items, list) else []):
+            keys = item.get("relatedTopicKeys", []) if isinstance(item, dict) else []
+            scan(item, f"{field}.{index}", topics=keys if isinstance(keys, list) else [])
     return list(rows.values())
+
+
+def safe_mentioned_funds(value):
+    """Project only resolved identities; observation references never grant a buy."""
+    result, seen = [], set()
+    for row in value[:256] if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        code, kind, subject = row.get("fundCode"), row.get("subjectKind"), row.get("subjectId")
+        if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code) or code in seen:
+            continue
+        if row.get("market") not in (None, "FUND_CN"):
+            continue
+        if kind == "fund":
+            try:
+                UUID(str(subject))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        elif kind != "nav" or subject != code:
+            continue
+        label = row.get("label")
+        projected = {
+            "fundCode": code, "subjectKind": kind, "subjectId": subject,
+            "market": "FUND_CN", "label": label[:200] if isinstance(label, str) else code,
+            "qualificationStatus": "OBSERVATION_ONLY", "investmentEligible": False,
+        }
+        for field in ("directionKeys", "topicKeys", "mentionLocations"):
+            projected[field] = list(dict.fromkeys(
+                item[:200] for item in row.get(field, [])[:72] if isinstance(item, str)
+            )) if isinstance(row.get(field), list) else []
+        result.append(projected)
+        seen.add(code)
+    return result
 
 
 def extract_mentioned_funds(report, packet):

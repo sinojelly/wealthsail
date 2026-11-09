@@ -1,6 +1,7 @@
 """Pure, explainable topic search hints and fund share-family identities."""
 
 import re
+import math
 
 from backend.investment.discovery_limits import OPPORTUNITY_KEYWORDS_PER_TOPIC
 from backend.investment.dynamic_discovery import _THEMES
@@ -11,6 +12,24 @@ ASSOCIATION_ORDER = {
     "NAME_CANDIDATE": 2,
     "BROAD_FALLBACK": 3,
 }
+
+
+def fund_price_priority(fund):
+    """Current technical position precedes descriptive association strength."""
+    position = fund.get("pricePosition") or {}
+    status = position.get("status")
+    score = fund.get("quantitativeScore")
+    score = score if type(score) in (int, float) and math.isfinite(score) else None
+    category = (
+        0 if status == "ENTRY_ZONE" else
+        1 if status == "NEAR_ENTRY_ZONE" else
+        3 if status == "OVERHEATED" else
+        2 if status not in (None, "DATA_PENDING") and score is not None and score >= 70 else
+        4
+    )
+    distance = position.get("distanceToEntryPct")
+    distance = distance if type(distance) in (int, float) and math.isfinite(distance) else math.inf
+    return (category, distance if category == 1 else 0, -(score if score is not None else -1))
 _SYNONYMS = (
     (r"光模块|光通信|\bCPO\b", ("光通信", "通信", "人工智能")),
     (r"电网设备|电网|特高压", ("电网设备", "特高压", "电力")),
@@ -56,6 +75,13 @@ def topic_text(topic):
         + texts(topic.get("industryClaims"))
         + texts(match.get("unresolvedClaims"))
     )
+
+
+def mentioned_codes(topic):
+    """Exact narrative codes are identity lookup hints, never product evidence."""
+    from backend.macro.research_mentions import mentioned_fund_codes
+
+    return [row["fundCode"] for row in mentioned_fund_codes({"topicCatalog": [topic]})]
 
 
 def regional_bond_terms(topic):

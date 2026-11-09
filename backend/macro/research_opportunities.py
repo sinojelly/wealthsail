@@ -207,6 +207,7 @@ def project_topic_recommendations(
     from backend.macro.research_topics import frozen_manifest
     from backend.macro.research_topic_polarity import classify_topic_polarity
     from backend.macro.research_topic_priority import IMPORTANCE, topic_highlights
+    from backend.investment.opportunity_fund_matching import fund_price_priority
 
     if not isinstance(topics, list) or len(topics) > 72:
         raise ValidationError_("机会推荐超过主题目录边界")
@@ -329,7 +330,7 @@ def project_topic_recommendations(
                 if row.get("matchLevel") != "BROAD_FALLBACK"
                 and row.get("associationLevel") != "BROAD_FALLBACK"
             ]
-        )[:3]
+        )
         indirect = deepcopy(
             [
                 *recalled.get("indirectFunds", []),
@@ -340,7 +341,7 @@ def project_topic_recommendations(
                     or row.get("associationLevel") == "BROAD_FALLBACK"
                 ),
             ]
-        )[:3]
+        )
         funds = (
             direct if economic_direction in {"POSITIVE_OPPORTUNITY", "MIXED"} else []
         )
@@ -378,6 +379,10 @@ def project_topic_recommendations(
             fund["riskWarnings"] = list(
                 dict.fromkeys([*fund.get("riskWarnings", []), *warnings])
             )
+        direct.sort(key=fund_price_priority)
+        indirect.sort(key=fund_price_priority)
+        del direct[3:]
+        del indirect[3:]
         gaps = ([] if backed else ["POSITIVE_SOURCE_UNVERIFIED"]) + (
             [] if verified else ["RISK_AUDIT_INCOMPLETE"]
         )
@@ -451,6 +456,7 @@ def project_topic_recommendations(
         ranked.append(
             (
                 (
+                    min((fund_price_priority(fund)[0] for fund in [*direct, *indirect]), default=5),
                     -int(bool(funds)),
                     -IMPORTANCE.get(item["priority"].get("importance"), 0),
                     -len(refs & checked_ids),
@@ -554,7 +560,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
                 "FUND_RECALL_FAILED" if state == "FAILED" else "FUND_RECALL_PENDING"
             ]
             return result
-        recalls = await enrich_topic_funds(conn, discovered, packet, now)
+        recalls = await enrich_topic_funds(conn, discovered, packet, now, display_limit=None)
         recalls = await enrich_fund_price_positions(conn, recalls, packet, now)
     else:
         # Explicit test seam. Production reads always use the durable cache.
@@ -594,7 +600,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
             ),
             "priceEvaluableFundCount": sum(
                 (fund.get("pricePosition") or {}).get("status")
-                in {"ENTRY_ZONE", "NEUTRAL", "OVERHEATED"}
+                in {"ENTRY_ZONE", "NEAR_ENTRY_ZONE", "NEUTRAL", "OVERHEATED"}
                 for item in items
                 for fund in item["recommendedFunds"]
             ),

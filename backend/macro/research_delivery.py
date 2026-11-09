@@ -301,6 +301,7 @@ async def read_economic_research(conn, run_id, now):
             "valueDirections",
             "industryCycleReviews",
             "macroOverview",
+            "mentionedFunds",
         )
     )
     partial = (
