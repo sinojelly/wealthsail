@@ -103,6 +103,8 @@ def price_position(plan, now):
 
 def _zone_contract(plan):
     """Keep the complete refreshed calculation and expose chart coordinates."""
+    if not plan or not isinstance(plan.get("tracks"), list):
+        return None
     result = deepcopy(plan)
     tracks = result.get("tracks") or []
     track = next((row for row in tracks if row.get("priceState") == "READY"), {})
@@ -147,8 +149,40 @@ async def enrich_fund_price_positions(
         for recalled in result.values():
             for field in ("funds", "indirectFunds"):
                 for fund in recalled.get(field, []):
-                    if fund.get("fundCode") in prepared["refresh"]:
-                        fund["actionableZones"]["navSync"] = deepcopy(prepared["refresh"][fund["fundCode"]])
+                    plan = fund.get("actionableZones")
+                    if not isinstance(plan, dict):
+                        continue
+                    code = fund.get("fundCode")
+                    if code in prepared["refresh"]:
+                        plan["navSync"] = deepcopy(prepared["refresh"][code])
+                    latest = (prepared.get("latestConfirmed", {}).get(code) or {})
+                    try:
+                        latest_date = date.fromisoformat(str(latest.get("asOf"))[:10])
+                        plan_date = date.fromisoformat(str(plan.get("asOf"))[:10])
+                    except (TypeError, ValueError):
+                        continue
+                    if latest.get("quality") == "ESTIMATED" or not plan_date < latest_date <= local(prepared["asOf"]).date():
+                        continue
+                    # A failed source repair must not make an older cohort
+                    # current merely because that cohort was checked recently.
+                    plan["historyQuality"] = "PARTIAL"
+                    plan["priceRefresh"].update(state="PARTIAL", reason="NEWER_CONFIRMED_NAV_AVAILABLE")
+                    if isinstance(plan.get("series"), dict):
+                        plan["series"]["state"] = "PARTIAL"
+                    for track in plan.get("tracks", []):
+                        track.update(priceState="PARTIAL", entryReady=False, inBuyZone=False)
+                    fund.update(
+                        pricePosition=price_position(plan, prepared["asOf"]),
+                        quantitativeScore=None,
+                        referenceTracks=deepcopy(plan.get("tracks", [])),
+                    )
+                    for key in ("unadjustedQuantitativeScore", "quantitativeRiskPenaltyApplied"):
+                        fund.pop(key, None)
+                    fund["missingEvidence"] = list(dict.fromkeys([
+                        *fund.get("missingEvidence", []), "NEWER_CONFIRMED_NAV_AVAILABLE",
+                    ]))
+                if field in recalled:
+                    recalled[field].sort(key=fund_price_priority)
         return result
     result = deepcopy(recalls)
     products = {}

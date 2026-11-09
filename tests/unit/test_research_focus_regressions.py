@@ -80,6 +80,22 @@ async def test_missing_history_keeps_fund_and_explicit_empty_price_contract():
     assert candidate["quantitativeScore"] is None
 
 
+@pytest.mark.asyncio
+async def test_identity_conflict_exposes_no_partial_actionable_zone_object():
+    from backend.investment.opportunity_fund_prices import enrich_fund_price_positions
+    from tests.unit.test_live_fund_plans_v6 import NOW as PRICE_NOW
+    from uuid import uuid4
+
+    wrong = {**product(), "subjectKind": "fund", "subjectId": str(uuid4())}
+    result = await enrich_fund_price_positions(
+        LocalHistory([history("987651")]),
+        {"valid": {"funds": [product()]}, "conflict": {"funds": [wrong]}}, {}, PRICE_NOW,
+    )
+    candidate = result["conflict"]["funds"][0]
+    assert candidate["actionableZones"] is None
+    assert candidate["pricePosition"]["status"] == "DATA_PENDING"
+
+
 def test_focus_sorts_all_twelve_topics_by_current_fund_price_state():
     states = ["OVERHEATED", "NEUTRAL", "NEAR_ENTRY_ZONE", "ENTRY_ZONE"]
     topics, recalls = [], {}
@@ -225,3 +241,28 @@ async def test_all_displayed_funds_are_synced_even_when_more_than_thirty_two(mon
     assert set(ensure.await_args.args[1]) == set(codes)
     assert ensure.await_args.kwargs["provider_budget"] == 36
     assert sum(len(item["funds"]) for item in result.values()) == 36
+
+
+@pytest.mark.asyncio
+async def test_newer_confirmed_nav_prevents_stale_history_from_appearing_ready(monkeypatch):
+    from backend.investment.opportunity_fund_prices import enrich_fund_price_positions
+    from tests.unit.test_live_fund_plans_v6 import NOW as PRICE_NOW
+
+    ensure = AsyncMock(return_value={
+        "asOf": PRICE_NOW, "histories": [history("987651")],
+        "refresh": {"987651": {"state": "FAILED", "reason": "NAV_SOURCE_SYNC_FAILED"}},
+        "latestConfirmed": {"987651": {"asOf": "2026-10-28", "quality": "FRESH"}},
+    })
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", ensure)
+    result = await enrich_fund_price_positions(
+        LocalHistory([]), {"topic:new": {"funds": [product()]}}, {}, PRICE_NOW,
+        tenant_id="tenant", user_id="actor",
+    )
+    candidate = result["topic:new"]["funds"][0]
+    zones = candidate["actionableZones"]
+    assert zones["priceRefresh"]["state"] == "PARTIAL"
+    assert zones["priceRefresh"]["reason"] == "NEWER_CONFIRMED_NAV_AVAILABLE"
+    assert zones["series"]["state"] == "PARTIAL"
+    assert candidate["pricePosition"]["status"] == "DATA_PENDING"
+    assert candidate["quantitativeScore"] is None
+    assert candidate["confirmedNav"]["asOf"] == "2026-10-27"
