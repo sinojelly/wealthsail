@@ -456,7 +456,12 @@ def project_topic_recommendations(
         ranked.append(
             (
                 (
-                    min((fund_price_priority(fund)[0] for fund in [*direct, *indirect]), default=5),
+                    min(
+                        (priority if priority[0] < 4 else (4, 0, 0)
+                         for fund in [*direct, *indirect]
+                         for priority in [fund_price_priority(fund)]),
+                        default=(5, 0, 0),
+                    ),
                     -int(bool(funds)),
                     -IMPORTANCE.get(item["priority"].get("importance"), 0),
                     -len(refs & checked_ids),
@@ -472,7 +477,7 @@ def project_topic_recommendations(
     return [item for _, item in ranked]
 
 
-async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
+async def read_topic_fund_recommendations(conn, run_id, now, *, tenant_id=None, user_id=None, _recall=None):
     """Read the complete visible topic snapshot and the current local catalog.
 
     Only public, archived INITIAL observations supply theses and risk proof.
@@ -561,7 +566,9 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, _recall=None):
             ]
             return result
         recalls = await enrich_topic_funds(conn, discovered, packet, now, display_limit=None)
-        recalls = await enrich_fund_price_positions(conn, recalls, packet, now)
+        recalls = await enrich_fund_price_positions(
+            conn, recalls, packet, now, tenant_id=tenant_id, user_id=user_id,
+        )
     else:
         # Explicit test seam. Production reads always use the durable cache.
         recalls = await _recall(conn, candidates, packet, now)

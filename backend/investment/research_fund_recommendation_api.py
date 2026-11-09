@@ -1,8 +1,10 @@
-"""Read-only news-driven fund recommendations, independent of formal reports."""
+"""News-driven recommendations with authenticated public NAV cache repair."""
 
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
+
+from backend.common.database import tenant_transaction
 
 from backend.dependencies import (
     get_pool,
@@ -11,7 +13,6 @@ from backend.dependencies import (
     now_shanghai,
 )
 from backend.errors import ok
-from backend.investment.research_topic_api import readonly_tenant_transaction
 from backend.macro.research_opportunities import read_topic_fund_recommendations
 
 router = APIRouter(
@@ -27,6 +28,8 @@ async def read_recommendations(
     request_id=Depends(get_request_id),
 ):
     now = now_shanghai()
-    async with readonly_tenant_transaction(pool, ctx) as conn:
-        value = await read_topic_fund_recommendations(conn, run_id, now)
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        value = await read_topic_fund_recommendations(
+            conn, run_id, now, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+        )
     return ok(value, request_id=request_id, as_of=now)

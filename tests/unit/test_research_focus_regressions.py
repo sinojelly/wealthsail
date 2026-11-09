@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from decimal import Decimal
+from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -52,6 +54,7 @@ async def test_every_candidate_has_current_full_actionable_zone_contract():
     zones = candidate["actionableZones"]
     assert zones["fundCode"] == candidate["fundCode"]
     assert zones["currentPrice"] == candidate["confirmedNav"]["value"]
+    assert candidate["confirmedNav"]["changePct"] == zones["currentChangePct"]
     assert zones["asOf"] == candidate["confirmedNav"]["asOf"]
     assert zones["priceRefresh"]["calculatedAt"] == PRICE_NOW.isoformat()
     assert zones["tracks"] == candidate["referenceTracks"]
@@ -97,6 +100,18 @@ def test_focus_sorts_all_twelve_topics_by_current_fund_price_state():
         f"focus_{i}" for i in [3, 7, 11, 2, 6, 10, 1, 5, 9, 0, 4, 8]
     ]
     assert recalls == original
+
+
+def test_current_high_scores_sort_before_narrative_source_count():
+    high, backed = topic("score_95"), topic("score_75", sourceIds=["s1", "s2"])
+    items = project_topic_recommendations(
+        [backed, high],
+        {row["topicId"]: {"funds": [{**fund(score), "pricePosition": {"status": "NEUTRAL"}}]}
+         for row, score in [(high, 95), (backed, 75)]},
+        sources=[source(), {**source(), "id": "s2"}], reviews=[], coverage={}, packet={},
+        validated_at=NOW, now=NOW,
+    )
+    assert [item["key"] for item in items] == ["score_95", "score_75"]
 
 
 def test_funds_within_one_topic_are_sorted_before_the_display_limit():
@@ -166,3 +181,47 @@ def test_acceptance_receipt_keeps_resolved_mentions_before_read_projection():
         research_id=RUN, completed_at=at,
     )
     assert any(row["fundCode"] == "018344" for row in outcome.accepted["mentionedFunds"])
+
+
+@pytest.mark.asyncio
+async def test_actor_recommendation_repairs_nav_before_current_plan_calculation(monkeypatch):
+    from backend.investment.opportunity_fund_prices import enrich_fund_price_positions
+    from tests.unit.test_live_fund_plans_v6 import NOW as PRICE_NOW
+
+    synced_at = PRICE_NOW + timedelta(seconds=2)
+    ensure = AsyncMock(return_value={
+        "asOf": synced_at, "histories": [history("987651")],
+        "refresh": {"987651": {"state": "READY"}}, "latestConfirmed": {},
+    })
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", ensure)
+    result = await enrich_fund_price_positions(
+        conn := LocalHistory([]), {"topic:new": {"funds": [product()]}}, {}, PRICE_NOW,
+        tenant_id="tenant", user_id="actor",
+    )
+    ensure.assert_awaited_once_with(
+        conn, ["987651"], PRICE_NOW, tenant_id="tenant", user_id="actor", provider_budget=1,
+    )
+    candidate = result["topic:new"]["funds"][0]
+    assert candidate["actionableZones"]["priceRefresh"]["calculatedAt"] == synced_at.isoformat()
+    assert candidate["actionableZones"]["navSync"] == {"state": "READY"}
+    assert candidate["confirmedNav"]["value"] is not None
+
+
+@pytest.mark.asyncio
+async def test_all_displayed_funds_are_synced_even_when_more_than_thirty_two(monkeypatch):
+    from backend.investment.opportunity_fund_prices import enrich_fund_price_positions
+    from tests.unit.test_live_fund_plans_v6 import NOW as PRICE_NOW
+
+    codes = [f"{981000 + index:06}" for index in range(36)]
+    ensure = AsyncMock(return_value={"asOf": PRICE_NOW, "histories": [], "refresh": {}})
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", ensure)
+    recalls = {
+        f"topic:{index}": {"funds": [product(code) for code in codes[index * 3:index * 3 + 3]]}
+        for index in range(12)
+    }
+    result = await enrich_fund_price_positions(
+        LocalHistory([]), recalls, {}, PRICE_NOW, tenant_id="tenant", user_id="actor",
+    )
+    assert set(ensure.await_args.args[1]) == set(codes)
+    assert ensure.await_args.kwargs["provider_budget"] == 36
+    assert sum(len(item["funds"]) for item in result.values()) == 36

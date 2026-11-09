@@ -1,4 +1,4 @@
-"""Current local NAV context for matched products, with no provider I/O."""
+"""Current NAV coordinates, with authenticated repair for displayed products."""
 
 from copy import deepcopy
 from datetime import date, timedelta
@@ -116,9 +116,40 @@ def _zone_contract(plan):
     return result
 
 
-async def enrich_fund_price_positions(conn, recalls, packet, now):
+async def enrich_fund_price_positions(
+    conn, recalls, packet, now, *, tenant_id=None, user_id=None, histories=None,
+):
     """Batch only displayed identities, including products outside the NAV pool."""
     now = local(now)
+    if tenant_id is not None and user_id is not None:
+        from backend.funds.nav_history import ensure_nav_histories
+
+        # Rank the entire local candidate catalog first, then repair every
+        # displayed product in one bounded provider round and reprice it.
+        selected = await enrich_fund_price_positions(conn, recalls, packet, now, histories=histories)
+        for recalled in selected.values():
+            for field in ("funds", "indirectFunds"):
+                if field in recalled:
+                    del recalled[field][3:]
+        codes = list(dict.fromkeys(
+            fund["fundCode"] for recalled in selected.values()
+            for field in ("funds", "indirectFunds") for fund in recalled.get(field, [])
+            if _code({**fund, "priceBasis": "UNIT_NAV", "unit": "CNY/份"})
+        ))
+        if not codes:
+            return selected
+        prepared = await ensure_nav_histories(
+            conn, codes, now, tenant_id=tenant_id, user_id=user_id, provider_budget=len(codes),
+        )
+        result = await enrich_fund_price_positions(
+            conn, selected, packet, prepared["asOf"], histories=prepared["histories"],
+        )
+        for recalled in result.values():
+            for field in ("funds", "indirectFunds"):
+                for fund in recalled.get(field, []):
+                    if fund.get("fundCode") in prepared["refresh"]:
+                        fund["actionableZones"]["navSync"] = deepcopy(prepared["refresh"][fund["fundCode"]])
+        return result
     result = deepcopy(recalls)
     products = {}
     for recalled in result.values():
@@ -147,6 +178,7 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
         now,
         packet=packet,
         include_series=True,
+        histories=histories,
     )
     plans = {row["fundCode"]: row for row in refreshed["discoveryActionableZones"]}
     for recalled in result.values():
@@ -176,6 +208,7 @@ async def enrich_fund_price_positions(conn, recalls, packet, now):
                             "asOf": plan["asOf"],
                             "retrievedAt": plan.get("retrievedAt"),
                             "sourceUri": plan.get("sourceUri"),
+                            "changePct": plan.get("currentChangePct"),
                         },
                         referenceTracks=deepcopy(plan.get("tracks", [])),
                         quantitativeScore=scored.get("opportunityScore"),

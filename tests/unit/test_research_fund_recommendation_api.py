@@ -1,4 +1,4 @@
-"""Recommendation reads run in a tenant-scoped, immutable snapshot."""
+"""Recommendation reads may repair public NAV inside the actor's tenant."""
 
 from contextlib import asynccontextmanager
 from importlib import import_module, util
@@ -22,11 +22,11 @@ def test_recommendations_are_available_without_a_formal_report(monkeypatch):
     seen = []
 
     @asynccontextmanager
-    async def readonly(*args):
-        seen.append("readonly")
+    async def transaction(*args):
+        seen.append(args)
         yield object()
 
-    monkeypatch.setattr(module, "readonly_tenant_transaction", readonly)
+    monkeypatch.setattr(module, "tenant_transaction", transaction)
     read = AsyncMock(
         return_value={
             "researchId": str(run_id),
@@ -44,9 +44,10 @@ def test_recommendations_are_available_without_a_formal_report(monkeypatch):
     response = TestClient(app).get(
         f"/api/v1/investment/daily-research/topic-fund-recommendations/{run_id}"
     )
-    assert response.status_code == 200 and seen == ["readonly"]
+    assert response.status_code == 200 and len(seen) == 1
     assert (
         response.json()["data"]["items"][0]["recommendedFunds"][0]["fundCode"]
         == "123456"
     )
     assert read.await_args.args[1] == run_id
+    assert seen[0][1:] == (read.await_args.kwargs["user_id"], read.await_args.kwargs["tenant_id"])
