@@ -160,6 +160,13 @@ export interface ResearchAcceptanceOutcome {
     }>;
     industryCycleReviews: Array<{ industry: string } & AcceptanceIndustryRisk>;
     valueDirections: AcceptanceObservation[];
+    mentionedFunds?: Array<{
+      fundCode: string;
+      name?: string;
+      label?: string;
+      directionKey?: string;
+      directionTitle?: string;
+    }>;
     events: AcceptanceObservation[];
     upcoming: AcceptanceObservation[];
   };

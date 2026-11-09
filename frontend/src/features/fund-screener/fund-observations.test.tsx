@@ -276,7 +276,7 @@ it("keeps saved AI opportunity summaries on Today and independent observations, 
     name: "高价值机会",
   });
   expect(await within(topics).findByText("机器人商业化观察")).toBeVisible();
-  expect(topics).toHaveTextContent("负面风险待核验");
+  expect(within(topics).queryByText("负面风险待核验")).toBeNull();
   expect(
     screen.queryByRole("region", { name: "服务器代表池基金观察" }),
   ).not.toBeInTheDocument();

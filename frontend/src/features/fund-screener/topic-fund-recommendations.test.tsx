@@ -7,6 +7,7 @@ import { renderWithSession } from "../../test/render-with-session";
 import MacroContextStrip from "./components/MacroContextStrip";
 import TopicFundRecommendations from "./components/TopicFundRecommendations";
 import { getResearchTopicRegistry } from "../../api/research-topic-registry";
+import { frozenPlan } from "./personal-funds.test-data";
 
 const session = vi.hoisted(() => ({
   tenantId: "reader-tenant",
@@ -159,7 +160,7 @@ beforeEach(() => {
   );
 });
 
-it("limits Today summaries to three topics and mounts original right-hand charts only when requested", async () => {
+it("shows all Today opportunities and mounts their charts when expanded", async () => {
   const payload = response();
   payload.items.push({
     ...payload.items[0],
@@ -177,9 +178,7 @@ it("limits Today summaries to three topics and mounts original right-hand charts
     />,
   );
   await screen.findByRole("heading", { name: "机器人订单机会" });
-  expect(
-    screen.queryByRole("heading", { name: "第四个机会主题" }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "第四个机会主题" })).toBeVisible();
   expect(
     screen.queryByRole("region", { name: "000001净值走势图区域" }),
   ).not.toBeInTheDocument();
@@ -187,8 +186,36 @@ it("limits Today summaries to three topics and mounts original right-hand charts
   expect(
     screen.getByRole("region", { name: "000001净值走势图区域" }),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByText("查看全部4个机会主题"));
-  expect(screen.getByRole("heading", { name: "第四个机会主题" })).toBeVisible();
+});
+
+it("keeps twelve observation opportunities and their supplied buy/sell levels on the front", async () => {
+  const payload = response();
+  Object.assign(payload, {
+    items: Array.from({ length: 12 }, (_, i) => ({
+      ...payload.items[0],
+      topicId: `topic-${i}`,
+      title: `机会方向${i + 1}`,
+      recommendationStatus: "OBSERVATION_ONLY",
+      recommendedFunds: [
+        {
+          ...payload.items[0].recommendedFunds[0],
+          actionableZones: frozenPlan("000001"),
+        },
+      ],
+    })),
+  });
+  vi.mocked(fetch).mockResolvedValue(fetchData(payload));
+  renderWithSession(
+    <TopicFundRecommendations
+      runId={run}
+      state="READY"
+      presentation="SUMMARY"
+    />,
+  );
+  await screen.findByRole("heading", { name: "机会方向12" });
+  expect(screen.getAllByText("参考买入区间")).toHaveLength(12);
+  expect(screen.getAllByText("1.0500–1.1500")).toHaveLength(12);
+  expect(screen.queryByText("正面来源待核验，仅供研究观察。")).toBeNull();
 });
 
 it("preserves candidate, indirect, source and current-price qualifications in Today summaries", async () => {
@@ -215,12 +242,12 @@ it("preserves candidate, indirect, source and current-price qualifications in To
   );
   const title = await screen.findByRole("heading", { name: "机器人订单机会" });
   const card = title.closest("article")!;
-  expect(within(card).getByText(/正面来源待核验/)).toBeVisible();
+  expect(within(card).queryByText(/正面来源待核验/)).toBeNull();
   expect(within(card).getByText(/名称匹配候选/)).toBeVisible();
   expect(within(card).getByText(/申购限额/)).toBeVisible();
   expect(within(card).getByText(/处于高位，勿追高/)).toBeVisible();
   expect(within(card).getByText(/2026年11月6日/)).toBeVisible();
-  expect(within(card).getByText(/基金资料待补齐/)).toBeVisible();
+  expect(within(card).queryByText(/基金资料待补齐/)).toBeNull();
   const indirect = screen
     .getByRole("heading", { name: "宏观需求改善" })
     .closest("article")!;
@@ -508,13 +535,15 @@ it("connects news opportunities to funds despite no formal report or incomplete 
   });
   expect(await within(region).findByText("机器人订单机会")).toBeVisible();
   expect(within(region).getByText(/000001.*机器人主题基金/)).toBeVisible();
-  expect(within(region).getByText("负面风险待核验")).toBeVisible();
-  expect(within(region).getByText("存在负面分歧")).toBeVisible();
-  expect(within(region).getByText("风险核查已完成")).toBeVisible();
+  expect(within(region).getByText("负面风险待核验")).not.toBeVisible();
+  expect(
+    within(region).getByText(/行业反方风险提示：短期产能过剩与价格竞争/),
+  ).toBeVisible();
+  expect(within(region).getByText("风险核查已完成")).not.toBeVisible();
   expect(within(region).getByText("精选池匹配")).toBeVisible();
   expect(within(region).getByText("全量库动态匹配")).toBeVisible();
   expect(within(region).getByText("宽基间接观察")).toBeVisible();
-  expect(within(region).getByText("短期产能过剩与价格竞争")).toBeVisible();
+  expect(within(region).getByText("短期产能过剩与价格竞争")).not.toBeVisible();
   expect(within(region).getByText(/申购状态待核验/)).toBeVisible();
   expect(
     within(region).queryByRole("button", { name: /买入|跟踪|执行/ }),
@@ -635,7 +664,7 @@ it("retains matched funds while identifying missing positive source verification
   );
   expect(
     await screen.findByText("正面来源待核验，以下基金仅为主题匹配候选。"),
-  ).toBeVisible();
+  ).not.toBeVisible();
   expect(screen.getByText(/000001.*机器人主题基金/)).toBeVisible();
 });
 
@@ -720,7 +749,7 @@ it("shows the adverse risk deduction alongside the news thesis and matched fund"
       source="CURRENT"
     />,
   );
-  expect(await screen.findByText("负面风险扣分：-20")).toBeVisible();
+  expect(await screen.findByText("负面风险扣分：-20")).not.toBeVisible();
   expect(screen.getByText(/量化得分：75（扣分前95分）/)).toBeVisible();
   expect(screen.getByText(/000002.*芯片精选基金/)).toBeVisible();
 });
@@ -949,7 +978,7 @@ it("shows each fund's inline NAV panel and loads its chart on entering the viewp
   expect(fund.querySelector("details.op-match-chart")).toBeNull();
   expect(within(fund).queryByText("查看单位净值走势")).not.toBeInTheDocument();
   expect(within(fund).queryByRole("img")).not.toBeInTheDocument();
-  expect(within(fund).getByText(/匹配归档未提供买卖价位/)).toBeVisible();
+  expect(within(fund).queryByText(/匹配归档未提供买卖价位/)).toBeNull();
   const intersection = observed.get(panel)!;
   expect(intersection).toBeDefined();
   act(() => {

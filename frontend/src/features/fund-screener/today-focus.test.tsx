@@ -66,3 +66,30 @@ it("keeps missing judgment distinct from no market opportunities", () => {
   expect(screen.getByText(/尚无有效报告研判/)).toBeVisible();
   expect(screen.queryByText("暂无投资机会")).not.toBeInTheDocument();
 });
+
+it("shows all observation value directions and mentioned funds without opening evidence", () => {
+  const value = data("观察方向保留。");
+  value.dailyResearch!.report!.valueDirections = Array.from(
+    { length: 15 },
+    (_, i) => ({
+      key: `direction-${i}`,
+      title: `价值方向${i + 1}`,
+      thesis: "AI研究观点",
+      qualificationStatus: "OBSERVATION_ONLY",
+      investmentEligible: false,
+      signal: "WATCH",
+      sourceIds: [],
+      macroCodes: [],
+      watchFor: [],
+      plans: [],
+    }),
+  );
+  value.dailyResearch!.report!.mentionedFunds = [
+    { fundCode: "000051", name: "提及基金" },
+  ];
+  renderWithSession(<TodayFocus data={value} onViewEvidence={() => {}} />);
+  expect(screen.getByText("价值方向15")).toBeVisible();
+  expect(
+    screen.getByRole("region", { name: "本期提及基金" }),
+  ).toHaveTextContent("000051");
+});

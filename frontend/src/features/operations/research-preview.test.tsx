@@ -303,7 +303,7 @@ it("clears the previous private snapshot immediately when the session subject ch
     );
   }
   renderWithSession(<SwitchSession />, `/operations/research-preview/${runId}`);
-  expect(await screen.findByText("机器人资金约束观察")).toBeInTheDocument();
+  expect((await screen.findAllByText("机器人资金约束观察")).length).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: "切换查看身份" }));
   expect(screen.queryByText("机器人资金约束观察")).not.toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("正在读取冻结研究材料");

@@ -13,6 +13,10 @@ import ObservationSection from "./ObservationSection";
 import ViewportFundChart from "./ViewportFundChart";
 import { readingText, researchSummary } from "../research-reading";
 import "../topic-fund-cards.css";
+import QuantitativePricePanel from "./QuantitativePricePanel";
+import { referenceTrack, quantitativePosition } from "../quantitative-position";
+import { planPrice } from "../plan-display";
+import { planNavSnapshot } from "../plan-nav-snapshot";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const riskLabels = {
@@ -81,7 +85,43 @@ function subscriptionLabel(fund: TopicRecommendedFund): string {
             : "申购状态待核验";
 }
 
+function FundPrices({ fund }: { fund: TopicRecommendedFund }) {
+  const plan = fund.actionableZones;
+  const nav = fund.confirmedNav?.value ?? plan?.currentPrice;
+  const change = fund.confirmedNav?.changePct ?? plan?.currentChangePct;
+  return (
+    <>
+      <p>
+        最新净值：
+        <strong>
+          {planPrice(nav, { subjectKind: "nav", priceBasis: "UNIT_NAV" })}
+        </strong>
+        {change != null && Number.isFinite(Number(change)) && (
+          <span className="op-nav-change">
+            {" "}
+            · {Number(change) > 0 ? "+" : ""}
+            {Number(change).toFixed(2)}%
+          </span>
+        )}
+        {fund.confirmedNav?.asOf || plan?.asOf
+          ? ` · ${timeLabel(fund.confirmedNav?.asOf ?? plan?.asOf)}`
+          : ""}
+      </p>
+      {plan ? (
+        <QuantitativePricePanel plan={plan} />
+      ) : (
+        <small>参考买卖点正在补齐净值资料。</small>
+      )}
+    </>
+  );
+}
+
 function Fund({ fund }: { fund: TopicRecommendedFund }) {
+  const snapshot =
+    fund.history ??
+    (fund.actionableZones
+      ? planNavSnapshot(fund.actionableZones, fund.name)
+      : undefined);
   return (
     <li className="op-match-fund">
       <header>
@@ -143,9 +183,7 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
               </p>
             )}
           </div>
-          <p className="op-match-note">
-            匹配归档未提供买卖价位，操作条件需另行核验。
-          </p>
+          <FundPrices fund={fund} />
           {!!fund.missingEvidence?.length && (
             <p className="op-match-warning">
               基金资料待补齐，请核对最新净值、历史价格与申购限制。
@@ -192,7 +230,23 @@ function Fund({ fund }: { fund: TopicRecommendedFund }) {
           </details>
         </div>
         {/^[0-9]{6}$/.test(fund.fundCode) && (
-          <ViewportFundChart fundCode={fund.fundCode} />
+          <ViewportFundChart
+            fundCode={fund.fundCode}
+            track={
+              fund.actionableZones
+                ? referenceTrack(fund.actionableZones)
+                : undefined
+            }
+            confirmedNavAsOf={
+              fund.confirmedNav?.asOf ?? fund.actionableZones?.asOf ?? undefined
+            }
+            {...(snapshot
+              ? {
+                  snapshot,
+                  snapshotMode: "CURRENT_LOCAL" as const,
+                }
+              : {})}
+          />
         )}
       </div>
     </li>
@@ -229,13 +283,13 @@ function topicFundGroups(topic: TopicFundRecommendation) {
 
 function Topic({ topic }: { topic: TopicFundRecommendation }) {
   const thesisPreview = researchSummary(topic.thesis, 240);
-  const { groups, recommended, negative } = topicFundGroups(topic);
+  const { groups, negative } = topicFundGroups(topic);
   return (
     <article className="op-match-topic">
       <div className="op-match-thesis">
         <header>
           <h4>{topic.title}</h4>
-          {topic.topicPolarity && (
+          {topic.topicPolarity && topic.topicPolarity !== "UNDETERMINED" && (
             <span className="op-match-badge">
               {polarityLabels[topic.topicPolarity]}
             </span>
@@ -247,28 +301,24 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
             {importanceLabels[topic.priority.importance ?? "UNKNOWN"]}
           </p>
         )}
-        <p className="op-match-risk" data-risk={topic.riskStatus}>
-          <strong>
-            {riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}
-          </strong>
-        </p>
-        {Number.isFinite(topic.riskScorePenalty) &&
-          topic.riskScorePenalty > 0 && (
-            <p>负面风险扣分：-{topic.riskScorePenalty}</p>
-          )}
-        {!!topic.riskWarnings?.length && (
-          <ul className="op-match-warning" aria-label="风险提示">
-            {topic.riskWarnings.map((warning, index) => (
-              <li key={index}>{warning}</li>
-            ))}
-          </ul>
-        )}
-        {topic.recommendationStatus === "SOURCE_PENDING" &&
-          recommended.length > 0 && (
-            <p>正面来源待核验，以下基金仅为主题匹配候选。</p>
+        {topic.riskStatus === "RISK_ALERT" &&
+          topic.riskWarnings?.length > 0 && (
+            <p className="op-match-warning">
+              ⚠️ 行业反方风险提示：{topic.riskWarnings[0]}
+            </p>
           )}
         <details className="op-match-details">
           <summary>研究依据与核查详情</summary>
+          <p>{riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}</p>
+          {topic.riskScorePenalty > 0 && (
+            <p>负面风险扣分：-{topic.riskScorePenalty}</p>
+          )}
+          {topic.recommendationStatus === "SOURCE_PENDING" && (
+            <p>正面来源待核验，以下基金仅为主题匹配候选。</p>
+          )}
+          {topic.riskWarnings?.map((warning, index) => (
+            <p key={index}>{warning}</p>
+          ))}
           {thesisPreview !== topic.thesis && <p>{topic.thesis}</p>}
           {topic.priority && (
             <p>
@@ -332,36 +382,33 @@ function Topic({ topic }: { topic: TopicFundRecommendation }) {
 function TopicSummary({ topic }: { topic: TopicFundRecommendation }) {
   const [expanded, setExpanded] = useState(false);
   const { groups } = topicFundGroups(topic);
-  const funds = groups.flatMap((group) =>
-    group.funds.map((fund) => ({ fund, title: group.title })),
-  );
+  const funds = [
+    ...new Map(
+      groups.flatMap((group) =>
+        group.funds.map(
+          (fund) => [fund.fundCode, { fund, title: group.title }] as const,
+        ),
+      ),
+    ).values(),
+  ];
   return (
     <article className="op-opportunity-summary">
       <header>
         <h4>{topic.title}</h4>
-        <span className="op-match-badge">
-          {topic.topicPolarity
-            ? polarityLabels[topic.topicPolarity]
-            : "主题研究观察"}
-        </span>
       </header>
       <p>{researchSummary(topic.thesis, 150)}</p>
-      <p className="op-match-risk" data-risk={topic.riskStatus}>
-        {riskLabels[topic.riskStatus] ?? riskLabels.UNVERIFIED_RISK}
-      </p>
-      {topic.riskWarnings?.length > 0 && (
-        <p className="op-match-warning">{topic.riskWarnings[0]}</p>
-      )}
-      {topic.recommendationStatus === "SOURCE_PENDING" && (
-        <p className="op-match-warning">正面来源待核验，仅供研究观察。</p>
+      {topic.riskStatus === "RISK_ALERT" && topic.riskWarnings?.length > 0 && (
+        <p className="op-match-warning">
+          ⚠️ 行业反方风险提示：{topic.riskWarnings[0]}
+        </p>
       )}
       {funds.length ? (
         <ul
           className="op-summary-funds"
           aria-label={`${topic.title}的基金摘要`}
         >
-          {funds.slice(0, 3).map(({ fund, title }) => (
-            <li key={`${title}:${fund.fundCode}`}>
+          {funds.map(({ fund, title }) => (
+            <li key={fund.fundCode}>
               <strong>
                 {fund.name} {fund.fundCode}
               </strong>
@@ -369,29 +416,21 @@ function TopicSummary({ topic }: { topic: TopicFundRecommendation }) {
                 {title} ·{" "}
                 {fund.associationLevel
                   ? associationLabels[fund.associationLevel]
-                  : (matchLabels[fund.matchLevel] ?? "关联待核验")}{" "}
+                  : (matchLabels[fund.matchLevel] ?? "主题关联")}{" "}
                 · {subscriptionLabel(fund)}
               </span>
-              <span>
-                价格观察：{fund.pricePosition?.label ?? "当前价格资料待核验"}
-                {fund.pricePosition?.asOf
-                  ? ` · 数据时间：${timeLabel(fund.pricePosition.asOf)}`
-                  : " · 数据时间未提供"}
-              </span>
-              {!!fund.missingEvidence?.length && (
-                <span className="op-match-warning">基金资料待补齐</span>
+              {!fund.actionableZones && fund.pricePosition && (
+                <span>
+                  价格观察：{fund.pricePosition.label} ·{" "}
+                  {timeLabel(fund.pricePosition.asOf)}
+                </span>
               )}
-              {!!fund.riskWarnings?.length && (
-                <span className="op-match-warning">{fund.riskWarnings[0]}</span>
-              )}
+              <FundPrices fund={fund} />
             </li>
           ))}
         </ul>
       ) : (
-        <p>基金匹配尚无完整条目，展开核查资料状态。</p>
-      )}
-      {funds.length > 3 && (
-        <small>另有{funds.length - 3}项基金观察，展开查看。</small>
+        <p>基金匹配资料正在补齐。</p>
       )}
       <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
         <summary>查看{topic.title}的基金与走势图</summary>
@@ -399,6 +438,17 @@ function TopicSummary({ topic }: { topic: TopicFundRecommendation }) {
       </details>
     </article>
   );
+}
+
+function topicPriceOrder(topic: TopicFundRecommendation): [number, number] {
+  const funds = topicFundGroups(topic).groups.flatMap((group) => group.funds);
+  const ranks = funds.map((fund) =>
+    fund.actionableZones ? quantitativePosition(fund.actionableZones).rank : 2,
+  );
+  return [
+    ranks.length ? Math.min(...ranks) : 4,
+    Math.max(0, ...funds.map((fund) => fund.quantitativeScore ?? 0)),
+  ];
 }
 
 export default function TopicFundRecommendations({
@@ -497,7 +547,6 @@ function RecommendationsData({
   terminal: boolean;
   presentation: "FULL" | "SUMMARY";
 }) {
-  const [showAll, setShowAll] = useState(false);
   const reads = useRef(0);
   const previousLifecycle = useRef(lifecycle);
   const [exhaustedLifecycle, setExhaustedLifecycle] = useState<string | null>(
@@ -594,7 +643,7 @@ function RecommendationsData({
       {valid && (
         <>
           <details className="op-match-details op-match-archive">
-            <summary>匹配归档详情</summary>
+            <summary>研究来源与数据时间</summary>
             <p>
               研究ID：{data.researchId} · 证据时间：
               {timeLabel(data.validatedAt)} · 匹配时间：
@@ -626,15 +675,12 @@ function RecommendationsData({
                 : "主题归档或基金匹配正在完成，每3秒自动检查，最多10次；也可手动重新检查。"}
             </p>
           )}
-          {data.items
-            .slice(
-              0,
-              presentation === "SUMMARY"
-                ? showAll
-                  ? data.items.length
-                  : 3
-                : 10,
-            )
+          {[...data.items]
+            .sort((a, b) => {
+              const left = topicPriceOrder(a),
+                right = topicPriceOrder(b);
+              return left[0] - right[0] || right[1] - left[1];
+            })
             .map((topic) =>
               presentation === "SUMMARY" ? (
                 <TopicSummary key={topic.topicId} topic={topic} />
@@ -642,27 +688,6 @@ function RecommendationsData({
                 <Topic key={topic.topicId} topic={topic} />
               ),
             )}
-          {presentation === "SUMMARY" && data.items.length > 3 && (
-            <button
-              type="button"
-              onClick={() => setShowAll(!showAll)}
-              aria-expanded={showAll}
-            >
-              {showAll
-                ? "收起其余机会"
-                : `查看全部${data.items.length}个机会主题`}
-            </button>
-          )}
-          {presentation === "FULL" && data.items.length > 10 && (
-            <details>
-              <summary>
-                查看其余{data.items.length - 10}个机会主题与匹配基金
-              </summary>
-              {data.items.slice(10).map((topic) => (
-                <Topic key={topic.topicId} topic={topic} />
-              ))}
-            </details>
-          )}
           {!data.items.length && confirmedZero && (
             <p>
               已归档的匹配结果为零；这仅表示该研究未匹配到基金，不代表市场没有机会。

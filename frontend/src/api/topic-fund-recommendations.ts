@@ -1,4 +1,6 @@
 import { request } from "./client";
+import type { ActionableZoneResult } from "./investment";
+import type { FundNavHistory } from "./funds";
 
 export type TopicRiskStatus =
   "VERIFIED_SAFE" | "RISK_ALERT" | "UNVERIFIED_RISK";
@@ -13,6 +15,13 @@ export type FundAssociationLevel =
   "DIRECT_INDEX" | "CATEGORY_MATCH" | "NAME_CANDIDATE" | "BROAD_FALLBACK";
 
 export interface TopicRecommendedFund {
+  actionableZones?: ActionableZoneResult | null;
+  history?: FundNavHistory | null;
+  confirmedNav?: {
+    value: string | number | null;
+    asOf: string | null;
+    changePct?: string | number | null;
+  } | null;
   fundCode: string;
   name: string;
   matchLevel: FundMatchLevel;
@@ -22,7 +31,13 @@ export interface TopicRecommendedFund {
   alternativeShareClasses?: Array<{ fundCode: string; name: string }>;
   salesChannel?: "OFF_EXCHANGE" | "EXCHANGE" | "UNKNOWN";
   pricePosition?: {
-    status: "ENTRY_ZONE" | "NEUTRAL" | "OVERHEATED" | "DATA_PENDING";
+    status:
+      | "ENTRY_ZONE"
+      | "NEAR_ENTRY_ZONE"
+      | "NEUTRAL"
+      | "OVERHEATED"
+      | "DATA_PENDING";
+    distanceToEntryPct?: number;
     label: string;
     asOf?: string | null;
     reasons: string[];
