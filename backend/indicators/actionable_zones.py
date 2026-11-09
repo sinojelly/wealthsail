@@ -13,6 +13,8 @@ from decimal import (
 import math
 from statistics import pstdev
 
+from backend.funds.nav_window import two_year_nav_points
+
 VERSION = "actionable-zones-v6"
 PARAMETERS = {
     "ma": [20, 60, 200],
@@ -21,6 +23,7 @@ PARAMETERS = {
     "bollinger": [20, 2],
     "momentum": 20,
     "maximumPePercentile": 40,
+    "maximumLeftNavPercentile": 35,
     "maximumMA200Gap": -0.08,
     "oversoldRSI": 38,
     "bollingerProximity": 1.02,
@@ -927,8 +930,32 @@ def compute_actionable_price_plan(
         "nav",
         "fund",
     }
-    historical_points = suffix[-500:] if nav_basis else []
+    historical_points = two_year_nav_points(suffix) if nav_basis and suffix else []
     nav_history = _historical_nav_anchors(historical_points) if nav_basis else {}
+    historical_closes = [_number(point["close"]) for point in historical_points]
+    # Midrank leaves a constant series at 50%, rather than treating ties as a
+    # low valuation. A real short fund history still needs 120 observations.
+    values["navPercentile2y"] = (
+        float(
+            (
+                sum(value < close for value in historical_closes)
+                + Decimal("0.5") * sum(value == close for value in historical_closes)
+            )
+            / len(historical_closes)
+            * 100
+        )
+        if len(historical_closes) >= 120
+        else None
+    )
+    states["navPercentile2y"] = {
+        "state": "READY"
+        if values["navPercentile2y"] is not None
+        else "INSUFFICIENT"
+        if nav_basis
+        else "NOT_APPLICABLE",
+        "sampleCount": len(historical_points),
+        "requiredSamples": 120,
+    }
     for key in [
         *(f"p{percentile}" for percentile in HISTORICAL_PERCENTILES),
         "peakHigh",
@@ -1096,8 +1123,18 @@ def compute_actionable_price_plan(
         if value is not None and not math.isfinite(value):
             values[key] = None
             states[key]["state"] = "CONFLICT"
+    value_condition = (
+        (
+            "近2年净值分位不高于35%",
+            values["navPercentile2y"] <= 35
+            if values["navPercentile2y"] is not None
+            else None,
+        )
+        if nav_basis and pe is None
+        else ("PE历史分位不高于40%", pe <= 40 if pe is not None else None)
+    )
     left_conditions = [
-        ("PE历史分位不高于40%", pe <= 40 if pe is not None else None),
+        value_condition,
         (
             "收盘偏离真实MA200不高于-8%",
             values["distanceMA200"] <= -0.08
