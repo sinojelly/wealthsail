@@ -8,7 +8,7 @@ const stateLabels = {
   RSI_OVERBOUGHT: "RSI严重超买",
 };
 export default function SellRiskAlerts({ data }: { data?: AlertData }) {
-  if (!data?.items.length) return null;
+  if (!data?.items.length || data.actionReminders !== undefined) return null;
   return (
     <section
       className="op-personal-sell-alerts"

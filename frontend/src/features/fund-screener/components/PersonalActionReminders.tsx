@@ -1,9 +1,13 @@
 import { usePersonalFunds } from "../use-personal-funds";
-import { fundDisplayName } from "../plan-display";
+import { fundDisplayName, planPrice } from "../plan-display";
 import { timeLabel } from "../macro-display";
 import { watchStateLabels } from "../watch-display";
 import "../my-funds.css";
-import type { SellRiskAlert } from "../../../api/investment";
+import type {
+  SellRiskAlert,
+  SellRiskAlerts,
+  PersonalActionReminder,
+} from "../../../api/investment";
 import {
   hasSameSellReminder,
   personalWatchState,
@@ -13,11 +17,13 @@ export interface PersonalActionRemindersProps {
   actor: string;
   onViewFunds: () => void;
   sellRiskAlerts?: readonly SellRiskAlert[];
+  actionData?: SellRiskAlerts;
 }
 export default function PersonalActionReminders({
   actor,
   onViewFunds,
   sellRiskAlerts = [],
+  actionData,
 }: PersonalActionRemindersProps) {
   const { list, groups } = usePersonalFunds(actor);
   const observations = groups.flatMap((group) =>
@@ -51,10 +57,42 @@ export default function PersonalActionReminders({
         !track.priceWatch || personalWatchState(track.priceWatch) === "UNKNOWN",
     ),
   );
-  const unplannedHoldings = groups.filter(
+  const currentReminders = actionData?.actionReminders;
+  const pendingHoldings = groups.filter(
     (group) =>
       group.holding &&
+      !group.reference?.plan &&
       !group.tracks.some((track) => track.priceWatch?.frozenPlan),
+  ).length;
+  const normal = actionData?.normalHoldings ?? [];
+  const price = (value: string | number | null | undefined) =>
+    planPrice(value, { subjectKind: "nav", priceBasis: "UNIT_NAV" });
+  const reminderLabels = {
+    BUY_ZONE: "🟢 低吸加仓参考",
+    SELL_ZONE: "🟠 分批止盈参考",
+    STOP_LOSS: "🔴 止损风控提醒",
+    LARGE_DAILY_MOVE: "⚡ 当日大幅波动提醒",
+    NORMAL: "区间中部观察",
+  };
+  const describe = (row: PersonalActionReminder) => (
+    <>
+      <span>
+        {row.basis === "CONFIRMED_NAV" ? "确认净值" : "估算净值"}{" "}
+        {price(row.value)} · {timeLabel(row.asOf)}
+      </span>
+      <span>
+        买入区间 {price(row.entryZoneMin)}–{price(row.entryZoneMax)} · 止盈 T1 /
+        T2 {price(row.sellZoneMin)} / {price(row.sellZoneMax)} · 止损{" "}
+        {price(row.stopLossPrice)}
+      </span>
+      {row.planAsOf && <small>参考区间日期：{timeLabel(row.planAsOf)}</small>}
+      {row.dailyChangePct != null && (
+        <span>
+          当日涨跌 {row.dailyChangePct > 0 ? "+" : ""}
+          {row.dailyChangePct.toFixed(2)}%
+        </span>
+      )}
+    </>
   );
   return (
     <section className="op-personal-reminders" aria-label="我的行动提醒">
@@ -64,8 +102,10 @@ export default function PersonalActionReminders({
           查看我的基金
         </button>
       </header>
-      {list.isPending && <p role="status">正在读取个人行动提醒…</p>}
-      {list.isError && (
+      {currentReminders === undefined && list.isPending && (
+        <p role="status">正在读取个人行动提醒…</p>
+      )}
+      {currentReminders === undefined && list.isError && (
         <p role="alert">
           行动提醒读取失败，无法确认当前触发。
           <button type="button" onClick={() => void list.refetch()}>
@@ -73,7 +113,64 @@ export default function PersonalActionReminders({
           </button>
         </p>
       )}
-      {!!entries.length && (
+      {currentReminders !== undefined && (
+        <>
+          {!!currentReminders.length && (
+            <ul>
+              {currentReminders.map((row) => (
+                <li
+                  key={`${row.fundCode}:${row.state}`}
+                  className={
+                    row.state === "STOP_LOSS" ? "op-reminder-risk" : ""
+                  }
+                >
+                  <strong>
+                    {fundDisplayName(row.label, row.fundCode)} {row.fundCode}：
+                    {reminderLabels[row.state]}
+                  </strong>
+                  {describe(row)}
+                  {row.triggerStates
+                    .filter((state) => state !== row.state)
+                    .map((state) => (
+                      <small key={state}>{reminderLabels[state]}</small>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!!normal.length && (
+            <details>
+              <summary>
+                其余 {normal.length}{" "}
+                只持仓基金当前处于正常持有区间（点击展开查看全部持仓买卖点距离）
+              </summary>
+              <ul>
+                {normal.map((row) => (
+                  <li key={row.fundCode}>
+                    <strong>
+                      {row.label} {row.fundCode}
+                    </strong>
+                    {describe(row)}
+                    <span>
+                      距离买区 {row.distanceToBuyPct?.toFixed(2) ?? "—"}% ·
+                      距离卖区 {row.distanceToSellPct?.toFixed(2) ?? "—"}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {!!actionData?.summary?.unavailableCount && (
+            <p role="status">
+              {actionData.summary.unavailableCount} 只持仓基金净值资料正在补齐。
+            </p>
+          )}
+          {!currentReminders.length &&
+            !normal.length &&
+            !actionData?.summary?.unavailableCount && <p>暂无新触发</p>}
+        </>
+      )}
+      {currentReminders === undefined && !!entries.length && (
         <ul>
           {entries.map(({ group, track, watch, needsCheck, sell }) => (
             <li
@@ -100,24 +197,27 @@ export default function PersonalActionReminders({
           ))}
         </ul>
       )}
-      {list.isSuccess &&
-        unplannedHoldings.map((group) => (
-          <p role="status" key={group.key}>
-            {fundDisplayName(group.label, group.code)}
-            ：尚无可评估的冻结计划，无法确认持仓价格风险是否触发。
-          </p>
-        ))}
-      {list.isSuccess && missing && (
+      {currentReminders === undefined && list.isSuccess && missing && (
         <p role="status">
           部分基金行情依据不足，暂无法确认是否触发；请在我的基金核对原计划。
         </p>
       )}
-      {list.isSuccess && hasGlobalDuplicates && (
-        <p>相同风险已在上方“持仓/跟踪卖出与风控提醒”展示。</p>
-      )}
+      {currentReminders === undefined &&
+        list.isSuccess &&
+        pendingHoldings > 0 && (
+          <p role="status">
+            {pendingHoldings} 只持仓基金净值与参考买卖点正在补齐。
+          </p>
+        )}
+      {currentReminders === undefined &&
+        list.isSuccess &&
+        hasGlobalDuplicates && (
+          <p>相同风险已在上方“持仓/跟踪卖出与风控提醒”展示。</p>
+        )}
       {list.isSuccess &&
+        currentReminders === undefined &&
+        !pendingHoldings &&
         !missing &&
-        !unplannedHoldings.length &&
         !hasGlobalDuplicates &&
         !entries.length && <p>暂无新触发</p>}
     </section>

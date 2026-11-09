@@ -395,7 +395,7 @@ it("shows safe industry diagnostics from the manual request without borrowing th
 });
 
 it.each([
-  ["READY", "研究成功 · 报告已生成"],
+  ["READY", "✅ 今日投研已完成"],
   ["FAILED", "正式报告未通过"],
   ["UNCERTAIN", "执行异常 · 待核实"],
 ] as const)(

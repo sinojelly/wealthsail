@@ -171,7 +171,7 @@ it("shows watchlist and current mentioned funds even when no formal research pla
   });
   expect(mentioned).toHaveTextContent("本期研究提及");
   expect(screen.getByRole("article", { name: "自选基金" })).toHaveTextContent(
-    "当前买入区间参考",
+    "参考买入区间",
   );
   expect(
     within(mentioned).queryByRole("button", { name: /取消跟踪/ }),
@@ -520,9 +520,70 @@ it("does not call unplanned real holdings a completed no-hit check", async () =>
     />,
   );
   expect(
-    await screen.findByText(/持仓基金024194.*尚无可评估的冻结计划/),
+    await screen.findByText(/1 只持仓基金净值与参考买卖点正在补齐/),
   ).toBeVisible();
   expect(screen.queryByText("暂无新触发")).not.toBeInTheDocument();
+});
+
+it("shows live quantitative holding triggers and collapses normal holdings into one row", async () => {
+  const holding = {
+    fundCode: "024194",
+    label: "持仓基金",
+    relationship: ["HELD"] as ["HELD"],
+    state: "BUY_ZONE" as const,
+    basis: "CONFIRMED_NAV" as const,
+    value: "1.1200",
+    asOf: "2026-11-09",
+    planOrigin: "CURRENT_ACTIONABLE_ZONES" as const,
+    entryZoneMin: "1.0500",
+    entryZoneMax: "1.1500",
+    sellZoneMin: "1.3500",
+    sellZoneMax: "1.5000",
+    stopLossPrice: "0.9500",
+    distanceToBuyPct: 0,
+    distanceToSellPct: 20.54,
+    distanceToStopPct: 15.17,
+    dailyChangePct: -2.6,
+    triggerStates: ["BUY_ZONE", "LARGE_DAILY_MOVE"] as Array<
+      "BUY_ZONE" | "LARGE_DAILY_MOVE"
+    >,
+  };
+  show(
+    <PersonalActionReminders
+      actor="live-holdings"
+      onViewFunds={() => {}}
+      actionData={{
+        asOf: "2026-11-09",
+        items: [],
+        limitations: [],
+        actionReminders: [holding],
+        normalHoldings: [
+          {
+            ...holding,
+            fundCode: "000689",
+            state: "NORMAL",
+            triggerStates: [],
+            distanceToBuyPct: 4.5,
+          },
+        ],
+        summary: {
+          heldCount: 2,
+          evaluatedCount: 2,
+          alertCount: 1,
+          normalCount: 1,
+          unavailableCount: 0,
+        },
+      }}
+    />,
+  );
+  expect(await screen.findByText(/低吸加仓参考/)).toBeVisible();
+  expect(screen.getByText(/当日大幅波动提醒/)).toBeVisible();
+  const summary = screen.getByText(/其余 1 只持仓基金当前处于正常持有区间/);
+  expect(summary).toBeVisible();
+  expect(screen.getByText(/距离买区 4.50%/)).not.toBeVisible();
+  await userEvent.click(summary);
+  expect(screen.getByText(/距离买区 4.50%/)).toBeVisible();
+  expect(screen.queryByText(/尚无可评估的冻结计划/)).toBeNull();
 });
 
 it.each(["UNKNOWN", "NONE"] as const)(

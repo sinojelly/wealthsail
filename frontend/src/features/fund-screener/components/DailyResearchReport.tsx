@@ -255,7 +255,7 @@ function currentEconomicResearch(data?: DailyResearch | null) {
 }
 const economicLabels: Record<EconomicResearchDelivery["status"], string> = {
   AVAILABLE: "今日经济研究已有可阅读成果",
-  PARTIAL: "今日经济研究已有观察资料，证据仍待核实",
+  PARTIAL: "研究观察资料已更新，部分来源仍在补充",
   UNAVAILABLE: "今日经济研究暂无可阅读成果",
   PENDING: "今日经济研究资料待归档",
   UNKNOWN: "今日经济研究交付状态未知",
@@ -313,6 +313,22 @@ export function DailyResearchStatus({
 }) {
   const currentState = executionState(data, state);
   const economic = currentEconomicResearch(data);
+  const currentId = data?.pipeline?.researchRunId ?? data?.runId;
+  const completedReport =
+    currentState === "READY" &&
+    !!data?.report &&
+    (!currentId || !data.reportRunId || data.reportRunId === currentId);
+  const completion =
+    data?.reportCompletedAt ?? data?.completedAt ?? data?.pipeline?.finishedAt;
+  const completedTime =
+    completion && Number.isFinite(Date.parse(completion))
+      ? new Intl.DateTimeFormat("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(new Date(completion))
+      : null;
   const previousDaySuccess =
     currentState === "STALE" &&
     !!data?.reportRunId &&
@@ -334,7 +350,16 @@ export function DailyResearchStatus({
       data-state={economic?.status ?? currentState}
       data-report-state={currentState}
     >
-      {economic ? (
+      {completedReport ? (
+        <>
+          <span>
+            ✅ 今日投研已完成{completedTime ? `（${completedTime}）` : ""}
+          </span>
+          {economic?.status === "PARTIAL" && (
+            <small> · {economicLabels.PARTIAL}</small>
+          )}
+        </>
+      ) : economic ? (
         <>
           <span>{economicLabels[economic.status]}</span>
           <span>

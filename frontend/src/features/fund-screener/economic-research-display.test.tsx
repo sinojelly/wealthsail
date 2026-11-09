@@ -71,6 +71,14 @@ const daily = (): DailyResearch => ({
   },
 });
 
+it("leads with today's successful report time and suppresses residual failure diagnostics", () => {
+  const data = daily();
+  Object.assign(data, { state: "READY", reportRunId: current, completedAt: "2026-11-09T08:12:00+08:00", reportCompletedAt: "2026-11-09T08:12:00+08:00", failureReasonCode: "TIMEOUT" });
+  render(<DailyResearchStatus data={data} />);
+  expect(screen.getByText("✅ 今日投研已完成（08:12）")).toBeVisible();
+  expect(screen.queryByText(/正式报告未通过|执行超时/)).toBeNull();
+});
+
 it("explains the automatic-only 23-hour dispatch cooldown separately from economic delivery", () => {
   const data = daily();
   Object.assign(data, {
@@ -85,7 +93,7 @@ it("explains the automatic-only 23-hour dispatch cooldown separately from econom
   expect(screen.getByText(/自动研究冷却中（23小时）/)).toBeVisible();
   expect(screen.getByText(/仅限制自动研究/)).toBeVisible();
   expect(
-    screen.getByText("今日经济研究已有观察资料，证据仍待核实"),
+    screen.getByText("研究观察资料已更新，部分来源仍在补充"),
   ).toBeVisible();
 });
 
@@ -167,7 +175,7 @@ it("puts the current read-only information overview before a retained READY repo
 });
 
 it.each([
-  ["PARTIAL", "今日经济研究已有观察资料，证据仍待核实"],
+  ["PARTIAL", "研究观察资料已更新，部分来源仍在补充"],
   ["PENDING", "今日经济研究资料待归档"],
   ["UNAVAILABLE", "今日经济研究暂无可阅读成果"],
   ["UNKNOWN", "今日经济研究交付状态未知"],

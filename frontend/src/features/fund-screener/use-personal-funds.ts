@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getStudyTracks } from "../../api/study-api";
 import { groupPersonalFunds } from "./personal-fund-model";
 import { useStudyQuoteRefresh } from "./use-study-tracking";
@@ -17,6 +17,7 @@ function shanghaiDate() {
 
 export function usePersonalFunds(actor: string) {
   const session = useAuthSession();
+  const queryClient = useQueryClient();
   useStudyQuoteRefresh(actor);
   const [today, setToday] = useState(shanghaiDate);
   useEffect(() => {
@@ -47,7 +48,18 @@ export function usePersonalFunds(actor: string) {
       actor,
       "research-included",
     ),
-    queryFn: ({ signal }) => getPersonalFundsReference(true, signal),
+    queryFn: async ({ signal }) => {
+      const data = await getPersonalFundsReference(true, signal);
+      if (
+        Object.values(data.navSync?.states ?? {}).some(
+          (row) => row.state === "READY",
+        )
+      )
+        void queryClient.invalidateQueries({
+          queryKey: privateQueryKey(session, "opportunity-context"),
+        });
+      return data;
+    },
     enabled: !!actor,
     staleTime: 30_000,
   });

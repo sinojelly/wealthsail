@@ -6,6 +6,7 @@ import type {
   OpportunityContext,
   MacroEvent,
   SellRiskAlert,
+  SellRiskAlerts as SellRiskData,
 } from "../../../api/investment";
 import { sourceHref, timeLabel, monthLabel } from "../macro-display";
 import DailyResearchReport, {
@@ -256,6 +257,7 @@ export default function MacroContextStrip({
   renderPersonalReminders?: (
     onViewFunds: () => void,
     sellRiskAlerts: readonly SellRiskAlert[],
+    actionData?: SellRiskData,
   ) => ReactNode;
   renderResearchRefresh?: () => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
@@ -381,18 +383,24 @@ export default function MacroContextStrip({
         ) : (
           daily && (
             <p className="op-research-execution-summary">
-              本次执行：
-              {(
-                {
-                  READY: "已完成",
-                  RUNNING: "进行中",
-                  FAILED: "未通过",
-                  UNCERTAIN: "结果待核实",
-                  STALE: "本研究日尚未更新",
-                  NOT_RUN: "尚未启动",
-                } as Record<string, string>
-              )[daily.pipeline?.state ?? daily.state] ?? "状态待核实"}{" "}
-              · 展示内容以报告来源为准
+              {daily.state === "READY" ? (
+                <DailyResearchStatus data={daily} />
+              ) : (
+                <>
+                  本次执行：
+                  {(
+                    {
+                      READY: "已完成",
+                      RUNNING: "进行中",
+                      FAILED: "未通过",
+                      UNCERTAIN: "结果待核实",
+                      STALE: "本研究日尚未更新",
+                      NOT_RUN: "尚未启动",
+                    } as Record<string, string>
+                  )[daily.pipeline?.state ?? daily.state] ?? "状态待核实"}{" "}
+                  · 展示内容以报告来源为准
+                </>
+              )}
             </p>
           )
         )}
@@ -407,7 +415,12 @@ export default function MacroContextStrip({
               {daily && (
                 <>
                   本次执行：
-                  <DailyResearchStatus data={daily} /> · 执行ID：
+                  {daily.state === "READY" ? (
+                    "已完成"
+                  ) : (
+                    <DailyResearchStatus data={daily} />
+                  )}{" "}
+                  · 执行ID：
                   {currentResearchId ?? daily.pipeline?.id ?? "尚未启动"}
                 </>
               )}
@@ -541,6 +554,7 @@ export default function MacroContextStrip({
                 {renderPersonalReminders?.(
                   () => open("tracking"),
                   ready?.sellRiskAlerts?.items ?? [],
+                  ready?.sellRiskAlerts,
                 )}
                 {ready && historicalPreview
                   ? historicalPreview.recommendations
