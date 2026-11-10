@@ -41,7 +41,7 @@ from backend.macro.research_topics import TopicProposal, direction_limit, is_v2
 from backend.macro.event_metadata import event_metadata, source_metadata
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-input-v23"
+PROMPT_VERSION = "daily-research-input-v24"
 MAX_REPORT_SOURCES = 24
 
 
@@ -206,6 +206,39 @@ _direction_schema["required"].append("reviewIndustryIds")
 _direction_schema["properties"]["industryCycle"] = {
     "anyOf": [{"$ref": "#/$defs/IndustryCycleProposal"}, {"type": "null"}]
 }
+
+
+def _request_industry_scopes(packet):
+    """Derive new-request reference permissions from the validated frozen contract."""
+    from backend.macro.research_topics import frozen_manifest, is_targeted_research
+
+    manifest = frozen_manifest(packet)
+    if manifest is None:
+        return None
+    observation_scopes = (
+        manifest["deferredScopes"] if is_targeted_research(packet) else []
+    )
+    return {
+        "allowedReviewIndustryIds": manifest["selectedScopes"] + observation_scopes,
+        "observationScopes": observation_scopes,
+    }
+
+
+def report_schema_for_packet(packet):
+    """Constrain new v3 direction references without changing historical schemas."""
+    from backend.macro.research_topics import is_targeted_research
+
+    schema = deepcopy(REPORT_SCHEMA)
+    if not is_targeted_research(packet):
+        return schema
+    scopes = _request_industry_scopes(packet)["allowedReviewIndustryIds"]
+    field = schema["$defs"]["ValueDirectionProposal"]["properties"]["reviewIndustryIds"]
+    if scopes:
+        field["items"]["enum"] = scopes
+    else:
+        field["maxItems"] = 0
+    return schema
+
 
 _TZ = ZoneInfo("Asia/Shanghai")
 _MACROS = {"PMI", "CPI_YOY", "PPI_YOY", "M2_YOY"}
@@ -1826,6 +1859,8 @@ def build_prompt(packet):
         if identity_version == TOPIC_MATCH_VERSION
         else STRICT_ALIASES,
     }
+    if scopes := _request_industry_scopes(packet):
+        public_packet["industryCycleResearch"].update(scopes)
     for field in (
         "allocationVersion",
         "selectionReasons",

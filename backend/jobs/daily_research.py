@@ -54,8 +54,8 @@ from backend.macro.daily_repository import (
 )
 from backend.macro.daily_research import (
     PROMPT_VERSION,
-    REPORT_SCHEMA,
     build_prompt,
+    report_schema_for_packet,
     make_research_packet,
     ResearchValidationError,
     validate_report,
@@ -906,6 +906,7 @@ async def _execute_daily_research(
         packet["inputQuality"] = source_quality(manual_bundle, local(now_shanghai()))
         packet["sourceBatchId"] = str(source_batch_id)
     prompt = build_prompt(packet)
+    output_schema = report_schema_for_packet(packet)
     from backend.macro.research_topics import is_v2
 
     if is_v2(packet):
@@ -1136,7 +1137,7 @@ async def _execute_daily_research(
                 async with timer:
                     if remote_codex:
                         value = await codex_client.research(
-                            settings, prompt, REPORT_SCHEMA,
+                            settings, prompt, output_schema,
                             timeout=settings.daily_research_timeout_seconds,
                             model=selected_model, identity=identity,
                             on_exit=confirmed_model_exit, on_output=capture_model_result,
@@ -1145,7 +1146,7 @@ async def _execute_daily_research(
                         )
                     else:
                         value = await run_codex_research(
-                            cli["executable"], prompt, REPORT_SCHEMA,
+                            cli["executable"], prompt, output_schema,
                             timeout=settings.daily_research_timeout_seconds,
                             model=selected_model, lifecycle=lifecycle,
                         )
