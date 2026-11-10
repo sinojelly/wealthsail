@@ -124,6 +124,28 @@ async def initial(conn, run_id, now):
     )
 
 
+async def test_raw_unrepresentable_business_values_remain_original_artifact_text_in_jsonb():
+    import json
+    import math
+    from hashlib import sha256
+
+    original = {"summary": "原始\ud800\x00观点", "metric": float("nan")}
+    async with fixture() as (conn, run_id, now, *_):
+        await repo.save_research_artifacts(
+            conn, run_id, {"asOf": now.isoformat()}, original, {}, now,
+        )
+        saved = json.loads(await conn.fetchval(
+            "SELECT raw_output::text FROM research.research_validation_artifacts WHERE run_id=$1", run_id,
+        ))
+        assert saved["omissionReason"] is None
+        content = saved["content"]
+        restored = json.loads(content)
+        assert restored["summary"] == original["summary"]
+        assert math.isnan(restored["metric"])
+        assert saved["sha256"] == sha256(content.encode("utf-8")).hexdigest()
+        assert saved["byteLength"] == len(content.encode("utf-8"))
+
+
 async def test_099_tables_force_rls_and_raw_outcome_are_not_api_selectable():
     async with fixture() as (conn, *_):
         rows = await conn.fetch(
@@ -304,22 +326,57 @@ async def test_runner_readback_rejects_accidental_direct_raw_api_grant():
 async def test_real_eight_direction_two_issue_replay_keeps_old_result_and_original_checks(
     monkeypatch,
 ):
+    import json
+
     from tests.unit.test_research_acceptance import eight_directions
     from tests.unit.test_daily_research import NOW as VALIDATED_AT
-    from backend.macro.research_acceptance import validate_report_outcome
+    from backend.macro.research_acceptance import diagnose_report_outcome
 
-    async with fixture(manual=True) as (conn, _unused, _now, tenants, actors, _viewer):
-        _, _, run_id = await make_run(conn, tenants[0], actors[0], now=VALIDATED_AT)
+    # Migration 105 checks the real clock when claiming queued work. Reconstruct
+    # this already-started historical manual lineage directly; replay must not
+    # enqueue or claim a new execution to inspect the original frozen material.
+    async with fixture(now=VALIDATED_AT) as (
+        conn, run_id, _now, tenants, actors, _viewer,
+    ):
+        request_id = await conn.fetchval(
+            """INSERT INTO research.daily_research_refresh_requests
+            (tenant_id,user_id,command_key,requested_at,request_mode,status,started_at)
+            VALUES($1,$2,$3,$4,'MANUAL','RUNNING',$4) RETURNING id""",
+            tenants[0], actors[0], uuid4(), VALIDATED_AT,
+        )
+        batch_id = await conn.fetchval(
+            """INSERT INTO market.alpha_public_batches
+            (run_date,claimed_at,completed_at,status,run_mode,debug_request_id)
+            VALUES($1,$2,$2,'READY','MANUAL',$3) RETURNING id""",
+            VALIDATED_AT.date(), VALIDATED_AT, request_id,
+        )
+        await conn.execute(
+            """UPDATE research.daily_research_runs
+            SET run_mode='MANUAL',debug_request_id=$2,source_batch_id=$3
+            WHERE run_id=$1""",
+            run_id, request_id, batch_id,
+        )
+        await conn.execute(
+            """UPDATE research.daily_research_refresh_requests
+            SET batch_id=$2,report_run_id=$3 WHERE id=$1""",
+            request_id, batch_id, run_id,
+        )
         packet, raw, checks = eight_directions()
         raw["valueDirections"][0]["macroCodes"] = ["UNKNOWN_MACRO"]
         raw["valueDirections"][1]["reviewIndustryIds"] = ["MODEL_UNKNOWN"]
-        result = validate_report_outcome(
+        # Reproduce the immutable original failure under its historical policy;
+        # replay below deliberately uses today's sanitize-and-keep publication.
+        result = diagnose_report_outcome(
             raw, packet, checks, research_id=str(run_id), completed_at=VALIDATED_AT
         )
         assert result.to_dict()["counts"]["valueDirections"]["acceptedCount"] == 6
         await repo.save_research_artifacts(
             conn, run_id, packet, raw, checks, VALIDATED_AT
         )
+        assert await conn.fetchval(
+            "SELECT tenant_id FROM research.research_validation_artifacts WHERE run_id=$1",
+            run_id,
+        ) == tenants[0]
         initial_record = await repo.save_validation_outcome(
             conn, run_id, result.to_dict(), recorded_at=VALIDATED_AT
         )
@@ -339,6 +396,11 @@ async def test_real_eight_direction_two_issue_replay_keeps_old_result_and_origin
             "backend.integrations.daily_sources.verify_research_sources", forbidden
         )
         await apply_tenant_context(conn, str(actors[0]), str(tenants[0]))
+        original_materials = await repo.read_artifacts_admin(conn, run_id)
+        archived_checks = next(
+            item for item in original_materials["items"] if item["kind"] == "SOURCE_CHECKS"
+        )
+        assert json.loads(archived_checks["content"]) == checks
         replay = await repo.replay_validation(
             conn,
             run_id,
@@ -349,11 +411,11 @@ async def test_real_eight_direction_two_issue_replay_keeps_old_result_and_origin
         )
         assert replay["counts"]["valueDirections"] == {
             "inputCount": 8,
-            "acceptedCount": 6,
-            "quarantinedCount": 2,
+            "acceptedCount": 8,
+            "quarantinedCount": 0,
         }
         assert replay["validatedAt"] == VALIDATED_AT.isoformat()
-        assert replay["actionable"] is False and replay["formalPublishable"] is False
+        assert replay["actionable"] is False and replay["formalPublishable"] is True
         old = await conn.fetchrow(
             "SELECT status,payload FROM research.daily_research_results WHERE run_id=$1",
             run_id,
@@ -362,6 +424,7 @@ async def test_real_eight_direction_two_issue_replay_keeps_old_result_and_origin
         assert (await repo.read_validation_summary(conn, run_id, VALIDATED_AT))[
             "id"
         ] == initial_record["id"]
+        assert await repo.read_artifacts_admin(conn, run_id) == original_materials
 
 
 async def test_replay_rejects_a_corrupt_inserted_digest_without_a_new_record(

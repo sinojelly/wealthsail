@@ -115,7 +115,7 @@ def test_fresh_nav_does_not_trip_delayed_nav_guard():
 @pytest.mark.parametrize(
     "status,label", [("SUSPENDED", "⛔ 暂停申购"), ("LIMITED", "⛔ 单日限购10元")]
 )
-def test_subscription_restrictions_stay_in_scan_but_leave_recommended_plans(
+def test_subscription_restrictions_annotate_and_preserve_reference_plans(
     status, label
 ):
     report, packet = fixtures()
@@ -126,8 +126,9 @@ def test_subscription_restrictions_stay_in_scan_but_leave_recommended_plans(
     result = daily_research.apply_entry_guards(report, packet, NOW)
     assert result["quantitativeScan"]["items"][0]["subscriptionLabel"] == label
     assert result["quantitativeScan"]["items"][0]["preferredEntryEligible"] is False
-    assert result["valueDirections"][0]["plans"] == []
-    assert result["actionablePlans"] == []
+    assert result["valueDirections"][0]["plans"][0]["entryBlocked"] is True
+    assert result["actionablePlans"][0]["entryBlocked"] is True
+    assert result["valueDirections"][0]["plans"][0]["tracks"]
     assert result["valueDirections"][0]["signal"] == "WATCH"
 
 
@@ -173,7 +174,7 @@ def test_limited_triggered_plan_cannot_leave_a_watch_only_alternative_as_buy_sig
     alternative = scan_plan("008281", selectedTrack="RIGHT_TREND")
     report["valueDirections"][0]["plans"].append(alternative)
     result = daily_research.apply_entry_guards(report, packet, NOW)
-    assert len(result["valueDirections"][0]["plans"]) == 1
+    assert len(result["valueDirections"][0]["plans"]) == 2
     assert result["valueDirections"][0]["signal"] == "WATCH"
 
 

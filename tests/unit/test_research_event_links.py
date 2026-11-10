@@ -112,7 +112,7 @@ def test_v1_unknown_legacy_direction_keeps_original_hard_reference_failure():
     packet, raw, checks = observation_case(v2=False)
     raw["events"][0]["affectedDirectionIds"] = ["unregistered-theme"]
     with pytest.raises(strict.ResearchValidationError):
-        validate(raw, packet, checks)
+        strict.diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
 
 
 def test_readonly_topic_canonical_links_and_declared_concepts_do_not_grant_qualification():
@@ -184,15 +184,13 @@ def test_unique_exact_topic_key_still_resolves_when_only_canonical_fallback_coll
     assert row["referenceResolution"]["resolved"][0]["method"] == "EXACT"
 
 
-def test_invalid_topic_schema_or_unknown_sources_cannot_register_an_identity():
+def test_topic_source_defects_are_repaired_without_losing_its_event_link():
     packet, raw, checks = observation_case()
     raw["topicCatalog"] = [topic(sourceIds=["missing-source"]), {"key": ["malformed"]}]
     raw["events"][0]["relatedTopicKeys"] = ["steel-repricing"]
     row = validate(raw, packet, checks)["events"][0]
-    assert row["relatedTopicKeys"] == []
-    assert (
-        row["referenceResolution"]["unresolved"][0]["reasonCode"] == "UNKNOWN_REFERENCE"
-    )
+    assert row["relatedTopicKeys"] == ["steel-repricing"]
+    assert row["referenceResolution"]["resolved"][0]["key"] == "steel-repricing"
 
 
 def test_v2_real_formal_legacy_reference_remains_an_explicit_formal_dependency():
@@ -261,7 +259,7 @@ def test_observation_link_tolerance_never_weakens_independent_strict_rules(failu
     else:
         raw["events"][0]["summary"] = "<script>unsafe</script>"
     with pytest.raises(strict.ResearchValidationError):
-        validate(raw, packet, checks)
+        strict.diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
 
 
 def test_partial_acceptance_probes_share_original_topic_context_and_preserve_story():
@@ -270,7 +268,7 @@ def test_partial_acceptance_probes_share_original_topic_context_and_preserve_sto
         event(relatedTopicKeys=["STEEL_REPRICING"]),
         event(sourceIds=["missing-source"]),
     ]
-    result = acceptance.validate_report_outcome(
+    result = acceptance.diagnose_report_outcome(
         raw, packet, checks, research_id=RUN, completed_at=NOW
     )
     assert result.decision == "PARTIAL" and result.formal_payload is None
@@ -414,7 +412,8 @@ def test_possible_formal_dependencies_only_expand_ambiguity_for_risk_closure(
 
 
 def test_canonical_collision_cannot_lose_high_event_risk_after_direction_pruning():
-    from tests.unit.test_research_independent_contracts import combined_case, evaluate
+    from tests.unit.test_research_independent_contracts import combined_case
+    from backend.macro.research_batch import diagnose_research_batch
 
     packet, raw, checks = combined_case()
     _, sample, _ = case()
@@ -440,7 +439,7 @@ def test_canonical_collision_cannot_lose_high_event_risk_after_direction_pruning
     raw["valueDirections"] = [retained, removed]
     raw["events"][0]["relatedFormalDirectionKeys"] = ["FOO_BAR"]
 
-    result = evaluate(packet, raw, checks)
+    result = diagnose_research_batch(raw, packet, checks, research_id=RUN, validated_at=NOW)
 
     assert result["autoPublishAllowed"] is False
     assert result["retained"]["directionKeys"] == ["foo_bar"]

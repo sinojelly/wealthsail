@@ -28,7 +28,6 @@ from backend.integrations.codex_research import (
     _isolation_arguments,
     _run,
     configured_model,
-    decode_report,
     exec_usage,
     normalize_usage,
     public_environment,
@@ -73,6 +72,29 @@ def _prompt(system_prompt: str, user_prompt: str, *, json_mode: bool) -> bytes:
     if len(encoded) > _MAX_OUTPUT_BYTES:
         raise CodexOutputError("Codex prompt limit exceeded")
     return encoded
+
+
+def _validate_completion_json(content: str) -> None:
+    """Keep private completion's object contract separate from report repair."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON field")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("non-finite JSON number")
+
+    try:
+        value = json.loads(
+            content, object_pairs_hook=unique_object, parse_constant=invalid_constant
+        )
+        if not isinstance(value, dict):
+            raise ValueError("JSON object required")
+    except (ValueError, UnicodeError) as exc:
+        raise CodexOutputError("invalid Codex completion JSON") from exc
 
 
 def _timeout(value: float) -> float:
@@ -147,7 +169,7 @@ async def complete(
             if not content:
                 raise CodexOutputError("empty Codex completion")
             if json_mode:
-                decode_report(content)
+                _validate_completion_json(content)
         except (CodexExecutionError, CodexOutputError) as exc:
             raise with_telemetry(exc, usage=usage, model=selected_model, inference_succeeded=completed)
         except (OSError, UnicodeError) as exc:

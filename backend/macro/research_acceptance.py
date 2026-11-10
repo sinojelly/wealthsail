@@ -1,7 +1,7 @@
-"""Bounded, collectable acceptance; retained observations never become a report.
+"""Publish parsed research with local repair and independent audit diagnostics.
 
-Only the global candidate-completeness gate is separated from component checks.
-All evidence, fund identity, history, price and entry guards use the strict core.
+Legacy strict checks remain callable as diagnostics; publication retains model
+insights and fund references even when an individual field needs repair.
 """
 
 from collections import Counter
@@ -24,7 +24,7 @@ from backend.macro.industry_cycle import IndustryCycleReview, RISK_CHECKS
 from backend.macro.research_diagnostics import RULE_IDS, sanitize_missing_industry_codes
 from backend.macro.value_directions import ValueDirectionProposal, _macro_codes
 
-VALIDATOR_VERSION = "research-acceptance-v1"
+VALIDATOR_VERSION = "research-acceptance-v2"
 _ROOT = Path(__file__).resolve().parents[2]
 # Hash the deployed backend tree, including lazy dependencies such as candidate
 # generation and diagnostics, so a newly imported rule cannot silently escape.
@@ -489,6 +489,36 @@ def _overview_counts(raw, overview):
 def validate_report_outcome(
     raw, packet, source_checks, *, research_id, completed_at, _strict_validator=None
 ):
+    """The publication path keeps parsed reports and records local repairs.
+
+    An explicitly supplied diagnostic validator retains the legacy isolated
+    inspection contract. Production callers use the sanitizer by default.
+    """
+    if _strict_validator is not None and _strict_validator is not strict.validate_report:
+        return diagnose_report_outcome(raw, packet, source_checks, research_id=research_id,
+            completed_at=completed_at, _strict_validator=_strict_validator)
+    try:
+        formal = strict.validate_report(raw, packet, source_checks,
+            completed_at=completed_at, research_id=research_id)
+    except strict.ResearchValidationError:
+        return rejected_outcome(research_id, completed_at,
+            reason_code="SCHEMA_VALIDATION_FAILED", rule_id="ACCEPTANCE_PARSE_FAILED")
+    counts = {
+        key: {"inputCount": len(formal.get(key, [])), "acceptedCount": len(formal.get(key, [])), "quarantinedCount": 0}
+        for key in COMPONENTS
+    }
+    plans = sum(len(row.get("plans", [])) for row in formal.get("valueDirections", []))
+    counts["fundPlans"] = {"inputCount": plans, "acceptedCount": plans, "quarantinedCount": 0}
+    accepted = deepcopy(formal)
+    accepted["macroOverview"] = {key: deepcopy(formal[key]) for key in ("summary", "macroCycle", "coverage")}
+    accepted["macroOverview"]["verification"] = "MODEL_UNVERIFIED"
+    return _bounded_outcome(ValidationOutcome(str(research_id), strict._now(completed_at),
+        "COMPLETE", (), accepted, counts, formal))
+
+
+def diagnose_report_outcome(
+    raw, packet, source_checks, *, research_id, completed_at, _strict_validator=None
+):
     """Collect expected data failures; unexpected internal exceptions propagate.
 
     Formal publication always requires the original, unpruned strict report.
@@ -525,7 +555,7 @@ def validate_report_outcome(
                     reason_code="SOURCE_REFERENCE_INVALID",
                     rule_id="ACCEPTANCE_UNSAFE_SOURCE",
                 )
-    validator = _strict_validator or strict.validate_report
+    validator = _strict_validator or strict.diagnose_report
     # Legacy injected validators predate the identity keyword. V2 must always
     # receive caller context; its expected run never comes from the receipt.
     identity_context = (

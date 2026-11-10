@@ -333,6 +333,8 @@ async def get_context(
             ),
             histories=alpha_public.get("fundHistories"),
             include_failure_industry_codes=can_manage_operations is True,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
     from backend.investment.nav_change import report_with_nav_changes
 

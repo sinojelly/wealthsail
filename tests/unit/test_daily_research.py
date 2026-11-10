@@ -1,3 +1,5 @@
+# Historical strict diagnostic policy only. Production uses sanitize-and-keep;
+# see test_research_sanitize_keep.py for the current publication contract.
 """Public daily research never delegates fact authority to model output."""
 
 from copy import deepcopy
@@ -71,7 +73,7 @@ def test_strict_report_contract_rejects_unrecognized_execution_and_private_field
         raw = deepcopy(report())
         raw["events"][0][key] = "buy"
         with pytest.raises(ValueError):
-            module.validate_report(
+            module.diagnose_report(
                 raw,
                 {"asOf": NOW.isoformat(), "directions": [{"id": "a-share:broad"}]},
                 {},
@@ -215,7 +217,8 @@ def test_packet_whitelists_public_facts_without_discarding_current_partial_resea
 def test_prompt_prioritizes_media_and_quantitative_dual_engine_without_active_fund_veto():
     prompt = engine().build_prompt(packet())
     assert "topicCatalog每批最多64" in prompt
-    assert "总量最多10，旧冻结v2仍最多8" in prompt
+    assert "有足够真实线索时形成6至10个valueDirections" in prompt
+    assert "绝不是洞察或基金关联白名单" in prompt
     assert "quantitativeScan" in prompt and "quantitativeFundCodes" in prompt
     assert "核心一等催化线索" in prompt
     assert "严禁因未二次抓取官网原文而丢弃或降权" in prompt
@@ -234,7 +237,7 @@ def test_prompt_selects_available_fund_tracks_without_dropping_watch_candidates(
 
 def test_prompt_prioritizes_current_cross_industry_catalysts_before_extra_technical_slots():
     prompt = engine().build_prompt(packet())
-    assert engine().PROMPT_VERSION == "daily-research-input-v24"
+    assert engine().PROMPT_VERSION == "daily-research-input-v25"
     assert "sources总预算最多24条" in prompt
     assert "先跨行业覆盖本次输入中真实存在的核心催化" in prompt
     assert "再分配同链补充来源和纯量化方向" in prompt
@@ -371,7 +374,7 @@ def checks():
 
 
 def validate(raw=None, source_checks=None, public_packet=None):
-    return engine().validate_report(
+    return engine().diagnose_report(
         raw or report(),
         public_packet or packet(),
         checks() if source_checks is None else source_checks,
@@ -425,11 +428,11 @@ def test_event_references_accept_current_validated_value_direction_keys(field):
         ]
     else:
         raw[field][0]["affectedDirectionIds"] = ["healthcare-recovery"]
-    actual = engine().validate_report(raw, public, {}, completed_at=direction_now)
+    actual = engine().diagnose_report(raw, public, {}, completed_at=direction_now)
     assert actual[field][0]["affectedDirectionIds"] == ["healthcare-recovery"]
     raw[field][0]["affectedDirectionIds"] = ["nonexistent-current-direction"]
     with pytest.raises(ValueError, match="unknown research direction reference"):
-        engine().validate_report(raw, public, {}, completed_at=direction_now)
+        engine().diagnose_report(raw, public, {}, completed_at=direction_now)
 
 
 def test_invalid_current_directions_are_validated_before_event_key_references():
@@ -453,7 +456,7 @@ def test_invalid_current_directions_are_validated_before_event_key_references():
         "discoveryUniverse": [],
     }
     with pytest.raises(ValueError, match="duplicate value direction"):
-        engine().validate_report(raw, public, {}, completed_at=direction_now)
+        engine().diagnose_report(raw, public, {}, completed_at=direction_now)
 
 
 @pytest.mark.parametrize(
@@ -651,12 +654,12 @@ def test_boolean_measurement_and_nonfinite_numbers_are_never_presented_as_values
 
 def test_duplicate_json_keys_and_naive_or_backdated_completion_are_rejected():
     with pytest.raises(ValueError):
-        engine().validate_report(
+        engine().diagnose_report(
             '{"summary":"a","summary":"b"}', packet(), {}, completed_at=NOW
         )
     for stamp in (NOW.replace(tzinfo=None), NOW - timedelta(seconds=1)):
         with pytest.raises(ValueError):
-            engine().validate_report(report(), packet(), checks(), completed_at=stamp)
+            engine().diagnose_report(report(), packet(), checks(), completed_at=stamp)
 
 
 def test_first_not_run_dto_with_null_report_can_build_public_packet():

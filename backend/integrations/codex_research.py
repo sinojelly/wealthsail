@@ -200,21 +200,13 @@ def configured_model(environment):
 
 
 def decode_report(text):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise CodexOutputError("duplicate report field")
-            result[key] = value
-        return result
+    """Decode every parseable JSON body; content repair belongs to acceptance."""
+    from backend.macro.research_sanitize import parse_report
 
     try:
-        payload = json.loads(text, object_pairs_hook=unique)
+        return parse_report(text)
     except (ValueError, UnicodeError) as exc:
         raise CodexOutputError("invalid report JSON") from exc
-    if not isinstance(payload, dict):
-        raise CodexOutputError("report must be an object")
-    return payload
 
 
 def resolve_codex_executable(configured=None, *, environment=None):

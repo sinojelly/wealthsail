@@ -1,10 +1,12 @@
+# Historical strict diagnostic policy only. Production uses sanitize-and-keep;
+# see test_research_sanitize_keep.py for the current publication contract.
 """Incomplete investment checks preserve observations without granting plans."""
 
 from copy import deepcopy
 
 import pytest
 
-from backend.macro.daily_research import ResearchValidationError, validate_report
+from backend.macro.daily_research import ResearchValidationError, diagnose_report as validate_report
 from tests.unit.test_research_cost_review75 import NOW, RUN, executed_checks, prepared
 
 

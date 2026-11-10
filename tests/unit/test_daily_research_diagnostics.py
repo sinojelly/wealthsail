@@ -152,10 +152,10 @@ async def test_real_validate_report_failure_logs_diagnostic_reason(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_real_validate_report_with_bad_source_url_logs_source_reference_invalid(
+async def test_real_validate_report_repairs_bad_source_url_and_publishes_prose(
     monkeypatch, caplog
 ):
-    """When model generates an unsafe source URL, real validate_report logs SOURCE_REFERENCE_INVALID."""
+    """A malformed URL is removed without rejecting the model's research."""
     from backend.macro.daily_research import validate_report as real_validate_report
     from tests.unit.test_daily_research import report
 
@@ -173,16 +173,18 @@ async def test_real_validate_report_with_bad_source_url_logs_source_reference_in
     with caplog.at_level("WARNING"):
         outcome = await mod.sync_daily_research(object(), settings(), NOW)
 
-    assert outcome["status"] == "FAILED"
-    assert "stage=REPORT_VALIDATION reason_code=SOURCE_REFERENCE_INVALID" in caplog.text
+    assert outcome["status"] == "READY"
+    assert "reason_code=SOURCE_REFERENCE_INVALID" not in caplog.text
 
 
-def test_validate_report_non_dict_raises_schema_validation_failed():
-    """Passing a non-dict payload (e.g. list, None, int) raises SCHEMA_VALIDATION_FAILED directly."""
+def test_validate_report_non_dict_json_is_normalized_and_absent_body_fails():
+    """Every parsed JSON shape is publishable; no model body is an execution failure."""
     from backend.macro.daily_research import ResearchValidationError, validate_report
 
     packet = {"asOf": NOW.isoformat()}
-    for non_dict in ([1, 2, 3], "[]", None, 123):
+    for non_dict in ([1, 2, 3], "[]", 123):
+        assert validate_report(non_dict, packet, {}, completed_at=NOW)["executionStatus"] == "COMPLETED"
+    for non_dict in (None, "not-json"):
         with pytest.raises(ResearchValidationError) as exc_info:
             validate_report(non_dict, packet, {}, completed_at=NOW)
         assert exc_info.value.reason_code == "SCHEMA_VALIDATION_FAILED"

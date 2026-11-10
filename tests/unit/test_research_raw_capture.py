@@ -14,8 +14,8 @@ from tests.unit.test_codex_client import settings, transport
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "raw",
-    ['{"broken":', '{"duplicate":1,"duplicate":2}', '"x"' * (1024 * 1024 + 1)],
-    ids=["malformed", "duplicate", "oversized"],
+    ['{"broken":', '"x"' * (1024 * 1024 + 1)],
+    ids=["malformed", "oversized"],
 )
 async def test_decode_failure_retains_bounded_exact_output_and_full_digest(
     monkeypatch, raw
@@ -36,6 +36,32 @@ async def test_decode_failure_retains_bounded_exact_output_and_full_digest(
     assert error.raw_output_sha256 == sha256(encoded).hexdigest()
     assert error.raw_output == (raw if len(encoded) <= 2 * 1024 * 1024 else None)
     assert raw[:40] not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_parseable_duplicate_fields_keep_report_and_capture_remains_exact(monkeypatch):
+    raw = '{"duplicate":1,"duplicate":2}'
+    calls = []
+
+    async def execute(args, **kwargs):
+        calls.append(args)
+        path = Path(args[args.index("--output-last-message") + 1])
+        path.write_text(raw, encoding="utf-8", newline="")
+        captured = codex_research._capture_output_error(
+            codex_research.CodexOutputError("fixture capture"), path
+        )
+        assert captured.raw_output == raw
+        assert captured.raw_output_sha256 == sha256(raw.encode()).hexdigest()
+        assert captured.raw_output_bytes == len(raw.encode())
+        return 0, b'{"type":"turn.completed"}\n', b""
+
+    monkeypatch.setattr(codex_research, "_run", execute)
+    result = await codex_research.run_codex_research(
+        "fixture", "public", {}, environment={}
+    )
+    assert result["duplicate"] == 2
+    assert result["_bodyDuplicateFields"] == ["duplicate"]
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

@@ -86,11 +86,13 @@ async def test_future_batch_keeps_thirty_topics_and_calls_model_once(monkeypatch
     # explicit observations, without pretending their searches were executed.
     for row in registry["items"]:
         if row["key"].startswith("new-topic-"):
-            assert row["status"] == "PENDING_REVIEW"
-            assert row["reasonCode"] == "INDUSTRY_IDENTITY_PENDING"
+            assert row["status"] == "OBSERVATION_ONLY"
+            assert row["reasonCode"] == "OBSERVATION_ONLY"
+            assert row["summary"] == "公开线索待补证。"
+            assert row["match"]["unresolvedClaims"]
     coverage = state["terminal"][0]["payload"]["researchDiscovery"]["coverage"]
     assert coverage["pendingScopeCount"] == 0
-    assert coverage["observationScopeCount"] >= 30
+    assert coverage["pendingVerificationTopicCount"] >= 30
     assert coverage["executionPlannedTaskCount"] == len(manifest["tasks"])
     assert coverage["executionMatchedTaskCount"] == len(manifest["tasks"])
     assert coverage["additionalModelCalls"] == 0
@@ -168,14 +170,24 @@ async def test_zero_formal_delivers_news_topics_with_one_model_and_original_usag
     batch.assert_called_once()
     assert batch.call_args.kwargs["research_id"] == RUN
     terminal = state["terminal"][0]["payload"]
-    assert terminal["valueDirections"] == [] and terminal["actionablePlans"] == []
+    assert [row["key"] for row in terminal["valueDirections"]] == [
+        row["key"] for row in raw["valueDirections"]
+    ]
+    assert sum(len(row["plans"]) for row in terminal["valueDirections"]) == sum(
+        len(row["plans"]) for row in raw["valueDirections"]
+    )
+    assert len(terminal["actionablePlans"]) == sum(
+        len(row["plans"]) for row in raw["valueDirections"]
+    ) + len(raw.get("actionablePlans", []))
     assert len(terminal["events"]) == 6 and len(terminal["upcoming"]) == 3
     queued = mod.archive_repository.enqueue_research_archive.await_args
     coverage = queued.kwargs["topic_registry"]["coverage"]
     assert coverage["discoveredTopicCount"] == 64
     assert coverage["executionMatchedTaskCount"] == 50
     assert coverage["researchDeliveryStatus"] == "VALIDATED_READ_ONLY"
-    assert coverage["qualifiedFormalDirectionCount"] == 0
+    assert coverage["evaluableFundDirectionCount"] == sum(
+        bool(row["plans"]) for row in raw["valueDirections"]
+    )
     assert coverage["additionalModelCalls"] == 0
     assert queued.args[6]["researchWorkload"]["inputTokens"] == 5000
     assert queued.args[6]["researchWorkload"]["cachedInputTokens"] == 4000

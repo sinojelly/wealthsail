@@ -96,7 +96,18 @@ def _aware(value):
 def freeze_artifact(value, limit, *, raw=False):
     """Hash the complete canonical representation; omit, never cut, oversize bodies."""
     try:
-        text = value if raw and isinstance(value, str) else _encode(value)
+        if raw:
+            # Raw model values are evidence, not JSONB business fields. Keep
+            # nonfinite tokens in this inner text and represent lone surrogate
+            # code points with JSON escapes; json.loads recovers their original
+            # values, while the outer descriptor remains valid UTF-8/JSONB.
+            text = value if isinstance(value, str) else json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                allow_nan=True, default=_json_default,
+            )
+            text = text.encode("utf-8", errors="backslashreplace").decode("utf-8")
+        else:
+            text = _encode(value)
         encoded = text.encode("utf-8")
     except (TypeError, ValueError, UnicodeError):
         return {

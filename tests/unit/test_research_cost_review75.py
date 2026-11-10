@@ -1,11 +1,11 @@
-"""Offline regressions for audit assurance and top-level evidence reuse."""
+"""Historical strict audit diagnostics, independent of sanitized publication."""
 
 from copy import deepcopy
 import hashlib
 
 import pytest
 
-from backend.macro.research_batch import evaluate_research_batch
+from backend.macro.research_batch import diagnose_research_batch
 from backend.macro.research_topics import freeze_discovery_packet
 from tests.unit.test_daily_research import NOW
 from tests.unit.test_industrial_metals_research_regression import case
@@ -66,7 +66,7 @@ def prepared():
 
 
 def evaluate(packet, raw, checks):
-    return evaluate_research_batch(
+    return diagnose_research_batch(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
 
@@ -102,11 +102,11 @@ def test_model_not_found_without_execution_receipt_is_read_only_observation():
 
 
 def test_public_strict_validator_cannot_bypass_execution_assurance():
-    from backend.macro.daily_research import validate_report
+    from backend.macro.daily_research import diagnose_report
 
     packet, raw, checks = prepared()
     before = deepcopy((packet, raw, checks))
-    result = validate_report(raw, packet, checks, completed_at=NOW)
+    result = diagnose_report(raw, packet, checks, completed_at=NOW)
     direction = result["valueDirections"][0]
     assert direction["qualificationStatus"] == "OBSERVATION_ONLY"
     assert direction["investmentEligible"] is False

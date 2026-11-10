@@ -1,4 +1,4 @@
-"""Execution proof requires the caller's run identity at every strict boundary."""
+"""Historical strict diagnosis and current offline delivery use caller run identity."""
 
 from copy import deepcopy
 from unittest.mock import Mock
@@ -43,7 +43,7 @@ def assert_unqualified_observation(direction, *, projected=False):
 def test_v2_strict_without_expected_run_cannot_trust_receipt_self_declared_identity():
     packet, raw, checks = verified_case()
     before = deepcopy((packet, raw, checks))
-    result = strict.validate_report(raw, packet, checks, completed_at=NOW)
+    result = strict.diagnose_report(raw, packet, checks, completed_at=NOW)
     assert_unqualified_observation(result["valueDirections"][0])
     assert verified_tasks(checks, frozen_manifest(packet), NOW) == set()
     assert (packet, raw, checks) == before
@@ -53,7 +53,7 @@ def test_v2_strict_without_expected_run_cannot_trust_receipt_self_declared_ident
 def test_v2_strict_different_or_missing_run_cannot_authorize_not_found(research_id):
     packet, raw, checks = verified_case()
     before = deepcopy((packet, raw, checks))
-    result = strict.validate_report(
+    result = strict.diagnose_report(
         raw, packet, checks, completed_at=NOW, research_id=research_id
     )
     assert_unqualified_observation(result["valueDirections"][0])
@@ -67,7 +67,7 @@ def test_v2_strict_different_or_missing_run_cannot_authorize_not_found(research_
 def test_v2_strict_exact_expected_run_keeps_original_verified_prices():
     packet, raw, checks = verified_case()
     before = deepcopy((packet, raw, checks))
-    result = strict.validate_report(
+    result = strict.diagnose_report(
         raw, packet, checks, completed_at=NOW, research_id=RUN
     )
     assert result["valueDirections"][0]["plans"]
@@ -87,7 +87,7 @@ def test_v2_strict_exact_expected_run_keeps_original_verified_prices():
 
 def test_acceptance_for_another_runs_receipt_delivers_only_unqualified_observation():
     packet, raw, checks = verified_case()
-    result = acceptance.validate_report_outcome(
+    result = acceptance.diagnose_report_outcome(
         raw, packet, checks, completed_at=NOW, research_id=OTHER_RUN
     )
     # Content can be complete enough for read-only delivery; that decision never
@@ -114,7 +114,7 @@ def test_acceptance_passes_same_identity_to_strict_and_every_component_probe(
     monkeypatch.setattr(strict, "_validate_report_core", core)
     raw["valueDirections"][0]["reviewIndustryIds"] = ["UNKNOWN_MODEL_LABEL"]
 
-    acceptance.validate_report_outcome(
+    acceptance.diagnose_report_outcome(
         raw, packet, checks, completed_at=NOW, research_id=RUN
     )
 
@@ -126,9 +126,9 @@ def test_v1_strict_keeps_legacy_behavior_with_optional_identity():
     from tests.unit.test_industrial_metals_research_regression import case
 
     packet, raw, checks = case()
-    legacy = strict.validate_report(raw, packet, checks, completed_at=NOW)
+    legacy = strict.diagnose_report(raw, packet, checks, completed_at=NOW)
     assert (
-        strict.validate_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
+        strict.diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
         == legacy
     )
 
@@ -139,9 +139,9 @@ def test_v1_acceptance_keeps_legacy_injected_validator_signature():
     packet, raw, checks = case()
 
     def legacy_validator(raw, packet, checks, *, completed_at):
-        return strict.validate_report(raw, packet, checks, completed_at=completed_at)
+        return strict.diagnose_report(raw, packet, checks, completed_at=completed_at)
 
-    result = acceptance.validate_report_outcome(
+    result = acceptance.diagnose_report_outcome(
         raw,
         packet,
         checks,
@@ -183,17 +183,32 @@ async def test_real_offline_acceptance_uses_requested_run_not_receipt_identity(
             "validatedAt": NOW.isoformat(),
         }
     )
+    assert result["researchId"] == research_id
     assert result["formalPublishable"] is True
     assert result["actionable"] is False
     direction = result["accepted"]["valueDirections"][0]
+    # Publication now keeps deterministic reference plans for both audited and
+    # unaudited observations. The caller identity still governs audit metadata;
+    # retaining a price reference must never certify another run's searches.
+    assert result["counts"]["fundPlans"]["acceptedCount"] == 2
+    assert len(direction["plans"]) == 2
+    assert direction["quantitativeFundCodes"] == raw["valueDirections"][0].get(
+        "quantitativeFundCodes", []
+    )
+    anchors = {row["subjectId"]: row for row in packet["discoveryActionableZones"]}
+    for plan in direction["plans"]:
+        anchor = anchors[plan["subjectId"]]
+        for field in ("currentPrice", "priceBasis", "unit", "sourceUri", "asOf"):
+            assert plan[field] == anchor[field]
+    assert direction["industryCycle"]["confirmedRiskFlags"]
     if research_id == RUN:
-        assert result["counts"]["fundPlans"]["acceptedCount"] == 2
-        assert "plans" not in direction
-        assert "quantitativeFundCodes" not in direction
+        assert direction["auditStatus"] == "AUDITED"
         assert direction["industryCycle"]["searchExecutionVerified"] is True
+        assert "DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED" not in direction["formalEligibilityReasons"]
     else:
-        assert_unqualified_observation(direction, projected=True)
-        assert result["counts"]["fundPlans"]["acceptedCount"] == 0
+        assert direction["auditStatus"] == "UNAUDITED_SCOPE"
+        assert direction["industryCycle"]["searchExecutionVerified"] is False
+        assert "DIRECTION_INDUSTRY_EXECUTION_UNVERIFIED" in direction["formalEligibilityReasons"]
         assert (
             verified_tasks(
                 checks, frozen_manifest(packet), NOW, research_id=research_id

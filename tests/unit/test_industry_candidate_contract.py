@@ -9,7 +9,7 @@ from backend.integrations.daily_sources import industry_cycle_research_tasks
 from backend.macro.daily_research import (
     ResearchValidationError,
     build_prompt,
-    validate_report,
+    diagnose_report as validate_report,
 )
 from test_daily_research import NOW, report
 from test_industry_cycle import checks

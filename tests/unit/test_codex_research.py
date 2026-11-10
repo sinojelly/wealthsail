@@ -144,12 +144,13 @@ def test_preserves_current_user_model_without_copying_auth_or_loading_connectors
     )
 
 
-def test_rejects_duplicate_model_json_fields(monkeypatch, tmp_path):
-    # JSON schema validation must see the actual unique keys, never silently
-    # replace an earlier unsafe assertion with a later value.
+def test_duplicate_model_json_fields_are_retained_with_a_repair_diagnostic(monkeypatch, tmp_path):
+    # The original output remains in the audit; a duplicate field is a local
+    # format defect and cannot destroy an otherwise parsed research report.
     mod = adapter()
-    with pytest.raises(mod.CodexOutputError):
-        mod.decode_report('{"summary":"first","summary":"second"}')
+    parsed = mod.decode_report('{"summary":"first","summary":"second"}')
+    assert parsed["summary"] == "second"
+    assert parsed["_bodyDuplicateFields"] == ["summary"]
 
 
 @pytest.mark.asyncio

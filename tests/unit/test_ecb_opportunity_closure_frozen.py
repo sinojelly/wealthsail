@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from backend.investment.fund_observation import build_fund_observation
-from backend.macro.research_batch import evaluate_research_batch
+from backend.macro.research_batch import diagnose_research_batch
 from backend.macro.research_frozen_bundle import read_frozen_bundle
 
 RUN = "ecbfb663-b677-440f-b7a8-10443be5799b"
@@ -23,7 +23,7 @@ def test_real_ecb_zero_formal_twenty_one_topics_and_thirty_nine_observations():
     before = sha256(FILE.read_bytes()).hexdigest()
     frozen = read_frozen_bundle(FILE, RUN, observed_at=datetime.now(timezone.utc))
     raw = json.loads(frozen.raw)
-    batch = evaluate_research_batch(
+    batch = diagnose_research_batch(
         raw,
         frozen.packet,
         frozen.source_checks,

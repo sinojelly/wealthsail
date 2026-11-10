@@ -4,13 +4,13 @@ from copy import deepcopy
 
 import pytest
 
-from backend.macro.daily_research import validate_report
+from backend.macro.daily_research import diagnose_report
 from tests.unit.test_daily_research import NOW
 from tests.unit.test_industrial_metals_research_regression import case
 
 
 def test_missing_nonferrous_audit_preserves_observation_without_trade_permission():
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
@@ -18,7 +18,7 @@ def test_missing_nonferrous_audit_preserves_observation_without_trade_permission
     raw["industryCycleReviews"] = raw["industryCycleReviews"][:2]
     raw["narrativeDirectionIds"] = {"summary": [], "macroCycle": [], "coverage": []}
     before = deepcopy((packet, raw, checks))
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         raw,
         packet,
         checks,
@@ -57,7 +57,7 @@ def test_missing_nonferrous_audit_preserves_observation_without_trade_permission
         for review in result["formalReport"]["industryCycleReviews"]
     )
     assert (
-        validate_report(
+        diagnose_report(
             result["candidateRaw"],
             packet,
             checks,
@@ -70,7 +70,7 @@ def test_missing_nonferrous_audit_preserves_observation_without_trade_permission
 
 
 def test_unrelated_sector_and_composite_never_replace_product_audit():
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
@@ -79,7 +79,7 @@ def test_unrelated_sector_and_composite_never_replace_product_audit():
         row for row in raw["industryCycleReviews"] if row["industry"] != "NONFERROUS"
     ]
     raw["valueDirections"][0]["reviewIndustryIds"] = ["RARE_EARTH_METALS"]
-    value = evaluate_research_batch(
+    value = diagnose_research_batch(
         raw,
         packet,
         checks,
@@ -138,17 +138,27 @@ def test_independent_invalid_direction_reference_does_not_veto_valid_fund_direct
     )
     assert result["autoPublishAllowed"] is True
     assert [row["key"] for row in result["formalReport"]["valueDirections"]] == [
-        "industrial-metals-repricing"
+        "industrial-metals-repricing",
+        invalid["key"],
     ]
-    isolated = next(
+    retained = next(
         row for row in result["registry"]["items"] if row["key"] == invalid["key"]
     )
-    assert isolated["status"] == "QUARANTINED" and not isolated["investmentEligible"]
-    assert result["candidateRaw"]["industryCycleReviews"] == raw["industryCycleReviews"]
+    assert (
+        retained["status"] == "OBSERVATION_ONLY" and not retained["investmentEligible"]
+    )
+    assert result["formalReport"]["valueDirections"][0]["plans"]
+    observation = result["formalReport"]["valueDirections"][1]
+    assert observation["thesis"] == invalid["thesis"]
+    assert observation["sourceIds"] == []
+    assert any(
+        row["code"] == "SOURCE_REFERENCE_REMOVED"
+        for row in result["formalReport"]["validationWarnings"]
+    )
 
 
 def test_unhashable_topic_key_is_one_quarantined_item_not_a_system_failure():
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 
     packet, raw, checks = case()
@@ -157,7 +167,7 @@ def test_unhashable_topic_key_is_one_quarantined_item_not_a_system_failure():
     from tests.unit.test_research_cost_review75 import executed_checks
 
     checks = executed_checks(packet, checks)
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         raw,
         packet,
         checks,

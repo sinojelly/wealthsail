@@ -140,13 +140,13 @@ def test_newer_earnings_doubt_does_not_mask_older_sector_risk():
 
 @pytest.mark.parametrize("flag", SECTOR_RISKS + EARNINGS_RISKS)
 def test_current_verified_direction_recovers_only_earnings_risks(monkeypatch, flag):
-    from backend.macro import daily_research
+    from backend.macro import research_sanitize
 
     # Isolate the report's sector/direction orchestration; fact verification and
     # actual price propagation have separate production-path regression tests.
     monkeypatch.setattr(
-        daily_research,
-        "validate_value_directions",
+        research_sanitize,
+        "sanitize_value_directions",
         lambda *args, **kwargs: [
             {
                 "key": "verified-company",

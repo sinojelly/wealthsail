@@ -1,11 +1,11 @@
-"""Read-only acceptance and delivery preserve bounded downgrade metadata."""
+"""Historical strict downgrade metadata survives the bounded read-only DTO."""
 
 from copy import deepcopy
 
 import pytest
 
 from backend.macro import research_acceptance_repository as repository
-from backend.macro.daily_research import validate_report
+from backend.macro.daily_research import diagnose_report
 from backend.macro.research_acceptance import _projection
 from backend.macro.research_delivery import _observations
 from tests.unit.test_research_autodowngrade_audit import KEY, RUN, public_failure
@@ -37,7 +37,7 @@ def assert_no_trade_coordinates(value):
 def test_real_strict_downgrade_survives_acceptance_and_delivery_with_risk_evidence():
     value, at = public_failure()
     before = deepcopy(value)
-    report = validate_report(
+    report = diagnose_report(
         value["raw"],
         value["packet"],
         value["sourceChecks"],

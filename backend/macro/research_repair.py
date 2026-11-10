@@ -18,7 +18,7 @@ from backend.macro.daily_research import (
     _previous_industry_states,
     _safe_narrative,
     _url,
-    validate_report,
+    diagnose_report as validate_report,
 )
 from backend.macro.industry_contract import plan_industry_ids
 from backend.macro.industry_cycle import industry_risk_policy
@@ -26,7 +26,7 @@ from backend.macro.research_acceptance import (
     _parse,
     build_revision,
     rejected_outcome,
-    validate_report_outcome,
+    diagnose_report_outcome as validate_report_outcome,
     validator_revision,
 )
 from backend.macro.value_directions import _macro_codes
@@ -257,7 +257,7 @@ def repair_report(raw, packet, source_checks, *, research_id, validated_at):
     if frozen_manifest(packet) is not None:
         # New and offline historical research use exactly the same deterministic
         # core. A V1 frozen packet never receives V2 coverage semantics.
-        from backend.macro.research_batch import evaluate_research_batch
+        from backend.macro.research_batch import diagnose_research_batch as evaluate_research_batch
 
         batch = evaluate_research_batch(
             raw,

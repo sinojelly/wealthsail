@@ -363,6 +363,68 @@ async def test_partial_chart_source_keeps_actual_new_nav_but_never_claims_buy_re
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sample_count", [1, 19, 20, 60, 119])
+async def test_short_history_retains_real_nav_and_every_calculable_reference(sample_count):
+    from backend.indicators.actionable_zones import compute_actionable_price_plan
+    from backend.investment.live_fund_plans import refresh_report_fund_plans
+
+    short = history()
+    short["points"] = short["points"][-sample_count:]
+    short.pop("providerHistoryProof")
+    report = {"valueDirections": [{
+        "auditStatus": "UNAUDITED_SCOPE", "qualificationStatus": "OBSERVATION_ONLY",
+        "plans": [old_plan()],
+    }]}
+    before = deepcopy(report)
+    expected = compute_actionable_price_plan(
+        short["points"], subject_kind="nav", subject_id="008298",
+        price_basis="UNIT_NAV", unit="CNY/份", market="FUND_CN",
+        source_uri=short["sourceUri"],
+    )
+
+    result = await refresh_report_fund_plans(
+        LocalHistory([short]), report, NOW, include_series=True,
+    )
+
+    direction = result["valueDirections"][0]
+    plan = direction["plans"][0]
+    assert direction["auditStatus"] == "UNAUDITED_SCOPE"
+    assert direction["qualificationStatus"] == "OBSERVATION_ONLY"
+    assert plan["currentPrice"] == expected["currentPrice"]
+    assert plan["asOf"] == short["asOf"]
+    assert plan["sourceUri"] == short["sourceUri"]
+    assert plan["retrievedAt"] == short["retrievedAt"]
+    assert plan["availableAt"] == short["availableAt"]
+    assert plan["confirmedNav"]["value"] == expected["currentPrice"]
+    assert plan["historyQuality"] == plan["priceRefresh"]["state"] == "PARTIAL"
+    assert plan["historyCoverage"] == "SHORT_HISTORY"
+    assert plan["historySampleCount"] == sample_count
+    assert plan["inputWindow"]["sampleCount"] == sample_count
+    assert plan["priceRefresh"]["reason"] == "LOCAL_NAV_HISTORY_INSUFFICIENT"
+    assert plan["indicators"]["navPercentile2y"] is None
+    assert plan["historicalPriceWindow"]["state"] == "INSUFFICIENT"
+    assert plan["indicatorStates"]["navPercentile2y"]["requiredSamples"] == 120
+    assert plan["indicatorStates"]["navPercentile2y"]["sampleCount"] == sample_count
+    assert plan["series"]["state"] == "PARTIAL"
+    assert plan["series"]["points"] == [
+        {"date": row["date"], "value": row["close"]} for row in short["points"]
+    ]
+    for track, calculated in zip(plan["tracks"], expected["tracks"]):
+        for field in (
+            "entryZoneMin", "entryZoneMax", "stopLossPrice", "takeProfitT1",
+            "takeProfitT2", "sellZoneMin", "sellZoneMax",
+        ):
+            assert track[field] == calculated[field]
+            assert (track[field] is not None) is (sample_count >= 20)
+        assert track["entryReady"] is False
+        assert track["priceState"] == ("PARTIAL" if sample_count >= 20 else "INSUFFICIENT")
+    assert all(signal["entryReady"] is False for signal in plan["signals"])
+    assert plan["actionableZones"]["currentPrice"] == expected["currentPrice"]
+    assert plan["actionableZones"]["buyZone"]["min"] == expected["tracks"][1]["entryZoneMin"]
+    assert report == before
+
+
+@pytest.mark.asyncio
 async def test_current_guards_reapply_without_treating_old_packet_news_as_current():
     from backend.investment.live_fund_plans import refresh_report_fund_plans
 

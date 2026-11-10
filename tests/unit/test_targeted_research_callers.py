@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from backend.macro.daily_research import ResearchValidationError, validate_report
+from backend.macro.daily_research import ResearchValidationError, diagnose_report as validate_report
 from backend.macro.research_batch import evaluate_research_batch
 from backend.macro.research_topics import freeze_discovery_packet, frozen_manifest
 from tests.unit.test_targeted_research_v3 import input_packet, NOW

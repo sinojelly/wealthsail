@@ -1,3 +1,5 @@
+# Historical strict diagnostic policy only. Production uses sanitize-and-keep;
+# see test_research_sanitize_keep.py for the current publication contract.
 """Discovered directions select public evidence and server price coordinates."""
 
 from copy import deepcopy
@@ -53,7 +55,7 @@ def direction(**updates):
 
 
 def validate(rows=None, public=None, aliases=None):
-    return module().validate_value_directions(
+    return module().diagnose_value_directions(
         rows or [direction()],
         public or packet(),
         NOW,
@@ -186,7 +188,7 @@ def test_duplicate_direction_and_product_track_rejected():
 
 
 def test_daily_report_uses_new_dynamic_directions_and_flattens_verified_prices():
-    from backend.macro.daily_research import validate_report
+    from backend.macro.daily_research import diagnose_report as validate_report
     from test_daily_research import report
 
     raw = {
@@ -210,7 +212,7 @@ def test_daily_report_uses_new_dynamic_directions_and_flattens_verified_prices()
 
 
 def test_eight_distinct_directions_survive_report_validation_without_price_anchors():
-    from backend.macro.daily_research import validate_report
+    from backend.macro.daily_research import diagnose_report as validate_report
     from test_daily_research import report
 
     rows = [
@@ -397,7 +399,7 @@ def test_dual_fund_direction_keeps_both_real_plans_and_quantitative_facts():
 
 
 def test_report_keeps_cls_media_as_unverified_while_using_its_catalyst_with_nav():
-    from backend.macro.daily_research import validate_report
+    from backend.macro.daily_research import diagnose_report as validate_report
     from test_daily_research import report
 
     raw = {

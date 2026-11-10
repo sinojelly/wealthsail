@@ -1,4 +1,4 @@
-"""Deterministic V2 discovery acceptance; only a strict projection is actionable."""
+"""Research delivery keeps all insights; audit completeness is separate metadata."""
 
 from collections import Counter
 from copy import deepcopy
@@ -13,6 +13,7 @@ from backend.macro.daily_research import (
     _previous_industry_states,
     _url,
     validate_report,
+    diagnose_report,
 )
 from backend.macro.industry_contract import plan_industry_ids
 from backend.macro.research_acceptance import (
@@ -53,6 +54,125 @@ _SYSTEMIC = re.compile(
 
 
 def evaluate_research_batch(
+    raw, packet, checks, *, research_id, validated_at, rule_version=None,
+    _strict_validator=None,
+):
+    """Keep the complete report; audit coverage is descriptive metadata only."""
+    if _strict_validator is not None:
+        return diagnose_research_batch(raw, packet, checks, research_id=research_id,
+            validated_at=validated_at, rule_version=rule_version,
+            _strict_validator=_strict_validator)
+    stamp = _now(validated_at)
+    revision = validator_revision()
+    if rule_version is not None and rule_version != revision:
+        raise ValueError("unsupported research rule version")
+    outcome = validate_report_outcome(raw, packet, checks, research_id=research_id, completed_at=stamp)
+    formal = outcome.formal_payload
+    registry = {
+        "version": REGISTRY_VERSION, "researchId": str(research_id),
+        "validatedAt": stamp.isoformat(), "revision": revision,
+        "buildCommit": build_revision(), "items": [], "coverage": {},
+        "auditTasks": [], "issues": [],
+    }
+    # Keep the original planned search work visible for diagnostics. A missing
+    # receipt changes its audit status, never the report's publication status.
+    manifest = None
+    try:
+        manifest = frozen_manifest(packet)
+        if manifest:
+            registry["auditTasks"] = deepcopy(manifest["tasks"])
+    except (ValueError, TypeError, KeyError):
+        pass
+    checked_source_ids = {row["id"] for row in (formal or {}).get("sources", []) if row.get("verification") == "SOURCE_CHECKED"}
+    discovered = (formal or {}).get("topicCatalog", [])
+    discovered_keys = {row["key"] for row in discovered}
+    checked_topics = sum(bool(set(row.get("sourceIds", [])) & checked_source_ids) for row in discovered)
+    completed_scopes = {row["industry"] for row in (formal or {}).get("industryCycleReviews", []) if row.get("auditStatus") == "AUDITED"}
+    for task in registry["auditTasks"]:
+        if task["industryId"].startswith("TOPIC_SCOPE:"):
+            task.update(status="PLANNED_DEFERRED", reasonCode="INDUSTRY_IDENTITY_PENDING")
+        elif task["industryId"] not in completed_scopes:
+            task.update(status="PENDING_REVIEW", reasonCode="AUDIT_INCOMPLETE")
+    registry["auditTasks"] = [task for task in registry["auditTasks"] if task["industryId"] not in completed_scopes]
+    if formal is not None:
+        topics = list(formal.get("topicCatalog", []))
+        known = {row["key"] for row in topics}
+        topics += [
+            {"key": row["key"], "title": row["title"], "thesis": row["thesis"],
+             "industryClaims": row.get("reviewIndustryIds", []),
+             "relatedIndustryIds": [], "sourceIds": row.get("sourceIds", []),
+             "unknowns": row.get("watchFor", []), "pendingTasks": [],
+             "auditStatus": row.get("auditStatus"), "plans": row.get("plans", [])}
+            for row in formal.get("valueDirections", []) if row["key"] not in known
+        ]
+        for topic in topics:
+            industries = topic.get("industryClaims", [])
+            audited = topic.get("auditStatus") == "AUDITED"
+            linked_direction = next((row for row in formal.get("valueDirections", []) if row["key"] == topic["key"]), {})
+            eligible = bool(topic.get("plans") or linked_direction.get("plans")) and audited
+            status = "FORMAL" if eligible else "OBSERVATION_ONLY"
+            code = "FORMAL_VALIDATED" if eligible else "OBSERVATION_ONLY"
+            match = {"status": "COMPOSITE" if len(industries) > 1 else "STANDARD" if industries else "UNMATCHED",
+                "industryIds": industries, "relatedIndustryIds": topic.get("relatedIndustryIds", []),
+                "evidence": ["GLOBAL_INDUSTRY_IDENTITY"], "registryVersion": "industry-registry-v1",
+                "scopeVerified": audited, "unresolvedClaims": topic.get("originalIndustryIds", []) if topic.get("industryMappings") else [],
+                "proposedScopes": []}
+            registry["items"].append({
+                "topicId": "topic:" + digest([topic["key"], industries])[:32],
+                "key": topic["key"], "title": topic["title"], "summary": topic["thesis"],
+                "unknowns": topic.get("unknowns", []), "followUp": topic.get("pendingTasks", []),
+                "status": status, "reasonCode": code, "reason": TOPIC_MESSAGES[code],
+                "impact": "基于已有资讯研判；关联基金参考价位由真实行情计算。",
+                "measures": ["保留完整观点与基金参考价位", "未执行额外模型调用"],
+                "pendingTasks": [], "sourceIds": topic.get("sourceIds", []),
+                "match": match, "investmentEligible": eligible,
+            })
+    count = len(registry["items"])
+    direction_count = len((formal or {}).get("valueDirections", []))
+    registry["coverage"] = {
+        "totalCount": count, "storedCount": count, "hasMore": False,
+        "countsByStatus": {status: sum(row["status"] == status for row in registry["items"]) for status in ("FORMAL", "OBSERVATION_ONLY", "PENDING_REVIEW", "QUARANTINED")},
+        "discoveredTopicCount": len(discovered), "strictDirectionCount": direction_count,
+        "evidenceBackedTopicCount": checked_topics,
+        "pendingVerificationTopicCount": len(discovered) - checked_topics,
+        "evidenceBackedTopicRatioPercent": round(100 * checked_topics / len(discovered), 1) if discovered else None,
+        "plannedScopeCount": len((manifest or {}).get("selectedScopes", [])),
+        "reviewedScopeCount": len(completed_scopes),
+        "pendingScopeCount": len(set((manifest or {}).get("selectedScopes", [])) - completed_scopes),
+        "deferredScopeCount": len((manifest or {}).get("deferredScopes", [])),
+        "observationScopeCount": len(({industry for row in registry["items"] if row["key"] in discovered_keys for industry in row["match"]["industryIds"]} | set((manifest or {}).get("deferredScopes", []))) - completed_scopes),
+        "evaluableFundDirectionCount": sum(bool(row.get("plans")) for row in (formal or {}).get("valueDirections", [])),
+        "qualifiedFormalDirectionCount": sum(bool(row.get("plans")) for row in (formal or {}).get("valueDirections", [])),
+        "validEventCount": len((formal or {}).get("events", [])),
+        "validUpcomingCount": len((formal or {}).get("upcoming", [])),
+        "additionalModelCalls": 0, "autoPublishAllowed": formal is not None,
+        "autoPublishBlockerCount": 0, "searchExecutionVerified": False,
+        "researchDeliveryStatus": "VALIDATED_READ_ONLY" if formal else "UNAVAILABLE",
+        "investmentQualificationStatus": "QUALIFIED_CANDIDATES" if any(row.get("plans") for row in (formal or {}).get("valueDirections", [])) else "NO_QUALIFIED_OPPORTUNITIES",
+    }
+    if manifest:
+        from backend.macro.research_assurance import audit_assurance
+
+        assurance = audit_assurance({row["industry"]: row for row in (formal or {}).get("industryCycleReviews", [])}, manifest, checks if isinstance(checks, dict) else {}, stamp, research_id=research_id)
+        registry["coverage"].update({key: value for key, value in assurance.items() if key != "completedKinds"})
+        registry["coverage"].update(manifest["budget"])
+        registry["coverage"]["executionPendingDirectionCount"] = sum(row.get("auditStatus") == "UNAUDITED_SCOPE" for row in (formal or {}).get("valueDirections", []))
+    warnings = (formal or {}).get("validationWarnings", [])
+    summary = {"version": "research-sanitize-v1", "originalDecision": outcome.decision,
+        "strictRevalidated": False, "quarantinedCount": 0,
+        "coverage": deepcopy(registry["coverage"]), "changed": bool(warnings),
+        "repairRevision": revision, "buildCommit": build_revision(),
+        "quarantined": [], "validationWarnings": deepcopy(warnings)}
+    return {"originalOutcome": outcome, "formalReport": formal, "registry": registry,
+        "repairSummary": summary, "autoPublishAllowed": formal is not None,
+        "historicalPublishAllowed": formal is not None, "strictPass": formal is not None,
+        "candidateRaw": deepcopy(formal), "safetyBlocked": False,
+        "hardBlockers": [], "autoBlockers": [], "quarantined": [],
+        "decision": "REPAIRED" if formal else "BLOCKED",
+        "retained": {"counts": {key: len((formal or {}).get(key, [])) for key in ("sources", "industryCycleReviews", "valueDirections", "events", "upcoming")}, "directionKeys": [row["key"] for row in (formal or {}).get("valueDirections", [])]}}
+
+
+def diagnose_research_batch(
     raw,
     packet,
     checks,
@@ -62,6 +182,7 @@ def evaluate_research_batch(
     rule_version=None,
     _strict_validator=None,
 ):
+    _strict_validator = _strict_validator or diagnose_report
     """Preserve every bounded proposal while withholding unreviewed fund plans."""
     from backend.macro.research_repair import (
         _NEGATIVE,

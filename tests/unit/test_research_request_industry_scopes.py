@@ -1,4 +1,4 @@
-"""New requests expose and constrain the exact frozen direction industry scope."""
+"""Frozen searches never limit global industries or emerging model insights."""
 
 from copy import deepcopy
 import json
@@ -9,6 +9,7 @@ import pytest
 from backend.macro import daily_research as research
 from backend.macro.model_projection import model_packet
 from backend.macro import research_topics as topics
+from backend.macro.industry_contract import STANDARD_INDUSTRY_CODES
 from tests.unit.test_daily_research import NOW
 from tests.unit.test_daily_research_job import NOW as JOB_NOW, isolate, settings
 from tests.unit.test_research_frozen_contract_projection import frozen as historical_v2
@@ -43,7 +44,7 @@ def review_id_schema(schema):
     return schema["$defs"]["ValueDirectionProposal"]["properties"]["reviewIndustryIds"]
 
 
-def test_new_prompt_distinguishes_registered_identity_from_frozen_direction_permission():
+def test_new_prompt_distinguishes_global_industry_identity_from_frozen_audit_work():
     value = packet()
     before = deepcopy(value)
     manifest = topics.frozen_manifest(value)
@@ -51,15 +52,16 @@ def test_new_prompt_distinguishes_registered_identity_from_frozen_direction_perm
     assert manifest["deferredScopes"] == DEFERRED
     view = prompt_view(value)
     contract = view["industryCycleResearch"]
-    assert contract["allowedReviewIndustryIds"] == SELECTED + DEFERRED
+    assert set(contract["allowedReviewIndustryIds"]) == STANDARD_INDUSTRY_CODES
+    assert contract["freeIndustryLabelsAllowed"] is True
     assert contract["observationScopes"] == DEFERRED
     assert "MEMORY" in view["topicIdentityRegistry"]["standardIndustryCodes"]
     assert "SEMICONDUCTOR_AI" in view["topicIdentityRegistry"]["standardIndustryCodes"]
-    assert not {"MEMORY", "SEMICONDUCTOR_AI"} & set(contract["allowedReviewIndustryIds"])
+    assert {"MEMORY", "SEMICONDUCTOR_AI"} <= set(contract["allowedReviewIndustryIds"])
     assert value == before
 
 
-def test_v24_prompt_uses_selected_only_for_old_contract_and_keeps_historical_views():
+def test_current_prompt_opens_global_industries_and_preserves_historical_frozen_views():
     for value in (packet(), historical_v2()):
         before = deepcopy(value)
         for version in ("daily-model-input-v1", "daily-model-input-v2"):
@@ -68,34 +70,32 @@ def test_v24_prompt_uses_selected_only_for_old_contract_and_keeps_historical_vie
             assert "observationScopes" not in view
         assert value == before
     old = historical_v2()
-    manifest = topics.frozen_manifest(old)
     view = prompt_view(old)["industryCycleResearch"]
-    assert view["allowedReviewIndustryIds"] == manifest["selectedScopes"]
+    assert set(view["allowedReviewIndustryIds"]) == STANDARD_INDUSTRY_CODES
     assert view["observationScopes"] == []
     legacy = prompt_view({"industryCycleResearch": {"required": True}})
     assert "allowedReviewIndustryIds" not in legacy["industryCycleResearch"]
 
 
-def test_request_schema_excludes_registered_but_unfrozen_ids_and_preserves_observations():
+def test_request_schema_accepts_unfrozen_industries_and_free_labels_independently():
     value = packet()
     before, base = deepcopy(value), deepcopy(research.REPORT_SCHEMA)
     schema = research.report_schema_for_packet(value)
     field = review_id_schema(schema)
-    assert field["items"]["enum"] == SELECTED + DEFERRED
-    assert "US_TECH" in field["items"]["enum"]
-    assert not {"MEMORY", "SEMICONDUCTOR_AI"} & set(field["items"]["enum"])
+    assert "enum" not in field["items"]
+    assert field["items"]["type"] == "string"
     assert field.get("minItems", 0) == 0
     schema["$defs"]["ValueDirectionProposal"]["properties"]["title"]["maxLength"] = 1
-    field["items"]["enum"].append("INVENTED")
-    assert review_id_schema(research.report_schema_for_packet(value))["items"]["enum"] == SELECTED + DEFERRED
+    field["items"]["description"] = "free industry labels"
+    assert "description" not in review_id_schema(research.report_schema_for_packet(value))["items"]
     assert research.REPORT_SCHEMA == base
     assert value == before
 
 
-def test_empty_frozen_scope_allows_only_empty_direction_review_ids_without_empty_enum():
+def test_empty_frozen_audit_scope_still_allows_industry_discovery():
     schema = research.report_schema_for_packet(packet(scopes=[]))
     field = review_id_schema(schema)
-    assert field["maxItems"] == 0
+    assert field["maxItems"] > 0
     assert "enum" not in field["items"]
     assert field.get("minItems", 0) == 0
 
@@ -127,7 +127,7 @@ async def test_both_dispatch_paths_send_the_packet_bound_schema(monkeypatch, rem
     assert state["consumed"] is True
     provider.assert_awaited_once()
     sent = provider.await_args.args[2]
-    assert review_id_schema(sent)["items"]["enum"] == SELECTED + DEFERRED
+    assert "enum" not in review_id_schema(sent)["items"]
     assert sent is not research.REPORT_SCHEMA
     assert research.REPORT_SCHEMA == before
 

@@ -7,10 +7,8 @@ queue consumer, database, or stored report is involved.
 from copy import deepcopy
 from datetime import timedelta
 
-import pytest
-
 from backend.indicators.actionable_zones import compute_actionable_price_plan
-from backend.macro.daily_research import ResearchValidationError, validate_report
+from backend.macro.daily_research import validate_report
 from test_daily_research import NOW, report
 from test_industry_cycle import checks
 from test_value_directions import direction
@@ -146,25 +144,24 @@ def case():
     return public, raw, checked
 
 
-def test_original_missing_nonferrous_rejects_with_server_sector_and_direction_index():
+def test_original_missing_nonferrous_audit_preserves_direction_and_all_fund_plans():
     public, raw, checked = case()
     raw["industryCycleReviews"] = raw["industryCycleReviews"][:2]
-    with pytest.raises(ResearchValidationError) as caught:
-        validate_report(raw, public, checked, completed_at=NOW)
-    assert caught.value.reason_code == "DIRECTION_VALIDATION_FAILED"
-    assert caught.value.rule_id == "DIRECTION_PLAN_SECTOR_UNREVIEWED"
-    assert caught.value.item_index == 0
-    assert caught.value.missing_industry_codes == ["NONFERROUS"]
+    actual = validate_report(raw, public, checked, completed_at=NOW)
+    direction = actual["valueDirections"][0]
+    assert len(direction["plans"]) == 2
+    assert "NONFERROUS" in direction["reviewIndustryIds"]
+    assert direction["auditStatus"] == "UNAUDITED_SCOPE"
 
 
-def test_model_unknown_label_is_distinct_from_missing_server_sector():
+def test_model_unknown_label_is_preserved_as_a_broad_observation():
     public, raw, checked = case()
     raw["valueDirections"][0]["reviewIndustryIds"].append("model-unreviewed-label")
-    with pytest.raises(ResearchValidationError) as caught:
-        validate_report(raw, public, checked, completed_at=NOW)
-    assert caught.value.rule_id == "DIRECTION_DECLARED_INDUSTRY_UNKNOWN"
-    assert caught.value.item_index == 0
-    assert caught.value.missing_industry_codes is None
+    actual = validate_report(raw, public, checked, completed_at=NOW)
+    direction = actual["valueDirections"][0]
+    assert "BROAD" in direction["reviewIndustryIds"]
+    assert "model-unreviewed-label" in direction["originalIndustryIds"]
+    assert len(direction["plans"]) == 2
 
 
 def test_all_three_genuine_audits_accept_without_cross_sector_or_repeated_discount():
@@ -226,13 +223,12 @@ def test_all_three_genuine_audits_accept_without_cross_sector_or_repeated_discou
     assert public == original
 
 
-def test_missing_one_of_five_checks_cannot_be_replaced_by_a_label_only():
+def test_missing_one_of_five_checks_is_annotated_without_rejecting_other_research():
     public, raw, checked = case()
     raw["industryCycleReviews"][-1]["riskChecks"].pop()
-    with pytest.raises(ResearchValidationError) as caught:
-        validate_report(raw, public, checked, completed_at=NOW)
-    assert caught.value.reason_code == "SCHEMA_VALIDATION_FAILED"
-    assert caught.value.item_index == 2
+    actual = validate_report(raw, public, checked, completed_at=NOW)
+    assert len(actual["valueDirections"][0]["plans"]) == 2
+    assert any(row["code"] == "RISK_CHECK_INCOMPLETE" for row in actual["validationWarnings"])
 
 
 def test_next_report_does_not_reintroduce_direction_union_as_each_industry_history():

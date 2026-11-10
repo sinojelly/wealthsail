@@ -11,13 +11,17 @@ from tests.unit.test_research_repair import NOW, fixture
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("header_proven", [False, True])
-async def test_worker_repairs_once_only_when_auto_gate_passes_and_archives_original(
+async def test_worker_keeps_all_parsed_insights_without_legacy_auto_gate_or_model_retry(
     monkeypatch, header_proven
 ):
     from backend.macro.daily_research import validate_report
     from backend.macro.research_acceptance import validate_report_outcome
 
     mod, state = boundary(monkeypatch)
+    from unittest.mock import Mock
+
+    repair = Mock(wraps=mod.repair_report)
+    monkeypatch.setattr(mod, "repair_report", repair)
     packet, raw, checks = fixture(narrative=header_proven)
     original = deepcopy(raw)
     monkeypatch.setattr(mod, "validate_report", validate_report)
@@ -28,18 +32,26 @@ async def test_worker_repairs_once_only_when_auto_gate_passes_and_archives_origi
     mod.verify_research_sources.side_effect = None
     mod.verify_research_sources.return_value = checks
     result = await mod._execute_daily_research(object(), settings(), NOW, packet=packet)
-    assert result["status"] == ("READY" if header_proven else "FAILED")
+    assert result["status"] == "READY"
     saved = state["outcome"][1]
-    assert saved["decision"] == "PARTIAL" and saved["formalPublishable"] is False
-    assert saved["deterministicRepair"]["strictPass"] is True
-    assert saved["repairedFormalPublished"] is header_proven
+    assert saved["decision"] == "COMPLETE" and saved["formalPublishable"] is True
+    repair.assert_not_called()
     assert state["artifacts"][2] == original
     payload = state["terminal"][0]["payload"]
-    if header_proven:
-        assert payload["deterministicRepair"]["quarantinedCount"] == 1
-        assert len(payload["valueDirections"]) == 1
-    else:
-        assert payload is None
+    assert [row["key"] for row in payload["valueDirections"]] == [
+        row["key"] for row in original["valueDirections"]
+    ]
+    assert (
+        len(payload["valueDirections"][0]["plans"])
+        == len(original["valueDirections"][0]["plans"])
+        == 2
+    )
+    assert (
+        payload["valueDirections"][1]["thesis"]
+        == original["valueDirections"][1]["thesis"]
+    )
+    assert payload["valueDirections"][1]["plans"] == []
+    assert payload["valueDirections"][0]["plans"][0]["tracks"]
     assert raw == original
     mod.run_codex_research.assert_awaited_once()
     mod.verify_research_sources.assert_awaited_once()

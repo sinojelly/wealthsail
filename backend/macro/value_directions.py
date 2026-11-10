@@ -361,6 +361,19 @@ def _macro_codes(packet, now):
 
 
 def validate_value_directions(
+    proposals, packet, now, source_aliases, *, sources=None,
+    industry_reviews=None, historical_cycles=None, audit_completed_scopes=None,
+):
+    """Keep each direction and its funds; search coverage only adds metadata."""
+    from backend.macro.research_sanitize import sanitize_value_directions
+
+    return sanitize_value_directions(proposals, packet, now, source_aliases,
+        sources=sources, industry_reviews=industry_reviews,
+        historical_cycles=historical_cycles,
+        audit_completed_scopes=audit_completed_scopes)
+
+
+def diagnose_value_directions(
     proposals,
     packet,
     now,

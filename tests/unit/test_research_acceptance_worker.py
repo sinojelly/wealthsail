@@ -12,7 +12,11 @@ import pytest
 from backend.integrations.codex_research import CodexOutputError
 from backend.macro.daily_research import ResearchValidationError
 from tests.unit.test_daily_research_job import (
-    NOW, confirmed_research_failure, confirmed_research_result, isolate, settings,
+    NOW,
+    confirmed_research_failure,
+    confirmed_research_result,
+    isolate,
+    settings,
 )
 
 
@@ -187,7 +191,9 @@ async def test_execution_failure_with_valid_json_cannot_publish_complete_accepta
             encoding="utf-8",
             newline="",
         )
-        kwargs["lifecycle"].exited(reaped=True, descendants_confirmed=True, returncode=1)
+        kwargs["lifecycle"].exited(
+            reaped=True, descendants_confirmed=True, returncode=1
+        )
         return 1, b'{"type":"turn.completed"}\n', b"PRIVATE CLI stderr"
 
     cli = AsyncMock(side_effect=failed_cli)
@@ -215,7 +221,7 @@ async def test_execution_failure_with_valid_json_cannot_publish_complete_accepta
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_review", [False, True])
-async def test_real_collector_keeps_partial_observations_out_of_formal_payload(
+async def test_real_collector_publishes_insights_and_prices_despite_missing_audit(
     monkeypatch, missing_review
 ):
     from backend.macro.daily_research import validate_report
@@ -241,12 +247,23 @@ async def test_real_collector_keeps_partial_observations_out_of_formal_payload(
     result = await mod._execute_daily_research(
         object(), settings(), REPORT_NOW, packet=packet
     )
-    assert result["status"] == ("FAILED" if missing_review else "READY")
-    assert (state["terminal"][0]["payload"] is None) is missing_review
+    assert result["status"] == "READY"
+    payload = state["terminal"][0]["payload"]
+    assert payload is not None
+    assert [row["key"] for row in payload["valueDirections"]] == [
+        row["key"] for row in raw["valueDirections"]
+    ]
+    assert len(payload["valueDirections"][0]["plans"]) == len(
+        raw["valueDirections"][0]["plans"]
+    )
+    assert payload["valueDirections"][0]["plans"][0]["tracks"]
+    assert payload["valueDirections"][0]["plans"][0]["currentPrice"] != "0"
+    if missing_review:
+        assert payload["valueDirections"][0]["auditStatus"] == "UNAUDITED_SCOPE"
     saved = state["outcome"][1]
-    assert saved["decision"] == ("PARTIAL" if missing_review else "COMPLETE")
+    assert saved["decision"] == "COMPLETE"
     assert saved["accepted"]["sources"]
-    assert "plans" not in str(saved["accepted"])
+    assert saved["accepted"]["valueDirections"][0]["plans"]
     assert state["artifacts"][2] == raw
     mod.run_codex_research.assert_awaited_once()
 
@@ -288,7 +305,9 @@ async def test_cancelled_usage_bookkeeping_keeps_returned_raw_without_retry(
         monkeypatch.setattr(
             codex_client, "preflight", AsyncMock(return_value={"version": "fixture"})
         )
-        model = AsyncMock(side_effect=lambda *a, **k: confirmed_research_result(raw, k["identity"]))
+        model = AsyncMock(
+            side_effect=lambda *a, **k: confirmed_research_result(raw, k["identity"])
+        )
         monkeypatch.setattr(codex_client, "_research", model)
     else:
         model = mod.run_codex_research

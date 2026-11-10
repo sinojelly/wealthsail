@@ -335,8 +335,9 @@ def test_observations_need_no_unallocated_five_kind_search_records(count):
         audit_completed_scopes=set(),
     )
     assert len(result) == count
-    for row in result:
-        assert row["signal"] == "WATCH" and row["plans"] == []
+    for proposal, row in zip(before, result, strict=True):
+        assert row["signal"] == proposal["signal"] and row["plans"] == []
+        assert row["auditStatus"] == "UNAUDITED_SCOPE"
         assert row["qualificationStatus"] == "OBSERVATION_ONLY"
         assert row["investmentEligible"] is False
         assert row["industryCycle"]["riskChecks"] == []
@@ -349,7 +350,7 @@ def test_observations_need_no_unallocated_five_kind_search_records(count):
 @pytest.mark.parametrize(
     "failure", ["unknown_industry", "unknown_source", "no_evidence"]
 )
-def test_observation_layer_still_rejects_unregistered_identity_sources_and_empty_evidence(
+def test_observation_layer_repairs_identity_sources_and_keeps_prose(
     failure,
 ):
     packet = topics.freeze_discovery_packet(input_packet(), NOW)
@@ -367,8 +368,7 @@ def test_observation_layer_still_rejects_unregistered_identity_sources_and_empty
         row["sourceIds"] = ["invented"]
     else:
         row["sourceIds"] = []
-    with pytest.raises(ValueError):
-        validate_value_directions(
+    result = validate_value_directions(
             [row],
             packet,
             NOW,
@@ -376,6 +376,13 @@ def test_observation_layer_still_rejects_unregistered_identity_sources_and_empty
             industry_reviews=[],
             audit_completed_scopes=set(),
         )
+    assert result[0]["thesis"] == row["thesis"]
+    assert result[0]["auditStatus"] == "UNAUDITED_SCOPE"
+    if failure == "unknown_industry":
+        assert result[0]["reviewIndustryIds"] == ["BROAD"]
+        assert result[0]["originalIndustryIds"] == ["FAKE_INDUSTRY"]
+    elif failure in {"unknown_source", "no_evidence"}:
+        assert result[0]["sourceIds"] == []
 
 
 @pytest.mark.parametrize("count", [6, 10])
@@ -511,7 +518,7 @@ def test_real_completed_normalized_searches_can_complete_only_the_frozen_industr
     }
 
 
-def test_trusted_not_found_restores_strict_plan_while_readable_positive_sources_alone_do_not():
+def test_trusted_not_found_updates_audit_status_without_stripping_unaudited_fund_plan():
     from backend.macro.daily_research import validate_report
     from tests.unit.test_industrial_metals_research_regression import case
 
@@ -535,8 +542,9 @@ def test_trusted_not_found_restores_strict_plan_while_readable_positive_sources_
     without = validate_report(
         raw, packet, checks, completed_at=NOW, research_id=UUID(int=1)
     )
-    assert without["valueDirections"][0]["investmentEligible"] is False
-    assert without["valueDirections"][0]["plans"] == []
+    assert without["valueDirections"][0]["investmentEligible"] is True
+    assert without["valueDirections"][0]["plans"]
+    assert without["valueDirections"][0]["auditStatus"] == "UNAUDITED_SCOPE"
     manifest = topics.frozen_manifest(packet)
     receipt = observe(
         *[
@@ -551,6 +559,7 @@ def test_trusted_not_found_restores_strict_plan_while_readable_positive_sources_
     )
     strict = with_proof["valueDirections"][0]
     assert strict["plans"]
+    assert strict["auditStatus"] == "AUDITED"
     assert strict.get("qualificationStatus") != "OBSERVATION_ONLY"
     assert strict.get("investmentEligible") is not False
     assert (packet, raw, checks) == before

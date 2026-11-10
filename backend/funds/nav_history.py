@@ -124,6 +124,11 @@ async def ensure_nav_histories(
         )
         if (
             len(view["points"]) < NAV_RESEARCH_MIN_SAMPLES
+            or view["state"] != "READY"
+            or (
+                view.get("asOf") is not None
+                and (now.date() - date.fromisoformat(view["asOf"])).days > 10
+            )
             or any(
                 row.get("coverageReason")
                 for row in candidates

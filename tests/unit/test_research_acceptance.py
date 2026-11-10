@@ -1,3 +1,5 @@
+# Historical strict diagnostic policy only. Production uses sanitize-and-keep;
+# see test_research_sanitize_keep.py for the current publication contract.
 """Independent, observation-only salvage never promotes a failed formal report."""
 
 from copy import deepcopy
@@ -6,8 +8,8 @@ import json
 
 import pytest
 
-from backend.macro.research_acceptance import validate_report_outcome
-from backend.macro.daily_research import ResearchValidationError, validate_report
+from backend.macro.research_acceptance import diagnose_report_outcome as validate_report_outcome
+from backend.macro.daily_research import ResearchValidationError, diagnose_report as validate_report
 from test_daily_research import NOW
 from test_industrial_metals_research_regression import case
 
@@ -183,7 +185,7 @@ def test_missing_negative_review_blocks_only_dependent_funds_without_rewriting_c
 
 
 @pytest.mark.asyncio
-async def test_real_offline_child_keeps_six_directions_with_entry_guards_and_risks():
+async def test_real_offline_child_keeps_all_eight_directions_with_local_repairs_and_risks():
     from backend.macro.research_acceptance_replay import run_offline_validation
 
     packet, raw, checks = eight_directions()
@@ -198,8 +200,9 @@ async def test_real_offline_child_keeps_six_directions_with_entry_guards_and_ris
             "validatedAt": NOW.isoformat(),
         }
     )
-    assert result["decision"] == "PARTIAL"
-    assert result["counts"]["valueDirections"]["acceptedCount"] == 6
+    assert result["decision"] == "COMPLETE"
+    assert result["counts"]["valueDirections"]["acceptedCount"] == 8
+    assert result["accepted"]["valueDirections"][0]["plans"]
     assert (
         result["accepted"]["valueDirections"][0]["industryCycle"]["riskLevel"]
         == "CONFIRMED"

@@ -267,3 +267,21 @@ async def test_partial_source_proof_is_retried_despite_recent_sufficient_samples
         now_provider=lambda: NOW,
     )
     assert fetch.await_count == 1 and result["refresh"]["011035"]["state"] == "READY"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_proof,lag", [(True, 0), (False, 20)])
+async def test_recent_check_does_not_prevent_repair_of_uncovered_or_stale_nav(
+    monkeypatch, missing_proof, lag,
+):
+    incomplete = history(count=220, lag=lag)
+    if missing_proof:
+        incomplete.pop("providerHistoryProof")
+    fetch = AsyncMock(return_value=history(count=550, lag=0))
+    monkeypatch.setattr(service, "fetch_on_demand_nav_history", fetch)
+    result = await service.ensure_nav_histories(
+        Store([incomplete]), ["011035"], NOW, tenant_id="tenant", user_id="actor",
+        latest_confirmed={}, now_provider=lambda: NOW,
+    )
+    assert fetch.await_count == 1
+    assert result["refresh"]["011035"]["state"] == "READY"

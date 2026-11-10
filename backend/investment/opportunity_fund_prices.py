@@ -9,7 +9,7 @@ from backend.funds.nav_history import local
 from backend.investment.discovery_limits import (
     OPPORTUNITY_TOPIC_LIMIT,
 )
-from backend.investment.live_fund_plans import _code, refresh_report_fund_plans
+from backend.investment.live_fund_plans import _code, fund_reference_contract, refresh_report_fund_plans
 from backend.investment.opportunity_scoring import high_zone, score_plan
 from backend.investment.opportunity_fund_matching import displayed_funds, fund_price_priority
 
@@ -103,19 +103,7 @@ def price_position(plan, now):
 
 def _zone_contract(plan):
     """Keep the complete refreshed calculation and expose chart coordinates."""
-    if not plan or not isinstance(plan.get("tracks"), list):
-        return None
-    result = deepcopy(plan)
-    tracks = result.get("tracks") or []
-    track = next((row for row in tracks if row.get("priceState") == "READY"), {})
-    result.update(
-        buyZone={"min": track.get("entryZoneMin"), "max": track.get("entryZoneMax")},
-        sellZone={"min": track.get("sellZoneMin", track.get("takeProfitT1")),
-                  "max": track.get("sellZoneMax", track.get("takeProfitT2"))},
-        stopLoss=track.get("stopLossPrice"),
-        targets=[track[field] for field in ("takeProfitT1", "takeProfitT2") if track.get(field) is not None],
-    )
-    return result
+    return fund_reference_contract(plan)
 
 
 async def enrich_fund_price_positions(

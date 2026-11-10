@@ -69,6 +69,35 @@ def test_freeze_keeps_exact_raw_strings_and_canonical_json_hashes():
     assert canonical["sha256"] == sha256(canonical["content"].encode()).hexdigest()
 
 
+@pytest.mark.parametrize("as_text", [False, True])
+def test_raw_json_lone_surrogates_remain_replayable_as_escaped_artifact_text(as_text):
+    original = {"summary": "公开原文\ud800继续", "detail": ["\udfff"]}
+    value = json.dumps(original, ensure_ascii=False) if as_text else original
+    frozen = repo().freeze_artifact(value, 4096, raw=True)
+    assert frozen["omissionReason"] is None
+    assert json.loads(frozen["content"]) == original
+    encoded = frozen["content"].encode("utf-8")
+    assert frozen["byteLength"] == len(encoded)
+    assert frozen["sha256"] == sha256(encoded).hexdigest()
+    assert json.loads(repo()._encode(frozen))["content"] == frozen["content"]
+
+
+def test_raw_object_nonfinite_and_nul_values_keep_original_evidence_inside_text():
+    import math
+
+    original = {"summary": "原始\x00观点", "metric": float("nan"), "limit": float("inf")}
+    frozen = repo().freeze_artifact(original, 4096, raw=True)
+    assert frozen["omissionReason"] is None
+    restored = json.loads(frozen["content"])
+    assert restored["summary"] == original["summary"]
+    assert math.isnan(restored["metric"]) and restored["limit"] == float("inf")
+    # These are raw source bytes inside a JSON string, never JSONB scalar NaN,
+    # literal NUL, or a surrogate code point in the outer persistence document.
+    outer = repo()._encode(frozen)
+    assert "\x00" not in outer
+    assert json.loads(outer)["content"] == frozen["content"]
+
+
 @pytest.mark.parametrize(
     "limit,raw",
     [(4 * 1024 * 1024, False), (2 * 1024 * 1024, True), (512 * 1024, False)],

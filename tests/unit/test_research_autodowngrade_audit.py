@@ -15,9 +15,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from backend.macro.daily_research import validate_report
+from backend.macro.daily_research import diagnose_report
 from backend.macro.research_assurance import verified_tasks
-from backend.macro.research_batch import evaluate_research_batch
+from backend.macro.research_batch import (
+    diagnose_research_batch,
+    evaluate_research_batch,
+)
 from backend.macro.research_topics import frozen_manifest
 
 
@@ -32,7 +35,7 @@ def public_failure():
     return value, datetime.fromisoformat(value["validatedAt"])
 
 
-def assert_observation(report, original):
+def assert_legacy_observation(report, original):
     directions = {row["key"]: row for row in report["valueDirections"]}
     assert KEY in directions, "incomplete evidence must retain the research direction"
     direction = directions[KEY]
@@ -56,6 +59,44 @@ def assert_observation(report, original):
         row["title"] == original["events"][0]["title"] for row in report["events"]
     )
     assert not report["actionablePlans"]
+
+
+def assert_retained_insight(report, original, packet):
+    """Publication preserves insights and deterministic prices despite audit gaps."""
+    direction = next(row for row in report["valueDirections"] if row["key"] == KEY)
+    original_direction = original["valueDirections"][0]
+    assert direction["signal"] == original_direction["signal"]
+    assert direction["qualificationStatus"] == "OBSERVATION_ONLY"
+    assert direction["auditStatus"] == "UNAUDITED_SCOPE"
+    assert len(direction["plans"]) == len(original_direction["plans"]) == 1
+    assert (
+        direction["plans"][0]["subjectId"]
+        == original_direction["plans"][0]["subjectId"]
+    )
+    assert direction["title"] == original_direction["title"]
+    assert direction["thesis"] == original_direction["thesis"]
+    assert [row["summary"] for row in direction["risks"]] == [
+        row["summary"] for row in original_direction["risks"]
+    ]
+    assert direction["industryCycle"]["searchExecutionVerified"] is False
+    anchors = packet.get("discoveryActionableZones", [])
+    if anchors:
+        assert direction["plans"][0]["currentPrice"] == anchors[0]["currentPrice"]
+        assert direction["plans"][0]["tracks"]
+    else:
+        assert direction["plans"][0]["currentPrice"] is None
+        assert any(
+            warning["code"] == "FUND_PRICE_PENDING"
+            for warning in report["validationWarnings"]
+        )
+    assert report["summary"] == original["summary"]
+    assert report["macroCycle"] == original["macroCycle"]
+    assert report["coverage"] == original["coverage"]
+    assert report["topicCatalog"][0]["key"] == KEY
+    assert any(
+        row["title"] == original["events"][0]["title"] for row in report["events"]
+    )
+    assert report["actionablePlans"]
 
 
 def test_real_fixture_keeps_failed_source_checks_and_empty_execution_proof():
@@ -82,24 +123,24 @@ def test_real_fixture_keeps_failed_source_checks_and_empty_execution_proof():
     ] == ["FOUND", "FOUND", "UNVERIFIED", "UNVERIFIED", "UNVERIFIED"]
 
 
-def test_real_failed_robot_report_strictly_retains_observation_and_macro():
+def test_historical_failed_robot_diagnosis_retains_observation_and_macro():
     value, at = public_failure()
     before = deepcopy(value)
-    report = validate_report(
+    report = diagnose_report(
         value["raw"],
         value["packet"],
         value["sourceChecks"],
         completed_at=at,
         research_id=RUN,
     )
-    assert_observation(report, value["raw"])
+    assert_legacy_observation(report, value["raw"])
     assert value == before
 
 
-def test_real_failed_robot_batch_publishes_safe_observation_without_new_evidence():
+def test_historical_robot_batch_diagnosis_keeps_original_audit_gaps():
     value, at = public_failure()
     before = deepcopy(value)
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         value["raw"],
         value["packet"],
         value["sourceChecks"],
@@ -109,7 +150,7 @@ def test_real_failed_robot_batch_publishes_safe_observation_without_new_evidence
     assert result["strictPass"] is True
     assert result["autoPublishAllowed"] is True
     assert not result["safetyBlocked"]
-    assert_observation(result["formalReport"], value["raw"])
+    assert_legacy_observation(result["formalReport"], value["raw"])
     topic = next(row for row in result["registry"]["items"] if row["key"] == KEY)
     assert topic["status"] == "OBSERVATION_ONLY"
     assert topic["investmentEligible"] is False
@@ -134,7 +175,7 @@ def test_missing_real_nav_anchor_does_not_remove_other_research_content():
         research_id=RUN,
     )
     assert result["autoPublishAllowed"] is True
-    assert_observation(result["formalReport"], value["raw"])
+    assert_retained_insight(result["formalReport"], value["raw"], value["packet"])
 
 
 @pytest.mark.asyncio
@@ -241,7 +282,7 @@ async def test_worker_entry_persists_real_failed_sample_as_safe_ready_observatio
     assert finish.await_count == 1
     assert finish.await_args.kwargs["status"] == "READY"
     assert finish.await_args.kwargs["error_class"] is None
-    assert_observation(finish.await_args.kwargs["payload"], raw)
+    assert_retained_insight(finish.await_args.kwargs["payload"], raw, packet)
     assert archive.await_count == 1
     archived_checks = archive.await_args.args[4]
     assert archived_checks[EXECUTION_KEY]["receipt"] == checks[EXECUTION_KEY]["receipt"]

@@ -177,14 +177,14 @@ async def test_real_collector_plan_failure_keeps_checked_news_and_verified_bad_n
     monkeypatch,
 ):
     from backend.macro.research_acceptance_repository import safe_outcome_summary
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from tests.unit.test_research_cost_review75 import prepared, executed_checks
     from tests.unit.test_research_event_links import event
 
     packet, raw, checks = prepared()
     raw["valueDirections"][0]["plans"][0]["subjectId"] = "999999"
     raw["events"] = [event(sourceIds=["s1"])]
-    batch = evaluate_research_batch(
+    batch = diagnose_research_batch(
         raw,
         packet,
         executed_checks(packet, checks, run_id=str(RUN), at=NOW),

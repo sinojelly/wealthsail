@@ -92,8 +92,9 @@ def test_validated_report_copies_every_actual_server_scan_item(count):
 
 def test_model_cannot_replace_server_quantitative_scan():
     raw = {**report(), "quantitativeScan": scan()}
-    with pytest.raises(ValueError):
-        daily_research.validate_report(raw, {}, {}, completed_at=NOW)
+    actual = daily_research.validate_report(raw, {}, {}, completed_at=NOW)
+    assert actual["summary"] == raw["summary"]
+    assert "quantitativeScan" not in actual
 
 
 def test_public_scan_omits_private_fields_and_unusable_prices():

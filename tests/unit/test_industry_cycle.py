@@ -233,17 +233,18 @@ def test_collected_research_builds_five_queries_per_real_dynamic_candidate():
     )
 
 
-def test_current_packet_rejects_missing_cycle_even_if_legacy_parser_accepts_it():
+def test_current_packet_keeps_direction_and_fund_when_cycle_is_missing():
     from backend.macro.value_directions import validate_value_directions
     from test_value_directions import NOW
     from test_value_directions import direction, packet
 
     public = {**packet(), "industryCycleResearch": {"required": True}}
-    with pytest.raises(ValueError):
-        validate_value_directions([direction()], public, NOW, {"s1": "source:one"})
+    actual = validate_value_directions([direction()], public, NOW, {"s1": "source:one"})
+    assert actual[0]["plans"]
+    assert actual[0]["auditStatus"] == "UNAUDITED_SCOPE"
 
 
-def test_report_keeps_rejected_candidate_reviews_and_refuses_unreviewed_dynamic_sector():
+def test_report_keeps_unreviewed_dynamic_industry_as_an_observation():
     from backend.macro.daily_research import validate_report
     from test_daily_research import NOW, report
 
@@ -253,10 +254,8 @@ def test_report_keeps_rejected_candidate_reviews_and_refuses_unreviewed_dynamic_
         "industryCycleResearch": {"required": True},
         "discoveryUniverse": [{"discoverySector": "动态待观察行业"}],
     }
-    with pytest.raises(ValueError, match="unreviewed industry"):
-        validate_report(
-            {**report(), "valueDirections": []}, public, {}, completed_at=NOW
-        )
+    first = validate_report({**report(), "valueDirections": []}, public, {}, completed_at=NOW)
+    assert first["executionStatus"] == "COMPLETED"
     raw = {
         **report(),
         "valueDirections": [],
@@ -265,7 +264,8 @@ def test_report_keeps_rejected_candidate_reviews_and_refuses_unreviewed_dynamic_
         ],
     }
     actual = validate_report(raw, public, {}, completed_at=NOW)
-    assert actual["industryCycleReviews"][0]["industry"] == "动态待观察行业"
+    assert actual["industryCycleReviews"][0]["industry"] == "BROAD"
+    assert actual["industryCycleReviews"][0]["originalIndustryIds"] == ["动态待观察行业"]
     assert actual["industryCycleReviews"][0]["riskChecks"][0]["status"] == "NOT_FOUND"
     assert actual["valueDirections"] == []
 
@@ -345,11 +345,11 @@ def test_legacy_missing_discount_anchors_do_not_break_the_following_research_run
     assert first["plans"][0]["industryRiskAdjustment"]["state"] == "INSUFFICIENT"
     public["previousValueDirections"] = [first]
     second = validate_current_stage([raw], public)[0]
-    assert second["plans"][0]["tracks"][0]["entryZoneMin"] is None
-    assert second["plans"][0]["entryReady"] is False
+    assert second["plans"][0]["tracks"][0]["entryZoneMin"] == "1.1000"
+    assert second["plans"][0]["industryRiskAdjustment"]["referenceBandPreserved"] is True
 
 
-def test_new_watch_only_direction_must_link_its_review_without_using_title_keywords():
+def test_watch_direction_keeps_unregistered_industry_label_without_fabricating_scope():
     from backend.macro.value_directions import validate_value_directions
     from test_value_directions import NOW, direction, packet
 
@@ -365,8 +365,7 @@ def test_new_watch_only_direction_must_link_its_review_without_using_title_keywo
         ),
     }
     raw = direction(industryCycle=cycle(), plans=[], signal="WATCH")
-    with pytest.raises(ValueError, match="review link"):
-        validate_value_directions(
+    before = validate_value_directions(
             [raw],
             public,
             NOW,
@@ -374,6 +373,7 @@ def test_new_watch_only_direction_must_link_its_review_without_using_title_keywo
             industry_reviews=[review],
             sources=current_stage_sources(),
         )
+    assert before[0]["auditStatus"] == "UNAUDITED_SCOPE"
     raw["reviewIndustryIds"] = ["已审查观察行业"]
     actual = validate_value_directions(
         [raw],
@@ -383,7 +383,9 @@ def test_new_watch_only_direction_must_link_its_review_without_using_title_keywo
         industry_reviews=[review],
         sources=current_stage_sources(),
     )[0]
-    assert actual["industryCycle"]["riskFlags"] == ["EARLY_COMMERCIALIZATION"]
+    assert actual["originalIndustryIds"] == ["已审查观察行业"]
+    assert actual["industryCycle"]["declaredStage"] == cycle()["stage"]
+    assert actual["industryCycle"]["evidenceSummary"] == cycle()["evidenceSummary"]
 
 
 @pytest.mark.parametrize(

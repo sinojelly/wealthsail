@@ -6,7 +6,6 @@ import pytest
 
 from backend.integrations.daily_sources import industry_cycle_research_tasks
 from backend.macro.daily_research import (
-    ResearchValidationError,
     _public_industry_cycle,
     validate_report,
 )
@@ -69,11 +68,12 @@ def test_report_carries_server_computed_research_coverage(total):
     assert public == before
 
 
-def test_model_cannot_fabricate_complete_research_coverage():
+def test_server_corrects_model_coverage_without_rejecting_research():
     public, raw = packet_and_report(12)
     raw["industryResearchCoverage"] = {"status": "COMPLETE", "omittedCandidateCount": 0}
-    with pytest.raises(ResearchValidationError, match="schema"):
-        validate_report(raw, public, {}, completed_at=NOW)
+    actual = validate_report(raw, public, {}, completed_at=NOW)
+    assert actual["industryResearchCoverage"]["status"] == "PARTIAL"
+    assert actual["industryResearchCoverage"]["omittedCandidateCount"] == 2
 
 
 def test_public_cycle_keeps_verified_fact_identity_and_event_time_separate_from_publication():

@@ -323,12 +323,11 @@ def test_take_profit_requires_nonfuture_previous_date_and_finite_original_target
         )
 
 
-def test_phase2_model_must_explicitly_return_macro_cycle_and_plans():
+def test_phase2_missing_noncore_fields_are_defaulted_without_losing_research():
     from test_daily_research import report
     from backend.macro.daily_research import validate_report
 
-    with pytest.raises(ValueError):
-        validate_report(
+    result = validate_report(
             report(),
             {
                 "asOf": NOW.isoformat(),
@@ -338,3 +337,6 @@ def test_phase2_model_must_explicitly_return_macro_cycle_and_plans():
             {},
             completed_at=NOW,
         )
+    assert result["executionStatus"] == "COMPLETED"
+    assert result["summary"] == report()["summary"]
+    assert result["actionablePlans"] == []

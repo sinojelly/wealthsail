@@ -107,15 +107,58 @@ def _plans(report):
         yield from (row for row in report.get(field, []) if isinstance(row, dict))
     for direction in report.get("valueDirections", []):
         if isinstance(direction, dict):
-            for field in ("plans", "quantitativeEvidence"):
+            for field in ("plans", "fundPlans", "quantitativeEvidence"):
                 yield from (
                     row for row in direction.get(field, []) if isinstance(row, dict)
                 )
+    for field in ("mentionedFunds",):
+        yield from (row for row in report.get(field, []) if isinstance(row, dict))
+    for field in ("researchTopics", "topicCatalog"):
+        for topic in report.get(field, []):
+            if isinstance(topic, dict):
+                for plans in ("plans", "fundPlans"):
+                    yield from (
+                        row for row in topic.get(plans, []) if isinstance(row, dict)
+                    )
     yield from (
         row
         for row in (report.get("quantitativeScan") or {}).get("items", [])
         if isinstance(row, dict)
     )
+
+
+def _reference_defaults(plan):
+    """Complete coordinate metadata only for an already resolved CNY identity."""
+    if plan.get("market") == "FUND_CN" and plan.get("subjectKind") in {"nav", "fund"}:
+        candidate = {"priceBasis": "UNIT_NAV", "unit": "CNY/份", **plan}
+        if _code(candidate):
+            plan.setdefault("priceBasis", "UNIT_NAV")
+            plan.setdefault("unit", "CNY/份")
+    return plan
+
+
+def fund_reference_contract(plan):
+    """Full deterministic plan plus one compact set of chart/price coordinates."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("tracks"), list):
+        return None
+    result = {key: deepcopy(value) for key, value in plan.items() if key != "actionableZones"}
+    selected = plan.get("selectedTrack", plan.get("track"))
+    tracks = result["tracks"]
+    priced = [
+        row for row in tracks
+        if row.get("entryZoneMin") is not None and row.get("entryZoneMax") is not None
+    ]
+    track = next((row for row in priced if row.get("track") == selected), None)
+    track = track or next((row for row in priced if row.get("priceState") == "READY"), None)
+    track = track or next(iter(priced), {})
+    result.update(
+        buyZone={"min": track.get("entryZoneMin"), "max": track.get("entryZoneMax")},
+        sellZone={"min": track.get("sellZoneMin", track.get("takeProfitT1")),
+                  "max": track.get("sellZoneMax", track.get("takeProfitT2"))},
+        stopLoss=track.get("stopLossPrice"),
+        targets=[track[key] for key in ("takeProfitT1", "takeProfitT2") if track.get(key) is not None],
+    )
+    return result
 
 
 def _histories(value):
@@ -330,24 +373,46 @@ def _cached_nav_plan(code, view, points, benchmark):
     return plan
 
 
-async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet=None, include_series=False):
-    """Update response-only CNY fund coordinates without provider I/O or DB writes."""
+async def refresh_report_fund_plans(
+    conn, report, now, *, histories=None, packet=None, include_series=False,
+    tenant_id=None, user_id=None,
+):
+    """Refresh every research reference, repairing public NAV for actor reads.
+
+    Worker callers remain local-only. An authenticated reader uses the existing
+    narrow public-history persistence RPC before calculating price coordinates;
+    research status and audit coverage never filter the underlying products.
+    """
     if not isinstance(report, dict):
         return report
     from backend.macro.industry_cycle import expire_report_industry_risks
 
     now = local(now)
     result = expire_report_industry_risks(report, now)
-    plans = [(plan, code) for plan in _plans(result) if (code := _code(plan))]
+    if tenant_id is not None and user_id is not None:
+        from backend.investment.research_fund_references import resolve_report_fund_references
+
+        result = await resolve_report_fund_references(conn, result, packet, now)
+    plans = [(plan, code) for plan in _plans(result) if (code := _code(_reference_defaults(plan)))]
     if not plans:
         return result
     codes = list(dict.fromkeys(code for _, code in plans))
+    prepared = None
+    if tenant_id is not None and user_id is not None:
+        from backend.funds.nav_history import ensure_nav_histories
+
+        prepared = await ensure_nav_histories(
+            conn, codes, now, tenant_id=tenant_id, user_id=user_id,
+            provider_budget=len(codes),
+        )
+        now = local(prepared["asOf"])
     candidates = {code: [] for code in codes}
     supplied = [
         *_histories(histories),
         *_histories((packet or {}).get("fundHistories", [])),
+        *_histories((prepared or {}).get("histories", [])),
     ]
-    for offset in range(0, len(codes), RESEARCH_SELECTION_LIMIT):
+    for offset in range(0, len(codes) if prepared is None else 0, RESEARCH_SELECTION_LIMIT):
         supplied.extend(
             [
                 row
@@ -364,17 +429,19 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
         view = select_history_view(code, code, "2y", candidates[code], now)
         points = _chart_points(view, candidates[code], now)
         enough = len(points) >= NAV_RESEARCH_MIN_SAMPLES
+        # The engine keeps short-window references separate from 120-sample
+        # historical anchors. Preserve its real NAV and calculable coordinates.
         plan = _cached_nav_plan(
             code,
             view,
-            points if enough else [],
+            points,
             (packet or {}).get("relativeStrengthBenchmark"),
         )
         state = (
             "UNAVAILABLE"
-            if not enough
+            if not points
             else "READY"
-            if view["state"] == "READY"
+            if enough and view["state"] == "READY"
             else "PARTIAL"
         )
         reason = (
@@ -403,12 +470,12 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
             historyQuality=state,
             historySampleCount=len(points),
             historyTargetSamples=NAV_RESEARCH_MAX_SAMPLES,
-            retrievedAt=view.get("retrievedAt") if enough else None,
+            retrievedAt=view.get("retrievedAt") if points else None,
             availableAt=next(
                 (
                     history.get("availableAt")
                     for history in candidates[code]
-                    if enough
+                    if points
                     and history.get("sourceUri") == view.get("sourceUri")
                     and history.get("retrievedAt") == view.get("retrievedAt")
                     and history.get("asOf", view.get("asOf")) == view.get("asOf")
@@ -424,9 +491,24 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
                 **({"reason": reason} if reason else {}),
             },
         )
+        if prepared:
+            plan["navSync"] = deepcopy(prepared.get("refresh", {}).get(code, {}))
+            confirmed = prepared.get("latestConfirmed", {}).get(code) or {}
+            try:
+                known_date = date.fromisoformat(str(confirmed.get("asOf"))[:10])
+                plan_date = date.fromisoformat(str(plan.get("asOf"))[:10])
+            except (TypeError, ValueError):
+                known_date = plan_date = None
+            if (confirmed.get("quality") != "ESTIMATED" and plan_date is not None
+                    and known_date is not None and plan_date < known_date <= now.date()):
+                state, reason = "PARTIAL", "NEWER_CONFIRMED_NAV_AVAILABLE"
+                plan["historyQuality"] = state
+                plan["priceRefresh"].update(state=state, reason=reason)
+                for track in plan.get("tracks", []):
+                    track.update(priceState="PARTIAL", entryReady=False, inBuyZone=False)
         if include_series:
             plan["series"] = {
-                "state": view["state"],
+                "state": state if state != "READY" else view["state"],
                 "fundCode": code,
                 "asOf": view.get("asOf"),
                 "unit": "CNY/份",
@@ -444,12 +526,13 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
         )
         identity = {
             key: deepcopy(original[key])
-            for key in ("subjectKind", "subjectId", "label", "unit")
+            for key in ("subjectKind", "subjectId", "label", "unit", "selectedTrack", "track")
             if key in original
         }
         cycle = deepcopy(original.get("industryCycle"))
         for key in _STALE:
             original.pop(key, None)
+        original.pop("actionableZones", None)
         updated = calculated.get(code)
         if updated is None:
             continue
@@ -484,6 +567,18 @@ async def refresh_report_fund_plans(conn, report, now, *, histories=None, packet
             minimumHistorySamples=NAV_RESEARCH_MIN_SAMPLES,
         )
     result = apply_entry_guards(result, packet or {}, now)
+    if include_series:
+        from backend.investment.opportunity_fund_prices import price_position
+
+        for original in _plans(result):
+            if _code(original) and isinstance(original.get("tracks"), list):
+                original["pricePosition"] = price_position(original, now)
+                original["confirmedNav"] = {
+                    "value": original["currentPrice"], "asOf": original.get("asOf"),
+                    "retrievedAt": original.get("retrievedAt"), "sourceUri": original.get("sourceUri"),
+                    "changePct": original.get("currentChangePct"), "quality": original.get("historyQuality"),
+                } if original.get("currentPrice") is not None else None
+                original["actionableZones"] = fund_reference_contract(original)
     if isinstance(result.get("quantitativeScan"), dict):
         from backend.investment.quantitative_scan import public_quantitative_scan
 

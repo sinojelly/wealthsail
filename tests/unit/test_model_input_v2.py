@@ -179,7 +179,8 @@ def test_prompt_uses_versioned_compact_view_and_five_sections():
     ):
         assert heading in prompt
     assert "topicCatalog每批最多64" in prompt
-    assert "总量最多10，旧冻结v2仍最多8" in prompt
+    assert "有足够真实线索时形成6至10个valueDirections" in prompt
+    assert "绝不是洞察或基金关联白名单" in prompt
     assert "上限与目标不作凑数要求" in prompt
     assert "原始Packet" in prompt and "服务器" in prompt
 

@@ -52,6 +52,20 @@ _SYNONYMS = (
     (r"低空|无人机|\beVTOL\b", ("通用航空", "低空", "军工")),
     (r"人形机器人|具身智能|机器人", ("机器人", "高端装备")),
 )
+# Search hints cover the global taxonomy, including industries omitted by a
+# particular run's collection/audit budget. They describe candidate products,
+# never certify their portfolio exposure.
+_INDUSTRY_HINTS = {
+    "SEMICONDUCTOR_AI": ("半导体", "芯片", "算力"),
+    "BANK": ("银行",), "BROKER": ("证券", "券商"),
+    "FINTECH": ("金融科技",), "ACTIVE_GROWTH": ("成长", "科技"),
+    "NONFERROUS": ("有色金属", "有色"), "DEFENCE": ("军工", "国防"),
+    "COMMUNICATION": ("通信", "光通信"), "INNOVATIVE_DRUG": ("创新药", "生物医药"),
+    "GOLD": ("黄金",), "GLOBAL_ENERGY": ("油气", "原油", "能源"),
+    "US_TECH": ("纳斯达克", "美国科技"), "ROBOTICS_MOBILITY": ("机器人", "智能驾驶"),
+    "RARE_EARTH_METALS": ("稀土", "有色"), "FINANCE_POLICY": ("银行", "证券"),
+    "HEALTHCARE_CLINICAL": ("医药", "创新药"), "BROAD": ("沪深300", "中证A500"),
+}
 _SPLIT = re.compile(
     r"[\s，,、。:：;；/()（）]+|国产替代|商业化|产业|行业|政策|新增|订单|需求|利好|受益|加速|增长|带动|推动"
 )
@@ -138,6 +152,10 @@ def terms(topic):
     explicit += texts(match.get("unresolvedClaims")) + texts(
         topic.get("industryClaims")
     )
+    industry_hints = [
+        word for code in texts(match.get("industryIds"))
+        for word in _INDUSTRY_HINTS.get(code, ())
+    ]
     hints = [
         keyword
         for code, pattern, keywords in _THEMES
@@ -147,7 +165,7 @@ def terms(topic):
     ]
     if re.search(r"芯片|半导体|SCI_TECH_CHIP", text, re.IGNORECASE):
         hints += ["芯片", "半导体"]
-    candidates = roots + explicit + hints + _SPLIT.split(str(topic.get("title") or ""))
+    candidates = roots + explicit + industry_hints + hints + _SPLIT.split(str(topic.get("title") or ""))
     return list(
         dict.fromkeys(
             word.strip()

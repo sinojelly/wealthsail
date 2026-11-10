@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.macro.daily_research import ResearchValidationError, validate_report
+from backend.macro.daily_research import ResearchValidationError, diagnose_report
 from backend.macro.research_acceptance_replay import run_offline_repair
 from backend.macro.research_frozen_bundle import read_frozen_bundle
 
@@ -45,7 +45,7 @@ async def test_exact_frozen_case_passes_full_strict_in_fixed_zero_ai_child():
     original = json.loads(frozen.raw)
     before = deepcopy((frozen.packet, frozen.source_checks, original))
     with pytest.raises(ResearchValidationError) as error:
-        validate_report(
+        diagnose_report(
             original,
             frozen.packet,
             frozen.source_checks,
@@ -95,7 +95,7 @@ async def test_exact_frozen_case_passes_full_strict_in_fixed_zero_ai_child():
     assert result["candidateRaw"] == expected
     # The public validator repeats risk merging, dual-track price guards,
     # scoring and reference closure at the exact original evidence clock.
-    assert result["formalReport"] == validate_report(
+    assert result["formalReport"] == diagnose_report(
         expected, frozen.packet, frozen.source_checks, completed_at=frozen.validated_at
     )
     assert (

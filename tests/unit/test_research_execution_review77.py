@@ -266,7 +266,7 @@ async def test_large_report_asgi_to_client_to_strict_core_keeps_verified_fund_ri
     """Offline sources and model output; strict business validation is real."""
     from backend import codex_runner
     from backend.macro.research_assurance import bind_execution
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from backend.macro.research_workload import measured_workload
     from tests.unit.test_research_cost_review75 import prepared, RUN, NOW
 
@@ -352,7 +352,7 @@ async def test_large_report_asgi_to_client_to_strict_core_keeps_verified_fund_ri
         NOW,
         transport_reason=result.execution_receipt_transport_reason,
     )
-    batch = evaluate_research_batch(
+    batch = diagnose_research_batch(
         result, packet, bound, research_id=RUN, validated_at=NOW
     )
     assert batch["strictPass"] and batch["autoPublishAllowed"]

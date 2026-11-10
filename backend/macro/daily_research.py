@@ -35,13 +35,13 @@ from backend.macro.industry_cycle import (
 from backend.macro.value_directions import (
     MAX_VALUE_DIRECTIONS,
     ValueDirectionProposal,
-    validate_value_directions,
+    diagnose_value_directions,
 )
 from backend.macro.research_topics import TopicProposal, direction_limit, is_v2
 from backend.macro.event_metadata import event_metadata, source_metadata
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-input-v24"
+PROMPT_VERSION = "daily-research-input-v25"
 MAX_REPORT_SOURCES = 24
 
 
@@ -209,8 +209,9 @@ _direction_schema["properties"]["industryCycle"] = {
 
 
 def _request_industry_scopes(packet):
-    """Derive new-request reference permissions from the validated frozen contract."""
+    """Expose global identities; the frozen subset only describes audit work."""
     from backend.macro.research_topics import frozen_manifest, is_targeted_research
+    from backend.macro.industry_contract import STANDARD_INDUSTRY_CODES
 
     manifest = frozen_manifest(packet)
     if manifest is None:
@@ -219,25 +220,19 @@ def _request_industry_scopes(packet):
         manifest["deferredScopes"] if is_targeted_research(packet) else []
     )
     return {
-        "allowedReviewIndustryIds": manifest["selectedScopes"] + observation_scopes,
+        "allowedReviewIndustryIds": sorted(STANDARD_INDUSTRY_CODES),
+        "freeIndustryLabelsAllowed": True,
         "observationScopes": observation_scopes,
     }
 
 
 def report_schema_for_packet(packet):
-    """Constrain new v3 direction references without changing historical schemas."""
-    from backend.macro.research_topics import is_targeted_research
+    """Discovery can name every global industry or a new free-form label.
 
-    schema = deepcopy(REPORT_SCHEMA)
-    if not is_targeted_research(packet):
-        return schema
-    scopes = _request_industry_scopes(packet)["allowedReviewIndustryIds"]
-    field = schema["$defs"]["ValueDirectionProposal"]["properties"]["reviewIndustryIds"]
-    if scopes:
-        field["items"]["enum"] = scopes
-    else:
-        field["maxItems"] = 0
-    return schema
+    The frozen search budget describes extra audit work, never permission to
+    produce an insight. Local content defects are repaired after generation.
+    """
+    return deepcopy(REPORT_SCHEMA)
 
 
 _TZ = ZoneInfo("Asia/Shanghai")
@@ -1137,11 +1132,6 @@ def apply_entry_guards(value, packet, now):
             *direction.get("quantitativeEvidence", []),
         ]:
             guard(row)
-        direction["plans"] = [
-            row
-            for row in direction.get("plans", [])
-            if not row.get("subscriptionRestricted") or row.get("inSellZone") is True
-        ]
         if direction.get("signal") in {"LEFT_VALUE", "RIGHT_TREND"} and not any(
             not row.get("entryBlocked")
             and (row.get("selectedTrack") or row.get("track")) == direction["signal"]
@@ -1153,12 +1143,8 @@ def apply_entry_guards(value, packet, now):
             for row in direction["plans"]
         ):
             direction["signal"] = "WATCH"
-    if "actionablePlans" in result:
-        result["actionablePlans"] = [
-            row
-            for row in result["actionablePlans"]
-            if not row.get("subscriptionRestricted") or row.get("inSellZone") is True
-        ]
+    # Subscription and entry guards annotate a purchase constraint. They must
+    # never erase the independent reference prices, exit advice or chart.
     return result
 
 
@@ -1883,10 +1869,18 @@ def build_prompt(packet):
 
 
 def validate_report(raw, packet, source_checks, *, completed_at, research_id=None):
-    """Strict compatibility entry: every original publication rule still applies."""
-    return _validate_report_core(
+    """Publish parsed research after local repair, preserving its healthy items."""
+    from backend.macro.research_sanitize import sanitize_report
+
+    return sanitize_report(
         raw, packet, source_checks, completed_at=completed_at, research_id=research_id
     )
+
+
+def diagnose_report(raw, packet, source_checks, *, completed_at, research_id=None):
+    """Legacy strict diagnostics only; never a publication or model constraint."""
+    return _validate_report_core(raw, packet, source_checks,
+        completed_at=completed_at, research_id=research_id)
 
 
 def _validate_report_core(
@@ -2101,7 +2095,7 @@ def _validate_report_core(
         }
         for review in industry_reviews:
             review["searchExecutionVerified"] = review["industry"] in execution_scopes
-    value_directions = validate_value_directions(
+    value_directions = diagnose_value_directions(
         report["valueDirections"],
         packet,
         completed_at,

@@ -987,6 +987,12 @@ def _valid_not_found_query(check):
     return sum(char.isalnum() for char in residual) >= 2
 
 
+def industry_audit_status(industry_ids, audit_completed_scopes=None):
+    """Audit completeness annotates research; it never vetoes a fund reference."""
+    scopes = set(industry_ids or [])
+    return "AUDITED" if scopes and scopes <= set(audit_completed_scopes or []) else "UNAUDITED_SCOPE"
+
+
 def normalize_industry_cycle(
     raw,
     *,

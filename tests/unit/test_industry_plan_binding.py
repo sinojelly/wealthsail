@@ -4,7 +4,6 @@ from copy import deepcopy
 
 import pytest
 
-from backend.macro.daily_research import ResearchValidationError
 from backend.macro.industry_cycle import normalize_industry_cycle
 from backend.macro.value_directions import validate_value_directions
 from test_industry_cycle import cycle
@@ -183,48 +182,43 @@ def test_anchor_sector_wins_over_conflicting_same_code_scan_row():
     assert actual["plans"][0]["industryCycle"]["riskFlags"] == []
 
 
-def test_declared_unknown_review_has_its_own_closed_error():
+def test_declared_unknown_review_keeps_original_and_maps_observation_to_broad():
     public = metals_packet("NONFERROUS")
-    with pytest.raises(ResearchValidationError) as caught:
-        validate(
+    actual = validate(
             metals_direction(public, reviewIndustryIds=["model-invented-sector"]),
             public,
             [review("NONFERROUS")],
         )
-    assert caught.value.rule_id == "DIRECTION_DECLARED_INDUSTRY_UNKNOWN"
-    assert caught.value.item_index == 0
-    assert caught.value.missing_industry_codes is None
+    assert actual["plans"]
+    assert "BROAD" in actual["reviewIndustryIds"]
+    assert actual["originalIndustryIds"] == ["model-invented-sector"]
 
 
-def test_missing_server_sectors_are_sorted_and_survive_direction_wrapper():
+def test_unreviewed_server_sectors_are_attached_without_deleting_fund_plans():
     public = metals_packet("NONFERROUS", "RARE_EARTH")
     rows = [
         direction(key="first", plans=[], signal="WATCH", reviewIndustryIds=["ROBOT"]),
         metals_direction(public, key="second"),
     ]
-    with pytest.raises(ResearchValidationError) as caught:
-        validate_value_directions(
+    actual = validate_value_directions(
             rows, public, NOW, {"s1": "source:one"}, industry_reviews=[review("ROBOT")]
         )
-    assert caught.value.rule_id == "DIRECTION_PLAN_SECTOR_UNREVIEWED"
-    assert caught.value.item_index == 1
-    assert caught.value.missing_industry_codes == ["NONFERROUS", "RARE_EARTH"]
+    assert actual[1]["reviewIndustryIds"] == ["NONFERROUS", "RARE_EARTH"]
+    assert actual[1]["plans"]
+    assert actual[1]["auditStatus"] == "UNAUDITED_SCOPE"
 
 
-def test_required_fund_without_server_industry_cannot_borrow_declared_robot_review():
+def test_fund_without_server_industry_keeps_plan_without_borrowing_robot_risk():
     public = packet()
     public["industryCycleResearch"] = {"required": True}
     raw = direction(
         industryCycle=cycle(stage="UNKNOWN", sourceIds=[], evidence=[]),
         reviewIndustryIds=["ROBOT"],
     )
-    with pytest.raises(ResearchValidationError) as caught:
-        validate(raw, public, [review("ROBOT")])
-    assert caught.value.reason_code == "FUND_PLAN_INVALID"
-    assert str(caught.value) == "selected fund has no verified server industry"
-    assert caught.value.rule_id is None
-    assert caught.value.item_index == 0
-    assert caught.value.missing_industry_codes is None
+    actual = validate(raw, public, [review("ROBOT")])
+    assert actual["plans"]
+    assert actual["plans"][0]["industryCycle"]["riskFlags"] == []
+    assert actual["auditStatus"] == "UNAUDITED_SCOPE"
 
 
 def test_required_broad_index_does_not_need_a_fund_industry_identity():

@@ -1,4 +1,8 @@
-"""Bounded deterministic quarantine never invents reviews or weakens risk."""
+"""Historical strict repair diagnostics never invent facts or weaken risk.
+
+Daily publication uses sanitize-and-keep; this suite preserves the independent
+legacy audit contract and its complete evidence/protection assertions.
+"""
 
 from copy import deepcopy
 from datetime import timedelta
@@ -6,7 +10,7 @@ from importlib import import_module
 
 import pytest
 
-from backend.macro.daily_research import validate_report
+from backend.macro.daily_research import diagnose_report
 from tests.unit.test_daily_research import NOW
 from tests.unit.test_industrial_metals_research_regression import case
 
@@ -80,7 +84,7 @@ def test_orphan_watch_is_quarantined_and_full_strict_prices_risk_and_time_are_pr
     original = deepcopy((packet, raw, checks))
     baseline = deepcopy(raw)
     baseline["valueDirections"].pop()
-    expected = validate_report(baseline, packet, checks, completed_at=NOW)
+    expected = diagnose_report(baseline, packet, checks, completed_at=NOW)
     result = repair(raw, packet, checks)
     assert result["decision"] == "REPAIRED" and result["strictPass"] is True
     assert result["autoPublishAllowed"] and result["historicalPublishAllowed"]
@@ -397,7 +401,7 @@ def test_benign_fragment_does_not_prove_a_whole_dependent_event_nonnegative(
     )
 
 
-def test_new_model_contract_requires_header_provenance_and_calendar_importance():
+def test_model_contract_keeps_provenance_and_calendar_importance_without_audit_whitelist():
     from backend.macro.daily_research import REPORT_SCHEMA, build_prompt
 
     packet, _, _ = fixture()
@@ -409,7 +413,8 @@ def test_new_model_contract_requires_header_provenance_and_calendar_importance()
     }
     assert "importance" in REPORT_SCHEMA["$defs"]["_Upcoming"]["properties"]
     prompt = build_prompt(packet)
-    assert "narrativeDirectionIds" in prompt and "不猜测相邻行业" in prompt
+    assert "narrativeDirectionIds" in prompt
+    assert "绝不是洞察或基金关联白名单" in prompt
 
 
 def test_compact_repair_summary_never_copies_model_text_or_private_candidates():

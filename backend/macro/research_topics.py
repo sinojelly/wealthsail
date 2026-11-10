@@ -246,6 +246,24 @@ def direction_limit(packet):
     return manifest["budget"]["maxFormalDirections"] if manifest is not None else 8
 
 
+def global_industry_identity(value):
+    """Resolve a global label without treating this run's audit as a whitelist.
+
+    Unknown emerging industries remain observable under BROAD. Callers retain
+    the original label so this fallback is never mistaken for sector exposure.
+    """
+    if not isinstance(value, str):
+        return "BROAD", "UNCLASSIFIED_OBSERVATION"
+    value = value.strip()
+    code = value.upper() if value.isascii() else value
+    if code in STANDARD_INDUSTRY_CODES:
+        return code, "GLOBAL_CODE"
+    exact = V2_STRICT_ALIASES.get(value.casefold()) or STRICT_ALIASES.get(value.casefold())
+    if exact in STANDARD_INDUSTRY_CODES:
+        return exact, "EXACT_ALIAS"
+    return "BROAD", "UNCLASSIFIED_OBSERVATION"
+
+
 def topic_match_version(packet):
     """Frozen packets choose their original identity policy, never today's default."""
     _discovery_contract(packet)

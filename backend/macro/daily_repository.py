@@ -219,6 +219,8 @@ async def read_daily_research(
     schedule_mode="DAILY",
     schedule_time="07:00",
     include_failure_industry_codes=False,
+    tenant_id=None,
+    user_id=None,
 ):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
     from backend.investment.live_fund_plans import refresh_report_fund_plans
@@ -331,7 +333,9 @@ async def read_daily_research(
     if report is not None:
         with trace_stage("context.live_nav_prices"):
             report = await refresh_report_fund_plans(
-                conn, report, stamp, histories=histories, packet=packet
+                conn, report, stamp, histories=histories, packet=packet,
+                include_series=tenant_id is not None and user_id is not None,
+                tenant_id=tenant_id, user_id=user_id,
             )
             from backend.investment.opportunity_scoring import rank_report
 

@@ -1,4 +1,4 @@
-"""Offline shape regression, not a substitute for the ef47f9fd frozen export."""
+"""Historical strict shape diagnostics; not a substitute for the ef47f9fd export."""
 
 from copy import deepcopy
 from datetime import timedelta
@@ -8,7 +8,7 @@ import pytest
 
 from backend.integrations.research_execution import ExecutionObserver
 from backend.macro.research_assurance import bind_execution
-from backend.macro.research_batch import evaluate_research_batch
+from backend.macro.research_batch import diagnose_research_batch, evaluate_research_batch
 from tests.unit.test_daily_research import NOW, report
 from tests.unit.test_industry_allocation_policy_v2 import freeze_discovery_packet
 from tests.unit.test_industrial_metals_research_regression import case
@@ -115,10 +115,15 @@ def evaluate(packet, raw, checks):
     return evaluate_research_batch(raw, packet, checks, research_id=RUN, validated_at=NOW)
 
 
+def diagnose(packet, raw, checks):
+    """Preserve the historical strict policy without changing shared evaluate."""
+    return diagnose_research_batch(raw, packet, checks, research_id=RUN, validated_at=NOW)
+
+
 def test_64_topics_zero_formal_16_unregistered_refs_preserve_six_news_three_dates():
     packet, raw, checks = combined_case()
     before = deepcopy((packet, raw, checks))
-    result = evaluate(packet, raw, checks)
+    result = diagnose(packet, raw, checks)
     assert result["strictPass"] is True
     retained = result["strictFormalReport"]
     assert retained["valueDirections"] == []
@@ -149,7 +154,7 @@ def test_unknown_news_references_cannot_bypass_a_funds_missing_industry_audit():
     _, formal, _ = case()
     raw["valueDirections"] = formal["valueDirections"]
     raw["industryCycleReviews"] = [row for row in raw["industryCycleReviews"] if row["industry"] != "NONFERROUS"]
-    result = evaluate(packet, raw, checks)
+    result = diagnose(packet, raw, checks)
     assert not any(row["investmentEligible"] for row in result["registry"]["items"])
     assert not (result.get("formalReport") or {}).get("valueDirections")
 
@@ -161,7 +166,7 @@ def test_normalized_formal_dependency_keeps_high_risk_quarantine_protection():
     key = raw["valueDirections"][0]["key"]
     raw["events"][0]["relatedFormalDirectionKeys"] = [key.upper().replace("-", "_")]
     raw["industryCycleReviews"] = [row for row in raw["industryCycleReviews"] if row["industry"] != "NONFERROUS"]
-    result = evaluate(packet, raw, checks)
+    result = diagnose(packet, raw, checks)
     assert not result["autoPublishAllowed"]
     assert any(
         item["itemType"] == "EVENT" and item["itemIndex"] == 0
@@ -177,7 +182,7 @@ def test_accepted_sources_do_not_become_reliable_topic_evidence(untrusted):
         if isinstance(row, dict) and row.get("verification"):
             row["verification"] = untrusted
             row["quoteMatched"] = False
-    result = evaluate(packet, raw, checks)
+    result = diagnose(packet, raw, checks)
     assert result["registry"]["coverage"]["evidenceBackedTopicCount"] == 0
     assert result["registry"]["coverage"]["qualifiedFormalDirectionCount"] == 0
     assert result["registry"]["coverage"]["researchDeliveryStatus"] == "OBSERVATION_READ_ONLY"
@@ -188,7 +193,7 @@ def test_invalid_fund_does_not_cancel_independently_validated_news_delivery():
     _, formal, _ = case()
     raw["valueDirections"] = formal["valueDirections"]
     raw["industryCycleReviews"] = [row for row in raw["industryCycleReviews"] if row["industry"] != "NONFERROUS"]
-    result = evaluate(packet, raw, checks)
+    result = diagnose(packet, raw, checks)
     assert result["registry"]["coverage"]["researchDeliveryStatus"] == "VALIDATED_READ_ONLY"
     assert result["registry"]["coverage"]["qualifiedFormalDirectionCount"] == 0
     assert result["registry"]["coverage"]["investmentQualificationStatus"] == "BLOCKED"
@@ -196,5 +201,5 @@ def test_invalid_fund_does_not_cancel_independently_validated_news_delivery():
 
 def test_empty_or_unsafe_output_cannot_claim_economic_research_delivered():
     packet, _, checks = combined_case()
-    result = evaluate(packet, {}, checks)
+    result = diagnose(packet, {}, checks)
     assert result["registry"]["coverage"]["researchDeliveryStatus"] == "UNAVAILABLE"

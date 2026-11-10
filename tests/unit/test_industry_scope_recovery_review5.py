@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pytest
 
-from backend.macro import daily_research
+from backend.macro import daily_research, research_sanitize
 from test_daily_research import NOW
 from test_industry_history_review2 import recovery_history, risk_history
 from test_industry_risk_persistence import validate_with_history
@@ -52,8 +52,8 @@ def test_current_direction_uses_industry_applicable_recovery_without_faking_revi
     monkeypatch, scope
 ):
     monkeypatch.setattr(
-        daily_research,
-        "validate_value_directions",
+        research_sanitize,
+        "sanitize_value_directions",
         lambda *args, **kwargs: [
             {
                 "key": "company-facts",

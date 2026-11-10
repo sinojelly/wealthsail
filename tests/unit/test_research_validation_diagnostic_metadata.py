@@ -4,8 +4,8 @@ from copy import deepcopy
 
 import pytest
 
-from backend.macro.daily_research import ResearchValidationError, validate_report
-from backend.macro.value_directions import validate_value_directions
+from backend.macro.daily_research import ResearchValidationError, diagnose_report as validate_report
+from backend.macro.value_directions import diagnose_value_directions as validate_value_directions
 from backend.macro import industry_cycle
 from test_daily_research import NOW, report
 from test_industry_cycle import checks

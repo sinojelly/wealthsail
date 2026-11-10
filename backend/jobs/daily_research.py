@@ -28,6 +28,8 @@ from backend.config import get_settings
 from backend.dependencies import now_shanghai
 from backend.integrations.codex_research import (
     CodexOutputError,
+    ResearchResult,
+    decode_report,
     preflight_codex,
     run_codex_research,
 )
@@ -1153,6 +1155,29 @@ async def _execute_daily_research(
                     capture_model_result(value)
                     confirmed_model_exit(getattr(value, "research_execution_state", None))
                     return value
+            except CodexOutputError as exc:
+                # Older decoders rejected valid arrays, scalars or duplicate
+                # keys after a successful turn. Confirmed exit plus saved JSON
+                # enters normal acceptance without another provider call.
+                confirmed_model_exit(getattr(exc, "research_execution_state", None))
+                if not remote_codex:
+                    confirmed_model_exit(lifecycle.snapshot())
+                captured = getattr(exc, "raw_output", None)
+                if getattr(exc, "inference_succeeded", False) is not True or not model_exit_confirmed or captured is None:
+                    raise
+                try:
+                    decoded = decode_report(captured)
+                except CodexOutputError:
+                    raise exc
+                value = ResearchResult(decoded,
+                    usage=getattr(exc, "usage", None), model=getattr(exc, "model", selected_model),
+                    execution_receipt=getattr(exc, "execution_receipt", None),
+                    execution_receipt_transport_reason=getattr(exc, "execution_receipt_transport_reason", None),
+                    execution_statistics=getattr(exc, "execution_statistics", None),
+                    execution_progress=getattr(exc, "execution_progress", None))
+                value.research_execution_state = execution_state
+                capture_model_result(value)
+                return value
             except TimeoutError as exc:
                 if timer.expired():
                     exc.timeout_origin = "WORKER_OUTER_TIMEOUT"

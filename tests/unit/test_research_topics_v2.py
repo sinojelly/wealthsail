@@ -1,4 +1,4 @@
-"""Discovery size is independent of formal-plan and industry-review budgets."""
+"""Historical strict topic diagnostics, separate from full-report publication."""
 
 from copy import deepcopy
 from importlib import import_module
@@ -23,13 +23,13 @@ def topics():
 
 def evaluate_with_execution(raw, packet, checks, **kwargs):
     """Attach offline protocol evidence to the caller's already-frozen packet."""
-    from backend.macro.research_batch import evaluate_research_batch
+    from backend.macro.research_batch import diagnose_research_batch
     from tests.unit.test_research_cost_review75 import executed_checks
 
     checks = executed_checks(
         packet, checks, run_id=kwargs["research_id"], at=kwargs["validated_at"]
     )
-    return evaluate_research_batch(raw, packet, checks, **kwargs)
+    return diagnose_research_batch(raw, packet, checks, **kwargs)
 
 
 def topic(index, industry="NONFERROUS"):
@@ -182,15 +182,15 @@ def test_deferred_topic_is_pending_not_failed_or_silently_omitted():
 
 
 def test_v1_coverage_gate_remains_strict_while_v2_tracks_missing_batch_reviews():
-    from backend.macro.daily_research import ResearchValidationError, validate_report
+    from backend.macro.daily_research import ResearchValidationError, diagnose_report
 
     packet, raw, checks = case()
     packet["discoveryUniverse"].append({"discoverySector": "BANK"})
     with pytest.raises(ResearchValidationError):
-        validate_report(raw, packet, checks, completed_at=NOW)
+        diagnose_report(raw, packet, checks, completed_at=NOW)
     frozen = freeze_v2(packet, NOW)
     from tests.unit.test_research_cost_review75 import executed_checks
-    assert validate_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW, research_id=RUN)
+    assert diagnose_report(raw, frozen, executed_checks(frozen, checks), completed_at=NOW, research_id=RUN)
 
 
 def test_one_bad_topic_does_not_destroy_independent_formal_projection():
@@ -359,7 +359,7 @@ def test_frozen_manifest_cannot_be_reused_with_a_different_packet_clock():
 
 
 def test_v2_model_cannot_exchange_frozen_scope_budget_for_an_unallocated_review():
-    from backend.macro.daily_research import ResearchValidationError, validate_report
+    from backend.macro.daily_research import ResearchValidationError, diagnose_report
 
     packet, raw, checks = case()
     frozen = freeze_v2(packet, NOW)
@@ -367,7 +367,7 @@ def test_v2_model_cannot_exchange_frozen_scope_budget_for_an_unallocated_review(
         {**deepcopy(raw["industryCycleReviews"][-1]), "industry": "BROKER"}
     )
     with pytest.raises(ResearchValidationError) as rejected:
-        validate_report(raw, frozen, checks, completed_at=NOW)
+        diagnose_report(raw, frozen, checks, completed_at=NOW)
     assert rejected.value.rule_id == "INDUSTRY_REVIEW_BUDGET_EXCEEDED"
 
 

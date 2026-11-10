@@ -1,12 +1,12 @@
-"""Independent malformed components retain explicit read-only qualifications."""
+"""Historical strict diagnostics retain explicit read-only qualifications."""
 
 from copy import deepcopy
 
 import pytest
 
 from backend.macro.alpha_research import _program_plan
-from backend.macro.daily_research import validate_report
-from backend.macro.research_batch import evaluate_research_batch
+from backend.macro.daily_research import diagnose_report
+from backend.macro.research_batch import diagnose_research_batch
 from tests.unit.test_research_cost_review75 import NOW, RUN, executed_checks, prepared
 
 
@@ -25,7 +25,7 @@ def test_bad_plan_and_scalar_topic_keep_explicit_observation_qualification():
     raw["topicCatalog"] = [1]
     before = deepcopy((packet, raw, checks))
 
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
 
@@ -63,10 +63,10 @@ def test_plain_program_price_value_error_downgrades_fund_and_keeps_report():
         _program_plan(anchor, proposal["track"], NOW, require_theme=False)
     assert type(error.value) is ValueError
 
-    report = validate_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
+    report = diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
     assert_observation(report["valueDirections"][0])
     assert report["summary"] == raw["summary"]
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["strictPass"] is True
@@ -102,7 +102,7 @@ def test_downgrade_keeps_actual_fund_sector_and_its_confirmed_layoff_risk(failur
     )
     layoffs.update(status="FOUND", sourceIds=["s2"], summary=source["quote"])
     checks = executed_checks(packet, checks)
-    baseline = validate_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
+    baseline = diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
     baseline_direction = baseline["valueDirections"][0]
     assert "NONFERROUS" in baseline_direction["reviewIndustryIds"]
     assert (
@@ -118,7 +118,7 @@ def test_downgrade_keeps_actual_fund_sector_and_its_confirmed_layoff_risk(failur
     else:
         direction["plans"][0]["market"] = []
     before = deepcopy((packet, raw, checks))
-    report = validate_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
+    report = diagnose_report(raw, packet, checks, completed_at=NOW, research_id=RUN)
     downgraded = report["valueDirections"][0]
     assert_observation(downgraded)
     assert "NONFERROUS" in downgraded["reviewIndustryIds"]
@@ -128,7 +128,7 @@ def test_downgrade_keeps_actual_fund_sector_and_its_confirmed_layoff_risk(failur
         row["kind"] == "LAYOFFS_CLOSURES" and row["status"] == "FOUND"
         for row in cycle["riskChecks"]
     )
-    result = evaluate_research_batch(
+    result = diagnose_research_batch(
         raw, packet, checks, research_id=RUN, validated_at=NOW
     )
     assert result["autoPublishAllowed"] is True
