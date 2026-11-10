@@ -416,7 +416,9 @@ it("separates a timed-out current execution from the previous valid report and k
     screen.getByRole("region", { name: "服务器代表池基金观察" }),
   ).toBeVisible();
   await userEvent.click(screen.getByText("执行与报告状态"));
-  const diagnosis = screen.getByRole("group", { name: "研究失败诊断" });
+  const diagnosis = within(
+    screen.getByText("执行与报告状态").closest("details")!,
+  ).getByRole("group", { name: "研究失败诊断" });
   expect(diagnosis).toHaveTextContent("执行超时");
   expect(diagnosis).toHaveTextContent("原因代码：TIMEOUT");
   expect(screen.getByText(`报告ID：${previousId} · 只读`)).toBeInTheDocument();

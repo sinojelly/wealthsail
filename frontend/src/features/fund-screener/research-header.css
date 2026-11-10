@@ -113,6 +113,16 @@
 
 .op-debug-refresh .op-research-request-time {
   display: block;
+  overflow-wrap: anywhere;
+}
+
+.op-debug-refresh .op-research-manual-history > summary {
+  color: var(--op-teal);
+  cursor: pointer;
+}
+
+.op-debug-refresh .op-research-manual-history > .op-research-request-time {
+  margin-top: 8px;
 }
 
 .op-daily-observation .op-report-plan-target {

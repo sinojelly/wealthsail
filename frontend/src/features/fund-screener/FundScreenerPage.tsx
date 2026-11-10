@@ -414,7 +414,12 @@ function ResearchWorkspace({ subject }: { subject: string }) {
             actionData={actionData}
           />
         )}
-        renderResearchRefresh={() => <DailyResearchRefresh actor={subject} />}
+        renderResearchRefresh={(currentResearch) => (
+          <DailyResearchRefresh
+            actor={subject}
+            currentResearch={currentResearch}
+          />
+        )}
         renderStudyTracking={() => (
           <StudyTracking
             actor={subject}

@@ -1,8 +1,10 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import { renderWithSession } from "../../test/render-with-session";
 import * as api from "../../api/daily-research-debug";
+import type { DailyResearch, OpportunityContext } from "../../api/investment";
+import MacroContextStrip from "./components/MacroContextStrip";
 
 vi.mock("../../api/daily-research-debug", () => ({
   getResearchRefresh: vi.fn(),
@@ -32,6 +34,205 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.useRealTimers());
+
+const latestResearch = (
+  overrides: Partial<DailyResearch> = {},
+): DailyResearch => ({
+  methodVersion: "daily-research-v1",
+  state: "FAILED",
+  runMode: "SCHEDULED",
+  runId: "ae71f283-b0db-46dc-a072-229714627476",
+  scheduledFor: "2026-11-09T23:00:00Z",
+  startedAt: "2026-11-09T23:01:08Z",
+  completedAt: "2026-11-09T23:07:46Z",
+  pipeline: {
+    id: "44eb1d69-fb22-46ad-8a89-1ac17bd02a9f",
+    state: "FAILED",
+    stage: "VERIFYING_OUTPUT",
+    startedAt: "2026-11-09T23:00:00Z",
+    finishedAt: "2026-11-09T23:07:46Z",
+    researchRunId: "ae71f283-b0db-46dc-a072-229714627476",
+  },
+  asOf: null,
+  nextRunAt: null,
+  report: null,
+  failureStage: "REPORT_VALIDATION",
+  failureReasonCode: "DIRECTION_VALIDATION_FAILED",
+  failureRuleId: "DIRECTION_DECLARED_INDUSTRY_UNKNOWN",
+  failureItemIndex: 3,
+  ...overrides,
+});
+
+it("separates an old manual timeout from the latest scheduled execution and its diagnosis", async () => {
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: {
+      ...request("UNCERTAIN"),
+      id: "069dca1f-7ceb-4e71-b0ac-af4ddb42f7a2",
+      requestMode: "MANUAL",
+      requestedAt: "2026-11-06T15:12:59Z",
+      startedAt: "2026-11-06T15:13:00Z",
+      completedAt: "2026-11-06T15:29:23Z",
+      reportRunId: "c9ac567a-63e4-4b90-b405-87ffdd81ee10",
+      errorClass: "TimeoutError",
+      failureStage: "MODEL_EXECUTION",
+      failureReasonCode: "TIMEOUT",
+    } as never,
+  });
+  renderWithSession(
+    <MacroContextStrip
+      data={
+        {
+          state: "READY",
+          items: [],
+          dailyResearch: latestResearch(),
+        } as OpportunityContext
+      }
+      error={false}
+      renderResearchRefresh={(currentResearch) => (
+        <DailyResearchRefresh
+          actor="owner-a"
+          currentResearch={currentResearch}
+        />
+      )}
+    />,
+  );
+  const history = (await screen.findByText(/最近手动请求（历史）/)).closest(
+    "details",
+  )!;
+  expect(history).not.toHaveAttribute("open");
+  expect(screen.getByText(/执行结果待确认.*TimeoutError/)).not.toBeVisible();
+  expect(
+    screen.getByText(/执行来源：定时自动.*执行开始：2026年11月10日 07:00/),
+  ).toBeVisible();
+  expect(screen.queryByText(/^本次请求：/)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("执行与调度详情"));
+  const execution = screen.getByText("执行与调度详情").closest("details")!;
+  expect(
+    within(execution).getByText("原因代码：DIRECTION_VALIDATION_FAILED"),
+  ).toBeVisible();
+  expect(
+    within(execution).getByText(
+      "研究执行ID：ae71f283-b0db-46dc-a072-229714627476",
+    ),
+  ).toBeVisible();
+  expect(
+    within(execution).getByText("失败原因：价值方向声明了未知行业"),
+  ).toBeVisible();
+  expect(
+    within(execution).getByText("失败条目：数组索引 3（从0开始）"),
+  ).toBeVisible();
+  expect(
+    within(execution).getByText(/结束：2026年11月10日 07:07/),
+  ).toBeVisible();
+  expect(
+    within(execution).queryByText(/TIMEOUT|c9ac567a/),
+  ).not.toBeInTheDocument();
+  await userEvent.click(within(history).getByText(/最近手动请求（历史）/));
+  expect(
+    within(history).getByText(/提交时间：2026年11月6日 23:12/),
+  ).toBeVisible();
+  expect(
+    within(history).getByText("请求ID：069dca1f-7ceb-4e71-b0ac-af4ddb42f7a2"),
+  ).toBeVisible();
+  expect(
+    within(history).getByText(
+      /开始：2026年11月6日 23:13.*结束：2026年11月6日 23:29/,
+    ),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "手动启动研究" })).toBeEnabled();
+});
+
+it("keeps the latest manual failure visible when it belongs to the current execution", async () => {
+  const runId = "a1111111-1111-4111-8111-111111111111";
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: {
+      ...request("UNCERTAIN"),
+      requestMode: "MANUAL",
+      requestedAt: "2026-11-09T23:01:00Z",
+      startedAt: "2026-11-09T23:01:08Z",
+      completedAt: "2026-11-09T23:07:46Z",
+      reportRunId: runId,
+      errorClass: "TimeoutError",
+    } as never,
+  });
+  renderWithSession(
+    <DailyResearchRefresh
+      actor="owner-a"
+      currentResearch={latestResearch({
+        runMode: "MANUAL",
+        runId,
+        pipeline: null,
+      })}
+    />,
+  );
+  expect(await screen.findByText(/执行结果待确认.*TimeoutError/)).toBeVisible();
+  expect(screen.queryByText(/最近手动请求（历史）/)).not.toBeInTheDocument();
+  expect(screen.getByText(/提交时间：2026年11月10日 07:01/)).toBeVisible();
+  expect(screen.getByText("请求ID：debug-1")).toBeVisible();
+});
+
+it.each(["QUEUED", "UNCERTAIN"])(
+  "keeps an unfinished %s request visible even when a newer execution is known",
+  async (status) => {
+    const unfinished = {
+      ...request(status),
+      requestedAt: "2026-11-06T15:12:59Z",
+      startedAt: null,
+      completedAt: null,
+    };
+    vi.mocked(api.getResearchRefresh).mockResolvedValue({
+      enabled: true,
+      request: unfinished as never,
+    });
+    vi.mocked(api.getResearchRefreshStatus).mockResolvedValue(
+      unfinished as never,
+    );
+    renderWithSession(
+      <DailyResearchRefresh
+        actor="owner-a"
+        currentResearch={latestResearch()}
+      />,
+    );
+    expect(await screen.findByLabelText("最近手动请求身份")).toBeVisible();
+    expect(screen.queryByText(/最近手动请求（历史）/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "手动启动研究" })).toBeDisabled();
+  },
+);
+
+it.each([null, "invalid-time"])(
+  "does not hide a terminal request behind a new pipeline with unknown start %s",
+  async (startedAt) => {
+    vi.mocked(api.getResearchRefresh).mockResolvedValue({
+      enabled: true,
+      request: {
+        ...request("UNCERTAIN"),
+        requestedAt: "2026-11-06T15:12:59Z",
+        completedAt: "2026-11-06T15:29:23Z",
+        errorClass: "TimeoutError",
+      } as never,
+    });
+    renderWithSession(
+      <DailyResearchRefresh
+        actor="owner-a"
+        currentResearch={latestResearch({
+          pipeline: {
+            id: "new-pipeline-awaiting-model",
+            state: "RUNNING",
+            stage: "COLLECTING",
+            researchRunId: null,
+            startedAt,
+          },
+        })}
+      />,
+    );
+    expect(
+      await screen.findByText(/执行结果待确认.*TimeoutError/),
+    ).toBeVisible();
+    expect(screen.queryByText(/最近手动请求（历史）/)).not.toBeInTheDocument();
+  },
+);
 it("only explicitly starts collection and one model analysis, disabling an active request", async () => {
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
   const button = await screen.findByRole("button", { name: "手动启动研究" });

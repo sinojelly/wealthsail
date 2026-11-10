@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import type {
   Direction,
+  DailyResearch,
   OpportunityContext,
   MacroEvent,
   SellRiskAlert,
@@ -10,6 +11,7 @@ import type {
 } from "../../../api/investment";
 import { sourceHref, timeLabel, monthLabel } from "../macro-display";
 import DailyResearchReport, {
+  DailyResearchFailureDiagnosis,
   DailyResearchStatus,
 } from "./DailyResearchReport";
 import MacroEvidencePanel from "./MacroEvidencePanel";
@@ -259,7 +261,7 @@ export default function MacroContextStrip({
     sellRiskAlerts: readonly SellRiskAlert[],
     actionData?: SellRiskData,
   ) => ReactNode;
-  renderResearchRefresh?: () => ReactNode;
+  renderResearchRefresh?: (daily?: DailyResearch | null) => ReactNode;
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
   historicalPreview?: HistoricalResearchSlots;
@@ -404,6 +406,23 @@ export default function MacroContextStrip({
             </p>
           )
         )}
+        {daily && !historicalPreview && (
+          <p className="op-observation-meta">
+            执行来源：
+            {daily.runMode
+              ? {
+                  SCHEDULED: "定时自动",
+                  MANUAL: "手动启动",
+                  DEBUG: "手动调试",
+                }[daily.runMode]
+              : "未记录"}{" "}
+            · 执行开始：
+            {timeLabel(
+              daily.pipeline ? daily.pipeline.startedAt : daily.startedAt,
+            )}{" "}
+            北京时间
+          </p>
+        )}
         {!historicalPreview && (
           <details className="op-execution-disclosure">
             <summary>执行与调度详情</summary>
@@ -425,6 +444,20 @@ export default function MacroContextStrip({
                 </>
               )}
             </p>
+            {daily && (
+              <p className="op-observation-meta">
+                开始：
+                {timeLabel(
+                  daily.pipeline ? daily.pipeline.startedAt : daily.startedAt,
+                )}{" "}
+                · 结束：
+                {timeLabel(currentResearchCompletedAt)} 北京时间
+              </p>
+            )}
+            {daily &&
+              ["FAILED", "UNCERTAIN"].includes(
+                daily.pipeline?.state ?? daily.state,
+              ) && <DailyResearchFailureDiagnosis data={daily} />}
             {ready?.dailyResearch?.nextRunAt && (
               <small className="op-observation-next-run">
                 下次计划：{timeLabel(ready.dailyResearch.nextRunAt)}
@@ -433,7 +466,7 @@ export default function MacroContextStrip({
           </details>
         )}
       </header>
-      {renderResearchRefresh?.()}
+      {renderResearchRefresh?.(daily)}
       {ready && (
         <div className="op-research-report-source">
           <p aria-label="展示报告来源" aria-live="polite">

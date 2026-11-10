@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../../../api/daily-research-debug";
 import { HttpError } from "../../../api/client";
+import type { DailyResearch } from "../../../api/investment";
 import { timeLabel } from "../macro-display";
 import { DailyResearchFailureDiagnosis } from "./DailyResearchReport";
 import "../research-header.css";
@@ -37,11 +38,58 @@ function storeCommand(actor: string, value: string | null) {
 interface Props {
   actor: string;
   onReady?: () => void;
+  currentResearch?: DailyResearch | null;
 }
 export default function DailyResearchRefresh(props: Props) {
   return <RefreshControl key={props.actor} {...props} />;
 }
-function RefreshControl({ actor, onReady }: Props) {
+function ManualRequestRecord({
+  request,
+  historical,
+  children,
+}: {
+  request?: api.DebugResearchRequest | null;
+  historical: boolean;
+  children: ReactNode;
+}) {
+  const content = (
+    <>
+      {request && (
+        <div className="op-research-request-time" aria-label="最近手动请求身份">
+          <p>
+            最近手动请求 · 来源：
+            {request.requestMode === "DEBUG"
+              ? "手动调试"
+              : request.requestMode === "MANUAL"
+                ? "手动启动"
+                : "手动请求（模式未记录）"}
+          </p>
+          <p>请求ID：{request.id}</p>
+          <p>提交时间：{timeLabel(request.requestedAt)} 北京时间</p>
+          <p>
+            开始：{timeLabel(request.startedAt)} · 结束：
+            {timeLabel(request.completedAt)} 北京时间
+          </p>
+        </div>
+      )}
+      {children}
+    </>
+  );
+  return historical ? (
+    <details className="op-research-manual-history">
+      <summary>
+        最近手动请求（历史） · 提交于 {timeLabel(request?.requestedAt)} 北京时间
+      </summary>
+      <p>
+        此记录属于较早的手动请求；最新研究的状态与诊断见上方“执行与调度详情”。
+      </p>
+      {content}
+    </details>
+  ) : (
+    content
+  );
+}
+function RefreshControl({ actor, onReady, currentResearch }: Props) {
   const client = useQueryClient();
   const [unconfirmedKey, setUnconfirmedKey] = useState(() =>
     readCommand(actor),
@@ -183,6 +231,24 @@ function RefreshControl({ actor, onReady }: Props) {
     /^[A-Za-z][A-Za-z0-9_.]{0,79}$/.test(result.errorClass)
       ? result.errorClass
       : "原因待核查";
+  const currentRunId = currentResearch?.pipeline
+    ? currentResearch.pipeline.researchRunId
+    : currentResearch?.runId;
+  const currentStartedAt = Date.parse(
+    (currentResearch?.pipeline
+      ? currentResearch.pipeline.startedAt
+      : currentResearch?.startedAt) ?? "",
+  );
+  const requestEndedAt = Date.parse(
+    result?.completedAt ?? result?.startedAt ?? result?.requestedAt ?? "",
+  );
+  const historical =
+    !!result &&
+    !busy &&
+    !(currentRunId && currentRunId === result.reportRunId) &&
+    Number.isFinite(currentStartedAt) &&
+    Number.isFinite(requestEndedAt) &&
+    currentStartedAt > requestEndedAt;
   return (
     <section
       className="op-debug-refresh"
@@ -239,96 +305,93 @@ function RefreshControl({ actor, onReady }: Props) {
           <p>只清除此页记录，不会取消后台任务。下一次启动将使用新请求。</p>
         </div>
       )}
-      {expired && active(result?.status) ? (
-        <p role="status">
-          超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，本次执行结束前不会启动新的模型。
-        </p>
-      ) : result?.status === "QUEUED" ? (
-        <p role="status">
-          排队等待模型槽 ·{" "}
-          {result.blockedReasonCode === "MODEL_GUARD_ACTIVE"
-            ? "上次研究仍占用模型槽，需要等待退出确认"
-            : result.blockedReasonCode === "REQUEST_RUNNING"
-              ? "另一次研究正在运行"
-              : "等待后台认领"}
-          。尚未采集或调用 AI，保留上一份有效报告。
-          排队最多5分钟，超时终止且不自动重试。
-          {result.queueExpiresAt && (
-            <> 排队截止：{timeLabel(result.queueExpiresAt)}。</>
+      <ManualRequestRecord request={result} historical={historical}>
+        {expired && active(result?.status) ? (
+          <p role="status">
+            超过35分钟，执行结果待确认，正在继续查询后台结果。保留上一份有效报告，本次执行结束前不会启动新的模型。
+          </p>
+        ) : result?.status === "QUEUED" ? (
+          <p role="status">
+            排队等待模型槽 ·{" "}
+            {result.blockedReasonCode === "MODEL_GUARD_ACTIVE"
+              ? "上次研究仍占用模型槽，需要等待退出确认"
+              : result.blockedReasonCode === "REQUEST_RUNNING"
+                ? "另一次研究正在运行"
+                : "等待后台认领"}
+            。尚未采集或调用 AI，保留上一份有效报告。
+            排队最多5分钟，超时终止且不自动重试。
+            {result.queueExpiresAt && (
+              <> 排队截止：{timeLabel(result.queueExpiresAt)}。</>
+            )}
+          </p>
+        ) : result?.status === "RUNNING" ? (
+          <p role="status">
+            {phases[result.executionStage ?? ""] ?? "后台处理中 · 阶段待确认"}
+            。保留上一份有效报告。
+          </p>
+        ) : result?.status === "CANCELLED" ? (
+          <p role="status">
+            排队研究已取消，记录已保留，未调用
+            AI。不会自动重试；需要研究时请重新点击。
+          </p>
+        ) : result?.status === "EXPIRED" ? (
+          <p role="status">
+            {result.errorClass === "QueueInvalidatedByMaintenance" ||
+            result.errorClass === "LocalRebootQueueExpired"
+              ? "旧排队请求已在本机维护中终止"
+              : "排队等待超过5分钟，已终止"}
+            ；未开始采集或调用 AI。不会自动重试；需要研究时请重新点击。
+          </p>
+        ) : result?.status === "READY" ? (
+          <p role="status">手动研究已完成，页面将加载最新有效报告。</p>
+        ) : result?.status === "FAILED" ? (
+          <p role="alert">
+            采集或分析失败：{safeError}。保留上一份有效报告，可重新运行。
+          </p>
+        ) : result?.status === "UNCERTAIN" ? (
+          <p role="status">
+            执行结果待确认：{safeError}。
+            {result.completedAt
+              ? "本次执行已结束，保留上一份有效报告，可显式提交新请求；模型退出尚未确认时，新请求将等待。"
+              : "正在继续查询后台结果，保留上一份有效报告，不会启动新的模型。"}
+          </p>
+        ) : null}
+        {result?.status === "QUEUED" &&
+          result.blockedReasonCode === "MODEL_GUARD_ACTIVE" && (
+            <div>
+              {result.modelExitEvidenceCheckedAt &&
+                exitEvidence[result.modelExitEvidenceState ?? ""] && (
+                  <p>
+                    {exitEvidence[result.modelExitEvidenceState!]}（核对于{" "}
+                    {timeLabel(result.modelExitEvidenceCheckedAt)}）。
+                  </p>
+                )}
+              <p>
+                若原研究已结束仍长期阻塞，请在运行研究的 Windows
+                主机执行本地受控恢复。等待超时不会释放旧锁；不要按进程名结束全部
+                Codex。
+              </p>
+            </div>
           )}
-        </p>
-      ) : result?.status === "RUNNING" ? (
-        <p role="status">
-          {phases[result.executionStage ?? ""] ?? "后台处理中 · 阶段待确认"}
-          。保留上一份有效报告。
-        </p>
-      ) : result?.status === "CANCELLED" ? (
-        <p role="status">
-          排队研究已取消，记录已保留，未调用
-          AI。不会自动重试；需要研究时请重新点击。
-        </p>
-      ) : result?.status === "EXPIRED" ? (
-        <p role="status">
-          {result.errorClass === "QueueInvalidatedByMaintenance" ||
-          result.errorClass === "LocalRebootQueueExpired"
-            ? "旧排队请求已在本机维护中终止"
-            : "排队等待超过5分钟，已终止"}
-          ；未开始采集或调用 AI。不会自动重试；需要研究时请重新点击。
-        </p>
-      ) : result?.status === "READY" ? (
-        <p role="status">手动研究已完成，页面将加载最新有效报告。</p>
-      ) : result?.status === "FAILED" ? (
-        <p role="alert">
-          采集或分析失败：{safeError}。保留上一份有效报告，可重新运行。
-        </p>
-      ) : result?.status === "UNCERTAIN" ? (
-        <p role="status">
-          执行结果待确认：{safeError}。
-          {result.completedAt
-            ? "本次执行已结束，保留上一份有效报告，可显式提交新请求；模型退出尚未确认时，新请求将等待。"
-            : "正在继续查询后台结果，保留上一份有效报告，不会启动新的模型。"}
-        </p>
-      ) : null}
-      {result?.status === "QUEUED" &&
-        result.blockedReasonCode === "MODEL_GUARD_ACTIVE" && (
-          <div>
-            {result.modelExitEvidenceCheckedAt &&
-              exitEvidence[result.modelExitEvidenceState ?? ""] && (
-                <p>
-                  {exitEvidence[result.modelExitEvidenceState!]}（核对于{" "}
-                  {timeLabel(result.modelExitEvidenceCheckedAt)}）。
-                </p>
-              )}
-            <p>
-              若原研究已结束仍长期阻塞，请在运行研究的 Windows
-              主机执行本地受控恢复。等待超时不会释放旧锁；不要按进程名结束全部
-              Codex。
-            </p>
-          </div>
+        {(result?.status === "FAILED" || result?.status === "UNCERTAIN") && (
+          <details className="op-research-execution-diagnostics">
+            <summary>查看执行诊断</summary>
+            <DailyResearchFailureDiagnosis
+              data={{
+                failureStage: result.failureStage,
+                failureReasonCode: result.failureReasonCode,
+                failureRuleId: result.failureRuleId,
+                failureItemIndex: result.failureItemIndex,
+                failureIndustryCodes: result.failureIndustryCodes,
+                runId: result.reportRunId,
+              }}
+            />
+          </details>
         )}
-      {(result?.status === "FAILED" || result?.status === "UNCERTAIN") && (
-        <details className="op-research-execution-diagnostics">
-          <summary>查看执行诊断</summary>
-          <DailyResearchFailureDiagnosis
-            data={{
-              failureStage: result.failureStage,
-              failureReasonCode: result.failureReasonCode,
-              failureRuleId: result.failureRuleId,
-              failureItemIndex: result.failureItemIndex,
-              failureIndustryCodes: result.failureIndustryCodes,
-              runId: result.reportRunId,
-            }}
-          />
-        </details>
-      )}
-      {status.isError && (
-        <p role="alert">任务状态读取失败，将继续查询；不会自动重跑模型。</p>
-      )}
-      {result && (
-        <small className="op-research-request-time">
-          本次请求：{timeLabel(result.requestedAt)}
-        </small>
-      )}
+        {status.isError && (
+          <p role="alert">任务状态读取失败，将继续查询；不会自动重跑模型。</p>
+        )}
+      </ManualRequestRecord>
     </section>
   );
 }
