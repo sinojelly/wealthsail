@@ -582,6 +582,7 @@ export default function MacroContextStrip({
                   <TodayFocus
                     data={ready}
                     onViewEvidence={() => open("macro")}
+                    frozenNavHistories={historicalPreview?.navHistories}
                   />
                 )}
                 {renderPersonalReminders?.(

@@ -258,21 +258,20 @@ function sectionDisclosure(section: HTMLElement, title: string) {
 
 function expectFrozenPrices(card: HTMLElement) {
   const prices = within(card).getByRole("region", {
-    name: "原冻结左侧低吸价格区间",
+    name: "参考买卖点与操作状态",
   });
   for (const [label, value] of [
-    ["原冻结买入区间", "0.9800–1.0200"],
-    ["原冻结卖出区间", "1.1200–1.2000"],
-    ["原冻结止损参考", "0.9000"],
-    ["原冻结止盈 T1 / T2", "1.1200 / 1.2000"],
+    ["参考买入区间", "0.9800–1.0200"],
+    ["参考卖出区间（止盈 T1 / T2）", "1.1200–1.2000"],
+    ["风控止损参考", "0.9000"],
   ]) {
     expect(within(prices).getByText(label).closest("div")).toHaveTextContent(
       value,
     );
   }
   expect(
-    within(card).getByRole("region", { name: "原冻结右侧趋势价格区间" }),
-  ).toHaveTextContent("未保存右侧趋势的完整买卖点");
+    within(card).queryByRole("region", { name: "原冻结右侧趋势价格区间" }),
+  ).toBeNull();
 }
 
 beforeEach(() => {

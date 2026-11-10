@@ -68,8 +68,8 @@ export function quantitativePosition(plan: ActionableZoneResult) {
     label = "🟢 已入买区（低吸参考）";
     tone = "buy";
     rank = 0;
-  } else if (((current - high) / high) * 100 <= 3) {
-    label = `🟡 接近买区（差 ${(((current - high) / high) * 100).toFixed(2)}%）`;
+  } else if (buyDistance != null && buyDistance <= 3) {
+    label = `🟡 接近买区（差 ${buyDistance.toFixed(2)}%）`;
     tone = "near";
     rank = 1;
   } else if (

@@ -1,5 +1,9 @@
 import { request } from "./client";
-import type { DeterministicRepair, IndustryCycle } from "./investment";
+import type {
+  ActionableZoneResult,
+  DeterministicRepair,
+  IndustryCycle,
+} from "./investment";
 
 export type AcceptanceIndustryRisk = Partial<
   Pick<
@@ -166,6 +170,7 @@ export interface ResearchAcceptanceOutcome {
       label?: string;
       directionKey?: string;
       directionTitle?: string;
+      actionableZones?: ActionableZoneResult | null;
     }>;
     events: AcceptanceObservation[];
     upcoming: AcceptanceObservation[];

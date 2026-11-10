@@ -4,6 +4,17 @@ import ActionablePlan from "./components/ActionablePlan";
 import { frozenPlan } from "./personal-funds.test-data";
 vi.mock("./components/FundNavTrendChart", () => ({ default: () => null }));
 
+it("uses a single core reference grid for old frozen personal plans as well", () => {
+  const plan = frozenPlan();
+  plan.tracks.push({ ...plan.tracks[0], track: "RIGHT_TREND" });
+  render(<FundPriceTracks plan={plan} basis="原冻结" selected="LEFT_VALUE" />);
+  const panel = screen.getByRole("region", { name: "参考买卖点与操作状态" });
+  expect(within(panel).getAllByText("参考买入区间")).toHaveLength(1);
+  expect(
+    screen.queryByRole("region", { name: "原冻结右侧趋势价格区间" }),
+  ).toBeNull();
+});
+
 it("also consolidates standalone v6 plan cards instead of repeating both tracks", () => {
   const plan = frozenPlan();
   plan.methodVersion = "actionable-zones-v6";
@@ -50,7 +61,9 @@ it("keeps stale reference levels readable without labelling them a current buy t
 it.each([
   ["0.9000", "🔴 跌破止损参考"],
   ["1.4000", "🟠 已入卖区（分批止盈）"],
-  ["1.1700", "🟡 接近买区（差 1.74%）"],
+  ["1.1700", "🟡 接近买区（差 1.71%）"],
+  [String(1.15 / (1 - 0.0299)), "🟡 接近买区（差 2.99%）"],
+  [String(1.15 / (1 - 0.0301)), "⚪ 区间中部观察"],
   ["1.2500", "⚪ 区间中部观察"],
 ])(
   "compares current NAV %s to the supplied reference boundaries",

@@ -329,7 +329,7 @@ it("shows every fund's complete prices and chart slot by default while deferring
   expect(cards).toHaveLength(5);
   for (const card of cards) {
     expect(card).toHaveTextContent("最新确认净值");
-    expect(card).toHaveTextContent("原冻结买入区间");
+    expect(card).toHaveTextContent("参考买入区间");
     expect(
       within(card).getByRole("region", { name: /净值走势图区域/ }),
     ).toBeInTheDocument();

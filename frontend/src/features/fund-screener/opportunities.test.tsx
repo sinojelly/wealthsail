@@ -687,17 +687,19 @@ it("keeps valid personal reminders in Today without a report and opens the indep
   );
   const funds = await screen.findByRole("region", { name: "我的基金" });
   const frozenPrices = await within(funds).findByRole("region", {
-    name: "原冻结左侧低吸价格区间",
+    name: "参考买卖点与操作状态",
   });
   expect(
-    within(frozenPrices).getByText("原冻结买入区间").closest("div"),
+    within(frozenPrices).getByText("参考买入区间").closest("div"),
   ).toHaveTextContent("0.9800–1.0200");
   expect(
-    within(frozenPrices).getByText("原冻结卖出区间").closest("div"),
+    within(frozenPrices)
+      .getByText("参考卖出区间（止盈 T1 / T2）")
+      .closest("div"),
   ).toHaveTextContent("1.1200–1.2000");
   expect(
-    within(funds).getByRole("region", { name: "原冻结右侧趋势价格区间" }),
-  ).toHaveTextContent("未保存右侧趋势的完整买卖点");
+    within(funds).queryByRole("region", { name: "原冻结右侧趋势价格区间" }),
+  ).toBeNull();
   expect(funds).toHaveTextContent("1.0100");
   await userEvent.click(
     within(funds).getByRole("button", { name: "研究与复盘：ai 冻结研究" }),

@@ -16,8 +16,16 @@ export default function FundPriceTracks({
   selected?: PlanTrack;
   onSelect?: (track: PlanTrack) => void;
 }) {
-  if (basis === "当前" || plan.methodVersion.startsWith("actionable-zones-v6"))
-    return <QuantitativePricePanel plan={plan} basis={basis} />;
+  if (
+    basis !== "研究时" ||
+    plan.methodVersion.startsWith("actionable-zones-v6")
+  )
+    return (
+      <QuantitativePricePanel
+        plan={{ ...plan, selectedTrack: selected ?? plan.selectedTrack }}
+        basis={basis}
+      />
+    );
   const price = (value: string | number | null | undefined) =>
     planPrice(value, plan);
   return (

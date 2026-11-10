@@ -479,6 +479,19 @@ export interface RelativeStrength {
   missingEvidence?: string[];
 }
 export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
+  pricePosition?: {
+    status:
+      | "ENTRY_ZONE"
+      | "NEAR_ENTRY_ZONE"
+      | "NEUTRAL"
+      | "OVERHEATED"
+      | "DATA_PENDING";
+    distanceToEntryPct?: number;
+    label?: string;
+    asOf?: string | null;
+    reasons?: string[];
+    actionable?: false;
+  };
   industryCycle?: IndustryCycle | null;
   industryRiskWarning?: string | null;
   relativeStrength?: RelativeStrength | null;
@@ -572,13 +585,14 @@ export interface QuantitativeScan {
   items: QuantitativeScanItem[];
 }
 export interface ValueDirection extends OpportunityPriority {
+  auditStatus?: "AUDITED" | "UNAUDITED_SCOPE" | string;
   industryCycle?: IndustryCycle | null;
   industryRiskWarning?: string | null;
   key: string;
   title: string;
   thesis: string;
   signal: "LEFT_VALUE" | "RIGHT_TREND" | "TAKE_PROFIT" | "WATCH" | "AVOID";
-  qualificationStatus?: "OBSERVATION_ONLY";
+  qualificationStatus?: "OBSERVATION_ONLY" | "PENDING_REVIEW" | "FORMAL";
   investmentEligible?: boolean;
   formalEligibilityReasons?: string[];
   sourceIds: string[];
@@ -996,12 +1010,23 @@ export interface DailyResearch {
     actionablePlans?: ActionableZoneResult[];
     quantitativeScan?: QuantitativeScan;
     valueDirections?: ValueDirection[];
+    topicCatalog?: Array<{
+      key: string;
+      title: string;
+      thesis?: string;
+      summary?: string;
+      auditStatus?: string;
+      plans?: ActionableZoneResult[];
+      fundPlans?: ActionableZoneResult[];
+    }>;
+    researchTopics?: NonNullable<DailyResearch["report"]>["topicCatalog"];
     mentionedFunds?: Array<{
       fundCode: string;
       name?: string;
       label?: string;
       directionKey?: string;
       directionTitle?: string;
+      actionableZones?: ActionableZoneResult | null;
     }>;
     industryResearchCoverage?: {
       maximumCandidates: number;
