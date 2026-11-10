@@ -2991,6 +2991,10 @@ async def _readback(conn: asyncpg.Connection) -> None:
         "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=106)"
     ):
         await _readback_local_research_recovery(conn)
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM public.wealthsail_schema_migrations WHERE version=108)"
+    ):
+        await _readback_sanitized_research_recovery(conn)
 
     seed_versions = await conn.fetchval(
         "SELECT COUNT(*) FROM public.wealthsail_schema_migrations WHERE version IN (6,10)"
@@ -3121,6 +3125,33 @@ async def _readback_research_queue_control(conn: asyncpg.Connection) -> None:
         await _readback_research_control_function(
             conn, function, table, roles, "research queue control"
         )
+
+
+async def _readback_sanitized_research_recovery(conn: asyncpg.Connection) -> None:
+    table = "research.daily_research_report_recoveries"
+    boundary = "sanitized research recovery"
+    await _readback_research_control_function(
+        conn,
+        "research.publish_sanitized_daily_report(uuid,jsonb,text,text,timestamptz)",
+        table,
+        ("wealthsail_worker",),
+        boundary,
+    )
+    for role in ("wealthsail_worker", "wealthsail_api", "authenticated"):
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+            expected = role == "wealthsail_worker" and privilege == "SELECT"
+            column_privilege = privilege in {"SELECT", "INSERT", "UPDATE", "REFERENCES"}
+            query = (
+                "SELECT has_any_column_privilege($1,$2,$3)" if column_privilege
+                else "SELECT has_table_privilege($1,$2,$3)"
+            )
+            if await conn.fetchval(query, role, table, privilege) != expected:
+                raise RuntimeError(f"{boundary} privileges are missing or unsafe")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_class c,aclexplode(c.relacl) a WHERE c.oid=$1::regclass AND a.grantee=0)",
+        table,
+    ):
+        raise RuntimeError(f"{boundary} exposes PUBLIC privileges")
 
 
 async def _readback_local_research_recovery(conn: asyncpg.Connection) -> None:

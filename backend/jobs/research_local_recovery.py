@@ -5,6 +5,10 @@ Legacy reboot recovery requires an active OWNER's exact-run attestation that
 the original invocation belonged to this machine and its clock was not changed.
 Stop normal services and investigate every unrelated RUNNING item first. This
 command does not kill processes, rerun a model, or modify immutable run/results.
+
+To recover saved model output after a report-validation failure, use the separate
+``backend.jobs.research_report_recovery`` preview/publish command. Report replay
+does not release model guards or require Windows reboot evidence.
 """
 
 import argparse

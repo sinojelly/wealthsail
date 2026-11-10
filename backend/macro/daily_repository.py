@@ -330,6 +330,11 @@ async def read_daily_research(
         if report_row
         else None
     )
+    from backend.macro.research_report_recovery import report_recovery_times
+
+    report_recovery = report_recovery_times(
+        report, report_row["run_id"], report_row["recorded_at"]
+    ) if report_row else None
     if report is not None:
         with trace_stage("context.live_nav_prices"):
             report = await refresh_report_fund_plans(
@@ -349,6 +354,8 @@ async def read_daily_research(
         if latest
         else None
     )
+    if pipeline and report_recovery and str(displayed_run_id) == str(report_row["run_id"]):
+        pipeline = {**pipeline, "finishedAt": report_recovery["originalCompletedAt"]}
     failure_row = (
         latest
         if latest
@@ -419,12 +426,15 @@ async def read_daily_research(
         else None,
         "completedAt": pipeline["finishedAt"]
         if pipeline
+        else report_recovery["originalCompletedAt"]
+        if report_recovery and str(displayed_run_id) == str(report_row["run_id"])
         else latest.get("recorded_at")
         if latest
         else None,
-        "asOf": report_row.get("recorded_at") if report_row else None,
+        "asOf": report_recovery["originalCompletedAt"] if report_recovery else report_row.get("recorded_at") if report_row else None,
         "reportRunId": str(report_row["run_id"]) if report_row else None,
-        "reportCompletedAt": report_row.get("recorded_at") if report_row else None,
+        "reportCompletedAt": report_recovery["originalCompletedAt"] if report_recovery else report_row.get("recorded_at") if report_row else None,
+        "reportRecovery": report_recovery,
         "reportSlotDate": report_row.get("slot_date") if report_row else None,
         "nextRunAt": next_automatic,
         "automaticResearchCooldown": cooldown,
@@ -451,6 +461,15 @@ async def read_daily_research(
     }
 
 
+def _report_completion(row):
+    from backend.macro.research_report_recovery import report_recovery_times
+
+    if row is None:
+        return None
+    recovery = report_recovery_times(_object(row.get("payload")), row["run_id"], row["recorded_at"])
+    return recovery["originalCompletedAt"] if recovery else row["recorded_at"]
+
+
 async def read_recent_public_research(conn, now):
     """Bounded READY public reports only; never query actor study records."""
     stamp = local(now)
@@ -469,7 +488,7 @@ async def read_recent_public_research(conn, now):
         {
             "status": "READY",
             "runId": str(row["run_id"]),
-            "completedAt": row["recorded_at"],
+            "completedAt": _report_completion(row),
             "slotDate": row["slot_date"],
             "report": _object(row.get("payload")),
         }
@@ -494,6 +513,6 @@ async def read_previous_daily_research(conn, now):
     return {
         "reportRunId": str(row["run_id"]) if row else None,
         "reportSlotDate": row["slot_date"] if row else None,
-        "reportCompletedAt": row["recorded_at"] if row else None,
+        "reportCompletedAt": _report_completion(row),
         "report": _object(row.get("payload")) if row else None,
     }

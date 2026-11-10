@@ -135,6 +135,14 @@ async def run_offline_repair(payload, *, timeout=TIMEOUT_SECONDS):
     return await _run_child({**payload, "operation": "REPAIR"}, timeout=timeout, output_limit=REPAIR_OUTPUT_LIMIT)
 
 
+async def run_offline_sanitization(payload, *, timeout=TIMEOUT_SECONDS):
+    """Recover saved insights without provider, network or database authority."""
+    return await _run_child(
+        {**payload, "operation": "RECOVER_REPORT"}, timeout=timeout,
+        output_limit=REPAIR_OUTPUT_LIMIT,
+    )
+
+
 async def _run_child(payload, *, timeout=TIMEOUT_SECONDS, output_limit=OUTPUT_LIMIT):
     encoded = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -194,7 +202,16 @@ def main():
             raise ValueError("input limit")
         payload = json.loads(data)
         check_frozen_contract(payload["packet"])
-        if payload.get("operation", "VALIDATE") == "REPAIR":
+        if payload.get("operation") == "RECOVER_REPORT":
+            from backend.macro.research_sanitize import sanitize_report
+
+            value = sanitize_report(
+                payload["raw"], payload["packet"], payload["sourceChecks"],
+                research_id=payload["researchId"],
+                completed_at=datetime.fromisoformat(payload["validatedAt"]),
+            )
+            limit = REPAIR_OUTPUT_LIMIT
+        elif payload.get("operation", "VALIDATE") == "REPAIR":
             from backend.macro.research_repair import repair_report
             value = repair_report(payload["raw"], payload["packet"], payload["sourceChecks"], research_id=payload["researchId"], validated_at=datetime.fromisoformat(payload["validatedAt"]))
             limit = REPAIR_OUTPUT_LIMIT
