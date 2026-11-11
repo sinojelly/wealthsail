@@ -1,0 +1,7 @@
+# Optional transport comparison for diagnosed QUIC/UDP stalls.
+# Append to the SAME cloudflared Compose invocation and retain storage overlays.
+# This changes the connector-to-Cloudflare transport, not origin HTTP or Access.
+services:
+  cloudflared:
+    environment:
+      TUNNEL_TRANSPORT_PROTOCOL: http2

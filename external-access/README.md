@@ -6,6 +6,8 @@
 
 日期：2026-10-23。使用 Cloudflare Named Tunnel + Access，仅指定成员可访问。NAS **新增一个常驻 `cloudflared` 容器**，不需要公网 IP、路由器端口转发或额外反向代理容器。LAN/WAN 均通过下面的 HTTPS 域名访问，先通过 Access，再登录应用。
 
+若应用已返回而浏览器正文长时间停滞，先按[工作区与隧道传输追查](../docs/operations/2026-11-11-workspace-and-tunnel-stalls.md)关联请求耗时与隧道指标。可选 `compose.cloudflared.http2.yaml` 用于有证据时的传输对照；只部署应用不会重建这个同时承载两站的独立连接器。
+
 | 域名 | Tunnel 内部目标 | 应用 |
 |---|---|---|
 | `wealth.sinojelly.kdns.fr` | `http://wealthsail-origin:80` | WealthSail frontend |
