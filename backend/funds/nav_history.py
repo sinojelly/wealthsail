@@ -122,9 +122,11 @@ async def ensure_nav_histories(
             recently_checked(row, now) and (row.get("asOf") or "") == latest
             for row in candidates
         )
+        # READY proves the requested history window, not 120-sample investment
+        # eligibility. A recently checked new fund can have a complete shorter
+        # history; refetching it cannot manufacture older NAV observations.
         if (
-            len(view["points"]) < NAV_RESEARCH_MIN_SAMPLES
-            or view["state"] != "READY"
+            view["state"] != "READY"
             or (
                 view.get("asOf") is not None
                 and (now.date() - date.fromisoformat(view["asOf"])).days > 10

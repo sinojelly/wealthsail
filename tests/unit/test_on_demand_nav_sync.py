@@ -86,7 +86,10 @@ class Store:
 async def test_thin_or_behind_confirmed_history_is_repaired_once_before_pricing(
     monkeypatch, count, lag
 ):
-    store = Store([history(count=count, lag=lag)])
+    existing = history(count=count, lag=lag)
+    if count < 120:
+        existing.pop("providerHistoryProof")
+    store = Store([existing])
     fresh = history(count=550, lag=0)
     fetch = AsyncMock(return_value=fresh)
     monkeypatch.setattr(service, "fetch_on_demand_nav_history", fetch, raising=False)
@@ -107,6 +110,67 @@ async def test_thin_or_behind_confirmed_history_is_repaired_once_before_pricing(
     assert len(selected["points"]) == 500
     assert fetch.await_count == 1
     assert result["refresh"]["011035"]["state"] == "READY"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 19, 20, 60, 119])
+async def test_complete_short_history_survives_provider_cooldown_without_refetch(
+    monkeypatch, count,
+):
+    store = Store([])
+    fresh = history(count=count, lag=0)
+    fetch = AsyncMock(return_value=fresh)
+    monkeypatch.setattr(service, "fetch_on_demand_nav_history", fetch)
+    kwargs = dict(tenant_id="tenant", user_id="actor", latest_confirmed={})
+
+    first = await service.ensure_nav_histories(
+        store, ["011035"], NOW, now_provider=lambda: NOW, **kwargs,
+    )
+    later = NOW + timedelta(minutes=5)
+    second = await service.ensure_nav_histories(
+        store, ["011035"], later, now_provider=lambda: later, **kwargs,
+    )
+
+    assert fetch.await_count == len(store.persisted) == 1
+    assert first["refresh"]["011035"]["state"] == "PARTIAL"
+    assert first["refresh"]["011035"]["reason"] == "LOCAL_NAV_HISTORY_INSUFFICIENT"
+    assert second["refresh"]["011035"]["state"] == "IDLE"
+    assert second["histories"] == [fresh]
+    selected = service.select_history_view(
+        "011035", "新基金", "2y", second["histories"], later,
+    )
+    assert selected["state"] == "READY", "The fetched window is complete, even for a new fund"
+    assert selected["coverage"]["sampleCount"] == count
+    assert selected["points"] == [
+        {"date": row["date"], "unitNav": row["close"]} for row in fresh["points"]
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["newer_confirmed_nav", "source_recheck_due"])
+async def test_complete_short_history_still_repairs_when_new_facts_or_recheck_are_due(
+    monkeypatch, reason,
+):
+    existing = history(count=60, lag=1 if reason == "newer_confirmed_nav" else 0)
+    if reason == "source_recheck_due":
+        old = (NOW - timedelta(hours=36, seconds=1)).isoformat()
+        existing.update(retrievedAt=old, availableAt=old)
+        existing["providerHistoryProof"]["retrievedAt"] = old
+    store = Store([existing])
+    fresh = history(count=60, lag=0)
+    fetch = AsyncMock(return_value=fresh)
+    monkeypatch.setattr(service, "fetch_on_demand_nav_history", fetch)
+
+    result = await service.ensure_nav_histories(
+        store, ["011035"], NOW, tenant_id="tenant", user_id="actor",
+        latest_confirmed={"011035": {"asOf": NOW.date().isoformat()}},
+        now_provider=lambda: NOW,
+    )
+
+    assert fetch.await_count == len(store.persisted) == 1
+    assert result["refresh"]["011035"]["state"] == "PARTIAL"
+    assert result["refresh"]["011035"]["reason"] == "LOCAL_NAV_HISTORY_INSUFFICIENT"
+    assert result["histories"][-1] == fresh
 
 
 @pytest.mark.asyncio
@@ -134,6 +198,7 @@ async def test_provider_failure_retains_actual_old_history_and_reports_recoverab
     monkeypatch,
 ):
     old = history(count=80)
+    old.pop("providerHistoryProof")
     store = Store([old])
     monkeypatch.setattr(
         service,
@@ -208,6 +273,7 @@ async def test_persistence_failure_retains_old_facts_and_recovers_on_next_read(
     monkeypatch,
 ):
     old, fresh = history(count=80), history(count=550, lag=0)
+    old.pop("providerHistoryProof")
     store = Store([old])
     persist = store.fetchval
     store.fetchval = AsyncMock(side_effect=RuntimeError("temporary database error"))
