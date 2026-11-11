@@ -35,6 +35,7 @@ import {
 import "../research-header.css";
 import "../workspaces.css";
 import type { FundNavHistory } from "../../../api/funds";
+import { OPPORTUNITY_CONTEXT_TIMEOUT_MS } from "../../../api/report-read-policy";
 
 export interface HistoricalResearchSlots {
   validatedAt: string;
@@ -81,8 +82,8 @@ function ReportReadState({
         <small>
           {loading
             ? slow
-              ? "读取已保存报告耗时较长，仍在等待服务端响应。单次读取最多等待 30 秒。"
-              : "正在读取已保存的研究报告，单次读取最多等待 30 秒。"
+              ? `读取已保存报告耗时较长，仍在等待服务端响应，不会重新运行 AI。单次读取最多等待 ${OPPORTUNITY_CONTEXT_TIMEOUT_MS / 1000} 秒。`
+              : `正在读取已保存的研究报告，不会重新运行 AI。单次读取最多等待 ${OPPORTUNITY_CONTEXT_TIMEOUT_MS / 1000} 秒。`
             : paused
               ? "请恢复网络连接后重新读取。此操作只获取已保存报告，不会重新运行 AI。"
               : "本次读取已结束。重新读取只获取已保存报告，不会重新运行 AI。"}

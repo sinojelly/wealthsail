@@ -34,8 +34,63 @@ it("encodes the complete opportunity scope, opts into compact charts and forward
     fundMarket: "SSE",
     months: "60",
     compactCharts: "true",
+    chartFormat: "shared-v1",
   });
   expect(init?.signal).toBe(controller.signal);
+  expect(vi.mocked(requestWithTimeout).mock.calls.at(-1)![2]).toBe(90_000);
+});
+
+it("hydrates shared chart transport before exposing the unchanged report to consumers", async () => {
+  const id = "a".repeat(64);
+  const series = {
+    fundCode: "012733",
+    priceBasis: "UNIT_NAV",
+    unit: "CNY/份",
+    asOf: "2026-11-12",
+    sourceUri: "https://example.org/nav",
+    points: [{ date: "2026-11-12", value: 1.23 }],
+    extension: { verified: true },
+  };
+  const wire = {
+    state: "READY",
+    items: [],
+    events: [],
+    dailyResearch: {
+      report: {
+        summary: "完整已保存洞察",
+        valueDirections: [
+          { key: "AI", plans: [{ series: { seriesRef: id } }] },
+        ],
+        researchTopics: [
+          { key: "MEMORY", plans: [{ series: { seriesRef: id } }] },
+        ],
+        mentionedFunds: [
+          {
+            fundCode: "012733",
+            actionableZones: { series: { seriesRef: id } },
+          },
+        ],
+      },
+    },
+    chartSeries: { version: "shared-v1", items: { [id]: series } },
+  };
+  vi.mocked(requestWithTimeout).mockResolvedValueOnce({
+    data: wire,
+    meta: {},
+  } as never);
+  const result = await api.getOpportunityContext({ months: 36 });
+  expect(
+    result.dailyResearch?.report?.valueDirections?.[0].plans?.[0].series,
+  ).toBe(series);
+  expect(
+    result.dailyResearch?.report?.researchTopics?.[0].plans?.[0].series,
+  ).toBe(series);
+  expect(
+    result.dailyResearch?.report?.mentionedFunds?.[0].actionableZones?.series,
+  ).toBe(series);
+  expect(result.events).toBe(wire.events);
+  expect(result).not.toHaveProperty("chartSeries");
+  expect(wire).toHaveProperty("chartSeries");
 });
 
 it("uses scoped JSON mutations for monitors and the notice acknowledgement endpoint", async () => {

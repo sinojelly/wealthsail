@@ -4,6 +4,7 @@ from uuid import UUID
 from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from backend.common.database import tenant_transaction
+from backend.common.timing import trace_stage
 from backend.dependencies import (
     get_pool,
     get_request_id,
@@ -33,6 +34,7 @@ async def opportunity_context(
     ),
     months: int = Query(default=36, ge=1, le=120),
     compact_charts: bool = Query(default=False, alias="compactCharts"),
+    chart_format: Literal["inline", "shared-v1"] = Query(default="inline", alias="chartFormat"),
     theme_code: Literal[
         "HAINAN_FTP", "PUDONG_DEV", "GEO_CRUDE_OIL", "AI_MEMORY_HBM", "COMMERCIAL_SPACE"
     ]
@@ -58,5 +60,11 @@ async def opportunity_context(
     if compact_charts is True:
         from backend.investment.report_chart_projection import compact_context_charts
 
-        data = compact_context_charts(data)
+        with trace_stage("response.chart_compaction"):
+            data = compact_context_charts(data)
+    if chart_format == "shared-v1":
+        from backend.investment.report_chart_projection import share_context_charts
+
+        with trace_stage("response.chart_sharing"):
+            data = share_context_charts(data)
     return ok(data, request_id=request_id, as_of=now_shanghai())

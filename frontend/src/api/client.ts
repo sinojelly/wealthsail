@@ -14,23 +14,29 @@ function logRequestTiming(
   bodyAt: number,
   parsedAt: number,
   response?: Response,
+  failurePhase?: "HEADERS" | "BODY",
 ) {
   if (new URLSearchParams(window.location.search).get("perf") !== "1") return;
   const server = response?.headers.get("X-Request-Time-Ms");
   const ms = (value: number) => Math.round(value * 10) / 10;
-  console.info("frontend_performance", {
-    phase: "api",
-    path: path.split(/[?#]/, 1)[0],
-    method: init.method ?? "GET",
-    status: response?.status ?? 0,
-    requestId: response?.headers.get("X-Request-Id") ?? null,
-    headersMs: ms(headersAt - started),
-    bodyMs: ms(bodyAt - headersAt),
-    parseMs: ms(parsedAt - bodyAt),
-    durationMs: ms(parsedAt - started),
-    serverMs: server && Number.isFinite(Number(server)) ? Number(server) : null,
-    serverTiming: response?.headers.get("Server-Timing") ?? null,
-  });
+  console.info(
+    "frontend_performance",
+    JSON.stringify({
+      phase: "api",
+      path: path.split(/[?#]/, 1)[0],
+      method: init.method ?? "GET",
+      status: response?.status ?? 0,
+      requestId: response?.headers.get("X-Request-Id") ?? null,
+      headersMs: ms(headersAt - started),
+      bodyMs: ms(bodyAt - headersAt),
+      parseMs: ms(parsedAt - bodyAt),
+      durationMs: ms(parsedAt - started),
+      serverMs:
+        server && Number.isFinite(Number(server)) ? Number(server) : null,
+      serverTiming: response?.headers.get("Server-Timing") ?? null,
+      failurePhase: failurePhase ?? null,
+    }),
+  );
 }
 
 export class HttpError extends Error {
@@ -134,11 +140,36 @@ async function requestOnce<T>(
     });
   } catch (failure) {
     const failedAt = performance.now();
-    logRequestTiming(path, init, started, failedAt, failedAt, failedAt);
+    logRequestTiming(
+      path,
+      init,
+      started,
+      failedAt,
+      failedAt,
+      failedAt,
+      undefined,
+      "HEADERS",
+    );
     throw failure;
   }
   const headersAt = performance.now();
-  const responseText = await response.text();
+  let responseText: string;
+  try {
+    responseText = await response.text();
+  } catch (failure) {
+    const failedAt = performance.now();
+    logRequestTiming(
+      path,
+      init,
+      started,
+      headersAt,
+      failedAt,
+      failedAt,
+      response,
+      "BODY",
+    );
+    throw failure;
+  }
   const bodyAt = performance.now();
   let body: {
     data?: T;

@@ -75,8 +75,8 @@ it("reports opt-in API header, body, parsing and server timing without payloads 
     ),
   );
   await request("/v1/investment/opportunity-context?secret=private-query");
-  expect(log).toHaveBeenCalledWith(
-    "frontend_performance",
+  expect(log).toHaveBeenCalledWith("frontend_performance", expect.any(String));
+  expect(JSON.parse(log.mock.calls[0][1])).toEqual(
     expect.objectContaining({
       phase: "api",
       path: "/v1/investment/opportunity-context",
@@ -93,6 +93,57 @@ it("reports opt-in API header, body, parsing and server timing without payloads 
     /private-payload|private-query/,
   );
 });
+
+it.each(["HEADERS", "BODY"] as const)(
+  "records safe JSON timing when the %s read rejects",
+  async (failurePhase) => {
+    window.history.replaceState(null, "", "/fund-screener?perf=1");
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const failure = new Error("private-provider-error");
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        if (failurePhase === "HEADERS") {
+          clock = 1150;
+          throw failure;
+        }
+        clock = 150;
+        return {
+          status: 200,
+          headers: new Headers({
+            "X-Request-Id": "timed-body",
+            "X-Request-Time-Ms": "140",
+          }),
+          text: async () => {
+            clock = 1150;
+            throw failure;
+          },
+        };
+      }),
+    );
+    setAccessToken("private-access-token");
+    await expect(
+      request("/v1/investment/opportunity-context?secret=private-query"),
+    ).rejects.toBe(failure);
+    expect(log).toHaveBeenCalledTimes(1);
+    const timing = JSON.parse(log.mock.calls[0][1]);
+    expect(timing).toMatchObject({
+      phase: "api",
+      path: "/v1/investment/opportunity-context",
+      failurePhase,
+      status: failurePhase === "BODY" ? 200 : 0,
+      headersMs: failurePhase === "BODY" ? 150 : 1150,
+      bodyMs: failurePhase === "BODY" ? 1000 : 0,
+      parseMs: 0,
+      durationMs: 1150,
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(
+      /private-provider-error|private-access-token|private-query/,
+    );
+  },
+);
 
 it("keeps request performance diagnostics off by default", async () => {
   const log = vi.spyOn(console, "info").mockImplementation(() => {});

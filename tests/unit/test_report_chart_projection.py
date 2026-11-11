@@ -144,3 +144,164 @@ def test_compact_query_is_opt_in_and_never_changes_service_or_stored_data(monkey
         assert delivered == before
     assert original == before
     assert "compact_charts" not in read.await_args.kwargs
+
+
+def restore_shared_charts(value):
+    """Test the public wire contract independently of backend traversal."""
+    items = value["chartSeries"]["items"]
+
+    def restore(node):
+        if isinstance(node, dict):
+            if set(node) == {"seriesRef"}:
+                return deepcopy(items[node["seriesRef"]])
+            return {key: restore(child) for key, child in node.items()}
+        if isinstance(node, list):
+            return [restore(child) for child in node]
+        return node
+
+    return {key: restore(child) for key, child in value.items() if key != "chartSeries"}
+
+
+def test_shared_curves_round_trip_every_field_without_mutation_or_copying_unrelated_values():
+    from backend.investment.report_chart_projection import share_context_charts
+
+    original = context()
+    before = deepcopy(original)
+    original["series"] = {"unrelatedMarketSeries": [1, 2]}
+    before["series"] = {"unrelatedMarketSeries": [1, 2]}
+    result = share_context_charts(original)
+    assert original == before
+    assert restore_shared_charts(result) == before
+    assert result["chartSeries"]["version"] == "shared-v1"
+    assert len(result["chartSeries"]["items"]) == 2
+    assert result["privateDecision"] is original["privateDecision"]
+    assert result["series"] is original["series"]
+    assert result["dailyResearch"]["report"]["customField"] is original["dailyResearch"]["report"]["customField"]
+    for (_, old), (_, current) in zip(consumers(original), consumers(result)):
+        assert set(current["series"]) == {"seriesRef"}
+        assert current["tracks"] is old["tracks"]
+        assert result["chartSeries"]["items"][current["series"]["seriesRef"]] == old["series"]
+    assert any(series is original["dailyResearch"]["report"]["actionablePlans"][0]["series"]
+               for series in result["chartSeries"]["items"].values())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("fundCode", "007466"), ("asOf", "2026-11-09"),
+    ("retrievedAt", "2026-11-10T11:00:00+08:00"),
+    ("sourceUri", "https://different.example/nav"),
+    ("points", [{"date": "2026-11-10", "value": "1.2346"}]),
+    ("extension", {"complete": False}),
+])
+def test_shared_curves_keep_distinct_full_content_including_same_fund_clocks(field, value):
+    from backend.investment.report_chart_projection import share_context_charts
+
+    one, two = plan(), plan()
+    two["series"][field] = value
+    original = {"dailyResearch": {"report": {"valueDirections": [{"plans": [one, two]}]}}}
+    result = share_context_charts(original)
+    assert len(result["chartSeries"]["items"]) == 2
+    assert restore_shared_charts(result) == original
+    assert (result["dailyResearch"]["report"]["valueDirections"][0]["plans"][0]["series"]
+            != result["dailyResearch"]["report"]["valueDirections"][0]["plans"][1]["series"])
+
+
+def test_shared_curves_deduplicate_equal_objects_with_different_key_order_and_keep_empty_curves():
+    from backend.investment.report_chart_projection import share_context_charts
+
+    first = plan()["series"]
+    second = dict(reversed(list(first.items())))
+    original = {"dailyResearch": {"report": {"unknownNewSection": [
+        {"series": first}, {"series": second},
+        {"series": {"points": [], "state": "UNAVAILABLE"}},
+        {"series": {"ordinaryMetadata": True}},
+    ]}}}
+    result = share_context_charts(original)
+    assert len(result["chartSeries"]["items"]) == 2
+    assert restore_shared_charts(result) == original
+    rows = result["dailyResearch"]["report"]["unknownNewSection"]
+    assert rows[0]["series"] == rows[1]["series"]
+    assert rows[3] is original["dailyResearch"]["report"]["unknownNewSection"][3]
+
+
+def test_shared_curve_bytes_drop_without_truncating_any_curves_or_funds():
+    from backend.investment.report_chart_projection import share_context_charts
+
+    report = context()
+    for _, item in consumers(report):
+        for owner in (item, item["actionableZones"]):
+            owner["series"]["points"] = [
+                {"date": f"point-{index}", "value": f"{1 + index / 10000:.4f}"}
+                for index in range(550)
+            ]
+    projected = share_context_charts(report)
+    assert len(json.dumps(projected).encode()) < len(json.dumps(report).encode()) * 0.2
+    assert restore_shared_charts(projected) == report
+
+
+def test_sharing_never_conflates_decimal_metadata_with_json_string_metadata():
+    from decimal import Decimal
+    from fastapi.encoders import jsonable_encoder
+    from backend.investment.report_chart_projection import share_context_charts
+
+    decimal_curve = {"points": [], "extension": Decimal("1.25")}
+    text_curve = {"points": [], "extension": "1.25"}
+    original = {"dailyResearch": {"report": {"unknownSection": [
+        {"series": decimal_curve}, {"series": text_curve},
+    ]}}}
+    shared = share_context_charts(original)
+    assert restore_shared_charts(jsonable_encoder(shared)) == jsonable_encoder(original)
+    assert shared["dailyResearch"]["report"]["unknownSection"][0]["series"] is decimal_curve
+
+
+def test_shared_curve_table_has_no_implicit_fund_or_curve_limit():
+    from backend.investment.report_chart_projection import share_context_charts
+
+    original = {"dailyResearch": {"report": {"mentionedFunds": [
+        {"fundCode": f"{index:06d}", "series": {
+            "fundCode": f"{index:06d}", "points": [{"date": "2026-11-10", "value": "1.2345"}],
+        }} for index in range(601)
+    ]}}}
+    result = share_context_charts(original)
+    assert len(result["chartSeries"]["items"]) == 601
+    assert restore_shared_charts(result) == original
+
+
+@pytest.mark.parametrize("original", [None, {}, {"dailyResearch": None}, {"dailyResearch": {"report": None}},
+                                      {"dailyResearch": {"report": {"summary": "完整原文"}}}])
+def test_shared_format_without_curves_keeps_the_existing_response_object(original):
+    from backend.investment.report_chart_projection import share_context_charts
+
+    assert share_context_charts(original) is original
+
+
+@pytest.mark.parametrize("query,shared,compact", [
+    ("", False, False), ("?chartFormat=inline", False, False),
+    ("?chartFormat=shared-v1", True, False),
+    ("?chartFormat=shared-v1&compactCharts=true", True, True),
+])
+def test_chart_wire_format_is_opt_in_and_composes_with_existing_compaction(monkeypatch, query, shared, compact):
+    from backend.investment import radar_api as api
+    from backend.investment.report_chart_projection import compact_context_charts
+
+    original = context()
+    read = AsyncMock(return_value=original)
+    monkeypatch.setattr(api.opportunity_service, "get_context", read)
+
+    @asynccontextmanager
+    async def transaction(pool, user, tenant):
+        yield "connection"
+
+    monkeypatch.setattr(api, "tenant_transaction", transaction)
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[get_pool] = lambda: "pool"
+    app.dependency_overrides[get_tenant_context] = lambda: TenantContext("actor", "tenant")
+    response = TestClient(app).get("/investment/opportunity-context" + query)
+    assert response.status_code == 200
+    delivered = response.json()["data"]
+    expected = compact_context_charts(original) if compact else original
+    if shared:
+        assert restore_shared_charts(delivered) == expected
+    else:
+        assert delivered == expected and "chartSeries" not in delivered
+    assert "chart_format" not in read.await_args.kwargs

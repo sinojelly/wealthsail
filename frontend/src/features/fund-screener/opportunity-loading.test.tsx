@@ -225,6 +225,9 @@ it("waits for the selected opportunity report, including direction/index depende
     "role",
     "status",
   );
+  expect(screen.getByText(/单次读取最多等待 90 秒/)).toHaveTextContent(
+    "不会重新运行 AI",
+  );
   expect(
     screen.queryByRole("heading", { name: "当前宏观事实" }),
   ).not.toBeInTheDocument();

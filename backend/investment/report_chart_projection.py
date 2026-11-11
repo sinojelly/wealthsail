@@ -1,5 +1,8 @@
 """Copy-on-write chart compaction for the opt-in opportunity response only."""
 
+from hashlib import sha256
+import json
+
 _PLAN_ARRAYS = (
     "actionablePlans", "actionableZones", "themeActionableZones",
     "discoveryActionableZones",
@@ -81,3 +84,66 @@ def compact_context_charts(context):
     if updated is report:
         return context
     return {**context, "dailyResearch": {**daily, "report": updated}}
+
+
+def share_context_charts(context):
+    """Send each complete report curve once, preserving all consumer positions.
+
+    References use the complete canonical JSON content, including observation
+    clocks and arbitrary metadata. Identity alone never substitutes a curve.
+    Unchanged values and the table's original curves are shared, not copied.
+    """
+    if not isinstance(context, dict):
+        return context
+    daily = context.get("dailyResearch")
+    report = daily.get("report") if isinstance(daily, dict) else None
+    if not isinstance(report, dict):
+        return context
+    items, references, transformed = {}, {}, {}
+
+    def reference(series):
+        identity = id(series)
+        if identity not in references:
+            try:
+                encoded = json.dumps(
+                    series, ensure_ascii=False, allow_nan=False, sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                # Non-JSON server values must keep the normal response encoder:
+                # Decimal and text can encode differently at the API boundary.
+                # Optional transport compaction cannot make a report unreadable.
+                references[identity] = series
+            else:
+                key = sha256(encoded).hexdigest()
+                items.setdefault(key, series)
+                references[identity] = {"seriesRef": key}
+        return references[identity]
+
+    def project(node):
+        if not isinstance(node, (dict, list)):
+            return node
+        identity = id(node)
+        if identity in transformed:
+            return transformed[identity]
+        if isinstance(node, list):
+            values = [project(child) for child in node]
+            result = node if all(old is new for old, new in zip(node, values)) else values
+        else:
+            values = {
+                key: reference(child)
+                if key == "series" and isinstance(child, dict) and isinstance(child.get("points"), list)
+                else project(child)
+                for key, child in node.items()
+            }
+            result = node if all(node[key] is child for key, child in values.items()) else values
+        transformed[identity] = result
+        return result
+
+    updated = project(report)
+    if not items:
+        return context
+    return {
+        **context, "dailyResearch": {**daily, "report": updated},
+        "chartSeries": {"version": "shared-v1", "items": items},
+    }

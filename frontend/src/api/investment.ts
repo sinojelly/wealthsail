@@ -1,4 +1,6 @@
 import { request, requestWithTimeout } from "./client";
+import { hydrateOpportunityChartSeries } from "./opportunity-chart-transport";
+import { OPPORTUNITY_CONTEXT_TIMEOUT_MS } from "./report-read-policy";
 import type { RuntimeFailureReasonCode } from "./runtime-diagnostics";
 import type { ResearchAcceptanceOutcome } from "./research-acceptance";
 import type { TopicRegistryPage } from "./research-topic-registry";
@@ -1214,8 +1216,13 @@ export interface ScreenResult {
 async function read<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await request<T>(`/v1${path}`, { signal })).data;
 }
-async function readReport<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return (await requestWithTimeout<T>(`/v1${path}`, { signal })).data;
+async function readReport<T>(
+  path: string,
+  signal?: AbortSignal,
+  timeoutMs = 30_000,
+): Promise<T> {
+  return (await requestWithTimeout<T>(`/v1${path}`, { signal }, timeoutMs))
+    .data;
 }
 export const getDirections = (signal?: AbortSignal) =>
   readReport<Direction[]>("/investment/directions", signal);
@@ -1226,7 +1233,7 @@ export const getIndices = (id: string, signal?: AbortSignal) =>
   );
 export const getMarketContext = (signal?: AbortSignal, months = 36) =>
   read<MacroContext>(`/investment/market-context?months=${months}`, signal);
-export function getOpportunityContext(
+export async function getOpportunityContext(
   query: OpportunityQuery,
   signal?: AbortSignal,
 ) {
@@ -1235,10 +1242,13 @@ export function getOpportunityContext(
     if (value !== undefined && value !== "") params.set(key, String(value));
   });
   params.set("compactCharts", "true");
-  return readReport<OpportunityContext>(
+  params.set("chartFormat", "shared-v1");
+  const context = await readReport<OpportunityContext>(
     `/investment/opportunity-context?${params}`,
     signal,
+    OPPORTUNITY_CONTEXT_TIMEOUT_MS,
   );
+  return hydrateOpportunityChartSeries(context);
 }
 export const getConditionMonitors = (signal?: AbortSignal) =>
   read<ConditionMonitor[]>("/investment/condition-monitors", signal);

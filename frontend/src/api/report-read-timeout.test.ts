@@ -7,12 +7,12 @@ afterEach(() => {
 });
 
 it.each([
-  ["directions", () => getDirections()],
-  ["indices", () => getIndices("broad")],
-  ["report", () => getOpportunityContext({ months: 36 })],
+  ["directions", () => getDirections(), 30_000],
+  ["indices", () => getIndices("broad"), 30_000],
+  ["report", () => getOpportunityContext({ months: 36 }), 90_000],
 ] as const)(
-  "ends a stalled %s read after 30 seconds without retrying",
-  async (_name, load) => {
+  "ends a stalled %s read at its own deadline without retrying",
+  async (_name, load, timeoutMs) => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -21,7 +21,9 @@ it.each([
     const rejected = expect(load()).rejects.toMatchObject({
       code: "REQUEST_TIMEOUT",
     });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await rejected;
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
