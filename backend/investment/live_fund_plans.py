@@ -15,12 +15,14 @@ from backend.funds.nav_history import (
     obj,
     recently_checked,
     select_history_view,
+    stamp as nav_stamp,
     valid_points,
 )
 from backend.indicators.actionable_zones import (
     VERSION,
     compute_actionable_price_plan,
     apply_industry_cycle,
+    _price as nav_display_price,
 )
 from backend.funds.nav_window import NAV_RESEARCH_MAX_SAMPLES, NAV_RESEARCH_MIN_SAMPLES
 from backend.investment.opportunity_scoring import SCORE_FIELDS
@@ -184,6 +186,90 @@ def _safe_history(history):
             str(history.get("fundName") or history.get("label") or ""),
         )
     )
+
+
+def _saved_curve_history(plan, code, now):
+    """Reuse only a consistent server-plan snapshot, never a declared URL alone."""
+    tracks = plan.get("tracks")
+    if not (
+        plan.get("methodVersion") == VERSION
+        and _code(plan) == code
+        and isinstance(tracks, list)
+        and len(tracks) == 2
+        and all(isinstance(row, dict) and isinstance(row.get("track"), str) for row in tracks)
+        and {row["track"] for row in tracks} == {"LEFT_VALUE", "RIGHT_TREND"}
+    ):
+        return None
+    series = plan.get("series")
+    if not isinstance(series, dict):
+        zones = plan.get("actionableZones")
+        series = zones.get("series") if isinstance(zones, dict) else None
+    if not (
+        isinstance(series, dict)
+        and series.get("fundCode") == code
+        and series.get("priceBasis") == "UNIT_NAV"
+        and series.get("unit") in _UNITS
+        and isinstance(series.get("points"), list)
+        and all(isinstance(row, dict) for row in series["points"])
+        and plan.get("asOf") == series.get("asOf")
+        and plan.get("sourceUri") == series.get("sourceUri")
+    ):
+        return None
+    retrieved, available, series_retrieved = (
+        nav_stamp(value)
+        for value in (plan.get("retrievedAt"), plan.get("availableAt"), series.get("retrievedAt"))
+    )
+    refresh = plan.get("priceRefresh")
+    refresh = refresh if isinstance(refresh, dict) else {}
+    calculated = nav_stamp(refresh.get("calculatedAt"))
+    if not (
+        retrieved is not None and available is not None and calculated is not None
+        and series_retrieved == retrieved <= available <= calculated <= now
+        and refresh.get("methodVersion") == VERSION
+        and refresh.get("navAsOf") == series["asOf"]
+    ):
+        return None
+    history = {
+        "fundCode": code, "priceBasis": "UNIT_NAV", "unit": series["unit"],
+        "currency": "CNY", "sourceUri": series.get("sourceUri"),
+        "asOf": series.get("asOf"), "retrievedAt": series.get("retrievedAt"),
+        "availableAt": plan["availableAt"],
+        "points": [{"date": row.get("date"), "close": row.get("value")} for row in series["points"]],
+        # The snapshot proves recorded coordinates, not a new source recheck or
+        # complete live coverage. Keep reference prices without granting entry.
+        "coverageReason": "LOCAL_NAV_CONTINUITY_UNVERIFIED",
+    }
+    points = valid_points(history, code, now)
+    window = plan.get("inputWindow")
+    window = window if isinstance(window, dict) else {}
+    if not (
+        points and len(points) == len(series["points"])
+        and points[-1]["date"] == history["asOf"]
+        and [row["date"] for row in history["points"]] == [row["date"] for row in points]
+        and type(window.get("sampleCount")) is int and window["sampleCount"] == len(points)
+        and window.get("start") == points[0]["date"]
+        and window.get("end") == points[-1]["date"]
+    ):
+        return None
+    try:
+        # UNIT_NAV plans display four decimal places; bind the saved quote to
+        # that same deterministic rounding of the curve's actual last point.
+        price = Decimal(str(plan.get("currentPrice")))
+        if not price.is_finite() or price <= 0 or price != Decimal(nav_display_price(points[-1]["close"])):
+            return None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    try:
+        change = plan.get("currentChangePct")
+        if not isinstance(change, bool):
+            change = Decimal(str(change))
+            if change.is_finite() and change > -100:
+                # A distribution changes unit NAV independently of its
+                # disclosed daily return. Keep the saved same-quote disclosure.
+                history["points"][-1]["returnPct"] = str(change)
+    except (InvalidOperation, TypeError, ValueError):
+        pass
+    return history
 
 
 async def _local_histories(conn, codes, now):
@@ -375,19 +461,22 @@ def _cached_nav_plan(code, view, points, benchmark):
 
 async def refresh_report_fund_plans(
     conn, report, now, *, histories=None, packet=None, include_series=False,
-    tenant_id=None, user_id=None,
+    tenant_id=None, user_id=None, repair_nav=True,
 ):
-    """Refresh every research reference, repairing public NAV for actor reads.
+    """Refresh every research reference from recorded public NAV coordinates.
 
-    Worker callers remain local-only. An authenticated reader uses the existing
-    narrow public-history persistence RPC before calculating price coordinates;
+    Saved-report reads set repair_nav=False and never await a provider. Explicit
+    repair callers can use the narrow authenticated history persistence RPC;
     research status and audit coverage never filter the underlying products.
     """
     if not isinstance(report, dict):
         return report
     from backend.macro.industry_cycle import expire_report_industry_risks
+    from backend.common.report_chart_series import freeze_chart_series, freeze_report_chart_series
 
     now = local(now)
+    if not repair_nav:
+        report = freeze_report_chart_series(report)
     result = expire_report_industry_risks(report, now)
     if tenant_id is not None and user_id is not None:
         from backend.investment.research_fund_references import resolve_report_fund_references
@@ -398,7 +487,7 @@ async def refresh_report_fund_plans(
         return result
     codes = list(dict.fromkeys(code for _, code in plans))
     prepared = None
-    if tenant_id is not None and user_id is not None:
+    if repair_nav and tenant_id is not None and user_id is not None:
         from backend.funds.nav_history import ensure_nav_histories
 
         prepared = await ensure_nav_histories(
@@ -427,6 +516,12 @@ async def refresh_report_fund_plans(
     calculated = {}
     for code in codes:
         view = select_history_view(code, code, "2y", candidates[code], now)
+        if not repair_nav and not view["points"]:
+            for original, plan_code in plans:
+                if plan_code == code and (saved := _saved_curve_history(original, code, now)):
+                    candidates[code].append(saved)
+                    view = select_history_view(code, code, "2y", candidates[code], now)
+                    break
         points = _chart_points(view, candidates[code], now)
         enough = len(points) >= NAV_RESEARCH_MIN_SAMPLES
         # The engine keeps short-window references separate from 120-sample
@@ -507,7 +602,7 @@ async def refresh_report_fund_plans(
                 for track in plan.get("tracks", []):
                     track.update(priceState="PARTIAL", entryReady=False, inBuyZone=False)
         if include_series:
-            plan["series"] = {
+            series = {
                 "state": state if state != "READY" else view["state"],
                 "fundCode": code,
                 "asOf": view.get("asOf"),
@@ -517,6 +612,7 @@ async def refresh_report_fund_plans(
                 "retrievedAt": view.get("retrievedAt"),
                 "points": [{"date": row["date"], "value": row["close"]} for row in points],
             }
+            plan["series"] = series if repair_nav else freeze_chart_series(series)
         calculated[code] = plan
     for original, code in plans:
         previous_as_of, previous_method, previous_source = (

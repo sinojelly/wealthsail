@@ -200,13 +200,28 @@ async def finish_daily_run(
     )
 
 
-_READ = """SELECT r.*,t.status,t.recorded_at,t.payload,t.error_class,
+_READ_COLUMNS = """r.run_id,r.slot_date,r.scheduled_for,r.dispatched_at,r.run_mode,
+ r.source_batch_id,r.prompt_version,t.status,t.recorded_at,t.payload,t.error_class,
  t.failure_stage,t.failure_reason_code,t.failure_rule_id,t.failure_item_index,t.failure_industry_codes,
  EXISTS(SELECT 1 FROM research.daily_research_runs scheduled
- WHERE scheduled.slot_date=$1 AND scheduled.dispatched_at<=$2 AND scheduled.run_mode='SCHEDULED') AS scheduled_consumed
- FROM research.daily_research_runs r LEFT JOIN research.daily_research_results t
+ WHERE scheduled.slot_date=$1 AND scheduled.dispatched_at<=$2 AND scheduled.run_mode='SCHEDULED') AS scheduled_consumed"""
+_READ_FROM = """ FROM research.daily_research_runs r LEFT JOIN research.daily_research_results t
  ON t.run_id=r.run_id AND t.recorded_at<=$2
  WHERE r.slot_date<=$1 AND r.dispatched_at<=$2"""
+# Failed or unfinished attempts still expose their own frozen fund observation.
+# Its six inputs preserve all 46 products, audit proof, risk and subscription
+# facts without transferring unused histories, documents and market series.
+_LATEST_PACKET_SQL = """CASE WHEN t.status='READY' THEN r.public_packet ELSE
+ COALESCE((SELECT jsonb_object_agg(item.key,item.value)
+ FROM jsonb_each(CASE WHEN jsonb_typeof(r.public_packet)='object'
+   THEN r.public_packet ELSE '{}'::jsonb END) item
+ WHERE item.key IN ('asOf','quantitativeScan','discoveryUniverse',
+   'researchDiscovery','previousIndustryRiskStates','fundSubscriptionStatus')),
+ '{}'::jsonb) END"""
+_READ = "SELECT " + _READ_COLUMNS + ",r.public_packet" + _READ_FROM
+_READ_LATEST = (
+    "SELECT " + _READ_COLUMNS + "," + _LATEST_PACKET_SQL + " AS public_packet" + _READ_FROM
+)
 
 
 async def read_daily_research(
@@ -224,6 +239,7 @@ async def read_daily_research(
 ):
     from backend.investment.quantitative_scan import report_with_quantitative_scan
     from backend.investment.live_fund_plans import refresh_report_fund_plans
+    from backend.common.report_chart_series import freeze_report_chart_series
     from backend.common.timing import trace_stage
     from backend.macro.daily_pipeline_repository import read_pipeline
     from backend.macro.research_diagnostics import sanitize_failure_diagnostics
@@ -233,7 +249,7 @@ async def read_daily_research(
     stamp = local(now)
     pipeline = await read_pipeline(conn, stamp)
     latest = await conn.fetchrow(
-        _READ + " ORDER BY r.dispatched_at DESC,r.run_id DESC LIMIT 1",
+        _READ_LATEST + " ORDER BY r.dispatched_at DESC,r.run_id DESC LIMIT 1",
         stamp.date(),
         stamp,
     )
@@ -326,7 +342,9 @@ async def read_daily_research(
         state = "DISABLED"
     packet = _object(report_row.get("public_packet")) if report_row else None
     report = (
-        report_with_quantitative_scan(_object(report_row.get("payload")), packet, stamp)
+        report_with_quantitative_scan(
+            freeze_report_chart_series(_object(report_row.get("payload"))), packet, stamp,
+        )
         if report_row
         else None
     )
@@ -341,6 +359,7 @@ async def read_daily_research(
                 conn, report, stamp, histories=histories, packet=packet,
                 include_series=tenant_id is not None and user_id is not None,
                 tenant_id=tenant_id, user_id=user_id,
+                repair_nav=False,
             )
             from backend.investment.opportunity_scoring import rank_report
 
@@ -474,8 +493,8 @@ async def read_recent_public_research(conn, now):
     """Bounded READY public reports only; never query actor study records."""
     stamp = local(now)
     rows = await conn.fetch(
-        "WITH visible AS ("
-        + _READ
+        "WITH visible AS (SELECT r.run_id,r.slot_date,r.run_mode,t.recorded_at,t.payload"
+        + _READ_FROM
         + " AND t.status='READY' AND t.recorded_at>=$3), ranked AS ("
         + "SELECT *,row_number() OVER(PARTITION BY slot_date ORDER BY (run_mode='SCHEDULED') DESC,recorded_at DESC,run_id) AS day_rank FROM visible) "
         + "SELECT * FROM ranked WHERE day_rank=1 OR run_id IN (SELECT run_id FROM visible ORDER BY recorded_at DESC,run_id LIMIT 14) "

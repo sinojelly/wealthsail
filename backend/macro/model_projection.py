@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 import re
 
+from backend.common.report_chart_series import is_frozen_chart_json
+
 
 def _pick(row, fields):
     return {key: deepcopy(row[key]) for key in fields if key in row}
@@ -409,6 +411,9 @@ def known_company_names(packet):
 
 
 def readable_fund_codes(value, codes, company_names=()):
+    if is_frozen_chart_json(value):
+        # Recorded chart coordinates and their metadata are never narrative.
+        return value
     if isinstance(value, str):
         result = separate_fund_codes(value, codes)
         if len(company_names) == 1:

@@ -88,6 +88,196 @@ async def test_no_history_keeps_fund_reference_without_inventing_price():
 
 
 @pytest.mark.asyncio
+async def test_saved_report_read_reprices_all_local_references_without_provider_work(monkeypatch):
+    forbidden = AsyncMock(side_effect=AssertionError("Saved reports must not wait for external NAV"))
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", forbidden)
+    monkeypatch.setattr("backend.funds.latest_quotes.latest_quote_cache.get", forbidden)
+    monkeypatch.setattr("backend.funds.nav_history.fetch_on_demand_nav_history", forbidden)
+    codes = ["008298", "007466", "011035", "001234"]
+    report = {
+        "valueDirections": [{"auditStatus": "UNAUDITED_SCOPE", "plans": [old_plan(codes[0])]}],
+        "researchTopics": [{"key": "memory", "plans": [old_plan(codes[1])]}],
+        "mentionedFunds": [old_plan(codes[2])],
+        "quantitativeScan": {"items": [old_plan(codes[3])]},
+    }
+    before = deepcopy(report)
+
+    result = await refresh_report_fund_plans(
+        LocalHistory([history(code) for code in codes]), report, NOW,
+        tenant_id="tenant", user_id="actor", include_series=True, repair_nav=False,
+    )
+
+    forbidden.assert_not_awaited()
+    assert result["valueDirections"][0]["auditStatus"] == "UNAUDITED_SCOPE"
+    rows = [
+        result["valueDirections"][0]["plans"][0], result["researchTopics"][0]["plans"][0],
+        result["mentionedFunds"][0], result["quantitativeScan"]["items"][0],
+    ]
+    assert [row["fundCode"] for row in rows] == codes
+    for row in rows:
+        assert row["currentPrice"] == "1.5000"
+        assert row["asOf"] == "2026-10-27"
+        assert row["actionableZones"]["buyZone"]["min"] is not None
+        assert row["actionableZones"]["sellZone"]["max"] is not None
+        assert len(row["series"]["points"]) == 500
+    assert report == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("age", [timedelta(minutes=1), timedelta(days=11)])
+@pytest.mark.parametrize("invalid_local", [False, True])
+async def test_saved_server_curve_remains_real_reference_when_local_cohort_is_missing(monkeypatch, age, invalid_local):
+    archived = await refresh_report_fund_plans(
+        LocalHistory([history()]), {"valueDirections": [{"plans": [old_plan()]}]},
+        NOW, include_series=True,
+    )
+    before = deepcopy(archived)
+    saved = archived["valueDirections"][0]["plans"][0]
+    forbidden = AsyncMock(side_effect=AssertionError("No external work on saved report reads"))
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", forbidden)
+    rows = []
+    if invalid_local:
+        malformed = history()
+        malformed["sourceUri"] = "https://unverified.example/nav"
+        rows.append(malformed)
+
+    result = await refresh_report_fund_plans(
+        LocalHistory(rows), archived, NOW + age, tenant_id="tenant", user_id="actor",
+        include_series=True, repair_nav=False,
+    )
+
+    current = result["valueDirections"][0]["plans"][0]
+    assert current["currentPrice"] == saved["currentPrice"]
+    assert current["asOf"] == saved["asOf"]
+    assert current["retrievedAt"] == saved["retrievedAt"]
+    assert current["series"]["points"] == saved["series"]["points"]
+    for track, old_track in zip(current["tracks"], saved["tracks"]):
+        for field in ("entryZoneMin", "entryZoneMax", "stopLossPrice", "takeProfitT1", "takeProfitT2"):
+            assert track[field] == old_track[field]
+        assert track["entryReady"] is False
+    assert current["priceRefresh"]["calculatedAt"] == (NOW + age).isoformat()
+    assert current["historyQuality"] == "PARTIAL"
+    assert archived == before
+    forbidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_saved_curve_roundtrip_keeps_disclosed_return_on_distribution_day():
+    source = history()
+    source["points"][-1]["returnPct"] = "1.25"
+    archived = await refresh_report_fund_plans(
+        LocalHistory([source]), {"actionablePlans": [old_plan()]}, NOW, include_series=True,
+    )
+    before = deepcopy(archived)
+    saved = archived["actionablePlans"][0]
+    assert saved["currentChangePct"] == saved["confirmedNav"]["changePct"] == "1.25"
+
+    reread = await refresh_report_fund_plans(
+        LocalHistory(), archived, NOW + timedelta(minutes=1), include_series=True, repair_nav=False,
+    )
+
+    current = reread["actionablePlans"][0]
+    assert current["currentPrice"] == saved["currentPrice"]
+    assert current["asOf"] == saved["asOf"]
+    assert current["series"]["points"] == saved["series"]["points"]
+    assert current["currentChangePct"] == current["confirmedNav"]["changePct"] == "1.25"
+    assert archived == before
+
+
+@pytest.mark.asyncio
+async def test_minimal_custom_series_cannot_create_a_confirmed_nav_from_a_declared_url():
+    custom = {
+        "subjectKind": "nav", "subjectId": "008298", "fundCode": "008298",
+        "market": "FUND_CN", "priceBasis": "UNIT_NAV", "unit": "CNY/份",
+        "series": {
+            "fundCode": "008298", "priceBasis": "UNIT_NAV", "unit": "CNY/份",
+            "sourceUri": "https://fund.eastmoney.com/008298.html",
+            "retrievedAt": NOW.isoformat(), "asOf": "2026-10-27",
+            "points": [{"date": "2026-10-27", "value": "999"}],
+        },
+    }
+    result = await refresh_report_fund_plans(
+        LocalHistory(), {"actionablePlans": [custom]}, NOW, include_series=True, repair_nav=False,
+    )
+    current = result["actionablePlans"][0]
+    assert current["currentPrice"] is None and current["confirmedNav"] is None
+    assert current["historyQuality"] == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["method", "tracks", "price", "as_of", "source", "retrieved", "available", "calculated", "sample_count"])
+async def test_saved_curve_requires_the_original_server_plan_to_match_its_source(invalid):
+    archived = await refresh_report_fund_plans(
+        LocalHistory([history()]), {"actionablePlans": [old_plan()]}, NOW, include_series=True,
+    )
+    saved = archived["actionablePlans"][0]
+    if invalid == "method":
+        saved["methodVersion"] = "model-proposed"
+    elif invalid == "tracks":
+        saved["tracks"] = []
+    elif invalid == "price":
+        saved["currentPrice"] = "999"
+    elif invalid == "as_of":
+        saved["asOf"] = "2026-10-26"
+    elif invalid == "source":
+        saved["sourceUri"] = "https://unverified.example/nav"
+    elif invalid == "retrieved":
+        saved["retrievedAt"] = (NOW - timedelta(seconds=1)).isoformat()
+    elif invalid == "available":
+        saved.pop("availableAt")
+    elif invalid == "calculated":
+        saved["priceRefresh"]["calculatedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    else:
+        saved["inputWindow"]["sampleCount"] = 1
+    before = deepcopy(archived)
+
+    result = await refresh_report_fund_plans(
+        LocalHistory(), archived, NOW, include_series=True, repair_nav=False,
+    )
+
+    current = result["actionablePlans"][0]
+    assert current["currentPrice"] is None and current["confirmedNav"] is None
+    assert current["historyQuality"] == "UNAVAILABLE"
+    assert archived == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["source", "future", "fund_identity", "as_of", "unit"])
+async def test_saved_curve_fallback_never_promotes_invalid_source_identity_or_time(monkeypatch, invalid):
+    archived = await refresh_report_fund_plans(
+        LocalHistory([history()]), {"valueDirections": [{"plans": [old_plan()]}]},
+        NOW, include_series=True,
+    )
+    saved = archived["valueDirections"][0]["plans"][0]
+    if invalid == "source":
+        saved["series"]["sourceUri"] = "https://unverified.example/nav"
+    elif invalid == "future":
+        saved["series"]["retrievedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    elif invalid == "fund_identity":
+        saved["series"]["fundCode"] = "999999"
+    elif invalid == "as_of":
+        saved["series"]["asOf"] = "2026-10-26"
+    else:
+        saved["series"]["unit"] = "USD"
+    before = deepcopy(archived)
+    forbidden = AsyncMock(side_effect=AssertionError("Saved report reads stay local"))
+    monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", forbidden)
+
+    result = await refresh_report_fund_plans(
+        LocalHistory(), archived, NOW, tenant_id="tenant", user_id="actor",
+        include_series=True, repair_nav=False,
+    )
+
+    current = result["valueDirections"][0]["plans"][0]
+    assert current["fundCode"] == saved["fundCode"]
+    assert current["currentPrice"] is None
+    assert current["series"]["points"] == []
+    assert current["historyQuality"] == "UNAVAILABLE"
+    assert archived == before
+    forbidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_authenticated_failed_repair_keeps_older_actual_prices_marked_partial(monkeypatch):
     ensure = AsyncMock(return_value={
         "asOf": NOW, "histories": [history()],

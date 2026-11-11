@@ -12,8 +12,9 @@ from backend.macro.daily_repository import read_daily_research
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated", [False, True])
 async def test_a_saved_old_daily_report_is_repriced_before_return_without_updating_it(
-    monkeypatch,
+    monkeypatch, authenticated,
 ):
     now = datetime(2026, 10, 28, 20, tzinfo=ZoneInfo("Asia/Shanghai"))
     old = now - timedelta(days=5)
@@ -47,7 +48,8 @@ async def test_a_saved_old_daily_report_is_repriced_before_return_without_updati
         "payload": stored,
         "public_packet": {"fundHistories": []},
     }
-    result = await read_daily_research(conn, now)
+    actor = {"tenant_id": "tenant", "user_id": "actor"} if authenticated else {}
+    result = await read_daily_research(conn, now, **actor)
     assert (
         result["report"]["actionablePlans"][0]["methodVersion"] == "actionable-zones-v6"
     )
@@ -56,5 +58,7 @@ async def test_a_saved_old_daily_report_is_repriced_before_return_without_updati
     refresh.assert_awaited_once()
     assert refresh.await_args.args[:1] == (conn,)
     assert refresh.await_args.args[2] == now
+    assert refresh.await_args.kwargs["repair_nav"] is False
+    assert refresh.await_args.kwargs["include_series"] is authenticated
     assert stored["actionablePlans"][0]["methodVersion"] == "actionable-zones-v4"
     conn.execute.assert_not_awaited()

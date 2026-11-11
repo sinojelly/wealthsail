@@ -196,6 +196,8 @@ async def test_recent_reader_queries_only_ready_public_history_with_time_fences(
     sql, *args = conn.fetch.call_args.args
     assert "t.status='READY'" in sql and "t.recorded_at<=$2" in sql
     assert "r.dispatched_at<=$2" in sql and "t.recorded_at>=$3" in sql
+    assert "r.*" not in sql and "public_packet" not in sql
+    assert "scheduled_for" not in sql and "scheduled_consumed" not in sql
     assert "study_" not in sql and "tenant" not in sql
     assert args[2] == NOW - timedelta(days=14)
     assert result[0]["status"] == "READY"
