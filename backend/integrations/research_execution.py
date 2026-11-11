@@ -339,6 +339,7 @@ class ExecutionObserver:
         self.completed_tools = set()
         self.page_targets = {}
         self.progress_unknown = False
+        self.codex_diagnostic = None
 
     def _observe_progress(self, value):
         self.last_event_at = datetime.now(timezone.utc).isoformat()
@@ -519,6 +520,9 @@ class ExecutionObserver:
         elif kind in {"turn.failed", "error"}:
             self.recognized = self.partial = True
             self.proof_barrier = self.proof_barrier or "TURN_FAILED"
+            from backend.common.runtime_diagnostics import classify_failure
+
+            self.codex_diagnostic = classify_failure(value, origin="CLI", stage="CLI_STDOUT")
         elif kind in {"item.started", "item.updated", "item.completed"}:
             self.recognized = True
             item = value.get("item")

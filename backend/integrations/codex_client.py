@@ -20,6 +20,7 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from backend.integrations import codex_research
+from backend.common.runtime_diagnostics import attach_diagnostic, make_diagnostic
 from backend.integrations.research_execution import (
     EXECUTION_TRANSPORT_HEADER,
     sanitize_execution_receipt,
@@ -108,6 +109,15 @@ def _check_input(payload):
 
 
 def _failure_metadata(error, source, *, capture_raw=False, identity=None):
+    attach_diagnostic(error, source.get("diagnostic") if isinstance(source, dict)
+                      else getattr(source, "codex_diagnostic", None))
+    if not isinstance(source, dict) and not hasattr(error, "codex_diagnostic"):
+        reason = ("TRANSPORT_TIMEOUT" if isinstance(source, (TimeoutError, httpx.TimeoutException))
+                  else "TRANSPORT_DISCONNECTED" if isinstance(source, (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError))
+                  else "NETWORK_UNAVAILABLE" if isinstance(source, httpx.ConnectError)
+                  else None)
+        if reason is not None:
+            attach_diagnostic(error, make_diagnostic("TRANSPORT", "TRANSPORT", reason))
     if isinstance(source, dict):
         uncertain = source.get("inferenceUncertain") is True
         succeeded = source.get("inferenceSucceeded")
@@ -209,6 +219,8 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
                         if response.status_code == 504:
                             error.inference_uncertain = True
                         error = _failure_metadata(error, body.get("detail") if isinstance(body, dict) else None, capture_raw=endpoint == "/v1/research", identity=identity)
+                        if not hasattr(error, "codex_diagnostic"):
+                            attach_diagnostic(error, make_diagnostic("RUNNER", "RUNNER_HTTP", "RUNNER_HTTP_ERROR", httpStatus=response.status_code))
                         if response.status_code == 504 and not hasattr(error, "timeout_origin"):
                             error.timeout_origin = "RUNNER_OPERATION_TIMEOUT"
                         if transport_reason is not None:
@@ -229,7 +241,10 @@ async def _request_json(settings, method, endpoint, *, payload=None, timeout=90,
             raise error from exc
         raise _failure_metadata(CodexCallError("Codex runner request failed"), exc) from exc
     except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
-        raise CodexCallError("Codex runner request failed") from exc
+        error = _failure_metadata(CodexCallError("Codex runner request failed"), exc)
+        if not hasattr(error, "codex_diagnostic"):
+            attach_diagnostic(error, make_diagnostic("TRANSPORT", "TRANSPORT", "TRANSPORT_FAILED_UNCLASSIFIED"))
+        raise error from exc
 
 
 async def _preflight_local(settings, *, public=False):
@@ -290,7 +305,7 @@ async def account(settings, *, fresh=False, refresh=False) -> dict:
                     endpoint += "?refresh=true"
                 result = await _request_json(settings, "GET", endpoint, timeout=23)
                 result = private.safe_account_snapshot(result)
-                account_diagnostic("transport", started, status=result["status"])
+                account_diagnostic("transport", started, status=result["status"], diagnostic=result.get("diagnostic"))
                 result = history.accept(sequence, result)
                 if fresh and result["status"] == "STALE":
                     return private.unavailable_account("ACCOUNT_STALE")
@@ -310,12 +325,19 @@ async def account(settings, *, fresh=False, refresh=False) -> dict:
                 caches[key] = AccountMetadataCache(inspect, generation=auth_file_generation)
             return await caches[key].get(fresh=fresh, refresh=refresh)
     except Exception as error:
+        if not hasattr(error, "codex_diagnostic"):
+            attach_diagnostic(error, make_diagnostic("TRANSPORT", "TRANSPORT", "TRANSPORT_TIMEOUT" if isinstance(error, TimeoutError) else "TRANSPORT_FAILED_UNCLASSIFIED"))
         account_diagnostic("transport", started, error)
         if history is not None:
             fallback = history.failure(sequence)
             if not fresh:
+                from backend.common.runtime_diagnostics import sanitize_diagnostic
+
+                diagnostic = sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+                if diagnostic is not None:
+                    fallback["diagnostic"] = diagnostic
                 return fallback
-        return private.unavailable_account()
+        return private.unavailable_account(diagnostic=getattr(error, "codex_diagnostic", None))
 
 
 async def completion(

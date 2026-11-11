@@ -20,6 +20,10 @@ from backend.integrations.research_execution import (
 )
 from backend.integrations.research_process import cleanup_process, spawn_research_process
 from backend.integrations.research_lifecycle import CLEANUP_SECONDS
+from backend.common.runtime_diagnostics import (
+    SanitizedStderr, StderrDiagnostic, attach_diagnostic, classify_failure,
+    make_diagnostic, preferred_diagnostic, sanitize_diagnostic,
+)
 
 _LATE_SPAWNS = set()
 _OWNED_CLEANUPS = set()
@@ -401,14 +405,19 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=N
     if lifecycle is not None:
         lifecycle.started()
 
+    stderr_diagnostic = StderrDiagnostic()
+
     async def read(stream, keep):
         chunks, size = [], 0
         while chunk := await stream.read(65536):
             if keep and stdout_observer is not None:
                 stdout_observer(chunk)
+            if not keep:
+                stderr_diagnostic.feed(chunk)
             size += len(chunk)
             if size > 2 * 1024 * 1024:
-                raise CodexOutputError("output limit")
+                raise attach_diagnostic(CodexOutputError("output limit"),
+                                        make_diagnostic("CLI", "CLI_EXECUTION", "CLI_OUTPUT_LIMIT"))
             if keep:
                 chunks.append(chunk)
         return b"".join(chunks)
@@ -431,15 +440,19 @@ async def _run(args, *, cwd, env, input_data=None, timeout=15, stdout_observer=N
         if cancelled_during_spawn:
             raise asyncio.CancelledError
         stdout, stderr, code = await asyncio.wait_for(asyncio.shield(communication), timeout)
-        return code, stdout, stderr
+        return code, stdout, SanitizedStderr(stderr_diagnostic.finish())
     except TimeoutError as exc:
         exc.timeout_origin = "CLI_MODEL_TIMEOUT"
+        attach_diagnostic(exc, stderr_diagnostic.finish() or make_diagnostic("CLI", "CLI_EXECUTION", "CLI_MODEL_TIMEOUT"))
         if lifecycle is not None:
             lifecycle.terminating("CLI_MODEL_TIMEOUT")
         raise
     except asyncio.CancelledError:
         if lifecycle is not None and not lifecycle.data["terminationRequested"]:
             lifecycle.terminating("CANCELLED")
+        raise
+    except Exception as exc:
+        attach_diagnostic(exc, sanitize_diagnostic(getattr(exc, "codex_diagnostic", None)) or stderr_diagnostic.finish())
         raise
     finally:
         cleanup = _own_cleanup(process, control_read=control_read, lifecycle=lifecycle,
@@ -566,7 +579,7 @@ async def run_codex_research(
             if lifecycle is not None:
                 lifecycle.progress(observer.progress())
         try:
-            code, stdout, _ = await _run(
+            code, stdout, stderr = await _run(
                 args,
                 cwd=directory,
                 env=public_environment(
@@ -578,6 +591,9 @@ async def run_codex_research(
                 **({"lifecycle": lifecycle} if lifecycle is not None else {}),
             )
         except (Exception, asyncio.CancelledError) as exc:
+            attach_diagnostic(exc, sanitize_diagnostic(getattr(exc, "codex_diagnostic", None))
+                              or observer.codex_diagnostic
+                              or make_diagnostic("CLI", "CLI_EXECUTION", "CLI_FAILED_UNCLASSIFIED"))
             if lifecycle is not None:
                 exc.research_execution_state = lifecycle.snapshot()
             raise with_telemetry(
@@ -590,12 +606,18 @@ async def run_codex_research(
         receipt = observer.finish()
         try:
             if code:
-                raise CodexExecutionError("CLI did not complete")
+                failure = preferred_diagnostic(observer.codex_diagnostic,
+                                                getattr(stderr, "codex_diagnostic", None),
+                                                classify_failure(stderr, origin="CLI", stage="CLI_EXECUTION"))
+                raise attach_diagnostic(CodexExecutionError("CLI did not complete"), {**failure, "exitCode": code})
             if not output_path.is_file() or output_path.stat().st_size > 2 * 1024 * 1024:
-                raise CodexOutputError("missing or oversized report")
+                reason = "CLI_OUTPUT_LIMIT" if output_path.is_file() else "CLI_REPORT_MISSING"
+                raise attach_diagnostic(CodexOutputError("missing or oversized report"), make_diagnostic("CLI", "CLI_OUTPUT", reason))
             return ResearchResult(decode_report(output_path.read_text("utf-8")), usage=usage, model=model, execution_receipt=receipt,
                                   execution_statistics=observer.statistics(), execution_progress=observer.progress())
         except (CodexExecutionError, CodexOutputError, OSError, UnicodeError) as exc:
+            attach_diagnostic(exc, sanitize_diagnostic(getattr(exc, "codex_diagnostic", None))
+                              or make_diagnostic("CLI", "CLI_OUTPUT", "CLI_OUTPUT_INVALID"))
             _capture_output_error(exc, output_path)
             raise with_telemetry(exc, usage=usage, model=model, inference_succeeded=completed, execution_receipt=receipt,
                                  execution_statistics=observer.statistics(), execution_progress=observer.progress())

@@ -6,6 +6,7 @@ from uuid import UUID
 from backend.common.database import system_connection, tenant_transaction
 from backend.ai_usage.calculation import aggregate_task, quota_delta
 from backend.integrations.research_execution import sanitize_execution_progress
+from backend.common.runtime_diagnostics import sanitize_diagnostic
 
 
 def dump(value):
@@ -87,6 +88,9 @@ async def persist(pool, tenant_id, user_id, event, data):
                 )
             elif event == "finish_call":
                 details = {key: data[key] for key in ("before", "after", "tokens")}
+                diagnostic = sanitize_diagnostic(data.get("diagnostic"))
+                if diagnostic is not None:
+                    details["diagnostic"] = diagnostic
                 progress = sanitize_execution_progress(data.get("researchProgress"))
                 run_id = _run_identity(data.get("researchRunId"))
                 if progress is not None and run_id:
@@ -121,6 +125,7 @@ async def persist(pool, tenant_id, user_id, event, data):
 def call_dto(row):
     details = decode(row.get("details")) or {}
     progress = sanitize_execution_progress(details.get("researchProgress"))
+    diagnostic = sanitize_diagnostic(details.get("diagnostic"))
     return {
         "id": str(row["id"]),
         "model": row["model"],
@@ -129,6 +134,7 @@ def call_dto(row):
         "startedAt": row["started_at"],
         "finishedAt": row["finished_at"],
         "errorClass": row.get("error_class"),
+        **({"diagnostic": diagnostic} if diagnostic is not None else {}),
         **{
             key: (details.get("tokens") or {}).get(key)
             for key in ("inputTokens", "cachedTokens", "outputTokens", "totalTokens")

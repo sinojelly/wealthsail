@@ -1,6 +1,7 @@
 """Closed, content-free metadata shared by validation, storage and audit."""
 
 import re
+from backend.common.runtime_diagnostics import REASON_CODES as RUNTIME_REASON_CODES
 
 FAILURE_STAGES = frozenset(
     {"MODEL_EXECUTION", "SOURCE_VERIFICATION", "REPORT_VALIDATION", "PERSISTING"}
@@ -26,7 +27,7 @@ REASON_CODES = frozenset(
         "RUNNER_DISCONNECTED",
         "MODEL_EXIT_UNCONFIRMED",
     }
-)
+) | RUNTIME_REASON_CODES
 RULE_IDS = frozenset(
     {
         "INDUSTRY_REVIEW_DUPLICATE",

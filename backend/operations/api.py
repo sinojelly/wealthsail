@@ -44,6 +44,7 @@ async def operations_ai_usage(
 ) -> dict:
     from backend.ai_usage import repository as usage_repository
     from backend.integrations import codex_client
+    from backend.common.runtime_diagnostics import sanitize_diagnostic
 
     _require_owner_admin(ctx)
     limitations = ["ACCOUNT_DELTA_ESTIMATE", "HISTORY_FROM_INSTALLATION"]
@@ -96,6 +97,8 @@ async def operations_ai_usage(
                 else await codex_client.account(settings)
             )
             account = {key: raw.get(key, default) for key, default in account.items()}
+            if diagnostic := sanitize_diagnostic(raw.get("diagnostic")):
+                account["diagnostic"] = diagnostic
         except Exception as exc:
             logger.warning(
                 "codex_account stage=operations_api error_class=%s duration_ms=%.1f",
@@ -103,6 +106,8 @@ async def operations_ai_usage(
                 (time.monotonic() - started) * 1000,
             )
             account.update(status="UNAVAILABLE", limitations=["ACCOUNT_READ_FAILED"])
+            if diagnostic := sanitize_diagnostic(getattr(exc, "codex_diagnostic", None)):
+                account["diagnostic"] = diagnostic
     return ok(
         {"account": account}
         if view == "account"

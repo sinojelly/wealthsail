@@ -74,6 +74,7 @@ def endpoint(monkeypatch):
             "limitations": ["ACCOUNT_STALE"]
             if state.get("accountStatus") == "STALE"
             else [],
+            "diagnostic": state.get("accountDiagnostic"),
         }
 
     monkeypatch.setattr(repository, "list_tasks", tasks)
@@ -199,3 +200,21 @@ def test_unexpected_account_failure_is_safe_and_diagnosed_without_losing_tasks(
         "private@example.test" not in caplog.text
         and "TOKEN_NEVER_LOG" not in caplog.text
     )
+
+
+@pytest.mark.parametrize("platform", [True, False])
+def test_account_runtime_diagnostic_is_whitelisted_and_requires_platform_access(endpoint, platform):
+    client, state = endpoint
+    diagnostic = {"version": "codex-diagnostic-v1", "origin": "ACCOUNT_RPC", "stage": "ACCOUNT_READ",
+                  "reasonCode": "RPC_RESPONSE_TIMEOUT", "rpcCode": -32603, "elapsedMs": 15005}
+    state.update(platform=platform, accountStatus="UNAVAILABLE",
+                 accountDiagnostic={**diagnostic, "message": "TOKEN_NEVER_RETURN"})
+    response = client.get("/api/v1/operations/ai-usage?view=account")
+    account = response.json()["data"]["account"]
+    if platform:
+        assert account.get("diagnostic") == diagnostic
+    else:
+        assert account["status"] == "RESTRICTED"
+        assert "diagnostic" not in account
+        assert not state.get("accountCalled")
+    assert "TOKEN_NEVER_RETURN" not in response.text

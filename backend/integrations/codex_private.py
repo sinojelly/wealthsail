@@ -21,6 +21,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+from backend.common.runtime_diagnostics import (
+    StderrDiagnostic, attach_diagnostic, classify_failure, make_diagnostic,
+    preferred_diagnostic, sanitize_diagnostic,
+)
 
 from backend.integrations.codex_research import (
     CodexExecutionError,
@@ -182,9 +186,11 @@ async def complete(
         }
 
 
-async def _drain_stderr(stream: asyncio.StreamReader) -> None:
+async def _drain_stderr(stream: asyncio.StreamReader, diagnostic=None) -> None:
     size = 0
     while chunk := await stream.read(65536):
+        if diagnostic is not None:
+            diagnostic.feed(chunk)
         size += len(chunk)
         if size > _MAX_OUTPUT_BYTES:
             raise CodexOutputError("Codex process output limit exceeded")
@@ -303,7 +309,11 @@ class _AppServer:
             packet = await self.receive()
             if packet.get("id") == request_id and "method" not in packet:
                 if "error" in packet or not isinstance(packet.get("result"), dict):
-                    raise CodexExecutionError("Codex stream protocol request failed")
+                    raise attach_diagnostic(
+                        CodexExecutionError("Codex stream protocol request failed"),
+                        classify_failure(packet, origin="ACCOUNT_RPC" if method.startswith("account/") else "CLIENT",
+                                         stage="REQUEST", default="ACCOUNT_RPC_FAILED" if method.startswith("account/") else "CLI_FAILED_UNCLASSIFIED"),
+                    )
                 return packet["result"]
             if "method" in packet:
                 self.pending.append(packet)
@@ -324,13 +334,17 @@ def _safe_text(value, limit=120):
     return None
 
 
-def unavailable_account(reason="ACCOUNT_UNAVAILABLE"):
-    return {
+def unavailable_account(reason="ACCOUNT_UNAVAILABLE", *, diagnostic=None):
+    result = {
         "status": "UNAVAILABLE", "provider": "codex", "email": None,
         "planType": None, "authType": None, "accountFingerprint": None,
         "observedAt": datetime.now(timezone.utc).isoformat(), "windows": [],
         "credits": None, "limitations": [reason],
     }
+    safe = sanitize_diagnostic(diagnostic)
+    if safe is not None:
+        result["diagnostic"] = safe
+    return result
 
 
 def account_snapshot(account_response, limits_response, *, limitations=()):
@@ -339,6 +353,7 @@ def account_snapshot(account_response, limits_response, *, limitations=()):
     source = account_response.get("account") if isinstance(account_response, dict) else None
     if not isinstance(source, dict):
         result.update(status="UNAUTHENTICATED", limitations=["ACCOUNT_UNAUTHENTICATED"])
+        result["diagnostic"] = make_diagnostic("ACCOUNT_RPC", "ACCOUNT_READ", "ACCOUNT_UNAUTHENTICATED")
         return result
     auth_type = source.get("type")
     if auth_type not in {"chatgpt", "apiKey", "amazonBedrock"}:
@@ -409,7 +424,7 @@ def safe_account_snapshot(value):
     limitations = value.get("limitations")
     limitations = list(dict.fromkeys(code for code in limitations[:20] if isinstance(code, str) and code in _ACCOUNT_LIMITATIONS)) if isinstance(limitations, list) else []
     if value["status"] not in {"READY", "STALE"}:
-        result = unavailable_account()
+        result = unavailable_account(diagnostic=value.get("diagnostic"))
         if value["status"] == "UNAUTHENTICATED":
             result.update(status="UNAUTHENTICATED", limitations=["ACCOUNT_UNAUTHENTICATED"])
         elif limitations:
@@ -437,6 +452,9 @@ def safe_account_snapshot(value):
         return result
     result["limitations"] = list(dict.fromkeys(result["limitations"]))
     result["status"] = value["status"]
+    diagnostic = sanitize_diagnostic(value.get("diagnostic"))
+    if diagnostic is not None:
+        result["diagnostic"] = diagnostic
     for name in ("observationId", "authGeneration"):
         opaque = value.get(name)
         if isinstance(opaque, str) and len(opaque) == 32 and all(char in "0123456789abcdef" for char in opaque):
@@ -459,6 +477,19 @@ async def _account_stage(stage):
     try:
         yield
     except BaseException as error:
+        safe = (sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+                or sanitize_diagnostic(getattr(error.__cause__, "codex_diagnostic", None)))
+        if safe is None:
+            safe = make_diagnostic("ACCOUNT_RPC", stage.upper(), "ACCOUNT_RPC_TIMEOUT" if isinstance(error, TimeoutError) else "ACCOUNT_RPC_FAILED")
+        elif safe["stage"] == "REQUEST":
+            safe["stage"] = stage.upper()
+            if safe["reasonCode"] == "CLI_FAILED_UNCLASSIFIED":
+                safe["reasonCode"] = "ACCOUNT_RPC_FAILED"
+        if isinstance(error, TimeoutError):
+            safe["reasonCode"] = "ACCOUNT_RPC_TIMEOUT"
+        safe["origin"] = "ACCOUNT_RPC"
+        safe.setdefault("elapsedMs", max(0, round((time.monotonic() - started) * 1000)))
+        attach_diagnostic(error, safe)
         account_diagnostic(stage, started, error)
         raise
     else:
@@ -468,6 +499,7 @@ async def _account_stage(stage):
 async def read_account(executable, *, environment=None, timeout=ACCOUNT_READ_TIMEOUT_SECONDS):
     """Read account/limits with no thread, inference, login or token-file access."""
     source = os.environ if environment is None else environment
+    stderr_diagnostic = StderrDiagnostic()
     try:
         timeout = min(_timeout(timeout), ACCOUNT_READ_TIMEOUT_SECONDS)
         async with _account_stage("snapshot"):
@@ -481,7 +513,7 @@ async def read_account(executable, *, environment=None, timeout=ACCOUNT_READ_TIM
                             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE, limit=_MAX_OUTPUT_BYTES + 1, **options,
                         )
-                    stderr_task = asyncio.create_task(_drain_stderr(process.stderr))
+                    stderr_task = asyncio.create_task(_drain_stderr(process.stderr, stderr_diagnostic))
                     server = _AppServer(process, stderr_task, asyncio.get_running_loop().time() + timeout)
                     try:
                         async with _account_stage("initialize"):
@@ -495,16 +527,28 @@ async def read_account(executable, *, environment=None, timeout=ACCOUNT_READ_TIM
                         try:
                             async with _account_stage("rate_limits_read"):
                                 limits = await server.rpc(3, "account/rateLimits/read", {})
-                        except CodexExecutionError:
+                        except CodexExecutionError as error:
                             limitations.append("QUOTA_UNAVAILABLE")
+                            result = account_snapshot(account, limits, limitations=limitations)
+                            diagnostic = sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+                            if diagnostic is not None:
+                                result["diagnostic"] = diagnostic
+                            return result
                         return account_snapshot(account, limits, limitations=limitations)
                     finally:
                         async with _account_stage("cleanup"):
                             # Do not spend the normal inference shutdown budget
                             # twice after an inspection has already timed out.
                             await _stop_process(process, stderr_task, timeout=0.5)
-    except Exception:
-        return unavailable_account()
+    except Exception as error:
+        direct = sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+        safe = preferred_diagnostic(direct, stderr_diagnostic.finish())
+        if safe is not None:
+            safe = {**safe, "origin": "ACCOUNT_RPC", "stage": (direct or {}).get("stage", "SNAPSHOT")}
+            for key in ("rpcCode", "elapsedMs"):
+                if key in (direct or {}):
+                    safe[key] = direct[key]
+        return unavailable_account(diagnostic=safe)
 
 
 async def stream_chat(

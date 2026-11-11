@@ -120,7 +120,11 @@ def _canonical_reason_code(exc: Exception) -> str:
     Returns:
         Canonical string token representing failure category.
     """
-    code = getattr(exc, "timeout_origin", None) or getattr(exc, "reason_code", None)
+    from backend.common.runtime_diagnostics import sanitize_diagnostic
+
+    diagnostic = sanitize_diagnostic(getattr(exc, "codex_diagnostic", None))
+    code = (getattr(exc, "timeout_origin", None) or getattr(exc, "reason_code", None)
+            or (diagnostic or {}).get("reasonCode"))
     if isinstance(code, str) and code in REASON_CODES:
         return code
 
@@ -141,6 +145,8 @@ def research_call_identity(run_id, owner_token):
 
 
 def _log_research_failure(exc, stage, run_id, *, reason_code=None):
+    from backend.common.runtime_diagnostics import sanitize_diagnostic
+
     diagnostics = sanitize_failure_diagnostics(
         stage=stage,
         reason_code=reason_code or _canonical_reason_code(exc),
@@ -165,6 +171,9 @@ def _log_research_failure(exc, stage, run_id, *, reason_code=None):
     if codes := diagnostics.get("failure_industry_codes"):
         message += " industry_codes=%s"
         values.append(json.dumps(codes, separators=(",", ":")))
+    if runtime := sanitize_diagnostic(getattr(exc, "codex_diagnostic", None)):
+        message += " origin=%s runtime_stage=%s http_status=%s exit_code=%s rpc_code=%s"
+        values.extend(runtime.get(key, "-") for key in ("origin", "stage", "httpStatus", "exitCode", "rpcCode"))
     logger.warning(message, *values)
     return diagnostics
 

@@ -14,6 +14,7 @@ import anyio
 
 from backend.ai_usage import repository
 from backend.ai_usage.calculation import stamp, tokens
+from backend.common.runtime_diagnostics import sanitize_diagnostic
 
 logger = logging.getLogger(__name__)
 _current = ContextVar("ai_usage_task", default=None)
@@ -43,11 +44,11 @@ def _snapshot_diagnostic(reason, started):
     }
 
 
-def _failed_snapshot(reason, started):
+def _failed_snapshot(reason, started, diagnostic=None):
     # Fixed diagnostic codes are the only failure material persisted in history.
     return {
         "status": "UNAVAILABLE",
-        "diagnostic": _snapshot_diagnostic(reason, started),
+        "diagnostic": {**(sanitize_diagnostic(diagnostic) or {}), **_snapshot_diagnostic(reason, started)},
     }
 
 
@@ -291,6 +292,7 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
     from backend.integrations import codex_client
 
     started, requested_at = monotonic(), now()
+    diagnostic = None
     stage = stage if stage in {"before", "after"} else "account"
     timeout_seconds = min(
         SNAPSHOT_TIMEOUT_SECONDS,
@@ -303,6 +305,7 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
             # Page metadata may be cached or STALE. Attribution always asks for
             # a new independent observation, including a separate App Server read.
             raw = await codex_client.account(settings, fresh=True)
+        diagnostic = sanitize_diagnostic(raw.get("diagnostic"))
         if raw.get("status") == "STALE":
             raise AccountSnapshotNotFresh()
         if raw.get("status") != "READY":
@@ -330,7 +333,7 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
                 "credits",
             )
         }
-        result["diagnostic"] = _snapshot_diagnostic(None, started)
+        result["diagnostic"] = {**(diagnostic or {}), **_snapshot_diagnostic(None, started)}
         return result
     except asyncio.CancelledError:
         logger.info(
@@ -355,7 +358,7 @@ async def account_snapshot(settings, *, stage="account", timeout_seconds=None):
             if isinstance(exc, AccountSnapshotNotFresh)
             else "ERROR"
         )
-        return _failed_snapshot(reason, started)
+        return _failed_snapshot(reason, started, diagnostic or getattr(exc, "codex_diagnostic", None))
 
 
 @asynccontextmanager
@@ -390,6 +393,9 @@ async def observe(settings, model, call_type):
         yield record
     except BaseException as exc:
         _capture_research_progress(record, exc)
+        diagnostic = sanitize_diagnostic(getattr(exc, "codex_diagnostic", None))
+        if diagnostic is not None:
+            record["diagnostic"] = diagnostic
         if not (isinstance(exc, GeneratorExit) and record["status"] == "SUCCEEDED"):
             task.business_status = (
                 "CANCELLED"

@@ -15,20 +15,27 @@ import time
 import uuid
 
 from backend.integrations.codex_private import safe_account_snapshot, unavailable_account
+from backend.common.runtime_diagnostics import make_diagnostic, sanitize_diagnostic
 
 logger = logging.getLogger(__name__)
 
 
-def account_diagnostic(stage, started, error=None, *, status=None):
+def account_diagnostic(stage, started, error=None, *, status=None, diagnostic=None):
     """Only fixed stages, status codes, classes and durations enter logs."""
     safe_status = status if isinstance(status, str) and status in {
         "READY", "STALE", "UNAVAILABLE", "UNAUTHENTICATED",
     } else "UNKNOWN"
+    stage = stage if isinstance(stage, str) and stage in {"snapshot", "spawn", "initialize", "account_read", "rate_limits_read", "cleanup", "cache_fetch", "transport"} else "unknown"
+    diagnostic = (sanitize_diagnostic(diagnostic)
+                  or sanitize_diagnostic(getattr(error, "codex_diagnostic", None)) or {})
     logger.info(
-        "Codex account stage=%s error=%s elapsed_ms=%.1f status=%s",
+        "Codex account stage=%s error=%s elapsed_ms=%.1f status=%s reason_code=%s origin=%s diagnostic_stage=%s http_status=%s rpc_code=%s",
         stage, type(error).__name__ if error is not None else "NONE",
         (time.monotonic() - started) * 1000,
         safe_status,
+        diagnostic.get("reasonCode", "NONE"), diagnostic.get("origin", "NONE"),
+        diagnostic.get("stage", "NONE"), diagnostic.get("httpStatus", "NONE"),
+        diagnostic.get("rpcCode", "NONE"),
     )
 
 
@@ -97,6 +104,9 @@ class AccountMetadataCache:
         result = deepcopy(self._success or self._partial)
         result["status"] = "STALE"
         result["limitations"] = list(dict.fromkeys([*result["limitations"], "ACCOUNT_STALE"]))
+        diagnostic = sanitize_diagnostic((self._failure or {}).get("diagnostic"))
+        if diagnostic is not None:
+            result["diagnostic"] = diagnostic
         return result
 
     async def get(self, *, fresh=False, refresh=False):
@@ -126,9 +136,10 @@ class AccountMetadataCache:
             result = safe_account_snapshot(await self._fetch())
         except Exception as error:
             account_diagnostic("cache_fetch", started, error)
-            result = unavailable_account()
+            result = unavailable_account(diagnostic=sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+                                         or make_diagnostic("CLIENT", "CACHE_FETCH", "ACCOUNT_UNAVAILABLE"))
         else:
-            account_diagnostic("cache_fetch", started, status=result["status"])
+            account_diagnostic("cache_fetch", started, status=result["status"], diagnostic=result.get("diagnostic"))
         self._sync_auth()
         if auth_generation != self._auth_generation:
             return unavailable_account("ACCOUNT_AUTH_CHANGED")
@@ -169,7 +180,7 @@ class AccountMetadataCache:
                 self._clear_identity()
             elif result["status"] == "STALE":
                 # A lower-layer stale response is never a successful capture.
-                result = unavailable_account()
+                result = unavailable_account(diagnostic=result.get("diagnostic"))
             self._failure = result
             self._success_until = 0
             self._retry_after = self._clock() + self._cooldown

@@ -19,6 +19,7 @@ import tempfile
 from typing import Annotated, Any
 
 import anyio
+from backend.common.runtime_diagnostics import sanitize_diagnostic
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -50,6 +51,7 @@ MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_PROMPT_BYTES = 3 * 1024 * 1024
 MAX_SCHEMA_BYTES = 512 * 1024
+logger = logging.getLogger(__name__)
 
 
 async def complete_private(*args, **kwargs):
@@ -238,7 +240,8 @@ def _safe_completion(result):
 
 def _error_detail(error, message, *, capture_output=False, lifecycle=None):
     origin = getattr(error, "timeout_origin", None)
-    if not hasattr(error, "inference_succeeded") and lifecycle is None and (not isinstance(origin, str) or origin not in TIMEOUT_ORIGINS):
+    diagnostic = sanitize_diagnostic(getattr(error, "codex_diagnostic", None))
+    if not hasattr(error, "inference_succeeded") and lifecycle is None and diagnostic is None and (not isinstance(origin, str) or origin not in TIMEOUT_ORIGINS):
         return message
     model = getattr(error, "model", None)
     detail = {
@@ -246,6 +249,8 @@ def _error_detail(error, message, *, capture_output=False, lifecycle=None):
         "model": model if isinstance(model, str) and 1 <= len(model) <= 120 else "codex",
         "inferenceSucceeded": getattr(error, "inference_succeeded", False) is True,
     }
+    if diagnostic is not None:
+        detail["diagnostic"] = diagnostic
     if isinstance(origin, str) and origin in TIMEOUT_ORIGINS:
         detail["timeoutOrigin"] = origin
     if lifecycle is not None:
@@ -402,6 +407,9 @@ def create_app(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if diagnostic := sanitize_diagnostic(getattr(exc, "codex_diagnostic", None)):
+                logger.warning("codex_execution_failed origin=%s stage=%s reason_code=%s http_status=%s exit_code=%s rpc_code=%s",
+                               *(diagnostic.get(key, "-") for key in ("origin", "stage", "reasonCode", "httpStatus", "exitCode", "rpcCode")))
             raise HTTPException(502, _error_detail(exc, "Codex execution failed", capture_output=capture_output, lifecycle=lifecycle)) from exc
         finally:
             with anyio.CancelScope(shield=True):

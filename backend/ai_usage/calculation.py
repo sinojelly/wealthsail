@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from backend.common.runtime_diagnostics import sanitize_diagnostic
 
 
 def number(value):
@@ -69,6 +70,7 @@ def snapshot_diagnostic(snapshot):
         )
     observed = stamp(snapshot.get("observedAt")) if status == "READY" else None
     elapsed = diagnostic.get("elapsedMs")
+    safe = sanitize_diagnostic(diagnostic)
     return {
         "status": status,
         "reason": reason,
@@ -76,6 +78,7 @@ def snapshot_diagnostic(snapshot):
         "elapsedMs": elapsed
         if type(elapsed) is int and 0 <= elapsed <= 10**9
         else None,
+        **({"diagnostic": safe} if safe is not None else {}),
     }
 
 
