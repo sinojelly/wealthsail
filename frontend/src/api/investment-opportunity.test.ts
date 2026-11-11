@@ -1,12 +1,16 @@
 import * as api from "./investment";
-import { request } from "./client";
-vi.mock("./client", () => ({ request: vi.fn() }));
+import { request, requestWithTimeout } from "./client";
+vi.mock("./client", () => ({ request: vi.fn(), requestWithTimeout: vi.fn() }));
 
 beforeEach(() => {
   vi.mocked(request).mockResolvedValue({ data: {}, meta: {} } as never);
+  vi.mocked(requestWithTimeout).mockResolvedValue({
+    data: {},
+    meta: {},
+  } as never);
 });
 
-it("encodes the complete opportunity scope and forwards cancellation", async () => {
+it("encodes the complete opportunity scope, opts into compact charts and forwards cancellation", async () => {
   const controller = new AbortController();
   await api.getOpportunityContext(
     {
@@ -19,7 +23,7 @@ it("encodes the complete opportunity scope and forwards cancellation", async () 
     },
     controller.signal,
   );
-  const [url, init] = vi.mocked(request).mock.calls.at(-1)!;
+  const [url, init] = vi.mocked(requestWithTimeout).mock.calls.at(-1)!;
   const parsed = new URL(url, "https://app.test");
   expect(parsed.pathname).toBe("/v1/investment/opportunity-context");
   expect(Object.fromEntries(parsed.searchParams)).toEqual({
@@ -29,6 +33,7 @@ it("encodes the complete opportunity scope and forwards cancellation", async () 
     fundCode: "510330",
     fundMarket: "SSE",
     months: "60",
+    compactCharts: "true",
   });
   expect(init?.signal).toBe(controller.signal);
 });

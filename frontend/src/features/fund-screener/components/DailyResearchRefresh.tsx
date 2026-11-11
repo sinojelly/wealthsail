@@ -81,7 +81,7 @@ function ManualRequestRecord({
         最近手动请求（历史） · 提交于 {timeLabel(request?.requestedAt)} 北京时间
       </summary>
       <p>
-        此记录属于较早的手动请求；最新研究的状态与诊断见上方“执行与调度详情”。
+        此为此前保存的手动请求记录。当前研究的执行归属以“执行与调度详情”中的执行ID为准。
       </p>
       {content}
     </details>
@@ -242,13 +242,18 @@ function RefreshControl({ actor, onReady, currentResearch }: Props) {
   const requestEndedAt = Date.parse(
     result?.completedAt ?? result?.startedAt ?? result?.requestedAt ?? "",
   );
+  // A persisted terminal manual request is history until its run is matched to
+  // the current execution. Loading the report must not turn it into "this run".
   const historical =
     !!result &&
     !busy &&
+    !submitted &&
+    !pending(current) &&
     !(currentRunId && currentRunId === result.reportRunId) &&
-    Number.isFinite(currentStartedAt) &&
-    Number.isFinite(requestEndedAt) &&
-    currentStartedAt > requestEndedAt;
+    (!currentResearch ||
+      (Number.isFinite(currentStartedAt) &&
+        Number.isFinite(requestEndedAt) &&
+        currentStartedAt > requestEndedAt));
   return (
     <section
       className="op-debug-refresh"

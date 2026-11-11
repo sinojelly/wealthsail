@@ -41,16 +41,33 @@ beforeEach(() => {
 
 it("does not revive a cancelled queue when an older in-flight poll arrives late", async () => {
   let finishPoll!: (value: api.DebugResearchRequest) => void;
-  const oldPoll = new Promise<api.DebugResearchRequest>((resolve) => {finishPoll=resolve;});
-  vi.mocked(api.getResearchRefresh).mockResolvedValue({enabled:true,request:queued});
+  const oldPoll = new Promise<api.DebugResearchRequest>((resolve) => {
+    finishPoll = resolve;
+  });
+  vi.mocked(api.getResearchRefresh).mockResolvedValue({
+    enabled: true,
+    request: queued,
+  });
   vi.mocked(api.getResearchRefreshStatus).mockReturnValue(oldPoll);
-  vi.mocked(api.cancelResearchRefresh).mockResolvedValue({...queued,status:"CANCELLED",completedAt:queued.queueExpiresAt!,canCancel:false});
+  vi.mocked(api.cancelResearchRefresh).mockResolvedValue({
+    ...queued,
+    status: "CANCELLED",
+    completedAt: queued.queueExpiresAt!,
+    canCancel: false,
+  });
   renderWithSession(<DailyResearchRefresh actor="late-cancel-owner" />);
-  await userEvent.click(await screen.findByRole("button",{name:"取消排队研究"}));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "取消排队研究" }),
+  );
   await screen.findByText(/排队研究已取消/);
-  await act(async () => {finishPoll(queued); await oldPoll;});
+  await act(async () => {
+    finishPoll(queued);
+    await oldPoll;
+  });
   expect(screen.getByText(/排队研究已取消/)).toBeVisible();
-  expect(screen.queryByRole("button",{name:"取消排队研究"})).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "取消排队研究" }),
+  ).not.toBeInTheDocument();
 });
 
 it("distinguishes lost exit evidence and maintenance invalidation from the five-minute deadline", async () => {
@@ -71,6 +88,7 @@ it("distinguishes lost exit evidence and maintenance invalidation from the five-
     errorClass: "QueueInvalidatedByMaintenance",
     canCancel: false,
   });
+  await userEvent.click(await screen.findByText(/最近手动请求（历史）/));
   expect(await screen.findByText(/旧排队请求已在本机维护中终止/)).toBeVisible();
   expect(screen.queryByText(/排队等待超过5分钟/)).not.toBeInTheDocument();
   expect(api.startResearchRefresh).not.toHaveBeenCalled();
@@ -106,6 +124,7 @@ it("expired queues never restart automatically after the old model slot recovers
     errorClass: "QueueWaitExpired",
     canCancel: false,
   });
+  await userEvent.click(await screen.findByText(/最近手动请求（历史）/));
   expect(await screen.findByText(/排队等待超过5分钟.*已终止/)).toBeVisible();
   expect(screen.getByText(/不会自动重试.*重新点击/)).toBeVisible();
   expect(screen.getByRole("button", { name: "手动启动研究" })).toBeEnabled();

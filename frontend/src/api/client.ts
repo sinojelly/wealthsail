@@ -68,6 +68,46 @@ export async function request<T>(
   return requestOnce<T>(path, init, false);
 }
 
+// Opt in for saved-data reads; research submissions keep their own lifecycle.
+// The deadline covers both HTTP headers and body, including authentication retry.
+export async function requestWithTimeout<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = 30_000,
+): Promise<ApiEnvelope<T>> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      new Promise<never>((_resolve, reject) => {
+        cancel = () => {
+          const reason =
+            init.signal?.reason ??
+            new DOMException("Request cancelled", "AbortError");
+          reject(reason);
+          controller.abort(reason);
+        };
+        if (init.signal?.aborted) cancel();
+        else init.signal?.addEventListener("abort", cancel, { once: true });
+        timer = setTimeout(() => {
+          const failure = new HttpError(
+            "读取服务端数据超时",
+            408,
+            "REQUEST_TIMEOUT",
+          );
+          reject(failure);
+          controller.abort(failure);
+        }, timeoutMs);
+      }),
+      request<T>(path, { ...init, signal: controller.signal }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (cancel) init.signal?.removeEventListener("abort", cancel);
+  }
+}
+
 async function requestOnce<T>(
   path: string,
   init: RequestInit,

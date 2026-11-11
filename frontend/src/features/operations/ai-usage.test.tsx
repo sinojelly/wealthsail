@@ -159,6 +159,72 @@ it("shows safe live CLI progress without confusing a completed model event with 
 });
 
 it.each([
+  ["RPC_RESPONSE_TIMEOUT", "RPC 返回超时错误"],
+  ["WORKSPACE_ROUTING_TIMEOUT", "工作区路由发现超时"],
+])(
+  "shows safe account cause %s separately from model execution without guessing the network or exposing raw errors",
+  async (reasonCode, expected) => {
+    const data = structuredClone(aiUsageFixture);
+    const diagnostic = {
+      version: "codex-diagnostic-v1",
+      origin: "ACCOUNT_RPC",
+      stage: "ACCOUNT_READ",
+      reasonCode,
+      rpcCode: -32603,
+      elapsedMs: 15005,
+      message: "PRIVATE_PROVIDER_MESSAGE",
+      stderr: "PRIVATE_STDERR",
+    };
+    Object.assign(data.account, { status: "STALE", diagnostic });
+    Object.assign(data.tasks[0].calls[0], {
+      diagnostic: {
+        version: "codex-diagnostic-v1",
+        origin: "CLI",
+        stage: "CLI_EXECUTION",
+        reasonCode: "CLI_FAILED_UNCLASSIFIED",
+        exitCode: 1,
+      },
+    });
+    Object.assign(data.tasks[0].calls[0].quota, {
+      snapshots: {
+        before: {
+          status: "UNAVAILABLE",
+          reason: "TIMEOUT",
+          observedAt: null,
+          elapsedMs: 15005,
+          diagnostic,
+        },
+        after: { status: "READY", observedAt: "2026-11-11T07:07:00+08:00" },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(data)),
+    );
+    renderWithSession(<OperationsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "AI 用量" }));
+    const account = await screen.findByLabelText("账户读取诊断");
+    expect(account).toHaveTextContent(expected);
+    expect(account).toHaveTextContent("账户读取");
+    expect(account).toHaveTextContent("RPC -32603");
+    expect(account).not.toHaveTextContent(/网络|认证|登录|Token|令牌|额度不足/);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /展开.*2 次推理/ }),
+    );
+    expect(screen.getByLabelText("模型执行诊断")).toHaveTextContent(
+      "CLI 退出失败，具体原因未识别",
+    );
+    expect(screen.getByLabelText("模型执行诊断")).toHaveTextContent("退出码 1");
+    expect(screen.getByLabelText("推理前额度采集诊断")).toHaveTextContent(
+      expected,
+    );
+    expect(
+      screen.queryByText(/PRIVATE_PROVIDER_MESSAGE|PRIVATE_STDERR/),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it.each([
   ["BEFORE_MISSING", "推理前额度快照缺失，无法估算"],
   ["AFTER_MISSING", "推理后额度快照缺失，无法估算"],
   ["BOTH_MISSING", "推理前后额度快照均缺失，无法估算"],
@@ -654,6 +720,13 @@ it.each(["manual", "automatic"])(
                   windows: [],
                   credits: null,
                   limitations: ["ACCOUNT_READ_FAILED"],
+                  diagnostic: {
+                    version: "codex-diagnostic-v1",
+                    origin: "ACCOUNT_RPC",
+                    stage: "ACCOUNT_READ",
+                    reasonCode: "RPC_RESPONSE_TIMEOUT",
+                    rpcCode: -32603,
+                  },
                 },
         });
       }),
@@ -677,6 +750,9 @@ it.each(["manual", "automatic"])(
     expect(within(account).getByText("历史快照")).toBeVisible();
     expect(within(account).getByText("a***@example.com")).toBeVisible();
     expect(within(account).getByText("88%")).toBeVisible();
+    expect(within(account).getByLabelText("账户读取诊断")).toHaveTextContent(
+      "RPC 返回超时错误",
+    );
     expect(
       within(account).getByText(/最后成功观测时间 2026\/10\/27 15:30:00/),
     ).toBeVisible();

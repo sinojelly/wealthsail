@@ -3,7 +3,19 @@ import { privateQueryKey, useAuthSession } from "../app/auth-session";
 import { HttpError, request } from "./client";
 import type { ResearchProgress } from "./research-progress";
 
+export interface CodexDiagnostic {
+  version: "codex-diagnostic-v1";
+  origin: "CLI" | "RUNNER" | "TRANSPORT" | "ACCOUNT_RPC" | "CLIENT";
+  stage: string;
+  reasonCode: string;
+  httpStatus?: number;
+  exitCode?: number;
+  rpcCode?: number;
+  elapsedMs?: number;
+}
+
 export interface AiQuotaSnapshot {
+  diagnostic?: CodexDiagnostic;
   status: string;
   reason?: string | null;
   observedAt: string | null;
@@ -30,6 +42,7 @@ export interface AiTokens {
 }
 
 export interface AiUsageCall extends AiTokens {
+  diagnostic?: CodexDiagnostic;
   researchProgress?: ResearchProgress;
   id: string;
   model: string;
@@ -58,6 +71,7 @@ export interface AiUsageTask extends AiTokens {
 
 export interface AiUsageResponse {
   account: {
+    diagnostic?: CodexDiagnostic;
     status:
       | "READY"
       | "STALE"
@@ -153,6 +167,7 @@ export function useAiAccount(enabled: boolean) {
         return {
           ...previous,
           status: "STALE",
+          diagnostic: incoming.diagnostic,
           limitations: [
             ...new Set([
               ...previous.limitations,

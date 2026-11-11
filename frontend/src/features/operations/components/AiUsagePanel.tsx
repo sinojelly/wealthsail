@@ -12,6 +12,7 @@ import {
 import { HttpError } from "../../../api/client";
 import { formatShanghaiTime } from "../format-time";
 import { ResearchProgressDetails } from "../../fund-screener/components/ResearchProgressDetails";
+import CodexDiagnosticDetails from "./CodexDiagnosticDetails";
 
 const statuses: Record<string, { label: string; tone: string }> = {
   SUCCEEDED: { label: "成功", tone: "success" },
@@ -178,6 +179,10 @@ function Snapshot({ label, value }: { label: string; value: AiQuotaSnapshot }) {
       {nonnegative(elapsedMs) ? (
         <span>采集耗时 {elapsedMs.toLocaleString("zh-CN")} 毫秒</span>
       ) : null}
+      <CodexDiagnosticDetails
+        value={value.diagnostic}
+        label={`${label}额度采集诊断`}
+      />
     </div>
   );
 }
@@ -237,6 +242,7 @@ function Account({ account }: { account: AiAccount }) {
           {accountMessages[account.status] ?? "账户状态未知"}
         </p>
       ) : null}
+      <CodexDiagnosticDetails value={account.diagnostic} label="账户读取诊断" />
       {account.status === "READY" || account.status === "STALE" ? (
         <>
           <dl className="ai-account-meta">
@@ -398,6 +404,10 @@ function Task({ task }: { task: AiUsageTask }) {
                         </td>
                         <td>
                           <Status value={call.status} />
+                          <CodexDiagnosticDetails
+                            value={call.diagnostic}
+                            label="模型执行诊断"
+                          />
                           <ResearchProgressDetails
                             progress={call.researchProgress}
                           />

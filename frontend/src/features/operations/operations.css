@@ -359,6 +359,26 @@
   color: #9b2635;
   margin-top: 8px;
 }
+.ai-failure-diagnostic {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 2px solid #c49a56;
+  border-radius: 4px;
+  background: #fffaf1;
+  color: #795522;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ai-failure-diagnostic strong {
+  font-size: 12px;
+}
+.ai-failure-diagnostic small {
+  display: block;
+  color: #735f43;
+  font-size: 11px;
+}
 .ai-pagination {
   display: flex;
   align-items: center;

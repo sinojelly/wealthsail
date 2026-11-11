@@ -282,6 +282,7 @@ it("shows failed analysis with its safe reason and keeps the previous report", a
     request: { ...request("FAILED"), errorClass: "SourceUnavailable" } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  await userEvent.click(await screen.findByText(/最近手动请求（历史）/));
   expect(
     await screen.findByText(
       /采集或分析失败.*SourceUnavailable.*保留上一份有效报告/,
@@ -362,11 +363,12 @@ it("does not keep polling a terminal uncertain execution", async () => {
     } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  await userEvent.click(await screen.findByText(/最近手动请求（历史）/));
   expect(await screen.findByText(/执行结果待确认.*TimeoutError/)).toBeVisible();
   expect(api.getResearchRefreshStatus).not.toHaveBeenCalled();
 });
 
-it("keeps the execution outcome visible while technical diagnostics are collapsed", async () => {
+it("keeps a historical execution outcome available while technical diagnostics remain collapsed", async () => {
   vi.mocked(api.getResearchRefresh).mockResolvedValue({
     enabled: true,
     request: {
@@ -378,6 +380,9 @@ it("keeps the execution outcome visible while technical diagnostics are collapse
     } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  const history = await screen.findByText(/最近手动请求（历史）/);
+  expect(history.closest("details")).not.toHaveAttribute("open");
+  await userEvent.click(history);
   expect(await screen.findByText(/执行结果待确认.*TimeoutError/)).toBeVisible();
   const details = screen.getByText("查看执行诊断").closest("details");
   expect(details).not.toHaveAttribute("open");
@@ -414,6 +419,7 @@ it("keeps a completed report terminal beyond its original waiting deadline", asy
     } as never,
   });
   renderWithSession(<DailyResearchRefresh actor="owner-a" />);
+  await userEvent.click(await screen.findByText(/最近手动请求（历史）/));
   expect(await screen.findByText(/手动研究已完成/)).toBeVisible();
   expect(screen.queryByText(/超过35分钟/)).not.toBeInTheDocument();
 });

@@ -90,6 +90,35 @@ it("describes a model timeout without claiming successful inference or business 
   ).not.toBeInTheDocument();
 });
 
+it.each([
+  ["WORKSPACE_ROUTING_TIMEOUT", "工作区路由发现超时"],
+  ["CLI_FAILED_UNCLASSIFIED", "CLI 退出失败，具体原因未识别"],
+] as const)(
+  "renders the persisted runtime failure %s without hiding its reason code",
+  async (reasonCode, label) => {
+    const data = daily({
+      state: "UNCERTAIN",
+      errorClass: "RuntimeError",
+      failureStage: "MODEL_EXECUTION",
+      failureReasonCode: reasonCode,
+    });
+    const original = JSON.stringify(data);
+    await openDiagnostics(data);
+    const diagnosis = within(
+      screen.getByRole("group", { name: "研究失败诊断" }),
+    );
+    expect(diagnosis.getByText(`失败原因：${label}`)).toBeVisible();
+    expect(diagnosis.getByText(`原因代码：${reasonCode}`)).toBeVisible();
+    expect(diagnosis.getByText("失败阶段：模型执行")).toBeVisible();
+    expect(
+      diagnosis.queryByText(/报告未通过业务校验|Token|令牌|登录|认证/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/当前显示历史报告及原始日期/)).toBeVisible();
+    expect(screen.getByText(/上一份有效报告/)).toBeInTheDocument();
+    expect(JSON.stringify(data)).toBe(original);
+  },
+);
+
 it("does not render unknown diagnostic fields or treat them as a confirmed validation failure", async () => {
   await openDiagnostics(
     Object.assign(daily(), {

@@ -43,6 +43,60 @@ export interface HistoricalResearchSlots {
   navHistories: Record<string, FundNavHistory | null>;
 }
 
+function ReportReadState({
+  loading,
+  timedOut,
+  paused = false,
+  onRetry,
+}: {
+  loading: boolean;
+  timedOut: boolean;
+  paused?: boolean;
+  onRetry?: () => void;
+}) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => setSlow(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [loading]);
+  return (
+    <div
+      className="op-research-read-state"
+      data-state={loading ? "loading" : paused ? "paused" : "error"}
+      role={loading || paused ? undefined : "alert"}
+      aria-label="展示报告读取状态"
+    >
+      <span className="op-research-read-indicator" aria-hidden="true" />
+      <div>
+        <p role={loading || paused ? "status" : undefined}>
+          {loading
+            ? "正在加载展示报告…"
+            : paused
+              ? "网络连接已暂停，展示报告尚未读取。"
+              : timedOut
+                ? "展示报告读取超时，请重新读取。"
+                : "展示报告读取失败，请稍后重试。"}
+        </p>
+        <small>
+          {loading
+            ? slow
+              ? "读取已保存报告耗时较长，仍在等待服务端响应。单次读取最多等待 30 秒。"
+              : "正在读取已保存的研究报告，单次读取最多等待 30 秒。"
+            : paused
+              ? "请恢复网络连接后重新读取。此操作只获取已保存报告，不会重新运行 AI。"
+              : "本次读取已结束。重新读取只获取已保存报告，不会重新运行 AI。"}
+        </small>
+        {!loading && onRetry && (
+          <button type="button" onClick={onRetry}>
+            重新读取报告
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TopicCatalog(
   props: React.ComponentProps<typeof ResearchTopicRegistry>,
 ) {
@@ -226,6 +280,9 @@ export default function MacroContextStrip({
   loading = false,
   refreshing = false,
   refreshError = false,
+  readTimedOut = false,
+  readPaused = false,
+  onRetryRead,
   months = 36,
   onMonthsChange,
   directions = [],
@@ -246,6 +303,9 @@ export default function MacroContextStrip({
   loading?: boolean;
   refreshing?: boolean;
   refreshError?: boolean;
+  readTimedOut?: boolean;
+  readPaused?: boolean;
+  onRetryRead?: () => void;
   months?: number;
   onMonthsChange?: (months: number) => void;
   directions?: Direction[];
@@ -513,18 +573,34 @@ export default function MacroContextStrip({
           <a href="/dashboard?scope=MINE">核对我的持仓</a>
         </p>
       )}
-      {error && <p role="alert">展示报告读取失败，请稍后重试。</p>}
-      {loading && <p role="status">正在加载展示报告…</p>}
+      {(loading || error || readPaused) && (
+        <ReportReadState
+          key={loading ? "loading" : "error"}
+          loading={loading}
+          timedOut={readTimedOut}
+          paused={readPaused}
+          onRetry={onRetryRead}
+        />
+      )}
       {reportSourceUnavailable && (
         <p role="status">
           所选报告出处未加载；当前内容不能作为这份报告的出处。
         </p>
       )}
       {refreshing && (
-        <p role="status">正在更新展示报告，继续显示上一份已加载内容。</p>
+        <div className="op-research-read-update">
+          <p role="status">正在更新展示报告，继续显示上一份已加载内容。</p>
+        </div>
       )}
       {refreshError && (
-        <p role="alert">展示报告刷新失败，继续显示上一份已加载内容。</p>
+        <div className="op-research-read-update">
+          <p role="alert">展示报告刷新失败，继续显示上一份已加载内容。</p>
+          {onRetryRead && (
+            <button type="button" onClick={onRetryRead}>
+              重新读取报告
+            </button>
+          )}
+        </div>
       )}
       {expanded && (
         <div id={panelId} className="op-daily-expanded">

@@ -326,8 +326,8 @@ it("keeps personal funds readable after an initial report HTTP failure", async (
   api.opportunity.mockRejectedValue(new HttpError("report unavailable", 503));
   mountPage("/fund-screener?researchTab=tracking");
   expect(
-    await screen.findByText("展示报告读取失败，请稍后重试。"),
-  ).toHaveAttribute("role", "alert");
+    await screen.findByRole("alert", { name: "展示报告读取状态" }),
+  ).toHaveTextContent("展示报告读取失败，请稍后重试。");
   const funds = await screen.findByRole("region", { name: "我的基金" });
   const card = await within(funds).findByRole("article", {
     name: "个人人工智能联接基金",

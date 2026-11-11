@@ -291,6 +291,7 @@ it("allows an explicit new submission for a completed uncertain request without 
   expect(
     await screen.findByRole("button", { name: "手动启动研究" }),
   ).toBeEnabled();
+  await userEvent.click(screen.getByText(/最近手动请求（历史） · 提交于/));
   expect(screen.getByText(/新请求.*等待/)).toBeVisible();
   expect(api.getResearchRefreshStatus).not.toHaveBeenCalled();
 });

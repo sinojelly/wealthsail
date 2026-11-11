@@ -129,7 +129,104 @@
   scroll-margin-top: 88px;
 }
 
+.op-daily-observation .op-research-read-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 16px 20px 20px;
+  padding: 20px;
+  border: 1px solid var(--op-line);
+  border-radius: 12px;
+  background: #f7fafc;
+  color: var(--op-ink);
+  line-height: 1.65;
+}
+
+.op-research-read-state > div {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.op-daily-observation .op-research-read-state p,
+.op-daily-observation .op-research-read-update p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.op-research-read-state small {
+  color: var(--op-muted);
+  font-size: 13px;
+}
+
+.op-research-read-indicator {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border: 2px solid #d1e3e5;
+  border-top-color: var(--op-teal);
+  border-radius: 50%;
+  animation: op-report-read-spin 1s linear infinite;
+}
+
+.op-research-read-state[data-state="error"] {
+  border-color: #e4c89a;
+  background: #fffbf3;
+}
+
+.op-research-read-state[data-state="error"] .op-research-read-indicator {
+  border-color: #c99945;
+  animation: none;
+}
+
+.op-research-read-state[data-state="paused"] .op-research-read-indicator {
+  border-color: var(--op-muted);
+  animation: none;
+}
+
+.op-daily-observation .op-research-read-state button,
+.op-daily-observation .op-research-read-update button {
+  justify-self: start;
+  width: fit-content;
+  padding: 7px 12px;
+  border: 1px solid var(--op-teal);
+  border-radius: 6px;
+  background: white;
+  color: var(--op-teal);
+  font: inherit;
+  cursor: pointer;
+}
+
+.op-daily-observation .op-research-read-update {
+  display: grid;
+  gap: 8px;
+  padding: 12px 20px;
+  color: var(--op-muted);
+}
+
+@keyframes op-report-read-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .op-research-read-indicator {
+    animation: none;
+  }
+}
+
 @media (max-width: 640px) {
+  .op-daily-observation .op-research-read-state {
+    gap: 10px;
+    margin: 12px 14px 16px;
+    padding: 16px 14px;
+  }
+
+  .op-daily-observation .op-research-read-update {
+    padding: 12px 14px;
+  }
   .op-daily-observation .op-research-report-source,
   .op-debug-refresh.op-debug-refresh {
     padding-right: 14px;

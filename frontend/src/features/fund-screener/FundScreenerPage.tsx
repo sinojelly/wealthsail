@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { Sparkles, ListPlus } from "lucide-react";
 import { useAuthSession, getSessionSubject } from "../../app/auth-session";
 import * as api from "../../api/investment";
+import { HttpError } from "../../api/client";
 import * as watchlist from "../../api/watchlist";
 import type { CreateStudy } from "../../api/study-api";
 import { createStudyTrack } from "../../api/study-api";
@@ -56,6 +57,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const directions = useQuery({
     queryKey: [subject, "directions"],
     queryFn: ({ signal }) => api.getDirections(signal),
+    retry: false,
   });
   const opportunityArchiveInterval = useEconomicArchivePolling();
   const unlinked = params.get("unlinked") === "1";
@@ -67,6 +69,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     queryKey: [subject, "indices", directionId],
     queryFn: ({ signal }) => api.getIndices(directionId!, signal),
     enabled: !!directionId,
+    retry: false,
   });
   const indexId = unlinked
     ? null
@@ -192,6 +195,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       ),
     refetchInterval: opportunityArchiveInterval.refetchInterval,
     refetchOnReconnect: opportunityArchiveInterval.refetchOnReconnect,
+    retry: false,
     enabled:
       directions.isSuccess && (unlinked || !directionId || indices.isSuccess),
   });
@@ -203,6 +207,22 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     (opportunity.isError ||
       directions.isError ||
       (!unlinked && !!directionId && indices.isError));
+  const reportPaused =
+    !radarData &&
+    (directions.isPaused ||
+      (!unlinked && !!directionId && indices.isPaused) ||
+      opportunity.isPaused);
+  const reportFailure = directions.error ?? indices.error ?? opportunity.error;
+  const reportTimedOut =
+    reportFailure instanceof HttpError &&
+    reportFailure.code === "REQUEST_TIMEOUT";
+  function retryReportRead() {
+    // Manual refetch bypasses enabled: resolve the scope dependencies first.
+    if (!directions.isSuccess) void directions.refetch();
+    else if (!unlinked && directionId && !indices.isSuccess)
+      void indices.refetch();
+    else void opportunity.refetch();
+  }
   const mode = fundCode || selection.fundId ? "fund" : "index";
   const objectId =
     mode === "fund"
@@ -468,7 +488,10 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         selectedDirection={direction}
         selectedIndexId={indexId ?? undefined}
         error={reportError}
-        loading={!radarData && !reportError}
+        readTimedOut={reportTimedOut}
+        readPaused={reportPaused}
+        onRetryRead={retryReportRead}
+        loading={!radarData && !reportError && !reportPaused}
         refreshing={!!radarData && opportunity.isFetching}
         refreshError={
           !!radarData && opportunity.isError && !opportunity.isFetching

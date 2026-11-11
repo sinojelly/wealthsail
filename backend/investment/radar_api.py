@@ -32,6 +32,7 @@ async def opportunity_context(
         default=None, alias="fundMarket", min_length=1, max_length=30
     ),
     months: int = Query(default=36, ge=1, le=120),
+    compact_charts: bool = Query(default=False, alias="compactCharts"),
     theme_code: Literal[
         "HAINAN_FTP", "PUDONG_DEV", "GEO_CRUDE_OIL", "AI_MEMORY_HBM", "COMMERCIAL_SPACE"
     ]
@@ -54,4 +55,8 @@ async def opportunity_context(
             theme_code=theme_code,
             can_manage_operations=ctx.is_owner_or_admin,
         )
+    if compact_charts is True:
+        from backend.investment.report_chart_projection import compact_context_charts
+
+        data = compact_context_charts(data)
     return ok(data, request_id=request_id, as_of=now_shanghai())

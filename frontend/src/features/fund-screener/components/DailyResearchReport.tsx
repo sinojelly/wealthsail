@@ -7,6 +7,7 @@ import type {
   Direction,
   EconomicResearchDelivery,
 } from "../../../api/investment";
+import { runtimeFailureReasons } from "../../../api/runtime-diagnostics";
 import { sourceHref, timeLabel } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
 import { researchScheduleLabel } from "../research-schedule-display";
@@ -51,6 +52,7 @@ const failureStages: Record<DailyResearchFailureStage, string> = {
   PERSISTING: "保存报告",
 };
 const failureReasons: Record<DailyResearchFailureReasonCode, string> = {
+  ...runtimeFailureReasons,
   DIRECTION_VALIDATION_FAILED: "价值方向未通过校验",
   FUND_PLAN_INVALID: "基金计划不符合要求",
   SCHEDULE_DATE_INVALID: "计划事件日期无效",

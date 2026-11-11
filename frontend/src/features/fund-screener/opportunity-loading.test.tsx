@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -24,6 +28,7 @@ const api = vi.hoisted(() => ({
   market: vi.fn(),
   opportunity: vi.fn(),
   refresh: vi.fn(),
+  start: vi.fn(),
 }));
 
 vi.mock("../../api/investment", async (original) => ({
@@ -45,7 +50,7 @@ vi.mock("../../api/study-api", async (original) => ({
 vi.mock("../../api/daily-research-debug", () => ({
   getResearchRefresh: api.refresh,
   getResearchRefreshStatus: vi.fn(),
-  startResearchRefresh: vi.fn(),
+  startResearchRefresh: api.start,
 }));
 vi.mock("../../api/topic-fund-recommendations", () => ({
   getTopicFundRecommendations: vi
@@ -162,10 +167,10 @@ function observation(
   };
 }
 
-function mountPage() {
+function mountPage(retry: boolean | number = false) {
   const client = new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+      queries: { retry, gcTime: 0, refetchOnWindowFocus: false },
     },
   });
   clients.push(client);
@@ -203,6 +208,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clients.splice(0).forEach((client) => client.clear());
+  onlineManager.setOnline(true);
 });
 
 it("waits for the selected opportunity report, including direction/index dependencies, without flashing the faster macro fallback", async () => {
@@ -276,6 +282,83 @@ it("waits for the selected opportunity report, including direction/index depende
   ).toBeVisible();
   expect(screen.queryByText("正在加载展示报告…")).not.toBeInTheDocument();
   expect(screen.queryByText("49.1")).not.toBeInTheDocument();
+});
+
+it("shows a padded timeout state and explicitly retries the saved report without starting research", async () => {
+  api.opportunity.mockRejectedValueOnce(
+    new HttpError("读取超时", 408, "REQUEST_TIMEOUT"),
+  );
+  api.opportunity.mockResolvedValueOnce(facts(50.2, daily()));
+  mountPage(3);
+  const timeout = await screen.findByRole("alert", {
+    name: "展示报告读取状态",
+  });
+  expect(timeout).toHaveTextContent("展示报告读取超时，请重新读取。");
+  expect(timeout).toHaveClass("op-research-read-state");
+  expect(timeout).toHaveTextContent("不会重新运行 AI");
+  await userEvent.click(
+    within(timeout).getByRole("button", { name: "重新读取报告" }),
+  );
+  expect(await screen.findByLabelText("展示报告来源")).toHaveTextContent(
+    "展示报告",
+  );
+  expect(api.opportunity).toHaveBeenCalledTimes(2);
+  expect(api.start).not.toHaveBeenCalled();
+  expect(screen.queryByText("正在加载展示报告…")).not.toBeInTheDocument();
+});
+
+it("identifies a paused network query instead of leaving an indefinite loading indicator", async () => {
+  onlineManager.setOnline(false);
+  mountPage();
+  expect(
+    await screen.findByText("网络连接已暂停，展示报告尚未读取。"),
+  ).toHaveAttribute("role", "status");
+  expect(screen.queryByText("正在加载展示报告…")).not.toBeInTheDocument();
+  expect(api.directions).not.toHaveBeenCalled();
+  await act(async () => onlineManager.setOnline(true));
+  expect(await screen.findByLabelText("展示报告来源")).toBeVisible();
+});
+
+it("retries the paused dependency before fetching a report with an unresolved scope", async () => {
+  const directions = deferred<Direction[]>();
+  api.directions.mockReturnValue(directions.promise);
+  onlineManager.setOnline(false);
+  mountPage();
+  await screen.findByText("网络连接已暂停，展示报告尚未读取。");
+  await userEvent.click(screen.getByRole("button", { name: "重新读取报告" }));
+  await act(async () => onlineManager.setOnline(true));
+  await waitFor(() => expect(api.directions).toHaveBeenCalledTimes(1));
+  expect(api.opportunity).not.toHaveBeenCalled();
+  await act(async () => directions.resolve([]));
+  expect(await screen.findByLabelText("展示报告来源")).toBeVisible();
+});
+
+it("keeps an old terminal manual request collapsed while the current report identity is unavailable", async () => {
+  api.opportunity.mockReturnValue(new Promise(() => {}));
+  api.refresh.mockResolvedValue({
+    enabled: true,
+    request: {
+      id: "old-manual",
+      requestMode: "MANUAL",
+      status: "UNCERTAIN",
+      requestedAt: "2026-11-06T23:12:00+08:00",
+      startedAt: "2026-11-06T23:12:02+08:00",
+      completedAt: "2026-11-06T23:47:00+08:00",
+      reportRunId: previousId,
+      batchId: null,
+      errorClass: "TimeoutError",
+    },
+  });
+  mountPage();
+  const summary = await screen.findByText(/最近手动请求（历史） · 提交于/);
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText(/执行结果待确认：TimeoutError/)).not.toBeVisible();
+  expect(screen.getByText("正在加载展示报告…")).toBeVisible();
+  await userEvent.click(summary);
+  expect(screen.getByText(/执行结果待确认：TimeoutError/)).toBeVisible();
+  expect(screen.getByLabelText("最近手动请求身份")).toHaveTextContent(
+    "请求ID：old-manual",
+  );
 });
 
 it("preserves the current macro section before fund observations when a later refetch adds the representative pool", async () => {
@@ -462,8 +545,8 @@ it("reports an initial report request failure without presenting the unrelated s
   api.opportunity.mockRejectedValue(new HttpError("unavailable", 503));
   mountPage();
   expect(
-    await screen.findByText("展示报告读取失败，请稍后重试。"),
-  ).toHaveAttribute("role", "alert");
+    await screen.findByRole("alert", { name: "展示报告读取状态" }),
+  ).toHaveTextContent("展示报告读取失败，请稍后重试。");
   expect(
     screen.queryByRole("region", { name: "今日宏观总纲" }),
   ).not.toBeInTheDocument();
@@ -491,8 +574,8 @@ it.each(["directions", "indices"] as const)(
     mountPage();
 
     expect(
-      await screen.findByText("展示报告读取失败，请稍后重试。"),
-    ).toHaveAttribute("role", "alert");
+      await screen.findByRole("alert", { name: "展示报告读取状态" }),
+    ).toHaveTextContent("展示报告读取失败，请稍后重试。");
     expect(screen.queryByText("正在加载展示报告…")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "今日宏观总纲" }),

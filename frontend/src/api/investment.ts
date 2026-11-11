@@ -1,4 +1,5 @@
-import { request } from "./client";
+import { request, requestWithTimeout } from "./client";
+import type { RuntimeFailureReasonCode } from "./runtime-diagnostics";
 import type { ResearchAcceptanceOutcome } from "./research-acceptance";
 import type { TopicRegistryPage } from "./research-topic-registry";
 export interface Direction {
@@ -748,6 +749,7 @@ export type DailyResearchFailureStage =
   | "REPORT_VALIDATION"
   | "PERSISTING";
 export type DailyResearchFailureReasonCode =
+  | RuntimeFailureReasonCode
   | "DIRECTION_VALIDATION_FAILED"
   | "FUND_PLAN_INVALID"
   | "SCHEDULE_DATE_INVALID"
@@ -1212,10 +1214,13 @@ export interface ScreenResult {
 async function read<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await request<T>(`/v1${path}`, { signal })).data;
 }
+async function readReport<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return (await requestWithTimeout<T>(`/v1${path}`, { signal })).data;
+}
 export const getDirections = (signal?: AbortSignal) =>
-  read<Direction[]>("/investment/directions", signal);
+  readReport<Direction[]>("/investment/directions", signal);
 export const getIndices = (id: string, signal?: AbortSignal) =>
-  read<ResearchIndex[]>(
+  readReport<ResearchIndex[]>(
     `/investment/directions/${encodeURIComponent(id)}/indices`,
     signal,
   );
@@ -1229,7 +1234,8 @@ export function getOpportunityContext(
   Object.entries(query).forEach(([key, value]) => {
     if (value !== undefined && value !== "") params.set(key, String(value));
   });
-  return read<OpportunityContext>(
+  params.set("compactCharts", "true");
+  return readReport<OpportunityContext>(
     `/investment/opportunity-context?${params}`,
     signal,
   );
