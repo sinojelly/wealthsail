@@ -12,10 +12,10 @@ export function recordFrontendTiming(
   durationMs = performance.now(),
 ): void {
   if (!diagnosticsEnabled()) return;
-  console.info("frontend_performance", {
-    phase,
-    durationMs: milliseconds(durationMs),
-  });
+  console.info(
+    "frontend_performance",
+    JSON.stringify({ phase, durationMs: milliseconds(durationMs) }),
+  );
 }
 
 export function installFrontendPerformance(): () => void {
@@ -29,13 +29,29 @@ export function installFrontendPerformance(): () => void {
       !url.pathname.startsWith("/assets/")
     )
       return;
-    console.info("frontend_performance", {
-      phase: "asset",
-      asset: url.pathname.slice("/assets/".length),
-      durationMs: milliseconds(resource.duration),
-      transferBytes: resource.transferSize,
-      decodedBytes: resource.decodedBodySize,
-    });
+    console.info(
+      "frontend_performance",
+      JSON.stringify({
+        phase: "asset",
+        asset: url.pathname.slice("/assets/".length),
+        durationMs: milliseconds(resource.duration),
+        // The pre-request interval includes connection/setup; headers is the
+        // request-to-first-byte wait, and body is the response download.
+        queueMs: milliseconds(
+          Math.max(0, resource.requestStart - resource.fetchStart),
+        ),
+        headersMs: milliseconds(
+          Math.max(0, resource.responseStart - resource.requestStart),
+        ),
+        bodyMs: milliseconds(
+          Math.max(0, resource.responseEnd - resource.responseStart),
+        ),
+        transferBytes: resource.transferSize,
+        encodedBytes: resource.encodedBodySize,
+        decodedBytes: resource.decodedBodySize,
+        protocol: resource.nextHopProtocol,
+      }),
+    );
   };
   const observers: PerformanceObserver[] = [];
   const supported =
@@ -54,15 +70,18 @@ export function installFrontendPerformance(): () => void {
     const navigation = performance.getEntriesByType("navigation")[0] as
       PerformanceNavigationTiming | undefined;
     if (navigation) {
-      console.info("frontend_performance", {
-        phase: "navigation",
-        ttfbMs: milliseconds(navigation.responseStart - navigation.startTime),
-        htmlDownloadMs: milliseconds(
-          navigation.responseEnd - navigation.responseStart,
-        ),
-        domContentLoadedMs: milliseconds(navigation.domContentLoadedEventEnd),
-        loadMs: milliseconds(navigation.loadEventEnd),
-      });
+      console.info(
+        "frontend_performance",
+        JSON.stringify({
+          phase: "navigation",
+          ttfbMs: milliseconds(navigation.responseStart - navigation.startTime),
+          htmlDownloadMs: milliseconds(
+            navigation.responseEnd - navigation.responseStart,
+          ),
+          domContentLoadedMs: milliseconds(navigation.domContentLoadedEventEnd),
+          loadMs: milliseconds(navigation.loadEventEnd),
+        }),
+      );
     }
     if (!supported.includes("resource")) {
       for (const entry of performance.getEntriesByType("resource"))

@@ -238,7 +238,7 @@ it("reuses four research workspaces and every original fund without live or writ
   expect(fund).toHaveTextContent("1.0563");
   expect(fund).toHaveTextContent("研究时确认净值");
   expect(
-    within(fund).getByRole("img", { name: "018344单位净值走势" }),
+    await within(fund).findByRole("img", { name: "018344单位净值走势" }),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("article", { name: "历史基金 013477" }),
@@ -303,7 +303,9 @@ it("clears the previous private snapshot immediately when the session subject ch
     );
   }
   renderWithSession(<SwitchSession />, `/operations/research-preview/${runId}`);
-  expect((await screen.findAllByText("机器人资金约束观察")).length).toBeGreaterThan(0);
+  expect(
+    (await screen.findAllByText("机器人资金约束观察")).length,
+  ).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: "切换查看身份" }));
   expect(screen.queryByText("机器人资金约束观察")).not.toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("正在读取冻结研究材料");

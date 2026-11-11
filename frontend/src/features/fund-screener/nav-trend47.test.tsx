@@ -86,6 +86,7 @@ it("defaults to two-year real NAV and draws frozen buy and sell bands, including
     }),
   );
   render(<FundNavTrendChart fundCode="100101" track={track} />);
+  await act(async () => vi.dynamicImportSettled());
   expect(await screen.findByText(/区间最低 1.0000/)).toHaveTextContent(
     "最高 1.5000",
   );

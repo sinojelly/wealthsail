@@ -63,6 +63,7 @@ afterEach(() => vi.restoreAllMocks());
 it("warns using the real selected-period last point when the confirmed NAV is newer", async () => {
   const user = userEvent.setup();
   render(<FundNavTrendChart fundCode="024194" confirmedNavAsOf="2026-11-06" />);
+  await screen.findByText(/曲线末点早于最新确认净值/);
   expect(screen.getByRole("status")).toHaveTextContent(
     "曲线末点早于最新确认净值",
   );
@@ -76,24 +77,25 @@ it("warns using the real selected-period last point when the confirmed NAV is ne
   expect(screen.getByText(/图中最新净值/)).toHaveTextContent("2026年11月6日");
 });
 
-it("does not claim a date gap when confirmed NAV and real curve end on the same day", () => {
+it("does not claim a date gap when confirmed NAV and real curve end on the same day", async () => {
   render(
     <FundNavTrendChart
       fundCode="024194"
       confirmedNavAsOf="2026-11-05T10:00:00Z"
     />,
   );
-  expect(screen.getByText(/图中最新净值/)).toHaveTextContent("2026年11月5日");
+  expect(await screen.findByText(/图中最新净值/)).toHaveTextContent(
+    "2026年11月5日",
+  );
   expect(
     screen.queryByText(/曲线末点早于最新确认净值/),
   ).not.toBeInTheDocument();
 });
 
-it("keeps the actual curve source visible with its real observation date", () => {
+it("keeps the actual curve source visible with its real observation date", async () => {
   render(<FundNavTrendChart fundCode="024194" />);
-  expect(screen.getByRole("link", { name: "曲线数据来源" })).toHaveAttribute(
-    "href",
-    "https://example.org/unit-nav-history",
-  );
+  expect(
+    await screen.findByRole("link", { name: "曲线数据来源" }),
+  ).toHaveAttribute("href", "https://example.org/unit-nav-history");
   expect(screen.getByText(/图中最新净值/)).toHaveTextContent("2026年11月5日");
 });

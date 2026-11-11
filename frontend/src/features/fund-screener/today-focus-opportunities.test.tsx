@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { renderWithSession } from "../../test/render-with-session";
 import type {
   OpportunityContext,
@@ -50,7 +50,7 @@ function context(): OpportunityContext {
   } as unknown as OpportunityContext;
 }
 
-it("shows unaudited direction and mentioned-fund reference levels and band charts on the card front", () => {
+it("shows unaudited direction and mentioned-fund reference levels and band charts on the card front", async () => {
   vi.stubGlobal("IntersectionObserver", undefined);
   const data = context();
   Object.assign(data.dailyResearch!.report!, {
@@ -78,6 +78,7 @@ it("shows unaudited direction and mentioned-fund reference levels and band chart
   expect(within(direction).getByText("参考买入区间")).toBeVisible();
   expect(within(direction).getByText("1.0500–1.1500")).toBeVisible();
   expect(within(direction).getByText("23.4%")).toBeVisible();
+  await act(async () => vi.dynamicImportSettled());
   expect(
     within(direction).getByRole("img", { name: "000101单位净值走势" }),
   ).toBeVisible();

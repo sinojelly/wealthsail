@@ -158,8 +158,12 @@ it("reads current personal funds only after opt-in, keeps all action controls di
   expect(
     within(fund).getByRole("button", { name: "设置当前提醒" }),
   ).toBeDisabled();
-  expect(within(fund).getByRole("region", { name: "参考买卖点与操作状态" })).toBeVisible();
-  await userEvent.click(within(fund).getByRole("button", { name: "成立以来" }));
+  expect(
+    within(fund).getByRole("region", { name: "参考买卖点与操作状态" }),
+  ).toBeVisible();
+  await userEvent.click(
+    await within(fund).findByRole("button", { name: "成立以来" }),
+  );
   expect(calls).toEqual([
     "GET /api/v1/investment/personal-funds-reference?includeResearchMentions=false",
   ]);
@@ -168,7 +172,9 @@ it("reads current personal funds only after opt-in, keeps all action controls di
 });
 it("recomputes snapshot percentile from each selected period instead of displaying unknown or a wider-window rank", async () => {
   show(<FundNavTrendChart fundCode="011035" snapshot={reference().history} />);
-  expect(screen.getByText(/研究时处于该周期/)).toHaveTextContent("75.0%");
+  expect(await screen.findByText(/研究时处于该周期/)).toHaveTextContent(
+    "75.0%",
+  );
   await userEvent.click(screen.getByRole("button", { name: "近半年" }));
   expect(screen.getByText(/研究时处于该周期/)).toHaveTextContent("50.0%");
   await userEvent.click(screen.getByRole("button", { name: "冻结全窗口" }));
