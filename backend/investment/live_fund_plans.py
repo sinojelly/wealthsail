@@ -459,14 +459,55 @@ def _cached_nav_plan(code, view, points, benchmark):
     return plan
 
 
+def _history_identity(history):
+    try:
+        identity = json.dumps(history, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        # Legacy Python-only values must not be coerced into another cohort.
+        return identity if json.loads(identity) == history else None
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _distinct_histories(histories):
+    """Compare full JSON only for histories that could be identical."""
+    groups = {}
+    for history in histories:
+        # The header only narrows candidates. A same-date revision, altered proof
+        # or different metadata must still pass the complete JSON comparison.
+        header = (
+            len(history),
+            *(value if type(value) is str else None for value in (
+                history.get("fundCode"), history.get("retrievedAt"), history.get("availableAt"),
+                history.get("asOf"), history.get("sourceUri"), history.get("priceBasis"),
+            )),
+        )
+        previous = groups.get(header)
+        if previous is None:
+            groups[header] = history
+            yield history
+            continue
+        if isinstance(previous, dict):
+            first = _history_identity(previous)
+            previous = {first} if first is not None else set()
+            groups[header] = previous
+        identity = _history_identity(history)
+        if identity is None:
+            yield history
+        elif identity not in previous:
+            previous.add(identity)
+            yield history
+
+
 async def refresh_report_fund_plans(
     conn, report, now, *, histories=None, packet=None, include_series=False,
-    tenant_id=None, user_id=None, repair_nav=True,
+    tenant_id=None, user_id=None, repair_nav=True, read_local_histories=True,
+    allow_external_fetch=False,
 ):
     """Refresh every research reference from recorded public NAV coordinates.
 
     Saved-report reads set repair_nav=False and never await a provider. Explicit
-    repair callers can use the narrow authenticated history persistence RPC;
+    repair callers explicitly opt into allow_external_fetch=True to use the
+    narrow authenticated history persistence RPC;
     research status and audit coverage never filter the underlying products.
     """
     if not isinstance(report, dict):
@@ -487,12 +528,13 @@ async def refresh_report_fund_plans(
         return result
     codes = list(dict.fromkeys(code for _, code in plans))
     prepared = None
-    if repair_nav and tenant_id is not None and user_id is not None:
+    if repair_nav and allow_external_fetch and tenant_id is not None and user_id is not None:
         from backend.funds.nav_history import ensure_nav_histories
 
         prepared = await ensure_nav_histories(
             conn, codes, now, tenant_id=tenant_id, user_id=user_id,
             provider_budget=len(codes),
+            allow_external_fetch=True,
         )
         now = local(prepared["asOf"])
     candidates = {code: [] for code in codes}
@@ -501,7 +543,7 @@ async def refresh_report_fund_plans(
         *_histories((packet or {}).get("fundHistories", [])),
         *_histories((prepared or {}).get("histories", [])),
     ]
-    for offset in range(0, len(codes) if prepared is None else 0, RESEARCH_SELECTION_LIMIT):
+    for offset in range(0, len(codes) if prepared is None and read_local_histories else 0, RESEARCH_SELECTION_LIMIT):
         supplied.extend(
             [
                 row
@@ -510,7 +552,7 @@ async def refresh_report_fund_plans(
                 )
             ]
         )
-    for history in supplied:
+    for history in _distinct_histories(supplied):
         if history.get("fundCode") in candidates and _safe_history(history):
             candidates[history["fundCode"]].append(history)
     calculated = {}

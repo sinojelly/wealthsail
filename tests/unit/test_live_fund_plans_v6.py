@@ -96,6 +96,20 @@ class LocalHistory:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("read_local", [True, False])
+async def test_supplied_complete_history_can_explicitly_skip_duplicate_local_read(read_local):
+    from backend.investment.live_fund_plans import refresh_report_fund_plans
+
+    conn = LocalHistory()
+    result = await refresh_report_fund_plans(
+        conn, {"actionablePlans": [old_plan()]}, NOW,
+        histories=[history()], repair_nav=False, read_local_histories=read_local,
+    )
+    assert result["actionablePlans"][0]["currentPrice"] != "99.99"
+    assert len(conn.calls) == (1 if read_local else 0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("available", [True, False])
 async def test_live_scan_coverage_uses_refreshed_prices_instead_of_saved_counts(
     available,

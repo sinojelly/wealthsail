@@ -62,11 +62,11 @@ async def test_authenticated_report_repairs_every_direction_mention_and_quant_fu
                 "fundCode": "007466", "subjectKind": "nav", "subjectId": "007466", "market": "FUND_CN",
             }],
             "quantitativeScan": {"items": [old_plan("011035")]},
-        }, NOW, tenant_id="tenant", user_id="actor", include_series=True,
+        }, NOW, tenant_id="tenant", user_id="actor", include_series=True, allow_external_fetch=True,
     )
     assert set(ensure.await_args.args[1]) == set(codes)
     assert ensure.await_args.args[0] is conn
-    assert ensure.await_args.kwargs == {"tenant_id": "tenant", "user_id": "actor", "provider_budget": 3}
+    assert ensure.await_args.kwargs == {"tenant_id": "tenant", "user_id": "actor", "provider_budget": 3, "allow_external_fetch": True}
     for plan in [result["valueDirections"][0]["plans"][0], result["mentionedFunds"][0], result["quantitativeScan"]["items"][0]]:
         assert plan["actionableZones"]["navSync"] == {"state": "READY"}
         assert plan["actionableZones"]["priceRefresh"]["calculatedAt"] == prepared_at.isoformat()
@@ -287,7 +287,7 @@ async def test_authenticated_failed_repair_keeps_older_actual_prices_marked_part
     monkeypatch.setattr("backend.funds.nav_history.ensure_nav_histories", ensure)
     result = await refresh_report_fund_plans(
         LocalHistory(), {"valueDirections": [{"plans": [old_plan()]}]}, NOW,
-        tenant_id="tenant", user_id="actor", include_series=True,
+        tenant_id="tenant", user_id="actor", include_series=True, allow_external_fetch=True,
     )
     plan = result["valueDirections"][0]["plans"][0]
     assert plan["priceRefresh"]["state"] == "PARTIAL"

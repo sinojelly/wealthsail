@@ -282,6 +282,12 @@ function TrendView({
       )}
       {(failed ||
         exhausted ||
+        (!historical && !data && !loading) ||
+        (!historical &&
+          data &&
+          data.state !== "READY" &&
+          data.refresh.state !== "QUEUED" &&
+          data.refresh.state !== "RUNNING") ||
         data?.refresh.state === "FAILED" ||
         data?.refresh.state === "PARTIAL") && (
         <button
@@ -290,7 +296,7 @@ function TrendView({
           disabled={historical || loading}
           onClick={retry}
         >
-          重新读取净值
+          刷新并补齐净值
         </button>
       )}
     </section>
@@ -315,8 +321,11 @@ function LiveTrend(props: Props) {
     />
   );
 }
-function FrozenTrend({ snapshot, ...props }: Props) {
-  const [period, setPeriod] = useState<FundNavPeriod>("2y");
+function snapshotProjection(
+  snapshot: Props["snapshot"],
+  period: FundNavPeriod,
+  currentLocal: boolean,
+) {
   const end = snapshot?.asOf ?? snapshot?.points.at(-1)?.date;
   const start = end ? new Date(`${end.slice(0, 10)}T00:00:00Z`) : null;
   if (start && period !== "all")
@@ -331,7 +340,7 @@ function FrozenTrend({ snapshot, ...props }: Props) {
         point.date >= start.toISOString().slice(0, 10),
     ) ?? [];
   const values = points.map((point) => Number(point.unitNav));
-  const data = snapshot
+  return snapshot
     ? {
         ...snapshot,
         period,
@@ -342,9 +351,7 @@ function FrozenTrend({ snapshot, ...props }: Props) {
           endDate: points.at(-1)?.date ?? null,
           sampleCount: points.length,
           fullHistory:
-            props.snapshotMode === "CURRENT_LOCAL" &&
-            period === "all" &&
-            snapshot.coverage.fullHistory,
+            currentLocal && period === "all" && snapshot.coverage.fullHistory,
         },
         summary: {
           ...snapshot.summary,
@@ -357,16 +364,14 @@ function FrozenTrend({ snapshot, ...props }: Props) {
         refresh: { state: "IDLE" as const, runId: null, pollAfterMs: null },
       }
     : undefined;
+}
+function FrozenTrend({ snapshot, ...props }: Props) {
+  const [period, setPeriod] = useState<FundNavPeriod>("2y");
+  const data = snapshotProjection(snapshot, period, false);
   return (
     <TrendView
       {...props}
-      historical={props.snapshotMode !== "CURRENT_LOCAL"}
-      allPeriodLabel={
-        props.snapshotMode === "CURRENT_LOCAL" &&
-        !snapshot?.coverage.fullHistory
-          ? "本地全窗口"
-          : undefined
-      }
+      historical
       period={period}
       onPeriodChange={setPeriod}
       history={{
@@ -379,9 +384,39 @@ function FrozenTrend({ snapshot, ...props }: Props) {
     />
   );
 }
+function CurrentLocalTrend({ snapshot, ...props }: Props) {
+  const [period, setPeriod] = useState<FundNavPeriod>("2y");
+  const [active, setActive] = useState(false);
+  const history = useFundNavHistory(props.fundCode, period, active);
+  const data = snapshotProjection(snapshot, period, true);
+  return (
+    <TrendView
+      {...props}
+      historical={false}
+      period={period}
+      onPeriodChange={setPeriod}
+      allPeriodLabel={
+        !active && !snapshot?.coverage.fullHistory ? "本地全窗口" : undefined
+      }
+      history={{
+        ...(active
+          ? history
+          : { loading: false, failed: false, exhausted: false }),
+        data: active ? (history.data ?? data) : data,
+        retry: () => {
+          history.retry();
+          setActive(true);
+        },
+      }}
+    />
+  );
+}
 export default function FundNavTrendChart(props: Props) {
   if (!/^\d{6}$/.test(props.fundCode)) return null;
-  return props.snapshot !== undefined ? (
+  return props.snapshot !== undefined &&
+    props.snapshotMode === "CURRENT_LOCAL" ? (
+    <CurrentLocalTrend key={props.fundCode} {...props} />
+  ) : props.snapshot !== undefined ? (
     <FrozenTrend key={props.fundCode} {...props} />
   ) : (
     <LiveTrend key={props.fundCode} {...props} />

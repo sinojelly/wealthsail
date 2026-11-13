@@ -220,6 +220,12 @@ async def _claim(pool, code, now):
             )
             if recent and obj(recent["result"]).get("status") != "SUCCESS":
                 return {"status": "COOLDOWN"}
+            attempt = await conn.fetchrow(
+                "SELECT * FROM market.claim_fund_nav_sync_attempt($1)",
+                code,
+            )
+            if not attempt or attempt.get("claimed") is not True:
+                return {"status": "COOLDOWN"}
             identity = uuid4()
             await conn.execute(
                 """INSERT INTO market.macro_evidence_attempts(run_id,job_key,phase,started_at,recorded_at,lease_until,trigger,release_keys) VALUES($1,$2,'CLAIMED',$3,$3,$4,'NAV_CHART','[]'::jsonb)""",

@@ -12,7 +12,7 @@ import asyncpg
 import pytest
 
 from backend.common.database import apply_tenant_context
-from backend.funds.nav_history import get_nav_history
+from backend.funds.nav_history import get_nav_history, request_nav_history_refresh
 from backend.jobs.fund_nav_full_history import (
     refresh_full_nav_history,
     validate_full_payload,
@@ -117,7 +117,7 @@ async def test_owner_queues_once_and_viewer_reads_without_dispatch():
             == 0
         )
         await apply_tenant_context(conn, str(owner), str(tenant))
-        first = await get_nav_history(
+        first = await request_nav_history_refresh(
             conn, code, "all", tenant_id=tenant, user_id=owner, now=NOW
         )
         again = await get_nav_history(

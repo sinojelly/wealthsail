@@ -13,6 +13,79 @@ from backend.integrations.market_data import Observation
 NOW = datetime(2026, 10, 28, 16, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
+@pytest.mark.asyncio
+async def test_default_cache_read_never_constructs_provider_work(monkeypatch):
+    from backend.funds.latest_quotes import LatestQuoteCache
+
+    cache = LatestQuoteCache()
+
+    def forbidden(*_args):
+        raise AssertionError("read must not even construct provider work")
+
+    monkeypatch.setattr(cache, "_load", forbidden)
+    result = await cache.get(["004069"], NOW, trading_day=True)
+    assert result["items"] == [
+        {"fundCode": "004069", "confirmedNav": None, "currentEstimate": None}
+    ]
+
+
+def test_quote_get_reads_local_data_inside_tenant_transaction_and_never_refreshes(
+    monkeypatch,
+):
+    from contextlib import asynccontextmanager
+    from fastapi.testclient import TestClient
+    from backend.common.tenancy import TenantContext
+    from backend.dependencies import get_pool, get_request_id, get_tenant_context
+    from backend.funds import api, latest_quotes
+    from backend.main import create_app
+
+    active = False
+    connection = object()
+
+    @asynccontextmanager
+    async def transaction(*_args):
+        nonlocal active
+        active = True
+        yield connection
+        active = False
+
+    async def local(conn, codes, now):
+        assert conn is connection and active
+        assert codes == ["004069"]
+        return {
+            "items": [
+                {
+                    "fundCode": "004069",
+                    "confirmedNav": {"value": "1.2345", "asOf": "2026-10-27"},
+                    "currentEstimate": None,
+                }
+            ]
+        }
+
+    refresh = AsyncMock(side_effect=AssertionError("GET cannot call provider"))
+    monkeypatch.setattr(api, "tenant_transaction", transaction)
+    monkeypatch.setattr(latest_quotes, "read_local_fund_quotes", local)
+    monkeypatch.setattr(latest_quotes.latest_quote_cache, "get", refresh)
+    app = create_app()
+    app.dependency_overrides[get_pool] = lambda: object()
+    app.dependency_overrides[get_request_id] = lambda: "local-quote-test"
+    app.dependency_overrides[get_tenant_context] = lambda: TenantContext(
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+        tenant_role="VIEWER",
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/api/v1/funds/quotes", params={"codes": "004069"})
+    assert response.status_code == 200
+    assert response.json()["data"]["items"][0]["confirmedNav"]["value"] == "1.2345"
+    refresh.assert_not_awaited()
+    for codes in ["bad", ",004069", ",".join(["004069"] * 33)]:
+        assert (
+            client.get("/api/v1/funds/quotes", params={"codes": codes}).status_code
+            == 400
+        )
+
+
 def observation(field="ESTIMATED_NAV", **changes):
     values = dict(
         symbol="004069",
@@ -46,6 +119,7 @@ async def test_latest_quote_separates_after_close_estimate_from_official_disclos
         ["004069"],
         NOW,
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[estimate]),
         confirmed_loader=AsyncMock(return_value=[confirmed]),
         now_provider=lambda: NOW,
@@ -67,6 +141,7 @@ async def test_estimate_base_without_official_date_is_never_returned_as_confirme
         ["004069"],
         NOW,
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[observation()]),
         confirmed_loader=AsyncMock(return_value=[observation("NAV")]),
         now_provider=lambda: NOW,
@@ -95,6 +170,7 @@ async def test_quote_cache_reuses_recent_public_observations_and_refreshes_after
             ["004069", "004069"],
             now,
             trading_day=True,
+            allow_external_fetch=True,
             estimate_loader=estimate_loader,
             confirmed_loader=confirmed_loader,
             now_provider=lambda: now,
@@ -130,6 +206,7 @@ async def test_partial_32_fund_batch_retries_only_missing_quotes_without_starvat
         codes,
         NOW,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=limited_provider,
         now_provider=lambda: NOW,
     )
@@ -139,6 +216,7 @@ async def test_partial_32_fund_batch_retries_only_missing_quotes_without_starvat
         codes,
         NOW + timedelta(seconds=1),
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=limited_provider,
         now_provider=lambda: NOW + timedelta(seconds=1),
     )
@@ -149,6 +227,7 @@ async def test_partial_32_fund_batch_retries_only_missing_quotes_without_starvat
         codes,
         later,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=limited_provider,
         now_provider=lambda: later,
     )
@@ -183,6 +262,7 @@ async def test_failed_refresh_preserves_last_good_nav_and_retries_after_short_co
         ["004069"],
         NOW,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=loader,
         now_provider=lambda: NOW,
     )
@@ -192,6 +272,7 @@ async def test_failed_refresh_preserves_last_good_nav_and_retries_after_short_co
         ["004069"],
         expired,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=loader,
         now_provider=lambda: expired,
     )
@@ -206,6 +287,7 @@ async def test_failed_refresh_preserves_last_good_nav_and_retries_after_short_co
         ["004069"],
         cooldown,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=loader,
         now_provider=lambda: cooldown,
     )
@@ -216,6 +298,7 @@ async def test_failed_refresh_preserves_last_good_nav_and_retries_after_short_co
         ["004069"],
         retry,
         trading_day=False,
+        allow_external_fetch=True,
         confirmed_loader=loader,
         now_provider=lambda: retry,
     )
@@ -231,6 +314,7 @@ async def test_reading_cache_keeps_the_real_retrieval_time():
     cache = LatestQuoteCache()
     options = dict(
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[observation()]),
         confirmed_loader=AsyncMock(return_value=[]),
     )
@@ -240,7 +324,7 @@ async def test_reading_cache_keeps_the_real_retrieval_time():
     assert result["items"][0]["currentEstimate"]["retrievedAt"] == NOW.isoformat()
 
 
-def test_quote_http_contract_is_bounded_and_releases_transaction_before_provider(
+def test_quote_refresh_http_contract_is_bounded_and_releases_transaction_before_provider(
     monkeypatch,
 ):
     from contextlib import asynccontextmanager
@@ -265,6 +349,7 @@ def test_quote_http_contract_is_bounded_and_releases_transaction_before_provider
         assert active is False
         assert codes == ["004069"]
         assert kwargs["trading_day"] is True
+        assert kwargs["allow_external_fetch"] is True
         return {
             "items": [
                 {"fundCode": "004069", "confirmedNav": None, "currentEstimate": None}
@@ -282,12 +367,14 @@ def test_quote_http_contract_is_bounded_and_releases_transaction_before_provider
         tenant_role="VIEWER",
     )
     client = TestClient(app, raise_server_exceptions=False)
-    result = client.get("/api/v1/funds/quotes", params={"codes": "004069"})
+    result = client.post("/api/v1/funds/quotes/refresh", params={"codes": "004069"})
     assert result.status_code == 200
     assert result.json()["data"]["items"][0]["fundCode"] == "004069"
     for codes in ["bad", ",004069", ",".join(["004069"] * 33)]:
         assert (
-            client.get("/api/v1/funds/quotes", params={"codes": codes}).status_code
+            client.post(
+                "/api/v1/funds/quotes/refresh", params={"codes": codes}
+            ).status_code
             == 400
         )
 
@@ -303,6 +390,7 @@ async def test_quote_timeout_preserves_fast_partial_results():
         ["004069"],
         NOW,
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[observation()]),
         confirmed_loader=blocked,
         now_provider=lambda: NOW,
@@ -329,6 +417,7 @@ async def test_latest_estimate_rejects_future_stale_or_wrong_identity(changes):
         ["004069"],
         NOW,
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[observation(**changes)]),
         confirmed_loader=AsyncMock(return_value=[]),
         now_provider=lambda: NOW,
@@ -400,6 +489,7 @@ async def test_study_initial_read_uses_only_cached_quotes_and_never_waits_for_pr
         ["004069"],
         NOW,
         trading_day=True,
+        allow_external_fetch=True,
         estimate_loader=AsyncMock(return_value=[observation()]),
         confirmed_loader=AsyncMock(return_value=[]),
         now_provider=lambda: NOW,

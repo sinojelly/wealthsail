@@ -80,6 +80,7 @@ class SourceStore:
         self.connections = 0
         self.finishes = []
         self.commands = []
+        self.attempts = set()
 
     def transaction(self):
         from test_nav_history47 import Cache
@@ -103,7 +104,12 @@ class SourceStore:
             return self.operator
         return self.active
 
-    async def fetchrow(self, *args):
+    async def fetchrow(self, sql, *args):
+        if "claim_fund_nav_sync_attempt" in sql:
+            code = args[0]
+            claimed = code not in self.attempts
+            self.attempts.add(code)
+            return {"claimed": claimed, "last_sync_attempt_at": NOW}
         return None
 
     async def execute(self, sql, *args):
@@ -219,6 +225,13 @@ async def test_failed_provider_preserves_prior_cache_and_cancellation_releases_c
     async def cancel(code, end):
         raise asyncio.CancelledError()
 
+    # A failed fetch remains on the durable cooldown. Test cancellation on an
+    # independent claim rather than silently retrying the failed one.
+    with pytest.raises(DataUnavailableError):
+        await m.refresh_full_nav_history(
+            object(), "008281", now=NOW, fetcher=cancel, now_provider=lambda: NOW
+        )
+    store.attempts.clear()  # Simulate the next eligible attempt after 12 hours.
     with pytest.raises(asyncio.CancelledError):
         await m.refresh_full_nav_history(
             object(), "008281", now=NOW, fetcher=cancel, now_provider=lambda: NOW

@@ -135,6 +135,7 @@ class Cache:
         self.chart, self.research, self.operator = chart, research, operator
         self.identity_count = identity_count
         self.jobs = []
+        self.refresh_state = None
 
     async def fetch(self, sql, *args):
         if "research_fund_catalog" in sql:
@@ -148,7 +149,11 @@ class Cache:
     async def fetchrow(self, sql, *args):
         if "enqueue_fund_nav_chart_fetch" in sql:
             self.jobs.append(args)
+            self.refresh_state = "QUEUED"
             return {"id": "job47", "status": "PENDING"}
+        if "FROM workflow.job_runs" in sql and self.refresh_state:
+            assert args[:2] == ("t", "fund-unit-nav-history:008281")
+            return {"id": "job47", "refresh_state": self.refresh_state}
         return None
 
     async def execute(self, *args):
@@ -176,13 +181,25 @@ async def test_short_period_reuses_confirmed_cache_without_queueing():
 
 
 @pytest.mark.asyncio
-async def test_all_missing_depth_auto_queues_but_read_only_user_does_not_dispatch():
+async def test_partial_get_never_queues_but_explicit_owner_refresh_does():
     store = Cache(research=history())
     result = await module().get_nav_history(
         store, "008281", "all", tenant_id="t", user_id="u", now=NOW
     )
-    assert result["state"] == "PARTIAL" and result["refresh"]["state"] == "QUEUED"
-    assert len(store.jobs) == 1
+    assert result["state"] == "PARTIAL" and result["refresh"]["state"] == "IDLE"
+    assert len(store.jobs) == 0
+    requested = await module().request_nav_history_refresh(
+        store, "008281", "all", tenant_id="t", user_id="u", now=NOW
+    )
+    assert requested["refresh"]["state"] == "QUEUED" and len(store.jobs) == 1
+    for state in ("QUEUED", "RUNNING", "FAILED", "IDLE"):
+        store.refresh_state = state
+        polled = await module().get_nav_history(
+            store, "008281", "all", tenant_id="t", user_id="u", now=NOW
+        )
+        assert polled["refresh"]["state"] == state
+        assert polled["refresh"]["runId"] == (None if state == "IDLE" else "job47")
+        assert polled["points"] == result["points"] and len(store.jobs) == 1
     read = Cache(research=history(), operator=False)
     result = await module().get_nav_history(
         read, "008281", "all", tenant_id="t", user_id="u", now=NOW
@@ -266,7 +283,7 @@ async def test_new_confirmed_nav_prevents_an_older_full_chart_from_hiding_the_re
         store, "008281", "all", tenant_id="t", user_id="u", now=NOW
     )
     assert result["state"] == "PARTIAL" and result["coverage"]["fullHistory"] is False
-    assert result["refresh"]["state"] == "QUEUED" and len(store.jobs) == 1
+    assert result["refresh"]["state"] == "IDLE" and len(store.jobs) == 0
 
 
 @pytest.mark.asyncio
@@ -275,8 +292,8 @@ async def test_new_confirmed_nav_prevents_an_older_full_chart_from_hiding_the_re
     [
         ("2y", "27", "2026-10-27", "2.9733", 37.5, "IDLE"),
         ("2y", "28", "2026-10-28", "3.0027", 70.0, "IDLE"),
-        ("all", "27", "2026-10-26", "2.9767", 62.5, "QUEUED"),
-        ("all", "28", "2026-10-26", "2.9767", 62.5, "QUEUED"),
+        ("all", "27", "2026-10-26", "2.9767", 62.5, "IDLE"),
+        ("all", "28", "2026-10-26", "2.9767", 62.5, "IDLE"),
     ],
 )
 async def test_latest_two_year_nav_is_not_hidden_by_an_older_complete_history(
@@ -360,7 +377,7 @@ async def test_newer_partial_tail_does_not_replace_a_covered_two_year_history():
     assert result["points"][-1] == {"date": "2026-10-19", "unitNav": "1.5"}
     assert result["summary"]["currentNav"] == "1.5"
     assert result["coverage"]["latestKnownNavDate"] == "2026-10-20"
-    assert result["state"] == "PARTIAL" and result["refresh"]["state"] == "QUEUED"
+    assert result["state"] == "PARTIAL" and result["refresh"]["state"] == "IDLE"
 
 
 @pytest.mark.asyncio
@@ -398,7 +415,7 @@ async def test_old_full_cache_is_rechecked_even_without_a_new_research_tail():
     )
     assert result["state"] == "PARTIAL" and result["asOf"] == "2026-10-10"
     assert result["coverage"]["reason"] == "SOURCE_RECHECK_DUE"
-    assert result["refresh"]["state"] == "QUEUED" and len(store.jobs) == 1
+    assert result["refresh"]["state"] == "IDLE" and len(store.jobs) == 0
     assert result["points"][-1]["unitNav"] == "1.5"
 
 
@@ -421,7 +438,7 @@ async def test_full_cache_recheck_is_based_on_a_bounded_checked_age(age, expecte
         store, "008281", "all", tenant_id="t", user_id="u", now=NOW
     )
     assert result["state"] == expected
-    assert len(store.jobs) == (1 if expected == "PARTIAL" else 0)
+    assert len(store.jobs) == 0
 
 
 @pytest.mark.asyncio
@@ -466,4 +483,4 @@ async def test_deeper_period_requeue_uses_controlled_api_write_path():
         store, "008281", "all", tenant_id="t", user_id="u", now=NOW
     )
     assert result["points"][-1]["unitNav"] == "3"
-    assert result["refresh"]["state"] == "QUEUED"
+    assert result["refresh"]["state"] == "IDLE"

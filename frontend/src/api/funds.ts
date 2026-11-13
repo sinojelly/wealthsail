@@ -20,6 +20,18 @@ export async function getLatestFundQuotes(
   ).data;
 }
 
+/** Explicit quote refresh only; normal reads never contact a quote provider. */
+export async function refreshFundQuotes(
+  codes: string[],
+): Promise<LatestFundQuotes> {
+  return (
+    await request<LatestFundQuotes>(
+      `/v1/funds/quotes/refresh?codes=${encodeURIComponent([...new Set(codes)].sort().join(","))}`,
+      { method: "POST" },
+    )
+  ).data;
+}
+
 /** reference.fund_nav_ranges 缓存行的可用形态。 */
 export interface FundNavRange {
   fundCode: string;
@@ -214,4 +226,18 @@ export async function getFundNavHistory(
     { signal },
   );
   return envelope.data;
+}
+
+/** Queue NAV repair only after the user explicitly requests it. */
+export async function refreshFundNavHistory(
+  code: string,
+  period: FundNavPeriod,
+  signal?: AbortSignal,
+): Promise<FundNavHistory> {
+  return (
+    await request<FundNavHistory>(
+      `/v1/funds/${encodeURIComponent(code)}/nav-history/refresh?period=${period}`,
+      { method: "POST", signal },
+    )
+  ).data;
 }

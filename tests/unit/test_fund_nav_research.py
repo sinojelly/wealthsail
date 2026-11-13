@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from backend.errors import DataUnavailableError
 from backend.integrations.market_data import Observation
 from backend.investment import theme_graph
 from backend.macro import alpha_repository
@@ -47,6 +48,13 @@ class Store:
         self.history = history
         self.active = 0
         self.inserts = []
+        self.attempted = set()
+
+    async def fetchrow(self, sql, code):
+        assert "market.claim_fund_nav_sync_attempt" in sql
+        claimed = code not in self.attempted
+        self.attempted.add(code)
+        return {"claimed": claimed}
 
     async def execute(self, sql, *args):
         self.inserts.append((sql, args))
@@ -151,10 +159,14 @@ async def test_provider_failure_does_not_append_a_new_history(monkeypatch):
     job = _job()
     store = Store()
     _connection(monkeypatch, job, store)
+    provider = AsyncMock(side_effect=TimeoutError())
     with pytest.raises(TimeoutError):
         await job.refresh_fund_nav_history(
-            object(), "110022", now=NOW, fetcher=AsyncMock(side_effect=TimeoutError())
+            object(), "110022", now=NOW, fetcher=provider
         )
+    with pytest.raises(DataUnavailableError, match="冷却"):
+        await job.refresh_fund_nav_history(object(), "110022", now=NOW, fetcher=provider)
+    assert provider.await_count == 1
     assert store.inserts == []
 
 

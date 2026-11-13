@@ -1,5 +1,9 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { getLatestFundQuotes, type LatestFundQuote } from "../../api/funds";
+import {
+  getLatestFundQuotes,
+  refreshFundQuotes,
+  type LatestFundQuote,
+} from "../../api/funds";
 
 interface Snapshot {
   data?: LatestFundQuote;
@@ -12,10 +16,11 @@ interface Resource {
   listeners: Set<() => void>;
   expires: number;
   pending: boolean;
+  refreshRequested?: boolean;
 }
 const initial: Snapshot = { loading: false, failed: false };
 const resources = new Map<string, Resource>();
-const queued = new Set<Resource>();
+const queued = new Map<Resource, boolean>();
 let scheduled = false;
 let watchingFocus = false;
 const completedEvent = "wealthsail:fund-quotes-updated";
@@ -27,15 +32,15 @@ function publish(resource: Resource, patch: Partial<Snapshot>) {
   resource.snapshot = { ...resource.snapshot, ...patch };
   resource.listeners.forEach((listener) => listener());
 }
-async function fetchBatch(batch: Resource[]) {
+async function fetchBatch(batch: Resource[], explicitRefresh: boolean) {
   batch.forEach((resource) => {
     resource.pending = true;
     publish(resource, { loading: true, failed: false });
   });
   try {
-    const result = await getLatestFundQuotes(
-      batch.map((resource) => resource.code),
-    );
+    const result = await (
+      explicitRefresh ? refreshFundQuotes : getLatestFundQuotes
+    )(batch.map((resource) => resource.code));
     for (const resource of batch) {
       const data = result.items.find((row) => row.fundCode === resource.code);
       if (!data) throw new Error("MissingFundQuote");
@@ -51,22 +56,35 @@ async function fetchBatch(batch: Resource[]) {
   } finally {
     batch.forEach((resource) => {
       resource.pending = false;
+      const refreshRequested = resource.refreshRequested;
+      resource.refreshRequested = false;
+      if (refreshRequested && resource.listeners.size) {
+        queue(resource, true);
+      }
     });
   }
 }
-function queue(resource: Resource) {
-  if (resource.pending) return;
-  queued.add(resource);
+function queue(resource: Resource, explicitRefresh = false) {
+  if (resource.pending) {
+    if (explicitRefresh) resource.refreshRequested = true;
+    return;
+  }
+  queued.set(resource, explicitRefresh || queued.get(resource) === true);
   if (scheduled) return;
   scheduled = true;
   queueMicrotask(() => {
     scheduled = false;
     const batch = [...queued].filter(
-      (resource) => resource.listeners.size && !resource.pending,
+      ([resource]) => resource.listeners.size && !resource.pending,
     );
     queued.clear();
-    for (let offset = 0; offset < batch.length; offset += 32)
-      void fetchBatch(batch.slice(offset, offset + 32));
+    for (const explicit of [false, true]) {
+      const group = batch
+        .filter(([, refresh]) => refresh === explicit)
+        .map(([resource]) => resource);
+      for (let offset = 0; offset < group.length; offset += 32)
+        void fetchBatch(group.slice(offset, offset + 32), explicit);
+    }
   });
 }
 function refreshVisible() {
@@ -74,7 +92,11 @@ function refreshVisible() {
   for (const resource of resources.values())
     if (resource.listeners.size) queue(resource);
 }
-export const refreshLatestFundQuotes = refreshVisible;
+export function refreshLatestFundQuotes() {
+  if (document.visibilityState === "hidden") return;
+  for (const resource of resources.values())
+    if (resource.listeners.size) queue(resource, true);
+}
 function subscribe(code: string, listener: () => void) {
   if (!/^\d{6}$/.test(code)) return () => undefined;
   let resource = resources.get(code);

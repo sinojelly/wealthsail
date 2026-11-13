@@ -29,6 +29,14 @@ async def refresh_fund_nav_history(
     now = now or now_shanghai()
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("fund NAV requires an aware clock")
+    # This older webpage refresh shares the same per-fund cooldown as the
+    # full chart worker and personal refresh, including failed attempts.
+    async with system_connection(pool) as conn:
+        claim = await conn.fetchrow(
+            "SELECT * FROM market.claim_fund_nav_sync_attempt($1)", fund_code
+        )
+    if not claim or claim.get("claimed") is not True:
+        raise DataUnavailableError("单位净值来源暂处冷却期")
     start = now.date() - timedelta(days=NAV_HISTORY_FETCH_CALENDAR_DAYS)
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         observations = await asyncio.wait_for(

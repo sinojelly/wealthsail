@@ -207,33 +207,35 @@ class LatestQuoteCache:
         estimate_loader=None,
         confirmed_loader=None,
         now_provider=now_shanghai,
+        allow_external_fetch=False,
     ):
         from backend.integrations.market_data import fetch_fund_intraday_estimates
 
         now = _stamp(now)
         codes = sorted(set(codes))
         fetch_estimate = trading_day is True and _refresh_time(now)
-        work = [
-            self._load(
-                "confirmed.provider",
-                codes,
-                now,
-                confirmed_loader or _confirmed_observations,
-                timedelta(minutes=5),
-            )
-        ]
-        if fetch_estimate:
-            work.append(
+        if allow_external_fetch:
+            work = [
                 self._load(
-                    "estimate.provider",
+                    "confirmed.provider",
                     codes,
                     now,
-                    estimate_loader or fetch_fund_intraday_estimates,
-                    timedelta(seconds=60),
+                    confirmed_loader or _confirmed_observations,
+                    timedelta(minutes=5),
                 )
-            )
-        await asyncio.gather(*work)
-        finished = _stamp(now_provider())
+            ]
+            if fetch_estimate:
+                work.append(
+                    self._load(
+                        "estimate.provider",
+                        codes,
+                        now,
+                        estimate_loader or fetch_fund_intraday_estimates,
+                        timedelta(seconds=60),
+                    )
+                )
+            await asyncio.gather(*work)
+        finished = _stamp(now_provider()) if allow_external_fetch else now
         finished = finished if finished and finished >= now else now
         items = []
         for code in codes:
@@ -272,3 +274,40 @@ class LatestQuoteCache:
 
 
 latest_quote_cache = LatestQuoteCache()
+
+
+async def read_local_fund_quotes(conn, codes, now):
+    """Public, dated NAV coordinates only; never wait on a provider task."""
+    from backend.funds.nav_history import load_nav_histories, select_history_view
+
+    codes = sorted(set(codes))
+    cached = await latest_quote_cache.get(
+        codes, now, trading_day=True, allow_external_fetch=False
+    )
+    histories = await load_nav_histories(conn, codes, now)
+    for row in cached["items"]:
+        code = row["fundCode"]
+        view = select_history_view(
+            code, code, "2y", [h for h in histories if h["fundCode"] == code], now
+        )
+        if not view.get("points"):
+            continue
+        point = view["points"][-1]
+        current = row.get("confirmedNav")
+        if current and (current.get("asOf") or "") >= point["date"]:
+            continue
+        row["confirmedNav"] = {
+            "subjectKind": "nav",
+            "subjectId": code,
+            "fundCode": code,
+            "value": str(point["unitNav"]),
+            "asOf": point["date"],
+            "retrievedAt": view.get("retrievedAt"),
+            "sourceUri": view.get("sourceUri"),
+            "priceBasis": "UNIT_NAV",
+            "unit": view.get("unit", "CNY/份"),
+            "quality": view["state"],
+            "usable": view["state"] == "READY",
+            "changePct": None,
+        }
+    return cached

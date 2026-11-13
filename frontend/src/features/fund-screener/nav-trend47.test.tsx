@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ActionableZoneTrack } from "../../api/investment";
+import type { FundNavHistory } from "../../api/funds";
 import FundNavTrendChart from "./components/FundNavTrendChart";
 
 const track: ActionableZoneTrack = {
@@ -385,7 +386,7 @@ it("stops automatic history polling after ninety seconds while leaving an explic
   await act(async () => {
     await vi.advanceTimersByTimeAsync(95000);
   });
-  expect(screen.getByRole("button", { name: "重新读取净值" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "刷新并补齐净值" })).toBeEnabled();
   expect(fetcher.mock.calls.length).toBeLessThanOrEqual(10);
   const completed = fetcher.mock.calls.length;
   await act(async () => {
@@ -393,4 +394,165 @@ it("stops automatic history polling after ninety seconds while leaving an explic
   });
   expect(fetcher).toHaveBeenCalledTimes(completed);
   expect(screen.getByText(/区间最低 1.0000/)).toBeInTheDocument();
+});
+
+it("offers explicit worker refresh for an empty local history without creating work on mount", async () => {
+  const requests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url, init) => {
+      const method = init?.method ?? "GET";
+      requests.push(`${method} ${String(url)}`);
+      return response(
+        history(
+          "100116",
+          "2y",
+          method === "POST"
+            ? {
+                refresh: {
+                  state: "QUEUED",
+                  runId: "manual-queue",
+                  pollAfterMs: 10000,
+                },
+              }
+            : {
+                state: "NOT_COLLECTED",
+                points: [],
+                asOf: null,
+                refresh: { state: "IDLE", runId: null, pollAfterMs: null },
+              },
+        ),
+      );
+    }),
+  );
+  render(<FundNavTrendChart fundCode="100116" track={track} />);
+  const refresh = await screen.findByRole("button", { name: "刷新并补齐净值" });
+  expect(requests).toEqual(["GET /api/v1/funds/100116/nav-history?period=2y"]);
+  await userEvent.click(refresh);
+  await screen.findByText(/历史净值正在补齐/);
+  expect(requests).toEqual([
+    "GET /api/v1/funds/100116/nav-history?period=2y",
+    "POST /api/v1/funds/100116/nav-history/refresh?period=2y",
+  ]);
+  expect(
+    screen.getByRole("img", { name: "100116单位净值走势" }),
+  ).toBeInTheDocument();
+});
+
+it("keeps a partial CURRENT_LOCAL snapshot free of mount reads and activates refresh with POST then GET", async () => {
+  const requests: string[] = [];
+  const snapshot = history("100117", "2y", {
+    state: "PARTIAL",
+  }) as FundNavHistory;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url, init) => {
+      const method = init?.method ?? "GET";
+      requests.push(`${method} ${String(url)}`);
+      const period = new URL(
+        String(url),
+        "https://example.test",
+      ).searchParams.get("period")!;
+      return response(
+        history(
+          "100117",
+          period,
+          method === "POST"
+            ? {
+                refresh: {
+                  state: "QUEUED",
+                  runId: "manual",
+                  pollAfterMs: 1000,
+                },
+              }
+            : {},
+        ),
+      );
+    }),
+  );
+  render(
+    <FundNavTrendChart
+      fundCode="100117"
+      snapshot={snapshot}
+      snapshotMode="CURRENT_LOCAL"
+    />,
+  );
+  await screen.findByText(/区间最低 1.0000/);
+  expect(requests).toEqual([]);
+  await userEvent.click(screen.getByRole("button", { name: "刷新并补齐净值" }));
+  await waitFor(() =>
+    expect(requests).toEqual([
+      "POST /api/v1/funds/100117/nav-history/refresh?period=2y",
+      "GET /api/v1/funds/100117/nav-history?period=2y",
+    ]),
+  );
+  expect(
+    screen.getByRole("img", { name: "100117单位净值走势" }),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "近1年" }));
+  await waitFor(() =>
+    expect(requests.at(-1)).toBe(
+      "GET /api/v1/funds/100117/nav-history?period=1y",
+    ),
+  );
+  expect(requests.filter((r) => r.startsWith("POST"))).toHaveLength(1);
+});
+
+it("offers a working explicit refresh for a missing CURRENT_LOCAL snapshot without any mount GET", async () => {
+  const requests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url, init) => {
+      requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+      return response(history("100118"));
+    }),
+  );
+  render(
+    <FundNavTrendChart
+      fundCode="100118"
+      snapshot={null}
+      snapshotMode="CURRENT_LOCAL"
+    />,
+  );
+  await screen.findByText("暂无可用的单位净值记录");
+  expect(requests).toEqual([]);
+  await userEvent.click(screen.getByRole("button", { name: "刷新并补齐净值" }));
+  expect(
+    await screen.findByRole("img", { name: "100118单位净值走势" }),
+  ).toBeInTheDocument();
+  expect(requests[0]).toBe(
+    "POST /api/v1/funds/100118/nav-history/refresh?period=2y",
+  );
+});
+
+it("keeps HISTORICAL snapshots read-only across partial or missing data and period changes", async () => {
+  const fetcher = vi.fn();
+  vi.stubGlobal("fetch", fetcher);
+  const snapshot = history("100119", "2y", {
+    state: "PARTIAL",
+  }) as FundNavHistory;
+  const view = render(
+    <FundNavTrendChart
+      fundCode="100119"
+      snapshot={snapshot}
+      snapshotMode="HISTORICAL"
+    />,
+  );
+  await screen.findByText(/区间最低/);
+  expect(
+    screen.queryByRole("button", { name: "刷新并补齐净值" }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "近1年" }));
+  view.rerender(
+    <FundNavTrendChart
+      fundCode="100119"
+      snapshot={null}
+      snapshotMode="HISTORICAL"
+    />,
+  );
+  expect(screen.getByText("暂无可用的单位净值记录")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "刷新并补齐净值" }),
+  ).not.toBeInTheDocument();
+  expect(fetcher).not.toHaveBeenCalled();
 });

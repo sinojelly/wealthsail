@@ -28,7 +28,23 @@ async def latest_fund_quotes(
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """Refresh display quotes separately; no research-plan mutation or provider I/O in RLS."""
+    """Read stored display quotes; ordinary page reads never call a provider."""
+    from backend.funds.latest_quotes import read_local_fund_quotes
+
+    now = now_shanghai()
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await read_local_fund_quotes(conn, codes.split(","), now)
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/quotes/refresh")
+async def refresh_fund_quotes(
+    codes: str = Query(pattern=r"^[0-9]{6}(,[0-9]{6}){0,31}$", max_length=223),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    """Explicit public quote refresh; provider I/O is outside the DB transaction."""
     from backend.funds.latest_quotes import latest_quote_cache
 
     now = now_shanghai()
@@ -37,7 +53,9 @@ async def latest_fund_quotes(
             "SELECT is_trading_day FROM reference.trading_calendars WHERE market='SSE' AND calendar_date=$1",
             now.date(),
         )
-    data = await latest_quote_cache.get(codes.split(","), now, trading_day=trading_day)
+    data = await latest_quote_cache.get(
+        codes.split(","), now, trading_day=trading_day, allow_external_fetch=True
+    )
     return ok(data, request_id=request_id, as_of=now_shanghai())
 
 
@@ -108,11 +126,33 @@ async def fund_nav_history(
     ctx: TenantContext = Depends(get_tenant_context),
     request_id: str = Depends(get_request_id),
 ) -> dict:
-    """Read disclosed NAV; insufficient depth queues bounded Worker work."""
+    """Read disclosed local NAV without provider I/O or implicit job creation."""
     from backend.funds.nav_history import get_nav_history
 
     async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
         data = await get_nav_history(
+            conn,
+            fund_code,
+            period,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            now=now_shanghai(),
+        )
+    return ok(data, request_id=request_id, as_of=now_shanghai())
+
+
+@router.post("/{fund_code}/nav-history/refresh", status_code=status.HTTP_202_ACCEPTED)
+async def refresh_fund_nav_history(
+    fund_code: str,
+    period: Literal["6m", "1y", "2y", "all"] = Query(default="2y"),
+    pool: Pool = Depends(get_pool),
+    ctx: TenantContext = Depends(get_tenant_context),
+    request_id: str = Depends(get_request_id),
+) -> dict:
+    from backend.funds.nav_history import request_nav_history_refresh
+
+    async with tenant_transaction(pool, ctx.user_id, ctx.tenant_id) as conn:
+        data = await request_nav_history_refresh(
             conn,
             fund_code,
             period,

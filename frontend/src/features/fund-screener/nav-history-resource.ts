@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import {
   getFundNavHistory,
+  refreshFundNavHistory,
   type FundNavHistory,
   type FundNavPeriod,
 } from "../../api/funds";
@@ -66,13 +67,18 @@ function verified(data: FundNavHistory, code: string, period: FundNavPeriod) {
       .map(([date, unitNav]) => ({ date, unitNav })),
   };
 }
-function start(resource: Resource) {
-  if (resource.controller || !resource.listeners.size) return;
+function start(resource: Resource, explicitRefresh = false) {
+  if (resource.controller || (!resource.listeners.size && !explicitRefresh))
+    return;
   const controller = new AbortController();
   resource.controller = controller;
   if (resource.timer) clearTimeout(resource.timer);
   publish(resource, { loading: true, failed: false });
-  void getFundNavHistory(resource.code, resource.period, controller.signal)
+  void (explicitRefresh ? refreshFundNavHistory : getFundNavHistory)(
+    resource.code,
+    resource.period,
+    controller.signal,
+  )
     .then((raw) => {
       if (controller.signal.aborted || resources.get(resource.key) !== resource)
         return;
@@ -94,14 +100,16 @@ function start(resource: Resource) {
       if (
         !controller.signal.aborted &&
         resources.get(resource.key) === resource
-      )
+      ) {
+        if (explicitRefresh) resource.expires = Date.now() + 5000;
         publish(resource, { loading: false, failed: true });
+      }
     })
     .finally(() => {
       if (resource.controller === controller) resource.controller = undefined;
     });
 }
-function subscribe(code: string, period: FundNavPeriod, listener: () => void) {
+function getResource(code: string, period: FundNavPeriod) {
   const key = `${code}:${period}`;
   let resource = resources.get(key);
   if (!resource) {
@@ -122,8 +130,21 @@ function subscribe(code: string, period: FundNavPeriod, listener: () => void) {
     };
     resources.set(key, resource);
   }
+  return resource;
+}
+function subscribe(code: string, period: FundNavPeriod, listener: () => void) {
+  const resource = getResource(code, period);
+  const key = resource.key;
+  const reenter = !resource.listeners.size;
   resource.listeners.add(listener);
-  if (resource.expires <= Date.now() && !resource.controller) start(resource);
+  if (
+    (resource.expires <= Date.now() ||
+      (reenter &&
+        !resource.snapshot.failed &&
+        pending(resource.snapshot.data))) &&
+    !resource.controller
+  )
+    start(resource);
   const observed = resource;
   return () => {
     observed.listeners.delete(listener);
@@ -141,23 +162,27 @@ function subscribe(code: string, period: FundNavPeriod, listener: () => void) {
     });
   };
 }
-export function useFundNavHistory(code: string, period: FundNavPeriod) {
+export function useFundNavHistory(
+  code: string,
+  period: FundNavPeriod,
+  enabled = true,
+) {
   const key = `${code}:${period}`;
   const observe = useCallback(
-    (listener: () => void) => subscribe(code, period, listener),
-    [code, period],
+    (listener: () => void) =>
+      enabled ? subscribe(code, period, listener) : () => undefined,
+    [code, period, enabled],
   );
   const snapshot = useCallback(
-    () => resources.get(key)?.snapshot ?? initial,
-    [key],
+    () => (enabled ? (resources.get(key)?.snapshot ?? initial) : initial),
+    [key, enabled],
   );
   const value = useSyncExternalStore(observe, snapshot, () => initial);
   const retry = useCallback(() => {
-    const resource = resources.get(key);
-    if (!resource) return;
+    const resource = resources.get(key) ?? getResource(code, period);
     resource.deadline = Date.now() + 90000;
     publish(resource, { exhausted: false });
-    start(resource);
-  }, [key]);
+    start(resource, true);
+  }, [key, code, period]);
   return { ...value, retry };
 }

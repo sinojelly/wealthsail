@@ -1,6 +1,7 @@
 """Authenticated disclosed unit-NAV chart cache and durable on-demand requests."""
 
 from calendar import monthrange
+from contextlib import asynccontextmanager
 import asyncio
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -66,6 +67,9 @@ async def ensure_nav_histories(
     latest_confirmed=None,
     now_provider=None,
     provider_budget=32,
+    allow_external_fetch=False,
+    claim_attempt=None,
+    transaction_factory=None,
 ):
     """Repair thin or stale disclosed NAV before chart/plan computation.
 
@@ -85,15 +89,38 @@ async def ensure_nav_histories(
             if isinstance(code, str) and re.fullmatch(r"[0-9]{6}", code)
         }
     )
-    histories = await load_nav_histories(conn, codes, now)
+
+    @asynccontextmanager
+    async def database():
+        if transaction_factory is not None:
+            async with transaction_factory() as connection:
+                yield connection
+        else:
+            yield conn
+
+    async with database() as connection:
+        histories = await load_nav_histories(connection, codes, now)
     if type(provider_budget) is not int or provider_budget < 1:
         raise ValueError("NAV provider budget must be positive")
+    if not allow_external_fetch:
+        return {
+            "histories": histories,
+            "asOf": now,
+            "refresh": {
+                code: {"state": "IDLE", "runId": None, "pollAfterMs": None}
+                for code in codes
+            },
+            "latestConfirmed": latest_confirmed or {},
+        }
     if latest_confirmed is None and codes:
         from backend.funds.latest_quotes import latest_quote_cache
 
         try:
             quotes = await latest_quote_cache.get(
-                codes[:provider_budget], now, trading_day=False
+                codes[:provider_budget],
+                now,
+                trading_day=False,
+                allow_external_fetch=True,
             )
             latest_confirmed = {
                 row["fundCode"]: row["confirmedNav"]
@@ -148,6 +175,34 @@ async def ensure_nav_histories(
             state="PARTIAL", reason="NAV_SYNC_BUDGET_DEFERRED", retryAfterSeconds=2
         )
     needed = needed[:provider_budget]
+    claimed = []
+    for code in needed:
+        # The durable claim is made before I/O, so failed requests, new funds
+        # and lagged overseas disclosures share the same twelve-hour limit.
+        try:
+            # A rejected member/identity or missing migration rolls back only
+            # this claim, leaving the caller's tenant transaction usable.
+            if claim_attempt is not None:
+                claim = await claim_attempt(code)
+            else:
+                async with database() as connection:
+                    async with connection.transaction():
+                        claim = await connection.fetchrow(
+                            "SELECT * FROM market.claim_member_fund_nav_sync_attempt($1,$2,$3)",
+                            tenant_id,
+                            user_id,
+                            code,
+                        )
+        except Exception:
+            refresh[code].update(state="FAILED", reason="NAV_SYNC_CLAIM_UNAVAILABLE")
+            continue
+        if claim and claim.get("claimed") is True:
+            claimed.append(code)
+        else:
+            refresh[code].update(
+                state="PARTIAL", reason="NAV_SYNC_COOLDOWN", retryAfterSeconds=43200
+            )
+    needed = claimed
     fetched = await asyncio.gather(
         *[fetch_on_demand_nav_history(code, now) for code in needed],
         return_exceptions=True,
@@ -162,14 +217,15 @@ async def ensure_nav_histories(
                     raise ValueError("invalid provider NAV cohort")
                 failure = "NAV_HISTORY_PERSIST_FAILED"
                 # A rejected or unavailable RPC rolls back its savepoint only.
-                async with conn.transaction():
-                    await conn.fetchval(
-                        "SELECT market.append_fund_nav_sync_history($1,$2,$3,$4::jsonb)",
-                        tenant_id,
-                        user_id,
-                        code,
-                        json.dumps(history, ensure_ascii=False, allow_nan=False),
-                    )
+                async with database() as connection:
+                    async with connection.transaction():
+                        await connection.fetchval(
+                            "SELECT market.append_fund_nav_sync_history($1,$2,$3,$4::jsonb)",
+                            tenant_id,
+                            user_id,
+                            code,
+                            json.dumps(history, ensure_ascii=False, allow_nan=False),
+                        )
                 histories.append(history)
                 confirmed_date = (latest_confirmed.get(code) or {}).get("asOf", "")[:10]
                 reason = (
@@ -186,7 +242,7 @@ async def ensure_nav_histories(
                 continue
             except Exception:
                 pass
-        refresh[code].update(state="FAILED", reason=failure, retryAfterSeconds=30)
+        refresh[code].update(state="FAILED", reason=failure, retryAfterSeconds=43200)
     return {
         "histories": histories,
         "asOf": finished,
@@ -424,15 +480,42 @@ def history_view(code, name, period, history, now):
     return result
 
 
-async def _refresh_state(conn, code, tenant_id, user_id, now):
-    active = await conn.fetchrow(
-        """SELECT c.run_id FROM market.macro_evidence_attempts c WHERE c.job_key=$1 AND c.phase='CLAIMED' AND c.lease_until>$2
-        AND NOT EXISTS(SELECT 1 FROM market.macro_evidence_attempts f WHERE f.run_id=c.run_id AND f.phase IN ('FINISHED','CANCELLED') AND f.recorded_at<=$2) LIMIT 1""",
-        f"FUND_NAV_CHART:{code}",
+async def _read_refresh_state(conn, code, tenant_id, now):
+    # Scope the receipt to this tenant. A worker can complete after the
+    # request's NAV cutoff; that request must still tell the client to poll.
+    row = await conn.fetchrow(
+        """SELECT j.id, CASE
+          WHEN j.status='PENDING' THEN 'QUEUED'
+          WHEN j.status='RUNNING' OR j.finished_at>$3 THEN 'RUNNING'
+          WHEN j.status='COMPLETED' AND j.finished_at>$3-interval '3 minutes'
+            AND EXISTS (
+              SELECT 1 FROM market.macro_evidence_attempts c
+              WHERE c.job_key=$4 AND c.phase='CLAIMED'
+                AND c.started_at<=j.finished_at AND c.lease_until>$3
+                AND NOT EXISTS (
+                  SELECT 1 FROM market.macro_evidence_attempts f
+                  WHERE f.run_id=c.run_id AND f.phase IN ('FINISHED','CANCELLED')
+                    AND f.recorded_at<=$3
+                )
+            ) THEN 'RUNNING'
+          WHEN j.status='FAILED' AND coalesce(j.finished_at,j.started_at)>$3-interval '1 hour'
+            THEN 'FAILED'
+          ELSE 'IDLE'
+        END AS refresh_state
+        FROM workflow.job_runs j
+        WHERE j.tenant_id=$1 AND j.job_key=$2 AND j.job_type='FUND_UNIT_NAV_HISTORY_FETCH'""",
+        tenant_id,
+        f"fund-unit-nav-history:{code}",
         now,
+        f"FUND_NAV_CHART:{code}",
     )
-    if active:
-        return {"state": "RUNNING", "runId": str(active["run_id"]), "pollAfterMs": 2000}
+    state = row.get("refresh_state") if row else None
+    if state not in {"QUEUED", "RUNNING", "FAILED"}:
+        return None
+    return {"state": state, "runId": str(row["id"]), "pollAfterMs": 2000}
+
+
+async def _request_refresh_state(conn, code, tenant_id, user_id, now):
     last = await conn.fetchrow(
         """SELECT run_id,result FROM market.macro_evidence_attempts WHERE job_key=$1 AND phase IN ('FINISHED','CANCELLED') AND recorded_at BETWEEN $2::timestamptz-interval '1 hour' AND $2::timestamptz ORDER BY recorded_at DESC,id DESC LIMIT 1""",
         f"FUND_NAV_CHART:{code}",
@@ -500,7 +583,9 @@ def select_history_view(code, name, period, histories, now):
     return result
 
 
-async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, now):
+async def get_nav_history(
+    conn, fund_code, period="2y", *, tenant_id, user_id, now, allow_external_fetch=False
+):
     now = local(now)
     if (
         not isinstance(fund_code, str)
@@ -518,8 +603,14 @@ async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, n
         or re.search(r"美元|港币|港元|外币|现汇|现钞", identities[0]["fund_name"])
     ):
         raise ValidationError_("基金身份不唯一或不是已核验人民币场外基金")
+    queued_state = await _read_refresh_state(conn, fund_code, tenant_id, now)
     prepared = await ensure_nav_histories(
-        conn, [fund_code], now, tenant_id=tenant_id, user_id=user_id
+        conn,
+        [fund_code],
+        now,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        allow_external_fetch=allow_external_fetch,
     )
     now = prepared["asOf"]
     result = select_history_view(
@@ -539,13 +630,30 @@ async def get_nav_history(conn, fund_code, period="2y", *, tenant_id, user_id, n
     if sync_state.get("state") != "IDLE" and sync_state:
         result["refresh"] = sync_state
         return result
+    if queued_state:
+        result["refresh"] = queued_state
+        return result
     if not result["points"] and result["coverage"]["fullHistory"]:
         result["state"] = "UNAVAILABLE"
         if result["coverage"].get("reason") != "SOURCE_RECHECK_DUE":
             result["refresh"]["reason"] = "NO_NAV_FOR_PERIOD"
             return result
-    if result["state"] != "READY":
-        result["refresh"] = await _refresh_state(
+    if allow_external_fetch and result["state"] != "READY":
+        result["refresh"] = await _request_refresh_state(
             conn, fund_code, tenant_id, user_id, now
+        )
+    return result
+
+
+async def request_nav_history_refresh(
+    conn, fund_code, period="2y", *, tenant_id, user_id, now
+):
+    """Explicit chart refresh queues the existing worker; the GET never does."""
+    result = await get_nav_history(
+        conn, fund_code, period, tenant_id=tenant_id, user_id=user_id, now=now
+    )
+    if result["refresh"]["state"] not in {"QUEUED", "RUNNING"}:
+        result["refresh"] = await _request_refresh_state(
+            conn, fund_code, tenant_id, user_id, local(now)
         )
     return result
