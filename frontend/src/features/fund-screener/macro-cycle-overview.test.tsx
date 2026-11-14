@@ -1,7 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MacroCycleOverview from "./components/MacroCycleOverview";
-import { buildCycleOverview, cycleTrend } from "./macro-cycle-overview";
+import {
+  buildCycleOverview,
+  cycleTrend,
+  vixBand,
+} from "./macro-cycle-overview";
 import type { OpportunityContext } from "../../api/investment";
 
 function context() {
@@ -72,6 +76,66 @@ function context() {
   } as OpportunityContext;
 }
 
+it.each([
+  [14.99, 0],
+  [15, 1],
+  [25, 2],
+  [35, 3],
+])("classifies VIX %s at the published display boundary", (value, expected) => {
+  expect(vixBand(value)).toBe(expected);
+});
+
+it("shows a VIX close and daily history apart from the liquidity gauge", () => {
+  const data = context();
+  data.series = [
+    {
+      code: "VIX",
+      label: "VIX",
+      frequency: "DAILY",
+      unit: "点",
+      value: 35,
+      state: "READY",
+      asOf: "2026-11-12",
+      sourceUri: "https://fred.stlouisfed.org/series/VIXCLS",
+      sourceName: "Cboe",
+      publishedAt: null,
+      retrievedAt: "2026-11-13T06:00:00+08:00",
+      availableAt: null,
+      timeBasis: "RETRIEVAL_ONLY",
+      methodVersion: null,
+      changes: {
+        previousValue: null,
+        change5Samples: null,
+        change20Samples: null,
+        changeUnit: "点",
+        median: null,
+        percentile: null,
+        sampleCount: 4,
+      },
+      history: [9, 10, 11, 12].map((day) => ({
+        date: `2026-11-${String(day).padStart(2, "0")}`,
+        value: day === 12 ? 35 : 22,
+        state: "READY",
+      })),
+    },
+  ];
+  render(<MacroCycleOverview data={data} />);
+  const volatility = screen.getByRole("region", { name: "VIX 市场波动" });
+  expect(
+    within(volatility).getByRole("img", { name: "VIX 近两年收盘走势" }),
+  ).toBeVisible();
+  expect(within(volatility).getByText("极度恐慌")).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+  expect(
+    within(volatility).getByRole("link", { name: "Cboe / FRED" }),
+  ).toHaveAttribute("href", "https://fred.stlouisfed.org/series/VIXCLS");
+  expect(
+    screen.getByRole("region", { name: "流动性松紧" }),
+  ).not.toHaveTextContent("极度恐慌");
+});
+
 it("shows separate global, domestic, market and key-factor rows without inventing odds", () => {
   const data = context();
   data.dailyResearch!.report!.sources = [
@@ -86,11 +150,16 @@ it("shows separate global, domestic, market and key-factor rows without inventin
       verification: "SOURCE_CHECKED",
     },
   ];
-  render(<MacroCycleOverview data={data} />);
+  const { rerender } = render(<MacroCycleOverview data={data} />);
   const board = screen.getByRole("region", { name: "今日宏观总纲" });
   expect(
     within(board).getByRole("heading", { name: "宏观周期与今日总纲" }),
   ).toBeVisible();
+  expect(board).toHaveTextContent("流动性松紧");
+  expect(board).toHaveTextContent("VIX 市场波动");
+  expect(board).not.toHaveTextContent("联储表态与机构预测");
+  expect(board).toHaveTextContent("接近买区再分批观察");
+  rerender(<MacroCycleOverview data={data} factView />);
   expect(board).toHaveTextContent("全球利率与流动性");
   expect(board).toHaveTextContent("国内货币、财政与信用");
   expect(board).toHaveTextContent("市场阶段与操作总纲");
@@ -107,7 +176,7 @@ it("shows separate global, domestic, market and key-factor rows without inventin
 
 it("keeps all industry rows behind a compact, accessible disclosure", async () => {
   const data = context();
-  render(<MacroCycleOverview data={data} />);
+  render(<MacroCycleOverview data={data} factView />);
   const summary = screen.getByText("核心行业周期与趋势 · 1 项");
   expect(summary.closest("details")).not.toHaveAttribute("open");
   await userEvent.click(summary);
@@ -130,6 +199,9 @@ it("plots dated local macro history and excludes observations collected after th
       source: "统计局",
       state: "READY",
       history: [
+        { asOf: "2023-11-01", value: 49.4, publishedAt: "2023-11-30" },
+        { asOf: "2026-05-01", value: 50.4, publishedAt: "2026-05-31" },
+        { asOf: "2026-06-01", value: 50.3, publishedAt: "2026-06-30" },
         {
           asOf: "2026-09-01",
           value: 50.1,
@@ -162,11 +234,27 @@ it("plots dated local macro history and excludes observations collected after th
     cycleTrend(data, "PMI", data.dailyResearch!.report!.asOf).map(
       (row) => row.value,
     ),
-  ).toEqual([50.1, 49.3]);
-  render(<MacroCycleOverview data={data} historical />);
+  ).toEqual([49.4, 50.4, 50.3, 50.1, 49.3]);
+  data.items.push({
+    code: "CPI_YOY",
+    label: "CPI",
+    value: 0.7,
+    asOf: "2026-10-01",
+    publishedAt: "2026-11-09",
+    source: "统计局",
+    state: "READY",
+    history: [
+      { asOf: "2026-09-01", value: 0.5, publishedAt: "2026-10-10" },
+      { asOf: "2026-10-01", value: 0.7, publishedAt: "2026-11-09" },
+    ],
+  });
+  const { container } = render(<MacroCycleOverview data={data} historical />);
   expect(
     screen.getByRole("img", { name: "中国制造业景气与价格趋势" }),
   ).toBeVisible();
+  expect(screen.queryByText("2023-11")).not.toBeInTheDocument();
+  expect(container.querySelector('[data-macro-gap="PMI"]')).toBeInTheDocument();
+  expect(screen.getByText("0.70%")).toBeVisible();
   expect(
     screen.getByText("官员表示仍须观察价格压力", { exact: false }),
   ).toBeVisible();
@@ -205,7 +293,7 @@ it("labels legacy prose and industry evidence without fabricating a structured r
     stage: "政策/事件催化",
     origin: "原报告方向",
   });
-  render(<MacroCycleOverview data={data} />);
+  render(<MacroCycleOverview data={data} factView />);
   expect(screen.getByText("本报告未单列全球利率周期结论。")).toBeVisible();
   expect(screen.queryByText("高利率平台期")).not.toBeInTheDocument();
 });
@@ -245,7 +333,7 @@ it("rejects empty/conflicting observations while preserving real zero and its da
       },
     ],
   } as OpportunityContext["alphaPublic"];
-  render(<MacroCycleOverview data={data} />);
+  render(<MacroCycleOverview data={data} factView />);
   expect(screen.getByText("0.0")).toBeVisible();
   expect(screen.getByText("2026年10月")).toBeVisible();
   expect(screen.queryByText("1.80")).not.toBeInTheDocument();

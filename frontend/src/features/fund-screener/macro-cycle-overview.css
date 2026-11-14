@@ -203,9 +203,30 @@
 .op-cycle-factors-details[open] > ol {
   margin-top: 9px;
 }
+.op-cycle-brief {
+  font-size: 13px;
+  line-height: 1.65;
+}
+.op-cycle-brief .op-cycle-caption {
+  margin: 0;
+}
+.op-cycle-brief > p {
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.op-cycle-brief .op-cycle-policy-signal {
+  background: #f1f6f9;
+  border-radius: 6px;
+  padding: 6px 9px;
+}
+.op-cycle-chart-context {
+  color: var(--op-muted, #64748b);
+  font-size: 12px;
+  margin-top: 10px;
+}
 .op-cycle-trends {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin: 8px 0 14px;
 }
@@ -222,6 +243,9 @@
   color: #17334a;
   margin: 0 0 7px;
   font-size: 14px;
+}
+.op-cycle-vix-value {
+  margin: 4px 0;
 }
 .op-cycle-gauge {
   display: flex;
@@ -302,7 +326,12 @@
 .op-cycle-industries td p {
   margin: 4px 0;
 }
-@media (max-width: 650px) {
+@media screen and (max-width: 1000px) {
+  .op-cycle-trends {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media screen and (max-width: 650px) {
   .op-cycle-trends {
     grid-template-columns: minmax(0, 1fr);
   }

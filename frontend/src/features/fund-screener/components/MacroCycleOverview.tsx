@@ -197,10 +197,17 @@ export default function MacroCycleOverview({
     ? { ...data, ...snapshot, alphaPublic: null }
     : data;
   const facts = cycleFacts(observed, cutoff);
-  const factGrid = factView ? (historical ? facts : cycleFacts(data)) : [];
-  const chainFacts = factView ? [] : facts;
+  const marketFacts = historical ? facts : cycleFacts(data);
   const signals = report?.cycleInsights?.policySignals ?? [];
   const expectation = report?.cycleInsights?.rateExpectation;
+  // Current charts and the dated report judgment are displayed as separate evidence.
+  // A historical preview is the only view that freezes both to the same clock.
+  const trendData = historical ? observed : data;
+  const trendCutoff = historical ? cutoff : null;
+  const rateState = !retained || historical ? expectation?.state : undefined;
+  const keySignal =
+    signals.find((row) => row.kind === "MARKET_RATE_ODDS") ??
+    signals.find((row) => row.kind === "CENTRAL_BANK_REMARK");
   const haveGlobal = !!(
     model.global ||
     signals.length ||
@@ -216,6 +223,65 @@ export default function MacroCycleOverview({
       ? Math.round((Number(cn10.value) - Number(us10.value)) * 100)
       : null;
   const change5 = expectation?.us10yChange5Bp;
+  if (!factView) {
+    return (
+      <ObservationSection
+        className="op-macro-overview op-cycle-overview"
+        label="今日宏观总纲"
+        title="宏观周期与今日总纲"
+      >
+        <div className="op-cycle-brief">
+          <div className="op-cycle-caption">
+            {retained &&
+              report &&
+              !historical &&
+              data.dailyResearch?.state !== "READY" && (
+                <strong>历史宏观研判</strong>
+              )}
+            {report && (
+              <small>
+                研判证据：
+                {timeLabel(
+                  report.asOf ??
+                    data.dailyResearch?.reportCompletedAt ??
+                    data.dailyResearch?.asOf,
+                )}
+              </small>
+            )}
+          </div>
+          <p id={summaryId}>{expanded ? full : readingText(full, 130)}</p>
+          {model.market?.action && (
+            <p className="op-cycle-action">
+              {readingText(cycleReading(model.market.action), 100)}
+            </p>
+          )}
+          {full !== readingText(full, 130) && (
+            <button
+              type="button"
+              className="op-macro-expand"
+              aria-expanded={expanded}
+              aria-controls={summaryId}
+              onClick={() => setExpandedReport(expanded ? null : reportKey)}
+            >
+              {expanded ? "收起今日总纲" : "展开今日总纲"}
+            </button>
+          )}
+          {keySignal && <PolicySignal row={keySignal} compact />}
+        </div>
+        <div className="op-cycle-chart-context">
+          {historical
+            ? "研究时点的市场数据"
+            : "本地最新市场数据 · 各指标日期见图例"}
+        </div>
+        <MacroCycleTrends
+          data={trendData}
+          cutoff={trendCutoff}
+          facts={marketFacts}
+          rateState={rateState}
+        />
+      </ObservationSection>
+    );
+  }
   return (
     <ObservationSection
       className="op-macro-overview op-cycle-overview"
@@ -255,7 +321,7 @@ export default function MacroCycleOverview({
             <ol className="op-cycle-chain" aria-label="全球利率与流动性推导链">
               <ChainStep title="通胀与需求源头">
                 <StepFacts
-                  facts={chainFacts}
+                  facts={facts}
                   codes={[
                     "US_CPI_YOY",
                     "US_CPI_MOM",
@@ -285,7 +351,7 @@ export default function MacroCycleOverview({
               </ChainStep>
               <ChainStep title="核心流动性水位">
                 <StepFacts
-                  facts={chainFacts}
+                  facts={facts}
                   codes={[
                     "US_FED_FUNDS",
                     "US_T2_NOMINAL",
@@ -351,7 +417,6 @@ export default function MacroCycleOverview({
         >
           <ol className="op-cycle-chain" aria-label="国内经济与货币信用推导链">
             <ChainStep title="景气与价格信号">
-              <StepFacts facts={chainFacts} codes={["PMI", "CPI_YOY", "PPI_YOY"]} />
               {model.domestic?.summary && (
                 <p>
                   {readingText(cycleReading(model.domestic.summary), Infinity)}
@@ -359,10 +424,6 @@ export default function MacroCycleOverview({
               )}
             </ChainStep>
             <ChainStep title="货币与信用传导">
-              <StepFacts
-                facts={chainFacts}
-                codes={["M1_YOY", "M2_YOY", "TSF_STOCK_YOY", "M1_M2_GAP"]}
-              />
               <p>
                 {readingText(
                   cycleReading(model.domestic?.impact ?? ""),
@@ -431,21 +492,12 @@ export default function MacroCycleOverview({
           </details>
         )}
       </div>
-      {!factView && (
-        <MacroCycleTrends
-          data={observed}
-          supplemental={snapshot ? data : undefined}
-          cutoff={cutoff}
-          facts={facts}
-          changeBp={change5}
-        />
-      )}
-      {!!factGrid.length && (
+      {!!marketFacts.length && (
         <div
           className="op-core-facts op-cycle-facts"
           aria-label="已采集宏观数据"
         >
-          {factGrid.map((fact) => (
+          {marketFacts.map((fact) => (
             <div key={fact.code}>
               <span>{fact.label}</span>
               <strong>
@@ -509,11 +561,17 @@ export default function MacroCycleOverview({
   );
 }
 
-function PolicySignal({ row }: { row: MacroPolicySignal }) {
+function PolicySignal({
+  row,
+  compact = false,
+}: {
+  row: MacroPolicySignal;
+  compact?: boolean;
+}) {
   const href = sourceHref(row.sourceUri);
   return (
     <p className="op-cycle-policy-signal">
-      {readingText(row.text, Infinity)}{" "}
+      {readingText(row.text, compact ? 150 : Infinity)}{" "}
       <small>
         {row.asOf && <time dateTime={row.asOf}>{timeLabel(row.asOf)}</time>}{" "}
         {href ? (

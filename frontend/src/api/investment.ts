@@ -300,7 +300,7 @@ export interface OpportunitySeries {
     previousValue: number | null;
     change5Samples: number | null;
     change20Samples: number | null;
-    changeUnit: "bp" | "pp" | null;
+    changeUnit: "bp" | "pp" | "点" | "USD/barrel" | null;
     periodChange?: number | null;
     change3Months?: number | null;
     change6Months?: number | null;

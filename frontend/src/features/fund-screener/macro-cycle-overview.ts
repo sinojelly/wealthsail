@@ -123,6 +123,9 @@ const factDefinitions = [
   ["US_T2_NOMINAL", "美国2年国债", "%"],
   ["US_T10_NOMINAL", "美国10年名义利率", "%"],
   ["US_BRENT", "布伦特原油", "美元/桶"],
+  ["DR007", "DR007", "%"],
+  ["SHIBOR_7D", "7 天 Shibor", "%"],
+  ["VIX", "VIX", "点"],
 ] as const;
 
 export function cycleReportCutoff(data: OpportunityContext) {
@@ -160,6 +163,20 @@ function validCycleSample(row: {
   );
 }
 
+type EvidenceClock = {
+  availableAt?: string | null;
+  publishedAt?: string | null;
+  retrievedAt?: string | null;
+};
+
+function visibleBy(row: EvidenceClock, cutoff?: string | null) {
+  if (!cutoff) return true;
+  const clocks = [row.availableAt, row.publishedAt, row.retrievedAt].filter(
+    Boolean,
+  );
+  return clocks.length > 0 && clocks.every((clock) => knownBy(clock, cutoff));
+}
+
 export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
   const observations = [
     ...data.items,
@@ -187,12 +204,7 @@ export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
               row.asOf ?? ("referenceDate" in row ? row.referenceDate : null),
               cutoff,
             ) &&
-              knownBy(
-                ("availableAt" in row ? row.availableAt : null) ??
-                  row.publishedAt ??
-                  ("retrievedAt" in row ? row.retrievedAt : null),
-                cutoff,
-              ))),
+              visibleBy(row, cutoff))),
       )
       .sort((a, b) =>
         String(
@@ -222,6 +234,110 @@ export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
 
 export type CycleFact = ReturnType<typeof cycleFacts>[number];
 
+export type CyclePoint = { date: string; value: number; basis: string };
+
+export const cycleMonth = (day: string) =>
+  Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7)) - 1;
+
+/** Keep the recent run, including short missing periods but not an isolated earlier era. */
+export function recentCycleRun(points: readonly CyclePoint[]) {
+  let first = points.length - 1;
+  while (
+    first > 0 &&
+    cycleMonth(points[first].date) - cycleMonth(points[first - 1].date) <= 3
+  )
+    first--;
+  return points.slice(Math.max(0, first));
+}
+
+export function cycleVix(data: OpportunityContext, cutoff?: string | null) {
+  const series = data.series?.find((row) => row.code === "VIX");
+  const points = new Map<string, number>();
+  for (const row of series?.history ?? []) {
+    if (
+      row.value != null &&
+      Number(row.value) > 0 &&
+      validCycleSample(row) &&
+      knownBy(row.date, cutoff) &&
+      visibleBy(row, cutoff)
+    ) {
+      points.set(row.date.slice(0, 10), Number(row.value));
+    }
+  }
+  if (
+    series?.asOf &&
+    series.value != null &&
+    Number(series.value) > 0 &&
+    validCycleSample(series) &&
+    knownBy(series.asOf, cutoff) &&
+    visibleBy(series, cutoff)
+  ) {
+    points.set(series.asOf.slice(0, 10), Number(series.value));
+  }
+  const sorted = [...points].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const last = sorted.at(-1);
+  const end = cutoff?.slice(0, 10) ?? last?.[0];
+  const start = end ? `${Number(end.slice(0, 4)) - 2}${end.slice(4)}` : "";
+  return {
+    points: sorted.filter(([day]) => day >= start),
+    latest: last,
+    sourceUri: series?.sourceUri,
+  };
+}
+
+export function vixBand(value: number) {
+  return value < 15 ? 0 : value < 25 ? 1 : value < 35 ? 2 : 3;
+}
+
+/** Evidence-based presentation bands, independent from stock volatility. */
+export function liquidityBand(facts: CycleFact[], rateState?: string) {
+  const read = (code: string) => facts.find((row) => row.code === code);
+  const value = (code: string) => {
+    const row = read(code);
+    return row ? Number(row.value) : null;
+  };
+  const readings: number[] = [];
+  const nominal = value("US_T10_NOMINAL");
+  const real = value("US_T10_REAL");
+  if (nominal !== null && real !== null) {
+    readings.push(
+      nominal > 4.5 || real > 2.5 ? 1 : nominal < 3.5 && real < 1.5 ? -1 : 0,
+    );
+  }
+  const policy = value("US_FED_FUNDS");
+  const treasury2y = value("US_T2_NOMINAL");
+  if (rateState === "TIGHTER" || rateState === "EASIER")
+    readings.push(rateState === "TIGHTER" ? 1 : -1);
+  else if (
+    policy !== null &&
+    treasury2y !== null &&
+    read("US_FED_FUNDS")?.asOf?.slice(0, 10) ===
+      read("US_T2_NOMINAL")?.asOf?.slice(0, 10)
+  ) {
+    readings.push(
+      treasury2y - policy >= 0.25 ? 1 : treasury2y - policy <= -0.25 ? -1 : 0,
+    );
+  }
+  const m1 = read("M1_YOY");
+  const m2 = read("M2_YOY");
+  const m1Month = m1?.referencePeriod ?? m1?.asOf?.slice(0, 7);
+  const m2Month = m2?.referencePeriod ?? m2?.asOf?.slice(0, 7);
+  const gap =
+    value("M1_M2_GAP") ??
+    (m1 && m2 && m1Month && m1Month === m2Month
+      ? Number(m1.value) - Number(m2.value)
+      : null);
+  if (gap !== null) readings.push(gap < -2 ? 1 : gap > 0 ? -1 : 0);
+  const cn10 = value("CN_T10");
+  const shibor = value("SHIBOR_7D") ?? value("DR007");
+  if (cn10 !== null && shibor !== null) readings.push(shibor >= cn10 ? 1 : 0);
+  if (readings.length < 2) return null;
+  const score = readings.reduce((sum, item) => sum + item, 0);
+  return score >= 2 ? 3 : score > 0 ? 2 : score <= -2 ? 0 : 1;
+}
+
 export function cycleTrend(
   data: OpportunityContext,
   code: string,
@@ -241,10 +357,7 @@ export function cycleTrend(
       metadata: undefined,
     })),
   ];
-  const usable = new Map<
-    string,
-    { date: string; value: number; basis: string }
-  >();
+  const usable = new Map<string, CyclePoint>();
   if (supplemental && cutoff) {
     for (const point of cycleTrend(supplemental, code, cutoff)) {
       usable.set(point.date.slice(0, 7), point);
@@ -255,8 +368,7 @@ export function cycleTrend(
     if (
       !validCycleSample(row) ||
       !knownBy(row.date, cutoff) ||
-      (cutoff &&
-        !knownBy(row.availableAt ?? row.publishedAt ?? row.retrievedAt, cutoff))
+      !visibleBy(row, cutoff)
     )
       continue;
     const month = row.date.slice(0, 7);
