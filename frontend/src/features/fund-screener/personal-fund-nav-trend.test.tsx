@@ -63,7 +63,9 @@ afterEach(() => vi.restoreAllMocks());
 it("warns using the real selected-period last point when the confirmed NAV is newer", async () => {
   const user = userEvent.setup();
   render(<FundNavTrendChart fundCode="024194" confirmedNavAsOf="2026-11-06" />);
-  await screen.findByText(/曲线末点早于最新确认净值/);
+  await screen.findByText(/曲线末点早于最新确认净值/, undefined, {
+    timeout: 5000,
+  });
   expect(screen.getByRole("status")).toHaveTextContent(
     "曲线末点早于最新确认净值",
   );

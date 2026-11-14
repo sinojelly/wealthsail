@@ -79,15 +79,91 @@
   width: min(100%, 20rem);
 }
 .op-my-fund-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-  gap: 1.25rem;
-  padding: 1.25rem;
-  margin-block: 1rem;
+  display: block;
+  padding: 0;
+  margin-block: 0.6rem;
   border: 1px solid #dce5eb;
   border-radius: 0.8rem;
   background: #fff;
   container-type: inline-size;
+  overflow: hidden;
+}
+.op-my-fund-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 1.25rem;
+  padding: 0 1.15rem 1.15rem;
+}
+.op-my-fund-body:has(.op-current-fund-reference) {
+  display: block;
+}
+.op-my-funds .op-my-fund-toggle {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 1rem 1.15rem;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+.op-my-fund-heading-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  flex-wrap: wrap;
+}
+.op-my-fund-status {
+  font-size: 0.85rem;
+  color: #98641b;
+}
+.op-my-fund-summary-prices,
+.op-my-fund-toggle-label {
+  color: #526070;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.op-my-fund-toggle-label {
+  color: #087e8b;
+}
+.op-my-fund-profit {
+  margin: 0 1.15rem 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  color: #526070;
+  font-size: 0.88rem;
+}
+.op-my-fund-profit small {
+  color: #526070;
+  line-height: 1.6;
+}
+.op-my-fund-profit.positive strong {
+  color: #b42332;
+}
+.op-my-fund-profit.negative strong {
+  color: #087443;
+}
+@container (min-width: 860px) {
+  .op-my-fund-card[data-expanded="false"] .op-my-fund-toggle {
+    grid-template-columns: minmax(12rem, 1.2fr) minmax(8rem, 0.8fr) minmax(
+        20rem,
+        1.6fr
+      ) auto;
+    align-items: center;
+    gap: 0.6rem;
+    padding-block: 0.75rem;
+  }
+  .op-my-fund-card[data-expanded="false"] .op-my-fund-heading-line {
+    display: contents;
+  }
+  .op-my-fund-card[data-expanded="false"] .op-my-fund-badges {
+    display: none;
+  }
+  .op-my-fund-card[data-expanded="false"] .op-my-fund-toggle-label {
+    white-space: nowrap;
+  }
 }
 .op-my-fund-info,
 .op-my-fund-chart {
@@ -173,7 +249,7 @@
   margin-bottom: 0;
 }
 @media (max-width: 720px) {
-  .op-my-fund-card {
+  .op-my-fund-body {
     grid-template-columns: minmax(0, 1fr);
     padding: 0.85rem;
   }

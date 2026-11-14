@@ -4,7 +4,7 @@ from backend.investment import study_repository as repository
 from backend.investment.decision import semantic_hash
 
 
-async def list_watch_context(conn, tenant_id, user_id, now):
+async def list_watch_context(conn, tenant_id, user_id, now, *, include_prices=True):
     """Read every held fund once, independently of study-history pagination."""
     from backend.investment.discovery import _cached_histories
     from backend.investment.theme_graph import nav_plan
@@ -12,7 +12,7 @@ async def list_watch_context(conn, tenant_id, user_id, now):
     rows = await conn.fetch(
         """WITH latest AS (
           SELECT DISTINCT ON(p.account_id,p.instrument_id)
-            p.instrument_id,p.account_id,p.quantity
+            p.instrument_id,p.account_id,p.quantity,p.avg_cost,p.as_of
           FROM ledger.position_snapshots p
           JOIN identity.accounts a ON a.id=p.account_id AND a.tenant_id=p.tenant_id AND a.status='ACTIVE'
           WHERE p.tenant_id=$1 AND p.created_at<=$3
@@ -23,9 +23,16 @@ async def list_watch_context(conn, tenant_id, user_id, now):
                 AND owner.effective_from<=($3 AT TIME ZONE 'Asia/Shanghai')::date
                 AND (owner.effective_to IS NULL OR owner.effective_to>=($3 AT TIME ZONE 'Asia/Shanghai')::date))
           ORDER BY p.account_id,p.instrument_id,p.as_of DESC,p.created_at DESC
-        ) SELECT DISTINCT i.id AS instrument_id,ticker.fund_code,
-            i.primary_market AS market,i.canonical_name AS fund_name
-          FROM latest p JOIN reference.instruments i ON i.id=p.instrument_id
+        ), holdings AS (
+          SELECT instrument_id,sum(quantity) AS shares,
+            CASE WHEN bool_and(avg_cost>=0 AND avg_cost::text NOT IN ('NaN','Infinity','-Infinity'))
+              THEN sum(quantity * avg_cost) END AS total_cost,min(as_of) AS cost_as_of
+          FROM latest p WHERE p.quantity>0 AND p.quantity::text NOT IN ('NaN','Infinity','-Infinity')
+          GROUP BY instrument_id
+        ) SELECT i.id AS instrument_id,ticker.fund_code,
+            i.primary_market AS market,i.canonical_name AS fund_name,
+            p.shares,p.total_cost,p.cost_as_of
+          FROM holdings p JOIN reference.instruments i ON i.id=p.instrument_id
           LEFT JOIN LATERAL (
             SELECT alias.alias_value AS fund_code FROM reference.instrument_aliases alias
             WHERE alias.instrument_id=i.id AND alias.alias_type='TICKER'
@@ -34,8 +41,7 @@ async def list_watch_context(conn, tenant_id, user_id, now):
             ORDER BY (alias.effective_to IS NULL OR alias.effective_to>=($3 AT TIME ZONE 'Asia/Shanghai')::date) DESC,
               alias.effective_from DESC,alias.alias_value LIMIT 1
           ) ticker ON TRUE
-          WHERE p.quantity>0 AND p.quantity::text NOT IN ('NaN','Infinity','-Infinity')
-            AND i.asset_type IN ('OFF_EXCHANGE_FUND','EXCHANGE_FUND')
+          WHERE i.asset_type IN ('OFF_EXCHANGE_FUND','EXCHANGE_FUND')
           ORDER BY market,fund_code,instrument_id""",
         tenant_id,
         user_id,
@@ -47,16 +53,20 @@ async def list_watch_context(conn, tenant_id, user_id, now):
         tenant_id,
         user_id,
     )
-    histories = await _cached_histories(
-        conn,
-        sorted(
-            {
-                row["fund_code"]
-                for row in rows
-                if row["market"] == "FUND_CN" and row["fund_code"]
-            }
-        ),
-        now,
+    histories = (
+        await _cached_histories(
+            conn,
+            sorted(
+                {
+                    row["fund_code"]
+                    for row in rows
+                    if row["market"] == "FUND_CN" and row["fund_code"]
+                }
+            ),
+            now,
+        )
+        if include_prices
+        else {}
     )
     funds = []
     for row in rows:
@@ -93,6 +103,16 @@ async def list_watch_context(conn, tenant_id, user_id, now):
                 "confirmedNav": confirmed,
             }
         )
+        if row.get("shares") is not None:
+            funds[-1].update(
+                shares=str(row["shares"]),
+                totalCost=str(row["total_cost"])
+                if row.get("total_cost") is not None
+                else None,
+                costAsOf=row["cost_as_of"].isoformat()
+                if row.get("cost_as_of")
+                else None,
+            )
     return {
         "heldFunds": funds,
         "suppressedFundKeys": [

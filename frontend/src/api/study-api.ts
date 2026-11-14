@@ -82,6 +82,9 @@ export interface StudyTrack {
 export interface StudyPriceWatch {
   frozenPlan: ActionableZoneResult | null;
   confirmedNav: {
+    fundCode?: string | null;
+    subjectKind?: string | null;
+    subjectId?: string | null;
     value: string | null;
     asOf: string | null;
     retrievedAt?: string | null;

@@ -17,6 +17,7 @@ from backend.funds.nav_history import (
 from backend.investment import study_repository
 from backend.investment.fund_watch import list_watch_context
 from backend.investment.live_fund_plans import (
+    _local_histories,
     _safe_history,
     refresh_report_fund_plans,
 )
@@ -27,7 +28,6 @@ from backend.investment.study_price_watch import (
     _stamp,
     _trading_time,
 )
-from backend.macro.research_mentions import mentioned_fund_codes
 
 
 def merge_fund_inventory(rows):
@@ -65,7 +65,9 @@ def merge_fund_inventory(rows):
 
 
 async def _inventory(conn, tenant_id, user_id, now, *, include_research_mentions):
-    owned = await list_watch_context(conn, tenant_id, user_id, now)
+    owned = await list_watch_context(
+        conn, tenant_id, user_id, now, include_prices=False
+    )
     rows = [{**row, "relationships": ["HELD"]} for row in owned["heldFunds"]]
     tracks, offset = [], 0
     while True:
@@ -85,7 +87,12 @@ async def _inventory(conn, tenant_id, user_id, now, *, include_research_mentions
             scope.get("fundMarket"),
             scope.get("instrumentId"),
         )
-        if not track["enabled"] or track["status"] == "ENDED" or not market:
+        if (
+            not track["enabled"]
+            or track["status"] == "ENDED"
+            or not market
+            or (track.get("expiresOn") and track["expiresOn"] < now.date().isoformat())
+        ):
             continue
         if (
             f"{market}:{code}" in suppressed
@@ -116,58 +123,6 @@ async def _inventory(conn, tenant_id, user_id, now, *, include_research_mentions
         if isinstance(row.get("fundCode"), str)
         and re.fullmatch(r"[0-9]{6}", row["fundCode"])
     )
-    report = {}
-    mentions = []
-    if include_research_mentions:
-        saved = await conn.fetchrow(
-            """SELECT t.payload FROM research.daily_research_runs r
-            JOIN research.daily_research_results t USING(run_id)
-            WHERE t.status='READY' AND (
-              (r.run_mode='SCHEDULED' AND r.debug_request_id IS NULL) OR
-              (r.run_mode='MANUAL' AND EXISTS (
-                SELECT 1 FROM research.daily_research_refresh_requests q
-                WHERE q.id=r.debug_request_id AND q.tenant_id=$2 AND q.user_id=$3
-                  AND q.request_mode='MANUAL' AND q.status='READY'
-                  AND q.report_run_id=r.run_id AND q.batch_id=r.source_batch_id
-                  AND q.requested_at<=$1 AND q.started_at<=r.dispatched_at
-                  AND r.dispatched_at<=q.completed_at AND t.recorded_at<=q.completed_at
-                  AND q.completed_at<=$1)))
-              AND r.dispatched_at<=$1 AND t.recorded_at<=$1
-            ORDER BY r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC LIMIT 1""",
-            now,
-            tenant_id,
-            user_id,
-        )
-        report = obj(saved["payload"]) if saved else {}
-        mentions = mentioned_fund_codes(report)
-        # Explicit verified projection also covers structured-only mentions.
-        mentions += [
-            row for row in report.get("mentionedFunds", []) if isinstance(row, dict)
-        ]
-        for direction in report.get("valueDirections", []):
-            if isinstance(direction, dict):
-                for plan in direction.get("plans", []):
-                    if (
-                        isinstance(plan, dict)
-                        and plan.get("market", "FUND_CN") == "FUND_CN"
-                    ):
-                        mentions.append(
-                            {
-                                "fundCode": plan.get("fundCode")
-                                or (
-                                    plan.get("subjectId")
-                                    if plan.get("subjectKind") == "nav"
-                                    else None
-                                ),
-                                "directionKeys": [direction.get("key")],
-                            }
-                        )
-        candidate_codes.update(
-            row.get("fundCode")
-            for row in mentions
-            if isinstance(row.get("fundCode"), str)
-            and re.fullmatch(r"[0-9]{6}", row["fundCode"])
-        )
     catalog = (
         await conn.fetch(
             """SELECT fund_code,fund_name,currency FROM reference.research_fund_catalog
@@ -221,32 +176,6 @@ async def _inventory(conn, tenant_id, user_id, now, *, include_research_mentions
                     "relationships": ["WATCHLIST"],
                 }
             )
-    for mention in mentions:
-        code = mention.get("fundCode")
-        if code not in safe:
-            continue
-        directions = [
-            row
-            for row in report.get("valueDirections", [])
-            if isinstance(row, dict)
-            and row.get("key") in mention.get("directionKeys", [])
-        ]
-        rows.append(
-            {
-                "fundCode": code,
-                "fundMarket": "FUND_CN",
-                "label": safe[code]["fund_name"],
-                "relationships": ["RESEARCH_MENTIONED"],
-                "comments": [
-                    {
-                        "title": row.get("title"),
-                        "thesis": row.get("thesis"),
-                        "risks": deepcopy(row.get("risks") or []),
-                    }
-                    for row in directions
-                ],
-            }
-        )
     for row in rows:
         row["localNavEligible"] = bool(
             row["fundMarket"] == "FUND_CN"
@@ -330,8 +259,98 @@ async def _persisted_estimates(conn, codes, now):
     return output
 
 
+def holding_profit(holding, confirmed, estimate):
+    """Reference P&L from actual actor cost, without treating it as a trigger."""
+    shares, cost = _number(holding.get("shares")), _number(holding.get("totalCost"))
+    result = {
+        "state": "COST_UNAVAILABLE",
+        "shares": str(shares) if shares else None,
+        "totalCost": str(cost) if cost else None,
+        "unitCost": None,
+        "costAsOf": holding.get("costAsOf"),
+        "latestNav": None,
+        "priceAsOf": None,
+        "priceBasis": None,
+        "profitPct": None,
+        "profitAmount": None,
+    }
+    if shares is not None and cost is not None:
+        result["unitCost"] = str((cost / shares).quantize(Decimal("0.0000000001")))
+    code = holding.get("fundCode")
+    units = {"CNY", "CNY/份", "元/份", "CNY/unit", "CNY/share"}
+
+    def same_quote(row):
+        return bool(
+            holding.get("fundMarket") == "FUND_CN"
+            and isinstance(row, dict)
+            and code
+            and row.get("fundCode") == code
+            and row.get("subjectKind") == "nav"
+            and row.get("subjectId") == code
+            and row.get("priceBasis") == "UNIT_NAV"
+            and row.get("unit") in units
+            and row.get("asOf")
+            and _number(row.get("value")) is not None
+        )
+
+    quote = (
+        confirmed
+        if same_quote(confirmed)
+        else (
+            estimate
+            if same_quote(estimate)
+            and estimate.get("sourceVerification") == "PUBLIC_SOURCE"
+            else None
+        )
+    )
+    if quote is None:
+        if shares is not None and cost is not None:
+            result["state"] = "PRICE_UNAVAILABLE"
+        return result
+    value = _number(quote["value"])
+    result.update(
+        latestNav=str(value),
+        priceAsOf=quote["asOf"],
+        priceBasis="CONFIRMED_NAV" if quote is confirmed else "ESTIMATED_NAV",
+    )
+    if shares is None or cost is None:
+        return result
+    pnl = shares * value - cost
+    result.update(
+        state="AVAILABLE",
+        profitPct=str((pnl / cost * 100).quantize(Decimal("0.01"))),
+        profitAmount=str(pnl.quantize(Decimal("0.01"))),
+    )
+    return result
+
+
+def _personal_nav_codes(funds):
+    return sorted({
+        row["fundCode"] for row in funds
+        if set(row.get("relationships", [])) & {"HELD", "WATCHLIST", "TRACKED"}
+        and row.get("fundMarket") == "FUND_CN"
+        and row.get("localNavEligible") is True
+        and isinstance(row.get("fundCode"), str)
+        and re.fullmatch(r"[0-9]{6}", row["fundCode"])
+    })
+
+
+async def personal_nav_refresh_codes(conn, tenant_id, user_id, now):
+    """Actor inventory only: no chart computation, provider I/O or claim."""
+    return _personal_nav_codes(await _inventory(
+        conn, tenant_id, user_id, local(now), include_research_mentions=False,
+    ))
+
+
 async def personal_funds_reference(
-    conn, tenant_id, user_id, now, *, include_research_mentions=True
+    conn,
+    tenant_id,
+    user_id,
+    now,
+    *,
+    include_research_mentions=False,
+    allow_external_fetch=False,
+    claim_attempt=None,
 ):
     now = local(now)
     funds = await _inventory(
@@ -339,26 +358,35 @@ async def personal_funds_reference(
         tenant_id,
         user_id,
         now,
-        include_research_mentions=include_research_mentions,
+        include_research_mentions=False,
     )
-    codes = sorted(
-        {
-            row["fundCode"]
-            for row in funds
-            if row["fundMarket"] == "FUND_CN"
-            and row.get("localNavEligible") is True
-            and isinstance(row.get("fundCode"), str)
-            and re.fullmatch(r"[0-9]{6}", row["fundCode"])
+    # Citations do not establish a personal holding or watch choice.
+    funds = [
+        row
+        for row in funds
+        if set(row.get("relationships", [])) & {"HELD", "WATCHLIST", "TRACKED"}
+    ]
+    codes = _personal_nav_codes(funds)
+    if allow_external_fetch:
+        prepared = await ensure_nav_histories(
+            conn,
+            codes,
+            now,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            provider_budget=max(1, len(codes)),
+            allow_external_fetch=True,
+            claim_attempt=claim_attempt,
+        )
+    else:
+        prepared = {
+            "histories": [row async for row in _local_histories(conn, codes, now)]
+            if codes
+            else [],
+            "asOf": now,
+            "refresh": {},
+            "latestConfirmed": {},
         }
-    )
-    prepared = await ensure_nav_histories(
-        conn,
-        codes,
-        now,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        provider_budget=max(1, len(codes)),
-    )
     now = prepared["asOf"]
     histories = [row for row in prepared["histories"] if _safe_history(row)]
     skeletons = [
@@ -379,7 +407,12 @@ async def personal_funds_reference(
         for code in codes
     ]
     refreshed = await refresh_report_fund_plans(
-        conn, {"actionablePlans": skeletons}, now, histories=histories
+        conn,
+        {"actionablePlans": skeletons},
+        now,
+        histories=histories,
+        repair_nav=False,
+        read_local_histories=False,
     )
     plans = {row["fundCode"]: row for row in refreshed["actionablePlans"]}
     estimates = await _persisted_estimates(conn, codes, now)
@@ -465,6 +498,9 @@ async def personal_funds_reference(
             currentEstimate=estimate if eligible else None,
             missingReasons=missing,
             investmentEligible=False,
+            holdingProfit=holding_profit(fund, confirmed, estimate)
+            if "HELD" in fund["relationships"]
+            else None,
         )
     return {
         "version": "personal-funds-reference-v1",
@@ -472,7 +508,9 @@ async def personal_funds_reference(
         "source": "LOCAL_DATABASE_ONLY",
         "readOnly": True,
         "navSync": {
-            "policy": "AUTO_BACKFILL_AND_REPRICE",
+            "policy": "EXPLICIT_REFRESH"
+            if allow_external_fetch
+            else "LOCAL_DATABASE_ONLY",
             "states": prepared["refresh"],
         },
         "funds": funds,

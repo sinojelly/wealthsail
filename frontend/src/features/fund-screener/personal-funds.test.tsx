@@ -23,6 +23,7 @@ vi.mock("../../api/study-api", () => ({
 }));
 vi.mock("../../api/personal-funds", () => ({
   getPersonalFundsReference: vi.fn(),
+  refreshPersonalFundsReference: vi.fn(),
 }));
 vi.mock("../../api/funds", async (original) => ({
   ...(await original<typeof import("../../api/funds")>()),
@@ -125,7 +126,7 @@ beforeEach(() => {
   );
 });
 
-it("shows watchlist and current mentioned funds even when no formal research plan was saved", async () => {
+it("keeps watchlist funds but excludes research-only funds, including when an old server returns them", async () => {
   vi.mocked(api.getStudyTracks).mockResolvedValue({
     items: [],
     heldFunds: [],
@@ -166,23 +167,93 @@ it("shows watchlist and current mentioned funds even when no formal research pla
     ],
   });
   show(<MyFundsWorkspace actor="tenant:user" />);
-  const mentioned = await screen.findByRole("article", {
-    name: "提及观察基金",
+  const watched = await screen.findByRole("article", { name: "自选基金" });
+  expect(watched).toHaveTextContent("参考买入区间");
+  expect(
+    screen.queryByRole("article", { name: "提及观察基金" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "本期提及" }),
+  ).not.toBeInTheDocument();
+});
+
+it("folds an ordinary owned fund, shows its reference profit in the summary, and uses the list chart on expand", async () => {
+  vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [], total: 0 });
+  const history = await funds.getFundNavHistory("006543", "all");
+  vi.mocked(funds.getFundNavHistory).mockClear();
+  const plan = frozenPlan("006543");
+  plan.currentPrice = "1.20";
+  vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
+    version: "personal-funds-reference-v1",
+    source: "LOCAL_DATABASE_ONLY",
+    readOnly: true,
+    asOf: "2026-11-07",
+    funds: [
+      {
+        key: "FUND_CN:006543",
+        fundCode: "006543",
+        fundMarket: "FUND_CN",
+        label: "持仓待机基金",
+        relationships: ["HELD"],
+        investmentEligible: false,
+        plan,
+        history,
+        confirmedNav: null,
+        currentEstimate: null,
+        missingReasons: [],
+        holdingProfit: {
+          state: "AVAILABLE",
+          shares: "100",
+          totalCost: "100",
+          unitCost: "1",
+          costAsOf: "2026-11-05",
+          latestNav: "1.20",
+          priceAsOf: "2026-11-06",
+          priceBasis: "CONFIRMED_NAV",
+          profitPct: "20.00",
+          profitAmount: "20.00",
+        },
+      },
+    ],
   });
-  expect(mentioned).toHaveTextContent("本期研究提及");
-  expect(screen.getByRole("article", { name: "自选基金" })).toHaveTextContent(
-    "参考买入区间",
+  show(<MyFundsWorkspace actor="fold-profit" />);
+  const card = await screen.findByRole("article", { name: "持仓待机基金" });
+  expect(card).toHaveTextContent("持仓参考盈亏：+20.00%");
+  expect(card).toHaveTextContent("¥+20.00");
+  expect(within(card).queryByText("单位净值走势")).not.toBeInTheDocument();
+  const toggle = within(card).getByRole("button", {
+    name: /展开.*持仓待机基金/,
+  });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(toggle);
+  expect(
+    await within(card).findByRole("img", { name: "006543单位净值走势" }),
+  ).toBeInTheDocument();
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
+  expect(funds.getLatestFundQuotes).not.toHaveBeenCalled();
+});
+
+it("only synchronizes personal NAV after an explicit refresh and preserves existing cards if it fails", async () => {
+  vi.mocked(personal.refreshPersonalFundsReference).mockRejectedValueOnce(
+    new Error("净值来源暂不可用"),
+  );
+  show(<MyFundsWorkspace actor="explicit-personal-refresh" />);
+  await screen.findByRole("article", { name: "持仓基金024194" });
+  expect(personal.refreshPersonalFundsReference).not.toHaveBeenCalled();
+  expect(personal.getPersonalFundsReference).toHaveBeenCalledWith(
+    false,
+    expect.any(AbortSignal),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "刷新我的基金" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "净值来源暂不可用",
   );
   expect(
-    within(mentioned).queryByRole("button", { name: /取消跟踪/ }),
-  ).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "本期提及" }));
-  expect(
-    screen.getByRole("article", { name: "提及观察基金" }),
+    screen.getByRole("article", { name: "持仓基金024194" }),
   ).toBeInTheDocument();
-  expect(
-    screen.queryByRole("article", { name: "自选基金" }),
-  ).not.toBeInTheDocument();
+  expect(personal.refreshPersonalFundsReference).toHaveBeenCalledOnce();
+  expect(funds.getLatestFundQuotes).not.toHaveBeenCalled();
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -190,7 +261,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("requests only nearby personal NAV charts and keeps an activated chart across scrolling and plan changes", async () => {
+it("does not fetch missing personal chart data on scroll or plan selection", async () => {
   const user = userEvent.setup();
   const observations: Array<{
     callback: IntersectionObserverCallback;
@@ -248,16 +319,10 @@ it("requests only nearby personal NAV charts and keeps an activated chart across
   intersect(nearCard, false);
   expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   intersect(nearCard, true);
-  const graph = await within(nearCard).findByRole("img", {
-    name: "006531单位净值走势",
-  });
-  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(1);
-  expect(funds.getFundNavHistory).toHaveBeenCalledWith(
-    "006531",
-    "2y",
-    expect.any(AbortSignal),
-  );
-  expect(nearCard).toHaveTextContent("曲线末点早于最新确认净值");
+  expect(
+    await within(nearCard).findByText(/暂无可用的单位净值记录/),
+  ).toBeInTheDocument();
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   intersect(nearCard, false);
   await user.click(
     within(nearCard).getByRole("button", {
@@ -265,13 +330,15 @@ it("requests only nearby personal NAV charts and keeps an activated chart across
     }),
   );
   expect(nearCard).toHaveTextContent("1.0800–1.1500");
-  expect(within(nearCard).getByRole("img")).toBe(graph);
-  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(1);
+  expect(within(nearCard).queryByRole("img")).not.toBeInTheDocument();
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   expect(within(farCard).queryByRole("img")).not.toBeInTheDocument();
 
   intersect(farCard, true);
-  expect(await within(farCard).findByRole("img")).toBeInTheDocument();
-  expect(funds.getFundNavHistory).toHaveBeenCalledTimes(2);
+  expect(
+    await within(farCard).findByText(/暂无可用的单位净值记录/),
+  ).toBeInTheDocument();
+  expect(funds.getFundNavHistory).not.toHaveBeenCalled();
 });
 
 it("loads private holding and original plans independently of a failed public report and only reads the chosen detail", async () => {
@@ -402,6 +469,12 @@ it("does not look up public domestic NAV for code-less holdings or equal ETF cod
   });
   show(<MyFundsWorkspace actor="no-code" />);
   await screen.findByRole("article", { name: "持仓基金000301" });
+  for (const card of screen.getAllByRole("article")) {
+    const toggle = within(card).getByRole("button", {
+      name: /展开.*详情与走势/,
+    });
+    await userEvent.click(toggle);
+  }
   expect(screen.getAllByText(/净值图暂不可用/)).toHaveLength(2);
   expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   expect(funds.getLatestFundQuotes).not.toHaveBeenCalled();
@@ -822,7 +895,7 @@ it("shares a single actor list request between workspace and reminders", async (
 });
 
 it.each(["CNY", "元", "元/份", "CNY/unit", "CNY/份", "CNY/share"])(
-  "keeps original buy, stop and target overlays for the server-supported UNIT_NAV unit %s",
+  "keeps original prices for UNIT_NAV unit %s without initiating missing chart fetches",
   async (unit) => {
     const track = fundTrack("old-plan", "006501");
     track.priceWatch!.frozenPlan!.unit = unit;
@@ -833,16 +906,10 @@ it.each(["CNY", "元", "元/份", "CNY/unit", "CNY/份", "CNY/share"])(
     show(<MyFundsWorkspace actor={`unit-${unit}`} />);
     const card = await screen.findByRole("article", { name: "基金006501" });
     expect(card).toHaveTextContent("1.0500–1.1500");
-    expect(await within(card).findByText("建议买入区间")).toBeInTheDocument();
-    const graph = within(card).getByRole("img", { name: "006501单位净值走势" });
-    await waitFor(() => {
-      expect(graph.querySelectorAll(".recharts-reference-area")).toHaveLength(
-        2,
-      );
-      expect(graph.querySelectorAll(".recharts-reference-line")).toHaveLength(
-        1,
-      );
-    });
+    expect(
+      await within(card).findByText(/暂无可用的单位净值记录/),
+    ).toBeInTheDocument();
+    expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   },
 );
 
@@ -852,10 +919,13 @@ it("keeps unrecognized plan units out of the domestic NAV chart", async () => {
   vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [track], total: 1 });
   show(<MyFundsWorkspace actor="unsupported-unit" />);
   const card = await screen.findByRole("article", { name: "基金006502" });
+  await userEvent.click(
+    within(card).getByRole("button", { name: /展开.*详情与走势/ }),
+  );
   expect(card).toHaveTextContent("原计划口径或单位未确认匹配");
   expect(
-    await within(card).findByRole("img", { name: "006502单位净值走势" }),
-  ).toBeInTheDocument();
+    within(card).queryByRole("img", { name: "006502单位净值走势" }),
+  ).not.toBeInTheDocument();
   expect(within(card).queryByText("建议买入区间")).not.toBeInTheDocument();
 });
 
@@ -897,7 +967,7 @@ it.each(["unknown-market", "invalid-code"])(
     );
     expect(
       await screen.findByText(
-        "暂无持仓、活动跟踪、自选或本期提及基金；历史研究仍可查看。",
+        "暂无持仓、活动跟踪或自选基金；历史研究仍可查看。",
       ),
     ).toBeInTheDocument();
     expect(api.setFundWatchStatus).not.toHaveBeenCalled();
@@ -972,9 +1042,7 @@ it("refreshes partially cancelled studies and retries only the remaining origina
     screen.getByRole("button", { name: "取消跟踪 legacy-symbol" }),
   );
   expect(
-    await screen.findByText(
-      "暂无持仓、活动跟踪、自选或本期提及基金；历史研究仍可查看。",
-    ),
+    await screen.findByText("暂无持仓、活动跟踪或自选基金；历史研究仍可查看。"),
   ).toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(api.setStudyStatus).toHaveBeenCalledTimes(3);
@@ -1003,6 +1071,9 @@ it("reports an unsafe held-only identity without creating an UNKNOWN market pref
   });
   show(<MyFundsWorkspace actor="unsafe-held" />);
   await user.click(
+    await screen.findByRole("button", { name: /展开.*持仓基金006504/ }),
+  );
+  await user.click(
     await screen.findByRole("button", { name: "取消跟踪 006504" }),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent("无法取消跟踪");
@@ -1028,6 +1099,9 @@ it("retains the safe instrument-only cancellation path for a known-market holdin
     heldFunds: [holding],
   });
   show(<MyFundsWorkspace actor="safe-held" />);
+  await user.click(
+    await screen.findByRole("button", { name: /展开.*持仓基金006505/ }),
+  );
   await user.click(
     await screen.findByRole("button", { name: "取消跟踪 持仓基金006505" }),
   );

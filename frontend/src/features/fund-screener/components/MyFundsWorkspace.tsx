@@ -10,6 +10,8 @@ import {
 } from "../../../api/study-api";
 import {
   personalWatchState,
+  personalFundPriority,
+  sortPersonalFunds,
   relationshipLabels,
   type PersonalFundGroup,
 } from "../personal-fund-model";
@@ -17,10 +19,6 @@ import { usePersonalFunds } from "../use-personal-funds";
 import { fundDisplayName, planUnit } from "../plan-display";
 import { sourceHref, timeLabel } from "../macro-display";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
-import {
-  refreshLatestFundQuotes,
-  useLatestFundQuote,
-} from "../latest-quote-resource";
 import { studyConditionLabel, studyStates } from "./study-display";
 import { FundWatchQuote } from "./PriceWatchSummary";
 import ViewportFundChart from "./ViewportFundChart";
@@ -55,7 +53,7 @@ function newest<T extends { asOf: string | null; value: string | null }>(
   );
 }
 
-function FundCard({
+function FundCardContent({
   group,
   actor,
   onReview,
@@ -81,17 +79,16 @@ function FundCard({
     group.market === "FUND_CN" && /^\d{6}$/.test(group.code ?? "")
       ? group.code
       : undefined;
-  const latest = useLatestFundQuote(publicCode);
   const watches = group.tracks.flatMap((row) =>
     row.priceWatch ? [row.priceWatch] : [],
   );
   const confirmed = newest<NonNullable<StudyPriceWatch["confirmedNav"]>>([
-    latest.data?.confirmedNav,
+    group.reference?.confirmedNav,
     group.holding?.confirmedNav,
     ...watches.map((row) => row.confirmedNav),
   ]);
   const estimate = newest<NonNullable<StudyPriceWatch["currentEstimate"]>>([
-    latest.data?.currentEstimate,
+    group.reference?.currentEstimate,
     group.holding?.currentEstimate,
     ...group.tracks.map((row) => row.currentEstimate),
     ...watches.map(currentFundEstimate),
@@ -113,43 +110,20 @@ function FundCard({
     setDetailId(track.id);
   }
   return (
-    <article className="op-my-fund-card" aria-label={group.label}>
+    <div className="op-my-fund-body">
       <div className="op-my-fund-info">
-        <header>
-          <h4>{fundDisplayName(group.label, group.code)}</h4>
-          <small>
-            {group.code ?? "代码待核对"} ·{" "}
-            {group.market === "UNKNOWN" ? "市场待核对" : group.market}
-          </small>
-          <div className="op-my-fund-badges">
-            {group.holding && <span>已持仓</span>}
-            {!!group.tracks.length && (
-              <span>
-                {group.holding ? "同时跟踪" : "仅跟踪"} · {group.tracks.length}
-                份独立研究
-              </span>
+        {!group.reference && (
+          <>
+            <FundWatchQuote row={confirmed} label="最新确认净值" />
+            <FundWatchQuote
+              row={estimate}
+              label="可用估算净值（非最终净值）"
+              estimate
+            />
+            {estimate?.checkedAt && (
+              <small>估值核对时间：{timeLabel(estimate.checkedAt)}</small>
             )}
-            {group.trackingSuppressed && <span>已取消跟踪</span>}
-            {group.reference?.relationships
-              .filter(
-                (key) => key === "WATCHLIST" || key === "RESEARCH_MENTIONED",
-              )
-              .map((key) => (
-                <span key={key}>{relationshipLabels[key]}</span>
-              ))}
-          </div>
-        </header>
-        <FundWatchQuote row={confirmed} label="最新确认净值" />
-        <FundWatchQuote
-          row={estimate}
-          label="可用估算净值（非最终净值）"
-          estimate
-        />
-        {estimate?.checkedAt && (
-          <small>估值核对时间：{timeLabel(estimate.checkedAt)}</small>
-        )}
-        {latest.failed && (
-          <p role="status">独立行情更新失败，保留已有记录及原日期。</p>
+          </>
         )}
         {group.reference && <FundReferenceDetails fund={group.reference} />}
         {!!group.tracks.length && (
@@ -295,6 +269,8 @@ function FundCard({
             <ViewportFundChart
               fundCode={publicCode}
               track={overlay}
+              snapshot={null}
+              snapshotMode="CURRENT_LOCAL"
               confirmedNavAsOf={confirmed?.asOf ?? undefined}
             />
           ) : (
@@ -313,6 +289,104 @@ function FundCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function FundCard(props: Parameters<typeof FundCardContent>[0]) {
+  const { group } = props;
+  const priority = personalFundPriority(group);
+  const [chosenOpen, setChosenOpen] = useState<boolean | null>(null);
+  const open = chosenOpen ?? priority.defaultExpanded;
+  const profit = group.reference?.holdingProfit;
+  const signed = (value: string) =>
+    `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)}`;
+  const price = (value: number | string | null | undefined) =>
+    value == null || !Number.isFinite(Number(value))
+      ? "—"
+      : Number(value).toFixed(4);
+  return (
+    <article
+      className="op-my-fund-card"
+      aria-label={group.label}
+      data-expanded={open}
+    >
+      <button
+        type="button"
+        className="op-my-fund-toggle"
+        aria-label={`${open ? "收起" : "展开"} ${group.label}详情与走势`}
+        aria-expanded={open}
+        onClick={() => setChosenOpen(!open)}
+      >
+        <span className="op-my-fund-heading-line">
+          <strong>{fundDisplayName(group.label, group.code)}</strong>
+          <span className="op-my-fund-status">{priority.label}</span>
+        </span>
+        <span className="op-my-fund-badges">
+          {group.holding && <span>已持仓</span>}
+          {!!group.tracks.length && (
+            <span>
+              {group.holding ? "同时跟踪" : "仅跟踪"} · {group.tracks.length}
+              份独立研究
+            </span>
+          )}
+          {group.trackingSuppressed && <span>已取消跟踪</span>}
+          {group.reference?.relationships
+            .filter((key) => key === "WATCHLIST")
+            .map((key) => (
+              <span key={key}>{relationshipLabels[key]}</span>
+            ))}
+          <small>
+            {group.code ?? "代码待核对"} ·{" "}
+            {group.market === "UNKNOWN" ? "市场待核对" : group.market}
+          </small>
+        </span>
+        <span className="op-my-fund-summary-prices">
+          当前净值 {price(priority.current)} · 参考买区 {price(priority.low)}–
+          {price(priority.high)} · 参考卖区 {price(priority.sellLow)}–
+          {price(priority.sellHigh)}
+        </span>
+        <span className="op-my-fund-toggle-label">
+          {open ? "▾ 收起详情与走势" : "▸ 展开详情与走势"}
+        </span>
+      </button>
+      {group.holding && (
+        <div
+          className={`op-my-fund-profit ${profit?.profitPct != null && Number(profit.profitPct) > 0 ? "positive" : profit?.profitPct != null && Number(profit.profitPct) < 0 ? "negative" : ""}`}
+        >
+          <strong>
+            持仓参考盈亏：
+            {profit?.state === "AVAILABLE" && profit.profitPct != null ? (
+              <>
+                {signed(profit.profitPct)}%
+                {profit.profitAmount != null &&
+                  `（¥${signed(profit.profitAmount)}）`}
+              </>
+            ) : (
+              "暂不可计算"
+            )}
+          </strong>
+          <small>
+            {profit?.unitCost ? (
+              <>持仓成本 {price(profit.unitCost)} 元/份 · </>
+            ) : (
+              "成本资料待补齐 · "
+            )}
+            {profit?.latestNav ? (
+              <>
+                最新{profit.priceBasis === "ESTIMATED_NAV" ? "估值" : "净值"}{" "}
+                {price(profit.latestNav)}（{timeLabel(profit.priceAsOf)}）
+              </>
+            ) : (
+              "暂无对应价格"
+            )}
+          </small>
+          {profit?.priceBasis === "ESTIMATED_NAV" && (
+            <small>基于估算净值，仅供参考。</small>
+          )}
+        </div>
+      )}
+      {open && <FundCardContent {...props} />}
     </article>
   );
 }
@@ -322,7 +396,7 @@ export default function MyFundsWorkspace(props: MyFundsWorkspaceProps) {
 }
 
 function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
-  const { list, reference, groups } = usePersonalFunds(actor);
+  const { list, reference, groups, refresh } = usePersonalFunds(actor);
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState("all");
@@ -331,13 +405,14 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const term = search.trim().toLocaleLowerCase();
   const matches = (row: PersonalFundGroup) =>
     !term ||
     `${row.label} ${row.code ?? ""} ${row.holding?.instrumentId ?? ""}`
       .toLocaleLowerCase()
       .includes(term);
-  const filtered = groups.filter(
+  const filtered = sortPersonalFunds(groups).filter(
     (row) =>
       (filter !== "held" || row.holding) &&
       (filter !== "tracked" ||
@@ -346,8 +421,6 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
             row.reference?.relationships.includes("TRACKED")))) &&
       (filter !== "watchlist" ||
         row.reference?.relationships.includes("WATCHLIST")) &&
-      (filter !== "mentioned" ||
-        row.reference?.relationships.includes("RESEARCH_MENTIONED")) &&
       matches(row),
   );
   const history = (list.data?.items ?? []).filter(
@@ -425,29 +498,38 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         <div>
           <h3>我的基金</h3>
           <p>
-            合并持仓、活动跟踪、自选与本期研究提及；当前程序价位和原冻结计划分别保留日期与来源。
+            只展示持仓、自选关注与活动跟踪。按操作距离排序，次要项可展开查看完整详情与走势。
           </p>
         </div>
         <button
           type="button"
-          disabled={list.isFetching}
-          onClick={() => {
-            refreshLatestFundQuotes();
-            void list.refetch();
-            void reference.refetch();
+          disabled={refreshing}
+          onClick={async () => {
+            setRefreshing(true);
+            setError("");
+            try {
+              await refresh();
+            } catch (failure) {
+              setError(
+                failure instanceof Error
+                  ? failure.message
+                  : "刷新未完成，保留本地已有记录。",
+              );
+            } finally {
+              setRefreshing(false);
+            }
           }}
         >
-          刷新我的基金
+          {refreshing ? "正在刷新我的基金…" : "刷新我的基金"}
         </button>
       </header>
       <div className="op-my-funds-toolbar">
         <nav aria-label="我的基金筛选">
           {[
-            ["all", "全部"],
+            ["all", "全部我的基金"],
             ["held", "已持仓"],
             ["tracked", "仅跟踪"],
             ["watchlist", "自选关注"],
-            ["mentioned", "本期提及"],
             ["history", "历史复盘"],
           ].map(([key, label]) => (
             <button
@@ -478,9 +560,7 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         </p>
       )}
       {reference.isError && (
-        <p role="status">
-          自选与本期提及基金暂未补齐，已有持仓和跟踪仍可查看。
-        </p>
+        <p role="status">自选基金参考价位暂未补齐，已有持仓和跟踪仍可查看。</p>
       )}
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
@@ -516,7 +596,7 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
             <p>
               {groups.length
                 ? "没有匹配的基金，请调整筛选或搜索。"
-                : "暂无持仓、活动跟踪、自选或本期提及基金；历史研究仍可查看。"}
+                : "暂无持仓、活动跟踪或自选基金；历史研究仍可查看。"}
             </p>
           )}
         </>

@@ -54,7 +54,7 @@ def test_union_deduplicates_identity_without_promoting_observation():
 
 
 @pytest.mark.asyncio
-async def test_local_reference_contains_unplanned_mentions_and_actual_full_window(
+async def test_local_reference_excludes_unowned_mentions_and_keeps_owned_full_window(
     monkeypatch,
 ):
     from tests.unit.test_live_fund_plans_v6 import history, LocalHistory
@@ -68,7 +68,8 @@ async def test_local_reference_contains_unplanned_mentions_and_actual_full_windo
             return_value=[
                 fund("018344", "HELD"),
                 fund("013477", "WATCHLIST"),
-                fund("011035", "RESEARCH_MENTIONED"),
+                fund("011035", "WATCHLIST"),
+                fund("000051", "RESEARCH_MENTIONED"),
             ]
         ),
     )
@@ -90,6 +91,137 @@ async def test_local_reference_contains_unplanned_mentions_and_actual_full_windo
         "RIGHT_TREND",
     }
     assert row["investmentEligible"] is False
+
+
+@pytest.mark.asyncio
+async def test_personal_get_never_calls_external_nav_repair(monkeypatch):
+    from tests.unit.test_live_fund_plans_v6 import LocalHistory, history
+
+    monkeypatch.setattr(
+        service, "_inventory", AsyncMock(return_value=[fund("011035", "HELD")])
+    )
+    monkeypatch.setattr(service, "_persisted_estimates", AsyncMock(return_value={}))
+    repair = AsyncMock(side_effect=AssertionError("GET must remain local"))
+    monkeypatch.setattr(service, "ensure_nav_histories", repair)
+    conn = LocalHistory([history("011035")])
+    data = await service.personal_funds_reference(conn, "tenant", "actor", NOW)
+    assert data["funds"][0]["history"]["points"]
+    assert repair.await_count == 0
+    assert data["navSync"]["policy"] == "LOCAL_DATABASE_ONLY"
+    assert len(conn.calls) == 1
+
+
+@pytest.mark.parametrize("cost", [None, "0", "NaN", "-1"])
+def test_holding_profit_never_invents_a_cost_basis(cost):
+    holding = {
+        "fundCode": "011035",
+        "fundMarket": "FUND_CN",
+        "shares": "100",
+        "totalCost": cost,
+    }
+    quote = {
+        "fundCode": "011035",
+        "subjectKind": "nav",
+        "subjectId": "011035",
+        "priceBasis": "UNIT_NAV",
+        "unit": "CNY/份",
+        "value": "1.2",
+        "asOf": "2026-11-07",
+    }
+    result = service.holding_profit(holding, quote, None)
+    assert result["state"] == "COST_UNAVAILABLE"
+    assert result["profitPct"] is None and result["profitAmount"] is None
+    assert result["latestNav"] == "1.2" and result["priceAsOf"] == "2026-11-07"
+
+
+def test_holding_profit_uses_actual_weighted_cost_and_latest_confirmed_nav_even_yesterday():
+    holding = {
+        "fundCode": "011035",
+        "fundMarket": "FUND_CN",
+        "shares": "300",
+        "totalCost": "400",
+        "costAsOf": "2026-11-04",
+    }
+    quote = {
+        "fundCode": "011035",
+        "subjectKind": "nav",
+        "subjectId": "011035",
+        "priceBasis": "UNIT_NAV",
+        "unit": "CNY/份",
+        "value": "1.5",
+        "asOf": "2026-11-07",
+        "usable": False,
+    }
+    estimate = {
+        **quote,
+        "value": "1.6",
+        "asOf": "2026-11-08T10:00:00+08:00",
+        "sourceVerification": "PUBLIC_SOURCE",
+    }
+    result = service.holding_profit(holding, quote, estimate)
+    assert result == {
+        "state": "AVAILABLE",
+        "shares": "300",
+        "totalCost": "400",
+        "unitCost": "1.3333333333",
+        "costAsOf": "2026-11-04",
+        "latestNav": "1.5",
+        "priceAsOf": "2026-11-07",
+        "priceBasis": "CONFIRMED_NAV",
+        "profitPct": "12.50",
+        "profitAmount": "50.00",
+    }
+
+
+@pytest.mark.parametrize(
+    "change", [{"fundCode": "000051"}, {"unit": "USD"}, {"subjectId": "000051"}]
+)
+def test_holding_profit_rejects_price_from_another_identity_or_currency(change):
+    holding = {
+        "fundCode": "011035",
+        "fundMarket": "FUND_CN",
+        "shares": "100",
+        "totalCost": "100",
+    }
+    quote = {
+        "fundCode": "011035",
+        "subjectKind": "nav",
+        "subjectId": "011035",
+        "priceBasis": "UNIT_NAV",
+        "unit": "CNY/份",
+        "value": "1.2",
+        "asOf": "2026-11-07",
+        **change,
+    }
+    assert service.holding_profit(holding, quote, None)["state"] == "PRICE_UNAVAILABLE"
+
+
+def test_holding_profit_fallback_estimate_is_labelled_and_requires_public_provenance():
+    holding = {
+        "fundCode": "011035",
+        "fundMarket": "FUND_CN",
+        "shares": "100",
+        "totalCost": "100",
+    }
+    estimate = {
+        "fundCode": "011035",
+        "subjectKind": "nav",
+        "subjectId": "011035",
+        "priceBasis": "UNIT_NAV",
+        "unit": "CNY/份",
+        "value": "0.9",
+        "asOf": "2026-11-07",
+        "sourceVerification": "PUBLIC_SOURCE",
+    }
+    result = service.holding_profit(holding, None, estimate)
+    assert result["priceBasis"] == "ESTIMATED_NAV"
+    assert result["profitPct"] == "-10.00" and result["profitAmount"] == "-10.00"
+    assert (
+        service.holding_profit(
+            holding, None, {**estimate, "sourceVerification": "LOCAL_RECORD_ONLY"}
+        )["state"]
+        == "PRICE_UNAVAILABLE"
+    )
 
 
 @pytest.mark.asyncio
@@ -293,10 +425,11 @@ async def test_personal_query_reprices_from_newly_persisted_history_for_every_re
     monkeypatch.setattr(service, "ensure_nav_histories", repaired)
     monkeypatch.setattr(service, "_persisted_estimates", AsyncMock(return_value={}))
     data = await service.personal_funds_reference(
-        LocalHistory(), "tenant", "actor", current
+        LocalHistory(), "tenant", "actor", current, allow_external_fetch=True
     )
     row = data["funds"][0]
     assert repaired.await_args.args[1] == ["011035"]
+    assert repaired.await_args.kwargs["allow_external_fetch"] is True
     assert (
         row["history"]["asOf"]
         == row["actionableZones"]["asOf"]

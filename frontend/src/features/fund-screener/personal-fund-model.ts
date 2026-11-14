@@ -6,6 +6,7 @@ import type {
 } from "../../api/study-api";
 import type { SellRiskAlert } from "../../api/investment";
 import type { PersonalFundReference } from "../../api/personal-funds";
+import { fundOperationDistance } from "./fund-operation-distance";
 export const relationshipLabels = {
   HELD: "已持仓",
   TRACKED: "已跟踪",
@@ -192,7 +193,14 @@ export function groupPersonalFunds(
       group.key = reference.key;
       group.code = reference.fundCode ?? group.code;
       groups.set(group.key, group);
-    } else
+    } else if (
+      reference.relationships.some(
+        (key) => key === "HELD" || key === "WATCHLIST" || key === "TRACKED",
+      ) &&
+      (!suppressed.has(reference.key) ||
+        reference.relationships.includes("HELD") ||
+        reference.relationships.includes("WATCHLIST"))
+    )
       groups.set(reference.key, {
         key: reference.key,
         market: reference.fundMarket,
@@ -213,4 +221,87 @@ export function groupPersonalFunds(
       });
   }
   return [...groups.values()];
+}
+
+export function personalFundPriority(group: PersonalFundGroup) {
+  const plan =
+    group.reference?.plan ??
+    group.tracks.find((row) => row.priceWatch?.frozenPlan)?.priceWatch
+      ?.frozenPlan;
+  const quotes = [
+    group.reference?.confirmedNav,
+    group.holding?.confirmedNav,
+    ...group.tracks.map((row) => row.priceWatch?.confirmedNav),
+  ]
+    .filter(
+      (row) =>
+        row?.value != null &&
+        (!row.fundCode || row.fundCode === group.code) &&
+        (!row.subjectId || row.subjectId === group.code),
+    )
+    .sort((a, b) => (b!.asOf ?? "").localeCompare(a!.asOf ?? ""));
+  const samePlan =
+    plan &&
+    (!plan.market || plan.market === group.market) &&
+    (!plan.fundCode || plan.fundCode === group.code);
+  const position = fundOperationDistance(
+    samePlan ? plan : null,
+    quotes[0]?.value,
+  );
+  const nearBuy =
+    !position.stopTriggered &&
+    position.buyDistance != null &&
+    position.buyDistance < 2;
+  const nearSell = position.sellDistance != null && position.sellDistance < 2;
+  const held =
+    !!group.holding || !!group.reference?.relationships.includes("HELD");
+  const rank =
+    held && position.stopTriggered ? 0 : held && nearSell ? 1 : nearBuy ? 2 : 3;
+  const distance =
+    rank === 0
+      ? 0
+      : rank === 1
+        ? position.sellDistance
+        : rank === 2 || !held
+          ? position.buyDistance
+          : Math.min(
+              position.buyDistance ?? Infinity,
+              position.sellDistance ?? Infinity,
+            );
+  const label =
+    rank === 0
+      ? "止损参考触发"
+      : rank === 1
+        ? position.inSellZone
+          ? "已入卖区"
+          : `接近卖区（差 ${position.sellDistance!.toFixed(2)}%）`
+        : position.stopTriggered
+          ? "跌破止损参考"
+          : position.inBuyZone
+            ? "已入买区"
+            : nearBuy
+              ? `接近买区（差 ${position.buyDistance!.toFixed(2)}%）`
+              : position.buyDistance != null
+                ? `距买区 ${position.buyDistance.toFixed(2)}%`
+                : "价格资料待补齐";
+  return {
+    ...position,
+    rank,
+    distance: distance ?? Infinity,
+    label,
+    defaultExpanded: rank < 3,
+  };
+}
+
+export function sortPersonalFunds(groups: readonly PersonalFundGroup[]) {
+  const priorities = new Map(
+    groups.map((row) => [row, personalFundPriority(row)]),
+  );
+  return [...groups].sort((a, b) => {
+    const x = priorities.get(a)!,
+      y = priorities.get(b)!;
+    return (
+      x.rank - y.rank || x.distance - y.distance || a.key.localeCompare(b.key)
+    );
+  });
 }

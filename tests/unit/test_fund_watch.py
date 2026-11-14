@@ -113,6 +113,40 @@ async def test_watch_context_confirmed_nav_uses_same_fund_and_disclosed_daily_ch
 
 
 @pytest.mark.asyncio
+async def test_holding_costs_are_aggregated_over_latest_owned_account_positions(
+    monkeypatch,
+):
+    from backend.investment import discovery
+    from decimal import Decimal
+    from datetime import date
+
+    conn = AsyncMock()
+    conn.fetch.side_effect = [
+        [
+            {
+                "instrument_id": uuid4(),
+                "fund_code": "004069",
+                "market": "FUND_CN",
+                "fund_name": "证券联接",
+                "shares": Decimal("300"),
+                "total_cost": Decimal("400"),
+                "cost_as_of": date(2026, 10, 27),
+            }
+        ],
+        [],
+    ]
+    monkeypatch.setattr(discovery, "_cached_histories", AsyncMock(return_value={}))
+    result = await module().list_watch_context(conn, "tenant", "actor", NOW)
+    holding = result["heldFunds"][0]
+    assert holding["shares"] == "300" and holding["totalCost"] == "400"
+    assert holding["costAsOf"] == "2026-10-27"
+    sql = conn.fetch.await_args_list[0].args[0]
+    assert "p.avg_cost" in sql and "sum(quantity * avg_cost)" in sql
+    assert "GROUP BY instrument_id" in sql
+    assert "owner.user_id=$2" in sql and "p.created_at<=$3" in sql
+
+
+@pytest.mark.asyncio
 async def test_cancel_persists_actor_preference_and_stops_matching_studies_without_deleting_holdings(
     monkeypatch,
 ):

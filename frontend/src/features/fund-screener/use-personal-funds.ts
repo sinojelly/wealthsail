@@ -3,7 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getStudyTracks } from "../../api/study-api";
 import { groupPersonalFunds } from "./personal-fund-model";
 import { useStudyQuoteRefresh } from "./use-study-tracking";
-import { getPersonalFundsReference } from "../../api/personal-funds";
+import {
+  getPersonalFundsReference,
+  refreshPersonalFundsReference,
+} from "../../api/personal-funds";
 import { privateQueryKey, useAuthSession } from "../../app/auth-session";
 
 function shanghaiDate() {
@@ -46,10 +49,10 @@ export function usePersonalFunds(actor: string) {
       session,
       "personal-funds-reference",
       actor,
-      "research-included",
+      "personal-only",
     ),
     queryFn: async ({ signal }) => {
-      const data = await getPersonalFundsReference(true, signal);
+      const data = await getPersonalFundsReference(false, signal);
       if (
         Object.values(data.navSync?.states ?? {}).some(
           (row) => row.state === "READY",
@@ -67,6 +70,22 @@ export function usePersonalFunds(actor: string) {
     list,
     reference,
     today,
+    refresh: async () => {
+      const data = await refreshPersonalFundsReference();
+      queryClient.setQueryData(
+        privateQueryKey(
+          session,
+          "personal-funds-reference",
+          actor,
+          "personal-only",
+        ),
+        data,
+      );
+      await list.refetch();
+      void queryClient.invalidateQueries({
+        queryKey: privateQueryKey(session, "opportunity-context"),
+      });
+    },
     groups: groupPersonalFunds(
       list.data ?? { items: [], total: 0 },
       today,

@@ -1,7 +1,76 @@
-import { groupPersonalFunds } from "./personal-fund-model";
+import {
+  groupPersonalFunds,
+  personalFundPriority,
+  sortPersonalFunds,
+} from "./personal-fund-model";
+import type { PersonalFundReference } from "../../api/personal-funds";
 import { frozenPlan, fundTrack, heldFund } from "./personal-funds.test-data";
 
 const today = "2026-11-07";
+
+function reference(code: string, relationship = "WATCHLIST", current = "1") {
+  const plan = frozenPlan(code);
+  plan.currentPrice = current;
+  plan.tracks[0].entryZoneMin = "0.90";
+  plan.tracks[0].entryZoneMax = "0.98";
+  plan.tracks[0].takeProfitT1 = "1.02";
+  plan.tracks[0].takeProfitT2 = "1.20";
+  plan.tracks[0].stopLossPrice = "0.80";
+  return {
+    key: `FUND_CN:${code}`,
+    fundCode: code,
+    fundMarket: "FUND_CN",
+    label: code,
+    relationships: [relationship],
+    plan,
+    confirmedNav: null,
+    currentEstimate: null,
+    history: null,
+    missingReasons: [],
+    investmentEligible: false,
+  } as PersonalFundReference;
+}
+
+it("does not create a personal fund from a research mention returned by an old server", () => {
+  expect(
+    groupPersonalFunds({ items: [], total: 0 }, today, [
+      reference("000051", "RESEARCH_MENTIONED"),
+    ]),
+  ).toEqual([]);
+});
+
+it("prioritizes held stop/sell references before near buy opportunities and folds an exact 2 percent boundary", () => {
+  const groups = groupPersonalFunds({ items: [], total: 0 }, today, [
+    reference("000001", "HELD", "1"),
+    reference("000002", "WATCHLIST", "0.999"),
+    reference("000003", "HELD", "1.015"),
+    reference("000004", "HELD", "0.79"),
+    reference("000005", "WATCHLIST", "0.998"),
+    reference("000006", "HELD", "0.95"),
+  ]);
+  expect(sortPersonalFunds(groups).map((row) => row.code)).toEqual([
+    "000004",
+    "000003",
+    "000006",
+    "000005",
+    "000002",
+    "000001",
+  ]);
+  expect(personalFundPriority(groups[0]).defaultExpanded).toBe(false);
+  expect(personalFundPriority(groups[2]).defaultExpanded).toBe(true);
+  expect(personalFundPriority(groups[3]).label).toContain("止损");
+});
+
+it("does not promote a stopped watchlist fund even when it is within 2 percent of entry", () => {
+  const item = reference("000001", "WATCHLIST", "0.89");
+  item.plan!.tracks[0].stopLossPrice = "0.895";
+  const [group] = groupPersonalFunds({ items: [], total: 0 }, today, [item]);
+  expect(personalFundPriority(group)).toMatchObject({
+    stopTriggered: true,
+    defaultExpanded: false,
+    label: "跌破止损参考",
+  });
+});
 
 it("aggregates a holding and two research plans once without merging frozen prices", () => {
   const first = fundTrack("first");

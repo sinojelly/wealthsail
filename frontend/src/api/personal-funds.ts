@@ -1,10 +1,22 @@
-import { request } from "./client";
+import { request, requestWithTimeout } from "./client";
 import type { ActionableZoneResult } from "./investment";
 import type { FundNavHistory } from "./funds";
 import type { StudyPriceWatch } from "./study-api";
 
 export type FundRelationship =
   "HELD" | "TRACKED" | "WATCHLIST" | "RESEARCH_MENTIONED";
+export interface HoldingProfit {
+  state: "AVAILABLE" | "COST_UNAVAILABLE" | "PRICE_UNAVAILABLE";
+  shares: string | null;
+  totalCost: string | null;
+  unitCost: string | null;
+  costAsOf: string | null;
+  latestNav: string | null;
+  priceAsOf: string | null;
+  priceBasis: "CONFIRMED_NAV" | "ESTIMATED_NAV" | null;
+  profitPct: string | null;
+  profitAmount: string | null;
+}
 export interface PersonalFundReference {
   key: string;
   fundCode: string | null;
@@ -13,6 +25,7 @@ export interface PersonalFundReference {
   label: string;
   relationships: FundRelationship[];
   investmentEligible: false;
+  holdingProfit?: HoldingProfit | null;
   confirmedNav: StudyPriceWatch["confirmedNav"];
   currentEstimate:
     | (NonNullable<StudyPriceWatch["currentEstimate"]> & {
@@ -35,9 +48,22 @@ export interface PersonalFundsReference {
   asOf: string;
   funds: PersonalFundReference[];
   navSync?: {
-    policy: "AUTO_BACKFILL_AND_REPRICE";
+    policy:
+      "AUTO_BACKFILL_AND_REPRICE" | "LOCAL_DATABASE_ONLY" | "EXPLICIT_REFRESH";
     states: Record<string, { state: string; reason?: string }>;
   };
+}
+export async function refreshPersonalFundsReference(signal?: AbortSignal) {
+  return (
+    await requestWithTimeout<PersonalFundsReference>(
+      "/v1/investment/personal-funds-reference/refresh",
+      {
+        method: "POST",
+        signal,
+      },
+      120_000,
+    )
+  ).data;
 }
 export async function getPersonalFundsReference(
   includeResearchMentions: boolean,

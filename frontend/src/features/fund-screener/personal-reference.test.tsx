@@ -88,7 +88,7 @@ beforeEach(() => {
     toJSON: () => ({}),
   });
 });
-it("unions holdings, independent frozen tracks, watchlist and unplanned mentions exactly once", () => {
+it("unions holdings, independent frozen tracks and watchlist while excluding research-only mentions", () => {
   const held = heldFund();
   const rows = groupPersonalFunds(
     { items: [fundTrack()], heldFunds: [held], total: 1 },
@@ -104,12 +104,10 @@ it("unions holdings, independent frozen tracks, watchlist and unplanned mentions
     ],
   );
   expect(rows.map((row) => row.code).sort()).toEqual(
-    [held.fundCode, "013477", "011035"].sort(),
+    [held.fundCode, "013477"].sort(),
   );
   expect(rows.find((row) => row.holding)?.tracks).toHaveLength(1);
-  expect(
-    rows.find((row) => row.code === "011035")?.reference?.investmentEligible,
-  ).toBe(false);
+  expect(rows.find((row) => row.code === "011035")).toBeUndefined();
 });
 it("reads current personal funds only after opt-in, keeps all action controls disabled and never fetches live charts", async () => {
   const calls: string[] = [];

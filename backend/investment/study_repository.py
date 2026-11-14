@@ -598,6 +598,11 @@ async def add_check(conn, track, version, result, now):
 
 
 def track_dto(row):
+    expiry = row.get("expires_on")
+    try:
+        expiry = date.fromisoformat(expiry[:10]).isoformat() if expiry else None
+    except ValueError:
+        expiry = None
     return {
         "id": str(row["id"]),
         "title": row["title"],
@@ -607,6 +612,7 @@ def track_dto(row):
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "status": row.get("state") or ("OBSERVING" if row["enabled"] else "ENDED"),
+        "expiresOn": expiry,
         "unreadCount": int(row.get("unread_count") or 0),
     }
 
@@ -660,6 +666,10 @@ _TRACK_PROJECTION = """SELECT t.*,CASE WHEN NOT t.enabled THEN 'ENDED' ELSE
  COALESCE((SELECT c.result->>'state' FROM research.study_checks c WHERE c.tenant_id=t.tenant_id
  AND c.user_id=t.user_id AND c.track_id=t.id AND c.generation=t.generation AND c.evaluated_at<=$3
  ORDER BY c.evaluated_at DESC,c.id DESC LIMIT 1),'OBSERVING') END AS state,
+ (SELECT v.snapshot->>'expiresOn' FROM research.study_versions v
+ WHERE v.tenant_id=t.tenant_id AND v.user_id=t.user_id AND v.track_id=t.id
+ AND v.created_at<=$3 AND v.generation<=t.generation
+ ORDER BY v.version DESC,v.id DESC LIMIT 1) AS expires_on,
  (SELECT count(*) FROM research.study_checks c WHERE c.tenant_id=t.tenant_id AND c.user_id=t.user_id
  AND c.track_id=t.id AND c.generation=t.generation AND c.evaluated_at<=$3 AND c.result->>'meaningfulChange'='true'
  AND c.evaluated_at>COALESCE((SELECT max((n.payload->>'throughCheckedAt')::timestamptz)
