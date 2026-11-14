@@ -4,51 +4,55 @@
   min-width: 0;
 }
 .economic-events header h3 {
-  font-size: clamp(1.2rem, 2.5vw, 1.65rem);
+  font-size: 1.35rem;
   line-height: 1.4;
-  margin: 4px 0 10px;
+  margin: 4px 0 14px;
 }
 .economic-events-eyebrow {
   color: var(--op-accent, #2c6b68);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
 }
 .economic-event-status,
-.economic-energy {
-  background: var(--op-soft, #f5f8f8);
-  border: 1px solid var(--op-line, #dce4e5);
-  border-radius: 12px;
-  padding: 16px 20px;
-  margin: 20px 0;
+.economic-reading-notes {
+  color: var(--op-muted, #5c6c7c);
+  font-size: 0.78rem;
+  margin: 10px 0;
+}
+.economic-event-status > summary,
+.economic-reading-notes > summary,
+.economic-energy > summary {
+  cursor: pointer;
+  width: fit-content;
 }
 .economic-event-status p,
-.economic-event-card p,
+.economic-event-detail p,
 .economic-energy p {
   line-height: 1.75;
   margin: 8px 0;
 }
 .economic-event-filters {
-  display: grid;
-  gap: 18px;
-  margin-top: 24px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  margin-top: 18px;
 }
 .economic-event-filters [role="group"] {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 .economic-event-filters button,
-.economic-event-more,
-.economic-event-teasers button {
+.economic-event-more {
   border: 1px solid var(--op-line, #dce4e5);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 7px;
+  padding: 7px 11px;
   background: var(--op-surface, #fff);
   color: inherit;
   cursor: pointer;
-  max-width: 100%;
-  min-height: 40px;
+  min-height: 36px;
   text-align: left;
 }
 .economic-event-filters button[aria-pressed="true"] {
@@ -60,36 +64,118 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
-  font-size: 0.85rem;
+  gap: 8px;
+  font-size: 0.78rem;
 }
 .economic-event-filters select {
   border: 1px solid var(--op-line, #dce4e5);
-  border-radius: 8px;
-  padding: 9px;
+  border-radius: 7px;
+  padding: 8px;
   max-width: 100%;
   color: inherit;
   background: var(--op-surface, #fff);
 }
-.economic-event-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 18px;
-  margin: 24px 0 18px;
+.economic-event-list,
+.economic-event-teasers > ul {
+  margin: 18px 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--op-line, #dce4e5);
 }
-.economic-event-card {
+.economic-event-card,
+.economic-event-teasers li {
   min-width: 0;
-  border: 1px solid var(--op-line, #dce4e5);
-  border-radius: 14px;
-  background: var(--op-surface, #fff);
-  padding: 22px;
+  border-bottom: 1px solid var(--op-line, #dce4e5);
   overflow-wrap: anywhere;
+  background: var(--op-surface, #fff);
 }
-.economic-event-card h4 {
-  font-size: 1.14rem;
-  line-height: 1.55;
-  margin: 14px 0 10px;
+.economic-news-row,
+.economic-event-teasers .economic-news-row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 92px 76px minmax(120px, 1.5fr) minmax(0, 1fr) 62px 14px;
+  gap: 12px;
+  align-items: center;
+  list-style: none;
+  width: 100%;
+  min-height: 62px;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.economic-news-row::-webkit-details-marker {
+  display: none;
+}
+.economic-news-row:hover {
+  background: var(--op-soft, #f5f8f8);
+}
+.economic-news-row:focus-visible {
+  outline: 2px solid var(--op-accent, #2c6b68);
+  outline-offset: -2px;
+}
+.economic-news-row h4 {
+  font-size: 0.88rem;
+  line-height: 1.65;
+  font-weight: 650;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.economic-news-date {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.73rem;
+  color: var(--op-muted, #5c6c7c);
+}
+.economic-news-category {
+  font-size: 0.7rem;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: var(--op-accent, #2c6b68);
+  background: var(--op-soft, #f1f6f5);
+  white-space: nowrap;
+}
+.economic-news-impact {
+  min-width: 0;
+  color: var(--op-muted, #5c6c7c);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.economic-news-row:not(:has(.economic-news-impact)) h4 {
+  grid-column: span 2;
+}
+.economic-news-state {
+  font-size: 0.68rem;
+  color: var(--op-muted, #5c6c7c);
+  white-space: nowrap;
+  text-align: right;
+}
+.economic-news-arrow {
+  color: var(--op-accent, #2c6b68);
+  transition: transform 0.15s;
+}
+.economic-event-card > details[open] > .economic-news-row {
+  background: var(--op-soft, #f5f8f8);
+}
+.economic-event-card > details[open] > summary .economic-news-arrow {
+  transform: rotate(90deg);
+}
+.economic-event-detail {
+  padding: 2px 24px 22px;
+  font-size: 0.85rem;
+  max-width: 1040px;
+}
+.economic-event-detail h5 {
+  font-size: 0.88rem;
+  margin: 20px 0 8px;
 }
 .economic-event-tags {
   display: flex;
@@ -97,43 +183,24 @@
   gap: 6px;
   color: var(--op-muted, #5c6c7c);
   font-size: 0.72rem;
+  margin-top: 14px;
 }
 .economic-event-tags span {
   background: var(--op-soft, #f1f5f5);
   border-radius: 5px;
   padding: 3px 7px;
 }
+.economic-event-dates {
+  display: grid;
+  gap: 3px;
+  margin: 12px 0;
+}
 .economic-event-dates,
 .economic-event-muted,
 .economic-event-source-count {
   color: var(--op-muted, #5c6c7c);
-  font-size: 0.8rem;
+  font-size: 0.77rem;
   line-height: 1.65;
-}
-.economic-event-dates {
-  display: grid;
-  gap: 3px;
-  margin-bottom: 16px;
-}
-.economic-event-gap {
-  color: var(--op-warning, #91651e);
-  font-size: 0.8rem;
-}
-.economic-event-card summary {
-  cursor: pointer;
-  color: var(--op-accent, #2c6b68);
-  font-weight: 600;
-  font-size: 0.85rem;
-  padding: 12px 0 0;
-}
-.economic-event-detail {
-  margin-top: 18px;
-  border-top: 1px solid var(--op-line, #dce4e5);
-  font-size: 0.87rem;
-}
-.economic-event-detail h5 {
-  font-size: 0.9rem;
-  margin: 22px 0 8px;
 }
 .economic-event-detail ul,
 .economic-energy ul {
@@ -166,44 +233,61 @@
 .economic-event-record {
   border-top: 1px solid var(--op-line, #dce4e5);
   padding-top: 12px;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.economic-news-original {
+  color: var(--op-muted, #5c6c7c);
   font-size: 0.77rem;
-  overflow-wrap: anywhere;
+  margin-top: 10px;
 }
-.economic-event-teasers > ul {
-  list-style: none;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+.economic-news-original > summary {
+  cursor: pointer;
 }
-.economic-event-teasers li {
-  min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--op-line, #dce4e5);
-  border-radius: 10px;
-  overflow-wrap: anywhere;
-}
-.economic-event-teasers h4 {
-  margin: 10px 0;
-  line-height: 1.55;
-}
-.economic-event-teasers p {
-  line-height: 1.7;
-  font-size: 0.85rem;
+.economic-energy {
+  border-top: 1px solid var(--op-line, #dce4e5);
+  padding: 16px 0;
+  font-size: 0.8rem;
+  color: var(--op-muted, #5c6c7c);
 }
 .economic-event-empty {
   padding: 22px 0;
   line-height: 1.8;
 }
-@media (max-width: 760px) {
-  .economic-event-list,
-  .economic-event-teasers > ul {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 1050px) {
+  .economic-news-row,
+  .economic-event-teasers .economic-news-row {
+    grid-template-columns: 82px 76px minmax(0, 1fr) 62px 14px;
+    gap: 8px;
   }
-  .economic-event-card,
-  .economic-event-status,
-  .economic-energy {
-    padding: 16px;
+  .economic-news-impact {
+    display: none;
+  }
+  .economic-news-row:not(:has(.economic-news-impact)) h4 {
+    grid-column: auto;
+  }
+}
+@media (max-width: 620px) {
+  .economic-news-row,
+  .economic-event-teasers .economic-news-row {
+    grid-template-columns: 72px minmax(0, 1fr) 12px;
+    gap: 8px;
+    min-height: 60px;
+    padding: 10px 4px;
+  }
+  .economic-news-category,
+  .economic-news-state {
+    display: none;
+  }
+  .economic-news-row h4 {
+    white-space: normal;
+    font-size: 0.83rem;
+  }
+  .economic-news-date {
+    font-size: 0.68rem;
+  }
+  .economic-event-detail {
+    padding: 2px 10px 18px;
   }
   .economic-event-filters label {
     align-items: flex-start;

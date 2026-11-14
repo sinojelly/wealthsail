@@ -101,25 +101,28 @@ function context(count = 1): OpportunityContext {
   };
 }
 
-it("separates fact dates, source checking and conditional details without certifying a market move", async () => {
+it("shows one publication date and a compact title, keeping audit and summary behind expansion", async () => {
   render(<EconomicEvents data={context()} />);
   const card = screen.getByRole("article", { name: "本次事项1" });
+  const summary = card.querySelector("summary")!;
+  expect(within(summary).getByText("11-06 09:00")).toHaveAttribute(
+    "dateTime",
+    "2026-11-06T09:00:00+08:00",
+  );
+  expect(summary.querySelectorAll("time")).toHaveLength(1);
+  expect(within(summary).getByText("本次事项1")).toBeVisible();
+  expect(
+    within(summary).queryByText(/研究日期|引用来源|原文核对 1 项|发生了什么/),
+  ).not.toBeInTheDocument();
+  expect(within(card).getByText("独立事实1")).not.toBeVisible();
+  expect(within(card).getByText(/原文核对 1 项/)).not.toBeVisible();
+  await userEvent.click(summary);
   expect(within(card).getByText("独立事实1")).toBeVisible();
-  expect(within(card).queryByText(/事件发生时间未单独提供/)).not.toBeInTheDocument();
-  expect(within(card).getByText(/来源发布：2026年11月6日 09:00/)).toBeVisible();
   expect(within(card).getByText(/非事件发生时间/)).toBeVisible();
   expect(within(card).getByText("2026年11月7日 08:00")).toHaveAttribute(
     "dateTime",
     "2026-11-07T08:00:00+08:00",
   );
-  expect(
-    within(card).getByText(
-      /引用来源 3 项.*可读 2 项.*原文核对 1 项.*缺失 1 项/,
-    ),
-  ).toBeVisible();
-  expect(within(card).getByText("尚无可靠市场反应数据")).toBeVisible();
-  await userEvent.click(within(card).getByText("阅读传导、情景与来源"));
-  expect(within(card).getByText("若供给持续下降")).toBeVisible();
   expect(within(card).getByText("需求下降可能抵消")).toBeVisible();
   expect(within(card).getByText("持续时间未知")).toBeVisible();
   expect(within(card).getByRole("link", { name: "核对原文" })).toHaveAttribute(
@@ -130,78 +133,64 @@ it("separates fact dates, source checking and conditional details without certif
     within(card).queryByRole("link", { name: "危险来源" }),
   ).not.toBeInTheDocument();
   expect(within(card).getByText(/来源发布时间：2026年11月6日/)).toBeVisible();
-  expect(within(card).getByText(/经济小课堂 · 通用机制/)).toBeVisible();
   expect(
     within(card).getByText(/原文引用核对不等于事实或因果认证/),
   ).toBeVisible();
+  await userEvent.click(summary);
+  expect(within(card).getByText("独立事实1")).not.toBeVisible();
 });
 
-it("shows at most eight cards before more and makes classification and loaded research-date browsing work", async () => {
+it("keeps loaded archive category/date filters and pagination without dropping the report source deep link", async () => {
   render(<EconomicEvents data={context(10)} />);
   expect(screen.getAllByRole("article")).toHaveLength(8);
   await userEvent.click(screen.getByRole("button", { name: /查看更多事件/ }));
   expect(screen.getAllByRole("article")).toHaveLength(11);
   await userEvent.click(screen.getByRole("button", { name: "国际局势" }));
   expect(screen.getAllByRole("article")).toHaveLength(1);
-  expect(screen.getByRole("article", { name: "本次事项1" })).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "全部" }));
   await userEvent.selectOptions(
     screen.getByLabelText("研究日期（仅已加载归档）"),
     "2026-11-05",
   );
   expect(screen.getAllByRole("article")).toHaveLength(1);
-  expect(screen.getByRole("article", { name: "历史独立事项" })).toBeVisible();
-  expect(screen.getByText(/仅浏览本页已加载的研究日期/)).toBeVisible();
-  await userEvent.click(
-    within(screen.getByRole("article", { name: "历史独立事项" })).getByText(
-      "阅读传导、情景与来源",
-    ),
-  );
-  expect(
-    screen.getByRole("link", { name: "查看本份报告出处" }),
-  ).toHaveAttribute("href", expect.stringContaining("researchTab=macro"));
-  const reportSource = new URL(
+  const historical = screen.getByRole("article", { name: "历史独立事项" });
+  await userEvent.click(historical.querySelector("summary")!);
+  const source = new URL(
     screen
       .getByRole("link", { name: "查看本份报告出处" })
       .getAttribute("href")!,
     window.location.href,
   );
-  expect(reportSource.searchParams.get("reportRunId")).toBe("historical-run");
-  expect(reportSource.hash).toBe("#latest-successful-daily-report");
-  expect(screen.getByText(/报告出处不表示已核实的事件进展/)).toBeVisible();
+  expect(source.searchParams.get("reportRunId")).toBe("historical-run");
+  expect(source.hash).toBe("#latest-successful-daily-report");
+  expect(screen.getByText(/仅浏览本页已加载的研究日期/)).not.toBeVisible();
+  await userEvent.click(screen.getByText("归档与阅读说明"));
+  expect(screen.getByText(/仅浏览本页已加载的研究日期/)).toBeVisible();
 });
 
-it("shares teaser IDs with selected detail and never pads three summaries", async () => {
+it("shares teaser IDs with selected details even beyond the first eight rows", async () => {
   const data = context(10);
   const onOpen = vi.fn();
   const view = render(
     <EconomicEventTeasers data={data} onOpenEvent={onOpen} />,
   );
   expect(screen.getAllByRole("button", { name: /阅读事件/ })).toHaveLength(3);
+  expect(
+    screen.queryByText(/事件事实未独立核验|发生了什么/),
+  ).not.toBeInTheDocument();
   await userEvent.click(
     screen.getByRole("button", { name: "阅读事件：本次事项1" }),
   );
-  expect(onOpen).toHaveBeenCalledWith(
-    expect.stringMatching(/^CURRENT_ACCEPTED:current-run:event-0:/),
-  );
-  const openedId = onOpen.mock.calls[0][0];
-  expect(openedId).toBe(buildEconomicStories(data)[0].id);
-  const ninthId = buildEconomicStories(data)[8].id;
-  view.rerender(<EconomicEvents data={data} selectedEventId={ninthId} />);
+  expect(onOpen).toHaveBeenCalledWith(buildEconomicStories(data)[0].id);
+  const ninth = buildEconomicStories(data)[8].id;
+  view.rerender(<EconomicEvents data={data} selectedEventId={ninth} />);
   expect(screen.getAllByRole("article")).toHaveLength(8);
   const selected = screen.getByRole("article", { name: "本次事项9" });
-  expect(within(selected).getByText("若供给持续下降")).toBeVisible();
   expect(selected.querySelector("details")).toHaveAttribute("open");
-  view.rerender(
-    <EconomicEventTeasers
-      data={{ state: "READY", items: [] }}
-      onOpenEvent={onOpen}
-    />,
-  );
-  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(within(selected).getByText("持续时间未知")).toBeVisible();
 });
 
-it("retains an independent official publication when current research is pending or running", () => {
+it("retains official news while pending or running research diagnostics stay collapsed", async () => {
   const data = context();
   data.dailyResearch!.state = "RUNNING";
   data.dailyResearch!.economicResearch!.status = "PENDING";
@@ -220,14 +209,14 @@ it("retains an independent official publication when current research is pending
     },
   ];
   render(<EconomicEvents data={data} />);
-  expect(screen.getByText(/本次研究正在执行/)).toBeVisible();
-  expect(screen.getByText(/本次经济观察待归档/)).toBeVisible();
   expect(screen.queryByText("本次事项1")).not.toBeInTheDocument();
   expect(screen.getByRole("article", { name: "独立官方发布" })).toBeVisible();
-  expect(screen.getByText("独立官方资料")).toBeVisible();
+  expect(screen.getByText(/本次研究正在执行/)).not.toBeVisible();
+  await userEvent.click(screen.getByText(/条已加载新闻 · 归档状态/));
+  expect(screen.getByText(/本次研究正在执行/)).toBeVisible();
 });
 
-it("explains empty, partial and missing selected records without claiming complete news coverage", () => {
+it("explains empty and missing selected records without pretending full coverage", async () => {
   const view = render(
     <EconomicEvents
       data={{ state: "READY", items: [] }}
@@ -239,10 +228,11 @@ it("explains empty, partial and missing selected records without claiming comple
   const data = context();
   data.dailyResearch!.economicResearch!.acceptedContentComplete = false;
   view.rerender(<EconomicEvents data={data} />);
+  await userEvent.click(screen.getByText(/条已加载新闻 · 归档状态/));
   expect(screen.getByText(/本次观察仅加载部分安全内容/)).toBeVisible();
 });
 
-it("keeps program energy observations separate with their own dates and explicit asset-data gaps", () => {
+it("keeps energy observations and provenance available on demand", async () => {
   const data = context();
   data.dailyResearch!.report!.energy = [
     {
@@ -267,18 +257,14 @@ it("keeps program energy observations separate with their own dates and explicit
   ];
   render(<EconomicEvents data={data} />);
   const energy = screen.getByRole("region", { name: "独立能源观察" });
+  expect(within(energy).getByText(/74.2 美元\/桶/)).not.toBeVisible();
+  await userEvent.click(screen.getByText("能源数据与观察"));
   expect(within(energy).getByText(/74.2 美元\/桶/)).toBeVisible();
-  expect(within(energy).getByText(/观察日期：2026年11月4日/)).toBeVisible();
   expect(within(energy).getByText(/前值日期：2026年11月3日/)).toBeVisible();
   expect(within(energy).getByText(/不证明由上述事件导致/)).toBeVisible();
-  expect(
-    screen.getByText(
-      /股票、汇率、黄金等资产尚缺与本事件对应的可靠市场反应证据/,
-    ),
-  ).toBeVisible();
 });
 
-it("keeps opened selection and content after source-only refresh and honours report-completion date fallback", async () => {
+it("keeps selected content stable after source-only refresh and labels report-completion archive fallback", async () => {
   const data = context();
   const selectedId = buildEconomicStories(data)[0].id;
   const view = render(
@@ -293,9 +279,6 @@ it("keeps opened selection and content after source-only refresh and honours rep
   updated.dailyResearch!.reportCompletedAt = "2026-11-05T08:00:00+08:00";
   view.rerender(<EconomicEvents data={updated} selectedEventId={selectedId} />);
   expect(
-    screen.queryByText(/所选事件不在已加载资料中/),
-  ).not.toBeInTheDocument();
-  expect(
     within(screen.getByRole("article", { name: "本次事项1" })).getByText(
       "持续时间未知",
     ),
@@ -304,6 +287,11 @@ it("keeps opened selection and content after source-only refresh and honours rep
     screen.getByLabelText("研究日期（仅已加载归档）"),
     "2026-11-05",
   );
+  await userEvent.click(
+    screen
+      .getByRole("article", { name: "历史独立事项" })
+      .querySelector("summary")!,
+  );
   expect(screen.getByText(/报告完成日期：2026年11月5日/)).toBeVisible();
   expect(
     screen.queryByText("2026年11月5日 08:00", { selector: "time" }),
@@ -311,12 +299,12 @@ it("keeps opened selection and content after source-only refresh and honours rep
 });
 
 it.each(["2026-11-02", null])(
-  "keeps archived plan occurrence unconfirmed for scheduled date %s",
-  (scheduledDate) => {
+  "keeps substantive planned measures without claiming occurrence for %s",
+  async (scheduledDate) => {
     const data = context();
     data.dailyResearch!.report!.upcoming.push({
       id: "past-plan",
-      title: "归档计划事项",
+      title: "央行宣布下月降准0.5个百分点",
       phase: "PLANNED",
       scheduledDate,
       scheduledAt: null,
@@ -325,75 +313,43 @@ it.each(["2026-11-02", null])(
       watchFor: [],
     });
     render(<EconomicEvents data={data} />);
-    const plan = screen.getByRole("article", { name: "归档计划事项" });
+    const plan = screen.getByRole("article", {
+      name: "央行宣布下月降准0.5个百分点",
+    });
+    expect(
+      within(plan.querySelector("summary")!).getByText("发布日期未提供"),
+    ).toBeVisible();
+    await userEvent.click(plan.querySelector("summary")!);
     expect(
       within(plan).getByText(/原研究计划时间：.*是否发生未确认/),
     ).toBeVisible();
     expect(within(plan).queryByText(/尚未发生/)).not.toBeInTheDocument();
-    expect(within(plan).getByText("事件发生时间未单独提供")).toBeVisible();
-    if (scheduledDate)
-      expect(within(plan).getByText(/2026年11月2日/)).toBeVisible();
-    else expect(within(plan).getByText(/原研究计划时间：未确认/)).toBeVisible();
   },
 );
 
-it("shows unverified event facts before details even when original phase is implemented and quotation checked", async () => {
+it("does not certify event facts through the source-checked badge", async () => {
   const data = context();
-  const report = data.dailyResearch!.report!;
-  report.events[0].phase = "IMPLEMENTED";
-  report.events[0].factVerification = "UNVERIFIED";
-  report.sources = [
-    {
-      id: "report-source",
-      title: "已核对报告引文",
-      url: "https://example.test/checked-report",
-      quote: "原文引文",
-      publishedDate: "2026-11-04",
-      publishedAt: null,
-      retrievedAt: null,
-      verification: "SOURCE_CHECKED",
-    },
-  ];
-  report.events[0].sourceIds = ["report-source"];
-  data.events = [
-    {
-      id: "official",
-      title: "独立采集事项",
-      summary: "官方公开摘要",
-      category: "DATA_RELEASE",
-      sourceType: "OFFICIAL_FACT",
-      publisher: "官方机构",
-      sourceUri: "https://example.test/official",
-      publishedAt: null,
-      retrievedAt: null,
-      directionIds: [],
-    },
-  ];
+  data.dailyResearch!.economicResearch!.observations.events[0].phase =
+    "IMPLEMENTED";
   render(<EconomicEvents data={data} />);
-  const event = screen.getByRole("article", { name: "历史独立事项" });
-  expect(within(event).getByText("已实施")).toBeVisible();
-  expect(within(event).getByText(/原文核对 1 项/)).toBeVisible();
-  expect(within(event).getByText("事件事实未独立核验")).toBeVisible();
+  const card = screen.getByRole("article", { name: "本次事项1" });
   expect(
-    within(screen.getByRole("article", { name: "独立采集事项" })).getByText(
-      "事件事实未独立核验",
-    ),
+    within(card.querySelector("summary")!).getByText("来源已核对"),
   ).toBeVisible();
   expect(
-    within(event).getByText("阅读传导、情景与来源").closest("details"),
-  ).not.toHaveAttribute("open");
-  await userEvent.click(within(event).getByText("阅读传导、情景与来源"));
-  expect(
-    within(event).getByText(/原事件事实核验标记：UNVERIFIED/),
-  ).toBeVisible();
+    within(card.querySelector("summary")!).queryByText(/事实已核实/),
+  ).not.toBeInTheDocument();
+  await userEvent.click(card.querySelector("summary")!);
+  expect(within(card).getByText(/原记录未提供事件事实核验标记/)).toBeVisible();
 });
 
-it("prioritizes later high-importance teasers with stable ties while retaining archive input order", () => {
+it("prioritizes high-importance teasers with stable ties while retaining archive order", () => {
   const data = context(5);
-  const events = data.dailyResearch!.economicResearch!.observations.events;
-  events.forEach((event, index) => {
-    event.importance = index < 3 ? "LOW" : "HIGH";
-  });
+  data.dailyResearch!.economicResearch!.observations.events.forEach(
+    (event, index) => {
+      event.importance = index < 3 ? "LOW" : "HIGH";
+    },
+  );
   const original = structuredClone(data);
   const view = render(
     <EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />,
@@ -419,126 +375,71 @@ it("prioritizes later high-importance teasers with stable ties while retaining a
   expect(data).toEqual(original);
 });
 
-it("uses known research recency after importance and keeps new independent sources separate from retained facts", async () => {
-  const data = context();
-  data.dailyResearch!.economicResearch!.observations.events[0].importance =
-    "HIGH";
-  data.dailyResearch!.report!.events[0].importance = "HIGH";
-  const before = buildEconomicStories(data);
-  data.events = [
-    {
-      id: "history",
-      title: "历史独立事项",
-      summary: "刚采集的独立官方资料，不替换旧事实",
-      category: "DATA_RELEASE",
-      sourceType: "OFFICIAL_FACT",
-      publisher: "独立发布机构",
-      sourceUri: "https://example.test/new-official",
-      publishedAt: "2026-11-07T10:00:00+08:00",
-      retrievedAt: "2026-11-07T10:01:00+08:00",
-      directionIds: [],
-    },
-  ];
-  const onOpen = vi.fn();
-  const view = render(
-    <EconomicEventTeasers data={data} onOpenEvent={onOpen} />,
-  );
-  const items = screen.getAllByRole("listitem");
-  expect(
-    items.map(
-      (item) => within(item).getByRole("heading", { level: 4 }).textContent,
-    ),
-  ).toEqual(["本次事项1", "历史独立事项", "历史独立事项"]);
-  expect(within(items[0]).getByText(/2026-11-07/)).toBeVisible();
-  expect(within(items[1]).getByText(/2026-11-05/)).toBeVisible();
-  expect(within(items[2]).getByText(/独立公开记录/)).toBeVisible();
-  await userEvent.click(within(items[1]).getByRole("button"));
-  expect(onOpen).toHaveBeenCalledWith(before[1].id);
-  view.rerender(<EconomicEvents data={data} selectedEventId={before[1].id} />);
-  const archive = screen.getAllByRole("article");
-  expect(archive[0]).toHaveAttribute("data-event-id", before[0].id);
-  expect(archive[1]).toHaveAttribute("data-event-id", before[1].id);
-  expect(within(archive[1]).getByText("历史事实保留")).toBeVisible();
-  expect(
-    within(archive[2]).getByText("刚采集的独立官方资料，不替换旧事实"),
-  ).toBeVisible();
-  expect(
-    within(archive[2]).getByText("独立发布，不隶属研究日期"),
-  ).toBeVisible();
+it("shows publication dates in teasers without substituting newer research timestamps", () => {
+  render(<EconomicEventTeasers data={context()} onOpenEvent={vi.fn()} />);
+  expect(screen.getByText("11-06 09:00")).toBeVisible();
+  expect(screen.getByText("发布日期未提供")).toBeVisible();
+  expect(screen.queryByText(/2026-11-07|2026-11-05/)).not.toBeInTheDocument();
 });
 
-it("breaks equal-importance teaser ties by known research date rather than insertion origin", () => {
-  const data = context();
-  data.dailyResearch!.economicResearch!.observations.events[0].importance =
-    "HIGH";
-  data.dailyResearch!.economicResearch!.asOf = "2026-11-04T08:00:00+08:00";
-  data.dailyResearch!.report!.events[0].importance = "HIGH";
-  render(<EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />);
-  expect(
-    screen
-      .getAllByRole("heading", { level: 4 })
-      .map((item) => item.textContent),
-  ).toEqual(["历史独立事项", "本次事项1"]);
-});
-
-it("labels impossible evidence and archive dates as unverifiable while preserving raw records and missing dates", () => {
-  const data = context();
-  data.dailyResearch!.economicResearch!.asOf = "2026-02-30T08:00:00+08:00";
-  delete data.dailyResearch!.report!.asOf;
-  data.dailyResearch!.reportCompletedAt = "2026-02-30T23:00:00Z";
-  data.dailyResearch!.reportSlotDate = "2026-02-30";
-  render(<EconomicEvents data={data} />);
-  const options = within(
-    screen.getByLabelText("研究日期（仅已加载归档）"),
-  ).getAllByRole("option");
-  expect(options).toHaveLength(1);
-  const current = screen.getByRole("article", { name: "本次事项1" });
-  expect(
-    within(current).getByText(/日期不可核实.*2026-02-30T08:00:00\+08:00/),
-  ).toBeVisible();
-  expect(within(current).queryByText(/2026年3月/)).not.toBeInTheDocument();
-  const report = screen.getByRole("article", { name: "历史独立事项" });
-  expect(within(report).getByText("研究证据日期未提供")).toBeVisible();
-  expect(
-    within(report).getByText(
-      /报告完成日期：.*日期不可核实.*2026-02-30T23:00:00Z/,
-    ),
-  ).toBeVisible();
-  expect(
-    within(report).getByText(/报告所属日期：.*日期不可核实.*2026-02-30/),
-  ).toBeVisible();
-});
-
-it("labels an invalid original research date separately from a valid completion-date fallback", () => {
-  const data = context();
-  data.dailyResearch!.report!.asOf = "2026-02-30";
-  data.dailyResearch!.reportCompletedAt = "2026-02-28T23:00:00Z";
-  render(<EconomicEvents data={data} />);
-  const report = screen.getByRole("article", { name: "历史独立事项" });
-  expect(
-    within(report).getByText(/研究日期：.*日期不可核实.*2026-02-30/),
-  ).toBeVisible();
-  expect(within(report).getByText(/报告完成日期：2026年3月1日/)).toBeVisible();
-  expect(
-    within(screen.getByLabelText("研究日期（仅已加载归档）")).getByRole(
-      "option",
-      { name: "2026-03-01" },
-    ),
-  ).toBeInTheDocument();
-});
-
-it.each(["", "invalid-date"])(
-  "distinguishes a supplied invalid evidence date %j from a missing date in cards and teasers",
-  (asOf) => {
+it.each(["", "invalid-date", "2026-02-30T08:00:00+08:00"])(
+  "keeps invalid evidence date %j in detail without borrowing it for publication",
+  async (asOf) => {
     const data = context();
     data.dailyResearch!.economicResearch!.asOf = asOf;
     const view = render(<EconomicEvents data={data} />);
     const card = screen.getByRole("article", { name: "本次事项1" });
+    expect(
+      within(card.querySelector("summary")!).getByText("11-06 09:00"),
+    ).toBeVisible();
+    await userEvent.click(card.querySelector("summary")!);
     expect(within(card).getByText(/日期不可核实/)).toBeVisible();
     expect(
       within(card).queryByText("研究证据日期未提供"),
     ).not.toBeInTheDocument();
     view.rerender(<EconomicEventTeasers data={data} onOpenEvent={vi.fn()} />);
-    expect(screen.getByText(/本次安全经济观察.*日期不可核实/)).toBeVisible();
+    expect(screen.queryByText(/日期不可核实/)).not.toBeInTheDocument();
   },
 );
+
+it("hides empty planned calendar shells and correctly classifies a real British GDP release", () => {
+  const data = context();
+  const report = data.dailyResearch!.report!;
+  report.upcoming.push(
+    Object.assign(
+      {
+        id: "uk-planned",
+        title: "英国第三季度GDP",
+        phase: "PLANNED" as const,
+        scheduledDate: "2026-11-12",
+        scheduledAt: null,
+        sourceIds: [],
+        affectedDirectionIds: [],
+        watchFor: [],
+      },
+      { summary: "英国第三季度GDP" },
+    ),
+  );
+  report.events.push(
+    Object.assign(
+      {
+        ...report.events[0],
+        id: "uk-actual",
+        title: "英国第三季度GDP环比增长0.3%",
+        summary: "英国统计局公布第三季度GDP环比增长0.3%",
+      },
+      { category: "DATA_RELEASE" },
+    ),
+  );
+  render(<EconomicEvents data={data} />);
+  expect(
+    screen.queryByRole("article", { name: "英国第三季度GDP" }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(
+      screen
+        .getByRole("article", { name: "英国第三季度GDP环比增长0.3%" })
+        .querySelector("summary")!,
+    ).getByText("国际局势"),
+  ).toBeVisible();
+});

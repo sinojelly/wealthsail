@@ -1,0 +1,174 @@
+.op-cycle-overview {
+  border: 1px solid var(--op-line, #dce5ee);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f2faf8 0, #fff 54%);
+  overflow: hidden;
+}
+.op-cycle-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--op-muted, #64748b);
+  margin-bottom: 12px;
+}
+.op-cycle-caption svg {
+  color: var(--op-teal, #0f766e);
+}
+.op-cycle-caption h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #163b3d;
+}
+.op-cycle-caption small {
+  font-size: 12px;
+}
+.op-cycle-row {
+  display: grid;
+  grid-template-columns: minmax(175px, 24%) minmax(0, 1fr);
+  gap: 18px;
+  padding: 15px 0;
+  border-top: 1px solid #dceae7;
+  font-size: 13px;
+  line-height: 1.75;
+}
+.op-cycle-row-label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: #145e59;
+}
+.op-cycle-row-label svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.op-cycle-row-label h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.op-cycle-row-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.op-cycle-row-content p {
+  margin: 3px 0 5px;
+}
+.op-cycle-stage {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 5px;
+  background: #e8f4f1;
+  color: #145e59;
+  font-size: 12px;
+  font-weight: 600;
+}
+.op-cycle-action {
+  color: #133f50;
+  font-weight: 600;
+}
+.op-cycle-impact {
+  color: #475569;
+}
+.op-cycle-missing {
+  color: var(--op-muted, #64748b);
+}
+.op-cycle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--op-muted, #64748b);
+}
+.op-cycle-meta a {
+  color: #227b75;
+  text-decoration-color: #9bc7c2;
+}
+.op-cycle-factors {
+  margin: 0;
+  padding-left: 19px;
+}
+.op-cycle-factors li {
+  margin-bottom: 8px;
+  padding-left: 3px;
+}
+.op-cycle-factors li:last-child {
+  margin-bottom: 0;
+}
+.op-cycle-factors li > span {
+  display: block;
+  color: #475569;
+}
+.op-cycle-overview .op-cycle-facts {
+  margin-top: 10px;
+  gap: 8px;
+}
+.op-cycle-overview .op-cycle-facts > div {
+  background: #f6f9fb;
+  border: 1px solid #e4ebef;
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+.op-cycle-industries {
+  margin-top: 15px;
+  border-top: 1px solid #dceae7;
+  padding-top: 12px;
+  font-size: 13px;
+}
+.op-cycle-industries > summary {
+  color: #145e59;
+  font-weight: 600;
+  cursor: pointer;
+}
+.op-cycle-industry-scroll {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 10px;
+}
+.op-cycle-industries table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  text-align: left;
+}
+.op-cycle-industries th,
+.op-cycle-industries td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e4ebef;
+  vertical-align: top;
+  line-height: 1.7;
+}
+.op-cycle-industries thead th {
+  background: #eef5f3;
+  color: #47625e;
+  font-weight: 500;
+}
+.op-cycle-industries tbody th {
+  min-width: 90px;
+  width: 19%;
+  font-weight: 600;
+}
+.op-cycle-industries td:nth-child(2) {
+  width: 21%;
+}
+.op-cycle-industries td p {
+  margin: 4px 0;
+}
+@media (max-width: 650px) {
+  .op-cycle-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    padding: 13px 0;
+  }
+  .op-cycle-row-content {
+    padding-left: 26px;
+  }
+  .op-cycle-factors {
+    margin-left: 26px;
+  }
+  .op-cycle-industries th,
+  .op-cycle-industries td {
+    padding: 8px 6px;
+  }
+}

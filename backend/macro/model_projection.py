@@ -240,6 +240,7 @@ def model_packet(packet, *, version="daily-model-input-v1"):
             "institutionalSignals",
             "discoveryCoverage",
             "dynamicNavSourceResults",
+            "macroCycleResearch",
         ),
     )
     research_view = _industry_research_view(packet)

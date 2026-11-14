@@ -9,7 +9,7 @@ import type {
   SellRiskAlert,
   SellRiskAlerts as SellRiskData,
 } from "../../../api/investment";
-import { sourceHref, timeLabel, monthLabel } from "../macro-display";
+import { sourceHref, timeLabel } from "../macro-display";
 import DailyResearchReport, {
   DailyResearchFailureDiagnosis,
   DailyResearchStatus,
@@ -24,7 +24,7 @@ import DeterministicRepairNotice from "./DeterministicRepairNotice";
 import ResearchTopicRegistry from "./ResearchTopicRegistry";
 import FundObservations from "./FundObservations";
 import TopicFundRecommendations from "./TopicFundRecommendations";
-import ObservationSection from "./ObservationSection";
+import MacroCycleOverview from "./MacroCycleOverview";
 import TodayFocus from "./TodayFocus";
 import { EconomicEvents, EconomicEventTeasers } from "./EconomicEvents";
 import {
@@ -113,112 +113,6 @@ function TopicCatalog(
   );
 }
 
-function MacroOverview({
-  data,
-  historical = false,
-}: {
-  data: OpportunityContext;
-  historical?: boolean;
-}) {
-  const [expandedReport, setExpandedReport] = useState<string | null>(null);
-  const reportKey =
-    data.dailyResearch?.reportRunId ?? data.dailyResearch?.asOf ?? "no-report";
-  const expanded = expandedReport === reportKey;
-  const summaryId = useId();
-  const facts = [
-    {
-      code: "PMI",
-      label: "制造业PMI",
-      item: data.items.find((row) => row.code === "PMI"),
-    },
-    ...[
-      ["M1_M2_GAP", "M1−M2剪刀差"],
-      ["CN_T10", "中国10年国债"],
-      ["US_T10_REAL", "美国10年实际利率"],
-    ].map(([code, label]) => ({
-      code,
-      label,
-      item: [...(data.series ?? []), ...(data.alphaPublic?.observations ?? [])]
-        .filter((row) => row.code === code)
-        .sort((a, b) =>
-          String(
-            b.asOf ?? ("referenceDate" in b ? b.referenceDate : ""),
-          ).localeCompare(
-            String(a.asOf ?? ("referenceDate" in a ? a.referenceDate : "")),
-          ),
-        )[0],
-    })),
-  ];
-  const report = data.dailyResearch?.report;
-  const full = researchSummary(
-    report?.macroCycle ||
-      report?.summary ||
-      "综合研究尚未生成，以下为实际已采集观察。",
-    Infinity,
-  );
-  const preview = researchSummary(full, 280);
-  return (
-    <ObservationSection
-      className="op-macro-overview"
-      label="今日宏观总纲"
-      title={historical ? "历史宏观事实" : "当前宏观事实"}
-    >
-      {report && (
-        <h4>
-          {data.dailyResearch?.state === "READY"
-            ? "宏观周期与今日总纲"
-            : "历史宏观研判"}
-        </h4>
-      )}
-      <p id={summaryId}>{expanded ? full : preview}</p>
-      {full !== preview && (
-        <button
-          type="button"
-          className="op-macro-expand"
-          aria-expanded={expanded}
-          aria-controls={summaryId}
-          onClick={() => setExpandedReport(expanded ? null : reportKey)}
-        >
-          {expanded ? "收起今日总纲" : "展开今日总纲"}
-        </button>
-      )}
-      {report && (
-        <small>
-          研判证据：{timeLabel(report.asOf ?? data.dailyResearch?.asOf)}
-        </small>
-      )}
-      <div className="op-core-facts">
-        {facts
-          .filter(
-            ({ item }) =>
-              item?.value != null &&
-              !(typeof item.value === "string" && item.value.trim() === "") &&
-              Number.isFinite(Number(item.value)) &&
-              item.state !== "CONFLICT" &&
-              item.state !== "UNAVAILABLE",
-          )
-          .map(({ code, label, item }) => (
-            <div key={code}>
-              <span>{label}</span>
-              <strong>
-                {Number(item!.value).toFixed(code === "PMI" ? 1 : 2)}{" "}
-                {code === "M1_M2_GAP" ? "个百分点" : code === "PMI" ? "" : "%"}
-              </strong>
-              <small>
-                {"referencePeriod" in item!
-                  ? monthLabel(item.referencePeriod)
-                  : timeLabel(
-                      "referenceDate" in item!
-                        ? item.referenceDate
-                        : item!.asOf,
-                    )}
-              </small>
-            </div>
-          ))}
-      </div>
-    </ObservationSection>
-  );
-}
 function MacroEvents({
   events,
   state,
@@ -742,7 +636,8 @@ export default function MacroContextStrip({
                 </label>
                 {ready && (
                   <>
-                    <MacroOverview
+                    <MacroCycleOverview
+                      factView
                       data={ready}
                       historical={!!historicalPreview}
                     />

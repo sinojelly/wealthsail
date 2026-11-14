@@ -4,6 +4,10 @@ import type {
   ResearchAcceptanceOutcome,
 } from "../../api/research-acceptance";
 import { sourceHref } from "./macro-display";
+import {
+  classifyEconomicNews,
+  isEmptyCalendarStory,
+} from "./economic-news-reading";
 
 export type EconomicCategory =
   | "国际局势"
@@ -32,6 +36,7 @@ export interface EconomicStory {
   kind: "EVENT" | "UPCOMING";
   title: string;
   summary: string;
+  impact?: string | null;
   phase: string | null;
   importance: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN" | null;
   category: EconomicCategory;
@@ -158,6 +163,8 @@ type StoryObservation = Omit<AcceptanceObservation, "importance"> & {
   category?: string;
   sourcePublishedAt?: string | null;
   sourcePublicationBasis?: "SOURCE_PUBLICATION" | null;
+  whatHappened?: string;
+  whyItMatters?: string;
 };
 
 export function economicCalendarDate(
@@ -388,6 +395,14 @@ export function buildEconomicStories(
             : null;
     const allSources = sources.map(sourceProjection);
     function add(event: StoryObservation, kind: EconomicStory["kind"]) {
+      if (
+        isEmptyCalendarStory(
+          event.phase,
+          event.title ?? "",
+          event.whatHappened ?? event.summary ?? event.thesis ?? "",
+        )
+      )
+        return;
       const sourceIds = [...new Set(event.sourceIds ?? [])];
       const matched = allSources.filter((source) =>
         sourceIds.includes(source.id),
@@ -447,15 +462,24 @@ export function buildEconomicStories(
         origin,
         kind,
         title: event.title ?? "未提供事件标题",
-        summary: event.summary ?? event.thesis ?? "原研究未提供事实摘要",
+        summary:
+          event.whatHappened ??
+          event.summary ??
+          event.thesis ??
+          "原研究未提供事实摘要",
+        impact: event.whyItMatters ?? null,
         phase: event.phase ?? null,
         importance: importanceValue(event.importance),
-        category:
+        category: classifyEconomicNews(
+          event.title ?? "",
+          event.summary ?? event.thesis ?? "",
+          matched,
           event.category && Object.hasOwn(categoryCodes, event.category)
             ? categoryCodes[event.category]
             : lessons.length
               ? mechanisms[lessons[0].channel].category
               : "待分类",
+        ),
         researchAsOf: asOf,
         researchDate,
         researchDateBasis,
@@ -554,9 +578,14 @@ export function buildEconomicStories(
       summary: event.summary,
       phase: null,
       importance: null,
-      category: Object.hasOwn(categoryCodes, event.category)
-        ? categoryCodes[event.category]
-        : "待分类",
+      category: classifyEconomicNews(
+        event.title,
+        event.summary,
+        sources,
+        Object.hasOwn(categoryCodes, event.category)
+          ? categoryCodes[event.category]
+          : "待分类",
+      ),
       researchAsOf: null,
       researchDate: null,
       researchDateBasis: null,

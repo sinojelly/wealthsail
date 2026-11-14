@@ -41,7 +41,7 @@ from backend.macro.research_topics import TopicProposal, direction_limit, is_v2
 from backend.macro.event_metadata import event_metadata, source_metadata
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-input-v25"
+PROMPT_VERSION = "daily-research-input-v26"
 MAX_REPORT_SOURCES = 24
 
 
@@ -174,6 +174,8 @@ class _Report(_Strict):
     # Only select program-supplied series; the model cannot author energy values.
     energy: list[Literal["DCOILBRENTEU", "GASDESW"]] = Field(max_length=2)
     macroCycle: str = Field(min_length=1, max_length=1000)
+    # Optional display extension: any JSON shape is repaired independently.
+    cycleInsights: object | None = None
     # Stored reports predate this provenance; missing metadata never grants repair.
     narrativeDirectionIds: _NarrativeDirectionIds | None = None
     actionablePlans: list[ActionableProposal] = Field(max_length=24)
@@ -1517,6 +1519,8 @@ def make_research_packet(
     context, series, evidence, directions, *, now, previous=None, external=None
 ):
     """Take only bounded public fields; no actor, holdings, secrets or raw history."""
+    from backend.integrations.daily_sources import macro_cycle_research_tasks
+
     now = _now(now)
     macros, schedules, public_series, indices, actionable = [], [], [], [], []
     for row in context.get("items", [])[:8]:
@@ -1811,6 +1815,7 @@ def make_research_packet(
             (external or {}).get("dynamicNavSourceResults"), now
         ),
         "industryCycleResearch": {"required": True},
+        "macroCycleResearch": macro_cycle_research_tasks(now),
     }
 
 
@@ -1818,14 +1823,18 @@ def build_prompt(packet):
     """One public request; source material is untrusted data, never instructions."""
     if packet.get("asOf") is not None:
         packet = apply_entry_guards(packet, packet, _now(packet["asOf"]))
-    from backend.integrations.daily_sources import industry_cycle_research_tasks
+    from backend.integrations.daily_sources import industry_cycle_research_tasks, macro_cycle_research_tasks
 
     industry_tasks = (
         industry_cycle_research_tasks(packet, _now(packet["asOf"]))
         if packet.get("asOf")
         else {"required": True, "newDirectionRequiresSameChecks": True}
     )
-    packet = {**packet, "industryCycleResearch": industry_tasks}
+    packet = {
+        **packet,
+        "industryCycleResearch": industry_tasks,
+        **({"macroCycleResearch": macro_cycle_research_tasks(_now(packet["asOf"]))} if packet.get("asOf") else {}),
+    }
     public_packet = model_packet(packet, version="daily-model-input-v2")
     from backend.macro.research_topics import (
         TOPIC_MATCH_VERSION,

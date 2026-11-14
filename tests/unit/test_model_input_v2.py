@@ -222,15 +222,24 @@ def test_reference_expansion_preserves_exact_news_facts_and_source_dates():
     reason="private original export is local only; no production access",
 )
 def test_real_frozen_input_reduction_is_at_least_thirty_percent_without_mutation():
-    from scripts.audit_daily_research_input import audit, load_frozen_packet
+    from copy import deepcopy
+    from scripts.audit_daily_research_input import audit, load_frozen_packet, legacy_prompt
+    from backend.macro.daily_research import REPORT_SCHEMA
 
     path = Path("artifacts/research-recovery/ecbfb663-frozen.json")
     original = path.read_bytes()
-    summary = audit(load_frozen_packet(path), "ecf3f90")
+    packet = load_frozen_packet(path)
+    summary = audit(packet, "ecf3f90")
     assert summary["old"]["promptUtf8Bytes"] == 592170
     assert summary["old"]["projectionUtf8Bytes"] == 571818
     assert summary["oldDirectModelPacketUtf8Bytes"] == 570924
     assert summary["promptReductionPct"] >= 30
-    assert summary["schemaChanged"] is False
+    # The cycle dashboard intentionally adds one optional, permissive field.
+    # Keep the original no-unrelated-schema-drift protection for every other
+    # property and constraint, rather than accepting arbitrary schema changes.
+    schema = deepcopy(REPORT_SCHEMA)
+    assert "cycleInsights" not in schema["required"]
+    schema["properties"].pop("cycleInsights")
+    assert schema == legacy_prompt(packet, "ecf3f90")[2]
     assert summary["originalPacketUnchanged"] is True
     assert path.read_bytes() == original

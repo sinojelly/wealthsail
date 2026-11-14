@@ -246,6 +246,7 @@ it("preserves partial content, scheduled dates and explicit associations without
   delivery.observations.upcoming.push({
     id: "future",
     title: "待公布事项",
+    summary: "央行宣布将实施新的流动性支持安排，具体执行时间待公布。",
     phase: "PLANNED",
     scheduledDate: "2026-11-09",
     sourceIds: ["s1"],

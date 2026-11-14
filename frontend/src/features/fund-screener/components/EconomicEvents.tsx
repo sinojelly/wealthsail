@@ -14,6 +14,7 @@ import {
   unitLabel,
 } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
+import { economicNewsReading } from "../economic-news-reading";
 import "../economic-events.css";
 
 export interface EconomicEventsProps {
@@ -79,6 +80,44 @@ function storyTimeLabel(raw: string | null) {
     ? `日期不可核实（原记录：${readingText(raw, 180)}）`
     : timeLabel(raw);
 }
+function PublicationDate({ raw }: { raw: string | null }) {
+  if (!raw || !economicCalendarDate(raw))
+    return <span className="economic-news-date">发布日期未提供</span>;
+  const date =
+    raw.length === 10
+      ? raw.slice(5)
+      : new Intl.DateTimeFormat("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        })
+          .format(new Date(raw))
+          .replace(/\//g, "-");
+  return (
+    <time
+      className="economic-news-date"
+      dateTime={raw}
+      title={`来源发布时间：${timeLabel(raw)}（北京时间）`}
+    >
+      {date}
+    </time>
+  );
+}
+function storyReading(story: EconomicStory) {
+  const text = economicNewsReading(story.title, story.summary, story.sources);
+  const scenario = story.scenarios.find(
+    (item) => item.condition.trim() && item.impact.trim(),
+  );
+  const impact =
+    story.impact ||
+    (scenario
+      ? `${/^(若|如果|当)/.test(scenario.condition) ? "" : "若"}${scenario.condition}，${scenario.impact}`
+      : "");
+  return { ...text, impact };
+}
 function StoryDates({ story }: { story: EconomicStory }) {
   return (
     <div className="economic-event-dates">
@@ -141,6 +180,7 @@ function StoryCard({
   selected: boolean;
   onSelect?: (id: string) => void;
 }) {
+  const reading = storyReading(story);
   const count = story.sourceStatus;
   const frozenMatched = story.sourceIds.filter((id) =>
     story.sources.some(
@@ -155,51 +195,58 @@ function StoryCard({
       aria-label={story.title}
       data-event-id={story.id}
     >
-      <div className="economic-event-tags">
-        <span>{story.category}</span>
-        <span>{originLabel(story)}</span>
-        <span>
-          {story.phase && Object.hasOwn(phases, story.phase)
-            ? phases[story.phase]
-            : "事件阶段未提供"}
-        </span>
-      </div>
-      <h4>{readingText(story.title, 220)}</h4>
-      <StoryDates story={story} />
-      <p className="economic-event-fact">
-        <strong>
-          {story.kind === "UPCOMING"
-            ? "原研究日程："
-            : "发生了什么 · 原记录摘要："}
-        </strong>
-        {readingText(story.summary, 700)}
-      </p>
-      <p className="economic-event-source-count">
-        引用来源 {count.referenced} 项 · 可读 {count.available} 项 ·
-        冻结资料匹配 {frozenMatched} 项 · 原文核对 {count.checked} 项 · 缺失{" "}
-        {count.missing} 项
-      </p>
-      <p className="economic-event-gap">事件事实未独立核验</p>
-      <p className="economic-event-gap">尚无可靠市场反应数据</p>
-      {story.scenarios[0] ? (
-        <p>
-          <strong>为什么关注 · 条件推演：</strong>
-          {readingText(story.scenarios[0].condition, 100)} →{" "}
-          {readingText(story.scenarios[0].impact, 120)}
-        </p>
-      ) : (
-        <p className="economic-event-muted">
-          原记录未提供完整的条件与影响组合，传导仍待补充。
-        </p>
-      )}
       <details
         open={selected || undefined}
         onToggle={(event) => {
           if (event.currentTarget.open && !selected) onSelect?.(story.id);
         }}
       >
-        <summary>阅读传导、情景与来源</summary>
+        <summary
+          className="economic-news-row"
+          aria-label={`展开新闻：${reading.title}`}
+        >
+          <PublicationDate raw={story.sourcePublishedAt} />
+          <span className="economic-news-category">{story.category}</span>
+          <h4 title={reading.title}>{readingText(reading.title, 220)}</h4>
+          {reading.impact && (
+            <span className="economic-news-impact" title={reading.impact}>
+              💡 {readingText(reading.impact, 90)}
+            </span>
+          )}
+          <small className="economic-news-state">
+            {count.checked > 0 ? "来源已核对" : "待核实"}
+          </small>
+          <span className="economic-news-arrow" aria-hidden="true">
+            ▸
+          </span>
+        </summary>
         <div className="economic-event-detail">
+          <section aria-label="新闻摘要">
+            <h5>新闻摘要</h5>
+            <p>{readingText(reading.summary, 1600)}</p>
+            {reading.title !== story.title ||
+            reading.summary !== story.summary ? (
+              <details className="economic-news-original">
+                <summary>查看原研究表述</summary>
+                <p>{story.title}</p>
+                <p>{story.summary}</p>
+              </details>
+            ) : null}
+          </section>
+          <div className="economic-event-tags">
+            <span>{originLabel(story)}</span>
+            <span>
+              {story.phase && Object.hasOwn(phases, story.phase)
+                ? phases[story.phase]
+                : "事件阶段未提供"}
+            </span>
+          </div>
+          <StoryDates story={story} />
+          <p className="economic-event-source-count">
+            引用来源 {count.referenced} 项 · 可读 {count.available} 项 ·
+            冻结资料匹配 {frozenMatched} 项 · 原文核对 {count.checked} 项 · 缺失{" "}
+            {count.missing} 项
+          </p>
           <p className="economic-event-muted">
             {story.factVerification === "UNVERIFIED"
               ? "原事件事实核验标记：UNVERIFIED（未独立核验）。事件阶段与引用原文核对属于不同范围。"
@@ -402,91 +449,97 @@ function DeliveryStatus({
     UNKNOWN: "本次经济观察交付状态未知。",
   };
   return (
-    <div className="economic-event-status" role="status">
-      {state === "RUNNING" && (
-        <p>本次研究正在执行，已保留的报告和独立公开资料仍可阅读。</p>
-      )}
-      {state === "FAILED" && (
-        <p>本次正式投资报告未通过；安全经济观察与保留历史报告分别显示。</p>
-      )}
-      {matching ? (
-        <>
-          <p>
-            {readableCount > 0 &&
-            (economic.status === "PENDING" || economic.status === "UNAVAILABLE")
-              ? `本次经济观察${economic.status === "PENDING" ? "待归档" : "暂无本次成果"}；已加载 ${readableCount} 条其他可读经济事件。`
-              : labels[economic.status]}
-          </p>
-          {!economic.acceptedContentComplete &&
-            (economic.status === "AVAILABLE" ||
-              economic.status === "PARTIAL") && (
-              <p>
-                本次观察仅加载部分安全内容，不代表全部新闻或全部研究已覆盖。
-              </p>
+    <details className="economic-event-status">
+      <summary>{readableCount} 条已加载新闻 · 归档状态</summary>
+      <div role="status">
+        {state === "RUNNING" && (
+          <p>本次研究正在执行，已保留的报告和独立公开资料仍可阅读。</p>
+        )}
+        {state === "FAILED" && (
+          <p>本次正式投资报告未通过；安全经济观察与保留历史报告分别显示。</p>
+        )}
+        {matching ? (
+          <>
+            <p>
+              {readableCount > 0 &&
+              (economic.status === "PENDING" ||
+                economic.status === "UNAVAILABLE")
+                ? `本次经济观察${economic.status === "PENDING" ? "待归档" : "暂无本次成果"}；已加载 ${readableCount} 条其他可读经济事件。`
+                : labels[economic.status]}
+            </p>
+            {!economic.acceptedContentComplete &&
+              (economic.status === "AVAILABLE" ||
+                economic.status === "PARTIAL") && (
+                <p>
+                  本次观察仅加载部分安全内容，不代表全部新闻或全部研究已覆盖。
+                </p>
+              )}
+            {economic.archivePending && economic.status !== "PENDING" && (
+              <p>其余归档内容仍在恢复中。</p>
             )}
-          {economic.archivePending && economic.status !== "PENDING" && (
-            <p>其余归档内容仍在恢复中。</p>
-          )}
-        </>
-      ) : (
-        <p>
-          {readableCount > 0
-            ? `已加载 ${readableCount} 条可读经济事件，按原研究记录展示。`
-            : economic?.researchId
-              ? "经济观察身份与本次执行未对应，未作为本次资料显示。"
-              : "尚无本次可读经济观察，以下只展示已加载资料。"}
-        </p>
-      )}
-    </div>
+          </>
+        ) : (
+          <p>
+            {readableCount > 0
+              ? `已加载 ${readableCount} 条可读经济事件，按原研究记录展示。`
+              : economic?.researchId
+                ? "经济观察身份与本次执行未对应，未作为本次资料显示。"
+                : "尚无本次可读经济观察，以下只展示已加载资料。"}
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 function EnergyObservations({ data }: { data: OpportunityContext }) {
   const energy = data.dailyResearch?.report?.energy ?? [];
   return (
-    <section className="economic-energy" aria-label="独立能源观察">
-      <h4>独立能源观察</h4>
-      <p>
-        以下程序观察与事件独立，不证明由上述事件导致，也不充当事件发生时间。
-      </p>
-      {energy.length ? (
-        <ul>
-          {energy.map((item, index) => (
-            <li key={`${item.id}:${index}`}>
-              <strong>
-                {item.label}：{metricValue(item.value, 4)}{" "}
-                {unitLabel(item.unit)}
-              </strong>
-              <p>
-                观察日期：{timeLabel(item.asOf)} ·{" "}
-                {item.state === "STALE" ? "旧期观察，需更新" : "已采集观察"}
-              </p>
-              <p>
-                前值：{metricValue(item.previousValue, 4)}；前值日期：
-                {timeLabel(item.previousDate)}；变化：
-                {metricValue(item.change, 4)} {unitLabel(item.unit)}（
-                {metricValue(item.changePct)}%）
-              </p>
-              <p>
-                采集时间：{timeLabel(item.retrievedAt)}
-                ；来源发布时间未单独提供。
-              </p>
-              {sourceHref(item.sourceUri) && (
-                <a
-                  href={sourceHref(item.sourceUri)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  查看能源数据来源
-                </a>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>本页已加载报告未提供能源观察数值。</p>
-      )}
-      <p>股票、汇率、黄金等资产尚缺与本事件对应的可靠市场反应证据。</p>
-    </section>
+    <details className="economic-energy">
+      <summary>能源数据与观察</summary>
+      <section aria-label="独立能源观察">
+        <p>
+          以下程序观察与事件独立，不证明由上述事件导致，也不充当事件发生时间。
+        </p>
+        {energy.length ? (
+          <ul>
+            {energy.map((item, index) => (
+              <li key={`${item.id}:${index}`}>
+                <strong>
+                  {item.label}：{metricValue(item.value, 4)}{" "}
+                  {unitLabel(item.unit)}
+                </strong>
+                <p>
+                  观察日期：{timeLabel(item.asOf)} ·{" "}
+                  {item.state === "STALE" ? "旧期观察，需更新" : "已采集观察"}
+                </p>
+                <p>
+                  前值：{metricValue(item.previousValue, 4)}；前值日期：
+                  {timeLabel(item.previousDate)}；变化：
+                  {metricValue(item.change, 4)} {unitLabel(item.unit)}（
+                  {metricValue(item.changePct)}%）
+                </p>
+                <p>
+                  采集时间：{timeLabel(item.retrievedAt)}
+                  ；来源发布时间未单独提供。
+                </p>
+                {sourceHref(item.sourceUri) && (
+                  <a
+                    href={sourceHref(item.sourceUri)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    查看能源数据来源
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>本页已加载报告未提供能源观察数值。</p>
+        )}
+        <p>股票、汇率、黄金等资产尚缺与本事件对应的可靠市场反应证据。</p>
+      </section>
+    </details>
   );
 }
 export function EconomicEvents({
@@ -524,8 +577,7 @@ export function EconomicEvents({
     <section className="economic-events" aria-label="经济事件阅读">
       <header>
         <p className="economic-events-eyebrow">世界与经济观察</p>
-        <h3>读懂事件，分清事实与条件推演</h3>
-        <p>按原研究分别归档；跨研究的相同事件 ID 仍独立展示。</p>
+        <h3>关键财经新闻</h3>
       </header>
       <DeliveryStatus data={data} readableCount={stories.length} />
       <div className="economic-event-filters">
@@ -563,9 +615,12 @@ export function EconomicEvents({
           </select>
         </label>
       </div>
-      <p className="economic-event-muted">
-        仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在卡片单独标注。不代表完整历史检索；独立发布不冒充研究日期。分类来自已保存类别、标题主题或可对应的渠道，其余保留待分类。冻结资料匹配含目录标题，原文核对另列。
-      </p>
+      <details className="economic-reading-notes">
+        <summary>归档与阅读说明</summary>
+        <p className="economic-event-muted">
+          仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在卡片单独标注。不代表完整历史检索；独立发布不冒充研究日期。分类来自已保存类别、标题主题或可对应的渠道，其余保留待分类。冻结资料匹配含目录标题，原文核对另列。
+        </p>
+      </details>
       {selectedEventId &&
         !stories.some((story) => story.id === selectedEventId) && (
           <p role="status">所选事件不在已加载资料中，请从现有记录重新选择。</p>
@@ -613,38 +668,38 @@ export function EconomicEventTeasers({
       <h3>经济事件简讯</h3>
       {stories.length ? (
         <ul>
-          {stories.map((story) => (
-            <li key={story.id}>
-              <span className="economic-event-muted">
-                {originLabel(story)} ·{" "}
-                {story.researchDate ??
-                  (story.origin === "OFFICIAL"
-                    ? "独立公开记录"
-                    : [
-                          story.researchAsOf,
-                          story.reportCompletedAt,
-                          story.reportSlotDate,
-                        ].some((date) => date !== null)
-                      ? "日期不可核实"
-                      : "研究日期未提供")}
-              </span>
-              <h4>{readingText(story.title, 100)}</h4>
-              <p>{readingText(story.summary, 140)}</p>
-              <p className="economic-event-muted">事件事实未独立核验</p>
-              <p className="economic-event-muted">
-                {story.sources[0]
-                  ? `${sourceTitle(story.sources[0].title, 70)} · 来源发布 ${storyTimeLabel(story.sources[0].publishedAt)}`
-                  : "来源尚未提供"}
-              </p>
-              <button
-                type="button"
-                aria-label={`阅读事件：${story.title}`}
-                onClick={() => onOpenEvent(story.id)}
-              >
-                阅读事件 →
-              </button>
-            </li>
-          ))}
+          {stories.map((story) => {
+            const reading = storyReading(story);
+            return (
+              <li key={story.id}>
+                <button
+                  className="economic-news-row"
+                  type="button"
+                  aria-label={`阅读事件：${story.title}`}
+                  onClick={() => onOpenEvent(story.id)}
+                >
+                  <PublicationDate raw={story.sourcePublishedAt} />
+                  <span className="economic-news-category">
+                    {story.category}
+                  </span>
+                  <h4 title={reading.title}>
+                    {readingText(reading.title, 160)}
+                  </h4>
+                  {reading.impact && (
+                    <span className="economic-news-impact">
+                      💡 {readingText(reading.impact, 90)}
+                    </span>
+                  )}
+                  <small className="economic-news-state">
+                    {story.sourceStatus.checked > 0 ? "来源已核对" : "待核实"}
+                  </small>
+                  <span className="economic-news-arrow" aria-hidden="true">
+                    ▸
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p>暂无已加载的事件简讯。</p>

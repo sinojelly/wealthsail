@@ -97,6 +97,39 @@ PUBLICATION_META = frozenset(
 )
 
 
+def macro_cycle_research_tasks(now):
+    """Three explicit research priorities, not fabricated current observations.
+
+    Consumed during the existing single model run; saved-report GETs do not
+    fetch these sources, and a missing quote remains an evidence gap.
+    """
+    day = _aware(now).date().isoformat()
+    return {
+        "version": "macro-cycle-research-v1",
+        "asOf": _aware(now).isoformat(),
+        "queries": [
+            {
+                "topic": "GLOBAL_RATES_LIQUIDITY",
+                "query": f"{day} 美联储 最新 FOMC 利率决议 CME FedWatch 下次议息 概率 变化 美债收益率 美元指数",
+                "preferredSources": ["https://www.federalreserve.gov/monetarypolicy/openmarket.htm", "https://www.cmegroup.com/fedwatch", "https://home.treasury.gov/resource-center-data-chart-center/interest-rates"],
+                "check": "正式政策利率与期货隐含市场预期分开；概率须带目标会议、方向及报价时点，缺真实快照不写数值。",
+            },
+            {
+                "topic": "DOMESTIC_POLICY_CREDIT",
+                "query": f"{day} 中国 央行 货币政策 财政 信用 社融 M1 M2 PMI CPI PPI 最新",
+                "preferredSources": ["https://www.pbc.gov.cn/", "https://www.stats.gov.cn/", "https://www.mof.gov.cn/"],
+                "check": "注明数据所属期、公布日、货币口径断点及单月/累计；只据已有数据解释政策和信用传导。",
+            },
+            {
+                "topic": "MARKET_INDUSTRY_CYCLE",
+                "query": f"{day} A股 市场阶段 盈利 资金 利率 行业景气 订单 周期 最新变化",
+                "preferredSources": [],
+                "check": "优先复用冻结事实、行情与产业研究；按实际证据选择核心行业，不要求固定名单或额外全行业反方搜索。",
+            },
+        ],
+    }
+
+
 def industry_cycle_research_tasks(packet, now, *, allocation_version=None):
     """Build live-search jobs from this run's actual sectors, without invented news.
 
@@ -994,6 +1027,7 @@ async def collect_daily_sources(now, *, client=None, clock=None):
         "energy": [],
         "sourceResults": {},
         "industryCycleResearch": industry_cycle_research_tasks({}, now),
+        "macroCycleResearch": macro_cycle_research_tasks(now),
     }
     semaphore = asyncio.Semaphore(3)
 

@@ -71,7 +71,11 @@ it("does not hide an independent official fact just because a report reuses its 
   const official = screen.getByRole("region", { name: "官方关键事件" });
   expect(within(official).getByText("宏观重复正文")).toBeVisible();
   expect(within(official).getByText("独立事实正文")).toBeInTheDocument();
-  expect(screen.getByText("日报主项正文")).toBeInTheDocument();
+  expect(
+    within(screen.getByRole("list", { name: "重要事件" })).getByText(
+      "事实：日报主项正文",
+    ),
+  ).toBeInTheDocument();
   expect(
     within(screen.getByRole("list", { name: "重要事件" })).getAllByText(
       "同名官方公告",

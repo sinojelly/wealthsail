@@ -896,6 +896,13 @@ def sanitize_report(raw, packet, source_checks, *, completed_at, research_id=Non
         }
         sources[identity] = row
     report["sources"] = list(sources.values())
+    from backend.macro.cycle_insights import sanitize_cycle_insights
+
+    cycle = sanitize_cycle_insights(
+        parsed.get("cycleInsights"), aliases=aliases, now=now, warnings=warnings
+    )
+    if cycle:
+        report["cycleInsights"] = cycle
     reviews = []
     for index, review in enumerate(_rows(parsed.get("industryCycleReviews"))):
         if not isinstance(review, dict):
