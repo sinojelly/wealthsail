@@ -299,9 +299,7 @@ it("loads personal fund cards while the display report is pending and preserves 
   const card = await within(funds).findByRole("article", {
     name: "个人人工智能联接基金",
   });
-  const heading = within(card).getByRole("heading", {
-    name: "个人人工智能联接基金",
-  });
+  const heading = within(card).getByText("个人人工智能联接基金");
   expectFrozenPrices(card);
   expect(card).toHaveTextContent("仅跟踪");
   expect(
@@ -316,9 +314,7 @@ it("loads personal fund cards while the display report is pending and preserves 
   expect(
     within(funds).getByRole("article", { name: "个人人工智能联接基金" }),
   ).toBe(card);
-  expect(
-    within(card).getByRole("heading", { name: "个人人工智能联接基金" }),
-  ).toBe(heading);
+  expect(within(card).getByText("个人人工智能联接基金")).toBe(heading);
   expect(api.tracks).toHaveBeenCalledTimes(1);
 });
 
@@ -405,9 +401,9 @@ it.each(["RUNNING", "FAILED", "UNCERTAIN", "STALE"] as const)(
       await within(reminders).findByText(/个人人工智能联接基金.*012733/),
     ).toBeVisible();
     expect(reminders).toHaveTextContent("确认净值进入冻结买入区间");
-    expect(
-      screen.queryByRole("region", { name: "今日宏观总纲" }),
-    ).not.toBeInTheDocument();
+    const macro = screen.getByRole("region", { name: "今日宏观总纲" });
+    expect(macro).toBeVisible();
+    expect(macro).toHaveTextContent("历史有效报告的宏观研判");
     expect(
       screen.queryByRole("region", { name: "我的基金" }),
     ).not.toBeInTheDocument();

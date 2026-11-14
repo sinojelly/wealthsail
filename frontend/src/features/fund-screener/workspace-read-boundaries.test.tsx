@@ -39,6 +39,8 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
   );
   const unexpected: string[] = [];
   const reads: string[] = [];
+  let explicitPersonalRefresh = false;
+  let explicitNavRefresh = false;
   const fetcher = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "https://example.test");
@@ -66,7 +68,24 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
         };
       else if (path === "/v1/funds/quotes")
         data = { asOf: "2026-11-07T04:00:00Z", items: [] };
-      else if (path === "/v1/funds/991042/nav-history")
+      else if (
+        path === "/v1/investment/personal-funds-reference/refresh" &&
+        explicitPersonalRefresh &&
+        init?.method === "POST"
+      )
+        data = {
+          version: "personal-funds-reference-v1",
+          source: "LOCAL_DATABASE_ONLY",
+          readOnly: true,
+          asOf: "2026-11-07T04:00:00Z",
+          funds: [],
+        };
+      else if (
+        path === "/v1/funds/991042/nav-history" ||
+        (path === "/v1/funds/991042/nav-history/refresh" &&
+          explicitNavRefresh &&
+          init?.method === "POST")
+      )
         data = {
           methodVersion: "fund-unit-nav-trend-v1",
           fundCode: "991042",
@@ -96,7 +115,11 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
             percentilePct: 100,
             percentileMethod: "sample",
           },
-          refresh: { state: "IDLE", runId: null, pollAfterMs: null },
+          refresh: {
+            state: init?.method === "POST" ? "QUEUED" : "IDLE",
+            runId: init?.method === "POST" ? "explicit-nav" : null,
+            pollAfterMs: 1000,
+          },
         };
       else {
         unexpected.push(`${init?.method ?? "GET"} ${path}`);
@@ -110,19 +133,41 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
     expect(unexpected).toEqual([]);
     expect(
       fetcher.mock.calls.every(
-        ([, init]) => !init?.method || init.method === "GET",
+        ([url, init]) =>
+          !init?.method ||
+          init.method === "GET" ||
+          (init.method === "POST" &&
+            [
+              "/api/v1/investment/personal-funds-reference/refresh",
+              "/api/v1/funds/991042/nav-history/refresh",
+            ].includes(new URL(String(url), "https://example.test").pathname)),
       ),
     ).toBe(true);
-    expect(reads.some((url) => url.includes("/nav-history"))).toBe(true);
+    expect(
+      reads.some((url) => url.startsWith("GET /v1/funds/991042/nav-history")),
+    ).toBe(true);
   };
   try {
     const page = renderWithSession(<FundScreenerPage />, "/fund-screener");
     await screen.findByRole("button", { name: "手动启动研究" });
     await userEvent.click(screen.getByRole("tab", { name: "经济事件" }));
     await userEvent.click(screen.getByRole("tab", { name: "我的基金" }));
-    await screen.findByRole("article", { name: "基金991042" });
+    const firstFund = await screen.findByRole("article", {
+      name: "基金991042",
+    });
     expect(reads.filter((url) => url.includes("/nav-history"))).toEqual([]);
-    await waitFor(() => expect(observed).toHaveLength(2));
+    const openDetails = within(firstFund).queryByRole("button", {
+      name: "展开 基金991042详情与走势",
+    });
+    if (openDetails) await userEvent.click(openDetails);
+    await waitFor(() =>
+      expect(
+        observed.some(
+          (row) =>
+            row.element.getAttribute("aria-label") === "991042净值走势图区域",
+        ),
+      ).toBe(true),
+    );
     act(() =>
       observed
         .find(
@@ -131,10 +176,44 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
         )!
         .enter(),
     );
-    await screen.findByRole("img", { name: "991042单位净值走势" });
-    expect(reads.filter((url) => url.includes("/nav-history"))).toHaveLength(1);
+    const navRefresh = await within(firstFund).findByRole("button", {
+      name: "刷新并补齐净值",
+    });
+    expect(reads.filter((url) => url.includes("/nav-history"))).toEqual([]);
     expect(reads.some((url) => url.includes("991043/nav-history"))).toBe(false);
+    expect(
+      fetcher.mock.calls.every(
+        ([, init]) => !init?.method || init.method === "GET",
+      ),
+    ).toBe(true);
+    explicitNavRefresh = true;
+    await userEvent.click(navRefresh);
+    await screen.findByRole("img", { name: "991042单位净值走势" });
+    await waitFor(
+      () =>
+        expect(
+          reads.filter((url) =>
+            url.startsWith("GET /v1/funds/991042/nav-history"),
+          ),
+        ).toHaveLength(1),
+      { timeout: 3000 },
+    );
+    expect(
+      reads.filter((url) =>
+        url.startsWith("POST /v1/funds/991042/nav-history/refresh"),
+      ),
+    ).toHaveLength(1);
+    explicitPersonalRefresh = true;
     await userEvent.click(screen.getByRole("button", { name: "刷新我的基金" }));
+    await waitFor(() =>
+      expect(
+        reads.filter((url) =>
+          url.startsWith(
+            "POST /v1/investment/personal-funds-reference/refresh",
+          ),
+        ),
+      ).toHaveLength(1),
+    );
     await userEvent.click(
       within(
         screen.getByRole("region", { name: "991042单位净值图" }),
@@ -160,6 +239,7 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
     );
     await screen.findByRole("button", { name: "手动启动研究" });
     assertReadOnly();
+    expect(reads.filter((url) => url.startsWith("POST"))).toHaveLength(2);
   } finally {
     cleanup();
     vi.unstubAllGlobals();

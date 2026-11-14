@@ -96,7 +96,7 @@ it("keeps Today concise and navigates event teasers without losing the private d
     <Ui />,
     "/fund-screener?studyTrack=original&researchTab=events&fund=123456",
   );
-  expect(screen.getByRole("region", { name: "市场判断" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "今日宏观总纲" })).toBeVisible();
   expect(screen.queryByText("展开查看完整研究")).not.toBeInTheDocument();
   expect(screen.queryByText("私人基金独立加载")).not.toBeInTheDocument();
   await userEvent.click(screen.getByText("事件简讯入口"));

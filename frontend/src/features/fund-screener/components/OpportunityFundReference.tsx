@@ -21,7 +21,7 @@ export default function OpportunityFundReference({
   const historical = frozenNavHistories !== undefined;
   const snapshot = historical
     ? (frozenNavHistories[code] ?? null)
-    : planNavSnapshot(plan, name);
+    : (planNavSnapshot(plan, name) ?? null);
   return (
     <section
       className="op-insight-fund"

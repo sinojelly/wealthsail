@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { renderWithSession } from "../../test/render-with-session";
 import type {
   OpportunityContext,
@@ -73,8 +73,10 @@ it("shows unaudited direction and mentioned-fund reference levels and band chart
     ],
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
-  const direction = screen.getByRole("article", { name: "AI硬件" });
-  expect(within(direction).getByText("基于已有资讯研判")).toBeVisible();
+  const direction = screen
+    .getAllByTestId("today-fund-row")
+    .find((r) => r.getAttribute("data-fund-code") === "000101")!;
+  expect(screen.getByText("基于已有资讯研判")).toBeVisible();
   expect(within(direction).getByText("参考买入区间")).toBeVisible();
   expect(within(direction).getByText("1.0500–1.1500")).toBeVisible();
   expect(within(direction).getByText("23.4%")).toBeVisible();
@@ -82,7 +84,9 @@ it("shows unaudited direction and mentioned-fund reference levels and band chart
   expect(
     within(direction).getByRole("img", { name: "000101单位净值走势" }),
   ).toBeVisible();
-  const mentions = screen.getByRole("region", { name: "本期提及基金" });
+  const mentions = screen
+    .getAllByTestId("today-fund-row")
+    .find((r) => r.getAttribute("data-fund-code") === "000102")!;
   expect(
     within(mentions).getByText("参考卖出区间（止盈 T1 / T2）"),
   ).toBeVisible();
@@ -107,11 +111,13 @@ it("retains every topic and direction instead of truncating discovery output", (
     })),
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
-  expect(screen.getByText("方向15")).toBeVisible();
+  expect(
+    screen.getByText("方向15", { selector: ".op-today-insight strong" }),
+  ).toBeVisible();
   expect(screen.getByText("研究主题12")).toBeVisible();
 });
 
-it("tops up from real entry, near-entry and trend scan signals, deduplicating represented funds", () => {
+it("merges real scan signals with AI funds and keeps non-actionable scans folded", () => {
   const data = context();
   const trend = plan("000104", "1.2500");
   trend.tracks.push({
@@ -140,33 +146,41 @@ it("tops up from real entry, near-entry and trend scan signals, deduplicating re
     },
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
-  const scan = screen.getByRole("region", { name: "量化模型精选机会" });
-  expect(within(scan).getByText(/基金000102/)).toBeVisible();
-  expect(within(scan).getByText(/基金000103/)).toBeVisible();
-  expect(within(scan).getByText(/基金000104/)).toBeVisible();
-  expect(within(scan).queryByText(/基金000101/)).toBeNull();
-  expect(within(scan).queryByText(/基金000105/)).toBeNull();
-  expect(within(scan).queryByText(/基金000106/)).toBeNull();
-  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(3);
+  const scan = screen.getByRole("region", {
+    name: "按操作紧迫度排序的基金机会",
+  });
+  const rows = within(scan).getAllByTestId("today-fund-row");
+  expect(rows).toHaveLength(6);
+  expect(
+    rows.filter((r) => r.getAttribute("data-fund-code") === "000101"),
+  ).toHaveLength(1);
+  expect(
+    rows
+      .filter((r) => r.hasAttribute("open"))
+      .map((r) => r.getAttribute("data-fund-code")),
+  ).toEqual(["000101", "000102", "000103", "000104"]);
+  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(4);
 });
 
-it("uses current NAV as the distance denominator at the 2.99 and 3.01 percent boundary", () => {
+it("uses the strict two percent boundary for expansion and preserves all scans", () => {
   const data = context();
   Object.assign(data.dailyResearch!.report!, {
     quantitativeScan: {
       items: [
-        plan("000201", String(1.15 / (1 - 0.0299))),
-        plan("000202", String(1.15 / (1 - 0.0301))),
+        plan("000201", String(1.15 / (1 - 0.0199))),
+        plan("000202", String(1.15 / (1 - 0.02))),
       ],
     },
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
-  const scan = screen.getByRole("region", { name: "量化模型精选机会" });
-  expect(within(scan).getByText(/基金000201/)).toBeVisible();
-  expect(within(scan).queryByText(/基金000202/)).toBeNull();
+  const rows = screen.getAllByTestId("today-fund-row");
+  expect(rows[0]).toHaveAttribute("open");
+  expect(rows[1]).not.toHaveAttribute("open");
+  expect(within(rows[1]).queryByText("参考买入区间")).toBeNull();
+  fireEvent.click(within(rows[1]).getByText(/基金000202/));
 });
 
-it("prefers server price position and signal distances over inferred boundaries", () => {
+it("uses displayed current price and reference bands for urgency rather than a stale three-percent signal", () => {
   const data = context();
   const serverNear = plan("000211", "1.2500");
   Object.assign(serverNear, {
@@ -200,9 +214,15 @@ it("prefers server price position and signal distances over inferred boundaries"
     },
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
-  const scan = screen.getByRole("region", { name: "量化模型精选机会" });
-  expect(within(scan).getByText(/基金000211/)).toBeVisible();
-  expect(within(scan).getByText(/基金000213/)).toBeVisible();
-  expect(within(scan).queryByText(/基金000212/)).toBeNull();
-  expect(within(scan).queryByText(/基金000214/)).toBeNull();
+  const rows = screen.getAllByTestId("today-fund-row");
+  expect(
+    rows
+      .filter((r) => r.hasAttribute("open"))
+      .map((r) => r.getAttribute("data-fund-code")),
+  ).toEqual(["000212", "000214"]);
+  expect(
+    rows
+      .filter((r) => !r.hasAttribute("open"))
+      .map((r) => r.getAttribute("data-fund-code")),
+  ).toEqual(["000211", "000213"]);
 });

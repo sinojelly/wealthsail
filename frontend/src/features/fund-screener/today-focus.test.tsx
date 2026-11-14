@@ -48,9 +48,9 @@ it("labels retained report judgment and links to full evidence", async () => {
       onViewEvidence={open}
     />,
   );
-  expect(screen.getByRole("region", { name: "市场判断" })).toHaveTextContent(
-    "历史研判",
-  );
+  expect(
+    screen.getByRole("region", { name: "今日宏观总纲" }),
+  ).toHaveTextContent("历史宏观研判");
   expect(screen.getByText("信用修复仍需后续事实确认。")).toBeVisible();
   screen.getByRole("button", { name: "查看完整研判与市场证据" }).click();
   expect(open).toHaveBeenCalledOnce();
@@ -63,7 +63,7 @@ it("keeps missing judgment distinct from no market opportunities", () => {
       onViewEvidence={() => {}}
     />,
   );
-  expect(screen.getByText(/尚无有效报告研判/)).toBeVisible();
+  expect(screen.getByText(/综合研究尚未生成/)).toBeVisible();
   expect(screen.queryByText("暂无投资机会")).not.toBeInTheDocument();
 });
 
@@ -88,8 +88,10 @@ it("shows all observation value directions and mentioned funds without opening e
     { fundCode: "000051", name: "提及基金" },
   ];
   renderWithSession(<TodayFocus data={value} onViewEvidence={() => {}} />);
-  expect(screen.getByText("价值方向15")).toBeVisible();
   expect(
-    screen.getByRole("region", { name: "本期提及基金" }),
+    screen.getByText("价值方向15", { selector: ".op-today-insight strong" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("region", { name: "按操作紧迫度排序的基金机会" }),
   ).toHaveTextContent("000051");
 });

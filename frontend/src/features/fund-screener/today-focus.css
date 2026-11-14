@@ -23,6 +23,82 @@
 .op-insight-fund {
   container-type: inline-size;
 }
+.op-today-guide,
+.op-today-origins {
+  color: #617387;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.op-today-fund,
+.op-today-insight {
+  border: 1px solid #dce5eb;
+  border-radius: 0.65rem;
+  background: #fff;
+  margin-block: 0.65rem;
+  overflow-wrap: anywhere;
+}
+.op-today-fund > summary,
+.op-today-insight > summary {
+  cursor: pointer;
+  padding: 0.9rem 1rem;
+  line-height: 1.7;
+}
+.op-today-fund > summary > *,
+.op-today-insight > summary > * {
+  margin-inline-end: 0.7rem;
+}
+.op-today-fund > summary > span:last-child {
+  color: #617387;
+  font-size: 0.85rem;
+}
+.op-today-fund[open] > summary,
+.op-today-insight[open] > summary {
+  border-bottom: 1px solid #e9eff3;
+  background: #f7fbfc;
+}
+.op-today-fund-body {
+  padding: 0 1rem 0.8rem;
+}
+.op-today-fund-body > .op-insight-fund {
+  border: 0;
+  margin: 0;
+  padding: 0.5rem 0;
+}
+.op-today-insights {
+  margin-top: 1.8rem;
+}
+.op-today-insight > p,
+.op-today-related {
+  margin: 0.8rem 1rem;
+  line-height: 1.7;
+}
+.op-today-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}
+.op-today-insight > .op-match-badge {
+  margin-inline: 1rem;
+}
+.op-today-unpriced {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #e9eff3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.op-today-unpriced span {
+  color: #617387;
+}
+@media (max-width: 600px) {
+  .op-today-fund > summary > span:last-child {
+    display: block;
+    margin-left: 1rem;
+  }
+  .op-today-fund-body {
+    padding-inline: 0.7rem;
+  }
+}
 @container (min-width: 760px) {
   .op-insight-fund-layout {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
