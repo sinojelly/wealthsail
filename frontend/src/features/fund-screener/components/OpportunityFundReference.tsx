@@ -12,10 +12,12 @@ export default function OpportunityFundReference({
   plan,
   name = plan.label,
   frozenNavHistories,
+  immediateChart = false,
 }: {
   plan: ActionableZoneResult;
   name?: string;
   frozenNavHistories?: Record<string, FundNavHistory | null>;
+  immediateChart?: boolean;
 }) {
   const code = plan.fundCode ?? plan.subjectId;
   const historical = frozenNavHistories !== undefined;
@@ -45,6 +47,7 @@ export default function OpportunityFundReference({
         {plan.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
           <ViewportFundChart
             fundCode={code}
+            immediate={immediateChart}
             track={referenceTrack(plan)}
             confirmedNavAsOf={plan.asOf ?? undefined}
             {...(snapshot !== undefined

@@ -1022,6 +1022,7 @@ export interface DailyResearch {
       thesis?: string;
       summary?: string;
       auditStatus?: string;
+      primaryFundCodes?: string[];
       plans?: ActionableZoneResult[];
       fundPlans?: ActionableZoneResult[];
     }>;

@@ -30,6 +30,8 @@ from backend.investment.opportunity_fund_matching import (
     share_class_priority,
     terms as _terms,
     mentioned_codes,
+    matches_primary_scope,
+    primary_topic_scope,
     displayed_funds,
     texts as _texts,
 )
@@ -400,11 +402,18 @@ async def discover_topic_funds(conn, topics, packet, now):
         match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
         industries = set(_texts(match.get("industryIds")))
         regional_bonds = _regional_bond_terms(topic) is not None
+        scope = primary_topic_scope(topic)
+        check_scope = any(scope) and not key.startswith("reference:direction:")
         direct_candidates, indirect_candidates = [], []
         for code, product in products.items():
             direct_matches = [
                 product["matches"][word] for word in terms if word in product["matches"]
             ]
+            if check_scope:
+                direct_matches = [found for found in direct_matches if matches_primary_scope(
+                    scope, name=found[1] if found[0] == "名称" else None,
+                    index_name=found[1] if found[0] == "跟踪指数" else None,
+                )]
             direct = min(
                 direct_matches,
                 key=lambda found: found[0] != "跟踪指数",
@@ -420,7 +429,18 @@ async def discover_topic_funds(conn, topics, packet, now):
                 None,
             )
             title = str(topic.get("title") or key)[:200]
-            if code in mentions:
+            scoped = matches_primary_scope(
+                scope, name=product["name"], sector=sectors.get(code),
+                index_name=direct[1] if direct and direct[0] == "跟踪指数" else None,
+            )
+            if check_scope and not scoped:
+                direct = None
+                category = False
+            # Narrative codes must remain individually resolvable for report
+            # references and audit. Topic recommendation readers separately
+            # require evidence that they match the primary subject.
+            narrative = code in mentions
+            if narrative:
                 association = "NAME_CANDIDATE"
                 reason = f"主题「{title}」正文提及基金代码{code}，已核验基金主库身份；不代表已核验主题持仓。"
             elif direct and direct[0] == "跟踪指数":
@@ -463,7 +483,9 @@ async def discover_topic_funds(conn, topics, packet, now):
                 "matchLevel": level,
                 "matchReason": reason[:600],
                 "sourceUri": (direct or broad or (None, None, _SOURCE))[2][:2000],
-                **({"narrativeMention": True} if code in mentions else {}),
+                **({"narrativeMention": True} if narrative else {}),
+                **({"primaryTopicMatch": True}
+                   if scoped and association != "BROAD_FALLBACK" else {}),
             }
             target = (
                 indirect_candidates

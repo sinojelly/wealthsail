@@ -242,6 +242,7 @@ async def read_daily_research(
     from backend.common.report_chart_series import freeze_report_chart_series
     from backend.common.timing import trace_stage
     from backend.macro.daily_pipeline_repository import read_pipeline
+    from backend.macro.cycle_insights import project_cycle_insights
     from backend.macro.research_diagnostics import sanitize_failure_diagnostics
     from backend.macro.research_delivery import read_economic_research
     from backend.macro.research_opportunities import read_fund_observation
@@ -354,6 +355,9 @@ async def read_daily_research(
         report, report_row["run_id"], report_row["recorded_at"]
     ) if report_row else None
     if report is not None:
+        report = project_cycle_insights(
+            report, packet, report_recovery["originalCompletedAt"] if report_recovery else report_row["recorded_at"],
+        )
         with trace_stage("context.live_nav_prices"):
             report = await refresh_report_fund_plans(
                 conn, report, stamp, histories=histories, packet=packet,
@@ -362,10 +366,12 @@ async def read_daily_research(
                 repair_nav=False,
             )
             from backend.investment.opportunity_scoring import rank_report
+            from backend.investment.opportunity_fund_matching import annotate_topic_primary_funds
 
             # Live NAV refresh invalidates saved scores along with saved prices.
             # Recompute with the visible evidence clock and the same cycle guard.
             report = rank_report(report, {**(packet or {}), "asOf": stamp.isoformat()})
+            report = annotate_topic_primary_funds(report, packet)
     displayed_run_id = (
         pipeline["researchRunId"]
         if pipeline

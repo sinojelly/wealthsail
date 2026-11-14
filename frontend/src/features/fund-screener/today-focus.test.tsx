@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { renderWithSession } from "../../test/render-with-session";
 import type { OpportunityContext } from "../../api/investment";
 import TodayFocus from "./components/TodayFocus";
@@ -88,6 +88,7 @@ it("shows all observation value directions and mentioned funds without opening e
     { fundCode: "000051", name: "提及基金" },
   ];
   renderWithSession(<TodayFocus data={value} onViewEvidence={() => {}} />);
+  fireEvent.click(screen.getByText(/研究方向与主题/));
   expect(
     screen.getByText("价值方向15", { selector: ".op-today-insight strong" }),
   ).toBeVisible();

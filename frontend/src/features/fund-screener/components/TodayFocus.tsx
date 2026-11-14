@@ -17,7 +17,8 @@ function FundRow({
   fund: TodayFund;
   frozenNavHistories?: Record<string, FundNavHistory | null>;
 }) {
-  const [expanded, setExpanded] = useState(fund.priority.expanded);
+  const [manualExpansion, setManualExpansion] = useState<boolean>();
+  const expanded = manualExpansion ?? fund.priority.expanded;
   const plan = fund.plans[0];
   const track = referenceTrack(plan);
   return (
@@ -27,12 +28,15 @@ function FundRow({
       data-testid="today-fund-row"
       data-fund-code={fund.code}
       open={expanded}
-      onToggle={(e) => setExpanded(e.currentTarget.open)}
+      onToggle={(e) => {
+        if (e.currentTarget.open !== expanded)
+          setManualExpansion(e.currentTarget.open);
+      }}
     >
       <summary
         onClick={(e) => {
           e.preventDefault();
-          setExpanded(!expanded);
+          setManualExpansion(!expanded);
         }}
       >
         <span
@@ -59,6 +63,7 @@ function FundRow({
             plan={plan}
             name={fund.name}
             frozenNavHistories={frozenNavHistories}
+            immediateChart
           />
           {fund.plans.length > 1 && (
             <details className="op-today-alternatives">
@@ -78,12 +83,17 @@ export default function TodayFocus({
   data,
   onViewEvidence,
   frozenNavHistories,
+  watchedCodes,
 }: {
   data: OpportunityContext;
   onViewEvidence: () => void;
   frozenNavHistories?: Record<string, FundNavHistory | null>;
+  watchedCodes?: readonly string[];
 }) {
-  const board = useMemo(() => buildTodayBoard(data), [data]);
+  const board = useMemo(
+    () => buildTodayBoard(data, watchedCodes),
+    [data, watchedCodes],
+  );
   const funds = new Map(board.funds.map((f) => [f.key, f]));
   const identity =
     data.dailyResearch?.reportRunId ?? data.dailyResearch?.runId ?? "empty";
@@ -122,31 +132,35 @@ export default function TodayFocus({
           ))}
         </section>
         <section aria-label="全部研究洞察" className="op-today-insights">
-          <h4>研究方向与主题 · {board.insights.length} 项</h4>
-          {board.insights.map((insight) => (
-            <details
-              key={`${identity}:${insight.key}`}
-              className="op-today-insight"
-              open={insight.priority.expanded}
-            >
-              <summary>
-                <small>{insight.kind}</small>
-                <strong>{insight.title}</strong>
-                <span>{insight.priority.label}</span>
-              </summary>
-              <p>{insight.thesis}</p>
-              {insight.auditStatus === "UNAUDITED_SCOPE" && (
-                <small className="op-match-badge">基于已有资讯研判</small>
-              )}
-              <div className="op-today-related">
-                {insight.funds.map((key) => (
-                  <a key={key} href={`#today-fund-${encodeURIComponent(key)}`}>
-                    {funds.get(key)!.name} {funds.get(key)!.code}
-                  </a>
-                ))}
-              </div>
-            </details>
-          ))}
+          <details className="op-today-insights-list" key={identity}>
+            <summary>研究方向与主题 · {board.insights.length} 项</summary>
+            {board.insights.map((insight) => (
+              <details
+                key={`${identity}:${insight.key}`}
+                className="op-today-insight"
+              >
+                <summary>
+                  <small>{insight.kind}</small>
+                  <strong>{insight.title}</strong>
+                  <span>{insight.priority.label}</span>
+                </summary>
+                <p>{insight.thesis}</p>
+                {insight.auditStatus === "UNAUDITED_SCOPE" && (
+                  <small className="op-match-badge">基于已有资讯研判</small>
+                )}
+                <div className="op-today-related">
+                  {insight.funds.map((key) => (
+                    <a
+                      key={key}
+                      href={`#today-fund-${encodeURIComponent(key)}`}
+                    >
+                      {funds.get(key)!.name} {funds.get(key)!.code}
+                    </a>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </details>
         </section>
       </ObservationSection>
     </>

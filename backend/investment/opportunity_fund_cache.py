@@ -24,7 +24,7 @@ _FUND_FIELDS = {
     "fundCode", "name", "subjectKind", "subjectId", "market", "identityVerifiedAt",
     "overseasCalendarRequired", "associationLevel", "matchLevel", "matchReason",
     "sourceUri", "fundGroupKey", "alternativeShareClasses", "salesChannel",
-    "narrativeMention",
+    "narrativeMention", "primaryTopicMatch",
 }
 _ITEM_FIELDS = {"topicId", "status", "funds", "indirectFunds", "unavailableReason", "message"}
 

@@ -86,6 +86,122 @@ _FALLBACKS = (
     (r"欧洲|欧元区|欧股", ("欧洲50", "欧洲精选", "欧洲股票"), "欧洲权益"),
 )
 
+# Match the subject in the title before letting narrative context suggest
+# funds. Explicit related industries remain research context, not exposure.
+_TITLE_SCOPES = (
+    (r"(?:海外|美国|美股|全球|纳斯达克|纳指).*?(?:科技|技术|成长|QDII)|纳斯达克|纳指", "US_TECH", ("美国科技", "美股科技", "纳斯达克", "纳指", "全球科技", "海外科技", "标普信息科技")),
+    (r"港股科技|恒生科技", "HK_TECH", ("港股科技", "恒生科技")),
+    (r"AI硬件|算力硬件|半导体|芯片|存储器|HBM", "SEMICONDUCTOR_AI", ("半导体", "芯片", "算力", "存储", "人工智能")),
+    (r"金融科技|金融IT", "FINTECH", ("金融科技", "金融IT")),
+    (r"银行", "BANK", ("银行",)),
+    (r"券商|证券公司|证券保险", "BROKER", ("券商", "证券公司", "证券保险", "证券指数", "证券ETF")),
+    (r"光模块|光通信|CPO|网络通信|通信", "COMMUNICATION", ("光模块", "光通信", "通信", "CPO")),
+    (r"电网|特高压|电力", "POWER", ("电网", "特高压", "电力")),
+    (r"汽车|新能源车|智能驾驶", "AUTOMOTIVE", ("汽车", "新能源车", "智能驾驶")),
+    (r"机器人|具身智能", "ROBOT", ("机器人", "具身智能", "高端装备")),
+    (r"消费|白酒|食品饮料", "CONSUMPTION", ("消费", "白酒", "食品饮料")),
+    (r"宽基|沪深300|中证A500", "BROAD", ("沪深300", "中证A500", "中证500", "全指")),
+)
+
+
+def primary_topic_scope(topic):
+    """Resolve the actual named subject, independent of examples in the thesis."""
+    title = str(topic.get("title") or "")[:200]
+    found = [(m.start(), scope, roots) for pattern, scope, roots in _TITLE_SCOPES
+             if (m := re.search(pattern, title, re.IGNORECASE))]
+    match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
+    industries = set(texts(match.get("industryIds")) or texts(topic.get("industryClaims")))
+    if found:
+        _, scope, roots = min(found, key=lambda row: row[0])
+        # A registered storage subtype is inside the semiconductor subject.
+        # Other claims may merely be a comparison or mentioned risk.
+        subtypes = {"MEMORY"} if scope == "SEMICONDUCTOR_AI" else set()
+        return {scope} | (industries & subtypes), roots
+    # Sanitization may map an unrecognized claim to BROAD as an observation.
+    # The placeholder alone cannot establish a fund's thematic exposure.
+    industries.discard("BROAD")
+    roots = tuple(dict.fromkeys(
+        [word for scope, words in _INDUSTRY_HINTS.items() if scope in industries for word in words]
+        + [word for scope, _, words in _THEMES if scope in industries for word in words]
+    ))
+    return industries, roots
+
+
+def matches_primary_scope(scope, *, name, sector=None, index_name=None):
+    industries, roots = scope
+    if not industries and not roots:
+        return False
+    identity_text = f"{name or ''} {index_name or ''}".casefold()
+    if "US_TECH" in industries and not any(root.casefold() in identity_text for root in roots):
+        return False
+    return sector in industries or any(root.casefold() in identity_text for root in roots)
+
+
+def restrict_cached_primary_funds(recalled, topics, packet):
+    """Recheck archived recall IDs before price enrichment; old caches stay usable."""
+    sectors = _fund_sectors(packet)
+    result = {**recalled}
+    for topic in topics:
+        key = topic.get("topicId") or topic.get("key")
+        row = recalled.get(key)
+        scope = primary_topic_scope(topic)
+        if not isinstance(row, dict) or not any(scope):
+            continue
+        primary = []
+        for fund in row.get("funds", []):
+            # Old receipts encode verified index names in this server-generated
+            # explanation. Narrative and name candidates cannot borrow it.
+            index = re.search(r"匹配已核验跟踪指数「([^」]+)」", str(fund.get("matchReason") or "")) if fund.get("associationLevel") == "DIRECT_INDEX" else None
+            if fund.get("primaryTopicMatch") is True or matches_primary_scope(
+                scope, name=fund.get("name"), sector=sectors.get(fund.get("fundCode")),
+                index_name=index[1] if index else None,
+            ):
+                primary.append(fund)
+        result[key] = {**row, "funds": primary}
+    return result
+
+
+def _fund_sectors(packet):
+    sectors = {}
+    for row in (packet or {}).get("discoveryUniverse", []):
+        if not isinstance(row, dict) or not isinstance(row.get("fundCode"), str):
+            continue
+        sector = row.get("discoverySector")
+        if isinstance(sector, str):
+            sectors.setdefault(row["fundCode"], set()).add(sector)
+    return {code: next(iter(values)) for code, values in sectors.items() if len(values) == 1}
+
+
+def annotate_topic_primary_funds(report, packet=None):
+    """Project display associations without editing the saved price plans."""
+    sectors = _fund_sectors(packet)
+
+    def annotate(topic):
+        if not isinstance(topic, dict):
+            return topic
+        scope = primary_topic_scope(topic)
+        codes = []
+        for plan in topic.get("plans") or topic.get("fundPlans") or []:
+            if not isinstance(plan, dict):
+                continue
+            code = plan.get("fundCode") or plan.get("subjectId")
+            if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+                continue
+            sector = sectors.get(code, plan.get("discoverySector"))
+            # Only a server-verified same-scope recall can rescue a product
+            # whose name/sector does not spell out the tracked index.
+            if plan.get("primaryTopicMatch") is True or matches_primary_scope(
+                scope, name=plan.get("name") or plan.get("label"), sector=sector
+            ):
+                codes.append(code)
+        return {**topic, "primaryFundCodes": list(dict.fromkeys(codes))}
+
+    return {
+        **report,
+        **{field: [annotate(topic) for topic in report[field]]
+           for field in ("researchTopics", "topicCatalog") if isinstance(report.get(field), list)},
+    }
+
 
 def texts(value):
     return (

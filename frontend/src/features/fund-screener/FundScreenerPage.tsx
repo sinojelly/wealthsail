@@ -420,6 +420,9 @@ function ResearchWorkspace({ subject }: { subject: string }) {
       </header>
       <MacroContextStrip
         data={radarData}
+        watchedFundCodes={watched.data
+          ?.filter((item) => item.assetType === "FUND")
+          .map((item) => item.symbol)}
         renderMyFunds={(renderStudyTracking) => (
           <MyFundsWorkspace
             actor={subject}

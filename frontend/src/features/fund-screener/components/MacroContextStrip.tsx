@@ -192,6 +192,7 @@ export default function MacroContextStrip({
   onStudyDirection,
   onStudyQuantScan,
   historicalPreview,
+  watchedFundCodes,
 }: {
   data?: OpportunityContext;
   error: boolean;
@@ -220,6 +221,7 @@ export default function MacroContextStrip({
   onStudyDirection?: (input: DirectionTrackInput) => Promise<void>;
   onStudyQuantScan?: (input: QuantScanTrackInput) => Promise<void>;
   historicalPreview?: HistoricalResearchSlots;
+  watchedFundCodes?: readonly string[];
 }) {
   const [params, setParams] = useSearchParams();
   const historicalDate = historicalPreview
@@ -552,6 +554,9 @@ export default function MacroContextStrip({
                 {ready && (
                   <TodayFocus
                     data={ready}
+                    watchedCodes={
+                      historicalPreview ? undefined : watchedFundCodes
+                    }
                     onViewEvidence={() => open("macro")}
                     frozenNavHistories={historicalPreview?.navHistories}
                   />

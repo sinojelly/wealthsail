@@ -463,7 +463,9 @@ def _fund_views(raw, frozen, report, histories):
     return result
 
 
-def _report_view(value):
+def _report_view(value, packet=None, cutoff=None):
+    from backend.investment.opportunity_fund_matching import annotate_topic_primary_funds
+
     formal = value.get("formalReport")
     if isinstance(formal, dict):
         allowed = {
@@ -471,6 +473,7 @@ def _report_view(value):
             "asOf",
             "summary",
             "macroCycle",
+            "cycleInsights",
             "coverage",
             "sources",
             "events",
@@ -493,6 +496,12 @@ def _report_view(value):
             coverage=[],
             energy=[],
         )
+    if packet is not None and cutoff is not None:
+        from backend.macro.cycle_insights import project_cycle_insights
+
+        # Read representative frozen prices into the descriptive cycle stage
+        # before removing all actionable plans from historical preview.
+        report = project_cycle_insights(report, packet, cutoff)
     report["actionablePlans"] = []
     for direction in report.get("valueDirections", []):
         direction.update(
@@ -503,7 +512,7 @@ def _report_view(value):
             quantitativeFundCodes=[],
             quantitativeEvidence=[],
         )
-    return report
+    return annotate_topic_primary_funds(report)
 
 
 def _fact_view(row, fields, at):
@@ -788,7 +797,7 @@ async def preview_research(conn, run_id, *, now):
         or (value.get("originalOutcome") or {}).get("researchId") != str(run_id)
     ):
         raise DataUnavailableError("历史离线校验返回的身份或时刻不一致")
-    report = _report_view(value)
+    report = _report_view(value, frozen.packet, frozen.validated_at)
     from backend.macro.research_topic_repository import prepare_topic_registry
 
     registry = value.get("topicRegistry")

@@ -648,6 +648,38 @@ async def test_share_dedup_preserves_linked_launch_and_plain_product_meaning():
 
 
 @pytest.mark.asyncio
+async def test_bank_topic_does_not_promote_broker_fund_named_in_its_thesis():
+    from backend.investment.opportunity_fund_matching import restrict_cached_primary_funds
+
+    row = topic("bank", title="银行红利卖区评估", summary="比较券商基金004069", match={"industryIds": ["BANK", "BROKER"]})
+    bank = product("008298", "中证银行ETF联接A", "银行")
+    broker = product("004069", "中证证券公司ETF联接A", "证券")
+    resolved = await recall()(Connection([bank, broker]), [row], {}, NOW)
+    assert {fund["fundCode"] for fund in resolved["topic:bank"]["funds"]} == {"008298", "004069"}
+    result = restrict_cached_primary_funds(resolved, [row], {})["topic:bank"]
+    assert [fund["fundCode"] for fund in result["funds"]] == ["008298"]
+
+
+def test_old_report_derives_primary_links_without_rewriting_original_plans():
+    from backend.investment.opportunity_fund_matching import annotate_topic_primary_funds
+
+    rows = [
+        ("汽车技术入区", "中证汽车指数A", "中证机器人ETF联接A"),
+        ("金融IT付费需求", "中证金融科技ETF联接A", "中证计算机ETF联接A"),
+        ("网络通信与光模块回购", "中证通信设备ETF联接A", "中证人工智能ETF联接A"),
+        ("电网交流与电力经营", "中证全指电力指数A", "中证证券公司ETF联接A"),
+        ("海外科技滞后净值观察", "纳斯达克100ETF联接A", "中证人工智能ETF联接A"),
+    ]
+    topics = [{"title": title, "plans": [{"label": primary, "fundCode": "123456"}, {"label": incidental, "fundCode": "123789"}]} for title, primary, incidental in rows]
+    report = {"researchTopics": topics, "topicCatalog": topics}
+    projected = annotate_topic_primary_funds(report)
+    assert projected["researchTopics"] == projected["topicCatalog"]
+    assert [row["primaryFundCodes"] for row in projected["researchTopics"]] == [["123456"]] * len(rows)
+    assert all("primaryFundCodes" not in row for row in topics)
+    assert all(len(topic["plans"]) == 2 for topic in projected["researchTopics"])
+
+
+@pytest.mark.asyncio
 async def test_discovery_is_serializable_and_live_enrichment_refreshes_share_status():
     import json
 

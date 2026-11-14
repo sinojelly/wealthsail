@@ -119,6 +119,66 @@ it("preserves different dated plans but chooses the newest coordinates for urgen
   expect(fund.plans[0].asOf).toBe("2026-11-13");
   expect(fund.priority.expanded).toBe(false);
 });
+it("uses the valid displayed prices and only primary funds for theme badges", () => {
+  const value = data();
+  const bank = plan("008298", 0);
+  bank.currentPrice = "2";
+  bank.priceRefresh = {
+    state: "PARTIAL",
+    navAsOf: bank.asOf,
+    methodVersion: bank.methodVersion,
+  };
+  const wrong = plan("004069", 0);
+  value.dailyResearch!.report!.researchTopics = [
+    {
+      key: "bank",
+      title: "银行红利卖区评估",
+      primaryFundCodes: ["008298"],
+      plans: [wrong, bank],
+    },
+    {
+      key: "grid",
+      title: "电网建设",
+      primaryFundCodes: [],
+      plans: [wrong],
+    },
+  ];
+  const board = buildTodayBoard(value);
+  expect(board.funds.find((f) => f.code === "008298")?.priority.label).toBe(
+    "已达卖出参考区",
+  );
+  expect(board.funds.find((f) => f.code === "004069")?.origins).not.toContain(
+    "银行红利卖区评估",
+  );
+  expect(
+    board.insights.find((row) => row.key === "研究主题:bank")?.priority.label,
+  ).toBe("已入卖区（止盈评估）");
+  expect(
+    board.insights.find((row) => row.key === "研究主题:grid"),
+  ).toMatchObject({ funds: [], priority: { label: "主题观察" } });
+});
+it("opens only the preferred A/C share of the exact index product", () => {
+  const value = data();
+  const a = { ...plan("001631", 0), label: "天弘中证食品饮料ETF联接A" };
+  const c = { ...plan("001632", 0), label: "天弘中证食品饮料ETF联接C" };
+  const other = { ...plan("001633", 0), label: "另家中证食品饮料ETF联接C" };
+  value.dailyResearch!.report!.mentionedFunds = [a, c, other].map(
+    (actionableZones) => ({
+      fundCode: actionableZones.subjectId,
+      actionableZones,
+    }),
+  );
+  const board = buildTodayBoard(value, ["001632"]);
+  expect(
+    board.funds
+      .filter((f) => f.code.startsWith("00163"))
+      .map((f) => [f.code, f.priority.expanded]),
+  ).toEqual([
+    ["001631", false],
+    ["001632", true],
+    ["001633", true],
+  ]);
+});
 it("shows every insight, mounts each fund once, and only mounts a folded fund after expansion", async () => {
   vi.stubGlobal("IntersectionObserver", undefined);
   renderWithSession(<TodayFocus data={data()} onViewEvidence={() => {}} />);
@@ -135,6 +195,8 @@ it("shows every insight, mounts each fund once, and only mounts a folded fund af
   ]);
   expect(within(funds).getAllByText("参考买入区间")).toHaveLength(4);
   expect(screen.queryByRole("region", { name: "本期提及基金" })).toBeNull();
+  expect(screen.getByText("AI硬件", { selector: "strong" })).not.toBeVisible();
+  fireEvent.click(screen.getByText(/研究方向与主题/));
   expect(screen.getByText("AI硬件", { selector: "strong" })).toBeVisible();
   expect(screen.getByText("存储主题", { selector: "strong" })).toBeVisible();
   const folded = rows.at(-1)!;

@@ -67,6 +67,11 @@
 .op-today-insights {
   margin-top: 1.8rem;
 }
+.op-today-insights-list > summary {
+  font-weight: 650;
+  cursor: pointer;
+  padding-block: 0.55rem;
+}
 .op-today-insight > p,
 .op-today-related {
   margin: 0.8rem 1rem;

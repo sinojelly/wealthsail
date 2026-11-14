@@ -555,6 +555,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, tenant_id=None, 
         from backend.investment.opportunity_fund_prices import (
             enrich_fund_price_positions,
         )
+        from backend.investment.opportunity_fund_matching import restrict_cached_primary_funds
 
         discovered = await read_cached_topic_funds(
             conn, identity, validated, candidates, now
@@ -565,6 +566,7 @@ async def read_topic_fund_recommendations(conn, run_id, now, *, tenant_id=None, 
                 "FUND_RECALL_FAILED" if state == "FAILED" else "FUND_RECALL_PENDING"
             ]
             return result
+        discovered = restrict_cached_primary_funds(discovered, candidates, packet)
         recalls = await enrich_topic_funds(conn, discovered, packet, now, display_limit=None)
         recalls = await enrich_fund_price_positions(
             conn, recalls, packet, now, tenant_id=tenant_id, user_id=user_id,

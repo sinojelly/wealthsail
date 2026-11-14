@@ -76,6 +76,10 @@ it("shows unaudited direction and mentioned-fund reference levels and band chart
   const direction = screen
     .getAllByTestId("today-fund-row")
     .find((r) => r.getAttribute("data-fund-code") === "000101")!;
+  fireEvent.click(screen.getByText(/研究方向与主题/));
+  fireEvent.click(
+    screen.getByText("AI硬件", { selector: ".op-today-insight strong" }),
+  );
   expect(screen.getByText("基于已有资讯研判")).toBeVisible();
   expect(within(direction).getByText("参考买入区间")).toBeVisible();
   expect(within(direction).getByText("1.0500–1.1500")).toBeVisible();
@@ -111,6 +115,7 @@ it("retains every topic and direction instead of truncating discovery output", (
     })),
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
+  fireEvent.click(screen.getByText(/研究方向与主题/));
   expect(
     screen.getByText("方向15", { selector: ".op-today-insight strong" }),
   ).toBeVisible();

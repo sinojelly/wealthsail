@@ -3,6 +3,7 @@ import type {
   OpportunityContext,
 } from "../../api/investment";
 import { fundOperationDistance } from "./fund-operation-distance";
+import { fundDisplayName } from "./plan-display";
 
 export interface TodayPriority {
   rank: number;
@@ -35,18 +36,32 @@ const waiting = (): TodayPriority => ({
   label: "净值资料待补齐",
   percentile: Infinity,
 });
+const observation = (): TodayPriority => ({ ...waiting(), label: "主题观察" });
+
+function shareFamily(fund: TodayFund) {
+  const plan = fund.plans[0];
+  if (
+    plan.priceBasis !== "UNIT_NAV" ||
+    (plan.market ?? "FUND_CN") !== "FUND_CN"
+  )
+    return null;
+  // Match a full index fund product name, including provider and product form.
+  // A common index or an A/C suffix alone does not make two funds share classes.
+  const matched = fundDisplayName(fund.name, fund.code)
+    .replace(/\s+/g, "")
+    .match(
+      /^(.+(?:指数|ETF|联接)(?:基金|发起式)*)([AC])(?:类|份额)?(?:[（(]人民币[)）]|人民币)?$/i,
+    );
+  return matched
+    ? { product: matched[1].toUpperCase(), share: matched[2].toUpperCase() }
+    : null;
+}
 export function todayPriority(
   plan: ActionableZoneResult,
   held = false,
 ): TodayPriority {
   const p = fundOperationDistance(plan);
-  if (
-    p.current == null ||
-    p.low == null ||
-    p.high == null ||
-    p.low > p.high ||
-    (plan.priceRefresh && plan.priceRefresh.state !== "READY")
-  )
+  if (p.current == null || p.low == null || p.high == null || p.low > p.high)
     return waiting();
   const percentile = p.percentile ?? Infinity;
   const base = { percentile, expanded: false };
@@ -115,7 +130,10 @@ export function compareTodayPriority(a: TodayPriority, b: TodayPriority) {
 }
 
 /** One visible price board per identity; preserve distinct plans as alternatives. */
-export function buildTodayBoard(data: OpportunityContext) {
+export function buildTodayBoard(
+  data: OpportunityContext,
+  watchedCodes: readonly string[] = [],
+) {
   const daily = data.dailyResearch;
   const report = daily?.report;
   const directions = report?.valueDirections?.length
@@ -128,15 +146,22 @@ export function buildTodayBoard(data: OpportunityContext) {
     report?.mentionedFunds ??
     daily?.economicResearch?.observations.mentionedFunds ??
     [];
+  const personal = [
+    ...(data.sellRiskAlerts?.items ?? []),
+    ...(data.sellRiskAlerts?.actionReminders ?? []),
+    ...(data.sellRiskAlerts?.normalHoldings ?? []),
+  ];
   const held = new Set(
-    [
-      ...(data.sellRiskAlerts?.items ?? []),
-      ...(data.sellRiskAlerts?.actionReminders ?? []),
-      ...(data.sellRiskAlerts?.normalHoldings ?? []),
-    ]
+    personal
       .filter((r) => r.relationship.includes("HELD"))
       .map((r) => r.fundCode),
   );
+  const watched = new Set([
+    ...watchedCodes,
+    ...personal
+      .filter((r) => r.relationship.includes("TRACKED"))
+      .map((r) => r.fundCode),
+  ]);
   const funds = new Map<string, TodayFund>();
   const signatures = new Map<string, Set<string>>();
   const insights: TodayInsight[] = [];
@@ -193,6 +218,15 @@ export function buildTodayBoard(data: OpportunityContext) {
           : "fundPlans" in row && Array.isArray(row.fundPlans)
             ? (row.fundPlans as ActionableZoneResult[])
             : [];
+      const primary =
+        "primaryFundCodes" in row && Array.isArray(row.primaryFundCodes)
+          ? new Set(row.primaryFundCodes)
+          : null;
+      const associated = plans.map((p) => {
+        const inScope = !primary || primary.has(p.fundCode ?? p.subjectId);
+        const key = add(p, inScope ? title : "其他研究提及");
+        return inScope ? key : null;
+      });
       insights.push({
         key: `${kind}:${row.key ?? index}`,
         title,
@@ -201,8 +235,8 @@ export function buildTodayBoard(data: OpportunityContext) {
         kind,
         auditStatus:
           "auditStatus" in row ? (row.auditStatus as string) : undefined,
-        funds: [...new Set(plans.map((p) => add(p, title)))],
-        priority: waiting(),
+        funds: [...new Set(associated.filter((key) => key !== null))],
+        priority: observation(),
       });
     });
   }
@@ -233,11 +267,47 @@ export function buildTodayBoard(data: OpportunityContext) {
       compareTodayPriority(a.priority, b.priority) ||
       a.code.localeCompare(b.code),
   );
+  const shareGroups = new Map<
+    string,
+    Array<{ fund: TodayFund; share: string }>
+  >();
+  for (const fund of ordered) {
+    const family = shareFamily(fund);
+    if (!family || !fund.priority.expanded) continue;
+    const shares = shareGroups.get(family.product) ?? [];
+    shares.push({ fund, share: family.share });
+    shareGroups.set(family.product, shares);
+  }
+  for (const shares of shareGroups.values()) {
+    if (shares.length !== 2 || shares[0].share === shares[1].share) continue;
+    const candidates = shares.map(({ fund }) => fund);
+    const chosen =
+      candidates.find((fund) => held.has(fund.code)) ??
+      candidates.find((fund) => watched.has(fund.code)) ??
+      candidates[0];
+    for (const fund of candidates) {
+      if (fund !== chosen)
+        fund.priority = { ...fund.priority, expanded: false };
+    }
+  }
   insights.forEach((i) => {
     i.funds.sort((a, b) =>
       compareTodayPriority(funds.get(a)!.priority, funds.get(b)!.priority),
     );
-    i.priority = i.funds.length ? funds.get(i.funds[0])!.priority : waiting();
+    const primary = i.funds.map((key) => funds.get(key)!);
+    const sell = primary.find(
+      (fund) => fundOperationDistance(fund.plans[0]).inSellZone,
+    );
+    const exitThesis = /卖区|止盈/.test(i.title);
+    i.priority =
+      sell || exitThesis
+        ? {
+            ...(sell?.priority ?? observation()),
+            label: "已入卖区（止盈评估）",
+            expanded: false,
+            rank: 2,
+          }
+        : (primary[0]?.priority ?? observation());
   });
   insights.sort((a, b) => compareTodayPriority(a.priority, b.priority));
   const missing = unpriced.filter((m) => {
