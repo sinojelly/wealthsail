@@ -68,12 +68,13 @@ function FundCardContent({
 }) {
   const [chosenId, setChosenId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const chosen =
     group.tracks.find((row) => row.id === chosenId) ?? group.tracks[0];
   const detail = useQuery({
     queryKey: ["study", actor, "detail", detailId, 0],
     queryFn: ({ signal }) => getStudyDetail(detailId!, signal),
-    enabled: !!detailId,
+    enabled: historyOpen && !!detailId,
   });
   const publicCode =
     group.market === "FUND_CN" && /^\d{6}$/.test(group.code ?? "")
@@ -126,125 +127,147 @@ function FundCardContent({
           </>
         )}
         {group.reference && <FundReferenceDetails fund={group.reference} />}
-        {!!group.tracks.length && (
-          <div className="op-my-fund-plans" aria-label="独立冻结研究计划">
-            {group.tracks.map((track) => (
-              <button
-                type="button"
-                key={track.id}
-                aria-pressed={chosen?.id === track.id}
-                aria-label={`选择计划 ${track.title}`}
-                onClick={() => select(track)}
-              >
-                {track.title} · {timeLabel(track.createdAt)}
-              </button>
-            ))}
-          </div>
-        )}
-        {chosen ? (
-          <section aria-label="当前选择的冻结计划" className="op-my-fund-plan">
-            <strong>{chosen.title}</strong>
-            <small>
-              研究建立时间：{timeLabel(chosen.createdAt)} ·{" "}
-              {studyStates[chosen.status] ?? "状态待核对"}
-            </small>
-            {plan && (
-              <small>
-                计划行情基准：{timeLabel(plan.asOf)} · {plan.priceBasis} ·{" "}
-                {planUnit(plan.unit)} · {plan.methodVersion}
-                {sourceHref(plan.sourceUri) && (
-                  <>
-                    {" "}
-                    ·{" "}
-                    <a
-                      href={sourceHref(plan.sourceUri)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      原计划来源
-                    </a>
-                  </>
-                )}
-              </small>
-            )}
-            {frozenTrack ? (
+        {chosen && (
+          <details
+            className="op-my-fund-frozen-history op-print-disclosure"
+            onToggle={(event) => setHistoryOpen(event.currentTarget.open)}
+          >
+            <summary>
+              查看关联历史研究复盘（{chosen.createdAt.slice(0, 10)}）
+            </summary>
+            {historyOpen && (
               <>
-                <FundPriceTracks
-                  plan={plan!}
-                  basis="原冻结"
-                  selected={frozenTrack.track}
-                />
-                <small>
-                  冻结轨道：
-                  {frozenTrack.track === "LEFT_VALUE"
-                    ? "左侧低吸"
-                    : "右侧趋势"}{" "}
-                  · 研究时状态：
-                  {frozenTrack.state === "CANDIDATE"
-                    ? "候选"
-                    : frozenTrack.state === "WATCH"
-                      ? "观察"
-                      : "资料待核对"}
-                  。价位为原研究参考，未随最新行情改写。
-                </small>
+                <div className="op-my-fund-plans" aria-label="独立冻结研究计划">
+                  {group.tracks.map((track) => (
+                    <button
+                      type="button"
+                      key={track.id}
+                      aria-pressed={chosen?.id === track.id}
+                      aria-label={`选择计划 ${track.title}`}
+                      onClick={() => select(track)}
+                    >
+                      {track.title} · {timeLabel(track.createdAt)}
+                    </button>
+                  ))}
+                </div>
+                <section
+                  aria-label="当前选择的冻结计划"
+                  className="op-my-fund-plan"
+                >
+                  <strong>{chosen.title}</strong>
+                  <small>
+                    研究建立时间：{timeLabel(chosen.createdAt)} ·{" "}
+                    {studyStates[chosen.status] ?? "状态待核对"}
+                  </small>
+                  {plan && (
+                    <small>
+                      计划行情基准：{timeLabel(plan.asOf)} · {plan.priceBasis} ·{" "}
+                      {planUnit(plan.unit)} · {plan.methodVersion}
+                      {sourceHref(plan.sourceUri) && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <a
+                            href={sourceHref(plan.sourceUri)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            原计划来源
+                          </a>
+                        </>
+                      )}
+                    </small>
+                  )}
+                  {frozenTrack ? (
+                    <>
+                      <FundPriceTracks
+                        plan={plan!}
+                        basis="原冻结"
+                        selected={frozenTrack.track}
+                      />
+                      <small>
+                        冻结轨道：
+                        {frozenTrack.track === "LEFT_VALUE"
+                          ? "左侧低吸"
+                          : "右侧趋势"}{" "}
+                        · 研究时状态：
+                        {frozenTrack.state === "CANDIDATE"
+                          ? "候选"
+                          : frozenTrack.state === "WATCH"
+                            ? "观察"
+                            : "资料待核对"}
+                        。价位为原研究参考，未随最新行情改写。
+                      </small>
+                    </>
+                  ) : (
+                    <p>尚无完整冻结买卖点。</p>
+                  )}
+                  <p
+                    className={`op-my-fund-state state-${state?.toLowerCase() ?? "unknown"}`}
+                  >
+                    <strong>
+                      {state ? watchStateLabels[state] : "行情待更新"}
+                    </strong>
+                  </p>
+                  <small>
+                    当前判断依据：
+                    {watch?.basis === "CONFIRMED_NAV"
+                      ? "确认净值"
+                      : watch?.basis === "ESTIMATE_1430"
+                        ? "14:30估算净值"
+                        : watch?.basis === "ESTIMATE_INTRADAY"
+                          ? "盘中估算净值"
+                          : "行情待更新"}{" "}
+                    · {timeLabel(watch?.asOf)}
+                  </small>
+                  {watch?.reason && <p>{watch.reason}</p>}
+                  {chosenDetail ? (
+                    <p>
+                      下一观察条件：
+                      {chosenDetail.version.snapshot.watchFor[0] ??
+                        (chosenDetail.version.snapshot.conditions[0]
+                          ? studyConditionLabel(
+                              chosenDetail.version.snapshot.conditions[0],
+                            )
+                          : "未声明，需人工复盘。")}{" "}
+                      <small>
+                        版本 {chosenDetail.version.version} ·{" "}
+                        {timeLabel(chosenDetail.version.createdAt)}
+                      </small>
+                    </p>
+                  ) : detailId === chosen.id && detail.isError ? (
+                    <p role="alert">
+                      该研究条件读取失败，未借用其他研究。
+                      <button
+                        type="button"
+                        onClick={() => void detail.refetch()}
+                      >
+                        重试观察条件
+                      </button>
+                    </p>
+                  ) : detailId === chosen.id && detail.isPending ? (
+                    <p role="status">正在读取所选研究条件…</p>
+                  ) : (
+                    <p>
+                      选择计划或
+                      <button
+                        type="button"
+                        onClick={() => setDetailId(chosen.id)}
+                      >
+                        读取下一观察条件
+                      </button>
+                      后查看原研究条件。
+                    </p>
+                  )}
+                  <button type="button" onClick={() => onReview(chosen.id)}>
+                    研究与复盘：{chosen.title}
+                  </button>
+                </section>
               </>
-            ) : (
-              <p>尚无完整冻结买卖点。</p>
             )}
-            <p
-              className={`op-my-fund-state state-${state?.toLowerCase() ?? "unknown"}`}
-            >
-              <strong>{state ? watchStateLabels[state] : "行情待更新"}</strong>
-            </p>
-            <small>
-              当前判断依据：
-              {watch?.basis === "CONFIRMED_NAV"
-                ? "确认净值"
-                : watch?.basis === "ESTIMATE_1430"
-                  ? "14:30估算净值"
-                  : watch?.basis === "ESTIMATE_INTRADAY"
-                    ? "盘中估算净值"
-                    : "行情待更新"}{" "}
-              · {timeLabel(watch?.asOf)}
-            </small>
-            {watch?.reason && <p>{watch.reason}</p>}
-            {chosenDetail ? (
-              <p>
-                下一观察条件：
-                {chosenDetail.version.snapshot.watchFor[0] ??
-                  (chosenDetail.version.snapshot.conditions[0]
-                    ? studyConditionLabel(
-                        chosenDetail.version.snapshot.conditions[0],
-                      )
-                    : "未声明，需人工复盘。")}{" "}
-                <small>
-                  版本 {chosenDetail.version.version} ·{" "}
-                  {timeLabel(chosenDetail.version.createdAt)}
-                </small>
-              </p>
-            ) : detailId === chosen.id && detail.isError ? (
-              <p role="alert">
-                该研究条件读取失败，未借用其他研究。
-                <button type="button" onClick={() => void detail.refetch()}>
-                  重试观察条件
-                </button>
-              </p>
-            ) : detailId === chosen.id && detail.isPending ? (
-              <p role="status">正在读取所选研究条件…</p>
-            ) : (
-              <p>
-                选择计划或
-                <button type="button" onClick={() => setDetailId(chosen.id)}>
-                  读取下一观察条件
-                </button>
-                后查看原研究条件。
-              </p>
-            )}
-            <button type="button" onClick={() => onReview(chosen.id)}>
-              研究与复盘：{chosen.title}
-            </button>
-          </section>
-        ) : (
+          </details>
+        )}
+        {!chosen && (
           <p>
             {group.reference?.plan
               ? "当前程序参考价位独立展示；尚未保存个人冻结买卖计划。"

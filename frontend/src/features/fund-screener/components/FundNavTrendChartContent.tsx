@@ -69,7 +69,6 @@ function TrendView({
   ];
   const minimum = values.length ? Math.min(...values) : 0,
     maximum = values.length ? Math.max(...values) : 1;
-  const padding = Math.max((maximum - minimum) * 0.06, maximum * 0.01);
   const percentile =
     data?.summary.percentilePct ??
     navPercentile(data?.points.map((point) => Number(point.unitNav)) ?? []);
@@ -147,7 +146,7 @@ function TrendView({
                   tickLine={false}
                 />
                 <YAxis
-                  domain={[Math.max(0, minimum - padding), maximum + padding]}
+                  domain={[minimum * 0.97, maximum * 1.03]}
                   tickFormatter={(value: number) => value.toFixed(2)}
                   tick={{ fontSize: 10 }}
                   tickLine={false}

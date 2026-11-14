@@ -256,8 +256,11 @@ function sectionDisclosure(section: HTMLElement, title: string) {
   return { summary: summary!, details: details as HTMLDetailsElement };
 }
 
-function expectFrozenPrices(card: HTMLElement) {
-  const prices = within(card).getByRole("region", {
+async function expectFrozenPrices(card: HTMLElement) {
+  const entry = within(card).getByText(/查看关联历史研究复盘/);
+  expect(entry.closest("details")).not.toHaveAttribute("open");
+  await userEvent.click(entry);
+  const prices = await within(card).findByRole("region", {
     name: "参考买卖点与操作状态",
   });
   for (const [label, value] of [
@@ -300,7 +303,7 @@ it("loads personal fund cards while the display report is pending and preserves 
     name: "个人人工智能联接基金",
   });
   const heading = within(card).getByText("个人人工智能联接基金");
-  expectFrozenPrices(card);
+  await expectFrozenPrices(card);
   expect(card).toHaveTextContent("仅跟踪");
   expect(
     within(card).getByRole("region", { name: "012733净值走势图区域" }),
@@ -329,7 +332,7 @@ it("keeps personal funds readable after an initial report HTTP failure", async (
     name: "个人人工智能联接基金",
   });
   expect(card).toBeVisible();
-  expectFrozenPrices(card);
+  await expectFrozenPrices(card);
 });
 
 it.each([4, 5])(
@@ -374,7 +377,7 @@ it.each([4, 5])(
     for (const [index, card] of cards.entries()) {
       const code = tracks[index].scope.fundCode;
       expect(card).toBeVisible();
-      expectFrozenPrices(card);
+      await expectFrozenPrices(card);
       expect(
         within(card).getByRole("region", { name: `${code}净值走势图区域` }),
       ).toBeVisible();

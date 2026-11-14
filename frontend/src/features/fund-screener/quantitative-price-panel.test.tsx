@@ -44,7 +44,7 @@ it("shows one current price grid with position, percentile and distances", () =>
   expect(screen.getByText("价格依据与风险说明").tagName).toBe("SUMMARY");
 });
 
-it("keeps stale reference levels readable without labelling them a current buy trigger", () => {
+it("shows the real position of an incomplete history with usable dated prices", () => {
   const plan = frozenPlan();
   plan.priceRefresh = {
     state: "PARTIAL",
@@ -53,9 +53,16 @@ it("keeps stale reference levels readable without labelling them a current buy t
     reason: "SOURCE_BEHIND_CONFIRMED_NAV",
   };
   render(<FundPriceTracks plan={plan} basis="当前" />);
-  expect(screen.getByText("⚪ 净值资料补齐中")).toBeVisible();
-  expect(screen.queryByText("🟢 已入买区（低吸参考）")).toBeNull();
+  expect(screen.getByText("🟢 已入买区（低吸参考）")).toBeVisible();
+  expect(screen.getByText(/区间位置按上方日期计算/)).toBeVisible();
   expect(screen.getByText("1.0500–1.1500")).toBeVisible();
+});
+
+it("keeps the missing data label for a genuinely unavailable entry boundary", () => {
+  const plan = frozenPlan();
+  plan.tracks[0].entryZoneMin = null;
+  render(<FundPriceTracks plan={plan} basis="当前" />);
+  expect(screen.getByText("⚪ 净值资料补齐中")).toBeVisible();
 });
 
 it.each([
@@ -63,8 +70,9 @@ it.each([
   ["1.4000", "🟠 已入卖区（分批止盈）"],
   ["1.1700", "🟡 接近买区（差 1.71%）"],
   [String(1.15 / (1 - 0.0299)), "🟡 接近买区（差 2.99%）"],
-  [String(1.15 / (1 - 0.0301)), "⚪ 区间中部观察"],
-  ["1.2500", "⚪ 区间中部观察"],
+  [String(1.15 / (1 - 0.0301)), "⚪ 距买区 3.01%"],
+  ["1.2500", "⚪ 距买区 8.00%"],
+  ["1.0300", "🟡 接近买区（差 1.94%）"],
 ])(
   "compares current NAV %s to the supplied reference boundaries",
   (current, label) => {

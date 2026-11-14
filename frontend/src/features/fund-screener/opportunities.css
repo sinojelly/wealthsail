@@ -2972,9 +2972,6 @@
     position: static;
     break-inside: avoid;
   }
-  .op-nav-plot {
-    overflow: hidden;
-  }
 }
 .op-nav-legend span::before {
   display: inline-block;
@@ -3081,7 +3078,16 @@
     border-radius: 4px;
   }
   .op-nav-plot {
-    height: 115px;
+    /* Print can start before ResizeObserver reports the page's dimensions.
+       Keep the complete last measured SVG and let its viewBox scale to paper. */
+    break-inside: avoid;
+  }
+  .op-nav-plot .recharts-wrapper {
+    width: 100% !important;
+  }
+  .op-nav-plot .recharts-surface {
+    width: 100%;
+    height: 100%;
   }
   .op-nav-trend > header strong,
   .op-nav-trend .op-nav-summary,

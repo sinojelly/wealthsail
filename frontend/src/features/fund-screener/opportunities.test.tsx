@@ -692,6 +692,7 @@ it("keeps valid personal reminders in Today without a report and opens the indep
     "true",
   );
   const funds = await screen.findByRole("region", { name: "我的基金" });
+  await userEvent.click(await within(funds).findByText(/查看关联历史研究复盘/));
   const frozenPrices = await within(funds).findByRole("region", {
     name: "参考买卖点与操作状态",
   });

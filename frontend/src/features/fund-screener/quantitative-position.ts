@@ -45,18 +45,12 @@ export function quantitativePosition(plan: ActionableZoneResult) {
           : 0;
   const buyDistance = distance(low, high),
     sellDistance = distance(sellLow, sellHigh);
-  let label = "⚪ 区间中部观察",
+  let label = "⚪ 净值资料补齐中",
     tone = "neutral",
     rank = 2;
-  if (
-    current == null ||
-    low == null ||
-    high == null ||
-    (plan.priceRefresh != null && plan.priceRefresh.state !== "READY")
-  ) {
-    label = "⚪ 净值资料补齐中";
+  if (current == null || low == null || high == null || low > high) {
     rank = 4;
-  } else if (stop != null && current < stop) {
+  } else if (stop != null && current <= stop) {
     label = "🔴 跌破止损参考";
     tone = "stop";
     rank = 4;
@@ -64,7 +58,7 @@ export function quantitativePosition(plan: ActionableZoneResult) {
     label = "🟠 已入卖区（分批止盈）";
     tone = "sell";
     rank = 3;
-  } else if (current <= high) {
+  } else if (current >= low && current <= high) {
     label = "🟢 已入买区（低吸参考）";
     tone = "buy";
     rank = 0;
@@ -73,12 +67,15 @@ export function quantitativePosition(plan: ActionableZoneResult) {
     tone = "near";
     rank = 1;
   } else if (
+    buyDistance != null &&
     plan.tracks?.some(
       (row) => row.track === "RIGHT_TREND" && row.state === "CANDIDATE",
     )
   ) {
-    label = "🔵 右侧趋势走强";
+    label = `🔵 右侧趋势走强 · 距买区 ${buyDistance.toFixed(2)}%`;
     tone = "trend";
+  } else if (buyDistance != null) {
+    label = `⚪ 距买区 ${buyDistance.toFixed(2)}%`;
   }
   return {
     track,

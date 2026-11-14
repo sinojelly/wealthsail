@@ -111,6 +111,24 @@ async def test_personal_get_never_calls_external_nav_repair(monkeypatch):
     assert len(conn.calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_personal_get_embeds_all_ten_full_history_windows(monkeypatch):
+    from tests.unit.test_live_fund_plans_v6 import LocalHistory, history
+
+    codes = [f"{code:06d}" for code in range(1, 11)]
+    monkeypatch.setattr(
+        service, "_inventory", AsyncMock(return_value=[fund(code, "HELD") for code in codes])
+    )
+    monkeypatch.setattr(service, "_persisted_estimates", AsyncMock(return_value={}))
+    conn = LocalHistory([history(code) for code in codes])
+
+    data = await service.personal_funds_reference(conn, "tenant", "actor", NOW)
+
+    assert [row["fundCode"] for row in data["funds"]] == codes
+    assert all(len(row["history"]["points"]) == 550 for row in data["funds"])
+    assert len(conn.calls) == 1
+
+
 @pytest.mark.parametrize("cost", [None, "0", "NaN", "-1"])
 def test_holding_profit_never_invents_a_cost_basis(cost):
     holding = {

@@ -324,8 +324,9 @@ it("does not fetch missing personal chart data on scroll or plan selection", asy
   ).toBeInTheDocument();
   expect(funds.getFundNavHistory).not.toHaveBeenCalled();
   intersect(nearCard, false);
+  await user.click(within(nearCard).getByText(/查看关联历史研究复盘/));
   await user.click(
-    within(nearCard).getByRole("button", {
+    await within(nearCard).findByRole("button", {
       name: /选择计划 研究near-alternate/,
     }),
   );
@@ -361,6 +362,13 @@ it("loads private holding and original plans independently of a failed public re
   expect(card).toHaveTextContent("已持仓");
   expect(card).toHaveTextContent("最新确认净值");
   expect(card).toHaveTextContent("1.1410");
+  const history = within(card).getByText(/查看关联历史研究复盘/);
+  expect(history.closest("details")).not.toHaveAttribute("open");
+  expect(
+    within(card).queryByRole("region", { name: "当前选择的冻结计划" }),
+  ).not.toBeInTheDocument();
+  await user.click(history);
+  await within(card).findByRole("region", { name: "当前选择的冻结计划" });
   expect(card).toHaveTextContent("1.0500–1.1500");
   expect(card).toHaveTextContent("计划行情基准");
   expect(card).toHaveTextContent("研究建立时间");
@@ -379,7 +387,7 @@ it("loads private holding and original plans independently of a failed public re
   expect(card).toHaveTextContent("版本 2");
 });
 
-it("shows every fund's complete prices and chart slot by default while deferring offscreen charts", async () => {
+it("renders ten expanded charts immediately from the personal response, including offscreen funds", async () => {
   const user = userEvent.setup();
   vi.stubGlobal(
     "IntersectionObserver",
@@ -387,18 +395,42 @@ it("shows every fund's complete prices and chart slot by default while deferring
       return { observe: vi.fn(), disconnect: vi.fn() };
     }),
   );
-  const items = ["000101", "000102", "000103", "000104", "000105"].map((code) =>
-    fundTrack(code, code),
+  const codes = Array.from({ length: 10 }, (_, index) =>
+    String(101 + index).padStart(6, "0"),
   );
-  vi.mocked(api.getStudyTracks).mockResolvedValue({ items, total: 5 });
-  show(<MyFundsWorkspace actor="five" />);
-  const cards = await screen.findAllByRole("article", { name: /基金00010/ });
-  expect(cards).toHaveLength(5);
+  const references = await Promise.all(
+    codes.map(async (code): Promise<personal.PersonalFundReference> => ({
+      key: `FUND_CN:${code}`,
+      fundCode: code,
+      fundMarket: "FUND_CN",
+      label: `基金${code}`,
+      relationships: ["TRACKED"],
+      investmentEligible: false,
+      plan: frozenPlan(code),
+      confirmedNav: null,
+      currentEstimate: null,
+      history: await funds.getFundNavHistory(code, "2y"),
+      missingReasons: [],
+    })),
+  );
+  vi.mocked(funds.getFundNavHistory).mockClear();
+  vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
+    version: "personal-funds-reference-v1",
+    source: "LOCAL_DATABASE_ONLY",
+    readOnly: true,
+    asOf: "2026-11-07T12:00:00+08:00",
+    funds: references,
+  });
+  const items = codes.map((code) => fundTrack(code, code));
+  vi.mocked(api.getStudyTracks).mockResolvedValue({ items, total: 10 });
+  show(<MyFundsWorkspace actor="ten" />);
+  const cards = await screen.findAllByRole("article", { name: /基金0001/ });
+  expect(cards).toHaveLength(10);
   for (const card of cards) {
     expect(card).toHaveTextContent("最新确认净值");
     expect(card).toHaveTextContent("参考买入区间");
     expect(
-      within(card).getByRole("region", { name: /净值走势图区域/ }),
+      await within(card).findByRole("img", { name: /单位净值走势/ }),
     ).toBeInTheDocument();
   }
   expect(funds.getFundNavHistory).not.toHaveBeenCalled();
@@ -406,7 +438,7 @@ it("shows every fund's complete prices and chart slot by default while deferring
     screen.getByRole("searchbox", { name: "搜索我的基金" }),
     "000105",
   );
-  expect(screen.getAllByRole("article", { name: /基金00010/ })).toHaveLength(1);
+  expect(screen.getAllByRole("article", { name: /基金0001/ })).toHaveLength(1);
   expect(
     screen.getByRole("article", { name: "基金000105" }),
   ).toBeInTheDocument();
@@ -682,6 +714,9 @@ it.each(["UNKNOWN", "NONE"] as const)(
     expect(await within(reminders).findByText(/持仓身份待核实/)).toBeVisible();
     expect(within(reminders).queryByText("暂无新触发")).not.toBeInTheDocument();
     const fundsRegion = screen.getByRole("region", { name: "我的基金" });
+    await userEvent.click(
+      await within(fundsRegion).findByText(/查看关联历史研究复盘/),
+    );
     expect(await within(fundsRegion).findByText("行情待更新")).toBeVisible();
   },
 );
@@ -1013,6 +1048,7 @@ it("refreshes partially cancelled studies and retries only the remaining origina
     return studyDetail(updated);
   });
   const view = show(<MyFundsWorkspace actor="partial-cancel" />);
+  await user.click(await screen.findByText(/查看关联历史研究复盘/));
   await user.click(
     await screen.findByRole("button", { name: "取消跟踪 legacy-symbol" }),
   );

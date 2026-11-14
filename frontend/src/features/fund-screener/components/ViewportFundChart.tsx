@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import FundNavTrendChart from "./FundNavTrendChart";
 
-type ChartProps = ComponentProps<typeof FundNavTrendChart>;
+type ChartProps = ComponentProps<typeof FundNavTrendChart> & {
+  immediate?: boolean;
+};
 
-function ChartSlot(props: ChartProps) {
+function ChartSlot({ immediate = false, ...props }: ChartProps) {
   const { fundCode } = props;
   const container = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(
@@ -11,7 +13,7 @@ function ChartSlot(props: ChartProps) {
   );
 
   useEffect(() => {
-    if (active || !container.current) return;
+    if (active || immediate || !container.current) return;
     let disposed = false;
     const observer = new IntersectionObserver(
       (entries) => {
@@ -27,7 +29,7 @@ function ChartSlot(props: ChartProps) {
       disposed = true;
       observer.disconnect();
     };
-  }, [active]);
+  }, [active, immediate]);
 
   return (
     <div
@@ -36,7 +38,7 @@ function ChartSlot(props: ChartProps) {
       role="region"
       aria-label={`${fundCode}净值走势图区域`}
     >
-      {active ? (
+      {active || immediate ? (
         <FundNavTrendChart {...props} />
       ) : (
         <div className="op-match-chart-placeholder">

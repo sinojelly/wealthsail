@@ -389,6 +389,9 @@ async def personal_funds_reference(
         }
     now = prepared["asOf"]
     histories = [row for row in prepared["histories"] if _safe_history(row)]
+    histories_by_code = {}
+    for history in histories:
+        histories_by_code.setdefault(history["fundCode"], []).append(history)
     skeletons = [
         {
             "subjectKind": "nav",
@@ -425,10 +428,10 @@ async def personal_funds_reference(
                 code,
                 fund["label"],
                 "all",
-                [row for row in histories if row["fundCode"] == code],
+                histories_by_code.get(code, []),
                 now,
             )
-            if plan
+            if eligible
             else None
         )
         if view:
@@ -480,7 +483,7 @@ async def personal_funds_reference(
                 "unit": view["unit"],
                 "quality": view["state"],
                 "usable": view["state"] == "READY",
-                "changePct": plan.get("currentChangePct"),
+                "changePct": (plan or {}).get("currentChangePct"),
             }
         if plan:
             plan.update(

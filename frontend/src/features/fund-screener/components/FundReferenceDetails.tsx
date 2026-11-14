@@ -60,6 +60,7 @@ export default function FundReferenceDetails({
           {fund.fundMarket === "FUND_CN" && fund.fundCode ? (
             <ViewportFundChart
               fundCode={fund.fundCode}
+              immediate
               snapshot={fund.history}
               snapshotMode="CURRENT_LOCAL"
               track={track}

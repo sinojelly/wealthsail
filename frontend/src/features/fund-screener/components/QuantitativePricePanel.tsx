@@ -31,6 +31,11 @@ export default function QuantitativePricePanel({
       <small>
         {basis}价格日期：{timeLabel(plan.asOf)} · {planUnit(plan.unit)}
       </small>
+      {position.buyDistance != null &&
+        plan.priceRefresh &&
+        plan.priceRefresh.state !== "READY" && (
+          <small>行情资料仍待核对，区间位置按上方日期计算。</small>
+        )}
       <dl className="op-core-price-grid">
         <div>
           <dt>参考买入区间</dt>
