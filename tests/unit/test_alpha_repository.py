@@ -147,6 +147,42 @@ async def test_future_terminal_payload_is_not_visible_as_a_completed_attempt():
     )
 
 
+@pytest.mark.asyncio
+async def test_failed_money_source_keeps_prior_local_chart_history_without_certifying_latest():
+    old = NOW - timedelta(days=1)
+    previous = observation(
+        "M1_YOY",
+        "2026-09-01",
+        "4.4",
+        retrievedAt=old.isoformat(),
+        availableAt=old.isoformat(),
+    )
+    partial = {
+        "id": "today",
+        "run_date": NOW.date(),
+        "claimed_at": NOW,
+        "completed_at": NOW,
+        "status": "PARTIAL",
+        "payload": {"sourceResults": {"AKSHARE_MONEY_SUPPLY": {"status": "TIMEOUT"}}},
+    }
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [
+        partial,
+        partial,
+        {"payload": {"observations": [previous]}, "completed_at": old},
+    ]
+
+    cached = await engine().read_alpha_public(conn, NOW, include_cached_money=True)
+    row = next(
+        row
+        for row in engine().merge_alpha_series([], cached, NOW)
+        if row["code"] == "M1_YOY"
+    )
+    assert row["state"] == "STALE" and row["value"] == 4.4
+    assert row["retrievedAt"] == old.isoformat()
+    assert cached["sourceResults"]["AKSHARE_MONEY_SUPPLY"]["status"] == "TIMEOUT"
+
+
 def test_current_alpha_can_fill_chinabond_gap_without_mutating_permission_evidence():
     prior = {
         "code": "CN_T10",

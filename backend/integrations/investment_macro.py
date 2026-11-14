@@ -22,6 +22,7 @@ _DIRECT_FIELDS = {
     "CPI_YOY": ("RPT_ECONOMY_CPI", "NATIONAL_SAME"),
     "PMI": ("RPT_ECONOMY_PMI", "MAKE_INDEX"),
     "PPI_YOY": ("RPT_ECONOMY_PPI", "BASE_SAME"),
+    "M2_YOY": ("RPT_ECONOMY_CURRENCY_SUPPLY", "BASIC_CURRENCY_SAME"),
 }
 _SERIES = (
     ("CPI_YOY", "中国CPI同比", "macro_china_cpi", "全国-同比增长", "%", "cpi"),
@@ -90,10 +91,10 @@ def normalize_macro(items, *, start=None, end=None):
 
 
 def _latest_window_complete(rows, start, end):
-    # The current month may legitimately be unpublished. Test the last 24
+    # The current month may legitimately be unpublished. Test the last 36
     # completed months without assuming a release timestamp for the current one.
     now_month = end.year * 12 + end.month - 1
-    lower = max(start.year * 12 + start.month - 1, now_month - 24)
+    lower = max(start.year * 12 + start.month - 1, now_month - 36)
     actual = {row["period"].year * 12 + row["period"].month - 1 for row in rows}
     return bool(rows) and all(month in actual for month in range(lower, now_month))
 

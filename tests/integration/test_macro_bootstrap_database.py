@@ -1,7 +1,7 @@
 """Cold-start macro persistence/coverage executes real SQL under Worker authority."""
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock
 
 import asyncpg
@@ -57,12 +57,15 @@ async def test_macro_bootstrap_backfills_and_then_skips_with_real_worker_permiss
             item["complete"] and item["fresh"] and item["refreshed"]
             for item in result["coverage"].values()
         )
+        completed_at = datetime.fromisoformat(
+            result["coverage"]["PMI"]["lastCollectedAt"]
+        )
         assert await conn.fetchval("SELECT current_user::text") == "wealthsail_worker"
         assert not await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM market.source_snapshots WHERE retrieved_at=$1 AND retrieval_key LIKE 'research-macro:%' AND published_at IS NOT NULL)",
-            now,
+            completed_at,
         )
-        skipped = await refresh.ensure_macro_history(object(), now)
+        skipped = await refresh.ensure_macro_history(object(), completed_at)
         assert skipped["status"] == "SKIPPED"
         fetch.assert_awaited_once()
     finally:

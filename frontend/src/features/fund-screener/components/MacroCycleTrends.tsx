@@ -1,20 +1,28 @@
 import type { OpportunityContext } from "../../../api/investment";
+import type { MacroComposite } from "../../../api/macro-cycle";
 import {
   cycleMonth,
   cycleTrend,
   cycleVix,
   liquidityBand,
-  recentCycleRun,
   vixBand,
   type CycleFact,
 } from "../macro-cycle-overview";
 import { sourceHref } from "../macro-display";
 
-const economySeries = [
+const activitySeries = [
   { code: "PMI", label: "制造业 PMI", color: "#146556", axis: "primary" },
-  { code: "CPI_YOY", label: "CPI 同比", color: "#376db7", axis: "secondary" },
   { code: "M1_YOY", label: "M1 同比", color: "#9b5d21", axis: "secondary" },
-  { code: "PPI_YOY", label: "PPI 同比", color: "#a75178", axis: "secondary" },
+  {
+    code: "TSF_STOCK_YOY",
+    label: "社融存量同比",
+    color: "#376db7",
+    axis: "secondary",
+  },
+] as const;
+const inflationSeries = [
+  { code: "PPI_YOY", label: "PPI 同比", color: "#a75178", axis: "primary" },
+  { code: "CPI_YOY", label: "CPI 同比", color: "#376db7", axis: "primary" },
 ] as const;
 const ratesSeries = [
   {
@@ -30,6 +38,12 @@ const ratesSeries = [
     axis: "primary",
   },
   { code: "CN_T10", label: "中国 10Y", color: "#167466", axis: "primary" },
+  {
+    code: "US_T2_NOMINAL",
+    label: "美国 2Y",
+    color: "#996219",
+    axis: "primary",
+  },
 ] as const;
 
 const monthIndex = cycleMonth;
@@ -40,23 +54,29 @@ function Trend({
   data,
   supplemental,
   cutoff,
-  economy,
+  kind,
 }: {
   data: OpportunityContext;
   supplemental?: OpportunityContext;
   cutoff?: string | null;
-  economy: boolean;
+  kind: "activity" | "inflation" | "rates";
 }) {
-  const readings = (economy ? economySeries : ratesSeries)
+  const activity = kind === "activity";
+  const inflation = kind === "inflation";
+  const readings = (
+    activity ? activitySeries : inflation ? inflationSeries : ratesSeries
+  )
     .map((line) => ({
       ...line,
       points: cycleTrend(data, line.code, cutoff, supplemental),
     }))
     .filter((line) => line.points.length);
-  const lines = readings
-    .map((line) => ({ ...line, points: recentCycleRun(line.points) }))
-    .filter((line) => line.points.length >= 4);
-  const title = economy ? "中国制造业景气与价格趋势" : "中美国债收益率趋势";
+  const lines = readings.filter((line) => line.points.length >= 2);
+  const title = activity
+    ? "景气与货币活化趋势"
+    : inflation
+      ? "上下游通胀剪刀差"
+      : "中美国债收益率趋势";
   const legend = (
     <div className="op-cycle-trend-legend">
       {readings.map((line) => {
@@ -93,10 +113,11 @@ function Trend({
   );
   if (!lines.length)
     return (
-      <>
+      <div className="op-cycle-subplot">
+        <h5>{title}</h5>
         {legend}
         <p className="op-cycle-missing">可用历史样本不足，显示最新观测。</p>
-      </>
+      </div>
     );
   const months = lines.flatMap((line) =>
     line.points.map((point) => monthIndex(point.date)),
@@ -111,37 +132,62 @@ function Trend({
     return (value: number) =>
       143 - ((value - min + pad) / (max - min + 2 * pad)) * 125;
   };
+  const values = (axis: "primary" | "secondary") =>
+    lines
+      .filter((line) => line.axis === axis)
+      .flatMap((line) =>
+        line.points
+          .filter((point) => monthIndex(point.date) >= first)
+          .map((point) => point.value),
+      );
   const pmiValues =
     lines
       .find((line) => line.code === "PMI")
-      ?.points.map((point) => point.value) ?? [];
+      ?.points.filter((point) => monthIndex(point.date) >= first)
+      .map((point) => point.value) ?? [];
   const pmiRadius = Math.max(
     2.5,
     Math.ceil(
       Math.max(0, ...pmiValues.map((value) => Math.abs(value - 50))) * 2,
     ) / 2,
   );
-  const y = economy
+  const y = activity
     ? (value: number) =>
         143 - ((value - 50 + pmiRadius) / (2 * pmiRadius)) * 125
-    : scale([
-        0,
-        2.5,
-        4.5,
-        ...lines
-          .filter((line) => line.axis === "primary")
-          .flatMap((line) => line.points.map((point) => point.value)),
-      ]);
-  const secondaryY = scale([
-    0,
-    ...lines
-      .filter((line) => line.axis === "secondary")
-      .flatMap((line) => line.points.map((point) => point.value)),
-  ]);
-  const threshold = economy ? 50 : 4.5;
+    : scale(
+        inflation
+          ? [0, ...values("primary")]
+          : [0, 2.5, 4.5, ...values("primary")],
+      );
+  const secondaryValues = values("secondary");
+  const secondaryY = scale([0, ...secondaryValues]);
+  const percentageTicks = (samples: number[]) => [
+    ...new Set([Math.min(0, ...samples), 0, Math.max(0, ...samples)]),
+  ];
+  const secondaryTicks = percentageTicks(secondaryValues);
+  const ticks = activity
+    ? [50 - pmiRadius, 50, 50 + pmiRadius]
+    : inflation
+      ? percentageTicks(values("primary"))
+      : [2.5, 4.5];
+  const ppi = readings.find((line) => line.code === "PPI_YOY")?.points ?? [];
+  const cpi = new Map(
+    readings
+      .find((line) => line.code === "CPI_YOY")
+      ?.points.map((point) => [point.date, point.value]),
+  );
+  const paired = ppi
+    .filter((point) => monthIndex(point.date) >= first && cpi.has(point.date))
+    .map(({ date, value }) => ({
+      month: monthIndex(date),
+      ppi: value,
+      cpi: cpi.get(date)!,
+    }));
+  const latestGap = paired.at(-1);
   const dateTicks = [...new Set([first, Math.floor((first + last) / 2), last])];
   return (
-    <>
+    <div className="op-cycle-subplot">
+      <h5>{title}</h5>
       <svg
         className="op-cycle-trend-plot"
         viewBox="0 0 435 165"
@@ -149,14 +195,16 @@ function Trend({
         aria-label={title}
       >
         <title>{title}，短缺月以虚线连接，统计口径变化处留空</title>
-        <rect
-          x="37"
-          y="18"
-          width="357"
-          height={Math.max(0, y(threshold) - 18)}
-          fill={economy ? "#e7f4ed" : "#f9e8e6"}
-        />
-        {economy && (
+        {!inflation && (
+          <rect
+            x="37"
+            y="18"
+            width="357"
+            height={Math.max(0, y(activity ? 50 : 4.5) - 18)}
+            fill={activity ? "#e7f4ed" : "#f9e8e6"}
+          />
+        )}
+        {activity && (
           <rect
             x="37"
             y={y(50)}
@@ -166,25 +214,37 @@ function Trend({
           />
         )}
         <path d="M37 18V143H394" fill="none" stroke="#c2cdd7" />
-        {(economy ? [50 - pmiRadius, 50, 50 + pmiRadius] : [2.5, 4.5]).map(
-          (value) => (
-            <g key={value}>
-              <path
-                d={`M37 ${y(value)}H394`}
-                stroke="#9f786d"
-                strokeDasharray="4 4"
-              />
-              <text x="32" y={y(value) + 3} textAnchor="end">
-                {economy ? value : `${value}%`}
-              </text>
-            </g>
-          ),
-        )}
-        {economy && (
-          <text x="400" y={secondaryY(0) + 3}>
-            0%
-          </text>
-        )}
+        {ticks.map((value) => (
+          <g key={value}>
+            <path
+              d={`M37 ${y(value)}H394`}
+              stroke="#9f786d"
+              strokeDasharray="4 4"
+            />
+            <text x="32" y={y(value) + 3} textAnchor="end">
+              {activity ? value : `${value}%`}
+            </text>
+          </g>
+        ))}
+        {activity &&
+          secondaryValues.length > 0 &&
+          secondaryTicks.map((value) => (
+            <text key={value} x="400" y={secondaryY(value) + 3}>
+              {value}%
+            </text>
+          ))}
+        {paired.map((point, i) => {
+          const prior = paired[i - 1];
+          return prior && point.month - prior.month === 1 ? (
+            <polygon
+              key={point.month}
+              data-macro-spread="PPI_CPI"
+              points={`${x(prior.month)},${y(prior.ppi)} ${x(point.month)},${y(point.ppi)} ${x(point.month)},${y(point.cpi)} ${x(prior.month)},${y(prior.cpi)}`}
+              fill="#eacbcc"
+              opacity="0.6"
+            />
+          ) : null;
+        })}
         {dateTicks.map((date) => (
           <text
             key={date}
@@ -223,7 +283,7 @@ function Trend({
               : [];
           });
           return (
-            <g key={line.code}>
+            <g key={line.code} data-macro-series={line.code}>
               <path d={path} fill="none" stroke={line.color} strokeWidth="2" />
               {!!gaps.length && (
                 <path
@@ -239,7 +299,14 @@ function Trend({
                 (point, index) =>
                   (index === points.length - 1 ||
                     (line.code === "US_T10_REAL" && point.value > 2.5) ||
-                    (!points[index - 1] && !points[index + 1])) && (
+                    [points[index - 1], points[index + 1]].every(
+                      (neighbor) =>
+                        !neighbor ||
+                        neighbor.basis !== point.basis ||
+                        Math.abs(
+                          monthIndex(neighbor.date) - monthIndex(point.date),
+                        ) > 3,
+                    )) && (
                     <circle
                       key={point.date}
                       cx={x(monthIndex(point.date))}
@@ -259,12 +326,20 @@ function Trend({
         })}
       </svg>
       {legend}
+      {latestGap && (
+        <p className="op-cycle-spread">
+          {monthName(latestGap.month)} · PPI−CPI{" "}
+          {(latestGap.ppi - latestGap.cpi).toFixed(2)} 个百分点
+        </p>
+      )}
       <small>
-        {economy
-          ? "左轴 PMI，右轴同比。虚线跨 1–2 个缺月，口径变更处断开。"
-          : "虚线为利率观察阈值，圆点标出高于 2.5% 的实际利率。"}
+        {activity
+          ? "左轴 PMI，右轴同比。缺月以虚线连接，口径变更处断开。"
+          : inflation
+            ? "阴影为相邻月份的 PPI−CPI 差值。"
+            : "虚线横线标示利率观察阈值，圆点标出高于 2.5% 的实际利率。"}
       </small>
-    </>
+    </div>
   );
 }
 
@@ -359,12 +434,14 @@ export default function MacroCycleTrends({
   cutoff,
   facts,
   rateState,
+  composite,
 }: {
   data: OpportunityContext;
   supplemental?: OpportunityContext;
   cutoff?: string | null;
   facts: CycleFact[];
   rateState?: string;
+  composite?: MacroComposite;
 }) {
   const fact = (code: string) => facts.find((row) => row.code === code);
   const pmi = fact("PMI");
@@ -392,15 +469,24 @@ export default function MacroCycleTrends({
             </span>
           ))}
         </div>
+        {!!composite?.labels.length && (
+          <p className="op-cycle-composite">{composite.labels.join(" · ")}</p>
+        )}
         <Trend
           data={data}
           supplemental={supplemental}
           cutoff={cutoff}
-          economy
+          kind="activity"
+        />
+        <Trend
+          data={data}
+          supplemental={supplemental}
+          cutoff={cutoff}
+          kind="inflation"
         />
       </section>
       <section className="op-cycle-trend" aria-label="流动性松紧">
-        <h4>流动性松紧</h4>
+        <h4>全球流动性压力与风险走势图</h4>
         <div className="op-cycle-gauge" aria-label="流动性松紧分段">
           {["充裕宽松", "中性平衡", "偏紧收敛", "紧缩承压"].map(
             (label, index) => (
@@ -417,7 +503,7 @@ export default function MacroCycleTrends({
           data={data}
           supplemental={supplemental}
           cutoff={cutoff}
-          economy={false}
+          kind="rates"
         />
       </section>
       <VixTrend data={data} cutoff={cutoff} />

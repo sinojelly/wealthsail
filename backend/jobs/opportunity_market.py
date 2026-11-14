@@ -380,10 +380,16 @@ async def _read_pre_market(conn, now):
 
 def _source_key(record):
     if isinstance(record, dict):
+        metadata = record.get("metadata")
+        if (
+            record.get("code") == "TSF_STOCK_YOY"
+            and isinstance(metadata, dict)
+            and metadata.get("sourceKey") == "PBOC_TSF_HISTORY"
+        ):
+            return "PBOC_TSF_HISTORY"
         known = repository.CATALOG.get(record.get("code"))
         if known:
             return known[3]
-        metadata = record.get("metadata")
         if isinstance(metadata, dict) and isinstance(metadata.get("sourceKey"), str):
             return metadata["sourceKey"]
     return "UNKNOWN_SOURCE"

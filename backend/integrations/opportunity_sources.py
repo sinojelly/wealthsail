@@ -24,6 +24,7 @@ from backend.integrations.fred_macro import FRED_HOST, LEVELS, PRICE_INDEXES, fr
 
 from backend.integrations.macro_official import (
     PBOC_RELEASE_INDEX,
+    PBOC_STATISTICS_INDEX,
     _compact,
     _meta,
     _now,
@@ -31,6 +32,7 @@ from backend.integrations.macro_official import (
     _published,
     _soup,
     _table_grid,
+    parse_pboc_tsf_stock_growth,
 )
 
 TREASURY_XML_URL = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
@@ -39,6 +41,7 @@ SOURCE_KEYS = (
     "UST_REAL",
     "PBOC_M1",
     "PBOC_TSF",
+    "PBOC_TSF_HISTORY",
     "PBOC_LOANS",
     "CHINABOND",
     "CFETS",
@@ -457,7 +460,13 @@ async def _fetch_text(client, url):
                 body.extend(part)
                 if len(body) > _MAX_BYTES:
                     raise ValueError("official document exceeds bounded size")
-            return bytes(body).decode("utf-8-sig", errors="strict")
+            try:
+                return body.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                if original_host != "www.pbc.gov.cn":
+                    raise
+                # Some official annual workbooks are exported as GB2312 HTML.
+                return body.decode("gb18030")
     raise ValueError("official redirect limit exceeded")
 
 
@@ -466,6 +475,86 @@ def _years_before(day, years):
         return day.replace(year=day.year - years)
     except ValueError:
         return day.replace(year=day.year - years, day=28)
+
+
+async def _pboc_tsf_history(text, now):
+    minimum = now.date().replace(day=1)
+    first = _years_before(minimum, 3)
+    root = _soup(await text(PBOC_STATISTICS_INDEX))
+    annual = {}
+    for anchor in root.find_all("a", href=True):
+        if match := re.match(
+            r"(\d{4})年统计数据", _compact(anchor.get_text(" ", strip=True))
+        ):
+            year = int(match[1])
+            if max(first.year, 2023) <= year <= minimum.year:
+                annual[year] = _url(
+                    urljoin(PBOC_STATISTICS_INDEX, anchor["href"]), publisher="PBOC"
+                )
+
+    async def collect_year(year, uri):
+        index = _soup(await text(uri))
+        financing_uri = next(
+            (
+                _url(urljoin(uri, anchor["href"]), publisher="PBOC")
+                for anchor in index.find_all("a", href=True)
+                if _compact(anchor.get_text(" ", strip=True)).startswith("社会融资规模")
+            ),
+            None,
+        )
+        if not financing_uri:
+            raise ValueError("annual social financing archive unavailable")
+        financing = _soup(await text(financing_uri))
+        for anchor in financing.find_all("a", href=True):
+            if anchor.get_text(strip=True).lower() not in {"htm", "html"}:
+                continue
+            heading = anchor.find_previous(
+                string=re.compile(r"社会融资规模(?:存量|增量)统计表")
+            )
+            if not heading or "社会融资规模存量统计表" not in _compact(heading):
+                continue
+            source_uri = _url(urljoin(financing_uri, anchor["href"]), publisher="PBOC")
+            path = urlsplit(source_uri).path
+            if not path.endswith((".htm", ".html")) or not path.startswith(
+                ("/diaochatongjisi/attachDir/", "/eportal/fileDir/diaochatongjisi/")
+            ):
+                continue
+            return [
+                _row(
+                    "TSF_STOCK_YOY",
+                    period,
+                    value,
+                    source_uri,
+                    now,
+                    sourceKey="PBOC_TSF_HISTORY",
+                    statistic="totalSocialFinancingStockYoY",
+                    qualityStatus="STALE",
+                )
+                for period, value in parse_pboc_tsf_stock_growth(
+                    await text(source_uri), year
+                )
+                if first <= period <= minimum
+                and period.replace(
+                    day=calendar.monthrange(period.year, period.month)[1]
+                )
+                <= now.date()
+            ]
+        raise ValueError("official annual social financing stock table unavailable")
+
+    groups = await asyncio.gather(
+        *(collect_year(year, uri) for year, uri in sorted(annual.items())),
+        return_exceptions=True,
+    )
+    for year, group in zip(sorted(annual), groups, strict=True):
+        if isinstance(group, Exception):
+            logger.warning(
+                "official_tsf_history_failed year=%s error_class=%s",
+                year,
+                type(group).__name__,
+            )
+    return _unique(
+        [row for group in groups if isinstance(group, list) for row in group]
+    )
 
 
 async def fetch_opportunity_series(now, permissions=None):
@@ -605,6 +694,7 @@ async def fetch_opportunity_series(now, permissions=None):
                 collect("UST_REAL", lambda: treasury("US_T10_REAL")),
                 collect("PBOC_M1", lambda: pboc("M1_YOY")),
                 collect("PBOC_TSF", lambda: pboc("TSF_STOCK_YOY")),
+                collect("PBOC_TSF_HISTORY", lambda: _pboc_tsf_history(text, now)),
                 collect("PBOC_LOANS", lambda: pboc("CORP_MEDLONG_LOANS_YTD")),
                 *(collect(feed, lambda feed=feed: fred(feed))
                   for feed in SOURCE_KEYS if feed in PRICE_INDEXES or feed in LEVELS),
@@ -623,9 +713,20 @@ async def fetch_opportunity_series(now, permissions=None):
             for key in ("CHINABOND", "CFETS")
         }
     )
+    direct_stock_periods = {
+        row["referenceDate"]
+        for row in observations
+        if row.get("metadata", {}).get("sourceKey") == "PBOC_TSF"
+    }
     return {
         "observations": sorted(
-            observations, key=lambda row: (row["code"], row["referenceDate"])
+            (
+                row
+                for row in observations
+                if row.get("metadata", {}).get("sourceKey") != "PBOC_TSF_HISTORY"
+                or row["referenceDate"] not in direct_stock_periods
+            ),
+            key=lambda row: (row["code"], row["referenceDate"]),
         ),
         "sourceResults": {key: results[key] for key in SOURCE_KEYS},
     }

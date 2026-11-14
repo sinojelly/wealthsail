@@ -53,6 +53,130 @@ _NO_REALIZED_DELIVERY = re.compile(
     r"(?:预计|预期|计划|有望).{0,20}(?:利润|回款|收款|现金流).{0,12}(?:增长|增加|改善)"
 )
 
+_RESOURCE_NAMES = re.compile(r"煤炭|焦煤|动力煤|有色|稀土|工业金属|油气|石油")
+_RATE_SENSITIVE_NAMES = re.compile(
+    r"半导体|芯片|计算机|人工智能|AI硬件|机器人|云计算|算力|光伏|汽车|新能源|科技",
+    re.I,
+)
+_POLICY_NAMES = re.compile(r"券商|证券公司|军工|国防|航空航天|商业航天")
+
+
+def _macro_transmission(plan):
+    from backend.macro.industry_cycle import industry_risk_policy
+
+    cycle = plan.get("industryCycle") or {}
+    name = str(plan.get("name") or plan.get("label") or "")
+    sector = plan.get("discoverySector")
+    if sector == "COAL" or re.search(r"煤炭|焦煤|动力煤", name):
+        stance, rationale = (
+            "TAILWIND",
+            "煤炭指数覆盖上游生产企业。若煤价随工业品价格回升且销量企稳，收入和吨煤利润有望改善。跟踪动力煤及焦煤报价、电厂库存和下游补库。",
+        )
+    elif sector in {
+        "RARE_EARTH",
+        "NONFERROUS",
+        "RARE_EARTH_METALS",
+        "GLOBAL_ENERGY",
+    } or _RESOURCE_NAMES.search(name):
+        stance, rationale = (
+            "TAILWIND",
+            "上游商品价格改善可能支持资源企业收入与毛利，仍需跟踪对应商品价格、库存和下游订单。",
+        )
+    elif sector == "DIVIDEND" or re.search(r"红利|低波", name):
+        stance, rationale = (
+            "TAILWIND",
+            "在高实际利率环境下，稳定现金流和分红可提供相对防御，留意分红覆盖率与股债相对吸引力。",
+        )
+    elif (
+        cycle.get("stage") == "POLICY_CATALYST"
+        and cycle.get("sourceIds")
+        and (sector in {"BROKER", "DEFENCE", "AEROSPACE"} or _POLICY_NAMES.search(name))
+    ):
+        stance, rationale = (
+            "TAILWIND",
+            "报告已识别该行业的政策催化，继续跟踪政策落实进度，以及能否传导到交易量、订单或盈利。",
+        )
+    elif sector in {
+        "AI",
+        "SEMICONDUCTOR_AI",
+        "US_TECH",
+        "HK_TECH",
+        "MEMORY",
+        "PCB",
+        "ROBOT",
+        "ROBOTICS_MOBILITY",
+        "SOLID_BATTERY",
+    } or _RATE_SENSITIVE_NAMES.search(name):
+        stance, rationale = (
+            "HEADWIND",
+            "高实际利率提高长久期资产的折现率，上游成本抬升也可能挤压下游利润。参考仓位与净值区间分批观察，跟踪订单和毛利能否兑现。",
+        )
+    else:
+        return None
+    return stance, rationale, industry_risk_policy(cycle)["riskLevel"]
+
+
+def annotate_macro_opportunities(report, market_snapshot=None):
+    """Attach transmission reasoning to the live reading copy, including empty NAV plans."""
+    if not isinstance(report, dict):
+        return report
+    snapshot = (report.get("cycleInsights") or {}).get("macroSnapshot") or {}
+    current = (market_snapshot or {}).get("composite") or {}
+    if all(
+        _number(current.get(metric)) is not None
+        for metric in ("ppiYoy", "inflationGap", "us10yReal")
+    ):
+        snapshot = market_snapshot
+    composite = snapshot.get("composite") or {}
+    ppi = _number(composite.get("ppiYoy"))
+    gap = _number(composite.get("inflationGap"))
+    real = _number(composite.get("us10yReal"))
+    if ppi is None or ppi <= 0 or gap is None or gap < 2 or real is None or real < 2:
+        return report
+    from backend.investment.live_fund_plans import _plans
+
+    from backend.macro.industry_cycle import industry_risk_policy
+
+    reviews = {
+        row["industry"]: row
+        for row in report.get("industryCycleReviews", [])
+        if isinstance(row, dict) and isinstance(row.get("industry"), str)
+    }
+    risk_order = {"NONE": 0, "UNPROVEN": 1, "SUSPECTED": 2, "CONFIRMED": 3}
+    sources = list(
+        dict.fromkeys(
+            row["sourceUri"]
+            for row in [*snapshot.get("items", []), *snapshot.get("series", [])]
+            if row.get("code") in {"PPI_YOY", "CPI_YOY", "US_T10_REAL"}
+            and _source(row.get("sourceUri"))
+        )
+    )
+    result = deepcopy(report)
+    for plan in _plans(result):
+        if plan.get("priceBasis") != "UNIT_NAV" or not (
+            match := _macro_transmission(plan)
+        ):
+            continue
+        stance, rationale, risk = match
+        industry_risk = industry_risk_policy(reviews.get(plan.get("discoverySector")))[
+            "riskLevel"
+        ]
+        risk = max(risk, industry_risk, key=risk_order.__getitem__)
+        annotation = {
+            "stance": stance,
+            "label": "🔥 宏观/政策顺风" if stance == "TAILWIND" else "⚠️ 宏观逆风",
+            "rationale": (
+                f"PPI 同比 {ppi:+.2f}%，PPI−CPI {gap:+.2f} 个百分点，"
+                f"美国10年实际利率 {real:.2f}%。{rationale}"
+            ),
+            "riskLevel": risk,
+            "sourceUris": sources,
+        }
+        plan["macroOpportunity"] = annotation
+        if isinstance(plan.get("actionableZones"), dict):
+            plan["actionableZones"]["macroOpportunity"] = annotation
+    return result
+
 
 def _number(value):
     if isinstance(value, bool):

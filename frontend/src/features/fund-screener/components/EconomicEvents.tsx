@@ -70,6 +70,28 @@ function originLabel(story: EconomicStory) {
         ? "历史有效报告"
         : "已保存研究报告";
 }
+
+function sourceBadge(story: EconomicStory) {
+  const hosts = story.sources.flatMap((source) =>
+    source.href ? [new URL(source.href).hostname.toLowerCase()] : [],
+  );
+  const from = (...domains: string[]) =>
+    hosts.some((host) => domains.some((domain) =>
+      host === domain || host.endsWith(`.${domain}`),
+    ));
+  const named = (publisher: RegExp) =>
+    story.sources.some(({ title }) => publisher.test(title));
+  if (from("stats.gov.cn", "pbc.gov.cn", "bls.gov", "federalreserve.gov", "bea.gov", "ecb.europa.eu") ||
+      named(/^(国家统计局|中国人民银行|美国劳工统计局|美联储官网|欧洲央行)(?:$|[：:｜|\s])/))
+    return "🏛️ 官方统计/央行";
+  if (from("sse.com.cn", "szse.cn", "bse.cn", "hkexnews.hk", "cninfo.com.cn", "sec.gov") ||
+      named(/^(上交所|深交所|北交所|港交所|巨潮资讯|公司公告)(?:$|[：:｜|\s])/))
+    return "📢 交易所/公司公告";
+  if (from("cls.cn") || named(/^财联社(?:电报|[：:｜|\s]|$)/))
+    return "📰 财联社电报";
+  if (story.origin === "OFFICIAL") return "🏛️ 官方来源";
+  return story.sources.length ? "公开来源" : "来源待补充";
+}
 function reportHref(reportRunId: string | null) {
   const params = new URLSearchParams(window.location.search);
   params.set("researchTab", "macro");
@@ -218,7 +240,7 @@ function StoryCard({
             </span>
           )}
           <small className="economic-news-state">
-            {count.checked > 0 ? "来源已核对" : "待核实"}
+            {sourceBadge(story)}
           </small>
           <span className="economic-news-arrow" aria-hidden="true">
             ▸
@@ -693,7 +715,7 @@ export function EconomicEventTeasers({
                     </span>
                   )}
                   <small className="economic-news-state">
-                    {story.sourceStatus.checked > 0 ? "来源已核对" : "待核实"}
+                    {sourceBadge(story)}
                   </small>
                   <span className="economic-news-arrow" aria-hidden="true">
                     ▸

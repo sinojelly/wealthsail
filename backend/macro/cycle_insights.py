@@ -1,7 +1,7 @@
 """Optional cycle outlook: preserve views, keep clocks and references honest."""
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 import unicodedata
 from urllib.parse import urlsplit
@@ -158,11 +158,13 @@ _PUBLISHER_PREFIX = re.compile(
 )
 _CME_ORIGIN = re.compile(r"(?<![a-z])CME(?![a-z])|芝商所|美联储观察|FedWatch", re.I)
 _RATE_MONTH = re.compile(
-    r"(?P<relative>明年|今年|\d{4}年)?\s*(?P<month>1[0-2]|[1-9])月"
+    r"(?<!\d)(?P<relative>明年|次年|今年|\d{4}年)?\s*(?P<month>1[0-2]|[1-9])\s*月"
+    r"(?!\s*\d{1,2}\s*[日号])"
 )
 _ODDS = re.compile(
-    r"(?P<action>加息|降息)\s*(?P<step>\d{1,3})\s*(?:个?基点|bp)\s*(?:的)?\s*"
-    r"(?:概率|可能性)\s*(?:为|是|[:：])?\s*(?P<chance>\d{1,3}(?:\.\d+)?)\s*%",
+    r"(?:(?P<action>加息|降息)\s*(?P<step>\d{1,3})\s*(?:个?\s*基点|bps?)"
+    r"|(?:维持|保持)(?:当前|现有)?(?:利率(?:水平|区间)?)?(?:不变)?|利率不变|按兵不动)"
+    r"\s*的?\s*(?:概率|可能性)\s*(?:为|是|达到|约|[:：])?\s*(?P<chance>\d{1,3}(?:\.\d+)?)\s*%",
     re.I,
 )
 
@@ -186,18 +188,7 @@ def _compact_policy_text(value):
     return re.sub(r"[^\w\d%]+", "", unicodedata.normalize("NFKC", value)).casefold()
 
 
-def _forecast_snapshot(text, clock):
-    matches = tuple(_ODDS.finditer(text))
-    if not matches:
-        return None
-    months = tuple(_RATE_MONTH.finditer(text[: matches[0].start()]))
-    if not months:
-        return None
-    month = months[-1]
-    # A mixed-meeting sentence remains a plain excerpt. It must not be
-    # mistaken for a superset of one meeting's probability table.
-    if _RATE_MONTH.search(text, matches[0].end()):
-        return (None, frozenset())
+def _forecast_period(month, clock):
     month_number = int(month["month"])
     day = _day(clock)
     year = day.year if day else None
@@ -205,15 +196,35 @@ def _forecast_snapshot(text, clock):
     if relative and relative[0].isdigit():
         year = int(relative[:4])
     elif year is not None and (
-        relative == "明年" or not relative and month_number < day.month
+        relative in {"明年", "次年"} or not relative and month_number < day.month
     ):
         year += 1
-    outcomes = frozenset(
-        (row["action"], int(row["step"]), Decimal(row["chance"]))
-        for row in matches
-        if Decimal(row["chance"]) <= 100
-    )
-    return ((year, month_number, "累计" in text), outcomes) if outcomes else None
+    return year, month_number
+
+
+def _forecast_tables(text, clock):
+    months = list(_RATE_MONTH.finditer(text))
+    tables = {}
+    for index, month in enumerate(months):
+        end = months[index + 1].start() if index + 1 < len(months) else len(text)
+        block = text[month.end() : end]
+        period = (*_forecast_period(month, clock), "累计" in block)
+        for row in _ODDS.finditer(block):
+            chance = Decimal(row["chance"])
+            step = int(row["step"] or 0)
+            if chance <= 100 and (not row["action"] or step > 0):
+                tables.setdefault(period, set()).add(
+                    (-step if row["action"] == "降息" else step, chance)
+                )
+    return tables
+
+
+def _forecast_snapshot(text, clock):
+    tables = _forecast_tables(text, clock)
+    if len(tables) == 1:
+        period, outcomes = next(iter(tables.items()))
+        return period, frozenset(outcomes)
+    return (None, frozenset()) if tables else None
 
 
 def _same_policy_signal(a, b):
@@ -294,8 +305,7 @@ def _visible(row, cutoff):
     )
 
 
-def policy_signals(packet, report, cutoff):
-    """Extract only direct source excerpts from the selected report packet."""
+def _policy_sources(packet, report, cutoff):
     alpha = packet.get("alphaPublic")
     report_sources = [
         row
@@ -309,7 +319,6 @@ def policy_signals(packet, report, cutoff):
         *_rows(packet.get("documents")),
         *report_sources,
     ]
-    signals = []
     for source in rows:
         if not _visible(source, cutoff):
             continue
@@ -338,12 +347,86 @@ def policy_signals(packet, report, cutoff):
         content = next(
             (
                 source[key]
-                for key in ("content", "quote")
-                if isinstance(source.get(key), str)
+                for key in ("content", "text", "quote")
+                if isinstance(source.get(key), str) and source[key].strip()
             ),
             "",
         )
-        odds_source = bool(_CME_ORIGIN.search(f"{title}\n{content}"))
+        yield source, clock, uri, title, content
+
+
+def _fedwatch_source(title, content, uri):
+    return bool(
+        _CME_ORIGIN.search(f"{title}\n{content}")
+        or urlsplit(uri).hostname in {"cmegroup.com", "www.cmegroup.com"}
+    )
+
+
+def fed_rate_expectations(packet, report, cutoff):
+    """Resolve sourced FedWatch distributions without pooling different quotes."""
+    from backend.macro.daily_research import _stamp
+
+    results = {}
+    for source, clock, uri, title, content in _policy_sources(packet, report, cutoff):
+        if not clock or not _fedwatch_source(title, content, uri):
+            continue
+        clock_day = _day(clock)
+        quote_stamp = _stamp(clock) or datetime.combine(
+            clock_day, datetime.min.time(), tzinfo=cutoff.tzinfo
+        )
+        for excerpt in (content, title):
+            text = _PUBLISHER_PREFIX.sub("", unicodedata.normalize("NFKC", excerpt))
+            for (year, month, cumulative), outcomes in _forecast_tables(
+                text, clock
+            ).items():
+                period = f"{year:04d}-{month:02d}"
+                if period < cutoff.strftime("%Y-%m"):
+                    continue
+                total = sum(probability for _, probability in outcomes)
+                # Contradictory tiers in one excerpt are often comparisons
+                # with an earlier quote. Never combine them as a distribution.
+                if total > Decimal("100.25") or len(dict(outcomes)) != len(outcomes):
+                    continue
+                complete = abs(total - 100) <= Decimal("0.25")
+                changes = [
+                    {"changeBp": step, "probability": float(probability)}
+                    for step, probability in sorted(outcomes)
+                ]
+                movement = (
+                    sum(step * probability for step, probability in outcomes) / 100
+                ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+                row = {
+                    "meetingMonth": period,
+                    "cumulative": cumulative,
+                    "complete": complete,
+                    "hikeProbability": float(
+                        sum(p for step, p in outcomes if step > 0)
+                    ),
+                    "cutProbability": float(sum(p for step, p in outcomes if step < 0)),
+                    "holdProbability": float(
+                        sum(p for step, p in outcomes if step == 0)
+                    ),
+                    "expectedChangeBp": float(movement) if complete else None,
+                    "outcomes": changes,
+                    "mainOutcome": max(
+                        changes, key=lambda outcome: outcome["probability"]
+                    ),
+                    "sourceUri": uri,
+                    "asOf": clock,
+                    "sourceId": source.get("id"),
+                }
+                identity = period, cumulative
+                rank = complete, quote_stamp, len(outcomes)
+                if identity not in results or rank > results[identity][0]:
+                    results[identity] = rank, row
+    return [results[key][1] for key in sorted(results)]
+
+
+def policy_signals(packet, report, cutoff):
+    """Extract only direct source excerpts from the selected report packet."""
+    signals = []
+    for source, clock, uri, title, content in _policy_sources(packet, report, cutoff):
+        odds_source = _fedwatch_source(title, content, uri)
         # Numbered news digests need sentence-level qualification. A generic
         # headline must not lend an unrelated sentence a source affiliation.
         for line in dict.fromkeys([*re.split(r"[。！？；\r\n]+", content), title]):
@@ -472,7 +555,7 @@ def rate_expectation(series):
         text = "暂缺2年期有效比较，以下仅反映10年期收益率变化"
     parts = [text]
     if move10 is not None and move10 >= 25:
-        parts.append("长端融资成本近5个观测快速上行")
+        parts.append("长端融资成本快速上行")
     for label, value in (
         ("2年期−有效利率", spread),
         ("2年期近5个观测", move2),
@@ -681,6 +764,293 @@ _SNAPSHOT_FIELDS = (
     "periodChange",
     "frequency",
 )
+_MONTHLY_CODES = {
+    "PMI",
+    "CPI_YOY",
+    "PPI_YOY",
+    "M1_YOY",
+    "M2_YOY",
+    "M1_M2_GAP",
+    "TSF_STOCK_YOY",
+    "US_CPI_YOY",
+    "US_CPI_MOM",
+    "US_CORE_CPI_YOY",
+    "US_CORE_CPI_MOM",
+    "US_PPI_YOY",
+    "US_PPI_MOM",
+}
+_MISSING_STATES = {
+    "CONFLICT",
+    "UNVERIFIED",
+    "UNAVAILABLE",
+    "NOT_COLLECTED",
+    "PERMISSION_REQUIRED",
+    "PENDING",
+    "FAILED",
+    "TIMEOUT",
+    "RATE_LIMITED",
+}
+_AUDIT_CLAUSE = re.compile(
+    r"M1.{0,25}(?:口径|(?:新旧)?定义).{0,25}(?:断点|不.{0,5}串|不.{0,5}比)"
+    r"|M1.{0,25}(?:不|不能).{0,6}跨.{0,20}(?:口径|定义|断点)"
+    r"|(?:社融|企业中长期贷款).{0,35}(?:累计|单点).{0,25}(?:不能替代|不足以|不代表)"
+    r"|(?:四城|4城|城市样本).{0,20}(?:不.{0,6}代表全国|不等于全国)"
+    r"|\bRETRIEVAL_ONLY\b|(?:未访问|受限).{0,12}CFETS|CFETS.{0,12}(?:未访问|受限)"
+    r"|(?:基金)?相对强弱.{0,14}(?:证据不足|基准不足|基准尚缺|缺少基准)"
+    r"|布伦特(?:原油)?现货.{0,40}(?:美元/桶|不.{0,9}期货.{0,12}拼接)"
+    r"|BLS.{0,16}(?:403|抓取|不可访问)|Polymarket.{0,12}(?:超时|抓取)|网页未打开",
+    re.I,
+)
+_MONEY_SPREAD_MENTION = re.compile(
+    r"(?<!\d)(?P<month>1[0-2]|[1-9])月.{0,14}M1\s*[-−—－–/]\s*M2.{0,7}(?:差|剪刀差)",
+    re.I,
+)
+
+
+def _reference_month(row):
+    value = row.get("referencePeriod")
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}", value):
+        day = _day(value + "-01")
+        if day:
+            return value
+    day = next(
+        (
+            value
+            for key in ("referenceDate", "date", "asOf")
+            if (value := _day(row.get(key)))
+        ),
+        None,
+    )
+    return day.strftime("%Y-%m") if day else None
+
+
+def _chart_value(row):
+    return (
+        _number(row.get("value")) if row.get("state") not in _MISSING_STATES else None
+    )
+
+
+def _monthly_points(rows, code):
+    values = {}
+    for row in rows:
+        if row.get("code") != code:
+            continue
+        for point in [*_rows(row.get("history")), row]:
+            period = _reference_month(point)
+            if period and _chart_value(point) is not None:
+                values[period] = point
+    return values
+
+
+def _month_index(period):
+    year, month = map(int, period.split("-"))
+    return year * 12 + month
+
+
+def _month_label(period):
+    year, month = map(int, period.split("-"))
+    return f"{year}年{month}月"
+
+
+def _money_supply_spread(data):
+    rows = [*data["items"], *data["series"]]
+    m1, m2, prior_gaps = (
+        _monthly_points(rows, code) for code in ("M1_YOY", "M2_YOY", "M1_M2_GAP")
+    )
+    shared = sorted(m1.keys() & m2.keys())
+    if not shared or (prior_gaps and shared[-1] < max(prior_gaps)):
+        return None
+    projected = {}
+    for period in shared:
+        one, two = m1[period], m2[period]
+        one_value, two_value = (_chart_value(row) for row in (one, two))
+        point = {
+            "referencePeriod": period,
+            "date": period + "-01",
+            "value": float(one_value - two_value),
+            "definitionVersion": one.get("definitionVersion"),
+            "sourceUri": one.get("sourceUri") or two.get("sourceUri"),
+            "state": "STALE"
+            if "STALE" in (one.get("state"), two.get("state"))
+            else "OBSERVED",
+        }
+        for field in ("publishedAt", "retrievedAt", "availableAt"):
+            if clocks := [row[field] for row in (one, two) if row.get(field)]:
+                point[field] = max(clocks)
+        projected[period] = point
+    newest = shared[-1]
+    current = projected[newest]
+    history = {**prior_gaps, **projected}
+    previous = max(
+        (
+            period
+            for period in history
+            if _month_index(period) == _month_index(newest) - 1
+        ),
+        default=None,
+    )
+    # M1's January 2025 definition change makes the cross-break delta invalid.
+    comparable = previous and not (previous == "2024-12" and newest == "2025-01")
+    if comparable:
+        before = history[previous]
+        current_def, prior_def = (
+            current.get("definitionVersion"),
+            before.get("definitionVersion"),
+        )
+        comparable = not current_def or not prior_def or current_def == prior_def
+    gap = _chart_value(current)
+    previous_gap = _chart_value(history[previous]) if comparable else None
+    change = gap - previous_gap if previous_gap is not None else None
+    series = {
+        **current,
+        "code": "M1_M2_GAP",
+        "label": "M1−M2 剪刀差",
+        "asOf": current["date"],
+        "frequency": "MONTHLY",
+        "unit": "percentage_points",
+        "sourceName": "根据同月M1与M2同比计算",
+        "publishedAt": current.get("publishedAt"),
+        "retrievedAt": current.get("retrievedAt"),
+        "availableAt": current.get("availableAt"),
+        "timeBasis": "DERIVED_SAME_MONTH",
+        "methodVersion": "same-month-money-supply-spread-v1",
+        "metadata": {
+            "definitionKey": "M1_M2_GAP",
+            "definitionVersion": current.get("definitionVersion"),
+        },
+        "state": "STALE" if current["state"] == "STALE" else "READY",
+        "history": [history[period] for period in sorted(history)[-36:]],
+        "changes": {
+            "previousValue": float(previous_gap) if previous_gap is not None else None,
+            "periodChange": float(change) if change is not None else None,
+            "changeUnit": "pp",
+            "change5Samples": None,
+            "change20Samples": None,
+            "median": None,
+            "percentile": None,
+            "sampleCount": min(36, len(history)),
+        },
+    }
+    one, two = _chart_value(m1[newest]), _chart_value(m2[newest])
+    summary = f"{_month_label(newest)} M1同比 {one:.2f}%，M2同比 {two:.2f}%，剪刀差 {gap:+.2f} 个百分点"
+    if change:
+        direction = (
+            "收窄"
+            if abs(gap) < abs(previous_gap)
+            else "扩大"
+            if abs(gap) > abs(previous_gap)
+            else "变化"
+        )
+        summary += f"，较{_month_label(previous)}{direction} {abs(change):.2f} 个百分点"
+    return series, {
+        "referencePeriod": newest,
+        "m1Yoy": float(one),
+        "m2Yoy": float(two),
+        "gap": float(gap),
+        "previousGap": float(previous_gap) if previous_gap is not None else None,
+        "periodChange": float(change) if change is not None else None,
+        "summary": summary + "。",
+    }
+
+
+def _composite_cycle(data):
+    rows = [*data["items"], *data["series"]]
+    pmi, cpi, ppi = (
+        _monthly_points(rows, code) for code in ("PMI", "CPI_YOY", "PPI_YOY")
+    )
+    inflation_month = max(cpi.keys() & ppi.keys(), default=None)
+    pmi_value = _chart_value(pmi[max(pmi)]) if pmi else None
+    cpi_value = _chart_value(cpi[inflation_month]) if inflation_month else None
+    ppi_value = _chart_value(ppi[inflation_month]) if inflation_month else None
+    gap = ppi_value - cpi_value if inflation_month else None
+    rates = [
+        row
+        for row in rows
+        if row.get("code") == "US_T10_REAL" and _chart_value(row) is not None
+    ]
+    rate = (
+        _chart_value(max(rates, key=lambda row: row.get("asOf") or ""))
+        if rates
+        else None
+    )
+    labels = []
+    if pmi_value is not None:
+        labels.append(
+            "需求偏冷"
+            if pmi_value < 50
+            else "景气扩张"
+            if pmi_value > 50
+            else "景气处于荣枯线"
+        )
+    if gap is not None and gap >= 2 and ppi_value > 0:
+        labels.append("上游成本挤压")
+    if rate is not None and rate >= 2:
+        labels.append("外部高息紧缩")
+    return (
+        {
+            "labels": labels,
+            "pmi": float(pmi_value) if pmi_value is not None else None,
+            "ppiYoy": float(ppi_value) if ppi_value is not None else None,
+            "cpiYoy": float(cpi_value) if cpi_value is not None else None,
+            "inflationGap": float(gap) if gap is not None else None,
+            "inflationReferencePeriod": inflation_month,
+            "us10yReal": float(rate) if rate is not None else None,
+        }
+        if labels
+        else None
+    )
+
+
+def _display_prose(text, audit, money_month=None):
+    if not isinstance(text, str):
+        return text
+    clean = []
+    for clause in re.split(r"(?<=[。；;！？])|\r?\n", text):
+        if match := _AUDIT_CLAUSE.search(clause):
+            # Keep a substantive lead-in separated from the audit caveat.
+            start = max(clause.rfind(mark, 0, match.start()) for mark in ("，", ","))
+            if start >= 0:
+                clean.append(clause[:start].rstrip() + "。")
+            note = clause[start + 1 :].strip(" *\t。；;")
+            if note and note not in audit:
+                audit.append(note)
+        elif not (
+            money_month
+            and (match := _MONEY_SPREAD_MENTION.search(clause))
+            and int(match["month"]) != int(money_month[-2:])
+        ):
+            clean.append(clause)
+    return "".join(clean).strip()
+
+
+def _display_sections(cycle, report, snapshot):
+    existing = cycle.get("auditNotes")
+    audit = (
+        [note for note in existing if isinstance(note, str)]
+        if isinstance(existing, list)
+        else []
+    )
+    period = ((snapshot or {}).get("moneySupplySpread") or {}).get("referencePeriod")
+    original = report.get("macroCycle") or report.get("summary")
+    display = _display_prose(original, audit, period)
+    if display != original:
+        cycle["displayMacroCycle"] = display
+
+    def clean_row(row):
+        return {
+            key: _display_prose(value, audit, period)
+            if key in {"summary", "impact", "action", "driver"}
+            else value
+            for key, value in row.items()
+        }
+
+    for field in ("globalLiquidity", "domesticCycle", "marketRegime"):
+        if isinstance(cycle.get(field), dict):
+            cycle[field] = clean_row(cycle[field])
+    if isinstance(cycle.get("keyFactors"), list):
+        cycle["keyFactors"] = [clean_row(row) for row in _rows(cycle["keyFactors"])]
+    if audit:
+        cycle["auditNotes"] = audit
 
 
 def macro_snapshot(packet, cutoff):
@@ -697,11 +1067,42 @@ def macro_snapshot(packet, cutoff):
             ):
                 continue
             parsed = _pick(row, ("code", *_SNAPSHOT_FIELDS))
-            history = [
-                _pick(point, _SNAPSHOT_FIELDS)
+            history = {
+                (
+                    _reference_month(point)
+                    if code in _MONTHLY_CODES
+                    else point.get("date")
+                    or point.get("asOf")
+                    or point.get("referenceDate")
+                ): _pick(point, _SNAPSHOT_FIELDS)
                 for point in _rows(row.get("history"))
                 if _visible(point, cutoff)
-            ][-(212 if code == "VIX" else 36) :]
+            }
+            history = [
+                {
+                    **history[key],
+                    **(
+                        {
+                            "referencePeriod": key,
+                            "date": history[key].get("date")
+                            or history[key].get("asOf")
+                            or key + "-01",
+                        }
+                        if code in _MONTHLY_CODES
+                        else {}
+                    ),
+                }
+                for key in sorted(key for key in history if isinstance(key, str))[
+                    -(212 if code == "VIX" else 36) :
+                ]
+            ]
+            if code in _MONTHLY_CODES and (period := _reference_month(parsed)):
+                parsed.update(referencePeriod=period, frequency="MONTHLY")
+            metadata = row.get("metadata")
+            if isinstance(metadata, dict):
+                for field in ("definitionKey", "definitionVersion"):
+                    if field not in parsed and metadata.get(field):
+                        parsed[field] = metadata[field]
             if history:
                 parsed["history"] = history
             if parsed.get("value") is None and not history:
@@ -713,6 +1114,14 @@ def macro_snapshot(packet, cutoff):
                     ("previousValue", "periodChange", "change5Samples", "changeUnit"),
                 )
             data[target_key].append(parsed)
+    if spread := _money_supply_spread(data):
+        series, details = spread
+        for key in ("items", "series"):
+            data[key] = [row for row in data[key] if row["code"] != "M1_M2_GAP"]
+        data["series"].append(series)
+        data["moneySupplySpread"] = details
+    if composite := _composite_cycle(data):
+        data["composite"] = composite
     return data if any(data.values()) else None
 
 
@@ -724,6 +1133,8 @@ def project_cycle_insights(report, packet, cutoff):
     signals = policy_signals(packet, report, cutoff)
     if signals:
         cycle["policySignals"] = signals
+    if fed_odds := fed_rate_expectations(packet, report, cutoff):
+        cycle["fedRateExpectations"] = fed_odds
     rates = rate_expectation(
         [row for row in _rows(packet.get("series")) if _visible(row, cutoff)]
     )
@@ -755,4 +1166,5 @@ def project_cycle_insights(report, packet, cutoff):
     )
     if industries or "industries" in cycle:
         cycle["industries"] = industries
+    _display_sections(cycle, report, snapshot)
     return {**report, "cycleInsights": cycle} if cycle else report

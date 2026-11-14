@@ -327,14 +327,15 @@ it.each(["2026-11-02", null])(
   },
 );
 
-it("does not certify event facts through the source-checked badge", async () => {
+it("shows the publication category while preserving the event verification record", async () => {
   const data = context();
-  data.dailyResearch!.economicResearch!.observations.events[0].phase =
-    "IMPLEMENTED";
+  const observations = data.dailyResearch!.economicResearch!.observations;
+  observations.events[0].phase = "IMPLEMENTED";
+  observations.sources[0].url = "https://www.cls.cn/detail/123456";
   render(<EconomicEvents data={data} />);
   const card = screen.getByRole("article", { name: "本次事项1" });
   expect(
-    within(card.querySelector("summary")!).getByText("来源已核对"),
+    within(card.querySelector("summary")!).getByText("📰 财联社电报"),
   ).toBeVisible();
   expect(
     within(card.querySelector("summary")!).queryByText(/事实已核实/),

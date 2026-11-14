@@ -303,3 +303,110 @@ def test_duplicate_policy_excerpts_keep_distinct_people_stances_dates_and_odds()
     assert any("84.7%" in line and "15.3%" in line for line in odds)
     assert any("明年1月" in line and "10.9%" in line for line in odds)
     assert any("80%" in line and "20%" in line for line in odds)
+
+
+def test_fedwatch_aggregates_full_distributions_by_meeting_and_snapshot():
+    from backend.macro.cycle_insights import project_cycle_insights
+
+    def item(content, clock, title="据CME FedWatch"):
+        return {
+            "title": title,
+            "content": content,
+            "publishedAt": clock,
+            "sourceUri": "https://www.cls.cn/detail/123",
+        }
+
+    packet = {
+        "source_items": [
+            item("12月加息50bp概率15.3%", "2026-11-13T06:45:00+08:00"),
+            item(
+                "12月加息25个基点概率84.7%，加息50个基点概率15.3%；到次年1月累计加息25bp概率24.4%，累计加息50bp概率64.7%，累计加息75bp概率10.9%。",
+                "2026-11-13T06:00:00+08:00",
+            ),
+            item(
+                "次年3月降息25个基点的概率为20%，维持利率不变的概率为70%，加息25bp的概率为10%。",
+                "2026-11-13T06:01:00+08:00",
+            ),
+            item("12月降息50bp概率100%", "2026-11-13T08:00:00+08:00"),
+            item("12月降息25bp概率100%", "2026-11-13T07:00:00+08:00", "隔夜要闻"),
+            item("次年6月降息50bp概率25%", "2026-11-13T06:20:00+08:00"),
+        ]
+    }
+
+    december, january, march, june = project_cycle_insights({}, packet, NOW)[
+        "cycleInsights"
+    ]["fedRateExpectations"]
+    assert (
+        december["meetingMonth"],
+        december["hikeProbability"],
+        december["expectedChangeBp"],
+    ) == ("2026-12", 100, 28.8)
+    assert december["mainOutcome"] == {"changeBp": 25, "probability": 84.7}
+    assert december["asOf"] == "2026-11-13T06:00:00+08:00"
+    assert (
+        january["meetingMonth"],
+        january["cumulative"],
+        january["hikeProbability"],
+        january["expectedChangeBp"],
+    ) == ("2027-01", True, 100, 46.6)
+    assert (
+        march["cutProbability"],
+        march["holdProbability"],
+        march["hikeProbability"],
+        march["expectedChangeBp"],
+    ) == (20, 70, 10, -2.5)
+    assert (june["complete"], june["expectedChangeBp"]) == (False, None)
+
+
+def test_cycle_snapshot_uses_same_month_money_and_inflation_and_projects_audit_notes():
+    from backend.macro.cycle_insights import project_cycle_insights
+
+    def row(code, value, day, history=()):
+        return {
+            "code": code,
+            "value": value,
+            "asOf": day,
+            "state": "READY",
+            "history": [{"date": date, "value": value} for date, value in history],
+        }
+
+    frozen = {
+        "macros": [
+            row("PMI", 49.3, "2026-10-31"),
+            row("CPI_YOY", 0.7, "2026-10-01"),
+            row("PPI_YOY", 5.7, "2026-10-31"),
+        ],
+        "series": [
+            row("M1_M2_GAP", -4, "2026-09-30"),
+            row("M1_YOY", 4.4, "2026-10-31", [("2026-09-01", 3.1)]),
+            row("M2_YOY", 7.1, "2026-10-01", [("2026-09-30", 7.1)]),
+            row("US_T10_REAL", 2.91, "2026-11-12"),
+        ],
+    }
+    report = {
+        "macroCycle": "需求偏冷，外部利率高；M1新旧定义不跨断点串成趋势。9月M1-M2差为负。社融累计量不能替代信用脉冲。",
+        "cycleInsights": {"globalLiquidity": {"summary": "油价高企。BLS抓取403。"}},
+    }
+    projected = project_cycle_insights(report, frozen, NOW)
+    cycle = projected["cycleInsights"]
+    assert projected["macroCycle"] == report["macroCycle"]
+    assert cycle["displayMacroCycle"] == "需求偏冷，外部利率高；"
+    assert cycle["globalLiquidity"]["summary"] == "油价高企。"
+    assert set(cycle["auditNotes"]) == {
+        "M1新旧定义不跨断点串成趋势",
+        "社融累计量不能替代信用脉冲",
+        "BLS抓取403",
+    }
+    snapshot = cycle["macroSnapshot"]
+    spread = snapshot["moneySupplySpread"]
+    assert (
+        spread["referencePeriod"],
+        spread["gap"],
+        spread["previousGap"],
+        spread["periodChange"],
+    ) == ("2026-10", -2.7, -4, 1.3)
+    gap = next(row for row in snapshot["series"] if row["code"] == "M1_M2_GAP")
+    assert (gap["referencePeriod"], gap["value"]) == ("2026-10", -2.7)
+    composite = snapshot["composite"]
+    assert composite["inflationGap"] == 5
+    assert composite["labels"] == ["需求偏冷", "上游成本挤压", "外部高息紧缩"]

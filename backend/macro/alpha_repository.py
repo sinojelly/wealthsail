@@ -12,6 +12,7 @@ from backend.macro.market_repository import _day, _number, _stamp
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 METHOD = "alpha-public-v1"
 ARRAYS = ("observations", "catalysts", "odds", "launches", "fundHistories")
+_MONEY_SOURCE = "AKSHARE_MONEY_SUPPLY"
 LABELS = {
     "CN_T10": ("中国10年期国债收益率（东方财富）", "DAILY", "%", "AKSHARE_CN_T10"),
     "M1_YOY": ("M1同比（东方财富报告口径）", "MONTHLY", "%", "AKSHARE_MONEY_SUPPLY"),
@@ -124,7 +125,13 @@ async def finish_alpha_batch(conn, identity, now, status, payload):
 
 
 async def read_alpha_public(
-    conn, now, *, debug_request_id=None, manual_request_id=None, source_batch_id=None
+    conn,
+    now,
+    *,
+    debug_request_id=None,
+    manual_request_id=None,
+    source_batch_id=None,
+    include_cached_money=False,
 ):
     stamp = local(now)
     if debug_request_id is not None and manual_request_id is not None:
@@ -191,6 +198,43 @@ async def read_alpha_public(
         result["collectionAsOf"] = _stamp(ready["completed_at"]).isoformat()
         result["cacheRunDate"] = _day(ready["run_date"]).isoformat()
         result["batchId"] = str(ready["id"])
+        money = result["sourceResults"].get(_MONEY_SOURCE)
+        if (
+            include_cached_money
+            and not exact
+            and isinstance(money, dict)
+            and money.get("status") not in {None, "SUCCESS"}
+        ):
+            prior = await conn.fetchrow(
+                """SELECT jsonb_build_object('observations', (
+                     SELECT jsonb_agg(item) FROM jsonb_array_elements(payload->'observations') item
+                     WHERE item->>'sourceKey'=$3
+                   )) AS payload, completed_at
+                   FROM market.alpha_public_batches
+                   WHERE run_mode='SCHEDULED' AND run_date<=$1 AND claimed_at<=$2
+                     AND completed_at<=$2 AND status IN ('READY','PARTIAL')
+                     AND payload->'sourceResults'->$3->>'status'='SUCCESS'
+                     AND jsonb_typeof(payload->'observations')='array'
+                   ORDER BY run_date DESC,completed_at DESC,id DESC LIMIT 1""",
+                stamp.date(),
+                stamp,
+                _MONEY_SOURCE,
+            )
+            previous = (
+                _object(prior.get("payload")).get("observations") if prior else None
+            )
+            if isinstance(previous, list):
+                result["observations"] = [
+                    row
+                    for row in result["observations"]
+                    if not isinstance(row, dict)
+                    or row.get("sourceKey") != _MONEY_SOURCE
+                ] + [
+                    {**row, "state": "STALE"}
+                    for row in previous
+                    if isinstance(row, dict) and row.get("sourceKey") == _MONEY_SOURCE
+                ]
+                money["historyFallbackAsOf"] = prior["completed_at"].isoformat()
     else:
         ready = None
         result.update(collectionAsOf=None, cacheRunDate=None)
@@ -265,6 +309,12 @@ def _point(row, label, now, bundle):
     _, frequency, unit, expected = label
     day, value = _day(row.get("referenceDate")), _number(row.get("value"))
     state, reason = "OBSERVED", None
+    source_result = bundle.get("sourceResults", {}).get(expected) or {}
+    cached = (
+        expected == _MONEY_SOURCE
+        and row.get("state") == "STALE"
+        and source_result.get("historyFallbackAsOf") is not None
+    )
     if (
         day is None
         or day > now.date()
@@ -283,17 +333,16 @@ def _point(row, label, now, bundle):
         state, reason = "CONFLICT", "数值、频率或单位与指标口径不一致。"
     elif not _valid_source(row, expected):
         state, reason = "UNVERIFIED", "标的指标与供应商来源尚未对应核验。"
-    elif (bundle.get("sourceResults", {}).get(expected) or {}).get(
-        "status"
-    ) != "SUCCESS":
+    elif source_result.get("status") != "SUCCESS" and not cached:
         state, reason = (
-            (bundle.get("sourceResults", {}).get(expected) or {}).get("status")
-            or "UNAVAILABLE",
+            source_result.get("status") or "UNAVAILABLE",
             "本源最近采集未成功，未将旧值认证为当前事实。",
         )
-    elif now.date() > day + timedelta(
-        days=5 if frequency == "DAILY" else 45
-    ) or bundle.get("collectionState") in {"FAILED", "COLLECTING", "STALE"}:
+    elif (
+        cached
+        or now.date() > day + timedelta(days=5 if frequency == "DAILY" else 45)
+        or bundle.get("collectionState") in {"FAILED", "COLLECTING", "STALE"}
+    ):
         state, reason = "STALE", "保留实际历史观察；当前采集或指标观察期已陈旧。"
     basis = _basis(row)
     valid_value = value if state in {"OBSERVED", "STALE"} else None
@@ -514,13 +563,38 @@ def merge_alpha_series(existing_rows, bundle, now):
         )
         if index is None:
             result.append(row)
-        elif code == "M1_YOY" and result[index].get("state") == "READY":
+        elif code == "TSF_STOCK_YOY":
+            official = result[index]
+            current, fallback = (
+                (row, official)
+                if official.get("state") != "READY" and row["state"] == "READY"
+                else (official, row)
+            )
+            # TSF archive observations remain available to charts when a
+            # government reprint provides a fresher current reading.
+            history = {
+                point["date"][:7]: point
+                for point in current.get("history", [])
+                if isinstance(point.get("date"), str)
+            }
+            for point in fallback.get("history", []):
+                if point.get("date") and point.get("state") in {"OBSERVED", "STALE"}:
+                    history.setdefault(point["date"][:7], point)
+            result[index] = {
+                **current,
+                "history": [history[month] for month in sorted(history)],
+            }
+        elif code == "M1_YOY" and (
+            result[index].get("state") == "READY"
+            or (result[index].get("state") == "STALE" and row["state"] != "READY")
+        ):
             official = result[index]
             # Keep one observation per reporting month. Provider values only
             # fill absent months and retain their own visible definition. A
             # conflict already recorded by the official source is not hidden.
             history = {
-                point["date"][:7]: point for point in official.get("history", [])
+                point["date"][:7]: point
+                for point in official.get("history", [])
                 if isinstance(point.get("date"), str)
             }
             for point in row["history"]:
@@ -528,7 +602,14 @@ def merge_alpha_series(existing_rows, bundle, now):
                     history.setdefault(point["date"][:7], point)
             if "history" in official or len(history) > 1:
                 official["history"] = [history[month] for month in sorted(history)]
-        elif result[index].get("state") != "READY" and row["state"] == "READY":
+        elif result[index].get("state") != "READY" and (
+            row["state"] == "READY"
+            or (
+                code == "M1_YOY"
+                and row["state"] == "STALE"
+                and result[index].get("value") is None
+            )
+        ):
             row["previousEvidence"] = {
                 key: result[index].get(key)
                 for key in ("state", "sourceUri", "sourceName", "metadata")

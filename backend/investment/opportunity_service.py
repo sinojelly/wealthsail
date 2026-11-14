@@ -267,7 +267,7 @@ async def get_context(
     from backend.investment.theme_graph import read_themes, cached_nav_analysis
 
     with trace_stage("context.alpha_public"):
-        alpha_public = await read_alpha_public(conn, now)
+        alpha_public = await read_alpha_public(conn, now, include_cached_money=True)
         series = merge_alpha_series(series, alpha_public, now)
     with trace_stage("context.themes"):
         themes = await read_themes(conn, now, theme_code)
@@ -387,9 +387,17 @@ async def get_context(
     ):
         plans.append(selected_plan)
     from backend.investment.sell_risk import sell_risk_alerts
+    from backend.macro.cycle_insights import macro_snapshot
 
     with trace_stage("context.sell_risk"):
         sell_alerts = await sell_risk_alerts(conn, tenant_id, user_id, now, daily=daily)
+    market_snapshot = macro_snapshot({"macros": base.get("items"), "series": series}, now) or {}
+    from backend.investment.opportunity_scoring import annotate_macro_opportunities
+
+    daily["report"] = annotate_macro_opportunities(daily.get("report"), market_snapshot)
+    if "moneySupplySpread" in market_snapshot:
+        live_gap = next(row for row in market_snapshot["series"] if row["code"] == "M1_M2_GAP")
+        series = [row for row in series if row.get("code") != "M1_M2_GAP"] + [live_gap]
     return {
         **base,
         **personal,
@@ -399,6 +407,11 @@ async def get_context(
             "label": direction["label"],
         },
         "series": series,
+        "marketCycleSnapshot": {
+            key: market_snapshot[key]
+            for key in ("moneySupplySpread", "composite")
+            if key in market_snapshot
+        },
         "marketEvidence": evidence,
         "directionModel": model,
         "marketCollection": collected,

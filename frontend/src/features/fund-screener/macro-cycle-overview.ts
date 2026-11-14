@@ -85,9 +85,10 @@ export function buildCycleOverview(data: OpportunityContext) {
           origin: "原报告重要事件",
         }));
   const full = researchSummary(
-    report?.macroCycle ||
-      report?.summary ||
-      "综合研究尚未生成，以下为实际已采集观察。",
+    cycle?.displayMacroCycle ??
+      (report?.macroCycle ||
+        report?.summary ||
+        "综合研究尚未生成，以下为实际已采集观察。"),
     Infinity,
   );
   return {
@@ -136,6 +137,7 @@ export function cycleReportCutoff(data: OpportunityContext) {
 function knownBy(value: string | null | undefined, cutoff?: string | null) {
   if (!value) return false;
   if (!cutoff) return true;
+  if (/^\d{4}-\d{2}$/.test(value)) return value <= cutoff.slice(0, 7);
   if (value.length === 10 || cutoff.length === 10)
     return value.slice(0, 10) <= cutoff.slice(0, 10);
   return Date.parse(value) <= Date.parse(cutoff);
@@ -238,17 +240,6 @@ export type CyclePoint = { date: string; value: number; basis: string };
 
 export const cycleMonth = (day: string) =>
   Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7)) - 1;
-
-/** Keep the recent run, including short missing periods but not an isolated earlier era. */
-export function recentCycleRun(points: readonly CyclePoint[]) {
-  let first = points.length - 1;
-  while (
-    first > 0 &&
-    cycleMonth(points[first].date) - cycleMonth(points[first - 1].date) <= 3
-  )
-    first--;
-  return points.slice(Math.max(0, first));
-}
 
 export function cycleVix(data: OpportunityContext, cutoff?: string | null) {
   const series = data.series?.find((row) => row.code === "VIX");
@@ -357,6 +348,29 @@ export function cycleTrend(
       metadata: undefined,
     })),
   ];
+  const latest = series?.asOf ? series : monthly?.asOf ? monthly : undefined;
+  if (
+    latest?.asOf &&
+    !history.some(
+      (row) =>
+        (row.referencePeriod ?? row.date).slice(0, 7) ===
+        (latest.referencePeriod ?? latest.asOf!).slice(0, 7),
+    )
+  ) {
+    history.push({
+      ...latest,
+      date: latest.asOf,
+      timeBasis: series?.timeBasis ?? undefined,
+      definitionKey: undefined,
+      definitionVersion: undefined,
+      metadata: series?.metadata
+        ? {
+            definitionKey: series.metadata.definitionKey ?? undefined,
+            definitionVersion: series.metadata.definitionVersion ?? undefined,
+          }
+        : undefined,
+    });
+  }
   const usable = new Map<string, CyclePoint>();
   if (supplemental && cutoff) {
     for (const point of cycleTrend(supplemental, code, cutoff)) {
@@ -371,7 +385,7 @@ export function cycleTrend(
       !visibleBy(row, cutoff)
     )
       continue;
-    const month = row.date.slice(0, 7);
+    const month = (row.referencePeriod ?? row.date).slice(0, 7);
     if (
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) ||
       (frozenMonths.has(month) && (usable.get(month)?.date ?? "") > row.date)
@@ -389,7 +403,8 @@ export function cycleTrend(
         "",
     });
   }
-  return [...usable.values()]
-    .sort((a, b) => a.date.localeCompare(b.date))
+  return [...usable]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, point]) => ({ ...point, date: month }))
     .slice(-36);
 }

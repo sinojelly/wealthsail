@@ -7,7 +7,10 @@ import {
   Zap,
 } from "lucide-react";
 import type { OpportunityContext } from "../../../api/investment";
-import type { MacroPolicySignal } from "../../../api/macro-cycle";
+import type {
+  FedRateExpectation,
+  MacroPolicySignal,
+} from "../../../api/macro-cycle";
 import {
   buildCycleOverview,
   cycleFacts,
@@ -165,6 +168,77 @@ function StepFacts({
   );
 }
 
+const signed = (value: number) => `${value > 0 ? "+" : ""}${value}`;
+
+function FedPricing({ meetings }: { meetings: FedRateExpectation[] }) {
+  if (!meetings.length) return null;
+  return (
+    <div className="op-cycle-fed-pricing" aria-label="CME 利率期货定价">
+      <strong>🚨 CME 利率期货定价</strong>
+      {meetings.map((meeting) => {
+        const href = sourceHref(meeting.sourceUri);
+        const month = monthLabel(meeting.meetingMonth);
+        const label = meeting.cumulative ? `${month}累计` : month;
+        const distribution = [
+          [meeting.hikeProbability, "加息"],
+          [meeting.cutProbability, "降息"],
+          [meeting.holdProbability, "维持不变"],
+        ].filter(([value]) => Number(value) > 0);
+        return (
+          <p key={`${meeting.meetingMonth}:${meeting.cumulative}`}>
+            <strong>{label}</strong>{" "}
+            {meeting.complete
+              ? distribution
+                  .map(([value, move]) => `${move}总概率 ${value}%`)
+                  .join(" · ")
+              : "已报道档位"}{" "}
+            (
+            {meeting.outcomes.map(({ changeBp, probability }, index) => {
+              const text = `${changeBp === 0 ? "不变" : `${signed(changeBp)}bp`} ${probability}%`;
+              return (
+                <span key={changeBp}>
+                  {index > 0 && " | "}
+                  {changeBp === meeting.mainOutcome?.changeBp ? (
+                    <strong title="主定价档位">{text}</strong>
+                  ) : (
+                    text
+                  )}
+                </span>
+              );
+            })}
+            {meeting.expectedChangeBp != null &&
+              ` · 期望 ${signed(meeting.expectedChangeBp)}bp`}
+            )
+            {href && (
+              <>
+                {" "}
+                ·{" "}
+                <a href={href} target="_blank" rel="noreferrer">
+                  来源
+                </a>
+              </>
+            )}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function AuditNotes({ notes }: { notes: string[] }) {
+  if (!notes.length) return null;
+  return (
+    <details className="op-cycle-audit-notes">
+      <summary>ⓘ 数据口径与审计说明（{notes.length}项）</summary>
+      <ul>
+        {notes.map((note) => (
+          <li key={note}>{readingText(note, Infinity)}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export default function MacroCycleOverview({
   data,
   historical = false,
@@ -187,7 +261,8 @@ export default function MacroCycleOverview({
     Infinity,
   );
   const preview = researchSummary(full, 280);
-  const snapshot = report?.cycleInsights?.macroSnapshot;
+  const cycle = report?.cycleInsights;
+  const snapshot = cycle?.macroSnapshot;
   const retained =
     historical ||
     !!snapshot ||
@@ -198,8 +273,17 @@ export default function MacroCycleOverview({
     : data;
   const facts = cycleFacts(observed, cutoff);
   const marketFacts = historical ? facts : cycleFacts(data);
-  const signals = report?.cycleInsights?.policySignals ?? [];
-  const expectation = report?.cycleInsights?.rateExpectation;
+  const signals = cycle?.policySignals ?? [];
+  const expectation = cycle?.rateExpectation;
+  const meetings = cycle?.fedRateExpectations ?? [];
+  const notes = cycle?.auditNotes ?? [];
+  const moneySpread = historical
+    ? snapshot?.moneySupplySpread
+    : (data.marketCycleSnapshot?.moneySupplySpread ??
+      snapshot?.moneySupplySpread);
+  const relevantSignals = signals.filter(
+    (row) => row.kind !== "MARKET_RATE_ODDS",
+  );
   // Current charts and the dated report judgment are displayed as separate evidence.
   // A historical preview is the only view that freezes both to the same clock.
   const trendData = historical ? observed : data;
@@ -211,6 +295,7 @@ export default function MacroCycleOverview({
   const haveGlobal = !!(
     model.global ||
     signals.length ||
+    meetings.length ||
     expectation ||
     facts.some((fact) => fact.code.startsWith("US_"))
   );
@@ -222,7 +307,6 @@ export default function MacroCycleOverview({
     cn10.asOf.slice(0, 10) === us10.asOf.slice(0, 10)
       ? Math.round((Number(cn10.value) - Number(us10.value)) * 100)
       : null;
-  const change5 = expectation?.us10yChange5Bp;
   if (!factView) {
     return (
       <ObservationSection
@@ -231,6 +315,15 @@ export default function MacroCycleOverview({
         title="宏观周期与今日总纲"
       >
         <div className="op-cycle-brief">
+          <FedPricing meetings={meetings} />
+          {!!meetings.length &&
+            relevantSignals.map((row) => (
+              <PolicySignal
+                key={`${row.title}:${row.text}`}
+                row={row}
+                compact
+              />
+            ))}
           <div className="op-cycle-caption">
             {retained &&
               report &&
@@ -266,19 +359,30 @@ export default function MacroCycleOverview({
               {expanded ? "收起今日总纲" : "展开今日总纲"}
             </button>
           )}
-          {keySignal && <PolicySignal row={keySignal} compact />}
+          {!meetings.length && keySignal && (
+            <PolicySignal row={keySignal} compact />
+          )}
         </div>
         <div className="op-cycle-chart-context">
           {historical
             ? "研究时点的市场数据"
             : "本地最新市场数据 · 各指标日期见图例"}
         </div>
+        {moneySpread?.summary && (
+          <p className="op-cycle-chart-context">{moneySpread.summary}</p>
+        )}
         <MacroCycleTrends
           data={trendData}
           cutoff={trendCutoff}
           facts={marketFacts}
           rateState={rateState}
+          composite={
+            historical
+              ? snapshot?.composite
+              : (data.marketCycleSnapshot?.composite ?? snapshot?.composite)
+          }
         />
+        <AuditNotes notes={notes} />
       </ObservationSection>
     );
   }
@@ -319,6 +423,11 @@ export default function MacroCycleOverview({
         >
           {haveGlobal && (
             <ol className="op-cycle-chain" aria-label="全球利率与流动性推导链">
+              {!!meetings.length && (
+                <ChainStep title="联储会议期货定价">
+                  <FedPricing meetings={meetings} />
+                </ChainStep>
+              )}
               <ChainStep title="通胀与需求源头">
                 <StepFacts
                   facts={facts}
@@ -341,7 +450,11 @@ export default function MacroCycleOverview({
               </ChainStep>
               <ChainStep title="联储表态与机构预测">
                 {signals
-                  .filter((row) => row.kind !== "INFLATION_DRIVER")
+                  .filter(
+                    (row) =>
+                      row.kind !== "INFLATION_DRIVER" &&
+                      (!meetings.length || row.kind !== "MARKET_RATE_ODDS"),
+                  )
                   .map((row) => (
                     <PolicySignal key={`${row.title}:${row.text}`} row={row} />
                   ))}
@@ -364,12 +477,6 @@ export default function MacroCycleOverview({
                   <p>
                     同日中美 10 年利差 {spread > 0 ? "+" : ""}
                     {spread} bp。
-                  </p>
-                )}
-                {change5 != null && (
-                  <p>
-                    美国 10 年名义收益率近五个交易日 {change5 > 0 ? "+" : ""}
-                    {change5} bp。
                   </p>
                 )}
                 {expectation && (
@@ -424,6 +531,7 @@ export default function MacroCycleOverview({
               )}
             </ChainStep>
             <ChainStep title="货币与信用传导">
+              {moneySpread?.summary && <p>{moneySpread.summary}</p>}
               <p>
                 {readingText(
                   cycleReading(model.domestic?.impact ?? ""),
@@ -557,6 +665,7 @@ export default function MacroCycleOverview({
           </div>
         </details>
       )}
+      <AuditNotes notes={notes} />
     </ObservationSection>
   );
 }

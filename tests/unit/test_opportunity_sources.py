@@ -344,6 +344,7 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "UST_REAL",
         "PBOC_M1",
         "PBOC_TSF",
+        "PBOC_TSF_HISTORY",
         "PBOC_LOANS",
         "CHINABOND",
         "CFETS",
@@ -368,6 +369,43 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "US_CPI_YOY", "US_CPI_MOM", "US_CORE_CPI_YOY", "US_CORE_CPI_MOM",
         "US_PPI_YOY", "US_PPI_MOM", "US_FED_FUNDS", "US_T2_NOMINAL", "US_BRENT", "VIX",
     }
+
+
+@pytest.mark.asyncio
+async def test_official_tsf_archive_backfills_growth_while_monthly_release_is_unavailable(
+    monkeypatch,
+):
+    adapter = _adapter()
+    annual = "https://www.pbc.gov.cn/diaochatongjisi/2024/index.html"
+    index = "https://www.pbc.gov.cn/diaochatongjisi/2024/afre/index.html"
+    stock = "https://www.pbc.gov.cn/diaochatongjisi/attachDir/2025/11/2025111416272086731.htm"
+
+    async def fetch(client, uri):
+        documents = {
+            adapter.PBOC_STATISTICS_INDEX: f'<a href="{annual}">2024年统计数据</a>',
+            annual: f'<a href="{index}">社会融资规模 Aggregate Financing to the Real Economy</a>',
+            index: f'<table><tr><td>社会融资规模增量统计表</td><td><a href="flow.htm">htm</a></td></tr><tr><td>社会融资规模存量统计表</td><td><a href="{stock}">htm</a></td></tr></table>',
+            stock: """<table>
+              <tr><th></th><th colspan="2">2024.1</th><th colspan="2">2024.2</th></tr>
+              <tr><th>项目</th><th>存量</th><th>增速（%）</th><th>存量</th><th>增速（%）</th></tr>
+              <tr><td>社会融资规模存量<br>AFRE(stock)</td><td>384.32</td><td>9.5</td><td>385.71</td><td>9.0</td></tr>
+              <tr><td>人民币贷款</td><td>246.2</td><td>9.9</td><td>248.7</td><td>9.8</td></tr>
+            </table>""",
+        }
+        if uri not in documents:
+            raise httpx.ConnectError("offline")
+        return documents[uri]
+
+    monkeypatch.setattr(adapter, "_fetch_text", fetch)
+    result = await adapter.fetch_opportunity_series(NOW)
+    assert result["sourceResults"]["PBOC_TSF"]["status"] == "FAILED"
+    assert result["sourceResults"]["PBOC_TSF_HISTORY"]["status"] == "SUCCESS"
+    rows = [row for row in result["observations"] if row["code"] == "TSF_STOCK_YOY"]
+    assert [(row["referenceDate"], str(row["value"])) for row in rows] == [
+        ("2024-01-01", "9.5"),
+        ("2024-02-01", "9.0"),
+    ]
+    assert all(row["sourceUri"] == stock and row["publishedAt"] is None for row in rows)
 
 
 @pytest.mark.asyncio

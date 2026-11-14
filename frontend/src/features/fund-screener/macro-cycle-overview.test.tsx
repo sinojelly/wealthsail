@@ -155,7 +155,7 @@ it("shows separate global, domestic, market and key-factor rows without inventin
   expect(
     within(board).getByRole("heading", { name: "宏观周期与今日总纲" }),
   ).toBeVisible();
-  expect(board).toHaveTextContent("流动性松紧");
+  expect(board).toHaveTextContent("全球流动性压力与风险走势图");
   expect(board).toHaveTextContent("VIX 市场波动");
   expect(board).not.toHaveTextContent("联储表态与机构预测");
   expect(board).toHaveTextContent("接近买区再分批观察");
@@ -249,10 +249,12 @@ it("plots dated local macro history and excludes observations collected after th
     ],
   });
   const { container } = render(<MacroCycleOverview data={data} historical />);
+  expect(screen.getByRole("img", { name: "景气与货币活化趋势" })).toBeVisible();
+  expect(screen.getByRole("img", { name: "上下游通胀剪刀差" })).toBeVisible();
   expect(
-    screen.getByRole("img", { name: "中国制造业景气与价格趋势" }),
-  ).toBeVisible();
-  expect(screen.queryByText("2023-11")).not.toBeInTheDocument();
+    container.querySelector('[data-macro-series="CPI_YOY"] path'),
+  ).toHaveAttribute("d", expect.stringContaining(" L"));
+  expect(screen.getByText("2023-11")).toBeInTheDocument();
   expect(container.querySelector('[data-macro-gap="PMI"]')).toBeInTheDocument();
   expect(screen.getByText("0.70%")).toBeVisible();
   expect(
@@ -263,6 +265,40 @@ it("plots dated local macro history and excludes observations collected after th
     "true",
   );
   expect(screen.queryByText("55.0")).not.toBeInTheDocument();
+});
+
+it("highlights sourced CME distributions and moves audit text into a closed panel", () => {
+  const data = context();
+  const cycle = data.dailyResearch!.report!.cycleInsights!;
+  cycle.fedRateExpectations = [
+    {
+      meetingMonth: "2026-12",
+      cumulative: false,
+      complete: true,
+      hikeProbability: 100,
+      cutProbability: 0,
+      holdProbability: 0,
+      expectedChangeBp: 28.8,
+      outcomes: [
+        { changeBp: 25, probability: 84.7 },
+        { changeBp: 50, probability: 15.3 },
+      ],
+      sourceUri: "https://www.cmegroup.com/fedwatch",
+    },
+  ];
+  cycle.auditNotes = ["统计口径调整处断开"];
+  render(<MacroCycleOverview data={data} />);
+  const pricing = screen.getByLabelText("CME 利率期货定价");
+  expect(pricing).toHaveTextContent("加息总概率 100%");
+  expect(pricing).toHaveTextContent("+25bp 84.7% | +50bp 15.3% · 期望 +28.8bp");
+  expect(within(pricing).getByRole("link", { name: "来源" })).toBeVisible();
+  const disclosure = screen
+    .getByText("ⓘ 数据口径与审计说明（1项）")
+    .closest("details")!;
+  expect(disclosure).not.toHaveAttribute("open");
+  expect(
+    within(disclosure).getByText("统计口径调整处断开"),
+  ).toBeInTheDocument();
 });
 
 it("labels legacy prose and industry evidence without fabricating a structured rate cycle", () => {

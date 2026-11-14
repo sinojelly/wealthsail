@@ -26,6 +26,9 @@ from bs4 import BeautifulSoup
 NBS_RELEASE_INDEX = "https://www.stats.gov.cn/sj/zxfb/"
 NBS_CALENDAR_INDEX = "https://www.stats.gov.cn/xxgk/sjfb/fbrcb/"
 PBOC_RELEASE_INDEX = "https://www.pbc.gov.cn/diaochatongjisi/116219/116225/index.html"
+PBOC_STATISTICS_INDEX = (
+    "https://www.pbc.gov.cn/diaochatongjisi/116219/116319/index.html"
+)
 FED_RSS_URL = "https://www.federalreserve.gov/feeds/press_monetary.xml"
 SOURCE_KEYS = ("NBS_CPI", "NBS_PPI", "NBS_PMI", "NBS_CALENDAR", "PBOC_M2", "FED_RSS")
 _NBS_KEYS = {"CPI_YOY": "NBS_CPI", "PPI_YOY": "NBS_PPI", "PMI": "NBS_PMI"}
@@ -319,6 +322,45 @@ def _table_grid(table):
             column += colspan
         grid.append([cells.get(col, "") for col in range(max(cells, default=-1) + 1)])
     return grid
+
+
+def parse_pboc_tsf_stock_growth(text, year):
+    """Extract the published growth columns of the annual national stock table."""
+    results = {}
+    for table in _soup(text).find_all("table"):
+        if "社会融资规模存量统计表" not in _compact(
+            table.get_text(" ", strip=True)
+        ) and "AFRE(stock)" not in _compact(table.get_text(" ", strip=True)):
+            continue
+        grid = _table_grid(table)
+        for position, row in enumerate(grid[:-1]):
+            headers = grid[position + 1]
+            months = {
+                column: int(match[1])
+                for column, cell in enumerate(row)
+                if column < len(headers)
+                and re.fullmatch(r"增速[（(]%[）)]", headers[column])
+                and (match := re.fullmatch(rf"{year}\.(1[0-2]|0?[1-9])", cell))
+            }
+            if not months:
+                continue
+            for values in grid[position + 2 :]:
+                if not values or not re.fullmatch(
+                    r"社会融资规模存量(?:AFRE\(stock\))?", values[0], re.I
+                ):
+                    continue
+                for column, month in months.items():
+                    value = values[column] if column < len(values) else ""
+                    if not re.fullmatch(r"[+\-]?\d+(?:\.\d+)?", value):
+                        continue
+                    reference = date(year, month, 1)
+                    growth = Decimal(value)
+                    if reference in results and results[reference] != growth:
+                        raise ValueError("conflicting annual social financing growth")
+                    results[reference] = growth
+    if not results:
+        raise ValueError("annual national social financing growth is unavailable")
+    return sorted(results.items())
 
 
 def parse_nbs_calendar(text, source_uri, now):

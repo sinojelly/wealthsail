@@ -153,6 +153,7 @@ export interface MacroContext {
     history?: Array<{
       asOf: string;
       value: number;
+      referencePeriod?: string | null;
       unit?: string | null;
       source?: string | null;
       sourceUri?: string | null;
@@ -281,6 +282,7 @@ export interface OpportunitySeries {
   unit: string | null;
   value: number | null;
   asOf: string | null;
+  referencePeriod?: string | null;
   sourceUri: string | null;
   sourceName: string | null;
   publishedAt: string | null;
@@ -310,6 +312,7 @@ export interface OpportunitySeries {
   };
   history: Array<{
     date: string;
+    referencePeriod?: string | null;
     value: number | null;
     state: string;
     unit?: string | null;
@@ -483,6 +486,13 @@ export interface RelativeStrength {
   missingEvidence?: string[];
 }
 export interface ActionableZoneResult extends OpportunityPriority, EntrySafety {
+  macroOpportunity?: {
+    stance: "TAILWIND" | "HEADWIND";
+    label: string;
+    rationale: string;
+    riskLevel: string;
+    sourceUris?: string[];
+  };
   pricePosition?: {
     status:
       | "ENTRY_ZONE"
@@ -682,6 +692,10 @@ export interface PersonalActionReminder {
 }
 export interface OpportunityContext extends MacroContext {
   sellRiskAlerts?: SellRiskAlerts;
+  marketCycleSnapshot?: Pick<
+    NonNullable<import("./macro-cycle").MacroCycleInsights["macroSnapshot"]>,
+    "composite" | "moneySupplySpread"
+  >;
   strategyMemoryRules?: StrategyMemoryRule[];
   themes?: ThemeGraphRow[];
   alphaPublic?: AlphaPublic | null;
@@ -1015,6 +1029,7 @@ export interface DailyResearch {
     cycleInsights?: import("./macro-cycle").MacroCycleInsights | null;
     actionablePlans?: ActionableZoneResult[];
     quantitativeScan?: QuantitativeScan;
+    discoveryActionableZones?: ActionableZoneResult[];
     valueDirections?: ValueDirection[];
     topicCatalog?: Array<{
       key: string;

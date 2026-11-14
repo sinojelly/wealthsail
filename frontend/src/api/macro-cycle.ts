@@ -24,6 +24,29 @@ export interface MacroPolicySignal {
   kind: string;
 }
 
+export interface FedRateExpectation {
+  meetingMonth: string;
+  cumulative: boolean;
+  hikeProbability: number;
+  cutProbability: number;
+  holdProbability: number;
+  expectedChangeBp: number | null;
+  complete: boolean;
+  outcomes: { changeBp: number; probability: number }[];
+  mainOutcome?: { changeBp: number; probability: number };
+  sourceUri?: string | null;
+  asOf?: string | null;
+}
+
+export interface MacroComposite {
+  labels: string[];
+  pmi?: number | null;
+  ppiYoy?: number | null;
+  cpiYoy?: number | null;
+  inflationGap?: number | null;
+  us10yReal?: number | null;
+}
+
 export interface MacroCycleInsights {
   version?: string;
   globalLiquidity?: MacroCycleInsight;
@@ -31,7 +54,15 @@ export interface MacroCycleInsights {
   marketRegime?: MacroCycleInsight;
   keyFactors?: MacroCycleInsight[];
   industries?: MacroCycleInsight[];
-  macroSnapshot?: { items: MacroContext["items"]; series: OpportunitySeries[] };
+  macroSnapshot?: {
+    items: MacroContext["items"];
+    series: OpportunitySeries[];
+    composite?: MacroComposite;
+    moneySupplySpread?: { referencePeriod: string; summary: string };
+  };
+  displayMacroCycle?: string;
+  auditNotes?: string[];
+  fedRateExpectations?: FedRateExpectation[];
   policySignals?: MacroPolicySignal[];
   rateExpectation?: {
     state: string;

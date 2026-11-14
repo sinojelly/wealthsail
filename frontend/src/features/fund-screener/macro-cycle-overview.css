@@ -244,6 +244,43 @@
   margin: 0 0 7px;
   font-size: 14px;
 }
+.op-cycle-subplot + .op-cycle-subplot {
+  border-top: 1px solid #dde8ee;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.op-cycle-subplot h5 {
+  color: #36536a;
+  font-size: 12px;
+  margin: 5px 0;
+}
+.op-cycle-fed-pricing,
+.op-cycle-composite {
+  background: #fff3e5;
+  border-left: 3px solid #c97537;
+  border-radius: 5px;
+  color: #6f391b;
+  padding: 8px 10px;
+}
+.op-cycle-fed-pricing p,
+.op-cycle-spread {
+  margin: 4px 0;
+}
+.op-cycle-spread {
+  color: #843b60;
+  font-weight: 600;
+}
+.op-cycle-audit-notes {
+  color: #516678;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.op-cycle-audit-notes summary {
+  cursor: pointer;
+}
+.op-cycle-audit-notes li + li {
+  margin-top: 5px;
+}
 .op-cycle-vix-value {
   margin: 4px 0;
 }

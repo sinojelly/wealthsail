@@ -263,7 +263,11 @@ def series_context(rows, now, *, permissions=None, source_results=None):
         ):
             continue
         key = row["code"], _day(row["reference_date"])
-        rank = (_stamp(row["retrieved_at"]), row.get("revision") or 0)
+        rank = (
+            _metadata(row).get("sourceKey") != "PBOC_TSF_HISTORY",
+            _stamp(row["retrieved_at"]),
+            row.get("revision") or 0,
+        )
         if key not in selected or rank > selected[key][0]:
             selected[key] = rank, row
     output = []
@@ -365,7 +369,9 @@ async def read_series(conn, now):
         """SELECT DISTINCT ON(code,reference_date) * FROM market.opportunity_series_observations
       WHERE retrieved_at<=$1 AND available_at<=$1 AND (published_at IS NULL OR published_at<=$1)
       AND reference_date<=($1 AT TIME ZONE 'Asia/Shanghai')::date
-      ORDER BY code,reference_date,retrieved_at DESC,revision DESC""",
+      ORDER BY code,reference_date,
+        (metadata->>'sourceKey' IS NOT DISTINCT FROM 'PBOC_TSF_HISTORY'),
+        retrieved_at DESC,revision DESC""",
         now,
     )
 
@@ -422,7 +428,7 @@ async def read_collection(conn, now):
             SELECT a.id,a.recorded_at,s.source_key,
               a.outcomes->'PUBLIC_SOURCES' AS outcome,1 AS precedence
             FROM attempts a CROSS JOIN unnest(ARRAY[
-              'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_LOANS',
+              'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_TSF_HISTORY','PBOC_LOANS',
               'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU','VIXCLS'
             ]) AS s(source_key)
             WHERE a.outcomes->'PUBLIC_SOURCES'->>'status'='FAILED'
