@@ -147,3 +147,119 @@ def share_context_charts(context):
         **context, "dailyResearch": {**daily, "report": updated},
         "chartSeries": {"version": "shared-v1", "items": items},
     }
+
+
+def share_context_values(context):
+    """Opt-in exact JSON subtree sharing, including repeated complete evidence.
+
+    Hashes encode complete values, never fund IDs. Clocks, currencies, order,
+    unknown fields and differing plans survive. Single-use values stay inline;
+    the source report and private decision are never changed. Legacy non-JSON
+    values or reserved-marker collisions retain the normal encoder path.
+    """
+    if not isinstance(context, dict) or "reportValues" in context:
+        return context
+    daily = context.get("dailyResearch")
+    report = daily.get("report") if isinstance(daily, dict) else None
+    if not isinstance(report, dict):
+        return context
+    candidates, counts, seen, active, strings = {}, {}, {}, set(), {}
+    scalar_bytes = {}
+    reference_size = len(json.dumps({"reportValueRef": "0" * 64}, separators=(",", ":")))
+
+    def scalar(node):
+        key = (type(node), node.hex() if type(node) is float else node)
+        if key not in scalar_bytes:
+            scalar_bytes[key] = json.dumps(node, ensure_ascii=False, allow_nan=False,
+                                            separators=(",", ":")).encode("utf-8")
+        return scalar_bytes[key]
+
+    def count_references(node):
+        if isinstance(node, list):
+            for child in node:
+                count_references(child)
+        elif isinstance(node, dict):
+            if set(node) == {"reportValueRef"}:
+                counts[node["reportValueRef"]] += 1
+            else:
+                for child in node.values():
+                    count_references(child)
+
+    def collect(node):
+        if isinstance(node, str) and len(scalar(node)) >= 514:
+            if node not in strings:
+                encoded = json.dumps(node, ensure_ascii=False).encode("utf-8")
+                key = sha256(encoded).hexdigest()
+                strings[node] = key
+                candidates[key] = node
+            key = strings[node]
+            counts[key] = counts.get(key, 0) + 1
+            return {"reportValueRef": key}, reference_size
+        if node is None or type(node) in (str, bool, int, float):
+            return node, len(scalar(node))
+        if not isinstance(node, (dict, list)):
+            raise TypeError("legacy JSON encoder value")
+        identity = id(node)
+        if identity in active:
+            raise ValueError("cyclic report value")
+        if identity in seen:
+            result, size = seen[identity]
+            # Small shared wrappers can contain references to large children.
+            # Every reuse must count those edges too, or emit would repeatedly
+            # inline a supposedly single-use 500-point child.
+            count_references(result)
+            return result, size
+        active.add(identity)
+        if isinstance(node, dict):
+            if "reportValueRef" in node or any(type(key) is not str for key in node):
+                raise TypeError("reserved report value")
+            children = {key: collect(child) for key, child in node.items()}
+            result = {key: child for key, (child, _) in children.items()}
+            size = 2 + max(0, len(node) - 1) + sum(
+                len(scalar(key)) + 1 + child_size for key, (_, child_size) in children.items()
+            )
+        else:
+            children = [collect(child) for child in node]
+            result = [child for child, _ in children]
+            size = 2 + max(0, len(node) - 1) + sum(child_size for _, child_size in children)
+        active.remove(identity)
+        # Child references keep hashing work proportional to the JSON graph,
+        # rather than serializing the full 500-point curve at every ancestor.
+        if size >= 1024:
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
+                                 sort_keys=True, separators=(",", ":")).encode("utf-8")
+            key = sha256(encoded).hexdigest()
+            candidates.setdefault(key, result)
+            counts[key] = counts.get(key, 0) + 1
+            result = {"reportValueRef": key}
+            size = reference_size
+        seen[identity] = result, size
+        return result, size
+
+    items, restored = {}, {}
+
+    def emit(node):
+        if isinstance(node, list):
+            return [emit(child) for child in node]
+        if not isinstance(node, dict):
+            return node
+        if set(node) == {"reportValueRef"}:
+            key = node["reportValueRef"]
+            if key not in restored:
+                restored[key] = emit(candidates[key])
+            if counts[key] > 1:
+                items[key] = restored[key]
+                return node
+            return restored[key]
+        return {key: emit(child) for key, child in node.items()}
+
+    try:
+        updated = emit(collect(report)[0])
+    except (TypeError, ValueError, RecursionError):
+        return context
+    if not items:
+        return context
+    return {
+        **context, "dailyResearch": {**daily, "report": updated},
+        "reportValues": {"version": "shared-v2", "items": items},
+    }

@@ -1,5 +1,6 @@
-import { request, requestWithTimeout } from "./client";
+import { HttpError, request, requestWithTimeout } from "./client";
 import { hydrateOpportunityChartSeries } from "./opportunity-chart-transport";
+import { hydrateOpportunityReportValues } from "./opportunity-report-transport";
 import { OPPORTUNITY_CONTEXT_TIMEOUT_MS } from "./report-read-policy";
 import type { RuntimeFailureReasonCode } from "./runtime-diagnostics";
 import type { ResearchAcceptanceOutcome } from "./research-acceptance";
@@ -1011,6 +1012,7 @@ export interface DailyResearch {
     asOf?: string;
     summary: string;
     macroCycle?: string | null;
+    cycleInsights?: import("./macro-cycle").MacroCycleInsights | null;
     actionablePlans?: ActionableZoneResult[];
     quantitativeScan?: QuantitativeScan;
     valueDirections?: ValueDirection[];
@@ -1242,13 +1244,36 @@ export async function getOpportunityContext(
     if (value !== undefined && value !== "") params.set(key, String(value));
   });
   params.set("compactCharts", "true");
-  params.set("chartFormat", "shared-v1");
-  const context = await readReport<OpportunityContext>(
-    `/investment/opportunity-context?${params}`,
-    signal,
-    OPPORTUNITY_CONTEXT_TIMEOUT_MS,
-  );
-  return hydrateOpportunityChartSeries(context);
+  params.set("chartFormat", "shared-v2");
+  const started = performance.now();
+  let context: OpportunityContext;
+  try {
+    context = await readReport<OpportunityContext>(
+      `/investment/opportunity-context?${params}`,
+      signal,
+      OPPORTUNITY_CONTEXT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (
+      !(error instanceof HttpError) ||
+      error.status !== 422 ||
+      signal?.aborted
+    )
+      throw error;
+    // Old deployments may reject the new opt-in format. This one compatibility
+    // read shares the original deadline and never dispatches research or refresh.
+    params.set("chartFormat", "shared-v1");
+    const remaining = Math.max(
+      1,
+      OPPORTUNITY_CONTEXT_TIMEOUT_MS - Math.max(0, performance.now() - started),
+    );
+    context = await readReport<OpportunityContext>(
+      `/investment/opportunity-context?${params}`,
+      signal,
+      remaining,
+    );
+  }
+  return hydrateOpportunityChartSeries(hydrateOpportunityReportValues(context));
 }
 export const getConditionMonitors = (signal?: AbortSignal) =>
   read<ConditionMonitor[]>("/investment/condition-monitors", signal);

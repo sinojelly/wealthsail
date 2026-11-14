@@ -104,6 +104,7 @@ it("ignores the retired all-valuation filter from old URLs when discovering fund
     <FundScreenerPage />,
     "/fund-screener?valueCandidateOnly=true",
   );
+  await userEvent.click(await screen.findByText("手动研究指数与基金"));
   await waitFor(() =>
     expect(mocks.funds).toHaveBeenCalledWith(
       expect.not.objectContaining({ valueCandidateOnly: "true" }),

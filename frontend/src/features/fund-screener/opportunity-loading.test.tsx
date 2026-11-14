@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   opportunity: vi.fn(),
   refresh: vi.fn(),
   start: vi.fn(),
+  screen: vi.fn(),
 }));
 
 vi.mock("../../api/investment", async (original) => ({
@@ -37,9 +38,7 @@ vi.mock("../../api/investment", async (original) => ({
   getIndices: api.indices,
   getMarketContext: api.market,
   getOpportunityContext: api.opportunity,
-  screenFunds: vi
-    .fn()
-    .mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
+  screenFunds: api.screen,
   getAnalysis: vi.fn().mockResolvedValue({ state: "NOT_COLLECTED" }),
 }));
 vi.mock("../../api/watchlist", () => ({ list: vi.fn().mockResolvedValue([]) }));
@@ -203,6 +202,28 @@ beforeEach(() => {
   api.market.mockResolvedValue(facts(49.1));
   api.opportunity.mockResolvedValue(facts());
   api.refresh.mockResolvedValue({ enabled: false, request: null });
+  api.screen.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+});
+
+it("defers the manual fund screen until its closed panel is explicitly opened", async () => {
+  api.directions.mockResolvedValue([
+    {
+      id: "broad",
+      marketId: "a-share",
+      marketLabel: "A股",
+      styleId: "broad",
+      label: "宽基",
+      framework: "研究盈利与风险",
+    },
+  ]);
+  api.indices.mockResolvedValue([
+    { id: "hs300", name: "沪深300", code: "000300", marketId: "a-share" },
+  ]);
+  mountPage();
+  await waitFor(() => expect(api.opportunity).toHaveBeenCalledOnce());
+  expect(api.screen).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByText("手动研究指数与基金"));
+  await waitFor(() => expect(api.screen).toHaveBeenCalledOnce());
 });
 
 afterEach(() => {

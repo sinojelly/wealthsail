@@ -37,6 +37,7 @@ it("refreshes the candidate list when research data is updated", async () => {
   api.refresh.mockResolvedValue({ runId: "new-data", created: true });
   api.refreshStatus.mockResolvedValue({ status: "COMPLETED" });
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   await screen.findByRole("heading", { name: "沪深300" });
   const button = await screen.findByRole("button", { name: "更新研究数据" });
   await waitFor(() => expect(button).toBeEnabled());
@@ -146,6 +147,7 @@ it("shows collected ETF analysis and its score in the expanded list", async () =
     pageSize: 20,
   });
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   await user.click(await screen.findByRole("button", { name: /展开更多列/ }));
   expect(await screen.findByText("已分析")).toBeInTheDocument();
   expect(screen.getByText("75 · 趋势较强")).toBeInTheDocument();
@@ -284,6 +286,7 @@ it("queries the full private opportunity scope including fund market", async () 
 it("uses the v3.3 workspace and keeps parent selection when diagnosing a fund", async () => {
   const user = userEvent.setup();
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   expect(
     await screen.findByRole("heading", { name: "投资机会中心" }),
   ).toBeInTheDocument();
@@ -351,6 +354,7 @@ it("keeps unknown conclusions empty and distinguishes index follow from fund wat
 it("paginates through the server and preserves filters", async () => {
   const user = userEvent.setup();
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   const next = await screen.findByRole("button", { name: "下一页" });
   await waitFor(() => expect(next).toBeEnabled());
   await user.click(next);
@@ -400,6 +404,7 @@ it("pins analysis cutoff when paging and resets it when changing direction", asy
     analysisAsOf: "2026-10-12T10:00:00Z",
   });
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   const next = await screen.findByRole("button", { name: "下一页" });
   await waitFor(() => expect(next).toBeEnabled());
   await user.click(next);
@@ -504,6 +509,7 @@ it("does not mistake an ETF watch code for an OTC fund with the same code", asyn
     },
   ]);
   renderWithSession(<FundScreenerPage />);
+  await user.click(await screen.findByText("手动研究指数与基金"));
   await user.click(await screen.findByRole("button", { name: /同码场外基金/ }));
   expect(screen.getByRole("button", { name: "加入自选基金" })).toBeEnabled();
   expect(screen.queryByText("已加入自选")).not.toBeInTheDocument();

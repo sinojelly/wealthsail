@@ -101,7 +101,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
   const funds = useQuery({
     queryKey: [subject, "research-funds", filters],
     queryFn: ({ signal }) => api.screenFunds(filters, signal),
-    enabled: unlinked || indices.isSuccess,
+    enabled: manualOpen && (unlinked || indices.isSuccess),
   });
   const restore = useQuery({
     queryKey: [subject, "restore-fund", fundCode],
