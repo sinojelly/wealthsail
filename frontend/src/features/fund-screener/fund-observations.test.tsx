@@ -275,6 +275,11 @@ it("keeps saved AI opportunity summaries on Today and independent observations, 
   const topics = await screen.findByRole("region", {
     name: "高价值机会",
   });
+  const summary = within(topics)
+    .getByRole("heading", { name: "高价值机会", level: 3 })
+    .closest("summary")!;
+  expect(summary.parentElement).not.toHaveAttribute("open");
+  await userEvent.click(summary);
   expect(await within(topics).findByText("机器人商业化观察")).toBeVisible();
   expect(within(topics).queryByText("负面风险待核验")).toBeNull();
   expect(

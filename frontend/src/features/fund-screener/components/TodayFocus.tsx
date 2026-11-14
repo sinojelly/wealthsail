@@ -10,6 +10,29 @@ import QuantitativePricePanel from "./QuantitativePricePanel";
 import MacroCycleOverview from "./MacroCycleOverview";
 import "../today-focus.css";
 
+function fundLink(key: string) {
+  return `today-fund-${encodeURIComponent(key)}`;
+}
+
+function FundLink({ fund }: { fund: TodayFund }) {
+  const id = fundLink(fund.key);
+  return (
+    <a
+      href={`#${encodeURIComponent(id)}`}
+      onClick={() => {
+        const target = document.getElementById(id);
+        if (!target) return;
+        const alternatives = target.parentElement?.closest<HTMLDetailsElement>(
+          "details.op-today-track-alternatives",
+        );
+        if (alternatives) alternatives.open = true;
+      }}
+    >
+      {fundDisplayName(fund.name, fund.code)} {fund.code}
+    </a>
+  );
+}
+
 function FundRow({
   fund,
   frozenNavHistories,
@@ -24,7 +47,7 @@ function FundRow({
   return (
     <details
       className="op-today-fund"
-      id={`today-fund-${encodeURIComponent(fund.key)}`}
+      id={fundLink(fund.key)}
       data-testid="today-fund-row"
       data-fund-code={fund.code}
       open={expanded}
@@ -99,7 +122,10 @@ export default function TodayFocus({
     data.dailyResearch?.reportRunId ?? data.dailyResearch?.runId ?? "empty";
   return (
     <>
-      <MacroCycleOverview data={data} />
+      <MacroCycleOverview
+        data={data}
+        historical={frozenNavHistories !== undefined}
+      />
       <button
         type="button"
         className="op-workspace-link"
@@ -112,15 +138,47 @@ export default function TodayFocus({
         className="op-today-opportunities"
       >
         <p className="op-today-guide">
-          已入买区优先，其次距买区小于2%、持仓卖出提醒及右侧趋势机会。其余收起，点击可查看全部价位与走势。
+          每条赛道选一只代表基金。已入买区或距买区小于
+          1.5%，且已核对最新净值和至少一年历史的代表基金，默认最多展开 8 只。
         </p>
+        {board.holdingAlerts.length > 0 && (
+          <p className="op-today-holding-alerts" aria-label="持仓操作位置提醒">
+            {board.holdingAlerts.map((fund) => (
+              <span key={fund.key}>
+                {fund.priority.label} · <FundLink fund={fund} />
+              </span>
+            ))}
+          </p>
+        )}
         <section aria-label="按操作紧迫度排序的基金机会">
-          {board.funds.map((fund) => (
-            <FundRow
-              key={`${identity}:${fund.key}`}
-              fund={fund}
-              frozenNavHistories={frozenNavHistories}
-            />
+          {board.groups.map(({ representative, alternatives }) => (
+            <div
+              className="op-today-track"
+              key={`${identity}:${representative.key}`}
+            >
+              <FundRow
+                key={representative.key}
+                fund={representative}
+                frozenNavHistories={frozenNavHistories}
+              />
+              {alternatives.length > 0 && (
+                <details className="op-today-track-alternatives">
+                  <summary>
+                    同赛道备选基金（{alternatives.length} 只）
+                    <span>
+                      {alternatives.map((fund) => fund.code).join(" · ")}
+                    </span>
+                  </summary>
+                  {alternatives.map((fund) => (
+                    <FundRow
+                      key={fund.key}
+                      fund={fund}
+                      frozenNavHistories={frozenNavHistories}
+                    />
+                  ))}
+                </details>
+              )}
+            </div>
           ))}
           {board.unpriced.map((fund) => (
             <div className="op-today-unpriced" key={fund.fundCode}>
@@ -150,12 +208,7 @@ export default function TodayFocus({
                 )}
                 <div className="op-today-related">
                   {insight.funds.map((key) => (
-                    <a
-                      key={key}
-                      href={`#today-fund-${encodeURIComponent(key)}`}
-                    >
-                      {funds.get(key)!.name} {funds.get(key)!.code}
-                    </a>
+                    <FundLink key={key} fund={funds.get(key)!} />
                   ))}
                 </div>
               </details>

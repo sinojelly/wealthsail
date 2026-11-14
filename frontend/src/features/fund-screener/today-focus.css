@@ -64,6 +64,34 @@
   margin: 0;
   padding: 0.5rem 0;
 }
+.op-today-track-alternatives {
+  margin: -0.35rem 0 0.65rem 0.7rem;
+  padding: 0.2rem 0.55rem 0.25rem 0.6rem;
+  border-inline-start: 2px solid #dce5eb;
+}
+.op-today-track-alternatives > summary {
+  cursor: pointer;
+  color: #53687b;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.op-today-track-alternatives > summary > span {
+  margin-inline-start: 0.5rem;
+}
+.op-today-holding-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.op-today-holding-alerts > span {
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.4rem;
+  background: #fff5e9;
+  color: #76502e;
+}
 .op-today-insights {
   margin-top: 1.8rem;
 }

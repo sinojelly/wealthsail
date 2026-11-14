@@ -7,8 +7,27 @@ import { buildTodayBoard } from "./today-action-board";
 
 function plan(code: string, distance: number, percentile = 50) {
   const p = frozenPlan(code);
-  p.currentPrice = String(1.15 / (1 - distance / 100));
+  const currentPrice = String(1.15 / (1 - distance / 100));
+  p.currentPrice = currentPrice;
   p.indicators.navPercentile2y = percentile;
+  p.series = {
+    state: "READY",
+    fundCode: code,
+    asOf: p.asOf,
+    unit: "CNY/份",
+    priceBasis: "UNIT_NAV",
+    sourceUri: p.sourceUri,
+    retrievedAt: p.asOf,
+    points: Array.from({ length: 122 }, (_, i) => ({
+      date:
+        i === 0
+          ? "2024-10-22"
+          : i === 121
+            ? p.asOf!
+            : new Date(Date.UTC(2026, 0, i)).toISOString().slice(0, 10),
+      value: currentPrice,
+    })),
+  };
   return p;
 }
 function data() {
@@ -157,7 +176,7 @@ it("uses the valid displayed prices and only primary funds for theme badges", ()
     board.insights.find((row) => row.key === "研究主题:grid"),
   ).toMatchObject({ funds: [], priority: { label: "主题观察" } });
 });
-it("opens only the preferred A/C share of the exact index product", () => {
+it("keeps one preferred representative across providers in the same track", () => {
   const value = data();
   const a = { ...plan("001631", 0), label: "天弘中证食品饮料ETF联接A" };
   const c = { ...plan("001632", 0), label: "天弘中证食品饮料ETF联接C" };
@@ -176,8 +195,108 @@ it("opens only the preferred A/C share of the exact index product", () => {
   ).toEqual([
     ["001631", false],
     ["001632", true],
-    ["001633", true],
+    ["001633", false],
   ]);
+  const group = board.groups.find(
+    (row) => row.representative.code === "001632",
+  );
+  expect(group?.alternatives.map((fund) => fund.code)).toEqual([
+    "001631",
+    "001633",
+  ]);
+});
+
+it("limits automatic details to eight current representatives with one year of verified NAV", () => {
+  const value = data();
+  value.dailyResearch!.report!.valueDirections = [];
+  value.dailyResearch!.report!.topicCatalog = [];
+  const candidates = Array.from({ length: 12 }, (_, i) =>
+    plan(`0002${String(i).padStart(2, "0")}`, 0, i),
+  );
+  candidates[0].series!.points[0].date = "2026-09-01";
+  candidates[1].priceRefresh = {
+    state: "PARTIAL",
+    navAsOf: candidates[1].asOf,
+    methodVersion: "test",
+    reason: "NEWER_CONFIRMED_NAV_AVAILABLE",
+  };
+  candidates[2].series!.state = "STALE";
+  const held = plan("000309", 0);
+  held.currentPrice = "0.91";
+  held.label = "科技军工ETF联接A";
+  value.sellRiskAlerts = {
+    asOf: held.asOf,
+    limitations: [],
+    items: [
+      {
+        fundCode: "000309",
+        label: held.label,
+        relationship: ["HELD"],
+        state: "STOP_LOSS",
+        basis: "CONFIRMED_NAV",
+        value: held.currentPrice,
+        asOf: held.asOf,
+        sourceUri: held.sourceUri,
+        rsi14: null,
+        rsiAsOf: null,
+        planOrigin: "DAILY_REPORT",
+        stopLossPrice: held.tracks[0].stopLossPrice,
+        takeProfitT1: held.tracks[0].takeProfitT1,
+        takeProfitT2: held.tracks[0].takeProfitT2,
+      },
+    ],
+  };
+  value.dailyResearch!.report!.mentionedFunds = [...candidates, held].map(
+    (actionableZones) => ({
+      fundCode: actionableZones.subjectId,
+      actionableZones,
+    }),
+  );
+  const board = buildTodayBoard(value);
+  expect(
+    board.funds
+      .filter((fund) => fund.priority.expanded)
+      .map((fund) => fund.code),
+  ).toEqual([
+    "000203",
+    "000204",
+    "000205",
+    "000206",
+    "000207",
+    "000208",
+    "000209",
+    "000210",
+  ]);
+  expect(board.holdingAlerts.map((fund) => fund.code)).toEqual(["000309"]);
+});
+
+it("opens the alternate disclosure from a research association without opening its chart", () => {
+  const value = data();
+  const report = value.dailyResearch!.report!;
+  report.valueDirections![0].plans = [
+    { ...plan("023884", 0, 8), label: "华夏中证金融科技ETF联接A" },
+    { ...plan("013477", 0, 15), label: "华宝中证金融科技ETF联接A" },
+  ];
+  renderWithSession(
+    <TodayFocus
+      data={value}
+      watchedCodes={["013477"]}
+      onViewEvidence={() => {}}
+    />,
+  );
+  const details = screen.getByText(/同赛道备选基金/).closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  fireEvent.click(screen.getByText(/研究方向与主题/));
+  fireEvent.click(
+    screen.getByText("AI硬件", { selector: ".op-today-insight strong" }),
+  );
+  fireEvent.click(
+    screen.getByRole("link", { name: /华夏中证金融科技ETF联接A/ }),
+  );
+  expect(details).toHaveAttribute("open");
+  const row = within(details).getByTestId("today-fund-row");
+  expect(row).not.toHaveAttribute("open");
+  expect(within(row).queryByText("参考买入区间")).toBeNull();
 });
 it("shows every insight, mounts each fund once, and only mounts a folded fund after expansion", async () => {
   vi.stubGlobal("IntersectionObserver", undefined);

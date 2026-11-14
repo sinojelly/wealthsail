@@ -256,6 +256,14 @@ function sectionDisclosure(section: HTMLElement, title: string) {
   return { summary: summary!, details: details as HTMLDetailsElement };
 }
 
+async function openHighValueOpportunities(section: HTMLElement) {
+  const disclosure = sectionDisclosure(section, "高价值机会");
+  expect(disclosure.details).not.toHaveAttribute("open");
+  await userEvent.click(disclosure.summary);
+  expect(disclosure.details).toHaveAttribute("open");
+  return disclosure;
+}
+
 async function expectFrozenPrices(card: HTMLElement) {
   const entry = within(card).getByText(/查看关联历史研究复盘/);
   expect(entry.closest("details")).not.toHaveAttribute("open");
@@ -393,6 +401,7 @@ it.each(["RUNNING", "FAILED", "UNCERTAIN", "STALE"] as const)(
     const opportunities = await screen.findByRole("region", {
       name: "高价值机会",
     });
+    await openHighValueOpportunities(opportunities);
     expect(
       await within(opportunities).findByText(/历史归档机器人基金 000001/),
     ).toBeVisible();
@@ -460,6 +469,7 @@ it("distinguishes missing historical matching from an archived zero result witho
   );
   mountPage();
   const historical = await screen.findByRole("region", { name: "高价值机会" });
+  await openHighValueOpportunities(historical);
   expect(
     await within(historical).findByText(
       "未找到该研究的基金匹配归档记录；缺少记录不代表没有基金机会。",
@@ -508,6 +518,9 @@ it("keeps full research and representative inventory in default-closed market ev
   };
   api.opportunity.mockResolvedValue(context(research));
   mountPage();
+  await openHighValueOpportunities(
+    await screen.findByRole("region", { name: "高价值机会" }),
+  );
   expect(await screen.findByText(/历史归档机器人基金 000001/)).toBeVisible();
   expect(screen.getByRole("region", { name: "我的行动提醒" })).toBeVisible();
   expect(screen.queryByText("展开查看完整研究")).not.toBeInTheDocument();
@@ -537,14 +550,13 @@ it("retains independent opportunity disclosures and reminder nodes through a sam
     .mockReturnValueOnce(refreshed.promise);
   const { client } = mountPage();
   const historical = await screen.findByRole("region", { name: "高价值机会" });
+  const historicalDisclosure = await openHighValueOpportunities(historical);
   const fund = await within(historical).findByText(/历史归档机器人基金 000001/);
   const reminders = screen.getByRole("region", { name: "我的行动提醒" });
   const ownFund =
     await within(reminders).findByText(/个人人工智能联接基金.*012733/);
   const current = screen.getByRole("region", { name: "本次研究基金观察" });
-  const historicalDisclosure = sectionDisclosure(historical, "高价值机会");
   const currentDisclosure = sectionDisclosure(current, "本次研究基金观察");
-  expect(historicalDisclosure.details).toHaveAttribute("open");
   expect(currentDisclosure.details).not.toHaveAttribute("open");
   await userEvent.click(historicalDisclosure.summary);
   expect(fund).not.toBeVisible();
@@ -620,6 +632,7 @@ it("preserves displayed opportunities and reminder nodes across a current timeou
   const opportunities = await screen.findByRole("region", {
     name: "高价值机会",
   });
+  await openHighValueOpportunities(opportunities);
   const fund =
     await within(opportunities).findByText(/历史归档机器人基金 000001/);
   const reminders = screen.getByRole("region", { name: "我的行动提醒" });

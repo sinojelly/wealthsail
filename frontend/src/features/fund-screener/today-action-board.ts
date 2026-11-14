@@ -1,6 +1,7 @@
 import type {
   ActionableZoneResult,
   OpportunityContext,
+  QuantitativeScanItem,
 } from "../../api/investment";
 import { fundOperationDistance } from "./fund-operation-distance";
 import { fundDisplayName } from "./plan-display";
@@ -29,6 +30,103 @@ export interface TodayInsight {
   funds: string[];
   priority: TodayPriority;
 }
+export interface TodayFundGroup {
+  representative: TodayFund;
+  alternatives: TodayFund[];
+}
+
+const DAY = 86_400_000;
+const MAX_EXPANDED = 8;
+const ENTRY_DISTANCE = 1.5;
+const MIN_NAV_SAMPLES = 120;
+
+// Prefer a known track over shared prose about several sectors. These
+// aliases describe fund names, never the accompanying model narrative.
+const namedTracks: ReadonlyArray<readonly [RegExp, string]> = [
+  [/沪深300/i, "INDEX:CSI300"],
+  [/中证A500/i, "INDEX:CSI_A500"],
+  [/中证500/i, "INDEX:CSI500"],
+  [/金融科技|金融IT/i, "FINTECH"],
+  [/机器人|具身智能/i, "ROBOT"],
+  [/军工|国防|航空航天|卫星产业|卫星通信|商业航天/i, "AEROSPACE"],
+  [/医药|医疗|创新药|生物科技|生物医药/i, "HEALTHCARE"],
+  [/食品饮料|白酒/i, "FOOD_BEVERAGE"],
+  [/新能源车|汽车|智能驾驶/i, "AUTOMOTIVE"],
+  [/银行|银行红利/i, "BANK"],
+  [/券商|证券公司/i, "BROKER"],
+];
+const trackAliases: Record<string, string> = {
+  DEFENCE: "AEROSPACE",
+  COMMERCIAL_SPACE: "AEROSPACE",
+  EVENT_COMMERCIAL_SPACE: "AEROSPACE",
+  INNOVATIVE_DRUG: "HEALTHCARE",
+  MEDICAL: "HEALTHCARE",
+  PHARMA: "HEALTHCARE",
+  MEDICINE: "HEALTHCARE",
+};
+
+function fundRegion(name: string) {
+  if (/恒生|港股/.test(name)) return "HK";
+  if (/纳斯达克|纳指|标普|美股/.test(name)) return "US";
+  return /QDII|海外|全球|跨境/i.test(name) ? "OVERSEAS" : "CN";
+}
+
+function navDay(value: string | null | undefined) {
+  const day = value?.slice(0, 10);
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const date = Date.parse(`${day}T00:00:00Z`);
+  return Number.isFinite(date) &&
+    new Date(date).toISOString().slice(0, 10) === day
+    ? date
+    : null;
+}
+
+function navCoverage(plan: ActionableZoneResult, code: string) {
+  const historyQuality = (plan as Partial<QuantitativeScanItem>).historyQuality;
+  const series = plan.series;
+  const window = plan.historicalPriceWindow;
+  const asOf = navDay(plan.asOf);
+  const seriesReady =
+    series?.state === "READY" &&
+    series.points.length >= MIN_NAV_SAMPLES &&
+    series.fundCode === code &&
+    series.priceBasis === "UNIT_NAV" &&
+    !!series.sourceUri &&
+    navDay(series.asOf) === asOf;
+  const windowReady =
+    window?.state === "READY" &&
+    window.sampleCount >= Math.max(window.requiredSamples, MIN_NAV_SAMPLES) &&
+    !!plan.sourceUri &&
+    plan.priceRefresh?.state === "READY" &&
+    navDay(plan.priceRefresh.navAsOf) === asOf;
+  const start = navDay(
+    windowReady ? window.start : seriesReady ? series.points[0]?.date : null,
+  );
+  const end = navDay(
+    windowReady ? window.end : seriesReady ? series.points.at(-1)?.date : null,
+  );
+  const verified =
+    asOf !== null &&
+    start !== null &&
+    end === asOf &&
+    start <= end &&
+    (!plan.priceRefresh || plan.priceRefresh.state === "READY") &&
+    (!historyQuality || historyQuality === "READY") &&
+    !plan.priceRefresh?.reason;
+  return { asOf, verified, days: verified ? (end - start) / DAY : 0 };
+}
+
+function referenceReady(plan: ActionableZoneResult) {
+  const track = fundOperationDistance(plan).track;
+  return (
+    track?.priceState === "READY" &&
+    !track.entryBlocked &&
+    !plan.entryBlocked &&
+    !plan.subscriptionRestricted &&
+    !plan.subscriptionStatus?.restricted &&
+    plan.subscriptionStatus?.purchaseStatus !== "SUSPENDED"
+  );
+}
 const waiting = (): TodayPriority => ({
   rank: 4,
   distance: Infinity,
@@ -52,17 +150,14 @@ function shareFamily(fund: TodayFund) {
     .match(
       /^(.+(?:指数|ETF|联接)(?:基金|发起式)*)([AC])(?:类|份额)?(?:[（(]人民币[)）]|人民币)?$/i,
     );
-  return matched
-    ? { product: matched[1].toUpperCase(), share: matched[2].toUpperCase() }
-    : null;
+  return matched?.[1].toUpperCase() ?? null;
 }
 export function todayPriority(
   plan: ActionableZoneResult,
   held = false,
 ): TodayPriority {
   const p = fundOperationDistance(plan);
-  if (p.current == null || p.low == null || p.high == null || p.low > p.high)
-    return waiting();
+  if (p.current == null) return waiting();
   const percentile = p.percentile ?? Infinity;
   const base = { percentile, expanded: false };
   if (p.stopTriggered)
@@ -70,7 +165,6 @@ export function todayPriority(
       ...base,
       rank: held ? 2 : 4,
       distance: 0,
-      expanded: held,
       label: held ? "持仓止损提醒" : "跌破止损参考",
     };
   if (p.inSellZone)
@@ -78,26 +172,23 @@ export function todayPriority(
       ...base,
       rank: held ? 2 : 4,
       distance: 0,
-      expanded: held,
       label: held ? "持仓止盈提醒" : "已达卖出参考区",
-    };
-  if (p.inBuyZone)
-    return { ...base, rank: 0, distance: 0, expanded: true, label: "已入买区" };
-  if (p.buyDistance != null && p.buyDistance < 2)
-    return {
-      ...base,
-      rank: 1,
-      distance: p.buyDistance,
-      expanded: true,
-      label: `距买区 ${p.buyDistance.toFixed(2)}%`,
     };
   if (held && p.sellDistance != null && p.sellDistance < 2)
     return {
       ...base,
       rank: 2,
       distance: p.sellDistance,
-      expanded: true,
       label: `持仓距卖区 ${p.sellDistance.toFixed(2)}%`,
+    };
+  if (p.low == null || p.high == null || p.low > p.high) return waiting();
+  if (p.inBuyZone) return { ...base, rank: 0, distance: 0, label: "已入买区" };
+  if (p.buyDistance != null && p.buyDistance < 2)
+    return {
+      ...base,
+      rank: 1,
+      distance: p.buyDistance,
+      label: `距买区 ${p.buyDistance.toFixed(2)}%`,
     };
   if (
     plan.tracks?.some(
@@ -108,8 +199,10 @@ export function todayPriority(
       ...base,
       rank: 2,
       distance: p.buyDistance ?? Infinity,
-      expanded: true,
-      label: "右侧趋势机会",
+      label:
+        p.buyDistance == null
+          ? "右侧趋势机会"
+          : `右侧趋势观察 · 距买区 ${p.buyDistance.toFixed(2)}%`,
     };
   return {
     ...base,
@@ -162,8 +255,19 @@ export function buildTodayBoard(
       .filter((r) => r.relationship.includes("TRACKED"))
       .map((r) => r.fundCode),
   ]);
+  const observations = new Map(
+    (daily?.fundObservation?.items ?? [])
+      .filter((row) => row.identityVerified)
+      .map((row) => [row.fundCode, row]),
+  );
+  const sectors = new Map(
+    (report?.quantitativeScan?.items ?? []).map((row) => [
+      row.fundCode ?? row.subjectId,
+      row.discoverySector,
+    ]),
+  );
   const funds = new Map<string, TodayFund>();
-  const signatures = new Map<string, Set<string>>();
+  const signatures = new Map<string, Map<string, number>>();
   const insights: TodayInsight[] = [];
   function add(plan: ActionableZoneResult, origin: string, name?: string) {
     const code = plan.fundCode ?? plan.subjectId;
@@ -189,7 +293,7 @@ export function buildTodayBoard(
         priority: waiting(),
       };
       funds.set(key, fund);
-      signatures.set(key, new Set());
+      signatures.set(key, new Map());
     }
     const signature = JSON.stringify([
       plan.asOf,
@@ -199,9 +303,16 @@ export function buildTodayBoard(
       plan.track,
       plan.tracks,
     ]);
-    if (!signatures.get(key)!.has(signature)) {
+    const recorded = signatures.get(key)!;
+    const previous = recorded.get(signature);
+    if (previous === undefined) {
+      recorded.set(signature, fund.plans.length);
       fund.plans.push(plan);
-      signatures.get(key)!.add(signature);
+    } else if (
+      navCoverage(plan, code).days >
+      navCoverage(fund.plans[previous], code).days
+    ) {
+      fund.plans[previous] = plan;
     }
     if (!fund.origins.includes(origin)) fund.origins.push(origin);
     return key;
@@ -247,14 +358,15 @@ export function buildTodayBoard(
     else if (!unpriced.some((row) => row.fundCode === m.fundCode))
       unpriced.push(m);
   });
-  // Preserve the complete scan in compact form. Only actionable prices/trends
-  // open automatically; the user can inspect every other original opportunity.
+  // Keep every scan result available under its representative.
   (report?.quantitativeScan?.items ?? []).forEach((p) => add(p, "量化扫描"));
   const ordered = [...funds.values()];
   ordered.forEach((f) => {
     f.plans.sort(
       (a, b) =>
         (b.asOf ?? "").localeCompare(a.asOf ?? "") ||
+        Number(navCoverage(b, f.code).verified) -
+          Number(navCoverage(a, f.code).verified) ||
         compareTodayPriority(
           todayPriority(a, held.has(f.code)),
           todayPriority(b, held.has(f.code)),
@@ -267,28 +379,97 @@ export function buildTodayBoard(
       compareTodayPriority(a.priority, b.priority) ||
       a.code.localeCompare(b.code),
   );
-  const shareGroups = new Map<
-    string,
-    Array<{ fund: TodayFund; share: string }>
-  >();
-  for (const fund of ordered) {
-    const family = shareFamily(fund);
-    if (!family || !fund.priority.expanded) continue;
-    const shares = shareGroups.get(family.product) ?? [];
-    shares.push({ fund, share: family.share });
-    shareGroups.set(family.product, shares);
+  const coverage = new Map(
+    ordered.map((fund) => [fund, navCoverage(fund.plans[0], fund.code)]),
+  );
+  const latestNav = ordered.reduce((latest, fund) => {
+    const nav = coverage.get(fund)!;
+    // Omit overseas calendars from the comparison with same-market funds.
+    return nav.verified && fundRegion(fund.name) === "CN"
+      ? Math.max(latest, nav.asOf!)
+      : latest;
+  }, 0);
+  function canExpand(fund: TodayFund) {
+    const nav = coverage.get(fund)!;
+    const observation = observations.get(fund.code);
+    const overseas = fundRegion(fund.name) !== "CN";
+    const observationDate = navDay(observation?.confirmedNav?.asOf);
+    return (
+      nav.days >= 365 &&
+      (overseas || nav.asOf === latestNav) &&
+      (observationDate === null || nav.asOf! >= observationDate) &&
+      (observation?.observationStatus !== "STALE" ||
+        (observationDate !== null && nav.asOf! > observationDate)) &&
+      observation?.subscription?.status !== "SUSPENDED" &&
+      observation?.subscription?.restricted !== true &&
+      referenceReady(fund.plans[0]) &&
+      fund.priority.rank <= 1 &&
+      fund.priority.distance < ENTRY_DISTANCE
+    );
   }
-  for (const shares of shareGroups.values()) {
-    if (shares.length !== 2 || shares[0].share === shares[1].share) continue;
-    const candidates = shares.map(({ fund }) => fund);
-    const chosen =
-      candidates.find((fund) => held.has(fund.code)) ??
-      candidates.find((fund) => watched.has(fund.code)) ??
-      candidates[0];
-    for (const fund of candidates) {
-      if (fund !== chosen)
-        fund.priority = { ...fund.priority, expanded: false };
-    }
+  const eligible = new Set(ordered.filter(canExpand));
+  const trackGroups = new Map<string, TodayFund[]>();
+  for (const fund of ordered) {
+    const plan = fund.plans[0] as QuantitativeScanItem;
+    const knownSectors =
+      observations.get(fund.code)?.industry?.industryIds ?? [];
+    const sector =
+      sectors.get(fund.code) ??
+      plan.discoverySector ??
+      (knownSectors.length === 1 ? knownSectors[0] : undefined);
+    const name = fundDisplayName(fund.name, fund.code);
+    const track =
+      plan.priceBasis === "UNIT_NAV"
+        ? (namedTracks.find(([pattern]) => pattern.test(name))?.[1] ??
+          (sector && sector !== "BROAD"
+            ? Object.hasOwn(trackAliases, sector)
+              ? trackAliases[sector]
+              : sector
+            : null))
+        : null;
+    const family = shareFamily(fund);
+    const group = track ?? (family ? `PRODUCT:${family}` : fund.key);
+    const region = fundRegion(name);
+    const key = `${plan.market ?? "FUND_CN"}:${plan.priceBasis}:${fund.key.split(":").at(-1)}:${region}:${group}`;
+    const members = trackGroups.get(key) ?? [];
+    members.push(fund);
+    trackGroups.set(key, members);
+  }
+  const personalOrder = (fund: TodayFund) =>
+    held.has(fund.code) ? 0 : watched.has(fund.code) ? 1 : 2;
+  const subscriptionOrder = (fund: TodayFund) => {
+    const status =
+      observations.get(fund.code)?.subscription?.status ??
+      fund.plans[0].subscriptionStatus?.purchaseStatus;
+    return status === "OPEN" ? 0 : status === "SUSPENDED" ? 2 : 1;
+  };
+  const groups: TodayFundGroup[] = [...trackGroups.values()].map((members) => {
+    const [representative, ...alternatives] = members.sort(
+      (a, b) =>
+        Number(eligible.has(b)) - Number(eligible.has(a)) ||
+        personalOrder(a) - personalOrder(b) ||
+        Number(coverage.get(b)!.days >= 729) -
+          Number(coverage.get(a)!.days >= 729) ||
+        (coverage.get(b)!.asOf ?? 0) - (coverage.get(a)!.asOf ?? 0) ||
+        subscriptionOrder(a) - subscriptionOrder(b) ||
+        compareTodayPriority(a.priority, b.priority) ||
+        a.code.localeCompare(b.code),
+    );
+    return { representative, alternatives };
+  });
+  groups.sort(
+    (a, b) =>
+      Number(eligible.has(b.representative)) -
+        Number(eligible.has(a.representative)) ||
+      compareTodayPriority(
+        a.representative.priority,
+        b.representative.priority,
+      ),
+  );
+  for (const { representative } of groups
+    .filter(({ representative }) => eligible.has(representative))
+    .slice(0, MAX_EXPANDED)) {
+    representative.priority.expanded = true;
   }
   insights.forEach((i) => {
     i.funds.sort((a, b) =>
@@ -322,5 +503,8 @@ export function buildTodayBoard(
     });
     return !represented.length;
   });
-  return { funds: ordered, insights, unpriced: missing };
+  const holdingAlerts = ordered.filter((fund) =>
+    fund.priority.label.startsWith("持仓"),
+  );
+  return { funds: ordered, groups, insights, unpriced: missing, holdingAlerts };
 }

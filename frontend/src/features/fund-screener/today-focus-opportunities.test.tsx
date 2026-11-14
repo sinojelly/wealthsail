@@ -15,6 +15,18 @@ function plan(code: string, current = "1.1000"): QuantitativeScanItem {
   value.currentPrice = current;
   value.asOf = "2026-11-09";
   value.indicators.navPercentile2y = 23.4;
+  value.historicalPriceWindow = {
+    state: "READY",
+    sampleCount: 470,
+    requiredSamples: 120,
+    start: "2024-11-10",
+    end: value.asOf,
+  };
+  value.priceRefresh = {
+    state: "READY",
+    navAsOf: value.asOf,
+    methodVersion: value.methodVersion,
+  };
   value.series = {
     state: "READY",
     fundCode: code,
@@ -24,7 +36,7 @@ function plan(code: string, current = "1.1000"): QuantitativeScanItem {
     sourceUri: value.sourceUri,
     retrievedAt: value.asOf,
     points: [
-      { date: "2026-11-06", value: "1.09" },
+      { date: "2024-11-10", value: "1.09" },
       { date: "2026-11-09", value: current },
     ],
   };
@@ -143,7 +155,7 @@ it("merges real scan signals with AI funds and keeps non-actionable scans folded
       items: [
         plan("000101"),
         plan("000102"),
-        plan("000103", "1.1700"),
+        plan("000103", "1.1650"),
         trend,
         plan("000105", "1.2800"),
         plan("000106", ".9000"),
@@ -163,17 +175,17 @@ it("merges real scan signals with AI funds and keeps non-actionable scans folded
     rows
       .filter((r) => r.hasAttribute("open"))
       .map((r) => r.getAttribute("data-fund-code")),
-  ).toEqual(["000101", "000102", "000103", "000104"]);
-  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(4);
+  ).toEqual(["000101", "000102", "000103"]);
+  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(3);
 });
 
-it("uses the strict two percent boundary for expansion and preserves all scans", () => {
+it("uses the strict 1.5 percent boundary for expansion and preserves all scans", () => {
   const data = context();
   Object.assign(data.dailyResearch!.report!, {
     quantitativeScan: {
       items: [
-        plan("000201", String(1.15 / (1 - 0.0199))),
-        plan("000202", String(1.15 / (1 - 0.02))),
+        plan("000201", String(1.15 / (1 - 0.0149))),
+        plan("000202", String(1.15 / (1 - 0.015))),
       ],
     },
   });
@@ -191,7 +203,7 @@ it("uses displayed current price and reference bands for urgency rather than a s
   Object.assign(serverNear, {
     pricePosition: { status: "NEAR_ENTRY_ZONE", distanceToEntryPct: 2.99 },
   });
-  const serverNeutral = plan("000212", "1.1700");
+  const serverNeutral = plan("000212", "1.1650");
   Object.assign(serverNeutral, {
     pricePosition: { status: "NEUTRAL", distanceToEntryPct: 3.01 },
   });
@@ -204,7 +216,7 @@ it("uses displayed current price and reference bands for urgency rather than a s
       distanceToEntryPct: 2.99,
     },
   ];
-  const signalFar = plan("000214", "1.1700");
+  const signalFar = plan("000214", "1.1650");
   signalFar.signals = [
     {
       track: "LEFT_VALUE",

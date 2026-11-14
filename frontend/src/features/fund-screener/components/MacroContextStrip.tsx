@@ -578,6 +578,7 @@ export default function MacroContextStrip({
                             source="REPORT"
                             historical={isHistoricalReport}
                             presentation="SUMMARY"
+                            defaultExpanded={false}
                           />
                         )}
                         {currentResearchId &&
