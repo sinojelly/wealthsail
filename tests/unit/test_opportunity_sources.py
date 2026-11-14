@@ -315,6 +315,10 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
 
     async def fetch(client, uri):
         requested.append(uri)
+        if "fred.stlouisfed.org" in uri:
+            from urllib.parse import parse_qs, urlsplit
+            feed = parse_qs(urlsplit(uri).query)["id"][0]
+            return f"DATE,{feed}\n2025-09-01,99\n2025-10-01,100\n2024-10-01,97\n"
         if "treasury.gov" in uri:
             year = uri.split("field_tdr_date_value=")[1]
             return _fixture(
@@ -343,6 +347,7 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "PBOC_LOANS",
         "CHINABOND",
         "CFETS",
+        "CPIAUCSL", "CPILFESL", "PPIACO", "DFF", "DGS2", "DCOILBRENTEU",
     }
     assert all(
         result["sourceResults"][key]["status"] == "SUCCESS"
@@ -360,6 +365,8 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "M1_YOY",
         "TSF_STOCK_YOY",
         "CORP_MEDLONG_LOANS_YTD",
+        "US_CPI_YOY", "US_CPI_MOM", "US_CORE_CPI_YOY", "US_CORE_CPI_MOM",
+        "US_PPI_YOY", "US_PPI_MOM", "US_FED_FUNDS", "US_T2_NOMINAL", "US_BRENT",
     }
 
 
@@ -394,6 +401,30 @@ async def test_latest_bad_source_does_not_emit_older_fallback_but_other_sources_
     assert not any(r["code"] == "M1_YOY" for r in result["observations"])
     assert result["sourceResults"]["PBOC_TSF"]["status"] == "SUCCESS"
     assert result["sourceResults"]["PBOC_LOANS"]["status"] == "SUCCESS"
+
+
+@pytest.mark.asyncio
+async def test_fred_nominal_and_real_yields_survive_treasury_transport_failure(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    adapter = _adapter()
+
+    async def fetch(client, uri):
+        if "treasury.gov" in uri:
+            raise httpx.ConnectError("offline")
+        if "fred.stlouisfed.org" not in uri:
+            return ""
+        feed = parse_qs(urlsplit(uri).query)["id"][0]
+        level = "-0.15" if feed == "DFII10" else "4.25"
+        return f"DATE,{feed}\n2025-10-14,{level}\n"
+
+    monkeypatch.setattr(adapter, "_fetch_text", fetch)
+    result = await adapter.fetch_opportunity_series(NOW)
+    assert result["sourceResults"]["UST_NOMINAL"]["status"] == "SUCCESS"
+    assert result["sourceResults"]["UST_REAL"]["status"] == "SUCCESS"
+    treasury = {row["code"]: row for row in result["observations"] if row["code"].startswith("US_T10")}
+    assert treasury["US_T10_NOMINAL"]["sourceUri"].endswith("/DGS10")
+    assert treasury["US_T10_REAL"]["value"] == Decimal("-0.15")
 
 
 @pytest.mark.asyncio

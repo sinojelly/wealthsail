@@ -180,6 +180,19 @@ def test_ready_official_source_is_not_overwritten_by_alpha_vendor():
     assert row == prior
 
 
+def test_m1_history_fills_missing_month_keeps_official_value_and_definition():
+    prior = {
+        "code": "M1_YOY", "state": "READY", "value": 3.1,
+        "sourceUri": "https://www.pbc.gov.cn/release",
+        "metadata": {"sourceKey": "PBOC_M1"},
+        "history": [{"date": "2026-09-01", "value": 3.1, "definitionVersion": "PBOC_M1_2025"}],
+    }
+    provider = [observation("M1_YOY", "2026-08-31", "2.8"), observation("M1_YOY", "2026-09-30", "3.2")]
+    row = next(row for row in merged(provider, [prior]) if row["code"] == "M1_YOY")
+    assert [(point["date"], point["value"]) for point in row["history"]] == [("2026-08-31", 2.8), ("2026-09-01", 3.1)]
+    assert [point["definitionVersion"] for point in row["history"]] == ["EASTMONEY_REPORTED:2025_ONWARD", "PBOC_M1_2025"]
+
+
 def test_independent_labels_and_adjacent_yield_change_use_basis_points():
     result = merged([observation(day="2026-10-15", value="1.80"), observation()])
     row = next(row for row in result if row["code"] == "CN_T10")

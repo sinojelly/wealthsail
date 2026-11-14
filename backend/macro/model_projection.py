@@ -241,8 +241,16 @@ def model_packet(packet, *, version="daily-model-input-v1"):
             "discoveryCoverage",
             "dynamicNavSourceResults",
             "macroCycleResearch",
+            "rateExpectation",
         ),
     )
+    for key in ("macros", "series"):
+        if isinstance(result.get(key), list):
+            result[key] = [
+                {field: value for field, value in row.items() if field != "history"}
+                if isinstance(row, dict) else row
+                for row in result[key]
+            ]
     research_view = _industry_research_view(packet)
     if research_view is not None:
         result["industryCycleResearch"] = research_view

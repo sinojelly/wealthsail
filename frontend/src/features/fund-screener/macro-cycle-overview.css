@@ -126,6 +126,153 @@
   overflow-x: auto;
   margin-top: 10px;
 }
+.op-cycle-chain {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 5px 0;
+  list-style: none;
+  counter-reset: cycle-step;
+}
+.op-cycle-chain > li {
+  position: relative;
+  counter-increment: cycle-step;
+  padding: 8px 10px 8px 38px;
+  border: 1px solid #e2ece8;
+  border-radius: 8px;
+  background: #fcfefd;
+}
+.op-cycle-chain > li::before {
+  content: counter(cycle-step);
+  position: absolute;
+  inset: 9px auto auto 9px;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: #dfefe9;
+  color: #146056;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 21px;
+  text-align: center;
+}
+.op-cycle-chain h5 {
+  margin: 0;
+  color: #174941;
+  font-size: 13px;
+}
+.op-cycle-chain small,
+.op-cycle-trend small {
+  color: #536578;
+}
+.op-cycle-metric-chips,
+.op-cycle-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin: 4px 0;
+}
+.op-cycle-metric-chips > span {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #edf5f1;
+  color: #264f4a;
+}
+.op-cycle-policy-signal + .op-cycle-policy-signal {
+  border-top: 1px solid #e2ece8;
+  padding-top: 4px;
+}
+.op-cycle-factors-details {
+  padding: 10px 0;
+  border-top: 1px solid #dceae7;
+}
+.op-cycle-factors-details > summary {
+  cursor: pointer;
+  color: #145e59;
+  font-size: 13px;
+  font-weight: 600;
+}
+.op-cycle-factors-details svg {
+  vertical-align: middle;
+  margin-inline: 6px;
+}
+.op-cycle-factors-details[open] > ol {
+  margin-top: 9px;
+}
+.op-cycle-trends {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.op-cycle-trend {
+  min-width: 0;
+  border: 1px solid #dde8ee;
+  border-radius: 10px;
+  padding: 11px;
+  background: white;
+  font-size: 12px;
+  break-inside: avoid;
+}
+.op-cycle-trend h4 {
+  color: #17334a;
+  margin: 0 0 7px;
+  font-size: 14px;
+}
+.op-cycle-gauge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 5px 0;
+}
+.op-cycle-gauge > span {
+  flex: 1 1 auto;
+  padding: 3px 4px;
+  background: #edf3f7;
+  border: 1px solid transparent;
+  text-align: center;
+  border-radius: 4px;
+}
+.op-cycle-gauge > span[data-active="true"] {
+  font-weight: 700;
+  color: #144c54;
+  background: #dbefea;
+  border-color: #459286;
+}
+.op-cycle-gauge-risk > span:last-child[data-active="true"] {
+  color: #8b362f;
+  background: #f9e8e4;
+  border-color: #b85a51;
+}
+.op-cycle-trend-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.op-cycle-trend-plot text {
+  font:
+    11px system-ui,
+    sans-serif;
+  fill: #486174;
+}
+.op-cycle-trend-legend > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.op-cycle-trend-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 3px;
+  align-self: center;
+}
+.op-cycle-trend-legend a {
+  color: inherit;
+}
 .op-cycle-industries table {
   border-collapse: collapse;
   width: 100%;
@@ -156,6 +303,9 @@
   margin: 4px 0;
 }
 @media (max-width: 650px) {
+  .op-cycle-trends {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .op-cycle-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 7px;

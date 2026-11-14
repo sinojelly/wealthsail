@@ -12,13 +12,15 @@ import calendar
 import logging
 import math
 import re
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from backend.integrations.fred_macro import FRED_HOST, LEVELS, PRICE_INDEXES, fred_uri, parse_fred_macro
 
 from backend.integrations.macro_official import (
     PBOC_RELEASE_INDEX,
@@ -40,6 +42,8 @@ SOURCE_KEYS = (
     "PBOC_LOANS",
     "CHINABOND",
     "CFETS",
+    *PRICE_INDEXES,
+    *(feed for feed, (code, *_rest) in LEVELS.items() if not code.startswith("US_T10")),
 )
 _SOURCE_TIMEOUT_SECONDS = 45
 _MAX_BYTES = 2 * 1024 * 1024
@@ -102,6 +106,7 @@ def _url(value, *, publisher=None):
     groups = {
         "TREASURY": {"home.treasury.gov"},
         "PBOC": {"www.pbc.gov.cn", "pbc.gov.cn"},
+        "FRED": {FRED_HOST},
     }
     host = (parts.hostname or "").lower()
     allowed = groups[publisher] if publisher else set().union(*groups.values())
@@ -517,14 +522,28 @@ async def fetch_opportunity_series(now, permissions=None):
                 f"{TREASURY_XML_URL}?data={data}&field_tdr_date_value={year}"
                 for year in range(first_day.year, now.astimezone(_NEW_YORK).year + 1)
             ]
-            documents = await asyncio.gather(*(text(uri) for uri in uris))
-            rows = [
-                row
-                for uri, document in zip(uris, documents, strict=True)
-                for row in parse_treasury_xml(document, uri, code, now)
-                if date.fromisoformat(row["referenceDate"]) >= first_day
-            ]
-            return _unique(rows)
+            try:
+                # Give the original publisher a bounded share of the budget so
+                # the public FRED alternative can recover transport failures.
+                async with asyncio.timeout(_SOURCE_TIMEOUT_SECONDS / 2):
+                    documents = await asyncio.gather(*(text(uri) for uri in uris))
+                    rows = [
+                        row
+                        for uri, document in zip(uris, documents, strict=True)
+                        for row in parse_treasury_xml(document, uri, code, now)
+                        if date.fromisoformat(row["referenceDate"]) >= first_day
+                    ]
+                    return _unique(rows)
+            except (httpx.HTTPError, ValueError, TimeoutError) as error:
+                feed = "DFII10" if code == "US_T10_REAL" else "DGS10"
+                try:
+                    return await fred(feed)
+                except (httpx.HTTPError, ValueError, TimeoutError):
+                    raise error from None
+
+        async def fred(feed):
+            raw = await text(fred_uri(feed, now))
+            return parse_fred_macro(raw, feed, max(now, datetime.now(timezone.utc)), observed_by=now)
 
         async def pboc(code):
             candidates = []
@@ -587,6 +606,8 @@ async def fetch_opportunity_series(now, permissions=None):
                 collect("PBOC_M1", lambda: pboc("M1_YOY")),
                 collect("PBOC_TSF", lambda: pboc("TSF_STOCK_YOY")),
                 collect("PBOC_LOANS", lambda: pboc("CORP_MEDLONG_LOANS_YTD")),
+                *(collect(feed, lambda feed=feed: fred(feed))
+                  for feed in SOURCE_KEYS if feed in PRICE_INDEXES or feed in LEVELS),
             )
         finally:
             for task in pending.values():

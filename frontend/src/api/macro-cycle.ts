@@ -1,3 +1,5 @@
+import type { MacroContext, OpportunitySeries } from "./investment";
+
 export interface MacroCycleInsight {
   title?: string;
   stage?: string;
@@ -14,6 +16,14 @@ export interface MacroCycleInsight {
   importance?: "HIGH" | "MEDIUM" | "LOW";
 }
 
+export interface MacroPolicySignal {
+  text: string;
+  title: string;
+  sourceUri?: string | null;
+  asOf?: string | null;
+  kind: string;
+}
+
 export interface MacroCycleInsights {
   version?: string;
   globalLiquidity?: MacroCycleInsight;
@@ -21,4 +31,14 @@ export interface MacroCycleInsights {
   marketRegime?: MacroCycleInsight;
   keyFactors?: MacroCycleInsight[];
   industries?: MacroCycleInsight[];
+  macroSnapshot?: { items: MacroContext["items"]; series: OpportunitySeries[] };
+  policySignals?: MacroPolicySignal[];
+  rateExpectation?: {
+    state: string;
+    asOf?: string | null;
+    spreadBp?: number | null;
+    us2yChange5Bp?: number | null;
+    us10yChange5Bp?: number | null;
+    summary: string;
+  };
 }

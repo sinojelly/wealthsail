@@ -128,3 +128,113 @@ def test_legacy_report_does_not_acquire_fabricated_cycle_assessment():
     )
     assert "cycleInsights" not in report
     assert report["macroCycle"] == "政策托底阶段"
+
+
+def test_saved_cycle_projection_uses_only_same_report_sources_and_prices():
+    from backend.macro.cycle_insights import project_cycle_insights
+
+    def note(content, as_of="2026-11-12"):
+        return {
+            "title": "隔夜全球要闻",
+            "content": content,
+            "asOf": as_of,
+            "sourceUri": "https://www.cls.cn/detail/123",
+        }
+
+    def fund(code, value):
+        return {
+            "fundCode": code,
+            "priceBasis": "UNIT_NAV",
+            "currentPrice": value,
+            "indicators": {"navPercentile2y": 15},
+            "tracks": [dict(entryZoneMin=1, entryZoneMax=1.1, sellZoneMin=1.3)],
+        }
+
+    report = {
+        "valueDirections": [
+            {
+                "title": "银行",
+                "thesis": "分红预期支撑",
+                "plans": [fund("008298", 1.4)],
+                "industryCycle": {
+                    "stage": "UNKNOWN",
+                    "evidenceSummary": "旧报告未执行产业周期反方核查",
+                },
+            },
+            {
+                "title": "消费",
+                "quantitativeFundCodes": ["001632"],
+                "catalysts": [{"summary": "需求回补"}],
+            },
+        ],
+        "quantitativeScan": {"items": [fund("004069", 1.5), fund("001632", 1.02)]},
+    }
+    packet = {
+        "alphaPublic": {
+            "catalysts": [
+                note(
+                    "哈马克称美联储可能加息。英国第三季度GDP增长。高盛预计次年全球GDP增长2.8%"
+                ),
+                note("美联储公布降息", "2026-11-14"),
+            ]
+        },
+        "series": [
+            {
+                "code": "US_T2_NOMINAL",
+                "state": "READY",
+                "value": 4.55,
+                "asOf": "2026-11-12",
+                "changes": {"change5Samples": 32, "changeUnit": "bp"},
+            },
+            {
+                "code": "US_FED_FUNDS",
+                "state": "READY",
+                "value": 4.1,
+                "asOf": "2026-11-12",
+            },
+        ],
+    }
+    cycle = project_cycle_insights(report, packet, NOW)["cycleInsights"]
+    assert "cycleInsights" not in report
+    assert {row["kind"] for row in cycle["policySignals"]} == {
+        "CENTRAL_BANK_REMARK",
+        "INSTITUTION_FORECAST",
+    }
+    assert [row["fundCode"] for row in cycle["industries"]] == ["008298", "001632"]
+    assert [row["stage"] for row in cycle["industries"]] == [
+        "高位兑现·入卖区",
+        "低分位·已入买区",
+    ]
+    assert cycle["industries"][0]["driver"] == "分红预期支撑"
+    assert cycle["rateExpectation"]["spreadBp"] == 45
+    assert cycle["rateExpectation"]["us2yChange5Bp"] == 32
+    assert len(cycle["macroSnapshot"]["series"]) == 2
+
+
+def test_frozen_cycle_history_excludes_later_data_and_does_not_enter_model_request():
+    from backend.macro.daily_research import make_research_packet
+    from backend.macro.model_projection import model_packet
+    from backend.macro.cycle_insights import project_cycle_insights
+
+    pmi = {
+        "code": "PMI",
+        "value": 49.3,
+        "asOf": "2026-10-01",
+        "history": [
+            {
+                "asOf": "2026-09-01",
+                "value": 50.1,
+                "retrievedAt": "2026-10-01T09:00:00+08:00",
+            },
+            {
+                "asOf": "2026-10-01",
+                "value": 49.3,
+                "retrievedAt": "2026-11-14T09:00:00+08:00",
+            },
+        ],
+    }
+    packet = make_research_packet({"items": [pmi]}, [], [], [], now=NOW)
+    assert [row["value"] for row in packet["macros"][0]["history"]] == [50.1]
+    assert "history" not in model_packet(packet)["macros"][0]
+    chart = project_cycle_insights({}, packet, NOW)["cycleInsights"]["macroSnapshot"]
+    assert [row["value"] for row in chart["items"][0]["history"]] == [50.1]

@@ -514,6 +514,20 @@ def merge_alpha_series(existing_rows, bundle, now):
         )
         if index is None:
             result.append(row)
+        elif code == "M1_YOY" and result[index].get("state") == "READY":
+            official = result[index]
+            # Keep one observation per reporting month. Provider values only
+            # fill absent months and retain their own visible definition. A
+            # conflict already recorded by the official source is not hidden.
+            history = {
+                point["date"][:7]: point for point in official.get("history", [])
+                if isinstance(point.get("date"), str)
+            }
+            for point in row["history"]:
+                if point["date"] and point["state"] in {"OBSERVED", "STALE"}:
+                    history.setdefault(point["date"][:7], point)
+            if "history" in official or len(history) > 1:
+                official["history"] = [history[month] for month in sorted(history)]
         elif result[index].get("state") != "READY" and row["state"] == "READY":
             row["previousEvidence"] = {
                 key: result[index].get(key)

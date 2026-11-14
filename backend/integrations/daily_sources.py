@@ -80,9 +80,8 @@ INDEXES = {
     "OFAC": "https://ofac.treasury.gov/recent-actions",
     "FED": "https://www.federalreserve.gov/feeds/press_monetary.xml",
     "NBS": "https://www.stats.gov.cn/sj/zxfb/",
-    # Publisher-declared subscriptions; see BLS help/hlp_rss.htm and
-    # EIA todayinenergy/about.php and tools/rssfeeds/.
-    "BLS": "https://www.bls.gov/feed/bls_latest.rss",
+    # U.S. inflation observations are collected through FRED by the local
+    # macro evidence job. This document feed remains for energy context.
     "EIA": "https://www.eia.gov/rss/todayinenergy.xml",
 }
 PUBLICATION_META = frozenset(

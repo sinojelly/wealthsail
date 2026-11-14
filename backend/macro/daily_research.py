@@ -41,7 +41,7 @@ from backend.macro.research_topics import TopicProposal, direction_limit, is_v2
 from backend.macro.event_metadata import event_metadata, source_metadata
 
 VERSION = "daily-research-v1"
-PROMPT_VERSION = "daily-research-input-v26"
+PROMPT_VERSION = "daily-research-input-v27"
 MAX_REPORT_SOURCES = 24
 
 
@@ -1515,11 +1515,33 @@ def _nav_collection_results(rows, now):
     return result
 
 
+def _cycle_history(row, now, *, is_daily):
+    points = {}
+    for point in row.get("history") or []:
+        if not isinstance(point, dict) or not _visible(point, now):
+            continue
+        day = _day(point.get("date") or point.get("asOf"))
+        if day is None or day > now.date() or point.get("value") is None:
+            continue
+        points[day] = _pick(point, (
+            "date", "asOf", "value", "unit", "source", "sourceUri", "sourceName",
+            "state", "publishedAt", "retrievedAt", "availableAt", "definitionKey", "definitionVersion",
+        ))
+    periods = {}
+    for day, point in sorted(points.items()):
+        # Freeze the last observed day of every month for long charts. The
+        # live API and the already-calculated five-observation moves stay daily.
+        key = (day.year, day.month) if is_daily else day
+        periods[key] = point
+    return list(periods.values())[-36:]
+
+
 def make_research_packet(
     context, series, evidence, directions, *, now, previous=None, external=None
 ):
     """Take only bounded public fields; no actor, holdings, secrets or raw history."""
     from backend.integrations.daily_sources import macro_cycle_research_tasks
+    from backend.macro.cycle_insights import rate_expectation
 
     now = _now(now)
     macros, schedules, public_series, indices, actionable = [], [], [], [], []
@@ -1557,6 +1579,10 @@ def make_research_packet(
                 "lastPeriod",
             ),
         )
+        if row.get("code") in {"PMI", "CPI_YOY", "PPI_YOY", "M2_YOY"}:
+            history = _cycle_history(row, now, is_daily=False)
+            if history:
+                item["history"] = history
         macros.append(item)
         schedule = row.get("nextRelease") or {}
         if (
@@ -1612,6 +1638,10 @@ def make_research_packet(
                 "qualityStatus",
             ),
         )
+        if row["code"] in {"M1_YOY", "M2_YOY", "CN_T10", "US_T10_NOMINAL", "US_T10_REAL", "US_BRENT"}:
+            history = _cycle_history(row, now, is_daily=row.get("frequency") == "DAILY")
+            if history:
+                item["history"] = history
         public_series.append(item)
     for row in evidence[:8]:
         if row.get("indexId") not in _INDICES or not _visible(row, now):
@@ -1816,6 +1846,7 @@ def make_research_packet(
         ),
         "industryCycleResearch": {"required": True},
         "macroCycleResearch": macro_cycle_research_tasks(now),
+        **({"rateExpectation": rate} if (rate := rate_expectation(public_series)) else {}),
     }
 
 

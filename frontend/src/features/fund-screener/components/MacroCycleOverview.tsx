@@ -7,14 +7,19 @@ import {
   Zap,
 } from "lucide-react";
 import type { OpportunityContext } from "../../../api/investment";
+import type { MacroPolicySignal } from "../../../api/macro-cycle";
 import {
   buildCycleOverview,
   cycleFacts,
+  cycleReading,
+  cycleReportCutoff,
+  type CycleFact,
   type CycleView,
 } from "../macro-cycle-overview";
 import { sourceHref, timeLabel, monthLabel } from "../macro-display";
 import { readingText, researchSummary, sourceTitle } from "../research-reading";
 import ObservationSection from "./ObservationSection";
+import MacroCycleTrends from "./MacroCycleTrends";
 import "../macro-cycle-overview.css";
 
 type Sources = NonNullable<
@@ -67,31 +72,95 @@ function CycleRow({
         <h4>{title}</h4>
       </div>
       <div className="op-cycle-row-content">
-        {view ? (
+        {view || children ? (
           <>
-            {view.stage && (
+            {view?.stage && (
               <strong className="op-cycle-stage">
                 {readingText(view.stage, Infinity)}
               </strong>
             )}
             {children ??
-              (view.summary && <p>{readingText(view.summary, Infinity)}</p>)}
-            {view.impact && (
+              (view?.summary && (
+                <p>{readingText(cycleReading(view.summary), Infinity)}</p>
+              ))}
+            {!children && view?.impact && (
               <p className="op-cycle-impact">
                 {readingText(view.impact, Infinity)}
               </p>
             )}
-            {view.action && (
+            {!children && view?.action && (
               <p className="op-cycle-action">
                 {readingText(view.action, Infinity)}
               </p>
             )}
-            <ViewMeta view={view} sources={sources} />
+            {view && <ViewMeta view={view} sources={sources} />}
           </>
         ) : (
           <p className="op-cycle-missing">{missing}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+function ChainStep({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li>
+      <h5>{title}</h5>
+      {children}
+    </li>
+  );
+}
+
+function StepFacts({
+  facts,
+  codes,
+}: {
+  facts: CycleFact[];
+  codes: readonly string[];
+}) {
+  const visible = codes.flatMap((code) =>
+    facts.filter((fact) => fact.code === code),
+  );
+  if (!visible.length) return null;
+  return (
+    <div className="op-cycle-metric-chips">
+      {visible.map((fact) => {
+        const href = sourceHref(fact.sourceUri);
+        const label = (
+          <>
+            {fact.label}{" "}
+            <strong>
+              {fact.value}
+              {fact.unit}
+            </strong>
+          </>
+        );
+        return (
+          <span key={fact.code}>
+            {href ? (
+              <a href={href} target="_blank" rel="noreferrer">
+                {label}
+              </a>
+            ) : (
+              label
+            )}
+            {(fact.asOf || fact.referencePeriod) && (
+              <small>
+                {fact.referencePeriod
+                  ? monthLabel(fact.referencePeriod)
+                  : fact.asOf?.slice(0, 10)}
+              </small>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -113,9 +182,40 @@ export default function MacroCycleOverview({
   const summaryId = useId();
   const model = buildCycleOverview(data);
   const sources = report?.sources ?? [];
-  const full = researchSummary(model.market?.summary ?? "", Infinity);
+  const full = researchSummary(
+    cycleReading(model.market?.summary ?? ""),
+    Infinity,
+  );
   const preview = researchSummary(full, 280);
-  const facts = cycleFacts(data);
+  const snapshot = report?.cycleInsights?.macroSnapshot;
+  const retained =
+    historical ||
+    !!snapshot ||
+    (data.dailyResearch?.state !== "READY" && !!report);
+  const cutoff = retained ? cycleReportCutoff(data) : null;
+  const observed = snapshot
+    ? { ...data, ...snapshot, alphaPublic: null }
+    : data;
+  const facts = cycleFacts(observed, cutoff);
+  const factGrid = factView ? (historical ? facts : cycleFacts(data)) : [];
+  const chainFacts = factView ? [] : facts;
+  const signals = report?.cycleInsights?.policySignals ?? [];
+  const expectation = report?.cycleInsights?.rateExpectation;
+  const haveGlobal = !!(
+    model.global ||
+    signals.length ||
+    expectation ||
+    facts.some((fact) => fact.code.startsWith("US_"))
+  );
+  const cn10 = facts.find((row) => row.code === "CN_T10");
+  const us10 = facts.find((row) => row.code === "US_T10_NOMINAL");
+  const spread =
+    cn10?.asOf &&
+    us10?.asOf &&
+    cn10.asOf.slice(0, 10) === us10.asOf.slice(0, 10)
+      ? Math.round((Number(cn10.value) - Number(us10.value)) * 100)
+      : null;
+  const change5 = expectation?.us10yChange5Bp;
   return (
     <ObservationSection
       className="op-macro-overview op-cycle-overview"
@@ -150,14 +250,128 @@ export default function MacroCycleOverview({
           view={model.global}
           missing="本报告未单列全球利率周期结论。"
           sources={sources}
-        />
+        >
+          {haveGlobal && (
+            <ol className="op-cycle-chain" aria-label="全球利率与流动性推导链">
+              <ChainStep title="通胀与需求源头">
+                <StepFacts
+                  facts={chainFacts}
+                  codes={[
+                    "US_CPI_YOY",
+                    "US_CPI_MOM",
+                    "US_CORE_CPI_YOY",
+                    "US_PPI_YOY",
+                    "US_BRENT",
+                  ]}
+                />
+                {!facts.some((fact) =>
+                  /^US_(CPI|CORE_CPI|PPI|BRENT)/.test(fact.code),
+                ) && <p>该期缺少可核对的通胀或油价读数。</p>}
+                {signals
+                  .filter((row) => row.kind === "INFLATION_DRIVER")
+                  .map((row) => (
+                    <PolicySignal key={`${row.title}:${row.text}`} row={row} />
+                  ))}
+              </ChainStep>
+              <ChainStep title="联储表态与机构预测">
+                {signals
+                  .filter((row) => row.kind !== "INFLATION_DRIVER")
+                  .map((row) => (
+                    <PolicySignal key={`${row.title}:${row.text}`} row={row} />
+                  ))}
+                {!signals.some((row) => row.kind !== "INFLATION_DRIVER") && (
+                  <p>该期未找到可归属的官员表态或机构预测。</p>
+                )}
+              </ChainStep>
+              <ChainStep title="核心流动性水位">
+                <StepFacts
+                  facts={chainFacts}
+                  codes={[
+                    "US_FED_FUNDS",
+                    "US_T2_NOMINAL",
+                    "US_T10_NOMINAL",
+                    "US_T10_REAL",
+                    "CN_T10",
+                  ]}
+                />
+                {spread !== null && (
+                  <p>
+                    同日中美 10 年利差 {spread > 0 ? "+" : ""}
+                    {spread} bp。
+                  </p>
+                )}
+                {change5 != null && (
+                  <p>
+                    美国 10 年名义收益率近五个交易日 {change5 > 0 ? "+" : ""}
+                    {change5} bp。
+                  </p>
+                )}
+                {expectation && (
+                  <p>
+                    {readingText(expectation.summary, Infinity)}{" "}
+                    <small>
+                      利差反映市场定价，含期限溢价。
+                      {expectation.asOf && timeLabel(expectation.asOf)}
+                    </small>
+                  </p>
+                )}
+                {!expectation && !us10 && <p>该期缺少可核对的利率读数。</p>}
+              </ChainStep>
+              <ChainStep title="市场定价传导">
+                {cycleReading(
+                  model.global?.impact ?? model.global?.summary ?? "",
+                ) && (
+                  <p>
+                    {readingText(
+                      cycleReading(
+                        model.global?.impact ?? model.global?.summary ?? "",
+                      ),
+                      Infinity,
+                    )}
+                  </p>
+                )}
+                <p>
+                  实际利率上行可能抬高长久期资产折现率和黄金持有成本。盈利、风险溢价和避险需求会影响实际表现。
+                </p>
+                {model.global?.action && (
+                  <p className="op-cycle-action">
+                    {readingText(cycleReading(model.global.action), Infinity)}
+                  </p>
+                )}
+              </ChainStep>
+            </ol>
+          )}
+        </CycleRow>
         <CycleRow
           title="国内货币、财政与信用"
           icon={<Landmark size={18} aria-hidden="true" />}
           view={model.domestic}
           missing="国内周期以本报告总纲和下列已采集数据为准。"
           sources={sources}
-        />
+        >
+          <ol className="op-cycle-chain" aria-label="国内经济与货币信用推导链">
+            <ChainStep title="景气与价格信号">
+              <StepFacts facts={chainFacts} codes={["PMI", "CPI_YOY", "PPI_YOY"]} />
+              {model.domestic?.summary && (
+                <p>
+                  {readingText(cycleReading(model.domestic.summary), Infinity)}
+                </p>
+              )}
+            </ChainStep>
+            <ChainStep title="货币与信用传导">
+              <StepFacts
+                facts={chainFacts}
+                codes={["M1_YOY", "M2_YOY", "TSF_STOCK_YOY", "M1_M2_GAP"]}
+              />
+              <p>
+                {readingText(
+                  cycleReading(model.domestic?.impact ?? ""),
+                  Infinity,
+                ) || "关注货币与信用改善能否传导到支出、订单和盈利。"}
+              </p>
+            </ChainStep>
+          </ol>
+        </CycleRow>
         <CycleRow
           title="市场阶段与操作总纲"
           icon={<ChartNoAxesCombined size={18} aria-hidden="true" />}
@@ -177,17 +391,22 @@ export default function MacroCycleOverview({
               {expanded ? "收起今日总纲" : "展开今日总纲"}
             </button>
           )}
+          {model.market?.action && (
+            <p className="op-cycle-action">
+              {readingText(cycleReading(model.market.action), Infinity)}
+            </p>
+          )}
         </CycleRow>
         {!!model.factors.length && (
-          <div
-            className="op-cycle-row"
+          <details
+            className="op-cycle-factors-details"
             role="group"
             aria-label="今日关键影响因素"
           >
-            <div className="op-cycle-row-label">
+            <summary>
               <Zap size={18} aria-hidden="true" />
-              <h4>今日关键影响因素</h4>
-            </div>
+              今日关键影响因素 · {model.factors.length} 项
+            </summary>
             <ol className="op-cycle-factors">
               {model.factors.map((view, index) => (
                 <li key={`${view.title}:${index}`}>
@@ -198,7 +417,9 @@ export default function MacroCycleOverview({
                     )}
                   </strong>
                   {view.title && view.summary && (
-                    <span>{readingText(view.summary, Infinity)}</span>
+                    <span>
+                      {readingText(cycleReading(view.summary), Infinity)}
+                    </span>
                   )}
                   {view.impact && (
                     <span>{readingText(view.impact, Infinity)}</span>
@@ -207,15 +428,24 @@ export default function MacroCycleOverview({
                 </li>
               ))}
             </ol>
-          </div>
+          </details>
         )}
       </div>
-      {!!facts.length && (
+      {!factView && (
+        <MacroCycleTrends
+          data={observed}
+          supplemental={snapshot ? data : undefined}
+          cutoff={cutoff}
+          facts={facts}
+          changeBp={change5}
+        />
+      )}
+      {!!factGrid.length && (
         <div
           className="op-core-facts op-cycle-facts"
           aria-label="已采集宏观数据"
         >
-          {facts.map((fact) => (
+          {factGrid.map((fact) => (
             <div key={fact.code}>
               <span>{fact.label}</span>
               <strong>
@@ -253,12 +483,14 @@ export default function MacroCycleOverview({
                     </th>
                     <td>
                       <span className="op-cycle-stage">
-                        {readingText(view.stage || "阶段未单列", Infinity)}
+                        {readingText(view.stage || "观察中", Infinity)}
                       </span>
                     </td>
                     <td>
                       {readingText(
-                        view.driver || view.summary || "详见本报告方向研究。",
+                        cycleReading(
+                          view.driver || view.summary || "详见本报告方向研究。",
+                        ),
                         Infinity,
                       )}
                       {view.action && (
@@ -274,5 +506,24 @@ export default function MacroCycleOverview({
         </details>
       )}
     </ObservationSection>
+  );
+}
+
+function PolicySignal({ row }: { row: MacroPolicySignal }) {
+  const href = sourceHref(row.sourceUri);
+  return (
+    <p className="op-cycle-policy-signal">
+      {readingText(row.text, Infinity)}{" "}
+      <small>
+        {row.asOf && <time dateTime={row.asOf}>{timeLabel(row.asOf)}</time>}{" "}
+        {href ? (
+          <a href={href} target="_blank" rel="noreferrer">
+            {sourceTitle(row.title, 46)}
+          </a>
+        ) : (
+          sourceTitle(row.title, 46)
+        )}
+      </small>
+    </p>
   );
 }

@@ -10,6 +10,8 @@ from statistics import median
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
+from backend.integrations.fred_macro import FRED_CATALOG, FRED_HOST
+
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 NEW_YORK = ZoneInfo("America/New_York")
 CATALOG = {
@@ -24,6 +26,9 @@ CATALOG = {
     "US_SP500_CHANGE_PCT": ("标普500隔夜变化", "DAILY", "%", "PRE_MARKET"),
     "US_NASDAQ_CHANGE_PCT": ("纳斯达克隔夜变化", "DAILY", "%", "PRE_MARKET"),
 }
+CATALOG.update({code: row for code, row in FRED_CATALOG.items() if code not in CATALOG})
+US_YIELDS = {"US_T10_NOMINAL", "US_T10_REAL", "US_T2_NOMINAL", "US_FED_FUNDS"}
+_NY_SERIES = set(FRED_CATALOG)
 
 
 def _stamp(value):
@@ -76,7 +81,7 @@ def _metadata(row):
 
 def _visible(row, now):
     day = _day(row.get("reference_date"))
-    zone = NEW_YORK if row.get("code", "").startswith("US_T10") else SHANGHAI
+    zone = NEW_YORK if row.get("code") in _NY_SERIES else SHANGHAI
     if not day or day > now.astimezone(zone).date():
         return False
     return all(
@@ -139,7 +144,7 @@ def _years_before(day, years):
 
 
 def _changes(points, latest, frequency, *, code):
-    is_yield = code in {"CN_T10", "US_T10_NOMINAL", "US_T10_REAL", "DR007"}
+    is_yield = code in US_YIELDS or code in {"CN_T10", "DR007"}
     result = {
         "previousValue": None,
         "periodChange": None,
@@ -230,6 +235,8 @@ def _changes(points, latest, frequency, *, code):
     for key in result:
         if key not in {"changeUnit", "sampleCount"}:
             result[key] = _number(result[key])
+    if code == "US_BRENT":
+        result["changeUnit"] = "USD/barrel"
     return result
 
 
@@ -242,7 +249,7 @@ def series_context(rows, now, *, permissions=None, source_results=None):
         row = dict(record)
         if row.get("code") not in CATALOG or not _visible(row, now):
             continue
-        if row["code"].startswith("US_T10") and _day(
+        if row["code"] in _NY_SERIES and _day(
             row["reference_date"]
         ) < _years_before(now.astimezone(NEW_YORK).date(), 3):
             continue
@@ -269,7 +276,7 @@ def series_context(rows, now, *, permissions=None, source_results=None):
                 daily_ttl = 1 if source_key == "PRE_MARKET" else 5
                 stale = (
                     now.astimezone(
-                        NEW_YORK if code.startswith("US_T10") else SHANGHAI
+                        NEW_YORK if code in _NY_SERIES else SHANGHAI
                     ).date()
                     > (
                         day + timedelta(days=daily_ttl)
@@ -408,7 +415,8 @@ async def read_collection(conn, now):
             SELECT a.id,a.recorded_at,s.source_key,
               a.outcomes->'PUBLIC_SOURCES' AS outcome,1 AS precedence
             FROM attempts a CROSS JOIN unnest(ARRAY[
-              'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_LOANS'
+              'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_LOANS',
+              'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU'
             ]) AS s(source_key)
             WHERE a.outcomes->'PUBLIC_SOURCES'->>'status'='FAILED'
           )
@@ -463,8 +471,10 @@ def normalize_series(record, now, *, permissions=None):
         raise ValueError("source permission required")
     parsed = urlsplit(record["sourceUri"])
     roots = (
-        ("treasury.gov",)
+        ("treasury.gov", FRED_HOST)
         if code.startswith("US_T10")
+        else (FRED_HOST,)
+        if code in FRED_CATALOG
         else ("pbc.gov.cn",)
         if source_key.startswith("PBOC")
         else ("chinabond.com.cn",)

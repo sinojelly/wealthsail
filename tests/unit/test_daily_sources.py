@@ -320,8 +320,8 @@ def page(title, day="2026-10-15"):
     return f'<title>{title}</title><meta name="pubdate" content="{day}"><main><p>{title} reports public original observations with the published statistical definitions.</p></main>'
 
 
-def test_bls_and_eia_registry_uses_their_official_published_feeds():
-    assert sources.INDEXES["BLS"] == "https://www.bls.gov/feed/bls_latest.rss"
+def test_daily_document_collection_does_not_depend_on_bls_http():
+    assert "BLS" not in sources.INDEXES
     assert sources.INDEXES["EIA"] == "https://www.eia.gov/rss/todayinenergy.xml"
     assert "BEA" not in sources.INDEXES
 
@@ -369,7 +369,7 @@ async def test_official_rss_collects_bounded_original_quotes_and_real_page_day(
 
 
 @pytest.mark.asyncio
-async def test_five_publishers_get_fair_documents_and_larger_metadata_only_index():
+async def test_publishers_get_fair_documents_and_larger_metadata_only_index():
     def route(request):
         uri = str(request.url)
         if "fredgraph" in uri:
@@ -392,7 +392,6 @@ async def test_five_publishers_get_fair_documents_and_larger_metadata_only_index
                 ]
             else:
                 host = {
-                    "BLS": "www.bls.gov",
                     "EIA": "www.eia.gov",
                     "FED": "www.federalreserve.gov",
                 }[key]
@@ -413,8 +412,8 @@ async def test_five_publishers_get_fair_documents_and_larger_metadata_only_index
             NOW, client=client, clock=lambda: NOW
         )
     counts = Counter(row["sourceKey"] for row in result["documents"])
-    assert counts == {"OFAC": 2, "FED": 2, "NBS": 2, "BLS": 2, "EIA": 2}
-    assert len(result["documents"]) <= 12 and len(result["candidateIndex"]) == 40
+    assert counts == {"OFAC": 2, "FED": 2, "NBS": 2, "EIA": 2}
+    assert len(result["documents"]) <= 12 and len(result["candidateIndex"]) == 32
     assert all(
         set(row)
         <= {

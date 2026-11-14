@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MacroCycleOverview from "./components/MacroCycleOverview";
-import { buildCycleOverview } from "./macro-cycle-overview";
+import { buildCycleOverview, cycleTrend } from "./macro-cycle-overview";
 import type { OpportunityContext } from "../../api/investment";
 
 function context() {
@@ -115,6 +115,66 @@ it("keeps all industry rows behind a compact, accessible disclosure", async () =
     screen.getByRole("table", { name: "核心行业周期与趋势" }),
   ).toBeVisible();
   expect(screen.getByText("景气扩张")).toBeVisible();
+});
+
+it("plots dated local macro history and excludes observations collected after the report cutoff", () => {
+  const data = context();
+  data.dailyResearch!.report!.asOf = "2026-11-13T07:08:00+08:00";
+  data.items = [
+    {
+      code: "PMI",
+      label: "制造业PMI",
+      value: 55,
+      asOf: "2026-11-01",
+      publishedAt: "2026-11-30T09:30:00+08:00",
+      source: "统计局",
+      state: "READY",
+      history: [
+        {
+          asOf: "2026-09-01",
+          value: 50.1,
+          publishedAt: "2026-09-30T09:30:00+08:00",
+        },
+        {
+          asOf: "2026-10-01",
+          value: 49.3,
+          publishedAt: "2026-10-31T09:30:00+08:00",
+        },
+        {
+          asOf: "2026-11-01",
+          value: 55,
+          publishedAt: "2026-11-30T09:30:00+08:00",
+        },
+      ],
+    },
+  ];
+  const cycle = data.dailyResearch!.report!.cycleInsights!;
+  cycle.policySignals = [
+    {
+      text: "官员表示仍须观察价格压力",
+      title: "隔夜要闻",
+      sourceUri: "https://example.test/fed",
+      asOf: "2026-11-12",
+      kind: "CENTRAL_BANK_REMARK",
+    },
+  ];
+  expect(
+    cycleTrend(data, "PMI", data.dailyResearch!.report!.asOf).map(
+      (row) => row.value,
+    ),
+  ).toEqual([50.1, 49.3]);
+  render(<MacroCycleOverview data={data} historical />);
+  expect(
+    screen.getByRole("img", { name: "中国制造业景气与价格趋势" }),
+  ).toBeVisible();
+  expect(
+    screen.getByText("官员表示仍须观察价格压力", { exact: false }),
+  ).toBeVisible();
+  expect(screen.getByText("偏冷收缩", { exact: false })).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+  expect(screen.queryByText("55.0")).not.toBeInTheDocument();
 });
 
 it("labels legacy prose and industry evidence without fabricating a structured rate cycle", () => {
