@@ -3082,6 +3082,11 @@
        Keep the complete last measured SVG and let its viewBox scale to paper. */
     break-inside: avoid;
   }
+  .op-nav-plot .recharts-responsive-container > div {
+    /* Chromium can omit the overflowing SVG inside Recharts' zero-size wrapper. */
+    width: 100% !important;
+    height: 100% !important;
+  }
   .op-nav-plot .recharts-wrapper {
     width: 100% !important;
   }
