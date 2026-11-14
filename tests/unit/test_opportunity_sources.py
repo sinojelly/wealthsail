@@ -347,7 +347,7 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "PBOC_LOANS",
         "CHINABOND",
         "CFETS",
-        "CPIAUCSL", "CPILFESL", "PPIACO", "DFF", "DGS2", "DCOILBRENTEU",
+        "CPIAUCSL", "CPILFESL", "PPIACO", "DFF", "DGS2", "DCOILBRENTEU", "VIXCLS",
     }
     assert all(
         result["sourceResults"][key]["status"] == "SUCCESS"
@@ -366,7 +366,7 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "TSF_STOCK_YOY",
         "CORP_MEDLONG_LOANS_YTD",
         "US_CPI_YOY", "US_CPI_MOM", "US_CORE_CPI_YOY", "US_CORE_CPI_MOM",
-        "US_PPI_YOY", "US_PPI_MOM", "US_FED_FUNDS", "US_T2_NOMINAL", "US_BRENT",
+        "US_PPI_YOY", "US_PPI_MOM", "US_FED_FUNDS", "US_T2_NOMINAL", "US_BRENT", "VIX",
     }
 
 

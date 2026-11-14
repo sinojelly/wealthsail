@@ -9,6 +9,16 @@ from zoneinfo import ZoneInfo
 
 NEW_YORK = ZoneInfo("America/New_York")
 FRED_HOST = "fred.stlouisfed.org"
+VIX_CODE = "VIX"
+
+
+def vix_history_start(day):
+    """Two calendar years, including February 29 when the window starts on it."""
+    try:
+        return day.replace(year=day.year - 2)
+    except ValueError:
+        return day.replace(year=day.year - 2, day=28)
+
 
 # Feed, output code, label, definition. Index levels are never reported as rates.
 PRICE_INDEXES = {
@@ -42,6 +52,7 @@ LEVELS = {
         "EIA_DAILY_BRENT_SPOT",
         "USD/barrel",
     ),
+    "VIXCLS": (VIX_CODE, "CBOE 波动率指数（VIX）", "CBOE_SP500_VIX_DAILY_CLOSE", "点"),
 }
 FRED_CATALOG = {
     code + suffix: (label + name, "MONTHLY", "%", feed)
@@ -60,6 +71,8 @@ def fred_uri(feed, now):
     start = now.astimezone(NEW_YORK).date() - timedelta(
         days=366 * (4 if feed in PRICE_INDEXES else 3)
     )
+    if feed == "VIXCLS":
+        start = vix_history_start(now.astimezone(NEW_YORK).date())
     return f"https://{FRED_HOST}/graph/fredgraph.csv?" + urlencode(
         {"id": feed, "cosd": start.isoformat()}
     )
@@ -91,10 +104,12 @@ def parse_fred_macro(text, feed, retrieved, *, observed_by=None):
             raise ValueError("invalid FRED monthly index level")
         if (
             not monthly
-            and feed != "DCOILBRENTEU"
+            and feed not in {"DCOILBRENTEU", "VIXCLS"}
             and not Decimal("-20") <= value <= 100
         ):
             raise ValueError("invalid FRED rate")
+        if feed == "VIXCLS" and not Decimal(0) < value <= Decimal(1000):
+            raise ValueError("invalid VIX level")
         if day in values and values[day] != value:
             raise ValueError("conflicting FRED observation")
         values[day] = value
@@ -109,7 +124,9 @@ def parse_fred_macro(text, feed, retrieved, *, observed_by=None):
             "frequency": frequency,
             "unit": unit,
             "sourceUri": f"https://{FRED_HOST}/series/{feed}",
-            "sourceName": "FRED · Federal Reserve Bank of St. Louis",
+            "sourceName": "Cboe · FRED"
+            if feed == "VIXCLS"
+            else "FRED · Federal Reserve Bank of St. Louis",
             "publishedAt": None,
             "retrievedAt": retrieved,
             "availableAt": retrieved,
@@ -148,6 +165,12 @@ def parse_fred_macro(text, feed, retrieved, *, observed_by=None):
                     )
         return out
     code, _, definition, _ = LEVELS[feed]
+    if code == VIX_CODE:
+        return [
+            observation(code, day, value, definition)
+            for day, value in sorted(values.items())
+            if day >= vix_history_start(today)
+        ]
     # Keep recent daily data for actual five-observation moves. Earlier months
     # only need their latest valid day for the 36-month dashboard.
     months, daily = {}, []

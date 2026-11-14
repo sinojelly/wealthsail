@@ -1,12 +1,13 @@
 import json
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import httpx
 import pytest
 
 
@@ -181,6 +182,58 @@ async def test_macro_history_rejects_reversed_window():
 
 
 @pytest.mark.asyncio
+async def test_gapped_primary_history_falls_back_to_named_same_source_columns(
+    monkeypatch,
+):
+    import sys
+    from backend.integrations import investment_macro as adapter
+
+    provider = _provider(
+        macro_china_pmi=pd.DataFrame([{"月份": "202609", "制造业-指数": 50.1}])
+    )
+    monkeypatch.setitem(sys.modules, "akshare", provider)
+    make_client = httpx.AsyncClient
+    requests = []
+
+    def source(request):
+        requests.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "result": {
+                    "pages": 3,
+                    "data": [
+                        {
+                            "MAKE_INDEX": 50.1,
+                            "TIME": "2026年9月",
+                            "REPORT_DATE": "2026-09-01 00:00:00",
+                        },
+                        {
+                            "TIME": "2026年8月",
+                            "REPORT_DATE": "2026-08-01 00:00:00",
+                            "MAKE_INDEX": 49.8,
+                        },
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        adapter.httpx,
+        "AsyncClient",
+        lambda **kw: make_client(transport=httpx.MockTransport(source), **kw),
+    )
+    rows = await adapter.fetch_macro_history(date(2026, 8, 1), date(2026, 10, 13))
+    assert [request["reportName"] for request in requests] == ["RPT_ECONOMY_PMI"]
+    assert [(r["period"], r["value"]) for r in rows if r["fieldCode"] == "PMI"] == [
+        (date(2026, 8, 1), Decimal("49.8")),
+        (date(2026, 9, 1), Decimal("50.1")),
+    ]
+    assert all(row["publishedAt"] is None for row in rows)
+
+
+@pytest.mark.asyncio
 async def test_sync_persists_five_year_history_with_exact_period_and_source(
     monkeypatch,
 ):
@@ -226,14 +279,17 @@ async def test_sync_persists_five_year_history_with_exact_period_and_source(
 
     monkeypatch.setattr(job, "fetch_macro_history", history)
     now = datetime(2026, 10, 13, 22, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
-    result = await job.sync_macro(object(), now)
+    retrieved = now + timedelta(seconds=3)
+    result = await job.sync_macro(object(), now, now_provider=lambda: retrieved)
     cpi = [row for row in persisted if row[2] == "CPI_YOY"]
     assert [(row[8].date(), row[3]) for row in cpi] == [
         (date(2021, 10, 1), Decimal("1.5")),
         (date(2026, 9, 1), Decimal("-0.2")),
     ]
     assert result["observations"] == 8
-    assert all(row[9] == now and row[12] == "STALE" for row in persisted)
+    assert result["retrievedAt"] == retrieved
+    assert all(row[9] == retrieved and row[12] == "STALE" for row in persisted)
+    assert all(call.args[5] == retrieved for call in conn.fetchval.await_args_list)
     assert all(json.loads(row[14])["publicationVerified"] is False for row in persisted)
     assert (
         json.loads(cpi[0][14])["sourceUri"]

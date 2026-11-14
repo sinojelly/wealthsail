@@ -10,7 +10,12 @@ from statistics import median
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
-from backend.integrations.fred_macro import FRED_CATALOG, FRED_HOST
+from backend.integrations.fred_macro import (
+    FRED_CATALOG,
+    FRED_HOST,
+    VIX_CODE,
+    vix_history_start,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 NEW_YORK = ZoneInfo("America/New_York")
@@ -154,6 +159,8 @@ def _changes(points, latest, frequency, *, code):
         "change6Months": None,
         "changeUnit": "bp"
         if frequency == "DAILY" and is_yield
+        else "点"
+        if code == VIX_CODE
         else "pp"
         if frequency in {"MONTHLY", "DAILY"}
         else None,
@@ -249,9 +256,11 @@ def series_context(rows, now, *, permissions=None, source_results=None):
         row = dict(record)
         if row.get("code") not in CATALOG or not _visible(row, now):
             continue
-        if row["code"] in _NY_SERIES and _day(
-            row["reference_date"]
-        ) < _years_before(now.astimezone(NEW_YORK).date(), 3):
+        if row["code"] in _NY_SERIES and _day(row["reference_date"]) < (
+            vix_history_start(now.astimezone(NEW_YORK).date())
+            if row["code"] == VIX_CODE
+            else _years_before(now.astimezone(NEW_YORK).date(), 3)
+        ):
             continue
         key = row["code"], _day(row["reference_date"])
         rank = (_stamp(row["retrieved_at"]), row.get("revision") or 0)
@@ -275,9 +284,7 @@ def series_context(rows, now, *, permissions=None, source_results=None):
                 day = _day(latest["reference_date"])
                 daily_ttl = 1 if source_key == "PRE_MARKET" else 5
                 stale = (
-                    now.astimezone(
-                        NEW_YORK if code in _NY_SERIES else SHANGHAI
-                    ).date()
+                    now.astimezone(NEW_YORK if code in _NY_SERIES else SHANGHAI).date()
                     > (
                         day + timedelta(days=daily_ttl)
                         if frequency == "DAILY"
@@ -416,7 +423,7 @@ async def read_collection(conn, now):
               a.outcomes->'PUBLIC_SOURCES' AS outcome,1 AS precedence
             FROM attempts a CROSS JOIN unnest(ARRAY[
               'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_LOANS',
-              'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU'
+              'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU','VIXCLS'
             ]) AS s(source_key)
             WHERE a.outcomes->'PUBLIC_SOURCES'->>'status'='FAILED'
           )

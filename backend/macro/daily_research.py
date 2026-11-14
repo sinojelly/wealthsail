@@ -1527,6 +1527,22 @@ def _cycle_history(row, now, *, is_daily):
             "date", "asOf", "value", "unit", "source", "sourceUri", "sourceName",
             "state", "publishedAt", "retrievedAt", "availableAt", "definitionKey", "definitionVersion",
         ))
+    if row.get("code") == "VIX":
+        from backend.integrations.fred_macro import vix_history_start
+
+        # Preserve the stress peak and final observed close per ISO week in the
+        # frozen report. The live evidence view retains each trading-day close.
+        weeks = {}
+        for day, point in sorted(points.items()):
+            if day < vix_history_start(now.date()) or point.get("value") is None or point.get("state") == "CONFLICT":
+                continue
+            key = day.isocalendar()[:2]
+            peak, _ = weeks.get(key, ((day, point), None))
+            if point["value"] >= peak[1]["value"]:
+                peak = day, point
+            weeks[key] = peak, (day, point)
+        sampled = {day: point for pair in weeks.values() for day, point in pair}
+        return [sampled[day] for day in sorted(sampled)]
     periods = {}
     for day, point in sorted(points.items()):
         # Freeze the last observed day of every month for long charts. The
@@ -1638,7 +1654,7 @@ def make_research_packet(
                 "qualityStatus",
             ),
         )
-        if row["code"] in {"M1_YOY", "M2_YOY", "CN_T10", "US_T10_NOMINAL", "US_T10_REAL", "US_BRENT"}:
+        if row["code"] in {"M1_YOY", "M2_YOY", "CN_T10", "US_T10_NOMINAL", "US_T10_REAL", "US_BRENT", "VIX"}:
             history = _cycle_history(row, now, is_daily=row.get("frequency") == "DAILY")
             if history:
                 item["history"] = history

@@ -7,17 +7,19 @@ from itertools import groupby
 from uuid import NAMESPACE_URL, uuid5
 
 from backend.common.database import system_connection
+from backend.dependencies import now_shanghai
 from backend.integrations.investment_macro import fetch_macro_history, normalize_macro
 from backend.market import repository
 
 
-async def sync_macro(pool, now):
+async def sync_macro(pool, now, *, now_provider=None):
     start = now.date().replace(year=now.year - 5, day=1)
     items = normalize_macro(
         await fetch_macro_history(start, now.date()), start=start, end=now.date()
     )
     if not items:
         return {"observations": 0}
+    retrieved = max(now, (now_provider or now_shanghai)()).astimezone(now.tzinfo)
     async with system_connection(pool) as conn:
         async with conn.transaction():
             await repository.upsert_data_source(
@@ -42,10 +44,10 @@ async def sync_macro(pool, now):
                       (source_id,retrieval_key,origin_uri,as_of,retrieved_at,content_hash,quality_status)
                       VALUES($1,$2,$3,$4,$5,$6,'STALE') RETURNING id""",
                     source_id,
-                    f"research-macro:{source_uri}:{now.isoformat()}",
+                    f"research-macro:{source_uri}:{retrieved.isoformat()}",
                     source_uri,
                     source_as_of,
-                    now,
+                    retrieved,
                     "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
                 )
                 rows = []
@@ -73,7 +75,7 @@ async def sync_macro(pool, now):
                             item["unit"],
                             "CNY",
                             period,
-                            now,
+                            retrieved,
                             snapshot_id,
                             source_id,
                             "STALE",
@@ -88,4 +90,4 @@ async def sync_macro(pool, now):
                         )
                     )
                 await repository.insert_observations(conn, rows)
-    return {"observations": len(items)}
+    return {"observations": len(items), "retrievedAt": retrieved}

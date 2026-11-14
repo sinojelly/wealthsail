@@ -238,3 +238,68 @@ def test_frozen_cycle_history_excludes_later_data_and_does_not_enter_model_reque
     assert "history" not in model_packet(packet)["macros"][0]
     chart = project_cycle_insights({}, packet, NOW)["cycleInsights"]["macroSnapshot"]
     assert [row["value"] for row in chart["items"][0]["history"]] == [50.1]
+
+
+def test_duplicate_policy_excerpts_keep_distinct_people_stances_dates_and_odds():
+    from backend.macro.cycle_insights import policy_signals
+
+    def source(title, content, time="2026-11-13T03:45:00+08:00"):
+        return {
+            "title": title,
+            "content": content,
+            "publishedAt": time,
+            "sourceUri": "https://www.cls.cn/detail/123",
+        }
+
+    meeting = "美联储12月加息50个基点的概率为15.3%"
+    draft = {
+        "sourceItems": [
+            source(
+                "周五隔夜要闻",
+                "9、克利夫兰联储行长贝丝·哈马克重申，在人工智能投资所带来的需求压力下，需要提高利率以抗击通胀",
+            ),
+            source(
+                "克利夫兰联储行长称通胀正朝错误方向发展 利率需更具限制性",
+                "【克利夫兰联储行长称通胀正朝错误方向发展 利率需更具限制性】财联社11月13日电，克利夫兰联储行长贝丝·哈马克重申，她认为在人工智能投资所带来的需求压力下，需要提高利率以抗击通胀。上月美联储决定将利率维持在3.75%-4%的区间不变，哈马克是异议官员之一。",
+            ),
+            source(
+                "戴利称可能进一步加息",
+                "10、旧金山联储行长玛丽·戴利表示，可能需要进一步加息以降低通胀，并称越来越多的企业正在考虑涨价。",
+            ),
+            source("隔夜观点", "哈马克指出，若经济继续走弱可能降息"),
+            source("隔夜观点", "哈马克指出若工资增速持续超预期，可能进一步加息"),
+            source(
+                "隔夜观点",
+                "哈马克指出人工智能投资需求压力需要提高利率",
+                "2026-11-12T11:00:00+08:00",
+            ),
+            source(
+                "FOMC时程",
+                "美联储更新了2027年联邦公开市场委员会（FOMC）的会议日程，取消了10月的利率会议安排",
+            ),
+            source(
+                meeting,
+                f"【{meeting}】财联社11月13日电，据CME“美联储观察”：美联储12月加息25个基点的概率为84.7%，加息50个基点的概率为15.3%。美联储到明年1月累计加息25个基点的概率为24.4%，累计加息50个基点的概率为64.7%，累计加息75个基点的概率为10.9%",
+            ),
+            source(
+                "据CME观察",
+                "美联储12月加息25个基点的概率为80%，加息50个基点的概率为20%",
+                "2026-11-13T06:45:00+08:00",
+            ),
+        ]
+    }
+    rows = policy_signals(draft, {}, NOW)
+    remarks = [row for row in rows if row["kind"] == "CENTRAL_BANK_REMARK"]
+    assert len(remarks) == 5
+    assert (
+        sum("哈马克" in row["text"] and "提高利率" in row["text"] for row in remarks)
+        == 2
+    )
+    assert any("可能降息" in row["text"] for row in remarks)
+    assert any("工资增速" in row["text"] for row in remarks)
+    assert any("戴利" in row["text"] for row in remarks)
+    odds = [row["text"] for row in rows if row["kind"] == "MARKET_RATE_ODDS"]
+    assert len(odds) == 3
+    assert any("84.7%" in line and "15.3%" in line for line in odds)
+    assert any("明年1月" in line and "10.9%" in line for line in odds)
+    assert any("80%" in line and "20%" in line for line in odds)

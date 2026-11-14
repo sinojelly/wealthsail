@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 
@@ -123,6 +124,129 @@ _ECONOMY = re.compile(r"GDP|增长|生产总值", re.I)
 _PRICE_DRIVER = re.compile(
     r"AI.{0,8}(?:投资|资本开支|需求)|涨价|提价|关税|能源|原油|供给", re.I
 )
+_SPEAKERS = tuple(
+    (key, re.compile(pattern, re.I))
+    for key, pattern in (
+        ("HAMMACK", r"哈马克|\bHammack\b"),
+        ("DALY", r"戴利|\bDaly\b"),
+        ("POWELL", r"鲍威尔|\bPowell\b"),
+        ("WALLER", r"沃勒|\bWaller\b"),
+        ("WILLIAMS", r"威廉姆斯|\bWilliams\b"),
+        ("JEFFERSON", r"杰斐逊|\bJefferson\b"),
+        ("BOWMAN", r"鲍曼|\bBowman\b"),
+    )
+)
+_STANCE = (
+    (
+        "TIGHTER",
+        re.compile(
+            r"加息|提高利率|收紧(?:货币|政策)|限制性(?:立场|政策)|(?:利率|政策).{0,6}限制性|rate hike",
+            re.I,
+        ),
+    ),
+    ("EASIER", re.compile(r"降息|下调利率|降低利率|放松(?:货币|政策)|rate cut", re.I)),
+    (
+        "HOLD",
+        re.compile(
+            r"维持.{0,12}(?:利率|区间|不变)|利率.{0,12}(?:维持|按兵不动)|暂停(?:加息|降息)"
+        ),
+    ),
+)
+_PUBLISHER_PREFIX = re.compile(
+    r"^\s*(?:\d{1,2}[、.)）]\s*|【[^】]{4,180}】\s*(?=.{12,})|"
+    r"财联社\s*\d{1,2}月\d{1,2}日(?:电|讯)[，,:：]?\s*)+"
+)
+_CME_ORIGIN = re.compile(r"(?<![a-z])CME(?![a-z])|芝商所|美联储观察|FedWatch", re.I)
+_RATE_MONTH = re.compile(
+    r"(?P<relative>明年|今年|\d{4}年)?\s*(?P<month>1[0-2]|[1-9])月"
+)
+_ODDS = re.compile(
+    r"(?P<action>加息|降息)\s*(?P<step>\d{1,3})\s*(?:个?基点|bp)\s*(?:的)?\s*"
+    r"(?:概率|可能性)\s*(?:为|是|[:：])?\s*(?P<chance>\d{1,3}(?:\.\d+)?)\s*%",
+    re.I,
+)
+
+
+def _speaker(text):
+    matches = {key for key, pattern in _SPEAKERS if pattern.search(text)}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _stance(text):
+    categories = {key for key, pattern in _STANCE if pattern.search(text)}
+    # Opposing words and explicit negation need their full text preserved.
+    if len(categories) != 1 or re.search(
+        r"(?:不会|无须|无需|不宜|反对|不支持|不会考虑).{0,8}(?:加息|降息|收紧)", text
+    ):
+        return None
+    return next(iter(categories))
+
+
+def _compact_policy_text(value):
+    return re.sub(r"[^\w\d%]+", "", unicodedata.normalize("NFKC", value)).casefold()
+
+
+def _forecast_snapshot(text, clock):
+    matches = tuple(_ODDS.finditer(text))
+    if not matches:
+        return None
+    months = tuple(_RATE_MONTH.finditer(text[: matches[0].start()]))
+    if not months:
+        return None
+    month = months[-1]
+    # A mixed-meeting sentence remains a plain excerpt. It must not be
+    # mistaken for a superset of one meeting's probability table.
+    if _RATE_MONTH.search(text, matches[0].end()):
+        return (None, frozenset())
+    month_number = int(month["month"])
+    day = _day(clock)
+    year = day.year if day else None
+    relative = month["relative"]
+    if relative and relative[0].isdigit():
+        year = int(relative[:4])
+    elif year is not None and (
+        relative == "明年" or not relative and month_number < day.month
+    ):
+        year += 1
+    outcomes = frozenset(
+        (row["action"], int(row["step"]), Decimal(row["chance"]))
+        for row in matches
+        if Decimal(row["chance"]) <= 100
+    )
+    return ((year, month_number, "累计" in text), outcomes) if outcomes else None
+
+
+def _same_policy_signal(a, b):
+    if a["kind"] != b["kind"] or a["day"] != b["day"]:
+        return False
+    if a["textKey"] == b["textKey"] and a["claims"] == b["claims"]:
+        return True
+    if a["odds"] and b["odds"]:
+        (period_a, outcomes_a), (period_b, outcomes_b) = a["odds"], b["odds"]
+        return (
+            period_a is not None
+            and period_a == period_b
+            and (outcomes_a <= outcomes_b or outcomes_b <= outcomes_a)
+        )
+    shorter, longer = sorted((a["textKey"], b["textKey"]), key=len)
+    if len(shorter) >= 15 and shorter in longer and a["claims"] == b["claims"]:
+        return True
+    if not (
+        a["speaker"]
+        and a["speaker"] == b["speaker"]
+        and a["stance"]
+        and a["stance"] == b["stance"]
+        and (a["claims"] == b["claims"] or not a["claims"] or not b["claims"])
+    ):
+        return False
+    same_article = a["sourceUri"] == b["sourceUri"] and a["title"] == b["title"]
+    if same_article and (a["headline"] or b["headline"]):
+        return True
+    # Two comments pointing in the same direction can still have different
+    # reasons or conditions. Match shared phrases only for substantive text.
+    a_words = {shorter[i : i + 3] for i in range(len(shorter) - 2)}
+    b_words = {longer[i : i + 3] for i in range(len(longer) - 2)}
+    return len(a_words & b_words) >= max(10, 0.62 * len(a_words))
 
 
 def _rows(value):
@@ -185,7 +309,7 @@ def policy_signals(packet, report, cutoff):
         *_rows(packet.get("documents")),
         *report_sources,
     ]
-    signals, seen = [], set()
+    signals = []
     for source in rows:
         if not _visible(source, cutoff):
             continue
@@ -219,13 +343,30 @@ def policy_signals(packet, report, cutoff):
             ),
             "",
         )
+        odds_source = bool(_CME_ORIGIN.search(f"{title}\n{content}"))
         # Numbered news digests need sentence-level qualification. A generic
         # headline must not lend an unrelated sentence a source affiliation.
         for line in dict.fromkeys([*re.split(r"[。！？；\r\n]+", content), title]):
-            text = re.sub(r"\s+", " ", line).strip(" ，。；")
-            if len(text) < 10 or text in seen:
+            text = unicodedata.normalize(
+                "NFKC", _PUBLISHER_PREFIX.sub("", re.sub(r"\s+", " ", line))
+            ).strip(" ，。；")
+            if len(text) < 10:
                 continue
-            if _FED.search(text) and _RATES.search(text):
+            odds = _forecast_snapshot(text, clock) if odds_source else None
+            speaker = _speaker(text)
+            if speaker is None and line == title and _FED.search(title):
+                # Standalone headlines often name the office only. Borrow
+                # the identity solely from this article's single named voice.
+                speaker = _speaker(content)
+            stance = _stance(text) if speaker else None
+            if odds:
+                kind = "MARKET_RATE_ODDS"
+            elif (
+                _FED.search(text)
+                and _RATES.search(text)
+                and not _ODDS.search(text)
+                and not re.search(r"会议日程|例会安排|上月美联储决定", text)
+            ):
                 kind = "CENTRAL_BANK_REMARK"
             elif (
                 _FORECASTER.search(text)
@@ -241,7 +382,6 @@ def policy_signals(packet, report, cutoff):
                 kind = "INFLATION_DRIVER"
             else:
                 continue
-            seen.add(text)
             signals.append(
                 {
                     "kind": kind,
@@ -250,9 +390,39 @@ def policy_signals(packet, report, cutoff):
                     "sourceUri": uri,
                     "asOf": clock,
                     "sourceId": source.get("id"),
+                    "textKey": _compact_policy_text(text),
+                    "day": _day(clock),
+                    "speaker": speaker,
+                    "stance": stance,
+                    "odds": odds,
+                    "claims": frozenset(
+                        re.findall(
+                            r"\d+(?:\.\d+)?\s*(?:%|个?基点|bp)", text, flags=re.I
+                        )
+                    ),
+                    "headline": line == title,
                 }
             )
-    return sorted(signals, key=lambda row: row["asOf"] or "", reverse=True)[:18]
+    # Process complete direct excerpts before a title or partial reprint. Keep
+    # different odds, attributed stances and report days as separate rows.
+    first = sorted(
+        signals,
+        key=lambda row: (
+            len(row["odds"][1]) if row["odds"] else 0,
+            not row["headline"],
+            len(row["text"]),
+        ),
+        reverse=True,
+    )
+    unique = []
+    for row in first:
+        if not any(_same_policy_signal(row, known) for known in unique):
+            unique.append(row)
+    fields = ("kind", "title", "text", "sourceUri", "asOf", "sourceId")
+    return [
+        {key: row[key] for key in fields}
+        for row in sorted(unique, key=lambda row: row["asOf"] or "", reverse=True)[:18]
+    ]
 
 
 def rate_expectation(series):
@@ -472,6 +642,7 @@ def industry_position_rows(report):
 
 
 _SNAPSHOT_CODES = {
+    "VIX",
     "PMI",
     "CPI_YOY",
     "PPI_YOY",
@@ -530,7 +701,7 @@ def macro_snapshot(packet, cutoff):
                 _pick(point, _SNAPSHOT_FIELDS)
                 for point in _rows(row.get("history"))
                 if _visible(point, cutoff)
-            ][-36:]
+            ][-(212 if code == "VIX" else 36) :]
             if history:
                 parsed["history"] = history
             if parsed.get("value") is None and not history:

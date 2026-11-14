@@ -175,8 +175,9 @@ async def _refresh(pool, now, *, previous=None):
             "observations": 0,
             "coverage": previous or {},
         }
+    received = fetched.get("retrievedAt", now)
     try:
-        coverage = await _load_coverage(pool, now)
+        coverage = await _load_coverage(pool, received)
     except Exception as exc:  # noqa: BLE001 -- a failed check cannot certify collection
         logger.warning("macro_coverage_failed error_class=%s", type(exc).__name__)
         return {
@@ -191,7 +192,7 @@ async def _refresh(pool, now, *, previous=None):
         evidence["refreshed"] = bool(
             fetched.get("observations", 0) > 0
             and collected
-            and datetime.fromisoformat(collected) == now
+            and datetime.fromisoformat(collected) == received
         )
     any_refreshed = any(row["refreshed"] for row in coverage.values())
     complete = all(
