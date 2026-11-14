@@ -4,6 +4,7 @@ import type { DailyResearch, OpportunityContext } from "../../api/investment";
 import * as api from "../../api/investment";
 import FundScreenerPage from "./FundScreenerPage";
 import { renderWithSession } from "../../test/render-with-session";
+import { frozenPlan } from "./personal-funds.test-data";
 
 vi.mock("../../api/investment", () => ({
   getDirections: vi.fn().mockResolvedValue([]),
@@ -83,6 +84,52 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => vi.useRealTimers());
+
+it("refreshes a representative NAV gap until local history is available", async () => {
+  const pending = context("AVAILABLE");
+  const plan = frozenPlan("161032");
+  pending.dailyResearch!.report = {
+    summary: "煤炭",
+    sources: [],
+    coverage: [],
+    events: [],
+    upcoming: [],
+    energy: [],
+    discoveryActionableZones: [{ ...plan, currentPrice: null }],
+  };
+  const ready = context("AVAILABLE");
+  ready.dailyResearch!.report = {
+    ...pending.dailyResearch!.report!,
+    discoveryActionableZones: [
+      {
+        ...plan,
+        historicalPriceWindow: {
+          state: "READY",
+          sampleCount: 400,
+          requiredSamples: 120,
+          start: "2024-01-01",
+          end: plan.asOf,
+        },
+      },
+    ],
+  };
+  vi.mocked(api.getOpportunityContext)
+    .mockResolvedValueOnce(pending)
+    .mockResolvedValue(ready);
+  renderWithSession(<FundScreenerPage />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(20);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_020);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
+});
 
 it.each(["PARTIAL", "AVAILABLE"] as const)(
   "refreshes the single opportunity context from archived-pending to %s and stops after archival",

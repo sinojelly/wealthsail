@@ -130,6 +130,27 @@ def test_current_high_scores_sort_before_narrative_source_count():
     assert [item["key"] for item in items] == ["score_95", "score_75"]
 
 
+def test_topic_quota_retains_every_quantitative_trigger_regardless_of_score():
+    from backend.investment.opportunity_fund_matching import displayed_funds
+
+    ordinary = [{"fundCode": str(i)} for i in range(3)]
+    signals = [
+        {"pricePosition": {"distanceToEntryPct": 0}},
+        {"pricePosition": {"distanceToEntryPct": 1.99}},
+        {"actionableZones": {"inSellZone": True}},
+        {"referenceTracks": [{"track": "RIGHT_TREND", "state": "CANDIDATE"}]},
+        {"pricePosition": {"stopTriggered": True}},
+    ]
+    candidates = [
+        {"fundCode": str(i + 3), "quantitativeScore": 1, **item}
+        for i, item in enumerate(signals)
+    ]
+    assert (
+        displayed_funds(ordinary + candidates + [{"fundCode": "untriggered"}])
+        == ordinary + candidates
+    )
+
+
 def test_funds_within_one_topic_are_sorted_before_the_display_limit():
     row = topic()
     funds = [{**fund(90), "fundCode": f"{i:06}",

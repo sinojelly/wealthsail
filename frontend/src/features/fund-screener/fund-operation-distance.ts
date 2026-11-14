@@ -67,6 +67,6 @@ export function fundOperationDistance(
     sellDistance: inSellZone ? 0 : distance(sellLow, sellHigh),
     inBuyZone,
     inSellZone,
-    stopTriggered: current != null && stop != null && current <= stop,
+    stopTriggered: current != null && stop != null && current < stop,
   };
 }

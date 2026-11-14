@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -32,6 +33,7 @@ from backend.integrations.market_data import (
     fetch_fund_nav_history,
 )
 from backend.jobs.data_tasks import NavPersistenceStats, persist_nav_observations
+from backend.investment.theme_graph import collect_theme_nav_histories
 
 logger = logging.getLogger("wealthsail.fund_nav_sync")
 
@@ -198,6 +200,154 @@ on_demand_nav_history_cache = OnDemandNavHistoryCache()
 
 async def fetch_on_demand_nav_history(code, now):
     return await on_demand_nav_history_cache.get(code, now)
+
+
+_RESEARCH_NAV_GAP_BATCH = 24
+
+
+def _report_nav_target_codes(report):
+    from backend.investment.live_fund_plans import _plans
+    from backend.macro.research_mentions import mentioned_fund_codes
+
+    return list(
+        dict.fromkeys(
+            row["fundCode"]
+            for row in (*_plans(report), *mentioned_fund_codes(report))
+            if isinstance(row.get("fundCode"), str)
+            and re.fullmatch(r"[0-9]{6}", row["fundCode"])
+            and row.get("market") in (None, "FUND_CN")
+        )
+    )
+
+
+async def _load_gap_fill_targets(conn, now):
+    from backend.funds.nav_history import (
+        NAV_GAP_FILL_MIN_SAMPLES,
+        obj,
+        read_nav_fund_identities,
+        representative_nav_codes,
+    )
+
+    payload = await conn.fetchval(
+        """SELECT t.payload FROM research.daily_research_runs r
+          JOIN research.daily_research_results t ON t.run_id=r.run_id
+          WHERE t.status='READY' AND r.dispatched_at<=$1 AND t.recorded_at<=$1
+            AND r.slot_date<=($1 AT TIME ZONE 'Asia/Shanghai')::date
+          ORDER BY r.dispatched_at DESC,t.recorded_at DESC,r.run_id DESC LIMIT 1""",
+        now,
+    )
+    codes = list(
+        dict.fromkeys(
+            [
+                *representative_nav_codes(),
+                *_report_nav_target_codes(obj(payload)),
+            ]
+        )
+    )
+    # Use retrieval time for rechecks, as NAV publication may lag across markets.
+    # Inspect counts in PostgreSQL so recurring polls do not transfer chart data.
+    rows = await conn.fetch(
+        """SELECT c.fund_code FROM unnest($1::text[]) WITH ORDINALITY c(fund_code, priority)
+          WHERE NOT EXISTS(SELECT 1 FROM market.fund_nav_sync_attempts a
+            WHERE a.fund_code=c.fund_code AND a.last_sync_attempt_at>$2::timestamptz-interval '12 hours')
+          AND NOT EXISTS(SELECT 1 FROM (
+              SELECT payload
+              FROM market.fund_research_nav_histories WHERE fund_code=c.fund_code
+                AND retrieved_at BETWEEN $2-interval '30 hours' AND $2 AND available_at<=$2
+              UNION ALL
+              SELECT payload
+              FROM market.fund_nav_chart_histories WHERE fund_code=c.fund_code
+                AND retrieved_at BETWEEN $2-interval '30 hours' AND $2 AND available_at<=$2
+            ) h WHERE h.payload->>'priceBasis'='UNIT_NAV' AND h.payload->>'fundCode'=c.fund_code
+              AND COALESCE(h.payload->>'currency','CNY')='CNY'
+              AND h.payload->>'sourceUri' IN (
+                'https://fund.eastmoney.com/'||c.fund_code||'.html',
+                'https://fund.eastmoney.com/pingzhongdata/'||c.fund_code||'.js',
+                'https://api.fund.eastmoney.com/f10/lsjz')
+              AND h.payload->>'asOf' BETWEEN $3 AND $4
+              AND CASE WHEN jsonb_typeof(h.payload->'points')='array'
+                THEN jsonb_array_length(h.payload->'points') >= $5 ELSE false END)
+          ORDER BY c.priority""",
+        codes,
+        now,
+        (now.date() - timedelta(days=10)).isoformat(),
+        now.date().isoformat(),
+        NAV_GAP_FILL_MIN_SAMPLES,
+    )
+    return await read_nav_fund_identities(conn, [row["fund_code"] for row in rows], now)
+
+
+async def backfill_research_nav_gaps(pool, now):
+    """Warm local unit NAV cohorts used by Today and the interactive chart."""
+    from backend.dependencies import now_shanghai
+    from backend.funds.nav_history import local, stamp, valid_points
+    from backend.integrations.fund_nav_fallback import fetch_research_nav_gap_history
+
+    now = local(now)
+    claimed = {}
+    async with system_connection(pool) as conn:
+        for fund in await _load_gap_fill_targets(conn, now):
+            code = fund["fundCode"]
+            try:
+                claim = await conn.fetchrow(
+                    "SELECT * FROM market.claim_fund_nav_sync_attempt($1)", code
+                )
+            except Exception as exc:  # one changing fund identity cannot block others
+                logger.warning(
+                    "fund_nav_gap_claim_failed symbol=%s error_class=%s",
+                    code,
+                    type(exc).__name__,
+                )
+                continue
+            if claim and claim.get("claimed") is True:
+                claimed[code] = fund
+                if len(claimed) == _RESEARCH_NAV_GAP_BATCH:
+                    break
+    if not claimed:
+        return 0
+    result = await collect_theme_nav_histories(
+        pool,
+        now,
+        asset_rows=[
+            {
+                "asset_code": code,
+                "overseas_calendar_required": fund["overseasCalendarRequired"],
+            }
+            for code, fund in claimed.items()
+        ],
+        fetcher=fetch_research_nav_gap_history,
+    )
+    finished = max(now, local(now_shanghai()))
+    payloads = {
+        code: history
+        for history in result["fundHistories"]
+        if (code := history.get("fundCode")) in claimed
+        and valid_points(history, code, finished)
+    }
+    if not payloads:
+        return 0
+    inserted = 0
+    async with system_connection(pool) as conn:
+        for code, history in payloads.items():
+            try:
+                await conn.execute(
+                    """INSERT INTO market.fund_research_nav_histories
+                    (fund_code,retrieved_at,available_at,payload) VALUES($1,$2,$3,$4::jsonb)""",
+                    code,
+                    stamp(history["retrievedAt"]),
+                    stamp(history["availableAt"]),
+                    json.dumps(history, ensure_ascii=False, allow_nan=False),
+                )
+                inserted += 1
+            except (
+                Exception
+            ) as exc:  # preserve other verified cohorts when one save fails
+                logger.warning(
+                    "fund_nav_gap_persist_failed symbol=%s error_class=%s",
+                    code,
+                    type(exc).__name__,
+                )
+    return inserted
 
 
 # Query past the storage target so a not-yet-disclosed current NAV (or a

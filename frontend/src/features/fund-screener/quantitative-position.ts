@@ -48,21 +48,21 @@ export function quantitativePosition(plan: ActionableZoneResult) {
   let label = "⚪ 净值资料补齐中",
     tone = "neutral",
     rank = 2;
-  if (current == null || low == null || high == null || low > high) {
+  if (current == null) {
     rank = 4;
-  } else if (stop != null && current <= stop) {
-    label = "🔴 跌破止损参考";
+  } else if (stop != null && current < stop) {
+    label = "⚠️ 跌破止损线（深跌观察）";
     tone = "stop";
     rank = 4;
   } else if (sellLow != null && current >= sellLow) {
     label = "🟠 已入卖区（分批止盈）";
     tone = "sell";
     rank = 3;
-  } else if (current >= low && current <= high) {
+  } else if (low != null && high != null && current >= low && current <= high) {
     label = "🟢 已入买区（低吸参考）";
     tone = "buy";
     rank = 0;
-  } else if (buyDistance != null && buyDistance <= 3) {
+  } else if (buyDistance != null && buyDistance < 2) {
     label = `🟡 接近买区（差 ${buyDistance.toFixed(2)}%）`;
     tone = "near";
     rank = 1;
@@ -76,6 +76,8 @@ export function quantitativePosition(plan: ActionableZoneResult) {
     tone = "trend";
   } else if (buyDistance != null) {
     label = `⚪ 距买区 ${buyDistance.toFixed(2)}%`;
+  } else {
+    rank = 4;
   }
   return {
     track,

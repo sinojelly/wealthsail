@@ -359,6 +359,33 @@ async def read_daily_research(
             report, packet, report_recovery["originalCompletedAt"] if report_recovery else report_row["recorded_at"],
         )
         with trace_stage("context.live_nav_prices"):
+            if tenant_id is not None and user_id is not None:
+                from backend.funds.nav_history import read_representative_nav_funds
+
+                discovery = report.get("discoveryActionableZones") or []
+                representatives = {
+                    row["fundCode"]: row
+                    for row in await read_representative_nav_funds(conn, stamp)
+                }
+                if representatives:
+                    scan = (report.get("quantitativeScan") or {}).get("items", [])
+                    for row in [*discovery, *scan]:
+                        if (
+                            not isinstance(row, dict)
+                            or row.get("priceBasis") != "UNIT_NAV"
+                            or row.get("market") not in {None, "FUND_CN"}
+                        ):
+                            continue
+                        if match := representatives.pop(row.get("fundCode"), None):
+                            if not row.get("discoverySector"):
+                                row["discoverySector"] = match["discoverySector"]
+                    report["discoveryActionableZones"] = [
+                        *discovery,
+                        *(
+                            {**row, "referenceOnly": True, "investmentEligible": False}
+                            for row in representatives.values()
+                        ),
+                    ]
             report = await refresh_report_fund_plans(
                 conn, report, stamp, histories=histories, packet=packet,
                 include_series=tenant_id is not None and user_id is not None,

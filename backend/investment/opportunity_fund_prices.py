@@ -51,6 +51,13 @@ def price_position(plan, now):
         return result
     result["asOf"] = plan["asOf"]
     tracks = [row for row in plan.get("tracks", []) if isinstance(row, dict)]
+    if any(
+        track.get("priceState") == "READY"
+        and (stop := _number(track.get("stopLossPrice"))) is not None
+        and 0 < current < stop
+        for track in tracks
+    ):
+        result["stopTriggered"] = True
     distances = []
     for track in tracks:
         low, high = _number(track.get("entryZoneMin")), _number(track.get("entryZoneMax"))
@@ -89,10 +96,10 @@ def price_position(plan, now):
             label="进入技术参考区间",
             reasons=["TECHNICAL_ENTRY_ZONE_ONLY"],
         )
-    elif distances and min(distances) <= 3:
+    elif distances and min(distances) < 2:
         result.update(
             status="NEAR_ENTRY_ZONE", label="接近技术买区",
-            reasons=["WITHIN_THREE_PERCENT_OF_ENTRY_ZONE"],
+            reasons=["WITHIN_TWO_PERCENT_OF_ENTRY_ZONE"],
         )
     else:
         result.update(

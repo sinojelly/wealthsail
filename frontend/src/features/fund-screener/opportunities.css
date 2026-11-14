@@ -2973,26 +2973,27 @@
     break-inside: avoid;
   }
 }
-.op-nav-legend span::before {
+.op-nav-legend i {
   display: inline-block;
   width: 14px;
   height: 4px;
   margin-right: 4px;
-  content: "";
   vertical-align: middle;
 }
-.op-nav-legend .buy::before {
-  background: #8edbcc;
+.op-nav-legend .buy {
+  background: #a7ead9;
   height: 8px;
+  border: 1px solid #73c2b2;
 }
-.op-nav-legend .sell::before {
-  background: #fca5a5;
+.op-nav-legend .sell {
+  background: #ffd2dc;
   height: 8px;
+  border: 1px solid #efa8b8;
 }
-.op-nav-legend .stop::before {
+.op-nav-legend .stop {
   border-top: 1px dashed #d14343;
 }
-.op-nav-legend .target::before {
+.op-nav-legend .target {
   border-top: 1px dashed #d97706;
 }
 .op-nav-trend .op-nav-summary,

@@ -47,9 +47,25 @@
 .op-today-insight > summary > * {
   margin-inline-end: 0.7rem;
 }
-.op-today-fund > summary > span:last-child {
+.op-today-summary-prices {
   color: #617387;
   font-size: 0.85rem;
+}
+.op-today-fund > summary > .op-today-fund-evidence {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 0.65rem;
+  margin: 0.35rem 0 0 1rem;
+  font-size: 0.85rem;
+  color: #40576d;
+}
+.op-today-origins a {
+  margin-inline-start: 0.65rem;
+}
+.op-today-fund-thesis {
+  font-size: 0.9rem;
+  line-height: 1.7;
 }
 .op-today-fund[open] > summary,
 .op-today-insight[open] > summary {
@@ -124,7 +140,7 @@
   color: #617387;
 }
 @media (max-width: 600px) {
-  .op-today-fund > summary > span:last-child {
+  .op-today-summary-prices {
     display: block;
     margin-left: 1rem;
   }

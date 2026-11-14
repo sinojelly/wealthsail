@@ -179,13 +179,13 @@ it("merges real scan signals with AI funds and keeps non-actionable scans folded
   expect(within(scan).getAllByText("参考买入区间")).toHaveLength(3);
 });
 
-it("uses the strict 1.5 percent boundary for expansion and preserves all scans", () => {
+it("uses the strict two percent boundary for expansion and preserves all scans", () => {
   const data = context();
   Object.assign(data.dailyResearch!.report!, {
     quantitativeScan: {
       items: [
-        plan("000201", String(1.15 / (1 - 0.0149))),
-        plan("000202", String(1.15 / (1 - 0.015))),
+        plan("000201", String(1.15 / (1 - 0.0199))),
+        plan("000202", String(1.15 / (1 - 0.02))),
       ],
     },
   });
@@ -195,6 +195,66 @@ it("uses the strict 1.5 percent boundary for expansion and preserves all scans",
   expect(rows[1]).not.toHaveAttribute("open");
   expect(within(rows[1]).queryByText("参考买入区间")).toBeNull();
   fireEvent.click(within(rows[1]).getByText(/基金000202/));
+});
+
+it("shows same-track buys and their logic alongside the right-trend evidence", async () => {
+  vi.stubGlobal("IntersectionObserver", undefined);
+  const data = context();
+  const coal = {
+    ...plan("161032"),
+    label: "富国中证煤炭指数A",
+    opportunityScore: 42,
+    macroOpportunity: {
+      stance: "TAILWIND",
+      label: "🔥 宏观/政策顺风",
+      rationale: "上游价格走高有利于煤炭收入，仍需核对需求和供给。",
+      riskLevel: "NONE",
+    },
+  };
+  const coalAlternative = { ...plan("161724"), label: "招商中证煤炭指数A" };
+  const trend = plan("012552", "1.25");
+  trend.tracks.push({
+    ...trend.tracks[0],
+    track: "RIGHT_TREND",
+    state: "CANDIDATE",
+  });
+  Object.assign(trend.indicators, {
+    ma20: 1.218,
+    ma60: 1.145,
+    rsi14: 53.5,
+    momentum20: 0.075,
+    excessReturn20d: 5.45,
+  });
+  Object.assign(data.dailyResearch!.report!, {
+    discoveryActionableZones: [coal, coalAlternative, trend],
+    researchTopics: [
+      {
+        key: "coal",
+        title: "煤炭机会",
+        thesis: "关注煤炭价格与库存变化。",
+        primaryFundCodes: ["161032"],
+        plans: [coal],
+      },
+    ],
+  });
+  renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
+  const rows = screen.getAllByTestId("today-fund-row");
+  expect(rows.map((row) => row.dataset.fundCode)).toEqual([
+    "161032",
+    "161724",
+    "012552",
+  ]);
+  expect(within(rows[0]).getByText(/上游价格走高/)).toBeVisible();
+  expect(within(rows[0]).getByText(/关注煤炭价格与库存/)).toBeVisible();
+  expect(within(rows[1]).getByText("已入买区")).toBeVisible();
+  expect(within(rows[2]).getByText(/MA20 1.2180 > MA60 1.1450/)).toBeVisible();
+  expect(within(rows[2]).getByText(/RSI14 53.5/)).toBeVisible();
+  expect(within(rows[2]).getByText(/近20日 \+7.50%/)).toBeVisible();
+  expect(within(rows[2]).getByText(/较沪深300 \+5.45 个百分点/)).toBeVisible();
+  await act(async () => vi.dynamicImportSettled());
+  expect(
+    within(rows[0]).getAllByRole("img", { name: "161032单位净值走势" }),
+  ).toHaveLength(1);
 });
 
 it("uses displayed current price and reference bands for urgency rather than a stale three-percent signal", () => {

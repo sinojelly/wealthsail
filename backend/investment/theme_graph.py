@@ -124,7 +124,10 @@ def _history_quality(history, points, now):
 
 def _disclosed_nav_quality(history, points, now):
     """A complete disclosed series supports dated research, not today's estimate."""
-    from backend.integrations.nav_history_proof import nav_points_digest
+    from backend.integrations.nav_history_proof import (
+        PINGZHONGDATA_NAV_METHOD,
+        nav_points_digest,
+    )
 
     proof = history.get("providerHistoryProof")
     unknown = (
@@ -152,6 +155,10 @@ def _disclosed_nav_quality(history, points, now):
             return unknown
         allowed = {
             ("eastmoney-nav-history-v1", "https://api.fund.eastmoney.com/f10/lsjz"),
+            (
+                PINGZHONGDATA_NAV_METHOD,
+                f"https://fund.eastmoney.com/pingzhongdata/{history['fundCode']}.js",
+            ),
             (
                 "akshare-unit-nav-history-v1",
                 f"https://fund.eastmoney.com/pingzhongdata/{history['fundCode']}.js",

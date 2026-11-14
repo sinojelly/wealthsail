@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 
+PINGZHONGDATA_NAV_METHOD = "eastmoney-pingzhongdata-unit-nav-v1"
+
 
 def nav_points_digest(points):
     """Canonical values make 1.0100 and 1.01 the same disclosed coordinate."""

@@ -109,6 +109,12 @@ it("defaults to two-year real NAV and draws frozen buy and sell bands, including
   expect(screen.getByText("建议买入区间")).toBeInTheDocument();
   expect(screen.getByText("止损参考")).toBeInTheDocument();
   expect(screen.getByText("建议卖出区间")).toBeInTheDocument();
+  expect(
+    screen.getByText("建议买入区间").querySelector(".buy"),
+  ).toHaveAttribute("aria-hidden", "true");
+  expect(
+    screen.getByText("建议卖出区间").querySelector(".sell"),
+  ).toHaveAttribute("aria-hidden", "true");
 });
 
 it("keeps a legacy single target as a line without fabricating a sell range", async () => {

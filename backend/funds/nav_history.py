@@ -11,12 +11,73 @@ from zoneinfo import ZoneInfo
 
 from backend.errors import ValidationError_
 from backend.funds.nav_window import two_year_nav_points, two_year_nav_start
-from backend.integrations.nav_history_proof import nav_points_digest
+from backend.integrations.nav_history_proof import (
+    PINGZHONGDATA_NAV_METHOD,
+    nav_points_digest,
+)
 from backend.macro.research_debug_repository import active_operator
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PERIODS = {"6m", "1y", "2y", "all"}
 MAX_POINTS = 20000
+NAV_GAP_FILL_MIN_SAMPLES = 60
+_SUPPLEMENTAL_REPRESENTATIVES = (
+    "161032",
+    "161724",
+    "168204",
+    "012552",
+    "012629",
+    "001092",
+)
+
+
+def representative_nav_codes():
+    from backend.investment.dynamic_discovery import CORE_FUND_CODES
+
+    return [*_SUPPLEMENTAL_REPRESENTATIVES, *CORE_FUND_CODES]
+
+
+async def read_nav_fund_identities(conn, codes, now):
+    """Resolve unique CNY share classes for chart and live reference prices."""
+    if not codes:
+        return []
+    rows = await conn.fetch(
+        """WITH candidates AS (
+          SELECT c.instrument_id,c.fund_code,c.fund_name,c.currency,u.sector,
+                 (c.fund_type ILIKE '%QDII%' OR c.fund_name ILIKE '%QDII%'
+                   OR COALESCE(u.overseas_calendar_required,false)) AS overseas_calendar_required,
+                 count(*) OVER (PARTITION BY c.fund_code) AS identity_count
+          FROM reference.research_fund_catalog c
+          LEFT JOIN reference.discovery_fund_universe u ON u.market=c.market
+            AND u.fund_code=c.fund_code AND u.enabled AND u.verified_at<=$2
+          WHERE c.market='FUND_CN' AND c.fund_code=ANY($1::text[])
+            AND c.trade_form IN ('FUND','LOF')
+        ) SELECT instrument_id,fund_code,fund_name,sector,overseas_calendar_required
+          FROM candidates WHERE identity_count=1 AND currency='CNY'
+            AND fund_name !~ '美元|港币|港元|外币|现汇|现钞'
+          ORDER BY array_position($1::text[],fund_code)""",
+        codes,
+        now,
+    )
+    return [
+        {
+            "fundCode": row["fund_code"],
+            "label": row["fund_name"],
+            "market": "FUND_CN",
+            "subjectKind": "fund" if row["instrument_id"] else "nav",
+            "subjectId": str(row["instrument_id"] or row["fund_code"]),
+            "discoverySector": row["sector"],
+            "overseasCalendarRequired": row["overseas_calendar_required"] is True,
+            "priceBasis": "UNIT_NAV",
+            "unit": "CNY/份",
+            "currency": "CNY",
+        }
+        for row in rows
+    ]
+
+
+async def read_representative_nav_funds(conn, now):
+    return await read_nav_fund_identities(conn, representative_nav_codes(), now)
 
 
 async def fetch_on_demand_nav_history(code, now):
@@ -385,7 +446,11 @@ def interval_proven(history, points, start):
             proof.get("complete") is True
             and proof.get("fundCode") == history.get("fundCode")
             and proof.get("methodVersion")
-            in {"eastmoney-nav-history-v1", "akshare-unit-nav-history-v1"}
+            in {
+                "eastmoney-nav-history-v1",
+                "akshare-unit-nav-history-v1",
+                PINGZHONGDATA_NAV_METHOD,
+            }
             and date.fromisoformat(proof["queryStart"]) <= start
             and proof.get("uniquePointCount") == proof.get("pointCount") == len(points)
             and proof.get("firstDate") == points[0]["date"]

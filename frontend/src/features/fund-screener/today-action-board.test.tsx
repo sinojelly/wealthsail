@@ -193,8 +193,8 @@ it("keeps one preferred representative across providers in the same track", () =
       .filter((f) => f.code.startsWith("00163"))
       .map((f) => [f.code, f.priority.expanded]),
   ).toEqual([
-    ["001631", false],
     ["001632", true],
+    ["001631", false],
     ["001633", false],
   ]);
   const group = board.groups.find(
@@ -206,7 +206,7 @@ it("keeps one preferred representative across providers in the same track", () =
   ]);
 });
 
-it("limits automatic details to eight current representatives with one year of verified NAV", () => {
+it("automatically opens every current representative with one year of verified NAV", () => {
   const value = data();
   value.dailyResearch!.report!.valueDirections = [];
   value.dailyResearch!.report!.topicCatalog = [];
@@ -266,15 +266,16 @@ it("limits automatic details to eight current representatives with one year of v
     "000208",
     "000209",
     "000210",
+    "000211",
   ]);
   expect(board.holdingAlerts.map((fund) => fund.code)).toEqual(["000309"]);
 });
 
-it("opens the alternate disclosure from a research association without opening its chart", () => {
+it("opens a non-actionable alternate from a research association without opening its chart", () => {
   const value = data();
   const report = value.dailyResearch!.report!;
   report.valueDirections![0].plans = [
-    { ...plan("023884", 0, 8), label: "华夏中证金融科技ETF联接A" },
+    { ...plan("023884", 4, 8), label: "华夏中证金融科技ETF联接A" },
     { ...plan("013477", 0, 15), label: "华宝中证金融科技ETF联接A" },
   ];
   renderWithSession(
@@ -314,10 +315,11 @@ it("shows every insight, mounts each fund once, and only mounts a folded fund af
   ]);
   expect(within(funds).getAllByText("参考买入区间")).toHaveLength(4);
   expect(screen.queryByRole("region", { name: "本期提及基金" })).toBeNull();
-  expect(screen.getByText("AI硬件", { selector: "strong" })).not.toBeVisible();
+  const research = screen.getByRole("region", { name: "全部研究洞察" });
+  expect(within(research).getByText("AI硬件")).not.toBeVisible();
   fireEvent.click(screen.getByText(/研究方向与主题/));
-  expect(screen.getByText("AI硬件", { selector: "strong" })).toBeVisible();
-  expect(screen.getByText("存储主题", { selector: "strong" })).toBeVisible();
+  expect(within(research).getByText("AI硬件")).toBeVisible();
+  expect(within(research).getByText("存储主题")).toBeVisible();
   const folded = rows.at(-1)!;
   expect(within(folded).queryByText("参考买入区间")).toBeNull();
   fireEvent.click(within(folded).getByText(/基金000101/));

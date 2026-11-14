@@ -85,6 +85,17 @@
   margin: 0.25rem 0 0;
   font-variant-numeric: tabular-nums;
 }
+.op-core-price-grid .op-value-profit {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.op-core-price-grid .op-value-profit small {
+  display: block;
+  margin-top: 0.25rem;
+  color: #526070;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .op-position-badge {
   padding: 0.25rem 0.5rem;
   border-radius: 0.4rem;

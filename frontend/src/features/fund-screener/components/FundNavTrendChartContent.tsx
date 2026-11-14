@@ -146,7 +146,8 @@ function TrendView({
                   tickLine={false}
                 />
                 <YAxis
-                  domain={[minimum * 0.97, maximum * 1.03]}
+                  domain={[minimum * 0.98, maximum * 1.02]}
+                  allowDataOverflow
                   tickFormatter={(value: number) => value.toFixed(2)}
                   tick={{ fontSize: 10 }}
                   tickLine={false}
@@ -220,14 +221,35 @@ function TrendView({
           </div>
           <div className="op-nav-footer" aria-label="净值区间说明与图例">
             <div className="op-nav-legend">
-              {completeBand && <span className="buy">建议买入区间</span>}
-              {stop != null && <span className="stop">止损参考</span>}
-              {completeSellBand && <span className="sell">建议卖出区间</span>}
+              {completeBand && (
+                <span>
+                  <i className="buy" aria-hidden="true" />
+                  建议买入区间
+                </span>
+              )}
+              {stop != null && (
+                <span>
+                  <i className="stop" aria-hidden="true" />
+                  止损参考
+                </span>
+              )}
+              {completeSellBand && (
+                <span>
+                  <i className="sell" aria-hidden="true" />
+                  建议卖出区间
+                </span>
+              )}
               {!completeSellBand && sellLow != null && (
-                <span className="target">卖出参考下沿（T1）</span>
+                <span>
+                  <i className="target" aria-hidden="true" />
+                  卖出参考下沿（T1）
+                </span>
               )}
               {!completeSellBand && sellHigh != null && (
-                <span className="target">卖出参考上沿（T2）</span>
+                <span>
+                  <i className="target" aria-hidden="true" />
+                  卖出参考上沿（T2）
+                </span>
               )}
             </div>
             <p className="op-nav-summary">

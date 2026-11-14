@@ -393,10 +393,13 @@ async def run_opportunity_fund_nav_service(
     recent READY runs share one 24-provider-code budget; reused or cooling codes
     do not prevent later targets from progressing. All claims are durable.
     """
+    from backend.dependencies import now_shanghai
+    from backend.jobs.fund_nav_sync import backfill_research_nav_gaps
 
     async def collect():
         while not stop_event.is_set():
             started = perf_counter()
+            busy = True
             try:
                 busy = await _research_model_running(pool)
                 if busy:
@@ -422,6 +425,15 @@ async def run_opportunity_fund_nav_service(
                     safe_error_class(type(exc).__name__),
                     (perf_counter() - started) * 1000,
                 )
+            if not busy and not stop_event.is_set():
+                try:
+                    inserted = await backfill_research_nav_gaps(pool, now_shanghai())
+                    if inserted:
+                        logger.info("fund_nav_gap_rows_persisted count=%d", inserted)
+                except Exception as exc:
+                    logger.warning(
+                        "fund_nav_gap_fill_failed error_class=%s", type(exc).__name__
+                    )
             try:
                 await asyncio.wait_for(
                     stop_event.wait(), timeout=max(1, poll_interval_seconds)

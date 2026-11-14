@@ -32,15 +32,35 @@ def fund_price_priority(fund):
     return (category, distance if category == 1 else 0, -(score if score is not None else -1))
 
 
+def _has_price_trigger(fund):
+    position = fund.get("pricePosition") or {}
+    distance = position.get("distanceToEntryPct")
+    status = position.get("status")
+    if status == "ENTRY_ZONE" or position.get("stopTriggered") is True or (
+        status != "DATA_PENDING"
+        and type(distance) in (int, float)
+        and 0 <= distance < 2
+    ):
+        return True
+    plan = fund.get("actionableZones") or {}
+    tracks = plan.get("tracks") or fund.get("referenceTracks") or []
+    return plan.get("inSellZone") is True or any(
+        row.get("inSellZone") is True
+        or (row.get("track") == "RIGHT_TREND" and row.get("state") == "CANDIDATE")
+        for row in tracks
+        if isinstance(row, dict)
+    )
+
+
 def displayed_funds(funds, *, automatic_limit=3):
-    """All explicit narrative identities survive the automatic recall quota."""
+    """Retain narrative identities and every current price trigger."""
     if automatic_limit is None:
         return list(funds)
     result, automatic = [], 0
     for fund in funds:
         if fund.get("narrativeMention") is True:
             result.append(fund)
-        elif automatic < automatic_limit:
+        elif automatic < automatic_limit or _has_price_trigger(fund):
             result.append(fund)
             automatic += 1
     return result

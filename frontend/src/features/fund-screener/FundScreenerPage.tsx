@@ -26,6 +26,7 @@ import PersonalActionReminders from "./components/PersonalActionReminders";
 import DailyResearchRefresh from "./components/DailyResearchRefresh";
 import StudyCreateConfirmation from "./components/StudyCreateConfirmation";
 import { useEconomicArchivePolling } from "./economic-archive-polling";
+import { hasPendingTodayNav } from "./today-action-board";
 import "./opportunities.css";
 
 export default function FundScreenerPage() {
@@ -48,6 +49,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
     attempt: number;
   } | null>(null);
   const attemptRef = useRef(0);
+  const navPolling = useRef<{ report: string; until: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const requestedMonths = Number(params.get("macroMonths"));
@@ -193,7 +195,18 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         { ...opportunityScope, months: macroMonths },
         signal,
       ),
-    refetchInterval: opportunityArchiveInterval.refetchInterval,
+    refetchInterval: (query) => {
+      const archive = opportunityArchiveInterval.refetchInterval(query);
+      if (archive || query.state.error || !hasPendingTodayNav(query.state.data))
+        return archive;
+      const daily = query.state.data?.dailyResearch;
+      const report = daily?.reportRunId ?? daily?.runId ?? query.queryHash;
+      const now = Date.now();
+      if (navPolling.current?.report !== report)
+        navPolling.current = { report, until: now + 5 * 60_000 };
+      return now < navPolling.current.until ? 60_000 : false;
+    },
+    refetchOnWindowFocus: (query) => hasPendingTodayNav(query.state.data),
     refetchOnReconnect: opportunityArchiveInterval.refetchOnReconnect,
     retry: false,
     enabled:

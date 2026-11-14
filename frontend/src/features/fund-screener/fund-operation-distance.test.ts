@@ -31,6 +31,7 @@ it("does not round an exact decimal two percent boundary into an urgent fund", (
 it("keeps stop loss and crossed sell references explicit, without using a foreign price", () => {
   const plan = frozenPlan();
   expect(fundOperationDistance(plan, "0.9").stopTriggered).toBe(true);
+  expect(fundOperationDistance(plan, "0.95").stopTriggered).toBe(false);
   expect(fundOperationDistance(plan, "1.6")).toMatchObject({
     inSellZone: true,
     sellDistance: 0,

@@ -18,12 +18,17 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from zoneinfo import ZoneInfo
 
 from backend.integrations.market_data import Observation, fetch_fund_nav_history
-from backend.integrations.nav_history_proof import nav_points_digest
+from backend.integrations.nav_history_proof import (
+    PINGZHONGDATA_NAV_METHOD,
+    nav_points_digest,
+)
 
 logger = logging.getLogger("wealthsail.fund_nav_fallback")
 _API = "https://api.fund.eastmoney.com/f10/lsjz"
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def _frame_rows(frame, start, end):
@@ -233,6 +238,7 @@ def _observations(payload, symbol, start, end):
     expected = {
         "fund_open_fund_info_em": f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js",
         "fund_etf_fund_info_em": _API,
+        "pingzhongdata": f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js",
     }
     if (
         payload.get("complete") is not True
@@ -240,7 +246,7 @@ def _observations(payload, symbol, start, end):
         or payload.get("sourceUri") != expected[adapter]
     ):
         raise ValueError("invalid AKShare unit NAV provenance")
-    by_day = {}
+    by_day, daily_returns = {}, {}
     for point in payload["rows"]:
         day = date.fromisoformat(point["date"])
         value = Decimal(str(point["close"]))
@@ -249,6 +255,8 @@ def _observations(payload, symbol, start, end):
         if day in by_day and by_day[day] != value:
             raise ValueError("conflicting AKShare unit NAV coordinate")
         by_day[day] = value
+        if point.get("returnPct") is not None:
+            daily_returns[day] = point["returnPct"]
     points = [
         {"date": day.isoformat(), "close": str(by_day[day])} for day in sorted(by_day)
     ]
@@ -256,7 +264,9 @@ def _observations(payload, symbol, start, end):
         return []
     retained = points[-550:]
     proof = {
-        "methodVersion": "akshare-unit-nav-history-v1",
+        "methodVersion": PINGZHONGDATA_NAV_METHOD
+        if adapter == "pingzhongdata"
+        else "akshare-unit-nav-history-v1",
         "fundCode": symbol,
         "sourceUri": expected[adapter],
         "adapter": adapter,
@@ -284,9 +294,15 @@ def _observations(payload, symbol, start, end):
             as_of=datetime.combine(day, time.min, tzinfo=timezone.utc),
             quality_status="STALE",
             unit="CNY/share",
-            method_version=f"akshare/{adapter}/unit-nav-v1",
+            method_version=PINGZHONGDATA_NAV_METHOD
+            if adapter == "pingzhongdata"
+            else f"akshare/{adapter}/unit-nav-v1",
             origin_uri=expected[adapter],
-            metadata={"officialUnitNav": True, "providerHistoryProof": proof},
+            metadata={
+                "officialUnitNav": True,
+                "providerHistoryProof": proof,
+                **({"returnPct": daily_returns[day]} if day in daily_returns else {}),
+            },
         )
         for day in sorted(by_day)
     ]
@@ -303,6 +319,10 @@ def _complete_history(rows, symbol, start, end):
         allowed = {
             ("eastmoney-nav-history-v1", _API),
             ("akshare-unit-nav-history-v1", _API),
+            (
+                PINGZHONGDATA_NAV_METHOD,
+                f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js",
+            ),
             (
                 "akshare-unit-nav-history-v1",
                 f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js",
@@ -428,6 +448,127 @@ async def fetch_fund_nav_history_with_fallback(
         if not primary:
             raise RuntimeError("public unit NAV sources unavailable") from None
     return primary
+
+
+async def _fetch_pingzhongdata_history(symbol, start, end, client):
+    """Read the literal unit NAV series from the public script, without executing it."""
+    uri = f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js"
+    async with client.stream(
+        "GET",
+        uri,
+        timeout=8,
+        headers={"Referer": f"https://fund.eastmoney.com/{symbol}.html"},
+    ) as response:
+        response.raise_for_status()
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > 6_000_000:
+                raise ValueError("fund NAV script exceeded its response bound")
+    content = body.decode(response.encoding or "utf-8")
+    codes = re.findall(r"\bvar\s+fS_code\s*=\s*['\"]([0-9]{6})['\"]\s*;", content)
+    starts = list(re.finditer(r"\bvar\s+Data_netWorthTrend\s*=\s*", content))
+    if codes != [symbol] or len(starts) != 1:
+        raise ValueError("fund NAV script identity or unit NAV series missing")
+    values, stop = json.JSONDecoder(parse_float=Decimal).raw_decode(
+        content, starts[0].end()
+    )
+    if (
+        not isinstance(values, list)
+        or not 0 < len(values) <= 20_000
+        or not content[stop:].lstrip().startswith(";")
+    ):
+        raise ValueError("invalid fund NAV script series")
+    rows = []
+    for value in values:
+        if (
+            not isinstance(value, dict)
+            or type(value.get("x")) is not int
+            or isinstance(value.get("y"), bool)
+        ):
+            raise ValueError("invalid fund NAV script point")
+        day = datetime.fromtimestamp(value["x"] / 1000, _SHANGHAI).date()
+        nav = Decimal(str(value["y"]))
+        if not date(1900, 1, 1) <= day or not nav.is_finite() or nav <= 0:
+            raise ValueError("invalid fund NAV script value")
+        if start <= day <= end:
+            point = {"date": day.isoformat(), "close": str(nav)}
+            change = value.get("equityReturn")
+            if (
+                type(change) in (int, Decimal)
+                and Decimal(change).is_finite()
+                and change > -100
+            ):
+                point["returnPct"] = str(change)
+            rows.append(point)
+    return _observations(
+        {
+            "adapter": "pingzhongdata",
+            "sourceUri": uri,
+            "complete": True,
+            "totalCount": len(rows),
+            "receivedRowCount": len(rows),
+            "rows": rows,
+        },
+        symbol,
+        start,
+        end,
+    )
+
+
+async def fetch_research_nav_gap_history(
+    symbol, start, end, client, *, page_size=100, max_pages=32
+):
+    """Prefer the direct unit NAV script, then use paginated and AkShare sources."""
+    from backend.funds.nav_history import NAV_GAP_FILL_MIN_SAMPLES
+
+    if (
+        not isinstance(symbol, str)
+        or not re.fullmatch(r"[0-9]{6}", symbol)
+        or start > end
+    ):
+        raise ValueError("invalid fund NAV history interval")
+    direct = []
+    try:
+        direct = await _fetch_pingzhongdata_history(symbol, start, end, client)
+        if (
+            len(direct) >= NAV_GAP_FILL_MIN_SAMPLES
+            and (end - direct[-1].as_of.date()).days <= 10
+        ):
+            return direct
+    except Exception as exc:
+        logger.info(
+            "fund_nav_script_failed fund_code=%s error_class=%s",
+            symbol,
+            type(exc).__name__,
+        )
+    try:
+        fallback = await fetch_fund_nav_history_with_fallback(
+            symbol,
+            start,
+            end,
+            client,
+            page_size=page_size,
+            max_pages=max_pages,
+            minimum_points=NAV_GAP_FILL_MIN_SAMPLES,
+        )
+    except Exception:
+        if not direct:
+            raise
+        return direct
+
+    def rank(rows):
+        if not rows:
+            return False, False, date.min, 0
+        latest = rows[-1].as_of.date()
+        return (
+            len(rows) >= NAV_GAP_FILL_MIN_SAMPLES and (end - latest).days <= 10,
+            _complete_history(rows, symbol, start, end),
+            latest,
+            len(rows),
+        )
+
+    return max((direct, fallback), key=rank)
 
 
 def main():

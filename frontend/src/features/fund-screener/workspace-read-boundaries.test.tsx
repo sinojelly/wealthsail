@@ -176,6 +176,7 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
         )!
         .enter(),
     );
+    await act(async () => vi.dynamicImportSettled());
     const navRefresh = await within(firstFund).findByRole("button", {
       name: "刷新并补齐净值",
     });
