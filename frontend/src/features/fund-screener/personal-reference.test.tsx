@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PersonalFundReference } from "../../api/personal-funds";
@@ -159,6 +159,7 @@ it("reads current personal funds only after opt-in, keeps all action controls di
   expect(
     within(fund).getByRole("region", { name: "参考买卖点与操作状态" }),
   ).toBeVisible();
+  await act(async () => vi.dynamicImportSettled());
   await userEvent.click(
     await within(fund).findByRole("button", { name: "成立以来" }),
   );

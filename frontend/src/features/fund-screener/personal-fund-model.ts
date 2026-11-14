@@ -270,15 +270,15 @@ export function personalFundPriority(group: PersonalFundGroup) {
             );
   const label =
     rank === 0
-      ? "止损参考触发"
+      ? "⚠️ 跌破止损线（深跌观察）"
       : rank === 1
         ? position.inSellZone
           ? "已入卖区"
           : `接近卖区（差 ${position.sellDistance!.toFixed(2)}%）`
         : position.stopTriggered
-          ? "跌破止损参考"
+          ? "⚠️ 跌破止损线（深跌观察）"
           : position.inBuyZone
-            ? "已入买区"
+            ? "已入买区（低吸参考）"
             : nearBuy
               ? `接近买区（差 ${position.buyDistance!.toFixed(2)}%）`
               : position.buyDistance != null

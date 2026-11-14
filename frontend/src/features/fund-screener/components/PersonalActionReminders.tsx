@@ -2,6 +2,7 @@ import { usePersonalFunds } from "../use-personal-funds";
 import { fundDisplayName, planPrice } from "../plan-display";
 import { timeLabel } from "../macro-display";
 import { watchStateLabels } from "../watch-display";
+import { referenceTrack } from "../quantitative-position";
 import "../my-funds.css";
 import type {
   SellRiskAlert,
@@ -65,8 +66,40 @@ export default function PersonalActionReminders({
       !group.tracks.some((track) => track.priceWatch?.frozenPlan),
   ).length;
   const normal = actionData?.normalHoldings ?? [];
+  const currentPlans = new Map(
+    groups
+      .filter((group) => group.market === "FUND_CN" && group.reference?.plan)
+      .map((group) => [group.code, group.reference!.plan]),
+  );
   const price = (value: string | number | null | undefined) =>
     planPrice(value, { subjectKind: "nav", priceBasis: "UNIT_NAV" });
+  const dynamicReference = (
+    code: string | undefined,
+    frozenAsOf: string | null | undefined,
+  ) => {
+    const plan = currentPlans.get(code);
+    const track = plan && referenceTrack(plan);
+    if (
+      !plan?.asOf ||
+      plan.priceBasis !== "UNIT_NAV" ||
+      track?.priceState !== "READY" ||
+      (plan.priceRefresh && plan.priceRefresh.state !== "READY") ||
+      !frozenAsOf ||
+      plan.asOf.slice(0, 10) <= frozenAsOf.slice(0, 10)
+    )
+      return null;
+    return (
+      <span className="op-reminder-dynamic-reference">
+        最新动态参考（{timeLabel(plan.asOf)}） · 买入区间{" "}
+        {price(track.entryZoneMin)}–{price(track.entryZoneMax)} · 卖出区间{" "}
+        {price(track.sellZoneMin ?? track.takeProfitT1)}–
+        {price(track.sellZoneMax ?? track.takeProfitT2)} · 止损{" "}
+        {price(track.stopLossPrice)}
+      </span>
+    );
+  };
+  const distance = (value: number | null) =>
+    value != null && Number.isFinite(value) ? `${value.toFixed(2)}%` : "—";
   const reminderLabels = {
     BUY_ZONE: "🟢 低吸加仓参考",
     SELL_ZONE: "🟠 分批止盈参考",
@@ -80,18 +113,26 @@ export default function PersonalActionReminders({
         {row.basis === "CONFIRMED_NAV" ? "确认净值" : "估算净值"}{" "}
         {price(row.value)} · {timeLabel(row.asOf)}
       </span>
+      {row.planOrigin === "FROZEN_STUDY" &&
+        dynamicReference(row.fundCode, row.planAsOf)}
       <span>
+        {row.planOrigin === "FROZEN_STUDY" && (
+          <>原冻结计划（{timeLabel(row.planAsOf)}，本提醒依据） · </>
+        )}
         买入区间 {price(row.entryZoneMin)}–{price(row.entryZoneMax)} · 止盈 T1 /
         T2 {price(row.sellZoneMin)} / {price(row.sellZoneMax)} · 止损{" "}
         {price(row.stopLossPrice)}
       </span>
-      {row.planAsOf && <small>参考区间日期：{timeLabel(row.planAsOf)}</small>}
-      {row.dailyChangePct != null && (
-        <span>
-          当日涨跌 {row.dailyChangePct > 0 ? "+" : ""}
-          {row.dailyChangePct.toFixed(2)}%
-        </span>
+      {row.planOrigin !== "FROZEN_STUDY" && row.planAsOf && (
+        <small>参考区间日期：{timeLabel(row.planAsOf)}</small>
       )}
+      {row.dailyChangePct != null &&
+        Number.isFinite(Number(row.dailyChangePct)) && (
+          <span>
+            当日涨跌 {row.dailyChangePct > 0 ? "+" : ""}
+            {Number(row.dailyChangePct).toFixed(2)}%
+          </span>
+        )}
     </>
   );
   return (
@@ -152,8 +193,8 @@ export default function PersonalActionReminders({
                     </strong>
                     {describe(row)}
                     <span>
-                      距离买区 {row.distanceToBuyPct?.toFixed(2) ?? "—"}% ·
-                      距离卖区 {row.distanceToSellPct?.toFixed(2) ?? "—"}%
+                      距离买区 {distance(row.distanceToBuyPct)} · 距离卖区{" "}
+                      {distance(row.distanceToSellPct)}
                     </span>
                   </li>
                 ))}
@@ -187,10 +228,14 @@ export default function PersonalActionReminders({
                     : "待核实"
                   : watchStateLabels[watch!.state]}
               </strong>
+              {group.market === "FUND_CN" &&
+                dynamicReference(group.code, watch?.frozenPlan?.asOf)}
               <span>
                 {track.title} ·{" "}
                 {group.market === "UNKNOWN" ? "市场待核实" : group.market} ·
                 当前判断 {timeLabel(watch?.asOf)}
+                {watch?.frozenPlan?.asOf &&
+                  ` · 原冻结计划 ${timeLabel(watch.frozenPlan.asOf)}`}
               </span>
               {watch?.reason && <p>{watch.reason}</p>}
             </li>

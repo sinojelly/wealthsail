@@ -46,6 +46,34 @@
   margin: 0.35rem 0;
   color: #526070;
 }
+.op-holding-overview {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.65rem;
+  background: #f8fafc;
+}
+.op-holding-overview dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0.55rem 0 0;
+}
+.op-holding-overview dt,
+.op-holding-overview small {
+  color: #526070;
+  font-size: 0.8rem;
+}
+.op-holding-overview dd {
+  margin: 0.2rem 0 0;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.op-holding-overview small {
+  display: block;
+  margin-top: 0.55rem;
+}
 .op-my-funds-toolbar nav,
 .op-my-fund-badges,
 .op-my-fund-plans {
@@ -113,6 +141,10 @@
   gap: 0.6rem 1rem;
   flex-wrap: wrap;
 }
+.op-my-fund-heading-line strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .op-my-fund-status {
   font-size: 0.85rem;
   color: #98641b;
@@ -145,12 +177,20 @@
 .op-my-fund-profit.negative strong {
   color: #087443;
 }
+.op-my-fund-deep-loss {
+  flex-basis: 100%;
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  background: #fff7e7;
+  color: #805117;
+  line-height: 1.6;
+}
 @container (min-width: 860px) {
   .op-my-fund-card[data-expanded="false"] .op-my-fund-toggle {
-    grid-template-columns: minmax(12rem, 1.2fr) minmax(8rem, 0.8fr) minmax(
-        20rem,
-        1.6fr
-      ) auto;
+    grid-template-columns:
+      minmax(12rem, 1.2fr) minmax(8rem, 0.8fr) minmax(20rem, 1.6fr)
+      auto;
     align-items: center;
     gap: 0.6rem;
     padding-block: 0.75rem;
@@ -250,6 +290,13 @@
   margin-top: 0.3rem;
   font-size: 0.8rem;
   color: #526070;
+}
+.op-personal-reminders li .op-reminder-dynamic-reference {
+  color: #075c66;
+  font-weight: 600;
+}
+.op-personal-reminders li strong {
+  overflow-wrap: anywhere;
 }
 .op-personal-reminders li p {
   margin-bottom: 0;

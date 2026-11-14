@@ -68,7 +68,7 @@ it("does not promote a stopped watchlist fund even when it is within 2 percent o
   expect(personalFundPriority(group)).toMatchObject({
     stopTriggered: true,
     defaultExpanded: false,
-    label: "跌破止损参考",
+    label: "⚠️ 跌破止损线（深跌观察）",
   });
 });
 

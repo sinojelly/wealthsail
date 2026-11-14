@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import Decimal from "decimal.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../personal-fund-model";
 import { usePersonalFunds } from "../use-personal-funds";
 import { fundDisplayName, planUnit } from "../plan-display";
+import { finitePrice } from "../quantitative-position";
 import { sourceHref, timeLabel } from "../macro-display";
 import { currentFundEstimate, watchStateLabels } from "../watch-display";
 import { studyConditionLabel, studyStates } from "./study-display";
@@ -322,6 +324,7 @@ function FundCard(props: Parameters<typeof FundCardContent>[0]) {
   const [chosenOpen, setChosenOpen] = useState<boolean | null>(null);
   const open = chosenOpen ?? priority.defaultExpanded;
   const profit = group.reference?.holdingProfit;
+  const lossPct = profit?.state === "AVAILABLE" ? profit.profitPct : null;
   const signed = (value: string) =>
     `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)}`;
   const price = (value: number | string | null | undefined) =>
@@ -407,10 +410,129 @@ function FundCard(props: Parameters<typeof FundCardContent>[0]) {
           {profit?.priceBasis === "ESTIMATED_NAV" && (
             <small>基于估算净值，仅供参考。</small>
           )}
+          {lossPct != null &&
+            Number(lossPct) < -20 &&
+            priority.inBuyZone &&
+            !priority.stopTriggered && (
+              <p className="op-my-fund-deep-loss">
+                💡 深度浮亏提示：当前浮亏 {signed(lossPct)}%
+                {priority.percentile == null
+                  ? "，近2年净值分位待补齐"
+                  : `，处于近2年 ${priority.percentile.toFixed(1)}% 分位`}
+                。若仓位较轻可分批评估低吸，若单赛道已重仓可等待右侧均线企稳。
+              </p>
+            )}
         </div>
       )}
       {open && <FundCardContent {...props} />}
     </article>
+  );
+}
+
+const currency = new Intl.NumberFormat("zh-CN", {
+  style: "currency",
+  currency: "CNY",
+  currencyDisplay: "narrowSymbol",
+});
+const signedCurrency = new Intl.NumberFormat("zh-CN", {
+  style: "currency",
+  currency: "CNY",
+  currencyDisplay: "narrowSymbol",
+  signDisplay: "exceptZero",
+});
+const signedPercent = new Intl.NumberFormat("zh-CN", {
+  style: "percent",
+  signDisplay: "exceptZero",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const positiveMoney = (value?: string | null) =>
+  value && finitePrice(value) != null ? new Decimal(value) : null;
+
+function HoldingOverview({ groups }: { groups: PersonalFundGroup[] }) {
+  const holdings = groups.filter((group) => group.holding);
+  let totalCost = new Decimal(0);
+  let marketValue = new Decimal(0);
+  let comparedCost = new Decimal(0);
+  let comparedValue = new Decimal(0);
+  let costCount = 0,
+    pricedCount = 0,
+    comparableCount = 0,
+    estimatedCount = 0;
+  let buy = 0,
+    sell = 0;
+  for (const group of holdings) {
+    const profit = group.reference?.holdingProfit;
+    const cost = positiveMoney(profit?.totalCost);
+    const shares = positiveMoney(profit?.shares);
+    const nav = positiveMoney(profit?.latestNav);
+    const value = shares && nav ? shares.times(nav) : null;
+    if (cost) {
+      totalCost = totalCost.plus(cost);
+      costCount += 1;
+    }
+    if (value) {
+      marketValue = marketValue.plus(value);
+      pricedCount += 1;
+      if (profit?.priceBasis === "ESTIMATED_NAV") estimatedCount += 1;
+      if (cost) {
+        comparedCost = comparedCost.plus(cost);
+        comparedValue = comparedValue.plus(value);
+        comparableCount += 1;
+      }
+    }
+    if (group.reference?.plan) {
+      const position = personalFundPriority({ ...group, tracks: [] });
+      if (!position.stopTriggered && position.inBuyZone) buy += 1;
+      if (!position.stopTriggered && position.inSellZone) sell += 1;
+    }
+  }
+  const profit = comparedValue.minus(comparedCost);
+  const complete = comparableCount === holdings.length;
+  const money = (value: Decimal, count: number) =>
+    count || !holdings.length ? currency.format(value.toNumber()) : "—";
+  return (
+    <section className="op-holding-overview" aria-label="组合持仓总览">
+      <h4>组合持仓总览</h4>
+      <dl>
+        <div>
+          <dt>持仓基金</dt>
+          <dd>{holdings.length} 只</dd>
+        </div>
+        <div>
+          <dt>总持仓成本</dt>
+          <dd>{money(totalCost, costCount)}</dd>
+        </div>
+        <div>
+          <dt>参考总市值</dt>
+          <dd>{money(marketValue, pricedCount)}</dd>
+        </div>
+        <div>
+          <dt>参考总盈亏</dt>
+          <dd>
+            {comparableCount
+              ? `${signedCurrency.format(profit.toNumber())}（${signedPercent.format(profit.div(comparedCost).toNumber())}）`
+              : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt>今日已入买区</dt>
+          <dd>{buy} 只</dd>
+        </div>
+        <div>
+          <dt>今日已入卖区</dt>
+          <dd>{sell} 只</dd>
+        </div>
+      </dl>
+      {(!complete || estimatedCount > 0) && (
+        <small>
+          {!complete &&
+            `成本覆盖 ${costCount}/${holdings.length} 只，市值覆盖 ${pricedCount}/${holdings.length} 只，盈亏按两项均可得的 ${comparableCount} 只计算。`}
+          {estimatedCount > 0 && `其中 ${estimatedCount} 只使用估算净值。`}
+        </small>
+      )}
+    </section>
   );
 }
 
@@ -546,6 +668,9 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
           {refreshing ? "正在刷新我的基金…" : "刷新我的基金"}
         </button>
       </header>
+      {(list.isSuccess || reference.isSuccess) && (
+        <HoldingOverview groups={groups} />
+      )}
       <div className="op-my-funds-toolbar">
         <nav aria-label="我的基金筛选">
           {[
