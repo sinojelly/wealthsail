@@ -16,7 +16,7 @@ export type EconomicCategory =
   | "产业与就业"
   | "科技"
   | "货币与政策"
-  | "待分类";
+  | "综合要闻";
 export interface EconomicSource {
   id: string;
   title: string;
@@ -62,6 +62,7 @@ export interface EconomicStory {
   scenarios: Array<{ condition: string; impact: string; counter: string }>;
   watchFor: string[];
   unknowns: string[];
+  displayQuestions?: string[];
   lessons: Array<{ channel: string; explanation: string }>;
   associations: Array<{
     namespace: string;
@@ -124,7 +125,7 @@ const mechanisms: Record<
   },
 };
 const categoryCodes: Record<string, EconomicCategory> = {
-  UNCLASSIFIED: "待分类",
+  UNCLASSIFIED: "综合要闻",
   GEOPOLITICS: "国际局势",
   GEOPOLITICS_POLICY: "国际局势",
   ENERGY_SHIPPING: "国际局势",
@@ -165,6 +166,9 @@ type StoryObservation = Omit<AcceptanceObservation, "importance"> & {
   sourcePublicationBasis?: "SOURCE_PUBLICATION" | null;
   whatHappened?: string;
   whyItMatters?: string;
+  openQuestions?: string[];
+  stillUnknown?: string[];
+  displayQuestions?: string[];
 };
 
 export function economicCalendarDate(
@@ -472,13 +476,13 @@ export function buildEconomicStories(
         importance: importanceValue(event.importance),
         category: classifyEconomicNews(
           event.title ?? "",
-          event.summary ?? event.thesis ?? "",
+          event.whatHappened ?? event.summary ?? event.thesis ?? "",
           matched,
           event.category && Object.hasOwn(categoryCodes, event.category)
             ? categoryCodes[event.category]
             : lessons.length
               ? mechanisms[lessons[0].channel].category
-              : "待分类",
+              : "综合要闻",
         ),
         researchAsOf: asOf,
         researchDate,
@@ -505,7 +509,12 @@ export function buildEconomicStories(
         channels,
         scenarios: event.scenarios ?? [],
         watchFor: event.watchFor ?? [],
-        unknowns: event.unknowns ?? [],
+        unknowns: [
+          ...(event.unknowns ?? []),
+          ...(event.openQuestions ?? []),
+          ...(event.stillUnknown ?? []),
+        ],
+        displayQuestions: event.displayQuestions,
         lessons,
         associations,
         marketReaction: "UNVERIFIED",
@@ -584,7 +593,7 @@ export function buildEconomicStories(
         sources,
         Object.hasOwn(categoryCodes, event.category)
           ? categoryCodes[event.category]
-          : "待分类",
+          : "综合要闻",
       ),
       researchAsOf: null,
       researchDate: null,

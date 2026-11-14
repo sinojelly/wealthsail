@@ -14,7 +14,10 @@ import {
   unitLabel,
 } from "../macro-display";
 import { readingText, sourceTitle } from "../research-reading";
-import { economicNewsReading } from "../economic-news-reading";
+import {
+  economicEventQuestions,
+  economicNewsReading,
+} from "../economic-news-reading";
 import "../economic-events.css";
 
 export interface EconomicEventsProps {
@@ -36,7 +39,7 @@ const categories: Array<EconomicCategory | "全部"> = [
   "产业与就业",
   "科技",
   "货币与政策",
-  "待分类",
+  "综合要闻",
 ];
 const phases: Record<string, string> = {
   PLANNED: "计划中",
@@ -181,6 +184,7 @@ function StoryCard({
   onSelect?: (id: string) => void;
 }) {
   const reading = storyReading(story);
+  const questions = story.displayQuestions ?? economicEventQuestions(story.title, story.unknowns);
   const count = story.sourceStatus;
   const frozenMatched = story.sourceIds.filter((id) =>
     story.sources.some(
@@ -298,18 +302,16 @@ function StoryCard({
               <p>原研究未提供观察条件。</p>
             )}
           </section>
-          <section aria-label="未知事项">
-            <h5>仍不知道什么</h5>
-            {story.unknowns.length ? (
+          {!!questions.length && (
+            <section aria-label="未知事项">
+              <h5>仍待核实</h5>
               <ul>
-                {story.unknowns.map((item, index) => (
+                {questions.map((item, index) => (
                   <li key={index}>{readingText(item, 1200)}</li>
                 ))}
               </ul>
-            ) : (
-              <p>原研究未单列未知项，不代表不存在不确定性。</p>
-            )}
-          </section>
+            </section>
+          )}
           <section aria-label="经济知识">
             <h5>经济小课堂 · 通用机制</h5>
             {story.lessons.length ? (
@@ -618,7 +620,7 @@ export function EconomicEvents({
       <details className="economic-reading-notes">
         <summary>归档与阅读说明</summary>
         <p className="economic-event-muted">
-          仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在卡片单独标注。不代表完整历史检索；独立发布不冒充研究日期。分类来自已保存类别、标题主题或可对应的渠道，其余保留待分类。冻结资料匹配含目录标题，原文核对另列。
+          仅浏览本页已加载的研究日期；缺研究证据日期时可按已提供的报告完成日或所属日浏览，并在详情标注。分类参考事件主体与来源，跨领域内容归入综合要闻。
         </p>
       </details>
       {selectedEventId &&

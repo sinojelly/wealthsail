@@ -38,6 +38,46 @@ def _warn(warnings, path, code, message):
     warnings.append({"path": path, "code": code, "message": message})
 
 
+_QUESTION_TOPICS = tuple(map(re.compile, (
+    r"航运|海运|船舶|商船|通航|航道|海峡|停航|运输|战争险",
+    r"油气|原油|石油|油价|产油|减产|产量|能源供应",
+    r"黄金|金价|贵金属",
+    r"加息|降息|美联储|实际利率|政策利率",
+    r"卫星|火箭|星链|(?i:starship)|航天",
+)))
+_QUESTION_NOISE = re.compile(
+    r"报道|风险|尚未|待确认|仍需|有待|是否|影响|最新|目前|变化|调查|历史|线索|研究|市场"
+)
+_QUESTION_SUBJECTS = re.compile(r"英国|俄罗斯|乌克兰|俄乌|对俄|法国|加沙|欧盟")
+
+
+def _event_questions(title, proposals):
+    """Keep short, event-specific clauses out of a digest's other stories."""
+    anchors = set()
+    for word in re.findall(r"[\u3400-\u9fff]{3,}|[a-z]{3,}\d*", _QUESTION_NOISE.sub(" ", title), re.I):
+        anchors.update(
+            [word.lower()] if word.isascii() else
+            [word[index:index + 3] for index in range(len(word) - 2)]
+        )
+    shared_topics = [topic for topic in _QUESTION_TOPICS if topic.search(title)]
+    result = []
+    for proposal in proposals:
+        for clause in re.split(r"[；;。\n]+", proposal):
+            clause = clause.strip()
+            if not clause or clause in result or any(
+                subject not in title for subject in _QUESTION_SUBJECTS.findall(clause)
+            ):
+                continue
+            text = _QUESTION_NOISE.sub(" ", clause).lower()
+            if any(topic.search(text) for topic in shared_topics) or any(
+                anchor in text for anchor in anchors
+            ):
+                result.append(clause)
+                if len(result) == 2:
+                    return result
+    return result
+
+
 def _json_safe(value, warnings, path="$"):
     """Repair JSON text/number encodings before publication or JSONB storage."""
     if isinstance(value, str):
@@ -1065,6 +1105,10 @@ def sanitize_report(raw, packet, source_checks, *, completed_at, research_id=Non
                 "candidateConceptLabels",
             ):
                 row[name] = _texts(raw_item.get(name))
+            row["unknowns"] = list(dict.fromkeys(
+                question for key in ("unknowns", "openQuestions", "stillUnknown")
+                for question in _texts(raw_item.get(key))
+            ))
             row["scenarios"] = [
                 {
                     key: _text(item.get(key))
@@ -1140,6 +1184,8 @@ def sanitize_report(raw, packet, source_checks, *, completed_at, research_id=Non
 
     for field in ("events", "upcoming"):
         for row in report[field]:
+            # Keep source fidelity for the audit and identity merge above.
+            row["displayQuestions"] = _event_questions(row["title"], row["unknowns"])
             row.update(
                 event_metadata(
                     row,

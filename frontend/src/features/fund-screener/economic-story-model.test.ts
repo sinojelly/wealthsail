@@ -404,7 +404,7 @@ it("handles unknown official category labels without reading object prototype pr
       },
     ],
   };
-  expect(buildEconomicStories(data)[0].category).toBe("待分类");
+  expect(buildEconomicStories(data)[0].category).toBe("综合要闻");
 });
 
 it("preserves original fact-verification scope independently of reported phase and checked quotations", () => {

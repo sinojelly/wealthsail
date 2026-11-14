@@ -108,6 +108,19 @@ def test_fourth_ai_direction_and_its_real_price_plan_survive_local_defects():
     assert actual["validationWarnings"]
 
 
+def test_event_questions_keep_only_current_subject_and_preserve_raw_report():
+    raw = report()
+    event = raw["events"][0]
+    event.update(
+        title="中东运输风险与黄金、油气价格分化",
+        unknowns=["英国对俄石油制裁范围未知；法国网络攻击仍在调查"],
+        openQuestions=["商船能否恢复通航；原油供应是否持续受压；黄金需求能否维持"],
+    )
+    actual = validate_report(raw, packet(), {}, completed_at=NOW)
+    assert actual["events"][0]["displayQuestions"] == ["商船能否恢复通航", "原油供应是否持续受压"]
+    assert "法国" in event["unknowns"][0]
+
+
 def test_unknown_industry_maps_to_broad_and_keeps_original_insight():
     raw = report()
     raw["valueDirections"][3]["reviewIndustryIds"] = ["NEW_QUANTUM_MEMORY"]

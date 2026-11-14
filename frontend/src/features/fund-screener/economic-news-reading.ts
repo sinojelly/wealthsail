@@ -6,6 +6,62 @@ const overseas =
 const domestic =
   /中国|我国|国内|A股|沪深|央行|人民银行|国务院|财政部|国家统计局|上海|深圳|北京|国联民生|康辰|航天宏图|星网宇达|智微智能/;
 const editorialTitle = /实施线索|分别研究|仍须并列|仍需商业闭环|传导分别验证/;
+const categorySubjects: ReadonlyArray<[RegExp, EconomicCategory]> = [
+  [/央行|人民银行|降息|加息|降准|货币政策|互换便利|公开市场操作/, "货币与政策"],
+  [/火箭|卫星|星链|航天|Starship/i, "科技"],
+  [/投资者大会|上交所|深交所|证监会|稳市|ETF|券商|银行|分红/i, "金融市场"],
+];
+
+const questionTopics = [
+  /航运|海运|船舶|商船|通航|航道|海峡|停航|运输|战争险/,
+  /油气|原油|石油|油价|产油|减产|产量|能源供应/,
+  /黄金|金价|贵金属/,
+  /加息|降息|美联储|实际利率|政策利率/,
+  /卫星|火箭|星链|Starship|航天/i,
+];
+const otherSubjects = /英国|俄罗斯|乌克兰|俄乌|对俄|法国|加沙|欧盟/g;
+
+/** A combined news digest is not evidence that all its subitems belong to this event. */
+export function economicEventQuestions(title: string, rows: readonly string[]) {
+  const withoutGeneric = (value: string) =>
+    value.replace(
+      /报道|风险|尚未|待确认|仍需|有待|是否|影响|最新|目前|变化|调查|历史|线索|研究|市场/g,
+      " ",
+    );
+  const anchors =
+    withoutGeneric(title).match(/[\p{Script=Han}]{3,}|[a-z]{3,}\d*/giu) ?? [];
+  const relevant = (clause: string) => {
+    if (
+      (clause.match(otherSubjects) ?? []).some(
+        (subject) => !title.includes(subject),
+      )
+    )
+      return false;
+    const text = withoutGeneric(clause).toLowerCase();
+    return (
+      questionTopics.some((axis) => axis.test(title) && axis.test(text)) ||
+      anchors.some((word) => {
+        if (/^[a-z]/i.test(word)) return text.includes(word.toLowerCase());
+        return [...word].some(
+          (_, index) =>
+            index + 3 <= word.length &&
+            text.includes(word.slice(index, index + 3)),
+        );
+      })
+    );
+  };
+  return [
+    ...new Set(
+      rows
+        .flatMap((row) =>
+          typeof row === "string"
+            ? row.split(/[；;。\n]+/).map((part) => part.trim())
+            : [],
+        )
+        .filter((part) => part && relevant(part)),
+    ),
+  ].slice(0, 2);
+}
 function sharesSubject(title: string, source: string) {
   const subject = title.split(/[，,：:；;。]/)[0].replace(editorialTitle, "");
   const generic = new Set([
@@ -83,9 +139,19 @@ export function classifyEconomicNews(
 ): EconomicCategory {
   const domesticAt = title.search(domestic);
   const overseasAt = title.search(overseas);
+  const subjectCategory = categorySubjects.find(([matcher]) =>
+    matcher.test(title),
+  )?.[1];
+  if (fallback === "综合要闻" && subjectCategory) return subjectCategory;
   if (domesticAt >= 0 && (overseasAt < 0 || domesticAt < overseasAt))
     return fallback === "国际局势" ? "国内经济" : fallback;
   if (overseasAt >= 0) return "国际局势";
+  if (fallback === "综合要闻") {
+    const summaryCategory = categorySubjects.find(([matcher]) =>
+      matcher.test(summary),
+    )?.[1];
+    if (summaryCategory) return summaryCategory;
+  }
   if (domesticAt >= 0 || domestic.test(summary)) return fallback;
   if (
     overseas.test(summary) ||

@@ -23,7 +23,7 @@ _TOPICS = (
     ),
     (
         "TECHNOLOGY",
-        r"(?i)(?<![a-z])ai(?![a-z])|人工智能|机器人|半导体|芯片|算力|通信|火箭|航天|科技|技术创新",
+        r"(?i)(?<![a-z])ai(?![a-z])|人工智能|机器人|半导体|芯片|算力|通信|火箭|卫星|星链|Starship|航天|科技|技术创新",
     ),
     (
         "MONETARY_POLICY",
@@ -33,7 +33,7 @@ _TOPICS = (
         "DOMESTIC_GROWTH",
         r"(?i)(?<![a-z])(?:cpi|ppi|gdp|pmi)(?![a-z])|采购经理|国内经济|居民消费|生产价格|消费价格|经济增长|社融|信贷",
     ),
-    ("FINANCIAL_MARKET", r"金融市场|指数|交易所|权重上限|证券|资本市场|股市|债市|汇率"),
+    ("FINANCIAL_MARKET", r"(?i)投资者大会|上交所|深交所|证监会|稳市|ETF|券商|银行|分红|金融市场|指数|交易所|权重上限|证券|资本市场|股市|债市|汇率"),
     (
         "INDUSTRY_EMPLOYMENT",
         r"产业|就业|招聘|工资|稀土|氧化铝|化工|公共卫生|医疗|制造业|企业订单",
@@ -43,7 +43,7 @@ _TOPICS = (
 
 def _category(event):
     existing = event.get("category")
-    if isinstance(existing, str) and existing in _CATEGORIES:
+    if isinstance(existing, str) and existing in _CATEGORIES and existing != "UNCLASSIFIED":
         return existing
     # Titles describe the subject. Conditional scenarios and possible impacts do not.
     title = event.get("title")

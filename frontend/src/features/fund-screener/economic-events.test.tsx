@@ -124,7 +124,7 @@ it("shows one publication date and a compact title, keeping audit and summary be
     "2026-11-07T08:00:00+08:00",
   );
   expect(within(card).getByText("需求下降可能抵消")).toBeVisible();
-  expect(within(card).getByText("持续时间未知")).toBeVisible();
+  expect(within(card).queryByText("持续时间未知")).not.toBeInTheDocument();
   expect(within(card).getByRole("link", { name: "核对原文" })).toHaveAttribute(
     "href",
     "https://example.test/news",
@@ -187,7 +187,7 @@ it("shares teaser IDs with selected details even beyond the first eight rows", a
   expect(screen.getAllByRole("article")).toHaveLength(8);
   const selected = screen.getByRole("article", { name: "本次事项9" });
   expect(selected.querySelector("details")).toHaveAttribute("open");
-  expect(within(selected).getByText("持续时间未知")).toBeVisible();
+  expect(within(selected).getByText("独立事实9")).toBeVisible();
 });
 
 it("retains official news while pending or running research diagnostics stay collapsed", async () => {
@@ -280,7 +280,7 @@ it("keeps selected content stable after source-only refresh and labels report-co
   view.rerender(<EconomicEvents data={updated} selectedEventId={selectedId} />);
   expect(
     within(screen.getByRole("article", { name: "本次事项1" })).getByText(
-      "持续时间未知",
+      "独立事实1",
     ),
   ).toBeVisible();
   await userEvent.selectOptions(

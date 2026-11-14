@@ -1,5 +1,6 @@
 import {
   classifyEconomicNews,
+  economicEventQuestions,
   economicNewsReading,
   isEmptyCalendarStory,
 } from "./economic-news-reading";
@@ -43,7 +44,10 @@ it("does not replace an event with an unrelated or calendar source title", () =>
 
 it.each([
   ["英国第三季度GDP", "英国第三季度GDP", "国内经济", "国际局势"],
-  ["美国上周初请与EIA库存", "财经日历", "待分类", "国际局势"],
+  ["美国上周初请与EIA库存", "财经日历", "综合要闻", "国际局势"],
+  ["国际投资者大会与稳市传导", "交易所发布安排", "综合要闻", "金融市场"],
+  ["Starship火箭准备发射", "航天试验", "综合要闻", "科技"],
+  ["央行开展互换便利", "金融机构参与", "综合要闻", "货币与政策"],
   ["美联储维持利率不变", "中国出口企业可能受影响", "货币与政策", "国际局势"],
   [
     "中国出口企业应对美国关税",
@@ -59,6 +63,16 @@ it.each([
     expect(classifyEconomicNews(title, summary, [], original)).toBe(expected);
   },
 );
+
+it("keeps at most two event-specific questions from a combined digest", () => {
+  expect(
+    economicEventQuestions("中东运输风险与黄金、油气价格分化", [
+      "英国对俄石油制裁范围未知；法国网络攻击仍在调查",
+      "商船能否恢复通航；原油供应是否持续受压；黄金避险需求能否维持",
+      "加沙医院袭击细节未确认",
+    ]),
+  ).toEqual(["商船能否恢复通航", "原油供应是否持续受压"]);
+});
 
 it("uses a linked foreign source only when the event has no explicit domestic subject", () => {
   expect(
