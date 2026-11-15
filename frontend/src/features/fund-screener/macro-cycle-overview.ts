@@ -1,5 +1,9 @@
 import type { OpportunityContext } from "../../api/investment";
-import type { MacroCycleInsight } from "../../api/macro-cycle";
+import type {
+  MacroCycleInsight,
+  MacroCycleInsights,
+} from "../../api/macro-cycle";
+import { monthLabel } from "./macro-display";
 import { researchSummary } from "./research-reading";
 
 export type CycleView = MacroCycleInsight & { origin?: string };
@@ -143,11 +147,23 @@ function knownBy(value: string | null | undefined, cutoff?: string | null) {
   return Date.parse(value) <= Date.parse(cutoff);
 }
 
-function validCycleSample(row: {
+type CycleSample = {
   value: unknown;
   state?: string;
   valueVerification?: string;
-}) {
+  sourceUri?: string | null;
+  retrievedAt?: string | null;
+};
+
+function providerHistory(row: CycleSample) {
+  if (!row.retrievedAt || !Number.isFinite(Date.parse(row.retrievedAt)))
+    return false;
+  const href =
+    /^https:\/\/data\.eastmoney\.com\/cjsj\/(?:pmi|cpi|ppi|hbgyl)\.html(?:[?#].*)?$/i;
+  return !!row.sourceUri && href.test(row.sourceUri);
+}
+
+function validCycleSample(row: CycleSample, allowProvider = false) {
   return (
     row.value != null &&
     String(row.value).trim() !== "" &&
@@ -158,10 +174,12 @@ function validCycleSample(row: {
       "NOT_COLLECTED",
       "PERMISSION_REQUIRED",
       "PENDING",
+      "FAILED",
+      "TIMEOUT",
     ].includes(row.state ?? "") &&
-    !["CONFLICT", "UNAVAILABLE", "PENDING"].includes(
-      row.valueVerification ?? "",
-    )
+    !["CONFLICT", "UNAVAILABLE"].includes(row.valueVerification ?? "") &&
+    (row.valueVerification !== "PENDING" ||
+      (allowProvider && providerHistory(row)))
   );
 }
 
@@ -179,7 +197,11 @@ function visibleBy(row: EvidenceClock, cutoff?: string | null) {
   return clocks.length > 0 && clocks.every((clock) => knownBy(clock, cutoff));
 }
 
-export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
+export function cycleFacts(
+  data: OpportunityContext,
+  cutoff?: string | null,
+  allowProvider = false,
+) {
   const observations = [
     ...data.items,
     ...(data.series ?? []),
@@ -200,7 +222,7 @@ export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
       .filter(
         (row) =>
           row.code === code &&
-          validCycleSample(row) &&
+          validCycleSample(row, allowProvider) &&
           (!cutoff ||
             (knownBy(
               row.asOf ?? ("referenceDate" in row ? row.referenceDate : null),
@@ -228,6 +250,9 @@ export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
             referencePeriod:
               "referencePeriod" in item ? item.referencePeriod : null,
             sourceUri: item.sourceUri,
+            providerOnly:
+              "valueVerification" in item &&
+              item.valueVerification === "PENDING",
           },
         ]
       : [];
@@ -236,7 +261,109 @@ export function cycleFacts(data: OpportunityContext, cutoff?: string | null) {
 
 export type CycleFact = ReturnType<typeof cycleFacts>[number];
 
-export type CyclePoint = { date: string; value: number; basis: string };
+type MoneySpread = NonNullable<
+  MacroCycleInsights["macroSnapshot"]
+>["moneySupplySpread"];
+
+function periodOf(fact: CycleFact | undefined) {
+  return (fact?.referencePeriod || fact?.asOf)?.slice(0, 7) ?? "";
+}
+
+export function domesticMacroReading(facts: CycleFact[], spread?: MoneySpread) {
+  const find = (code: string) => facts.find((fact) => fact.code === code);
+  const pmi = find("PMI");
+  const cpi = find("CPI_YOY");
+  const ppi = find("PPI_YOY");
+  const real = find("US_T10_REAL");
+  const nominal = find("US_T10_NOMINAL");
+  const m1 = find("M1_YOY");
+  const m2 = find("M2_YOY");
+  const tsf = find("TSF_STOCK_YOY");
+  const value = (fact: CycleFact | undefined) =>
+    fact ? Number(fact.value) : null;
+  const dated = (label: string, fact: CycleFact) =>
+    `${monthLabel(periodOf(fact))} ${label} ${fact.value}${fact.unit}${fact.providerOnly ? "（供应商读数）" : ""}`;
+  const pmiValue = value(pmi);
+  const pmiLine =
+    pmi && pmiValue != null
+      ? `${dated("制造业 PMI 为", pmi)}，${
+          pmiValue < 50
+            ? "低于 50 荣枯线，制造业景气偏弱"
+            : pmiValue > 50
+              ? "高于 50 荣枯线，制造业处于扩张区间"
+              : "位于 50 荣枯线附近"
+        }`
+      : "";
+  const priceLine =
+    ppi && cpi && periodOf(ppi) && periodOf(ppi) === periodOf(cpi)
+      ? `${dated("PPI 同比", ppi)}、CPI 同比 ${cpi.value}%。${
+          Number(ppi.value) - Number(cpi.value) >= 2
+            ? "上游出厂价格涨幅明显高于消费价格，成本向终端传导较弱的行业面临利润压力。"
+            : "可继续观察上游价格向终端的传导。"
+        }`
+      : [ppi && dated("PPI 同比", ppi), cpi && dated("CPI 同比", cpi)]
+          .filter(Boolean)
+          .join("、");
+  const supply = [
+    m2 && dated("M2 同比", m2),
+    m1 && dated("M1 同比", m1),
+    tsf && dated("社融存量同比", tsf),
+  ]
+    .filter(Boolean)
+    .join("，");
+  const sameMonth = m1 && m2 && periodOf(m1) && periodOf(m1) === periodOf(m2);
+  const gap = sameMonth
+    ? spread?.referencePeriod === periodOf(m1) && spread.gap != null
+      ? spread.gap
+      : Number(m1.value) - Number(m2.value)
+    : null;
+  const moneyLine = supply
+    ? `${supply}。${
+        gap == null
+          ? ""
+          : `同月 M1−M2 剪刀差 ${gap > 0 ? "+" : ""}${gap.toFixed(2)} 个百分点，${
+              gap < 0
+                ? "活期资金增速慢于广义货币，继续观察资金活化。"
+                : gap > 0
+                  ? "活期资金增速快于广义货币，继续观察能否转化为支出与订单。"
+                  : "两者增速持平。"
+            }`
+      }`
+    : "货币与信用月度读数待补齐。";
+  const highRates = Number(real?.value) >= 2 || Number(nominal?.value) >= 4.5;
+  const backdrop = [
+    pmiValue !== null && pmiValue < 50 && "国内制造业景气偏弱",
+    highRates && "外部资金成本偏高",
+  ]
+    .filter(Boolean)
+    .join("，");
+  return [
+    {
+      title: "🌡️ 国内经济与物价",
+      text:
+        [
+          pmiLine && `${pmiLine}。`,
+          priceLine &&
+            (priceLine.endsWith("。") ? priceLine : `${priceLine}。`),
+        ]
+          .filter(Boolean)
+          .join("") || "国内景气与物价读数待补齐。",
+    },
+    { title: "🏦 国内货币与信用", text: moneyLine },
+    {
+      title: "🎯 市场定调与操作总纲",
+      text: `${backdrop ? `${backdrop}，留意行业分化。` : ""}
+      进入绿色买区可参考持仓分批观察，接近粉色卖区看止盈条件，区间之间等待价格信号。`.trim(),
+    },
+  ];
+}
+
+export type CyclePoint = {
+  date: string;
+  value: number;
+  basis: string;
+  providerOnly: boolean;
+};
 
 export const cycleMonth = (day: string) =>
   Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7)) - 1;
@@ -279,7 +406,7 @@ export function cycleVix(data: OpportunityContext, cutoff?: string | null) {
 }
 
 export function vixBand(value: number) {
-  return value < 15 ? 0 : value < 25 ? 1 : value < 35 ? 2 : 3;
+  return value < 15 ? 0 : value <= 20 ? 1 : value <= 30 ? 2 : 3;
 }
 
 /** Evidence-based presentation bands, independent from stock volatility. */
@@ -294,7 +421,7 @@ export function liquidityBand(facts: CycleFact[], rateState?: string) {
   const real = value("US_T10_REAL");
   if (nominal !== null && real !== null) {
     readings.push(
-      nominal > 4.5 || real > 2.5 ? 1 : nominal < 3.5 && real < 1.5 ? -1 : 0,
+      nominal >= 4.5 || real >= 2 ? 1 : nominal < 3.5 && real < 1.5 ? -1 : 0,
     );
   }
   const policy = value("US_FED_FUNDS");
@@ -353,8 +480,10 @@ export function cycleTrend(
     latest?.asOf &&
     !history.some(
       (row) =>
+        validCycleSample(row, true) &&
+        visibleBy(row, cutoff) &&
         (row.referencePeriod ?? row.date).slice(0, 7) ===
-        (latest.referencePeriod ?? latest.asOf!).slice(0, 7),
+          (latest.referencePeriod ?? latest.asOf!).slice(0, 7),
     )
   ) {
     history.push({
@@ -372,7 +501,7 @@ export function cycleTrend(
     });
   }
   const usable = new Map<string, CyclePoint>();
-  if (supplemental && cutoff) {
+  if (supplemental) {
     for (const point of cycleTrend(supplemental, code, cutoff)) {
       usable.set(point.date.slice(0, 7), point);
     }
@@ -380,7 +509,7 @@ export function cycleTrend(
   const frozenMonths = new Set<string>();
   for (const row of history) {
     if (
-      !validCycleSample(row) ||
+      !validCycleSample(row, true) ||
       !knownBy(row.date, cutoff) ||
       !visibleBy(row, cutoff)
     )
@@ -401,6 +530,8 @@ export function cycleTrend(
         row.definitionKey ??
         row.metadata?.definitionKey ??
         "",
+      providerOnly:
+        "valueVerification" in row && row.valueVerification === "PENDING",
     });
   }
   return [...usable]

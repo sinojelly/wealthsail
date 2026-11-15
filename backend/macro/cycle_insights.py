@@ -763,6 +763,7 @@ _SNAPSHOT_FIELDS = (
     "definitionKey",
     "periodChange",
     "frequency",
+    "valueVerification",
 )
 _MONTHLY_CODES = {
     "PMI",
@@ -1060,13 +1061,14 @@ def macro_snapshot(packet, cutoff):
     for raw_key, target_key in (("macros", "items"), ("series", "series")):
         for row in _rows(packet.get(raw_key)):
             code = row.get("code")
-            if (
-                not isinstance(code, str)
-                or code not in _SNAPSHOT_CODES
-                or not _visible(row, cutoff)
-            ):
+            if not isinstance(code, str) or code not in _SNAPSHOT_CODES:
                 continue
-            parsed = _pick(row, ("code", *_SNAPSHOT_FIELDS))
+            visible = _visible(row, cutoff)
+            parsed = (
+                _pick(row, ("code", *_SNAPSHOT_FIELDS))
+                if visible
+                else {"code": code, "label": row.get("label")}
+            )
             history = {
                 (
                     _reference_month(point)
@@ -1099,7 +1101,7 @@ def macro_snapshot(packet, cutoff):
             if code in _MONTHLY_CODES and (period := _reference_month(parsed)):
                 parsed.update(referencePeriod=period, frequency="MONTHLY")
             metadata = row.get("metadata")
-            if isinstance(metadata, dict):
+            if visible and isinstance(metadata, dict):
                 for field in ("definitionKey", "definitionVersion"):
                     if field not in parsed and metadata.get(field):
                         parsed[field] = metadata[field]
@@ -1107,7 +1109,7 @@ def macro_snapshot(packet, cutoff):
                 parsed["history"] = history
             if parsed.get("value") is None and not history:
                 continue
-            changes = row.get("changes") or row.get("statistics")
+            changes = (row.get("changes") or row.get("statistics")) if visible else None
             if isinstance(changes, dict):
                 parsed["changes"] = _pick(
                     changes,

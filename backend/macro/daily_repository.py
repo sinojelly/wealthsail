@@ -399,6 +399,10 @@ async def read_daily_research(
             # Recompute with the visible evidence clock and the same cycle guard.
             report = rank_report(report, {**(packet or {}), "asOf": stamp.isoformat()})
             report = annotate_topic_primary_funds(report, packet)
+            if tenant_id is not None and user_id is not None:
+                from backend.macro.live_industry_positions import enrich_live_industry_positions
+
+                report = enrich_live_industry_positions(report)
     displayed_run_id = (
         pipeline["researchRunId"]
         if pipeline

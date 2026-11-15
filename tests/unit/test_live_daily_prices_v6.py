@@ -1,10 +1,8 @@
 """The live API projection refreshes prices even when a report is old."""
 
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
-import sys
 
 import pytest
 
@@ -32,11 +30,7 @@ async def test_a_saved_old_daily_report_is_repriced_before_return_without_updati
         ],
     }
     refresh = AsyncMock(return_value=refreshed)
-    monkeypatch.setitem(
-        sys.modules,
-        "backend.investment.live_fund_plans",
-        SimpleNamespace(refresh_report_fund_plans=refresh),
-    )
+    monkeypatch.setattr("backend.investment.live_fund_plans.refresh_report_fund_plans", refresh)
     conn = AsyncMock()
     conn.fetchrow.return_value = {
         "run_id": "old-report",

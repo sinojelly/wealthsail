@@ -140,7 +140,7 @@ async def _fetch_eastmoney_history(client, code, start, end):
                 raise ValueError("macro history metric unavailable")
             period = _period(row.get("TIME"))
             reported = date.fromisoformat(str(row.get("REPORT_DATE"))[:10])
-            if period != reported:
+            if period != reported.replace(day=1):
                 raise ValueError("macro history period mismatch")
             observations.append(
                 {"fieldCode": code, "period": period, "value": row[column]}

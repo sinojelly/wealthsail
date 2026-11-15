@@ -40,7 +40,7 @@ it("preserves a long judgment's final negation and conditions within the three-s
   ).toEqual([first, second, third]);
 });
 
-it("labels retained report judgment and links to full evidence", async () => {
+it("keeps retained report prose folded in the audit drawer and links to full evidence", async () => {
   const open = vi.fn();
   renderWithSession(
     <TodayFocus
@@ -50,8 +50,11 @@ it("labels retained report judgment and links to full evidence", async () => {
   );
   expect(
     screen.getByRole("region", { name: "今日宏观总纲" }),
-  ).toHaveTextContent("历史宏观研判");
-  expect(screen.getByText("信用修复仍需后续事实确认。")).toBeVisible();
+  ).toHaveTextContent("今日宏观定调");
+  const original = screen.getByText("信用修复仍需后续事实确认。");
+  expect(original).not.toBeVisible();
+  fireEvent.click(screen.getByText("ⓘ 查看原始审计文本与数据口径说明"));
+  expect(original).toBeVisible();
   screen.getByRole("button", { name: "查看完整研判与市场证据" }).click();
   expect(open).toHaveBeenCalledOnce();
 });
@@ -63,7 +66,7 @@ it("keeps missing judgment distinct from no market opportunities", () => {
       onViewEvidence={() => {}}
     />,
   );
-  expect(screen.getByText(/综合研究尚未生成/)).toBeVisible();
+  expect(screen.getByText("国内景气与物价读数待补齐。")).toBeVisible();
   expect(screen.queryByText("暂无投资机会")).not.toBeInTheDocument();
 });
 

@@ -410,3 +410,34 @@ def test_cycle_snapshot_uses_same_month_money_and_inflation_and_projects_audit_n
     composite = snapshot["composite"]
     assert composite["inflationGap"] == 5
     assert composite["labels"] == ["需求偏冷", "上游成本挤压", "外部高息紧缩"]
+
+
+def test_macro_snapshot_retains_visible_history_under_later_current_reading():
+    from backend.macro.cycle_insights import macro_snapshot
+
+    cutoff = datetime.fromisoformat("2026-11-13T07:08:00+08:00")
+    snapshot = macro_snapshot(
+        {
+            "macros": [
+                {
+                    "code": "CPI_YOY",
+                    "value": 1.5,
+                    "asOf": "2026-11-01",
+                    "publishedAt": "2026-12-01T09:00:00+08:00",
+                    "history": [
+                        {
+                            "asOf": "2026-10-01",
+                            "retrievedAt": "2026-11-12T20:00:00+08:00",
+                            "value": 0.7,
+                            "valueVerification": "PENDING",
+                        }
+                    ],
+                }
+            ]
+        },
+        cutoff,
+    )
+    [item] = snapshot["items"]
+    assert "value" not in item
+    assert item["history"][0]["valueVerification"] == "PENDING"
+    assert item["history"][0]["value"] == 0.7

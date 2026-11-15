@@ -131,9 +131,9 @@ it("shows a VIX close and daily history apart from the liquidity gauge", () => {
   expect(
     within(volatility).getByRole("link", { name: "Cboe / FRED" }),
   ).toHaveAttribute("href", "https://fred.stlouisfed.org/series/VIXCLS");
-  expect(
-    screen.getByRole("region", { name: "流动性松紧" }),
-  ).not.toHaveTextContent("极度恐慌");
+  expect(screen.getByLabelText("流动性松紧分段")).not.toHaveTextContent(
+    "极度恐慌",
+  );
 });
 
 it("shows separate global, domestic, market and key-factor rows without inventing odds", () => {
@@ -155,10 +155,11 @@ it("shows separate global, domestic, market and key-factor rows without inventin
   expect(
     within(board).getByRole("heading", { name: "宏观周期与今日总纲" }),
   ).toBeVisible();
-  expect(board).toHaveTextContent("全球流动性压力与风险走势图");
+  expect(board).toHaveTextContent("全球流动性水位与市场波动");
   expect(board).toHaveTextContent("VIX 市场波动");
   expect(board).not.toHaveTextContent("联储表态与机构预测");
-  expect(board).toHaveTextContent("接近买区再分批观察");
+  expect(board).toHaveTextContent("进入绿色买区可参考持仓分批观察");
+  expect(within(board).getAllByText("💡 读图指南")).toHaveLength(4);
   rerender(<MacroCycleOverview data={data} factView />);
   expect(board).toHaveTextContent("全球利率与流动性");
   expect(board).toHaveTextContent("国内货币、财政与信用");
@@ -249,8 +250,12 @@ it("plots dated local macro history and excludes observations collected after th
     ],
   });
   const { container } = render(<MacroCycleOverview data={data} historical />);
-  expect(screen.getByRole("img", { name: "景气与货币活化趋势" })).toBeVisible();
-  expect(screen.getByRole("img", { name: "上下游通胀剪刀差" })).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "制造业 PMI 历史走势" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "PPI 与 CPI 历史走势" }),
+  ).toBeVisible();
   expect(
     container.querySelector('[data-macro-series="CPI_YOY"] path'),
   ).toHaveAttribute("d", expect.stringContaining(" L"));
@@ -258,8 +263,8 @@ it("plots dated local macro history and excludes observations collected after th
   expect(container.querySelector('[data-macro-gap="PMI"]')).toBeInTheDocument();
   expect(screen.getByText("0.70%")).toBeVisible();
   expect(
-    screen.getByText("官员表示仍须观察价格压力", { exact: false }),
-  ).toBeVisible();
+    screen.queryByText("官员表示仍须观察价格压力", { exact: false }),
+  ).not.toBeInTheDocument();
   expect(screen.getByText("偏冷收缩", { exact: false })).toHaveAttribute(
     "data-active",
     "true",
@@ -288,17 +293,87 @@ it("highlights sourced CME distributions and moves audit text into a closed pane
   ];
   cycle.auditNotes = ["统计口径调整处断开"];
   render(<MacroCycleOverview data={data} />);
-  const pricing = screen.getByLabelText("CME 利率期货定价");
+  const pricing = screen.getByLabelText("美联储利率预期与流动性判断");
   expect(pricing).toHaveTextContent("加息总概率 100%");
   expect(pricing).toHaveTextContent("+25bp 84.7% | +50bp 15.3% · 期望 +28.8bp");
   expect(within(pricing).getByRole("link", { name: "来源" })).toBeVisible();
   const disclosure = screen
-    .getByText("ⓘ 数据口径与审计说明（1项）")
+    .getByText("ⓘ 查看原始审计文本与数据口径说明")
     .closest("details")!;
   expect(disclosure).not.toHaveAttribute("open");
   expect(
     within(disclosure).getByText("统计口径调整处断开"),
   ).toBeInTheDocument();
+});
+
+it("keeps collected 36-month provider history visible while filtering conflicts and unattributed readings", () => {
+  const data = context();
+  const history = Array.from({ length: 36 }, (_, index) => ({
+    asOf: new Date(Date.UTC(2023, 10 + index, 1)).toISOString().slice(0, 10),
+    value: 0.5 + index / 100,
+    sourceUri: "https://data.eastmoney.com/cjsj/cpi.html",
+    retrievedAt: "2026-11-12T07:00:00+08:00",
+    state: "UNVERIFIED",
+    valueVerification: "PENDING",
+  }));
+  data.items = [
+    {
+      code: "CPI_YOY",
+      label: "CPI",
+      value: null,
+      asOf: null,
+      publishedAt: null,
+      source: null,
+      state: "NOT_COLLECTED",
+      history: [
+        ...history,
+        { ...history[0], asOf: "2026-11-01", valueVerification: "CONFLICT" },
+        {
+          ...history[0],
+          asOf: "2026-11-30",
+          sourceUri: "https://example.test/cpi",
+        },
+      ],
+    },
+  ];
+  expect(cycleTrend(data, "CPI_YOY")).toHaveLength(36);
+  expect(cycleTrend(data, "CPI_YOY").at(-1)).toMatchObject({
+    date: "2026-10",
+    providerOnly: true,
+  });
+  const { container } = render(<MacroCycleOverview data={data} />);
+  const path = container
+    .querySelector('[data-macro-series="CPI_YOY"] path')
+    ?.getAttribute("d");
+  expect(path?.match(/ L/g)).toHaveLength(35);
+  expect(screen.getByText("部分月份采用东方财富采集值。")).toBeVisible();
+});
+
+it("shows live fund prices beside the industry phase and formats the observed rate move once", async () => {
+  const data = context();
+  const cycle = data.dailyResearch!.report!.cycleInsights!;
+  cycle.industries![0].fundPositions = [
+    {
+      fundCode: "024194",
+      label: "示例基金",
+      status: "已入买区",
+      asOf: "2026-11-13",
+    },
+  ];
+  cycle.rateExpectation = {
+    state: "TIGHTER",
+    us10yChange5Bp: 20,
+    summary: "10年期近5个观测+201 近5个观测+20bp",
+  };
+  render(<MacroCycleOverview data={data} factView />);
+  expect(
+    screen.getByText("短端利率定价偏紧。10 年期近 5 个观测 +20 bp。"),
+  ).toBeVisible();
+  expect(screen.queryByText(/\+201/)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("核心行业周期与趋势 · 1 项"));
+  expect(screen.getByRole("list", { name: "当前基金位置" })).toHaveTextContent(
+    "024194 · 已入买区",
+  );
 });
 
 it("labels legacy prose and industry evidence without fabricating a structured rate cycle", () => {
@@ -381,8 +456,8 @@ it("keeps a complete legacy thesis available and resets expansion for another re
   data.dailyResearch!.report!.macroCycle =
     "市场阶段仍需结合实际盈利判断。".repeat(30) + "最后风险边界。";
   const { rerender } = render(<MacroCycleOverview data={data} />);
-  expect(screen.queryByText(/最后风险边界/)).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "展开今日总纲" }));
+  expect(screen.getByText(/最后风险边界/)).not.toBeVisible();
+  await userEvent.click(screen.getByText("ⓘ 查看原始审计文本与数据口径说明"));
   expect(screen.getByText(/最后风险边界/)).toBeVisible();
   rerender(
     <MacroCycleOverview
@@ -392,5 +467,5 @@ it("keeps a complete legacy thesis available and resets expansion for another re
       }}
     />,
   );
-  expect(screen.queryByText(/最后风险边界/)).not.toBeInTheDocument();
+  expect(screen.getByText(/最后风险边界/)).not.toBeVisible();
 });

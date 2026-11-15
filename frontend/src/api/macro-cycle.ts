@@ -14,6 +14,12 @@ export interface MacroCycleInsight {
   asOf?: string | null;
   sourceIds?: string[];
   importance?: "HIGH" | "MEDIUM" | "LOW";
+  fundPositions?: {
+    fundCode: string;
+    label: string;
+    asOf?: string | null;
+    status: string;
+  }[];
 }
 
 export interface MacroPolicySignal {
@@ -58,7 +64,13 @@ export interface MacroCycleInsights {
     items: MacroContext["items"];
     series: OpportunitySeries[];
     composite?: MacroComposite;
-    moneySupplySpread?: { referencePeriod: string; summary: string };
+    moneySupplySpread?: {
+      referencePeriod: string;
+      summary: string;
+      m1Yoy?: number;
+      m2Yoy?: number;
+      gap?: number;
+    };
   };
   displayMacroCycle?: string;
   auditNotes?: string[];

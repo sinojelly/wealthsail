@@ -904,6 +904,38 @@ def apply_industry_cycle(plan, industry_cycle):
     return result
 
 
+def buy_zone_backtest(closes, entry_low, entry_high):
+    """Retrospective touches of a fixed interval, with complete forward windows."""
+    low, high = _number(entry_low), _number(entry_high)
+    if low is None or high is None or not 0 < low <= high:
+        return None
+    prices = [_number(close) for close in closes]
+    if len(prices) < 2 or any(price is None or price <= 0 for price in prices):
+        return None
+    horizon, threshold = 60, Decimal("0.05")
+    inside = [low <= price <= high for price in prices]
+    # The first observation may already be part of an earlier wave.
+    entries = [
+        i for i in range(1, len(prices)) if inside[i] and not inside[i - 1]
+    ]
+    rebounds = [
+        max(Decimal(0), max(prices[i + 1 : i + 1 + horizon]) / prices[i] - 1)
+        for i in entries
+        if i + horizon < len(prices)
+    ]
+    evaluated = len(rebounds)
+    return {
+        "touchCount": len(entries),
+        "evaluatedCount": evaluated,
+        "winRatePct": round(sum(move > threshold for move in rebounds) / evaluated * 100, 2)
+        if evaluated else None,
+        "averageMaxReboundPct": round(float(sum(rebounds) / evaluated * 100), 2)
+        if evaluated else None,
+        "forwardObservations": horizon,
+        "winThresholdPct": int(threshold * 100),
+    }
+
+
 def compute_actionable_price_plan(
     points,
     *,

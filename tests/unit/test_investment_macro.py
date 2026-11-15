@@ -207,7 +207,7 @@ async def test_gapped_primary_history_falls_back_to_named_same_source_columns(
                         {
                             "MAKE_INDEX": 50.1,
                             "TIME": "2026年9月",
-                            "REPORT_DATE": "2026-09-01 00:00:00",
+                            "REPORT_DATE": "2026-09-30 00:00:00",
                         },
                         {
                             "TIME": "2026年8月",
