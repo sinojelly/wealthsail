@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { Route, Routes } from "react-router-dom";
@@ -237,6 +237,7 @@ it("reuses four research workspaces and every original fund without live or writ
   expect(fund).toHaveTextContent("行业核查尚缺可信执行凭证");
   expect(fund).toHaveTextContent("1.0563");
   expect(fund).toHaveTextContent("研究时确认净值");
+  await act(async () => vi.dynamicImportSettled());
   expect(
     await within(fund).findByRole("img", { name: "018344单位净值走势" }),
   ).toBeInTheDocument();

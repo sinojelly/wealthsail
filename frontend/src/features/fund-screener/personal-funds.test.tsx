@@ -223,7 +223,7 @@ it("folds an ordinary owned fund, shows its reference profit in the summary, and
   const card = await screen.findByRole("article", { name: "持仓待机基金" });
   expect(card).toHaveTextContent("持仓参考盈亏：+20.00%");
   expect(card).toHaveTextContent("¥+20.00");
-  const overview = screen.getByRole("region", { name: "组合持仓总览" });
+  const overview = screen.getByRole("region", { name: "我的持仓总览" });
   expect(overview).toHaveTextContent("持仓基金1 只");
   expect(overview).toHaveTextContent("总持仓成本¥100.00");
   expect(overview).toHaveTextContent("参考总市值¥120.00");
@@ -242,10 +242,69 @@ it("folds an ordinary owned fund, shows its reference profit in the summary, and
   expect(funds.getLatestFundQuotes).not.toHaveBeenCalled();
 });
 
-it("shows deep holding losses as a caveat without removing the buy-zone badge", async () => {
+it.each(["-20.00", "-25.33"])(
+  "qualifies deep holding losses %s without removing the buy-zone badge",
+  async (loss) => {
+    vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [], total: 0 });
+    const plan = frozenPlan("006543");
+    plan.indicators.navPercentile2y = 8.2;
+    vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
+      version: "personal-funds-reference-v1",
+      source: "LOCAL_DATABASE_ONLY",
+      readOnly: true,
+      asOf: "2026-11-07",
+      funds: [
+        {
+          key: "FUND_CN:006543",
+          fundCode: "006543",
+          fundMarket: "FUND_CN",
+          label: "浮亏观察",
+          relationships: ["HELD"],
+          investmentEligible: false,
+          plan,
+          history: null,
+          confirmedNav: null,
+          currentEstimate: null,
+          missingReasons: [],
+          holdingProfit: {
+            state: "AVAILABLE",
+            shares: "100",
+            totalCost: "150",
+            unitCost: "1.50",
+            costAsOf: "2026-11-05",
+            latestNav: "1.12",
+            priceAsOf: "2026-11-06",
+            priceBasis: "CONFIRMED_NAV",
+            profitPct: loss,
+            profitAmount: "-38.00",
+          },
+        },
+      ],
+    });
+    show(<MyFundsWorkspace actor="deep-loss" />);
+    const card = await screen.findByRole("article", { name: "浮亏观察" });
+    expect(card).toHaveTextContent("已入买区（低吸参考）");
+    expect(card).toHaveTextContent(
+      `深套控仓提醒：当前浮亏 ${loss}%，处于近2年 8.2% 分位`,
+    );
+    expect(card).toHaveTextContent(/站上20日均线/);
+    expect(
+      screen.getByRole("region", { name: "我的持仓总览" }),
+    ).toHaveTextContent("今日已入买区1 只");
+  },
+);
+
+it("opens the matching NAV chart from the quick table and counts near-sell holdings", async () => {
   vi.mocked(api.getStudyTracks).mockResolvedValue({ items: [], total: 0 });
-  const plan = frozenPlan("006543");
-  plan.indicators.navPercentile2y = 8.2;
+  const history = await funds.getFundNavHistory("004069", "2y");
+  const plan = frozenPlan("004069");
+  plan.currentPrice = "1.30";
+  const confirmed = {
+    ...heldFund("004069").confirmedNav!,
+    value: "1.31",
+    changePct: "-0.379",
+    asOf: history.asOf,
+  };
   vi.mocked(personal.getPersonalFundsReference).mockResolvedValue({
     version: "personal-funds-reference-v1",
     source: "LOCAL_DATABASE_ONLY",
@@ -253,39 +312,41 @@ it("shows deep holding losses as a caveat without removing the buy-zone badge", 
     asOf: "2026-11-07",
     funds: [
       {
-        key: "FUND_CN:006543",
-        fundCode: "006543",
+        key: "FUND_CN:004069",
+        fundCode: "004069",
         fundMarket: "FUND_CN",
-        label: "浮亏观察",
+        label: "券商指数基金",
         relationships: ["HELD"],
         investmentEligible: false,
         plan,
-        history: null,
-        confirmedNav: null,
+        history,
+        confirmedNav: confirmed,
         currentEstimate: null,
         missingReasons: [],
-        holdingProfit: {
-          state: "AVAILABLE",
-          shares: "100",
-          totalCost: "150",
-          unitCost: "1.50",
-          costAsOf: "2026-11-05",
-          latestNav: "1.12",
-          priceAsOf: "2026-11-06",
-          priceBasis: "CONFIRMED_NAV",
-          profitPct: "-25.33",
-          profitAmount: "-38.00",
-        },
       },
     ],
   });
-  show(<MyFundsWorkspace actor="deep-loss" />);
-  const card = await screen.findByRole("article", { name: "浮亏观察" });
-  expect(card).toHaveTextContent("已入买区（低吸参考）");
-  expect(card).toHaveTextContent(/当前浮亏 -25.33%，处于近2年 8.2% 分位/);
+  show(<MyFundsWorkspace actor="quick-actions" />);
+  const quick = await screen.findByRole("region", { name: "今日操作速览表" });
+  expect(quick).toHaveTextContent("1.3100");
+  expect(quick).toHaveTextContent("接近卖区");
   expect(
-    screen.getByRole("region", { name: "组合持仓总览" }),
-  ).toHaveTextContent("今日已入买区1 只");
+    screen.getByRole("region", { name: "我的持仓总览" }),
+  ).toHaveTextContent("接近或已入卖区1 只");
+  const card = screen.getByRole("article", { name: "券商指数基金" });
+  expect(
+    within(card).queryByRole("img", { name: "004069单位净值走势" }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(
+    within(quick).getByRole("row", { name: /券商指数基金/ }),
+  );
+  await act(async () => vi.dynamicImportSettled());
+  expect(
+    await within(card).findByRole("img", { name: "004069单位净值走势" }),
+  ).toBeVisible();
+  expect(within(card).getByLabelText("净值当日涨跌幅")).toHaveTextContent(
+    "-0.38%",
+  );
 });
 
 it("only synchronizes personal NAV after an explicit refresh and preserves existing cards if it fails", async () => {
@@ -806,7 +867,9 @@ it("shows the latest dynamic zone beside a reminder based on an older frozen pla
   expect(
     await screen.findByText(/最新动态参考.*2026年11月6日/),
   ).toHaveTextContent(/1.0600–1.1500/);
-  expect(screen.getByText(/原冻结计划.*2026年10月26日/)).toBeVisible();
+  expect(
+    screen.getByText("（原 10-26 历史冻结买区：1.0500–1.1500）"),
+  ).toBeVisible();
   expect(screen.getByText(/当日涨跌 \+2.51%/)).toBeVisible();
 });
 

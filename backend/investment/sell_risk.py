@@ -181,18 +181,9 @@ def _change(value):
         return None
 
 
-def _action_plan(target, confirmed, now):
-    """A private frozen track wins; unfrozen holdings use current public zones."""
-    plan, origin = target.get("plan"), target.get("planOrigin")
-    current = (confirmed or {}).get("actionableZones")
-    if (
-        origin != "FROZEN_STUDY"
-        and "HELD" in target["relationship"]
-        and isinstance(current, dict)
-    ):
-        plan, origin = current, "CURRENT_ACTIONABLE_ZONES"
+def _action_plan(plan, target, now, quote_day):
     if not isinstance(plan, dict):
-        return None, None, "NONE"
+        return None, None
     plan = deepcopy(plan)
     if not plan.get("selectedTrack", plan.get("track")):
         # The public chart lists the left-value track first. Use that same
@@ -213,9 +204,10 @@ def _action_plan(target, confirmed, now):
         track is None
         or track.get("priceState") != "READY"
         or plan.get("historyQuality", "READY") != "READY"
+        or quote_day < _day(plan["asOf"])
     ):
-        return None, None, "NONE"
-    return plan, track, origin or "NONE"
+        return None, None
+    return plan, track
 
 
 def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
@@ -241,9 +233,19 @@ def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
     if quote is None:
         return None
     value = _number(quote["value"])
-    plan, track, origin = _action_plan(target, confirmed if confirmed_ok else None, now)
-    if plan and _day(quote["asOf"]) < _day(plan["asOf"]):
-        plan, track, origin = None, None, "NONE"
+    quote_day = _day(quote["asOf"])
+    saved, saved_track = _action_plan(target.get("plan"), target, now, quote_day)
+    current, current_track = _action_plan(
+        confirmed.get("actionableZones") if confirmed_ok else None, target, now, quote_day
+    )
+    # Current price alerts and frozen study monitoring are distinct views.
+    use_current = current and (
+        not saved or _day(current["asOf"]) >= _day(saved["asOf"])
+    )
+    origin = target.get("planOrigin") if saved else "NONE"
+    plan, track = saved, saved_track
+    if use_current:
+        plan, track, origin = current, current_track, "CURRENT_ACTIONABLE_ZONES"
     change = _change(quote.get("dailyChangePct", quote.get("changePct")))
     if (
         estimate_ok
@@ -272,7 +274,7 @@ def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
         triggers.append("SELL_ZONE")
     elif (
         low is not None
-        and value <= high
+        and low <= value <= high
         and not any(
             row.get("entryBlocked") is True or row.get("subscriptionRestricted") is True
             for row in (plan, track)
@@ -324,6 +326,12 @@ def evaluate_action_reminder(target, *, confirmed=None, estimate=None, now):
         "dailyChangePct": round(float(change), 4) if change is not None else None,
         "dailyChangeAsOf": quote["asOf"] if change is not None else None,
     }
+    if use_current and saved_track and target.get("planOrigin") == "FROZEN_STUDY":
+        result["frozenReference"] = {
+            "asOf": saved["asOf"],
+            "entryZoneMin": str(saved_track["entryZoneMin"]),
+            "entryZoneMax": str(saved_track["entryZoneMax"]),
+        }
     for key in ("trackId", "reportRunId", "holdingsAsOf"):
         if target.get(key) is not None:
             result[key] = str(target[key])
@@ -432,13 +440,21 @@ async def load_risk_targets(
             AND m.effective_from<=($3 AT TIME ZONE 'Asia/Shanghai')::date
             AND (m.effective_to IS NULL OR m.effective_to>=($3 AT TIME ZONE 'Asia/Shanghai')::date)
         ),latest AS (
-          SELECT DISTINCT ON(p.account_id,p.instrument_id) p.instrument_id,p.quantity,p.as_of,p.data_quality_status
+          SELECT DISTINCT ON(p.account_id,p.instrument_id) p.instrument_id,p.quantity,p.avg_cost,p.as_of,p.data_quality_status
           FROM ledger.position_snapshots p JOIN mine ON mine.id=p.account_id
           WHERE p.tenant_id=$1 AND p.created_at<=$3 AND p.as_of<=($3 AT TIME ZONE 'Asia/Shanghai')::date
-          ORDER BY p.account_id,p.instrument_id,p.as_of DESC,p.created_at DESC)
+          ORDER BY p.account_id,p.instrument_id,p.as_of DESC,p.created_at DESC
+        ), costs AS (
+          SELECT instrument_id,sum(quantity) AS total_shares,
+            CASE WHEN bool_and(COALESCE(avg_cost>=0 AND avg_cost::text NOT IN ('NaN','Infinity','-Infinity'),false))
+              THEN sum(quantity * avg_cost) END AS total_cost
+          FROM latest WHERE quantity>0 AND quantity::text NOT IN ('NaN','Infinity','-Infinity')
+          GROUP BY instrument_id)
         SELECT p.quantity,p.as_of,p.data_quality_status,c.fund_code,c.fund_name,c.market,c.trade_form,c.currency,c.instrument_id,
+          costs.total_shares,costs.total_cost,
           (SELECT count(*) FROM reference.research_fund_catalog other WHERE other.market=c.market AND other.fund_code=c.fund_code) AS mapping_count
         FROM latest p JOIN reference.research_fund_catalog c ON c.instrument_id=p.instrument_id
+        JOIN costs ON costs.instrument_id=p.instrument_id
         JOIN reference.instruments i ON i.id=p.instrument_id AND i.lifecycle_status='ACTIVE'
         WHERE c.market='FUND_CN' AND c.trade_form IN ('FUND','LOF')""",
         tenant_id,
@@ -497,6 +513,8 @@ async def load_risk_targets(
         if "HELD" not in item["relationship"]:
             item["relationship"].insert(0, "HELD")
         item["holdingsAsOf"] = max(str(day), item.get("holdingsAsOf", str(day)))
+        item["shares"] = row.get("total_shares")
+        item["totalCost"] = row.get("total_cost")
     report = (daily or {}).get("report") or {}
     report_stamp = _stamp(report.get("asOf"))
     if (
@@ -672,7 +690,7 @@ def _saved_estimate(runs, target, now):
 
 
 async def sell_risk_alerts(conn, tenant_id, user_id, now, *, daily=None):
-    from backend.investment.personal_funds import _persisted_estimates
+    from backend.investment.personal_funds import _persisted_estimates, holding_profit
 
     now = _stamp(now)
     calendar = await _calendar(conn, now)
@@ -745,6 +763,18 @@ async def sell_risk_alerts(conn, tenant_id, user_id, now, *, daily=None):
     reminders = [row for row in evaluated if row["state"] != "NORMAL"]
     reminders.sort(key=lambda row: (_ACTION_STATES[row["state"]], row["fundCode"]))
     normal = [row for row in evaluated if row["state"] == "NORMAL"]
+    holding_returns = {}
+    for target in targets:
+        code = target["fundCode"]
+        quote = quotes.get(code)
+        if "HELD" in target["relationship"] and _valid_quote(quote, target, now):
+            profit = holding_profit(
+                {**target, "fundMarket": "FUND_CN"},
+                {**quote, "subjectKind": "nav", "subjectId": code},
+                None,
+            )["profitPct"]
+            if profit is not None:
+                holding_returns[code] = profit
     held_count = sum("HELD" in row["relationship"] for row in targets)
     evaluated_held = sum("HELD" in row["relationship"] for row in evaluated)
     return {
@@ -753,6 +783,7 @@ async def sell_risk_alerts(conn, tenant_id, user_id, now, *, daily=None):
         "limitations": [],
         "actionReminders": reminders,
         "normalHoldings": normal,
+        "holdingReturnPcts": holding_returns,
         "summary": {
             "heldCount": held_count,
             "evaluatedCount": evaluated_held,

@@ -373,6 +373,15 @@ export interface EntrySafety {
   inSellZone?: boolean;
 }
 export interface ActionableZoneTrack extends OpportunityPriority, EntrySafety {
+  subscriptionRestricted?: boolean;
+  buyZoneBacktest?: {
+    touchCount: number;
+    evaluatedCount: number;
+    winRatePct: number | null;
+    averageMaxReboundPct: number | null;
+    forwardObservations: number;
+    winThresholdPct: number;
+  };
   track: PlanTrack;
   state: "CANDIDATE" | "WATCH" | "INSUFFICIENT";
   candidate?: boolean;
@@ -655,6 +664,7 @@ export interface SellRiskAlerts {
   limitations: string[];
   actionReminders?: PersonalActionReminder[];
   normalHoldings?: PersonalActionReminder[];
+  holdingReturnPcts?: Record<string, string>;
   summary?: {
     heldCount: number;
     evaluatedCount: number;
@@ -665,6 +675,11 @@ export interface SellRiskAlerts {
 }
 export interface PersonalActionReminder {
   planAsOf?: string | null;
+  frozenReference?: {
+    asOf: string;
+    entryZoneMin: PlanPrice;
+    entryZoneMax: PlanPrice;
+  };
   fundCode: string;
   label: string;
   relationship: Array<"HELD" | "TRACKED">;

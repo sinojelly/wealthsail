@@ -136,7 +136,7 @@ def test_topic_quota_retains_every_quantitative_trigger_regardless_of_score():
     ordinary = [{"fundCode": str(i)} for i in range(3)]
     signals = [
         {"pricePosition": {"distanceToEntryPct": 0}},
-        {"pricePosition": {"distanceToEntryPct": 1.99}},
+        {"pricePosition": {"distanceToEntryPct": 2}},
         {"actionableZones": {"inSellZone": True}},
         {"referenceTracks": [{"track": "RIGHT_TREND", "state": "CANDIDATE"}]},
         {"pricePosition": {"stopTriggered": True}},

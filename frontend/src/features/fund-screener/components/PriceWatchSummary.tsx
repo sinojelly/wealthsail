@@ -15,10 +15,15 @@ export function FundWatchQuote({
   estimate?: boolean;
 }) {
   const raw = row && "changePct" in row ? row.changePct : null;
-  const change =
-    raw != null && raw.trim() !== "" && Number.isFinite(Number(raw))
-      ? Number(raw)
-      : null;
+  const pct =
+    typeof raw === "string"
+      ? raw
+          .trim()
+          .replace(/[%％]$/, "")
+          .trim()
+      : raw;
+  const parsed = pct != null && pct !== "" ? Number(pct) : NaN;
+  const change = Number.isFinite(parsed) ? parsed : null;
   return (
     <div className="op-watch-quote">
       {label && <span>{label}：</span>}
@@ -37,8 +42,7 @@ export function FundWatchQuote({
           className={`op-watch-change ${change > 0 ? "positive" : change < 0 ? "negative" : ""}`}
           aria-label={estimate ? "估算涨跌幅" : "净值当日涨跌幅"}
         >
-          {change > 0 ? "+" : ""}
-          {change.toFixed(2)}%
+          {`${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
         </span>
       )}
       <span className="op-watch-quote-time">
@@ -67,7 +71,7 @@ export default function PriceWatchSummary({
 }) {
   const latest = useLatestFundQuote(
     watch?.frozenPlan?.priceBasis === "UNIT_NAV"
-      ? watch.frozenPlan.fundCode ?? undefined
+      ? (watch.frozenPlan.fundCode ?? undefined)
       : undefined,
   );
   if (!watch) return null;

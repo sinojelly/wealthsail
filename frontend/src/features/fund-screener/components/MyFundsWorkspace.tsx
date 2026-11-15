@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Decimal from "decimal.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
@@ -26,6 +26,9 @@ import { FundWatchQuote } from "./PriceWatchSummary";
 import ViewportFundChart from "./ViewportFundChart";
 import FundReferenceDetails from "./FundReferenceDetails";
 import FundPriceTracks from "./FundPriceTracks";
+import OperationQuickTable, {
+  type OperationQuickRow,
+} from "./OperationQuickTable";
 import "../my-funds.css";
 
 export interface MyFundsWorkspaceProps {
@@ -318,13 +321,73 @@ function FundCardContent({
   );
 }
 
-function FundCard(props: Parameters<typeof FundCardContent>[0]) {
+function personalBuyGuidance(
+  group: PersonalFundGroup,
+  priority: ReturnType<typeof personalFundPriority>,
+) {
+  const profit = group.reference?.holdingProfit;
+  const raw = profit?.state === "AVAILABLE" ? profit.profitPct : null;
+  if (
+    raw == null ||
+    raw.trim() === "" ||
+    !priority.inBuyZone ||
+    priority.stopTriggered ||
+    priority.track?.priceState !== "READY" ||
+    group.reference?.plan?.entryBlocked ||
+    group.reference?.plan?.subscriptionRestricted ||
+    priority.track?.entryBlocked ||
+    priority.track?.subscriptionRestricted
+  )
+    return null;
+  const change = Number(raw);
+  if (change <= -20) {
+    const location =
+      priority.percentile == null
+        ? "，近2年净值分位待补齐"
+        : `，处于近2年 ${priority.percentile.toFixed(1)}% 分位`;
+    return {
+      tone: "deep",
+      title: "🟡 深套控仓提醒",
+      detail: `当前浮亏 ${change.toFixed(2)}%${location}。若该赛道仓位已重，先观察净值站上20日均线并企稳，再评估分批摊薄。`,
+      advice: "赛道仓位较重时，等待净值站上20日均线后复核。",
+    };
+  }
+  if (!Number.isFinite(change) || change <= -15) return null;
+  const lowPercentile =
+    priority.percentile != null && priority.percentile <= 35;
+  return {
+    tone: "healthy",
+    title: "🟢 优选低吸加仓",
+    detail: `底仓成本相对健康 · ${lowPercentile ? "处于低分位买区" : "已进入参考买区"}。仓位允许时可分批评估，留意止损参考。`,
+    advice: "底仓成本相对健康，仓位允许时可分批评估。",
+  };
+}
+
+function FundCard({
+  requestedOpen,
+  ...props
+}: Parameters<typeof FundCardContent>[0] & { requestedOpen?: number }) {
   const { group } = props;
   const priority = personalFundPriority(group);
-  const [chosenOpen, setChosenOpen] = useState<boolean | null>(null);
-  const open = chosenOpen ?? priority.defaultExpanded;
+  const [choice, setChoice] = useState<{ open: boolean; request?: number }>();
+  const open =
+    choice && choice.request === requestedOpen
+      ? choice.open
+      : requestedOpen !== undefined || priority.defaultExpanded;
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (requestedOpen === undefined) return;
+    const element = card.current;
+    element?.querySelector("button")?.focus({ preventScroll: true });
+    element?.scrollIntoView?.({
+      block: "start",
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "instant"
+        : "smooth",
+    });
+  }, [requestedOpen]);
   const profit = group.reference?.holdingProfit;
-  const lossPct = profit?.state === "AVAILABLE" ? profit.profitPct : null;
+  const guidance = personalBuyGuidance(group, priority);
   const signed = (value: string) =>
     `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)}`;
   const price = (value: number | string | null | undefined) =>
@@ -334,6 +397,7 @@ function FundCard(props: Parameters<typeof FundCardContent>[0]) {
   return (
     <article
       className="op-my-fund-card"
+      ref={card}
       aria-label={group.label}
       data-expanded={open}
     >
@@ -342,7 +406,7 @@ function FundCard(props: Parameters<typeof FundCardContent>[0]) {
         className="op-my-fund-toggle"
         aria-label={`${open ? "收起" : "展开"} ${group.label}详情与走势`}
         aria-expanded={open}
-        onClick={() => setChosenOpen(!open)}
+        onClick={() => setChoice({ open: !open, request: requestedOpen })}
       >
         <span className="op-my-fund-heading-line">
           <strong>{fundDisplayName(group.label, group.code)}</strong>
@@ -410,18 +474,11 @@ function FundCard(props: Parameters<typeof FundCardContent>[0]) {
           {profit?.priceBasis === "ESTIMATED_NAV" && (
             <small>基于估算净值，仅供参考。</small>
           )}
-          {lossPct != null &&
-            Number(lossPct) < -20 &&
-            priority.inBuyZone &&
-            !priority.stopTriggered && (
-              <p className="op-my-fund-deep-loss">
-                💡 深度浮亏提示：当前浮亏 {signed(lossPct)}%
-                {priority.percentile == null
-                  ? "，近2年净值分位待补齐"
-                  : `，处于近2年 ${priority.percentile.toFixed(1)}% 分位`}
-                。若仓位较轻可分批评估低吸，若单赛道已重仓可等待右侧均线企稳。
-              </p>
-            )}
+          {guidance && (
+            <p className="op-my-fund-guidance" data-tone={guidance.tone}>
+              <b>{guidance.title}</b>：{guidance.detail}
+            </p>
+          )}
         </div>
       )}
       {open && <FundCardContent {...props} />}
@@ -485,7 +542,7 @@ function HoldingOverview({ groups }: { groups: PersonalFundGroup[] }) {
     if (group.reference?.plan) {
       const position = personalFundPriority({ ...group, tracks: [] });
       if (!position.stopTriggered && position.inBuyZone) buy += 1;
-      if (!position.stopTriggered && position.inSellZone) sell += 1;
+      if (position.nearSell) sell += 1;
     }
   }
   const profit = comparedValue.minus(comparedCost);
@@ -493,8 +550,11 @@ function HoldingOverview({ groups }: { groups: PersonalFundGroup[] }) {
   const money = (value: Decimal, count: number) =>
     count || !holdings.length ? currency.format(value.toNumber()) : "—";
   return (
-    <section className="op-holding-overview" aria-label="组合持仓总览">
-      <h4>组合持仓总览</h4>
+    <section
+      className="op-holding-overview"
+      aria-labelledby="my-holding-overview"
+    >
+      <h4 id="my-holding-overview">我的持仓总览</h4>
       <dl>
         <div>
           <dt>持仓基金</dt>
@@ -521,7 +581,7 @@ function HoldingOverview({ groups }: { groups: PersonalFundGroup[] }) {
           <dd>{buy} 只</dd>
         </div>
         <div>
-          <dt>今日已入卖区</dt>
+          <dt>接近或已入卖区</dt>
           <dd>{sell} 只</dd>
         </div>
       </dl>
@@ -534,6 +594,54 @@ function HoldingOverview({ groups }: { groups: PersonalFundGroup[] }) {
       )}
     </section>
   );
+}
+
+function quickOperationRow(group: PersonalFundGroup): OperationQuickRow | null {
+  const plan = group.reference?.plan;
+  if (!plan) return null;
+  const position = personalFundPriority(group);
+  if (!position.track || position.track.priceState !== "READY") return null;
+  const guidance = personalBuyGuidance(group, position);
+  const entryBlocked =
+    plan.entryBlocked ||
+    plan.subscriptionRestricted ||
+    position.track.entryBlocked ||
+    position.track.subscriptionRestricted;
+  const action = position.stopTriggered
+    ? { tone: "stop", advice: "暂停补仓，复核止损条件。" }
+    : position.inBuyZone
+      ? {
+          tone: "buy",
+          advice: entryBlocked
+            ? "先核对申购限制和入场条件。"
+            : (guidance?.advice ?? "按仓位与止损参考分批评估。"),
+        }
+      : position.nearSell
+        ? { tone: "sell", advice: "复核持仓止盈计划与卖区价位。" }
+        : position.nearBuy
+          ? { tone: "near", advice: "观察最新净值是否落入参考买区。" }
+          : null;
+  if (!action) return null;
+  return {
+    id: group.key,
+    name: fundDisplayName(group.label, group.code),
+    code: group.code ?? "",
+    plan,
+    currentNav: position.current,
+    status:
+      position.inBuyZone || position.stopTriggered
+        ? position.label
+        : position.inSellZone
+          ? "已入卖区"
+          : position.nearSell
+            ? `接近卖区（差 ${position.sellDistance!.toFixed(2)}%）`
+            : position.label,
+    ...action,
+    holdingReturnPct:
+      group.reference?.holdingProfit?.state === "AVAILABLE"
+        ? group.reference.holdingProfit.profitPct
+        : null,
+  };
 }
 
 export default function MyFundsWorkspace(props: MyFundsWorkspaceProps) {
@@ -551,6 +659,10 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [openRequest, setOpenRequest] = useState<{
+    id: string;
+    request: number;
+  }>();
   const term = search.trim().toLocaleLowerCase();
   const matches = (row: PersonalFundGroup) =>
     !term ||
@@ -575,6 +687,18 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         .toLocaleLowerCase()
         .includes(term),
   );
+  const quickRows = sortPersonalFunds(groups).flatMap((group) => {
+    const row = quickOperationRow(group);
+    return row ? [row] : [];
+  });
+  function openFromTable(id: string) {
+    setFilter("all");
+    setSearch("");
+    setOpenRequest((previous) => ({
+      id,
+      request: (previous?.request ?? 0) + 1,
+    }));
+  }
   function review(id: string) {
     setReviewOpen(true);
     setParams((previous) => {
@@ -669,7 +793,10 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
         </button>
       </header>
       {(list.isSuccess || reference.isSuccess) && (
-        <HoldingOverview groups={groups} />
+        <>
+          <HoldingOverview groups={groups} />
+          <OperationQuickTable rows={quickRows} onSelect={openFromTable} />
+        </>
       )}
       <div className="op-my-funds-toolbar">
         <nav aria-label="我的基金筛选">
@@ -738,6 +865,9 @@ function Workspace({ actor, renderStudyTracking }: MyFundsWorkspaceProps) {
               onReview={review}
               onCancel={() => void cancel(group)}
               pending={pending !== null}
+              requestedOpen={
+                openRequest?.id === group.key ? openRequest.request : undefined
+              }
             />
           ))}
           {list.isSuccess && !reference.isPending && !filtered.length && (

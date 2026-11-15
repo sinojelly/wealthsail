@@ -71,7 +71,7 @@ function data() {
     },
   } as unknown as OpportunityContext;
 }
-it("sorts entry by percentile then strictly by distance, keeping exactly 2% folded and merging fund appearances", () => {
+it("sorts entry by percentile, includes exactly 2% in the near group, and opens only buys", () => {
   const board = buildTodayBoard(data());
   expect(board.funds.map((f) => f.code)).toEqual([
     "000105",
@@ -83,10 +83,11 @@ it("sorts entry by percentile then strictly by distance, keeping exactly 2% fold
   expect(board.funds.map((f) => f.priority.expanded)).toEqual([
     true,
     true,
-    true,
-    true,
+    false,
+    false,
     false,
   ]);
+  expect(board.funds.at(-1)?.priority.tone).toBe("near");
   expect(board.funds.find((f) => f.code === "000102")?.origins).toEqual([
     "AI硬件",
     "存储主题",
@@ -176,7 +177,7 @@ it("uses the valid displayed prices and only primary funds for theme badges", ()
     board.insights.find((row) => row.key === "研究主题:grid"),
   ).toMatchObject({ funds: [], priority: { label: "主题观察" } });
 });
-it("keeps one preferred representative across providers in the same track", () => {
+it("keeps each buy for a different fund distinct in the same track", () => {
   const value = data();
   const a = { ...plan("001631", 0), label: "天弘中证食品饮料ETF联接A" };
   const c = { ...plan("001632", 0), label: "天弘中证食品饮料ETF联接C" };
@@ -194,19 +195,12 @@ it("keeps one preferred representative across providers in the same track", () =
       .map((f) => [f.code, f.priority.expanded]),
   ).toEqual([
     ["001632", true],
-    ["001631", false],
-    ["001633", false],
-  ]);
-  const group = board.groups.find(
-    (row) => row.representative.code === "001632",
-  );
-  expect(group?.alternatives.map((fund) => fund.code)).toEqual([
-    "001631",
-    "001633",
+    ["001631", true],
+    ["001633", true],
   ]);
 });
 
-it("automatically opens every current representative with one year of verified NAV", () => {
+it("automatically opens the first eight verified current buys", () => {
   const value = data();
   value.dailyResearch!.report!.valueDirections = [];
   value.dailyResearch!.report!.topicCatalog = [];
@@ -266,12 +260,11 @@ it("automatically opens every current representative with one year of verified N
     "000208",
     "000209",
     "000210",
-    "000211",
   ]);
   expect(board.holdingAlerts.map((fund) => fund.code)).toEqual(["000309"]);
 });
 
-it("opens a non-actionable alternate from a research association without opening its chart", () => {
+it("reveals the waiting pool from a research association without opening its chart", () => {
   const value = data();
   const report = value.dailyResearch!.report!;
   report.valueDirections![0].plans = [
@@ -285,7 +278,7 @@ it("opens a non-actionable alternate from a research association without opening
       onViewEvidence={() => {}}
     />,
   );
-  const details = screen.getByText(/同赛道备选基金/).closest("details")!;
+  const details = screen.getByText(/观望等待池/).closest("details")!;
   expect(details).not.toHaveAttribute("open");
   fireEvent.click(screen.getByText(/研究方向与主题/));
   fireEvent.click(
@@ -295,7 +288,9 @@ it("opens a non-actionable alternate from a research association without opening
     screen.getByRole("link", { name: /华夏中证金融科技ETF联接A/ }),
   );
   expect(details).toHaveAttribute("open");
-  const row = within(details).getByTestId("today-fund-row");
+  const row = within(details)
+    .getAllByTestId("today-fund-row")
+    .find((fund) => fund.getAttribute("data-fund-code") === "023884")!;
   expect(row).not.toHaveAttribute("open");
   expect(within(row).queryByText("参考买入区间")).toBeNull();
 });
@@ -313,7 +308,7 @@ it("shows every insight, mounts each fund once, and only mounts a folded fund af
     "000102",
     "000101",
   ]);
-  expect(within(funds).getAllByText("参考买入区间")).toHaveLength(4);
+  expect(within(funds).getAllByText("参考买入区间")).toHaveLength(2);
   expect(screen.queryByRole("region", { name: "本期提及基金" })).toBeNull();
   const research = screen.getByRole("region", { name: "全部研究洞察" });
   expect(within(research).getByText("AI硬件")).not.toBeVisible();

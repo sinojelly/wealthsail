@@ -1,0 +1,56 @@
+.op-operation-quick {
+  min-width: 0;
+  margin-block: 0.8rem 1.1rem;
+  padding: 0.85rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.65rem;
+  background: #fff;
+}
+.op-operation-quick h3 {
+  margin-block-end: 0.65rem;
+  color: #223b52;
+}
+.op-operation-quick-scroll {
+  overflow: auto;
+  max-height: 20rem;
+}
+.op-operation-quick table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 51rem;
+  color: #253b4e;
+  text-align: left;
+  font-size: 0.83rem;
+}
+.op-operation-quick :is(td, th) {
+  padding: 0.45rem;
+  vertical-align: top;
+  border-block-end: 1px solid #e9eff3;
+}
+.op-operation-quick thead th {
+  position: sticky;
+  top: 0;
+  background: #f5f8fa;
+}
+.op-operation-quick tbody tr {
+  cursor: pointer;
+}
+.op-operation-quick tbody tr:is(:hover, :focus-within) {
+  background: #f0f8f6;
+}
+.op-operation-quick tbody th {
+  min-width: 8rem;
+}
+.op-operation-quick tbody th button {
+  padding: 0;
+  text-align: left;
+  font-weight: 650;
+}
+.op-operation-quick small {
+  display: block;
+  font-size: 0.75rem;
+  color: #566c80;
+}
+.op-operation-quick td:nth-child(4) {
+  white-space: nowrap;
+}

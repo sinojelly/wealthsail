@@ -251,8 +251,11 @@ export function personalFundPriority(group: PersonalFundGroup) {
   const nearBuy =
     !position.stopTriggered &&
     position.buyDistance != null &&
-    position.buyDistance < 2;
-  const nearSell = position.sellDistance != null && position.sellDistance < 2;
+    position.buyDistance <= 2;
+  const nearSell =
+    !position.stopTriggered &&
+    position.sellDistance != null &&
+    position.sellDistance <= 5;
   const held =
     !!group.holding || !!group.reference?.relationships.includes("HELD");
   const rank =
@@ -286,10 +289,13 @@ export function personalFundPriority(group: PersonalFundGroup) {
                 : "价格资料待补齐";
   return {
     ...position,
+    nearBuy,
+    nearSell,
     rank,
     distance: distance ?? Infinity,
     label,
-    defaultExpanded: rank < 3,
+    defaultExpanded:
+      rank === 1 ? position.inSellZone || position.sellDistance! < 2 : rank < 3,
   };
 }
 

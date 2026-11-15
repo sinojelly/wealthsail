@@ -39,7 +39,7 @@ def _has_price_trigger(fund):
     if status == "ENTRY_ZONE" or position.get("stopTriggered") is True or (
         status != "DATA_PENDING"
         and type(distance) in (int, float)
-        and 0 <= distance < 2
+        and 0 <= distance <= 2
     ):
         return True
     plan = fund.get("actionableZones") or {}

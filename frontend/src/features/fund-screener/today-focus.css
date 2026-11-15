@@ -23,8 +23,7 @@
 .op-insight-fund {
   container-type: inline-size;
 }
-.op-today-guide,
-.op-today-origins {
+.op-today-guide {
   color: #617387;
   font-size: 0.875rem;
   line-height: 1.7;
@@ -43,6 +42,13 @@
   padding: 0.9rem 1rem;
   line-height: 1.7;
 }
+.op-today-fund {
+  scroll-margin-top: 1rem;
+}
+.op-today-fund > summary > .op-today-fund-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .op-today-fund > summary > *,
 .op-today-insight > summary > * {
   margin-inline-end: 0.7rem;
@@ -60,12 +66,53 @@
   font-size: 0.85rem;
   color: #40576d;
 }
-.op-today-origins a {
-  margin-inline-start: 0.65rem;
+.op-today-group {
+  margin-block: 1rem;
 }
-.op-today-fund-thesis {
+.op-today-group > h3,
+.op-today-waiting > summary {
+  color: #253e55;
+  font-weight: 650;
+}
+.op-today-waiting > summary {
+  cursor: pointer;
+  padding-block: 0.6rem;
+}
+.op-today-reading {
+  border: 1px solid #dbe9f2;
+  background: #f6fafc;
+  border-radius: 0.55rem;
+  margin-block: 0.75rem;
+  padding: 0.75rem;
+}
+.op-today-reading h4 {
+  margin: 0 0 0.45rem;
+  font-weight: 650;
+}
+.op-today-reading dl {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+}
+.op-today-reading dl > div {
+  display: grid;
+  grid-template-columns: minmax(7.5em, max-content) 1fr;
+  gap: 0 0.6rem;
+}
+.op-today-reading :is(dt, dd) {
+  margin: 0;
   font-size: 0.9rem;
-  line-height: 1.7;
+  line-height: 1.6;
+}
+.op-today-reading dt {
+  font-weight: 600;
+}
+.op-today-reading a {
+  margin-inline-start: 0.5rem;
+}
+.op-today-backtest {
+  color: #40576d;
+  font-size: 0.82rem;
 }
 .op-today-fund[open] > summary,
 .op-today-insight[open] > summary {
@@ -79,21 +126,6 @@
   border: 0;
   margin: 0;
   padding: 0.5rem 0;
-}
-.op-today-track-alternatives {
-  margin: -0.35rem 0 0.65rem 0.7rem;
-  padding: 0.2rem 0.55rem 0.25rem 0.6rem;
-  border-inline-start: 2px solid #dce5eb;
-}
-.op-today-track-alternatives > summary {
-  cursor: pointer;
-  color: #53687b;
-  font-size: 0.8rem;
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-.op-today-track-alternatives > summary > span {
-  margin-inline-start: 0.5rem;
 }
 .op-today-holding-alerts {
   display: flex;
@@ -140,6 +172,13 @@
   color: #617387;
 }
 @media (max-width: 600px) {
+  .op-today-fund > summary > .op-today-fund-name {
+    display: block;
+    margin: 0.25rem 0 0 1rem;
+  }
+  .op-today-reading dl > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .op-today-summary-prices {
     display: block;
     margin-left: 1rem;

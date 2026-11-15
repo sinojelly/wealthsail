@@ -2973,22 +2973,15 @@
     break-inside: avoid;
   }
 }
-.op-nav-legend i {
+.op-nav-legend i,
+.op-nav-legend svg {
   display: inline-block;
   width: 14px;
-  height: 4px;
   margin-right: 4px;
   vertical-align: middle;
 }
-.op-nav-legend .buy {
-  background: #a7ead9;
-  height: 8px;
-  border: 1px solid #73c2b2;
-}
-.op-nav-legend .sell {
-  background: #ffd2dc;
-  height: 8px;
-  border: 1px solid #efa8b8;
+.op-nav-legend i {
+  height: 4px;
 }
 .op-nav-legend .stop {
   border-top: 1px dashed #d14343;

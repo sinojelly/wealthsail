@@ -223,7 +223,16 @@ function TrendView({
             <div className="op-nav-legend">
               {completeBand && (
                 <span>
-                  <i className="buy" aria-hidden="true" />
+                  <svg className="buy" width="14" height="8" aria-hidden="true">
+                    <rect
+                      x=".5"
+                      y=".5"
+                      width="13"
+                      height="7"
+                      fill="#a7ead9"
+                      stroke="#73c2b2"
+                    />
+                  </svg>
                   建议买入区间
                 </span>
               )}
@@ -235,7 +244,21 @@ function TrendView({
               )}
               {completeSellBand && (
                 <span>
-                  <i className="sell" aria-hidden="true" />
+                  <svg
+                    className="sell"
+                    width="14"
+                    height="8"
+                    aria-hidden="true"
+                  >
+                    <rect
+                      x=".5"
+                      y=".5"
+                      width="13"
+                      height="7"
+                      fill="#ffd2dc"
+                      stroke="#efa8b8"
+                    />
+                  </svg>
                   建议卖出区间
                 </span>
               )}

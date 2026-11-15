@@ -96,7 +96,7 @@ def price_position(plan, now):
             label="进入技术参考区间",
             reasons=["TECHNICAL_ENTRY_ZONE_ONLY"],
         )
-    elif distances and min(distances) < 2:
+    elif distances and min(distances) <= 2:
         result.update(
             status="NEAR_ENTRY_ZONE", label="接近技术买区",
             reasons=["WITHIN_TWO_PERCENT_OF_ENTRY_ZONE"],

@@ -39,7 +39,7 @@ it("does not create a personal fund from a research mention returned by an old s
   ).toEqual([]);
 });
 
-it("prioritizes held stop/sell references before near buy opportunities and folds an exact 2 percent boundary", () => {
+it("prioritizes held stop/sell references and includes the exact 2 percent buy boundary", () => {
   const groups = groupPersonalFunds({ items: [], total: 0 }, today, [
     reference("000001", "HELD", "1"),
     reference("000002", "WATCHLIST", "0.999"),
@@ -51,12 +51,16 @@ it("prioritizes held stop/sell references before near buy opportunities and fold
   expect(sortPersonalFunds(groups).map((row) => row.code)).toEqual([
     "000004",
     "000003",
+    "000001",
     "000006",
     "000005",
     "000002",
-    "000001",
   ]);
-  expect(personalFundPriority(groups[0]).defaultExpanded).toBe(false);
+  expect(personalFundPriority(groups[0])).toMatchObject({
+    nearBuy: true,
+    nearSell: true,
+    defaultExpanded: false,
+  });
   expect(personalFundPriority(groups[2]).defaultExpanded).toBe(true);
   expect(personalFundPriority(groups[3]).label).toContain("止损");
 });

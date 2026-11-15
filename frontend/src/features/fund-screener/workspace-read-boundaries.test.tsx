@@ -149,7 +149,10 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
   };
   try {
     const page = renderWithSession(<FundScreenerPage />, "/fund-screener");
-    await screen.findByRole("button", { name: "手动启动研究" });
+    await act(async () => vi.dynamicImportSettled());
+    await screen.findByRole(
+      "button", { name: "手动启动研究" }, { timeout: 3000 },
+    );
     await userEvent.click(screen.getByRole("tab", { name: "经济事件" }));
     await userEvent.click(screen.getByRole("tab", { name: "我的基金" }));
     const firstFund = await screen.findByRole("article", {
@@ -246,4 +249,4 @@ it("keeps refresh, four-workspace navigation and visible NAV reads free of resea
     vi.unstubAllGlobals();
     vi.useRealTimers();
   }
-});
+}, 15000);

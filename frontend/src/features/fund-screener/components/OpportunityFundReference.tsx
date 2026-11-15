@@ -13,11 +13,13 @@ export default function OpportunityFundReference({
   name = plan.label,
   frozenNavHistories,
   immediateChart = false,
+  displayStatus,
 }: {
   plan: ActionableZoneResult;
   name?: string;
   frozenNavHistories?: Record<string, FundNavHistory | null>;
   immediateChart?: boolean;
+  displayStatus?: { label: string; tone: string };
 }) {
   const code = plan.fundCode ?? plan.subjectId;
   const historical = frozenNavHistories !== undefined;
@@ -43,6 +45,7 @@ export default function OpportunityFundReference({
         <QuantitativePricePanel
           plan={plan}
           basis={historical ? "研究时" : "当前"}
+          displayStatus={displayStatus}
         />
         {plan.priceBasis === "UNIT_NAV" && /^\d{6}$/.test(code) && (
           <ViewportFundChart

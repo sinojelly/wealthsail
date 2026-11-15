@@ -34,8 +34,8 @@ def held():
     "value,change,state",
     [
         ("0.7999", 0, "STOP_LOSS"),
-        ("0.8", 0, "BUY_ZONE"),
-        ("0.85", 0, "BUY_ZONE"),
+        ("0.8", 0, "NORMAL"),
+        ("0.85", 0, "NORMAL"),
         ("1.0", 0, "BUY_ZONE"),
         ("1.2", 0, "SELL_ZONE"),
         ("1.5", 0, "SELL_ZONE"),
@@ -70,7 +70,7 @@ def test_normal_holding_reports_distance_to_both_zones():
     assert item["distanceToStopPct"] == pytest.approx(30.4348)
 
 
-def test_a_frozen_study_keeps_its_own_coordinates_and_rsi_alone_is_not_an_action():
+def test_ready_current_zones_drive_the_reminder_and_retain_frozen_coordinates():
     owned = target(relationship=["HELD"])
     fresh = current_plan()
     fresh["tracks"][0].update(entryZoneMin="1.1", entryZoneMax="1.16")
@@ -79,9 +79,42 @@ def test_a_frozen_study_keeps_its_own_coordinates_and_rsi_alone_is_not_an_action
         confirmed=confirmed("1.15", 99, actionableZones=fresh),
         now=NOW,
     )
+    assert item["state"] == "BUY_ZONE"
+    assert item["planOrigin"] == "CURRENT_ACTIONABLE_ZONES"
+    assert item["entryZoneMax"] == "1.16"
+    assert item["frozenReference"] == {
+        "asOf": "2026-10-19",
+        "entryZoneMin": "0.9",
+        "entryZoneMax": "1.1",
+    }
+
+
+def test_below_entry_zone_and_above_stop_is_an_observation():
+    item = sell_risk.evaluate_action_reminder(
+        held(), confirmed=confirmed("0.85", actionableZones=current_plan()), now=NOW
+    )
     assert item["state"] == "NORMAL"
-    assert item["planOrigin"] == "FROZEN_STUDY"
-    assert item["entryZoneMax"] == "1.1"
+    assert item["distanceToBuyPct"] == pytest.approx(5.8824)
+
+
+@pytest.mark.asyncio
+async def test_current_holding_returns_use_actor_costs_and_comparable_confirmed_nav(
+    monkeypatch,
+):
+    conn = ActorFacts(
+        holdings=[
+            holding_row(total_shares="100", total_cost="100"),
+            holding_row("000216", total_shares="20", total_cost="100"),
+        ],
+    )
+    monkeypatch.setattr(
+        sell_risk,
+        "confirmed_quotes",
+        AsyncMock(return_value={"000051": confirmed("1.2"), "000216": confirmed("1.5")}),
+    )
+    result = await sell_risk.sell_risk_alerts(conn, TENANT, ACTOR, NOW)
+    assert result["holdingReturnPcts"] == {"000051": "20.00"}
+    assert "total_cost" not in str(result)
 
 
 def test_quote_without_comparable_zones_can_only_report_a_real_daily_move():

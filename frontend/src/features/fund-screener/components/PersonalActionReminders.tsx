@@ -3,6 +3,7 @@ import { fundDisplayName, planPrice } from "../plan-display";
 import { timeLabel } from "../macro-display";
 import { watchStateLabels } from "../watch-display";
 import { referenceTrack } from "../quantitative-position";
+import { fundOperationDistance } from "../fund-operation-distance";
 import "../my-funds.css";
 import type {
   SellRiskAlert,
@@ -76,6 +77,7 @@ export default function PersonalActionReminders({
   const dynamicReference = (
     code: string | undefined,
     frozenAsOf: string | null | undefined,
+    quoteAsOf: string | null | undefined,
   ) => {
     const plan = currentPlans.get(code);
     const track = plan && referenceTrack(plan);
@@ -85,18 +87,11 @@ export default function PersonalActionReminders({
       track?.priceState !== "READY" ||
       (plan.priceRefresh && plan.priceRefresh.state !== "READY") ||
       !frozenAsOf ||
-      plan.asOf.slice(0, 10) <= frozenAsOf.slice(0, 10)
+      plan.asOf.slice(0, 10) < frozenAsOf.slice(0, 10) ||
+      (quoteAsOf && plan.asOf.slice(0, 10) > quoteAsOf.slice(0, 10))
     )
       return null;
-    return (
-      <span className="op-reminder-dynamic-reference">
-        最新动态参考（{timeLabel(plan.asOf)}） · 买入区间{" "}
-        {price(track.entryZoneMin)}–{price(track.entryZoneMax)} · 卖出区间{" "}
-        {price(track.sellZoneMin ?? track.takeProfitT1)}–
-        {price(track.sellZoneMax ?? track.takeProfitT2)} · 止损{" "}
-        {price(track.stopLossPrice)}
-      </span>
-    );
+    return { plan, track };
   };
   const distance = (value: number | null) =>
     value != null && Number.isFinite(value) ? `${value.toFixed(2)}%` : "—";
@@ -107,25 +102,94 @@ export default function PersonalActionReminders({
     LARGE_DAILY_MOVE: "⚡ 当日大幅波动提醒",
     NORMAL: "区间中部观察",
   };
-  const describe = (row: PersonalActionReminder) => (
+  const frozenFootnote = (
+    day: string | null | undefined,
+    low: PersonalActionReminder["entryZoneMin"] | undefined,
+    high: PersonalActionReminder["entryZoneMax"] | undefined,
+  ) =>
+    day &&
+    low != null &&
+    high != null && (
+      <small className="op-reminder-frozen-note">
+        （原 {day.slice(5, 10)} 历史冻结买区：{price(low)}–{price(high)}）
+      </small>
+    );
+  const references = (
+    date: string | null | undefined,
+    buyLow: PersonalActionReminder["entryZoneMin"] | undefined,
+    buyHigh: PersonalActionReminder["entryZoneMax"] | undefined,
+    sellLow: PersonalActionReminder["sellZoneMin"] | undefined,
+    sellHigh: PersonalActionReminder["sellZoneMax"] | undefined,
+    stop: PersonalActionReminder["stopLossPrice"] | undefined,
+    frozen = false,
+  ) => (
+    <span className="op-reminder-dynamic-reference">
+      {frozen ? "历史冻结参考" : "最新动态参考"}
+      {date && `（${timeLabel(date)}）`} · 买入区间 {price(buyLow)}–
+      {price(buyHigh)} · 卖出区间 {price(sellLow)}–{price(sellHigh)} · 止损{" "}
+      {price(stop)}
+    </span>
+  );
+  const legacyReference = (row: PersonalActionReminder) =>
+    row.planOrigin === "FROZEN_STUDY"
+      ? dynamicReference(row.fundCode, row.planAsOf, row.asOf)
+      : null;
+  const currentStatus = (
+    row: PersonalActionReminder,
+    dynamic: ReturnType<typeof legacyReference>,
+  ): PersonalActionReminder["state"] => {
+    if (!dynamic) return row.state;
+    const position = fundOperationDistance(dynamic.plan, row.value);
+    if (position.stopTriggered) return "STOP_LOSS";
+    if (position.inSellZone) return "SELL_ZONE";
+    if (
+      position.inBuyZone &&
+      !dynamic.plan.entryBlocked &&
+      !dynamic.track.entryBlocked &&
+      !dynamic.plan.subscriptionRestricted &&
+      !dynamic.track.subscriptionRestricted
+    )
+      return "BUY_ZONE";
+    return row.triggerStates.includes("LARGE_DAILY_MOVE")
+      ? "LARGE_DAILY_MOVE"
+      : "NORMAL";
+  };
+  const describe = (
+    row: PersonalActionReminder,
+    dynamic = legacyReference(row),
+  ) => (
     <>
+      {dynamic
+        ? references(
+            dynamic.plan.asOf,
+            dynamic.track.entryZoneMin,
+            dynamic.track.entryZoneMax,
+            dynamic.track.sellZoneMin ?? dynamic.track.takeProfitT1,
+            dynamic.track.sellZoneMax ?? dynamic.track.takeProfitT2,
+            dynamic.track.stopLossPrice,
+          )
+        : row.planOrigin !== "NONE" &&
+          references(
+            row.planAsOf,
+            row.entryZoneMin,
+            row.entryZoneMax,
+            row.sellZoneMin,
+            row.sellZoneMax,
+            row.stopLossPrice,
+            row.planOrigin === "FROZEN_STUDY",
+          )}
+      {dynamic &&
+        frozenFootnote(row.planAsOf, row.entryZoneMin, row.entryZoneMax)}
+      {row.frozenReference &&
+        frozenFootnote(
+          row.frozenReference.asOf,
+          row.frozenReference.entryZoneMin,
+          row.frozenReference.entryZoneMax,
+        )}
       <span>
         {row.basis === "CONFIRMED_NAV" ? "确认净值" : "估算净值"}{" "}
         {price(row.value)} · {timeLabel(row.asOf)}
       </span>
-      {row.planOrigin === "FROZEN_STUDY" &&
-        dynamicReference(row.fundCode, row.planAsOf)}
-      <span>
-        {row.planOrigin === "FROZEN_STUDY" && (
-          <>原冻结计划（{timeLabel(row.planAsOf)}，本提醒依据） · </>
-        )}
-        买入区间 {price(row.entryZoneMin)}–{price(row.entryZoneMax)} · 止盈 T1 /
-        T2 {price(row.sellZoneMin)} / {price(row.sellZoneMax)} · 止损{" "}
-        {price(row.stopLossPrice)}
-      </span>
-      {row.planOrigin !== "FROZEN_STUDY" && row.planAsOf && (
-        <small>参考区间日期：{timeLabel(row.planAsOf)}</small>
-      )}
       {row.dailyChangePct != null &&
         Number.isFinite(Number(row.dailyChangePct)) && (
           <span>
@@ -158,25 +222,31 @@ export default function PersonalActionReminders({
         <>
           {!!currentReminders.length && (
             <ul>
-              {currentReminders.map((row) => (
-                <li
-                  key={`${row.fundCode}:${row.state}`}
-                  className={
-                    row.state === "STOP_LOSS" ? "op-reminder-risk" : ""
-                  }
-                >
-                  <strong>
-                    {fundDisplayName(row.label, row.fundCode)} {row.fundCode}：
-                    {reminderLabels[row.state]}
-                  </strong>
-                  {describe(row)}
-                  {row.triggerStates
-                    .filter((state) => state !== row.state)
-                    .map((state) => (
-                      <small key={state}>{reminderLabels[state]}</small>
-                    ))}
-                </li>
-              ))}
+              {currentReminders.map((row) => {
+                const dynamic = legacyReference(row);
+                const state = currentStatus(row, dynamic);
+                return (
+                  <li
+                    key={`${row.fundCode}:${row.state}`}
+                    className={state === "STOP_LOSS" ? "op-reminder-risk" : ""}
+                  >
+                    <strong>
+                      {fundDisplayName(row.label, row.fundCode)} {row.fundCode}
+                      ：{reminderLabels[state]}
+                    </strong>
+                    {describe(row, dynamic)}
+                    {row.triggerStates
+                      .filter(
+                        (trigger) =>
+                          trigger !== state &&
+                          (!dynamic || trigger === "LARGE_DAILY_MOVE"),
+                      )
+                      .map((trigger) => (
+                        <small key={trigger}>{reminderLabels[trigger]}</small>
+                      ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
           {!!normal.length && (
@@ -228,8 +298,6 @@ export default function PersonalActionReminders({
                     : "待核实"
                   : watchStateLabels[watch!.state]}
               </strong>
-              {group.market === "FUND_CN" &&
-                dynamicReference(group.code, watch?.frozenPlan?.asOf)}
               <span>
                 {track.title} ·{" "}
                 {group.market === "UNKNOWN" ? "市场待核实" : group.market} ·

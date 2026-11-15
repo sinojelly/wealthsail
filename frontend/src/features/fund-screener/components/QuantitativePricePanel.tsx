@@ -9,11 +9,14 @@ import "../fund-price-tracks.css";
 export default function QuantitativePricePanel({
   plan,
   basis = "当前",
+  displayStatus,
 }: {
   plan: ActionableZoneResult;
   basis?: string;
+  displayStatus?: { label: string; tone: string };
 }) {
   const position = quantitativePosition(plan);
+  const status = displayStatus ?? position;
   const track = position.track;
   const price = (value: string | number | null | undefined) =>
     planPrice(value, plan);
@@ -24,8 +27,8 @@ export default function QuantitativePricePanel({
     <section className="op-core-price-panel" aria-label="参考买卖点与操作状态">
       <header>
         <strong>参考买卖点与操作状态</strong>
-        <span className="op-position-badge" data-tone={position.tone}>
-          {position.label}
+        <span className="op-position-badge" data-tone={status.tone}>
+          {status.label}
         </span>
       </header>
       <small>

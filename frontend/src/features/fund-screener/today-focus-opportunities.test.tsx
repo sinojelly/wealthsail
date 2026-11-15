@@ -6,6 +6,7 @@ import type {
 } from "../../api/investment";
 import { frozenPlan } from "./personal-funds.test-data";
 import TodayFocus from "./components/TodayFocus";
+import { todayPriority } from "./today-action-board";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -142,6 +143,7 @@ it("merges real scan signals with AI funds and keeps non-actionable scans folded
     track: "RIGHT_TREND",
     state: "CANDIDATE",
   });
+  Object.assign(trend.indicators, { ma20: 1.2, ma60: 1.17 });
   Object.assign(data.dailyResearch!.report!, {
     valueDirections: [
       {
@@ -175,11 +177,11 @@ it("merges real scan signals with AI funds and keeps non-actionable scans folded
     rows
       .filter((r) => r.hasAttribute("open"))
       .map((r) => r.getAttribute("data-fund-code")),
-  ).toEqual(["000101", "000102", "000103"]);
-  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(3);
+  ).toEqual(["000101", "000102"]);
+  expect(within(scan).getAllByText("参考买入区间")).toHaveLength(2);
 });
 
-it("uses the strict two percent boundary for expansion and preserves all scans", () => {
+it("groups both 1.99% and 2% into the buy watch group with charts collapsed", () => {
   const data = context();
   Object.assign(data.dailyResearch!.report!, {
     quantitativeScan: {
@@ -191,8 +193,10 @@ it("uses the strict two percent boundary for expansion and preserves all scans",
   });
   renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
   const rows = screen.getAllByTestId("today-fund-row");
-  expect(rows[0]).toHaveAttribute("open");
+  expect(rows[0]).not.toHaveAttribute("open");
   expect(rows[1]).not.toHaveAttribute("open");
+  expect(rows[0].closest("section")).toHaveAccessibleName(/即将入区/);
+  expect(rows[1].closest("section")).toHaveAccessibleName(/即将入区/);
   expect(within(rows[1]).queryByText("参考买入区间")).toBeNull();
   fireEvent.click(within(rows[1]).getByText(/基金000202/));
 });
@@ -246,7 +250,9 @@ it("shows same-track buys and their logic alongside the right-trend evidence", a
   ]);
   expect(within(rows[0]).getByText(/上游价格走高/)).toBeVisible();
   expect(within(rows[0]).getByText(/关注煤炭价格与库存/)).toBeVisible();
-  expect(within(rows[1]).getByText("已入买区")).toBeVisible();
+  expect(
+    within(rows[1].querySelector("summary")!).getByText("已入买区"),
+  ).toBeVisible();
   expect(within(rows[2]).getByText(/MA20 1.2180 > MA60 1.1450/)).toBeVisible();
   expect(within(rows[2]).getByText(/RSI14 53.5/)).toBeVisible();
   expect(within(rows[2]).getByText(/近20日 \+7.50%/)).toBeVisible();
@@ -296,10 +302,83 @@ it("uses displayed current price and reference bands for urgency rather than a s
     rows
       .filter((r) => r.hasAttribute("open"))
       .map((r) => r.getAttribute("data-fund-code")),
-  ).toEqual(["000212", "000214"]);
+  ).toEqual([]);
   expect(
     rows
       .filter((r) => !r.hasAttribute("open"))
       .map((r) => r.getAttribute("data-fund-code")),
-  ).toEqual(["000211", "000213"]);
+  ).toEqual(["000212", "000214", "000211", "000213"]);
+});
+
+it("puts near-sell coal above its trend signal and opens its single chart from any quick-table cell", async () => {
+  vi.stubGlobal("IntersectionObserver", undefined);
+  const data = context();
+  const coal = plan("161032", "2.1560");
+  coal.label = "富国中证煤炭指数(LOF)A";
+  coal.tracks[0].entryZoneMin = "1.8800";
+  coal.tracks[0].entryZoneMax = "1.9501";
+  coal.tracks[0].takeProfitT1 = "2.2332";
+  coal.tracks[0].takeProfitT2 = "2.3100";
+  coal.tracks[0].buyZoneBacktest = {
+    touchCount: 8,
+    evaluatedCount: 6,
+    winRatePct: 50,
+    averageMaxReboundPct: 7.4,
+    forwardObservations: 60,
+    winThresholdPct: 5,
+  };
+  coal.indicators = {
+    navPercentile2y: 68.6,
+    ma20: 2.05,
+    ma60: 2,
+    excessReturn20d: 5,
+  };
+  coal.macroOpportunity = {
+    stance: "TAILWIND",
+    label: "宏观/政策顺风",
+    rationale: "上游价格走高有利于煤炭收入。",
+    riskLevel: "NONE",
+  };
+  coal.industryCycle = {
+    stage: "UNKNOWN",
+    evidenceSummary: "炼焦煤库存累积，下游钢厂需求偏弱。",
+  };
+  data.dailyResearch!.report!.discoveryActionableZones = [coal];
+  renderWithSession(<TodayFocus data={data} onViewEvidence={() => {}} />);
+  const fund = screen.getByTestId("today-fund-row");
+  expect(fund.closest("section")).toHaveAccessibleName(/高位止盈参考/);
+  expect(fund).not.toHaveAttribute("open");
+  expect(within(fund).queryByText(/宏观\/政策顺风/)).toBeNull();
+  const table = screen.getByRole("table", { name: "今日操作速览" });
+  fireEvent.click(within(table).getByText(/高位勿追，持仓/));
+  expect(fund).toHaveAttribute("open");
+  expect(within(fund).getByText(/68.6% 分位.*9.55%.*3.58%/)).toBeVisible();
+  expect(
+    within(
+      within(fund).getByRole("region", { name: "投研结论与操作理由" }),
+    ).getByText(/炼焦煤库存累积/),
+  ).toBeVisible();
+  expect(
+    within(
+      within(fund).getByRole("region", { name: "参考买卖点与操作状态" }),
+    ).getByText(/接近卖出参考区/),
+  ).toBeVisible();
+  expect(within(fund).getByText(/按当前区间回看触及 8 次/)).toBeVisible();
+  expect(within(fund).queryByText(/上游价格走高/)).toBeNull();
+  await act(async () => vi.dynamicImportSettled());
+  expect(
+    within(fund).getAllByRole("img", { name: "161032单位净值走势" }),
+  ).toHaveLength(1);
+});
+
+it("requires observed strength rather than a saved candidate flag for a right-side row", () => {
+  const p = plan("000001", "1.25");
+  p.tracks.push({ ...p.tracks[0], state: "CANDIDATE", track: "RIGHT_TREND" });
+  Object.assign(p.indicators, { ma20: 1.25, ma60: 1.2, excessReturn20d: 2 });
+  expect(todayPriority(p).tone).toBe("neutral");
+  p.indicators.ma20 = 1.2;
+  expect(todayPriority(p).tone).toBe("trend");
+  p.indicators.ma20 = 1.25;
+  p.indicators.excessReturn20d = 2.01;
+  expect(todayPriority(p).tone).toBe("trend");
 });
