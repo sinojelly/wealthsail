@@ -2347,7 +2347,10 @@ def _sentiment_from_ak(df) -> dict:
         base + Decimal("0.5") * min(limit_up, 20) - Decimal("1.0") * min(limit_down, 20)
     )
     score = max(Decimal("0"), min(Decimal("100"), score))
+    from backend.integrations.china_market_trends import TURNOVER_METHOD, covered_turnover
+
     now = datetime.now(_SHANGHAI_TZ)
+    close_turnover = covered_turnover(df, now)
     return {
         "trade_date": now.date().isoformat(),
         "total_up": up,
@@ -2355,7 +2358,7 @@ def _sentiment_from_ak(df) -> dict:
         "total_flat": flat,
         "limit_up": limit_up,
         "limit_down": limit_down,
-        "turnover": turnover_yi.quantize(Decimal("0.01")),
+        "turnover": close_turnover if close_turnover is not None else turnover_yi.quantize(Decimal("0.01")),
         "sentiment_score": score.quantize(Decimal("0.01")),
         "total": total,
         "source_name": AKSOURCE_NAME,
@@ -2367,7 +2370,7 @@ def _sentiment_from_ak(df) -> dict:
             if source_rows
             else None
         ),
-        "method_version": "sentiment/v2",
+        "method_version": TURNOVER_METHOD if close_turnover is not None else "sentiment/v2",
     }
 
 

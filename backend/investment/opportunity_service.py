@@ -398,6 +398,10 @@ async def get_context(
     if "moneySupplySpread" in market_snapshot:
         live_gap = next(row for row in market_snapshot["series"] if row["code"] == "M1_M2_GAP")
         series = [row for row in series if row.get("code") != "M1_M2_GAP"] + [live_gap]
+    from backend.macro.china_market_dashboard import add_live_dashboard_series
+
+    with trace_stage("context.china_market_dashboard"):
+        series = await add_live_dashboard_series(conn, series, now)
     return {
         **base,
         **personal,

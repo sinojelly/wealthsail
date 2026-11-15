@@ -295,6 +295,7 @@ export interface OpportunitySeries {
     definitionVersion?: string | null;
     accumulationStart?: string | null;
     accumulationEnd?: string | null;
+    retailCnyPerTonne?: number | null;
   };
   state:
     "READY" | "STALE" | "CONFLICT" | "NOT_COLLECTED" | "PERMISSION_REQUIRED";
@@ -302,7 +303,7 @@ export interface OpportunitySeries {
     previousValue: number | null;
     change5Samples: number | null;
     change20Samples: number | null;
-    changeUnit: "bp" | "pp" | "点" | "USD/barrel" | null;
+    changeUnit: "bp" | "pp" | "点" | "USD/barrel" | "元/升" | "亿元" | null;
     periodChange?: number | null;
     change3Months?: number | null;
     change6Months?: number | null;
@@ -325,6 +326,7 @@ export interface OpportunitySeries {
     revision?: number;
     definitionKey?: string | null;
     definitionVersion?: string | null;
+    retailCnyPerTonne?: number | null;
     metadata?: { definitionKey?: string; definitionVersion?: string };
   }>;
 }

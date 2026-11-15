@@ -259,6 +259,14 @@
   gap: 12px;
   margin: 8px 0 14px;
 }
+@media screen and (min-width: 1150px) {
+  .op-cycle-trends {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.op-cycle-market-percentile {
+  color: #486174;
+}
 .op-cycle-trend {
   min-width: 0;
   border: 1px solid #dde8ee;

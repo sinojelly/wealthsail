@@ -245,11 +245,38 @@ async def _finish_refresh(conn, claim, now, result, *, cancelled=False):
 
 
 async def fetch_opportunity_series(now, permissions=None):
+    import httpx
+
+    from backend.integrations.china_market_trends import INDEX_ROWS, fetch_index_rows
     from backend.integrations.opportunity_sources import (
         fetch_opportunity_series as fetch,
     )
 
-    return await fetch(now, permissions=permissions)
+    async def collect_index(client, code):
+        try:
+            rows = await asyncio.wait_for(fetch_index_rows(client, code, now), timeout=15)
+            return rows, {"status": "SUCCESS", "observations": len(rows)}
+        except (ValueError, TypeError, AttributeError, TimeoutError, httpx.HTTPError) as exc:
+            return [], {"status": "FAILED", "errorClass": type(exc).__name__}
+
+    async with httpx.AsyncClient(follow_redirects=False) as client:
+        data, *index_results = await asyncio.gather(
+            fetch(now, permissions=permissions),
+            *(collect_index(client, code) for code in INDEX_ROWS),
+        )
+    return {
+        **data,
+        "observations": [
+            *data.get("observations", []),
+            *(row for rows, _ in index_results for row in rows),
+        ],
+        "sourceResults": {
+            **data.get("sourceResults", {}),
+            **{source: outcome for (_, _, source), (_, outcome) in zip(
+                INDEX_ROWS.values(), index_results, strict=True,
+            )},
+        },
+    }
 
 
 def _quote_date(value, zone, retrieved, now):
@@ -387,6 +414,12 @@ def _source_key(record):
             and metadata.get("sourceKey") == "PBOC_TSF_HISTORY"
         ):
             return "PBOC_TSF_HISTORY"
+        if (
+            record.get("code") in repository.FUEL_CATALOG
+            and isinstance(metadata, dict)
+            and metadata.get("sourceKey") == repository.BEIJING_FUEL_HISTORY_SOURCE
+        ):
+            return repository.BEIJING_FUEL_HISTORY_SOURCE
         known = repository.CATALOG.get(record.get("code"))
         if known:
             return known[3]
@@ -434,6 +467,13 @@ def _prepare_records(records, finished, permissions, outcomes, *, newly_fetched)
 
 
 def _status(outcomes, rejected, inserted):
+    from backend.integrations.china_market_trends import INDEX_CATALOG
+
+    chart_sources = {item[3] for item in INDEX_CATALOG.values()}
+    rejected = max(
+        0, rejected - sum(outcomes.get(key, {}).get("rejected", 0) for key in chart_sources)
+    )
+    outcomes = {key: row for key, row in outcomes.items() if key not in chart_sources}
     active = [
         row.get("status")
         for row in outcomes.values()

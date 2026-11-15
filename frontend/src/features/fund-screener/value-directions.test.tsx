@@ -156,6 +156,8 @@ beforeEach(() => {
 it("keeps macro facts and strict plans before complete news in the market evidence workspace", async () => {
   await renderFullResearch();
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
+  const wall = screen.getByRole("region", { name: "核心指标" });
+  const pmi = within(wall).getByRole("article", { name: "制造业PMI" });
   const directions = await screen.findByRole("region", {
     name: "今日价值方向与买卖计划",
   });
@@ -167,9 +169,9 @@ it("keeps macro facts and strict plans before complete news in the market eviden
   expect(
     directions.compareDocumentPosition(news) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(macro).toHaveTextContent("50.1");
-  expect(within(macro).getByText("2026年9月")).toBeVisible();
-  expect(macro).not.toHaveTextContent("9月1日");
+  expect(pmi).toHaveTextContent("50.1");
+  expect(pmi).toHaveTextContent("2026年9月");
+  expect(pmi).not.toHaveTextContent("9月1日");
   expect(directions).toHaveTextContent("创新药与医疗修复");
   expect(directions).toHaveTextContent("2.0724–2.1108");
   expect(directions).toHaveTextContent("1.9851");

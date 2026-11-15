@@ -197,7 +197,7 @@ function SeriesHistory({ series }: { series: OpportunitySeries }) {
       </figcaption>
       <p role="status" aria-label={`${series.label} 历史明细`}>
         {active
-          ? `${dateLabel(active.date)}：${active.value} ${unitLabel(active.unit)} · 来源：${active.sourceName ?? series.sourceName ?? "待确认"} · 可得：${timeLabel(active.availableAt ?? active.retrievedAt)}`
+          ? `${dateLabel(active.date)}：${active.value} ${unitLabel(active.unit)}${finite(active.retailCnyPerTonne) ? ` · ${metricValue(active.retailCnyPerTonne)} 元/吨` : ""} · 来源：${active.sourceName ?? series.sourceName ?? "待确认"} · 可得：${timeLabel(active.availableAt ?? active.retrievedAt)}`
           : "悬停或键盘聚焦查看实际观察值与来源。"}
       </p>
     </figure>
@@ -211,7 +211,7 @@ export function SeriesCard({ series }: { series: OpportunitySeries }) {
         ? "基点"
         : series.changes.changeUnit === "pp"
           ? "个百分点"
-          : null;
+          : unitLabel(series.changes.changeUnit, "") || null;
   const change = (value: number | null | undefined) =>
     finite(value) && changeUnit
       ? `${value > 0 ? "+" : ""}${value.toFixed(2)} ${changeUnit}`
@@ -232,6 +232,11 @@ export function SeriesCard({ series }: { series: OpportunitySeries }) {
               ? `${metricValue(series.value)} ${unitLabel(series.unit)}`
               : "—"}
           </p>
+          {finite(series.metadata?.retailCnyPerTonne) && (
+            <p>
+              同批次：{metricValue(series.metadata.retailCnyPerTonne)} 元/吨
+            </p>
+          )}
           <p>
             {series.frequency === "YTD"
               ? `累计区间：${accumulationRange(series)}`

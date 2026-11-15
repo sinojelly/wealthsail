@@ -70,6 +70,7 @@ it("shows each macro code once in core cards while retaining the alternative ori
         value: 7.2,
         unit: "%",
         state: "READY",
+        referencePeriod: "2026-09",
         sourceUri: "https://example.org/official",
       },
     ],

@@ -9,6 +9,7 @@ import {
   type CycleFact,
 } from "../macro-cycle-overview";
 import { sourceHref } from "../macro-display";
+import { DomesticIndexTrends, TurnoverTrend } from "./ChinaMarketTrends";
 
 const activitySeries = [
   { code: "PMI", label: "制造业 PMI", color: "#146556" },
@@ -547,6 +548,22 @@ export default function MacroCycleTrends({
           {(nominal || real || vix !== undefined) &&
             `。最新 ${[nominal && `名义 ${nominal.value}%`, real && `实际 ${real.value}%`, vix !== undefined && `VIX ${vix.toFixed(2)}`].filter(Boolean).join("、")}`}
           。
+        </Guide>
+      </section>
+      <section className="op-cycle-trend" aria-label="A股主要指数">
+        <h4>📈 A 股主要指数与历史分位</h4>
+        <DomesticIndexTrends rows={data.series} cutoff={cutoff} />
+        <Guide>
+          收盘分位衡量指数点位在近两年样本中的位置。低于 25% 处于样本低端，高于
+          75% 处于样本高端。判断估值需结合盈利和估值倍数。
+        </Guide>
+      </section>
+      <section className="op-cycle-trend" aria-label="A股成交额">
+        <h4>💰 A 股成交活跃度</h4>
+        <TurnoverTrend rows={data.series} cutoff={cutoff} />
+        <Guide>
+          沪深京 A
+          股收盘成交额可与近期读数比较。放量表示成交更活跃，缩量表示交易趋淡。缺少可核对的沪深京同日记录时保留空白。
         </Guide>
       </section>
     </div>

@@ -346,6 +346,8 @@ async def test_collection_three_years_isolated_sources_and_restricted_zero_http(
         "PBOC_TSF",
         "PBOC_TSF_HISTORY",
         "PBOC_LOANS",
+        "BEIJING_FUEL",
+        "BEIJING_FUEL_HISTORY",
         "CHINABOND",
         "CFETS",
         "CPIAUCSL", "CPILFESL", "PPIACO", "DFF", "DGS2", "DCOILBRENTEU", "VIXCLS",

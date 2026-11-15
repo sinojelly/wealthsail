@@ -159,7 +159,7 @@ it("shows separate global, domestic, market and key-factor rows without inventin
   expect(board).toHaveTextContent("VIX 市场波动");
   expect(board).not.toHaveTextContent("联储表态与机构预测");
   expect(board).toHaveTextContent("进入绿色买区可参考持仓分批观察");
-  expect(within(board).getAllByText("💡 读图指南")).toHaveLength(4);
+  expect(within(board).getAllByText("💡 读图指南")).toHaveLength(6);
   rerender(<MacroCycleOverview data={data} factView />);
   expect(board).toHaveTextContent("全球利率与流动性");
   expect(board).toHaveTextContent("国内货币、财政与信用");
@@ -400,6 +400,35 @@ it("shows live fund prices beside the industry phase and formats the observed ra
   await userEvent.click(screen.getByText("核心行业周期与趋势 · 1 项"));
   expect(screen.getByRole("list", { name: "当前基金位置" })).toHaveTextContent(
     "024194 · 已入买区",
+  );
+});
+
+it("shows true daily index closes and leaves missing three-exchange turnover clear", () => {
+  const data = context();
+  data.series = [
+    {
+      code: "CN_SH_COMP",
+      unit: "点",
+      state: "READY",
+      sourceName: "东方财富",
+      sourceUri: "https://quote.eastmoney.com/zs000001.html",
+      history: [
+        { date: "2026-11-12", value: 3988.56, state: "OBSERVED" },
+        { date: "2026-11-13", value: 3997.33, state: "OBSERVED" },
+      ],
+    },
+  ] as OpportunityContext["series"];
+  render(<MacroCycleOverview data={data} />);
+  const indices = screen.getByRole("region", { name: "A股主要指数" });
+  expect(
+    within(indices).getByRole("img", { name: "上证指数日线走势" }),
+  ).toBeVisible();
+  expect(within(indices).getByText("上证指数 3,997.33 点")).toBeVisible();
+  expect(
+    within(indices).getByText("近两年历史样本不足，暂不计算分位"),
+  ).toBeVisible();
+  expect(screen.getByRole("region", { name: "A股成交额" })).toHaveTextContent(
+    "暂无可核对的收盘数据",
   );
 });
 

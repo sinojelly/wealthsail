@@ -21,6 +21,13 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from backend.integrations.fred_macro import FRED_HOST, LEVELS, PRICE_INDEXES, fred_uri, parse_fred_macro
+from backend.integrations.beijing_fuel import (
+    BEIJING_FUEL_HISTORY_SOURCE,
+    BEIJING_FUEL_HOSTS,
+    BEIJING_FUEL_SOURCE,
+    collect_beijing_fuel_current,
+    collect_beijing_fuel_history,
+)
 
 from backend.integrations.macro_official import (
     PBOC_RELEASE_INDEX,
@@ -43,6 +50,8 @@ SOURCE_KEYS = (
     "PBOC_TSF",
     "PBOC_TSF_HISTORY",
     "PBOC_LOANS",
+    BEIJING_FUEL_SOURCE,
+    BEIJING_FUEL_HISTORY_SOURCE,
     "CHINABOND",
     "CFETS",
     *PRICE_INDEXES,
@@ -110,6 +119,7 @@ def _url(value, *, publisher=None):
         "TREASURY": {"home.treasury.gov"},
         "PBOC": {"www.pbc.gov.cn", "pbc.gov.cn"},
         "FRED": {FRED_HOST},
+        "BEIJING_FUEL": BEIJING_FUEL_HOSTS,
     }
     host = (parts.hostname or "").lower()
     allowed = groups[publisher] if publisher else set().union(*groups.values())
@@ -463,7 +473,7 @@ async def _fetch_text(client, url):
             try:
                 return body.decode("utf-8-sig")
             except UnicodeDecodeError:
-                if original_host != "www.pbc.gov.cn":
+                if original_host != "www.pbc.gov.cn" and original_host not in BEIJING_FUEL_HOSTS:
                     raise
                 # Some official annual workbooks are exported as GB2312 HTML.
                 return body.decode("gb18030")
@@ -696,6 +706,8 @@ async def fetch_opportunity_series(now, permissions=None):
                 collect("PBOC_TSF", lambda: pboc("TSF_STOCK_YOY")),
                 collect("PBOC_TSF_HISTORY", lambda: _pboc_tsf_history(text, now)),
                 collect("PBOC_LOANS", lambda: pboc("CORP_MEDLONG_LOANS_YTD")),
+                collect(BEIJING_FUEL_SOURCE, lambda: collect_beijing_fuel_current(text, now)),
+                collect(BEIJING_FUEL_HISTORY_SOURCE, lambda: collect_beijing_fuel_history(text, now)),
                 *(collect(feed, lambda feed=feed: fred(feed))
                   for feed in SOURCE_KEYS if feed in PRICE_INDEXES or feed in LEVELS),
             )
@@ -718,13 +730,24 @@ async def fetch_opportunity_series(now, permissions=None):
         for row in observations
         if row.get("metadata", {}).get("sourceKey") == "PBOC_TSF"
     }
+    current_fuel_periods = {
+        (row["code"], row["referenceDate"])
+        for row in observations
+        if row.get("metadata", {}).get("sourceKey") == BEIJING_FUEL_SOURCE
+    }
     return {
         "observations": sorted(
             (
                 row
                 for row in observations
-                if row.get("metadata", {}).get("sourceKey") != "PBOC_TSF_HISTORY"
-                or row["referenceDate"] not in direct_stock_periods
+                if (
+                    row.get("metadata", {}).get("sourceKey") != "PBOC_TSF_HISTORY"
+                    or row["referenceDate"] not in direct_stock_periods
+                )
+                and (
+                    row.get("metadata", {}).get("sourceKey") != BEIJING_FUEL_HISTORY_SOURCE
+                    or (row["code"], row["referenceDate"]) not in current_fuel_periods
+                )
             ),
             key=lambda row: (row["code"], row["referenceDate"]),
         ),

@@ -194,6 +194,12 @@ async function openFullResearch() {
   if (!summary.closest("details")?.open) await userEvent.click(summary);
 }
 
+function currentPmi() {
+  const wall = screen.getByRole("region", { name: "核心指标" });
+  const indicator = within(wall).getByRole("article", { name: "制造业PMI" });
+  return within(indicator).getByText(/^50\.2\b/);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   Object.values(api).forEach((mock) => mock.mockReset());
@@ -299,7 +305,7 @@ it("waits for the selected opportunity report, including direction/index depende
   expect(
     within(macro).getByRole("heading", { name: "当前宏观事实" }),
   ).toBeVisible();
-  expect(within(macro).getByText("50.2")).toBeVisible();
+  expect(currentPmi()).toBeVisible();
   await openFullResearch();
   expect(
     screen.getByRole("region", { name: "服务器代表池基金观察" }),
@@ -393,7 +399,7 @@ it("preserves the current macro section before fund observations when a later re
   const { client } = mountPage();
   const macro = await screen.findByRole("region", { name: "今日宏观总纲" });
   const heading = within(macro).getByRole("heading", { name: "当前宏观事实" });
-  const pmi = within(macro).getByText("50.2");
+  const pmi = currentPmi();
   await openFullResearch();
 
   let refreshing!: Promise<void>;
@@ -430,7 +436,7 @@ it("preserves the current macro section before fund observations when a later re
   expect(within(macro).getByRole("heading", { name: "当前宏观事实" })).toBe(
     heading,
   );
-  expect(within(macro).getByText("50.2")).toBe(pmi);
+  expect(currentPmi()).toBe(pmi);
   expect(
     macro.compareDocumentPosition(funds) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -517,7 +523,7 @@ it("separates a timed-out current execution from the previous valid report and k
     within(macro).getByRole("heading", { name: "当前宏观事实" }),
   ).toBeVisible();
   expect(within(macro).getByText("上一份有效报告的稳定宏观研判")).toBeVisible();
-  expect(within(macro).getByText("50.2")).toBeVisible();
+  expect(currentPmi()).toBeVisible();
   await openFullResearch();
   expect(
     screen.getByRole("region", { name: "服务器代表池基金观察" }),

@@ -642,17 +642,19 @@ export default function MacroContextStrip({
                 </label>
                 {ready && (
                   <>
-                    <MacroCycleOverview
-                      factView
-                      data={ready}
-                      historical={!!historicalPreview}
-                    />
                     <MacroEvidencePanel
                       data={ready}
                       marketId={selectedDirection?.marketId}
                       directionId={selectedDirection?.id}
                       selectedIndexId={selectedIndexId}
                       months={months}
+                      historical={!!historicalPreview}
+                    />
+                    <MacroCycleOverview
+                      factView
+                      data={ready}
+                      historical={!!historicalPreview}
+                      indicatorWall
                     />
                     <Phase2Evidence data={ready} />
                     <details

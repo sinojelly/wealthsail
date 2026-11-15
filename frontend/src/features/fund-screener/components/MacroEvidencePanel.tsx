@@ -22,9 +22,28 @@ import { indicatorMeaning } from "../indicator-meaning";
 const categories = [
   { id: "growth", label: "经济增长", codes: ["PMI"] },
   {
+    id: "a-share",
+    label: "A股指数与量能",
+    codes: [
+      "CN_SH_COMP",
+      "CN_CSI300",
+      "CN_A_TURNOVER",
+      "INDEX_TREND",
+      "INDEX_PE",
+    ],
+  },
+  {
     id: "inflation",
     label: "通胀与成本",
-    codes: ["CPI_YOY", "PPI_YOY", "DCOILBRENTEU", "GASDESW"],
+    codes: [
+      "CPI_YOY",
+      "PPI_YOY",
+      "US_BRENT",
+      "GASDESW",
+      "CN_FUEL_92",
+      "CN_FUEL_95",
+      "CN_FUEL_DIESEL_0",
+    ],
   },
   {
     id: "credit",
@@ -72,6 +91,9 @@ type EvidenceRow = {
   value: number | null;
   unit: string | null;
   date: string;
+  period?: string | null;
+  frequency?: string;
+  snapshot?: boolean;
   state: string;
   valueLabel?: string;
   change?: string;
@@ -95,9 +117,12 @@ function AlternativeSources({
       <summary>其他来源与口径 · {label}</summary>
       {open && (
         <>
-          <p>分别保留原始日期与定义，不混合计算。</p>
+          <p>各来源保留原始日期与定义。</p>
           {rows.map((row) => (
-            <div key={row.id}>{row.detail()}</div>
+            <div key={row.id}>
+              {row.snapshot && <p>报告时点快照 · {row.date}</p>}
+              {row.detail()}
+            </div>
           ))}
         </>
       )}
@@ -111,6 +136,7 @@ type Props = {
   directionId?: string;
   selectedIndexId?: string;
   months?: number;
+  historical?: boolean;
 };
 const finite = (value: number | null | undefined): value is number =>
   value != null && Number.isFinite(value);
@@ -216,6 +242,7 @@ function evidenceRows({
   renderMacro,
   selectedIndexId,
   directionId,
+  historical,
 }: Props): EvidenceRow[] {
   const rows: EvidenceRow[] = [
     ...data.items.map((item): EvidenceRow => ({
@@ -225,6 +252,8 @@ function evidenceRows({
       value: item.value,
       unit: macroUnit(item),
       date: monthLabel(item.referencePeriod ?? item.asOf),
+      period: (item.referencePeriod ?? item.asOf)?.slice(0, 7),
+      frequency: "MONTHLY",
       state: ["CONFLICT", "UNAVAILABLE"].includes(item.state)
         ? item.state
         : item.valueVerification && item.valueVerification !== "VERIFIED"
@@ -241,50 +270,67 @@ function evidenceRows({
       detail: () =>
         renderMacro ? renderMacro(item) : <EvidenceCard item={item} />,
     })),
-    ...(data.series ?? []).map((item): EvidenceRow => {
-      const change =
-        item.frequency === "MONTHLY"
-          ? item.changes.periodChange
-          : item.changes.change5Samples;
-      const unit =
-        item.changes.changeUnit === "bp"
-          ? "基点"
-          : item.changes.changeUnit === "pp"
-            ? "个百分点"
-            : null;
-      return {
-        id: `series:${item.code}`,
-        code: item.code,
+    ...(data.series ?? [])
+      .filter((item) => historical || item.code !== "GASDESW")
+      .map((item): EvidenceRow => {
+        const change =
+          item.frequency === "MONTHLY"
+            ? item.changes.periodChange
+            : item.changes.change5Samples;
+        const unit =
+          item.changes.changeUnit === "bp"
+            ? "基点"
+            : item.changes.changeUnit === "pp"
+              ? "个百分点"
+              : unitLabel(item.changes.changeUnit, "") || null;
+        return {
+          id: `series:${item.code}`,
+          code: item.code,
+          label: item.label,
+          value: item.value,
+          unit: unitLabel(item.unit),
+          date:
+            item.frequency === "MONTHLY"
+              ? monthLabel(item.referencePeriod ?? item.asOf)
+              : timeLabel(item.asOf),
+          period:
+            item.frequency === "MONTHLY"
+              ? (item.referencePeriod ?? item.asOf)?.slice(0, 7)
+              : item.asOf,
+          frequency: item.frequency,
+          state: item.state,
+          change:
+            item.frequency === "YTD"
+              ? "年内累计值，不跨年比较。"
+              : `${item.frequency === "MONTHLY" ? "连续月变化" : "近5个可比较样本"}：${finite(change) && unit ? `${change > 0 ? "+" : ""}${metricValue(change)} ${unit}` : "暂不可计算"}`,
+          reference: finite(item.metadata?.retailCnyPerTonne)
+            ? `同批次：${metricValue(item.metadata.retailCnyPerTonne)} 元/吨`
+            : finite(item.changes.median)
+              ? `历史样本中位数：${metricValue(item.changes.median)} ${unitLabel(item.unit, "")}`
+              : undefined,
+          summary:
+            indicatorMeaning(item.code) ??
+            "实际市场观察，需结合当前资产与其他证据独立判断。",
+          detail: () => <SeriesCard series={item} />,
+        };
+      }),
+    ...(data.dailyResearch?.report?.energy ?? [])
+      .filter((item) => historical || item.code !== "GASDESW")
+      .map((item): EvidenceRow => ({
+        id: `energy:${item.code}`,
+        code: item.code === "DCOILBRENTEU" ? "US_BRENT" : item.code,
         label: item.label,
         value: item.value,
-        unit: unitLabel(item.unit),
+        unit: energyUnit(item.unit),
         date: timeLabel(item.asOf),
+        period: item.asOf,
+        frequency: item.frequency,
+        snapshot: true,
         state: item.state,
-        change:
-          item.frequency === "YTD"
-            ? "年内累计值，不跨年比较。"
-            : `${item.frequency === "MONTHLY" ? "连续月变化" : "近5个可比较样本"}：${finite(change) && unit ? `${change > 0 ? "+" : ""}${metricValue(change)} ${unit}` : "暂不可计算"}`,
-        reference: finite(item.changes.median)
-          ? `历史样本中位数：${metricValue(item.changes.median)} ${unitLabel(item.unit, "")}`
-          : undefined,
-        summary:
-          indicatorMeaning(item.code) ??
-          "实际市场观察，需结合当前资产与其他证据独立判断。",
-        detail: () => <SeriesCard series={item} />,
-      };
-    }),
-    ...(data.dailyResearch?.report?.energy ?? []).map((item): EvidenceRow => ({
-      id: `energy:${item.code}`,
-      code: item.code,
-      label: item.label,
-      value: item.value,
-      unit: energyUnit(item.unit),
-      date: timeLabel(item.asOf),
-      state: item.state,
-      change: `相邻变化：${finite(item.change) ? `${item.change > 0 ? "+" : ""}${item.change.toFixed(3)} ${energyUnit(item.unit)}` : "暂不可计算"}`,
-      summary: "能源价格观察，不认证新闻因果或企业利润变化。",
-      detail: () => <EnergyEvidence row={item} />,
-    })),
+        change: `相邻变化：${finite(item.change) ? `${item.change > 0 ? "+" : ""}${item.change.toFixed(3)} ${energyUnit(item.unit)}` : "暂不可计算"}`,
+        summary: "报告时点能源价格快照。",
+        detail: () => <EnergyEvidence row={item} />,
+      })),
   ];
   const index =
     directionId === "a-share:broad" && selectedIndexId
@@ -364,7 +410,15 @@ function EvidenceContent({
   const panelId = useId();
   const preferred =
     directionId === "a-share:cyclical"
-      ? ["PPI_YOY", "DCOILBRENTEU", "GASDESW", "PMI", "CPI_YOY", "M2_YOY"]
+      ? [
+          "PPI_YOY",
+          "US_BRENT",
+          "CN_FUEL_92",
+          "CN_FUEL_DIESEL_0",
+          "PMI",
+          "CPI_YOY",
+          "M2_YOY",
+        ]
       : marketId === "gold" || marketId === "us"
         ? ["US_T10_REAL", "US_T10_NOMINAL", "DXY", "USD_CNY", "PMI", "CPI_YOY"]
         : [
@@ -382,7 +436,15 @@ function EvidenceContent({
   const primary = new Map<string, EvidenceRow>();
   for (const row of rows) {
     const previous = primary.get(row.code);
-    if (!previous || (!usable(previous) && usable(row)))
+    if (
+      !previous ||
+      (!usable(previous) && usable(row)) ||
+      (usable(previous) === usable(row) &&
+        ((previous.snapshot && !row.snapshot) ||
+          (!!previous.snapshot === !!row.snapshot &&
+            row.frequency === previous.frequency &&
+            (row.period ?? "") > (previous.period ?? ""))))
+    )
       primary.set(row.code, row);
   }
   const primaryRows = [...primary.values()];

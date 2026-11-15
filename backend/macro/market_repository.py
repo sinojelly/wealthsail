@@ -10,12 +10,20 @@ from statistics import median
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
+from backend.integrations.beijing_fuel import (
+    BEIJING_FUEL_CURRENT,
+    BEIJING_FUEL_HISTORY_SOURCE,
+    BEIJING_FUEL_HOSTS,
+    BEIJING_FUEL_SOURCE,
+    FUEL_CATALOG,
+)
 from backend.integrations.fred_macro import (
     FRED_CATALOG,
     FRED_HOST,
     VIX_CODE,
     vix_history_start,
 )
+from backend.integrations.china_market_trends import INDEX_CATALOG
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 NEW_YORK = ZoneInfo("America/New_York")
@@ -32,6 +40,9 @@ CATALOG = {
     "US_NASDAQ_CHANGE_PCT": ("纳斯达克隔夜变化", "DAILY", "%", "PRE_MARKET"),
 }
 CATALOG.update({code: row for code, row in FRED_CATALOG.items() if code not in CATALOG})
+CATALOG.update(FUEL_CATALOG)
+CATALOG.update(INDEX_CATALOG)
+_ARCHIVE_SOURCES = {"PBOC_TSF_HISTORY", BEIJING_FUEL_HISTORY_SOURCE}
 US_YIELDS = {"US_T10_NOMINAL", "US_T10_REAL", "US_T2_NOMINAL", "US_FED_FUNDS"}
 _NY_SERIES = set(FRED_CATALOG)
 
@@ -160,7 +171,7 @@ def _changes(points, latest, frequency, *, code):
         "changeUnit": "bp"
         if frequency == "DAILY" and is_yield
         else "点"
-        if code == VIX_CODE
+        if code == VIX_CODE or code in INDEX_CATALOG
         else "pp"
         if frequency in {"MONTHLY", "DAILY"}
         else None,
@@ -244,6 +255,8 @@ def _changes(points, latest, frequency, *, code):
             result[key] = _number(result[key])
     if code == "US_BRENT":
         result["changeUnit"] = "USD/barrel"
+    elif code in FUEL_CATALOG:
+        result["changeUnit"] = "元/升"
     return result
 
 
@@ -262,9 +275,13 @@ def series_context(rows, now, *, permissions=None, source_results=None):
             else _years_before(now.astimezone(NEW_YORK).date(), 3)
         ):
             continue
+        if row["code"] in FUEL_CATALOG and _day(row["reference_date"]) < _years_before(
+            now.astimezone(SHANGHAI).date(), 3
+        ):
+            continue
         key = row["code"], _day(row["reference_date"])
         rank = (
-            _metadata(row).get("sourceKey") != "PBOC_TSF_HISTORY",
+            _metadata(row).get("sourceKey") not in _ARCHIVE_SOURCES,
             _stamp(row["retrieved_at"]),
             row.get("revision") or 0,
         )
@@ -286,7 +303,11 @@ def series_context(rows, now, *, permissions=None, source_results=None):
                 value, state = None, "CONFLICT"
             else:
                 day = _day(latest["reference_date"])
-                daily_ttl = 1 if source_key == "PRE_MARKET" else 5
+                daily_ttl = (
+                    30 if source_key == BEIJING_FUEL_SOURCE
+                    else 1 if source_key == "PRE_MARKET"
+                    else 5
+                )
                 stale = (
                     now.astimezone(NEW_YORK if code in _NY_SERIES else SHANGHAI).date()
                     > (
@@ -318,6 +339,7 @@ def series_context(rows, now, *, permissions=None, source_results=None):
                 else {
                     "CHINABOND": "https://yield.chinabond.com.cn/",
                     "CFETS": "https://www.chinamoney.com.cn/",
+                    BEIJING_FUEL_SOURCE: BEIJING_FUEL_CURRENT,
                 }.get(source_key),
                 "sourceName": latest.get("source_name") if latest else None,
                 "publishedAt": latest.get("published_at") if latest else None,
@@ -347,6 +369,10 @@ def series_context(rows, now, *, permissions=None, source_results=None):
                         "availableAt": p.get("available_at"),
                         "publishedAt": p.get("published_at"),
                         "timeBasis": p.get("time_basis"),
+                        **(
+                            {"retailCnyPerTonne": _metadata(p).get("retailCnyPerTonne")}
+                            if code in FUEL_CATALOG else {}
+                        ),
                     }
                     for p in points
                 ],
@@ -370,7 +396,7 @@ async def read_series(conn, now):
       WHERE retrieved_at<=$1 AND available_at<=$1 AND (published_at IS NULL OR published_at<=$1)
       AND reference_date<=($1 AT TIME ZONE 'Asia/Shanghai')::date
       ORDER BY code,reference_date,
-        (metadata->>'sourceKey' IS NOT DISTINCT FROM 'PBOC_TSF_HISTORY'),
+        COALESCE(metadata->>'sourceKey' IN ('PBOC_TSF_HISTORY', 'BEIJING_FUEL_HISTORY'), false),
         retrieved_at DESC,revision DESC""",
         now,
     )
@@ -429,7 +455,8 @@ async def read_collection(conn, now):
               a.outcomes->'PUBLIC_SOURCES' AS outcome,1 AS precedence
             FROM attempts a CROSS JOIN unnest(ARRAY[
               'UST_NOMINAL','UST_REAL','PBOC_M1','PBOC_TSF','PBOC_TSF_HISTORY','PBOC_LOANS',
-              'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU','VIXCLS'
+              'CPIAUCSL','CPILFESL','PPIACO','DFF','DGS2','DCOILBRENTEU','VIXCLS',
+              'BEIJING_FUEL','BEIJING_FUEL_HISTORY'
             ]) AS s(source_key)
             WHERE a.outcomes->'PUBLIC_SOURCES'->>'status'='FAILED'
           )
@@ -494,6 +521,8 @@ def normalize_series(record, now, *, permissions=None):
         if source_key == "CHINABOND"
         else ("chinamoney.com.cn",)
         if source_key == "CFETS"
+        else tuple(BEIJING_FUEL_HOSTS)
+        if code in FUEL_CATALOG
         else ("sinajs.cn", "sina.com.cn", "eastmoney.com")
     )
     if (

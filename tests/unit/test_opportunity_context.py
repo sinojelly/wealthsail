@@ -24,11 +24,16 @@ def dependencies(monkeypatch):
     module = service()
     from backend.macro import alpha_repository
     from backend.investment import theme_graph
+    from backend.macro import china_market_dashboard
 
     monkeypatch.setattr(
         alpha_repository, "read_alpha_public", AsyncMock(return_value={})
     )
     monkeypatch.setattr(theme_graph, "read_themes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        china_market_dashboard, "add_live_dashboard_series",
+        AsyncMock(side_effect=lambda conn, series, now: series),
+    )
     monkeypatch.setattr(
         theme_graph, "cached_nav_analysis", AsyncMock(return_value=None)
     )

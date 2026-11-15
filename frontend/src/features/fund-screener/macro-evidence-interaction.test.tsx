@@ -392,6 +392,91 @@ it("prioritizes PPI and actual energy for the existing cyclical direction", asyn
   ).toBeInTheDocument();
 });
 
+it("shows domestic retail ceilings with both units and keeps US diesel out of the current evidence wall", async () => {
+  const fuel = {
+    ...series("CN_FUEL_92"),
+    label: "北京92号汽油最高零售价",
+    unit: "元/升",
+    value: 7.28,
+    metadata: { retailCnyPerTonne: 9820 },
+    history: [
+      {
+        date: "2026-10-10",
+        state: "READY",
+        value: 7.16,
+        retailCnyPerTonne: 9660,
+      },
+      {
+        date: "2026-10-16",
+        state: "READY",
+        value: 7.28,
+        retailCnyPerTonne: 9820,
+      },
+    ],
+  };
+  show(
+    {
+      state: "READY",
+      items: [],
+      series: [fuel, { ...series("GASDESW"), label: "美国柴油" }],
+    },
+    "a-share:cyclical",
+  );
+  const compact = screen.getByRole("article", { name: fuel.label });
+  expect(compact).toHaveTextContent("7.28 元/升");
+  expect(compact).toHaveTextContent("9,820 元/吨");
+  expect(screen.queryByText("美国柴油")).not.toBeInTheDocument();
+  await full(fuel.label);
+  const detail = screen.getByRole("region", { name: `${fuel.label}证据详情` });
+  expect(
+    within(detail).getByRole("img", { name: `${fuel.label} 历史观察` }),
+  ).toBeVisible();
+  const point = within(detail).getByRole("button", { name: /2026年10月10日/ });
+  await userEvent.click(point);
+  expect(within(detail).getByRole("status")).toHaveTextContent("9,660 元/吨");
+});
+
+it("opens the same current Brent history from the compact indicator, with frozen Brent separately dated", async () => {
+  const brent = {
+    ...series("US_BRENT"),
+    label: "布伦特原油现货",
+    unit: "USD/barrel",
+    value: 92.14,
+    asOf: "2026-11-11",
+    history: [
+      { date: "2026-11-10", value: 93.25, state: "READY" },
+      { date: "2026-11-11", value: 92.14, state: "READY" },
+    ],
+  };
+  show(
+    {
+      state: "READY",
+      items: [],
+      series: [brent],
+      dailyResearch: withEnergy({
+        ...energy,
+        value: 107.03,
+        asOf: "2026-11-03",
+      }),
+    },
+    "a-share:cyclical",
+  );
+  const compact = screen.getByRole("article", { name: brent.label });
+  expect(compact).toHaveTextContent("92.14 美元/桶");
+  expect(screen.queryByText("107.030 美元/桶")).not.toBeInTheDocument();
+  await full(brent.label);
+  const detail = screen.getByRole("region", { name: `${brent.label}证据详情` });
+  expect(
+    within(detail).getByRole("img", { name: `${brent.label} 历史观察` }),
+  ).toBeVisible();
+  expect(detail).toHaveTextContent("92.14 美元/桶");
+  await userEvent.click(within(compact).getByText(/其他来源与口径/));
+  expect(
+    within(compact).getByText(/报告时点快照.*2026年11月3日/),
+  ).toBeVisible();
+  expect(within(compact).getByText("107.030 美元/桶")).toBeVisible();
+});
+
 it.each([
   [null, "2026-10-15", /前次观察缺少有效数值/],
   [70.1, "bad-date", /观察日期无效/],

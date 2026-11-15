@@ -640,6 +640,8 @@ async def upsert_market_sentiment(
             coverage_pct = EXCLUDED.coverage_pct,
             method_version = EXCLUDED.method_version,
             updated_at = now()
+        WHERE market_sentiment.method_version <> 'sentiment/eastmoney-sh-sz-bj-v3'
+           OR EXCLUDED.method_version = 'sentiment/eastmoney-sh-sz-bj-v3'
         """,
         date.fromisoformat(trade_date),
         data.get("total_up"),
