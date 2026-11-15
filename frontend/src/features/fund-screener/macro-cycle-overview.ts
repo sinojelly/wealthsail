@@ -75,7 +75,7 @@ export function buildCycleOverview(data: OpportunityContext) {
         evidenceKind: "MODEL_ASSESSMENT",
         origin: "原报告方向",
       }));
-  const factors = Array.isArray(cycle?.keyFactors)
+  const factorCandidates = Array.isArray(cycle?.keyFactors)
     ? cycle.keyFactors.map(insight).filter((row): row is CycleView => !!row)
     : (report?.events ?? [])
         .filter(
@@ -88,6 +88,25 @@ export function buildCycleOverview(data: OpportunityContext) {
           evidenceKind: "MODEL_ASSESSMENT",
           origin: "原报告重要事件",
         }));
+  const factors = [
+    ...new Map(
+      factorCandidates.map((row) => [
+        JSON.stringify(
+          [
+            row.asOf?.slice(0, 10) ?? "",
+            row.title ?? "",
+            row.summary ?? "",
+          ].map((value) =>
+            value
+              .normalize("NFKC")
+              .replace(/[\p{P}\s]/gu, "")
+              .toLowerCase(),
+          ),
+        ),
+        row,
+      ]),
+    ).values(),
+  ];
   const full = researchSummary(
     cycle?.displayMacroCycle ??
       (report?.macroCycle ||

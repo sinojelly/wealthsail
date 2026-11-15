@@ -240,8 +240,7 @@ function FedPricing({
             })}
             {meeting.expectedChangeBp != null &&
               ` · 期望 ${signed(meeting.expectedChangeBp)}bp`}
-            )
-            {meeting.asOf && <small> · {timeLabel(meeting.asOf)}</small>}
+            ){meeting.asOf && <small> · {timeLabel(meeting.asOf)}</small>}
             {href && (
               <>
                 {" "}
@@ -334,10 +333,12 @@ export default function MacroCycleOverview({
   data,
   historical = false,
   factView = false,
+  indicatorWall = false,
 }: {
   data: OpportunityContext;
   historical?: boolean;
   factView?: boolean;
+  indicatorWall?: boolean;
 }) {
   const report = data.dailyResearch?.report;
   const reportKey =
@@ -367,8 +368,32 @@ export default function MacroCycleOverview({
     ? cycleFacts(observed, cutoff, true)
     : cycleFacts(data, undefined, true);
   const signals = cycle?.policySignals ?? [];
+  const inflationSignals = signals
+    .filter((row) => row.kind === "INFLATION_DRIVER")
+    .slice(0, 3);
   const expectation = cycle?.rateExpectation;
   const meetings = cycle?.fedRateExpectations ?? [];
+  const rateCandidates = signals.filter(
+    (row) =>
+      row.kind !== "INFLATION_DRIVER" &&
+      (!meetings.length || row.kind !== "MARKET_RATE_ODDS"),
+  );
+  const rateSignals = [
+    ...new Set([
+      rateCandidates.find((row) => row.kind === "CENTRAL_BANK_REMARK"),
+      rateCandidates.find((row) => row.kind === "INSTITUTION_FORECAST"),
+      ...rateCandidates,
+    ]),
+  ]
+    .filter((row) => row !== undefined)
+    .slice(0, 3);
+  const inflationCodes = [
+    "US_CPI_YOY",
+    "US_CPI_MOM",
+    "US_CORE_CPI_YOY",
+    "US_PPI_YOY",
+  ];
+  if (!indicatorWall) inflationCodes.push("US_BRENT");
   const notes = cycle?.auditNotes ?? [];
   const moneySpread = historical
     ? snapshot?.moneySupplySpread
@@ -480,36 +505,21 @@ export default function MacroCycleOverview({
                 </ChainStep>
               )}
               <ChainStep title="通胀与需求源头">
-                <StepFacts
-                  facts={facts}
-                  codes={[
-                    "US_CPI_YOY",
-                    "US_CPI_MOM",
-                    "US_CORE_CPI_YOY",
-                    "US_PPI_YOY",
-                    "US_BRENT",
-                  ]}
-                />
-                {!facts.some((fact) =>
-                  /^US_(CPI|CORE_CPI|PPI|BRENT)/.test(fact.code),
-                ) && <p>该期缺少可核对的通胀或油价读数。</p>}
-                {signals
-                  .filter((row) => row.kind === "INFLATION_DRIVER")
-                  .map((row) => (
-                    <PolicySignal key={`${row.title}:${row.text}`} row={row} />
-                  ))}
+                <StepFacts facts={facts} codes={inflationCodes} />
+                {!facts.some((fact) => inflationCodes.includes(fact.code)) && (
+                  <p>该期缺少可核对的通胀读数。</p>
+                )}
+                {inflationSignals.map((row) => (
+                  <PolicySignal key={`${row.title}:${row.text}`} row={row} />
+                ))}
               </ChainStep>
-              <ChainStep title="联储表态与机构预测">
-                {signals
-                  .filter(
-                    (row) =>
-                      row.kind !== "INFLATION_DRIVER" &&
-                      (!meetings.length || row.kind !== "MARKET_RATE_ODDS"),
-                  )
-                  .map((row) => (
-                    <PolicySignal key={`${row.title}:${row.text}`} row={row} />
-                  ))}
-                {!signals.some((row) => row.kind !== "INFLATION_DRIVER") && (
+              <ChainStep
+                title={`联储表态与机构预测${rateSignals.length ? ` · ${rateSignals.length} 条` : ""}`}
+              >
+                {rateSignals.map((row) => (
+                  <PolicySignal key={`${row.title}:${row.text}`} row={row} />
+                ))}
+                {!rateSignals.length && (
                   <p>该期未找到可归属的官员表态或机构预测。</p>
                 )}
               </ChainStep>
@@ -643,7 +653,7 @@ export default function MacroCycleOverview({
           </details>
         )}
       </div>
-      {!!marketFacts.length && (
+      {!indicatorWall && !!marketFacts.length && (
         <div
           className="op-core-facts op-cycle-facts"
           aria-label="已采集宏观数据"
@@ -736,12 +746,15 @@ function PolicySignal({ row }: { row: MacroPolicySignal }) {
       {readingText(row.text, Infinity)}{" "}
       <small>
         {row.asOf && <time dateTime={row.asOf}>{timeLabel(row.asOf)}</time>}{" "}
-        {href ? (
-          <a href={href} target="_blank" rel="noreferrer">
-            {sourceTitle(row.title, 46)}
+        {href && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            title={sourceTitle(row.title, 100)}
+          >
+            来源原文
           </a>
-        ) : (
-          sourceTitle(row.title, 46)
         )}
       </small>
     </p>

@@ -305,6 +305,37 @@ def test_duplicate_policy_excerpts_keep_distinct_people_stances_dates_and_odds()
     assert any("80%" in line and "20%" in line for line in odds)
 
 
+def test_saved_policy_reprints_keep_the_longest_excerpt_for_each_named_topic():
+    from backend.macro.cycle_insights import project_cycle_insights
+
+    def excerpt(text, clock="2026-11-12T22:01:00+08:00"):
+        return {
+            "kind": "CENTRAL_BANK_REMARK",
+            "title": "政策表态",
+            "text": text,
+            "sourceUri": "https://www.cls.cn/detail/123",
+            "asOf": clock,
+        }
+
+    direct = "克利夫兰联储哈马克表示她支持幅度更小、更稳定的利率调整，并将结合后续数据调整节奏"
+    distinct = "哈马克说美国通胀正朝错误方向发展"
+    other = "戴利表示支持小幅而稳定的利率调整"
+    report = {
+        "cycleInsights": {
+            "policySignals": [
+                excerpt("美联储哈马克倾向于支持小幅而稳定的利率调整"),
+                excerpt(direct, "2026-11-12T14:01:00Z"),
+                excerpt(distinct),
+                excerpt("哈马克称通胀走错了方向"),
+                excerpt(other),
+            ]
+        }
+    }
+    signals = project_cycle_insights(report, {}, NOW)["cycleInsights"]["policySignals"]
+    assert {row["text"] for row in signals} == {direct, distinct, other}
+    assert len(report["cycleInsights"]["policySignals"]) == 5
+
+
 def test_fedwatch_aggregates_full_distributions_by_meeting_and_snapshot():
     from backend.macro.cycle_insights import project_cycle_insights
 

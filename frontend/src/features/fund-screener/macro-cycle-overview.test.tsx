@@ -272,6 +272,33 @@ it("plots dated local macro history and excludes observations collected after th
   expect(screen.queryByText("55.0")).not.toBeInTheDocument();
 });
 
+it("counts distinct key factors and shows at most three sourced policy excerpts in a step", () => {
+  const data = context();
+  const cycle = data.dailyResearch!.report!.cycleInsights!;
+  cycle.keyFactors = [
+    { title: "利率预期", summary: "高利率观察。" },
+    { title: "利率预期", summary: "高利率观察" },
+  ];
+  cycle.policySignals = Array.from({ length: 6 }, (_, index) => ({
+    kind: index === 5 ? "INSTITUTION_FORECAST" : "CENTRAL_BANK_REMARK",
+    text: `来源政策观点 ${index}`,
+    title: `来源政策观点 ${index}`,
+    sourceUri: `https://www.cls.cn/detail/${index}`,
+    asOf: "2026-11-13T03:33:00+08:00",
+  }));
+  render(<MacroCycleOverview data={data} factView />);
+  expect(screen.getByText(/今日关键影响因素 · 1 项/)).toBeVisible();
+  const step = screen
+    .getByRole("heading", {
+      name: "联储表态与机构预测 · 3 条",
+    })
+    .closest("li")!;
+  expect(within(step).getAllByRole("link", { name: "来源原文" })).toHaveLength(
+    3,
+  );
+  expect(within(step).getAllByText("来源政策观点 5")).toHaveLength(1);
+});
+
 it("highlights sourced CME distributions and moves audit text into a closed panel", () => {
   const data = context();
   const cycle = data.dailyResearch!.report!.cycleInsights!;

@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 import unicodedata
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 
 def sanitize_cycle_insights(raw, *, aliases, now, warnings):
@@ -124,11 +125,12 @@ _ECONOMY = re.compile(r"GDP|增长|生产总值", re.I)
 _PRICE_DRIVER = re.compile(
     r"AI.{0,8}(?:投资|资本开支|需求)|涨价|提价|关税|能源|原油|供给", re.I
 )
+_POLICY_ZONE = ZoneInfo("Asia/Shanghai")
 _SPEAKERS = tuple(
     (key, re.compile(pattern, re.I))
     for key, pattern in (
-        ("HAMMACK", r"哈马克|\bHammack\b"),
-        ("DALY", r"戴利|\bDaly\b"),
+        ("HAMMACK", r"哈马[克科]|\bHammack\b"),
+        ("DALY", r"戴[利莉]|\bDaly\b"),
         ("POWELL", r"鲍威尔|\bPowell\b"),
         ("WALLER", r"沃勒|\bWaller\b"),
         ("WILLIAMS", r"威廉姆斯|\bWilliams\b"),
@@ -157,6 +159,17 @@ _PUBLISHER_PREFIX = re.compile(
     r"财联社\s*\d{1,2}月\d{1,2}日(?:电|讯)[，,:：]?\s*)+"
 )
 _CME_ORIGIN = re.compile(r"(?<![a-z])CME(?![a-z])|芝商所|美联储观察|FedWatch", re.I)
+_POLICY_TOPICS = (
+    re.compile(
+        r"通胀.{0,10}(?:错误方向|方向错误|朝错|走错)|(?:错误方向|方向错误).{0,10}通胀"
+    ),
+    re.compile(
+        r"(?:小幅|幅度更小|更小|温和)[^。]{0,15}(?:稳定|平稳|渐进|利率调整)|(?:稳定|渐进)[^。]{0,12}(?:小幅|幅度较小)"
+    ),
+    re.compile(r"(?:AI|人工智能).{0,12}(?:投资|需求|资本开支)", re.I),
+    re.compile(r"工资(?:增速|涨幅|增长)"),
+    re.compile(r"(?:企业|公司).{0,12}(?:涨价|提价)"),
+)
 _RATE_MONTH = re.compile(
     r"(?<!\d)(?P<relative>明年|次年|今年|\d{4}年)?\s*(?P<month>1[0-2]|[1-9])\s*月"
     r"(?!\s*\d{1,2}\s*[日号])"
@@ -230,6 +243,8 @@ def _forecast_snapshot(text, clock):
 def _same_policy_signal(a, b):
     if a["kind"] != b["kind"] or a["day"] != b["day"]:
         return False
+    if a["speaker"] and b["speaker"] and a["speaker"] != b["speaker"]:
+        return False
     if a["textKey"] == b["textKey"] and a["claims"] == b["claims"]:
         return True
     if a["odds"] and b["odds"]:
@@ -241,6 +256,15 @@ def _same_policy_signal(a, b):
         )
     shorter, longer = sorted((a["textKey"], b["textKey"]), key=len)
     if len(shorter) >= 15 and shorter in longer and a["claims"] == b["claims"]:
+        return True
+    if (
+        a["speaker"]
+        and a["speaker"] == b["speaker"]
+        and a["stance"] == b["stance"]
+        and a["topics"]
+        and a["topics"] == b["topics"]
+        and (a["claims"] == b["claims"] or not a["claims"] or not b["claims"])
+    ):
         return True
     if not (
         a["speaker"]
@@ -258,6 +282,59 @@ def _same_policy_signal(a, b):
     a_words = {shorter[i : i + 3] for i in range(len(shorter) - 2)}
     b_words = {longer[i : i + 3] for i in range(len(longer) - 2)}
     return len(a_words & b_words) >= max(10, 0.62 * len(a_words))
+
+
+def _policy_candidate(
+    kind, title, text, uri, clock, source_id, speaker=None, headline=None
+):
+    from backend.macro.daily_research import _stamp
+
+    speaker = speaker or _speaker(text)
+    stamp = _stamp(clock)
+    return {
+        "kind": kind,
+        "title": title[:180],
+        "text": text[:300],
+        "sourceUri": uri,
+        "asOf": clock,
+        "sourceId": source_id,
+        "textKey": _compact_policy_text(text),
+        "day": stamp.astimezone(_POLICY_ZONE).date() if stamp else _day(clock),
+        "speaker": speaker,
+        "stance": _stance(text) if speaker else None,
+        "topics": frozenset(
+            i for i, pattern in enumerate(_POLICY_TOPICS) if pattern.search(text)
+        ),
+        "odds": _forecast_snapshot(text, clock) if kind == "MARKET_RATE_ODDS" else None,
+        "claims": frozenset(
+            re.findall(r"\d+(?:\.\d+)?\s*(?:%|个?基点|bp)", text, flags=re.I)
+        ),
+        "headline": text == title if headline is None else headline,
+    }
+
+
+def _deduplicate_policy(signals):
+    # Prefer the complete direct excerpt before a headline.
+    ranked = sorted(
+        signals,
+        key=lambda row: (
+            len(row["odds"][1]) if row["odds"] else 0,
+            not row["headline"],
+            len(row["text"]),
+        ),
+        reverse=True,
+    )
+    grouped = {}
+    for row in ranked:
+        peers = grouped.setdefault((row["kind"], row["day"]), [])
+        if not any(_same_policy_signal(row, known) for known in peers):
+            peers.append(row)
+    unique = [row for peers in grouped.values() for row in peers]
+    fields = ("kind", "title", "text", "sourceUri", "asOf", "sourceId")
+    return [
+        {key: row[key] for key in fields}
+        for row in sorted(unique, key=lambda row: row["asOf"] or "", reverse=True)[:18]
+    ]
 
 
 def _rows(value):
@@ -441,7 +518,6 @@ def policy_signals(packet, report, cutoff):
                 # Standalone headlines often name the office only. Borrow
                 # the identity solely from this article's single named voice.
                 speaker = _speaker(content)
-            stance = _stance(text) if speaker else None
             if odds:
                 kind = "MARKET_RATE_ODDS"
             elif (
@@ -466,46 +542,18 @@ def policy_signals(packet, report, cutoff):
             else:
                 continue
             signals.append(
-                {
-                    "kind": kind,
-                    "title": title[:180],
-                    "text": text[:300],
-                    "sourceUri": uri,
-                    "asOf": clock,
-                    "sourceId": source.get("id"),
-                    "textKey": _compact_policy_text(text),
-                    "day": _day(clock),
-                    "speaker": speaker,
-                    "stance": stance,
-                    "odds": odds,
-                    "claims": frozenset(
-                        re.findall(
-                            r"\d+(?:\.\d+)?\s*(?:%|个?基点|bp)", text, flags=re.I
-                        )
-                    ),
-                    "headline": line == title,
-                }
+                _policy_candidate(
+                    kind,
+                    title,
+                    text,
+                    uri,
+                    clock,
+                    source.get("id"),
+                    speaker,
+                    headline=line == title,
+                )
             )
-    # Process complete direct excerpts before a title or partial reprint. Keep
-    # different odds, attributed stances and report days as separate rows.
-    first = sorted(
-        signals,
-        key=lambda row: (
-            len(row["odds"][1]) if row["odds"] else 0,
-            not row["headline"],
-            len(row["text"]),
-        ),
-        reverse=True,
-    )
-    unique = []
-    for row in first:
-        if not any(_same_policy_signal(row, known) for known in unique):
-            unique.append(row)
-    fields = ("kind", "title", "text", "sourceUri", "asOf", "sourceId")
-    return [
-        {key: row[key] for key in fields}
-        for row in sorted(unique, key=lambda row: row["asOf"] or "", reverse=True)[:18]
-    ]
+    return _deduplicate_policy(signals)
 
 
 def rate_expectation(series):
@@ -1135,6 +1183,31 @@ def project_cycle_insights(report, packet, cutoff):
     signals = policy_signals(packet, report, cutoff)
     if signals:
         cycle["policySignals"] = signals
+    elif "policySignals" in cycle:
+        cycle["policySignals"] = _deduplicate_policy(
+            [
+                _policy_candidate(
+                    row.get("kind"),
+                    row.get("title") or "",
+                    row["text"],
+                    row.get("sourceUri"),
+                    row.get("asOf"),
+                    row.get("sourceId"),
+                )
+                for row in _rows(cycle["policySignals"])
+                if isinstance(row.get("text"), str)
+                and isinstance(row.get("title", ""), str)
+                and row.get("kind")
+                in (
+                    "INFLATION_DRIVER",
+                    "CENTRAL_BANK_REMARK",
+                    "INSTITUTION_FORECAST",
+                    "MARKET_RATE_ODDS",
+                )
+                and (row.get("asOf") is None or isinstance(row["asOf"], str))
+                and _visible(row, cutoff)
+            ]
+        )
     if fed_odds := fed_rate_expectations(packet, report, cutoff):
         cycle["fedRateExpectations"] = fed_odds
     rates = rate_expectation(
