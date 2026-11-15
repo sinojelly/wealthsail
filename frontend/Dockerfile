@@ -13,7 +13,9 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build
+ARG BUILD_COMMIT=""
+ARG BUILD_DESCRIBE=""
+RUN BUILD_COMMIT="$BUILD_COMMIT" BUILD_DESCRIBE="$BUILD_DESCRIBE" pnpm build
 
 # ---- 运行层：nginx ----
 FROM nginx:1.27-alpine

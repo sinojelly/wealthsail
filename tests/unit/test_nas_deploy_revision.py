@@ -72,9 +72,11 @@ if kind == "compose":
  if command == "build":
   state["built"] = True
   state["build_commit"] = os.environ.get("BUILD_COMMIT")
+  state["build_describe"] = os.environ.get("BUILD_DESCRIBE")
   state["tag_revision"] = other if config.get("build_wrong_revision") else os.environ.get("BUILD_COMMIT", "unknown")
   state["frontend_tag_revision"] = other if config.get("build_wrong_frontend_revision") else os.environ.get("BUILD_COMMIT", "unknown")
   finish()
+ if command == "stop": finish()
  if command == "up":
   state["up"] = True
   finish()
@@ -90,7 +92,15 @@ if kind == "compose":
   if config.get("old_extra_instance") == service: finish("fixture-"+service+"\nfixture-"+service+"-old")
   if config.get("duplicate_same_instance") == service: finish("fixture-"+service+"\nfixture-"+service+"-second")
   finish("fixture-"+service)
- if command == "exec": finish()
+ if command == "exec":
+  if "http://127.0.0.1/build-info.json" in args:
+   finish(json.dumps({"commit": other if config.get("stale_static_build") else head, "describe": "aaaaaaa"}))
+  if args[:4] == ["-T", "api", "python", "-c"]:
+   finish(json.dumps({"gitCommit": other if config.get("stale_api_build") else head, "status": "ok"}))
+  finish()
+ if command == "run":
+  if config.get("migration_error") and "--dry-run" not in args: finish(code=5)
+  finish()
  finish(code=96)
 if kind != "docker": finish(code=96)
 if args and args[0] == "ps": finish()
@@ -138,6 +148,7 @@ sudo() {
   shift
   while [[ "${1:-}" == *=* ]]; do export "$1"; shift; done
  fi
+ if [[ "${1:-}" == --preserve-env=MIGRATION_DATABASE_URL ]]; then shift; fi
  case "${1:-}" in
   docker) shift; fixture_dispatch docker "$@" ;;
   "$NAS_TOOLS/nas-compose") shift; fixture_dispatch compose "$@" ;;
@@ -162,7 +173,7 @@ python3() {
 """
 
 
-def run_script(tmp_path, *, mode=None, scenario=None):
+def run_script(tmp_path, *, mode=None, scenario=None, extra=()):
     root = tmp_path / "checkout"
     tools = tmp_path / "tools"
     root.mkdir()
@@ -212,10 +223,11 @@ def run_script(tmp_path, *, mode=None, scenario=None):
             "FIXTURE_WINDOWS": "1" if os.name == "nt" else "0",
             "MSYS_NO_PATHCONV": "1",
             "MSYS2_ENV_CONV_EXCL": "*",
+            "MIGRATION_DATABASE_URL": "postgresql://fixture@db.example:5432/wealth",
         }
     )
     result = subprocess.run(
-        [BASH, "--noprofile", "--norc", str(script), *([mode] if mode else [])],
+        [BASH, "--noprofile", "--norc", str(script), *([mode] if mode else []), *extra],
         cwd=root,
         env=env,
         capture_output=True,
@@ -227,6 +239,30 @@ def run_script(tmp_path, *, mode=None, scenario=None):
 
 def completed(result):
     return "WealthSail deployment checks complete." in result.stdout
+
+
+@pytest.mark.parametrize("side", ["static", "api"])
+def test_deploy_verifies_served_revision_even_for_correct_image_labels(tmp_path, side):
+    result, _ = run_script(tmp_path, scenario={f"stale_{side}_build": True})
+    assert result.returncode != 0
+    assert "response Git revision does not match" in result.stderr
+    assert not completed(result)
+
+
+def test_migration_dry_run_apply_and_readback_precede_startup(tmp_path):
+    result, state = run_script(tmp_path, extra=("--migrate", "db.example:5432/wealth"))
+    assert completed(result), result.stderr
+    operations = [call for call in state["calls"] if call[:2] == ["compose", "ws"]]
+    migrations = [call for call in operations if call[2] == "run"]
+    assert [call[-1] for call in migrations] == [
+        "--dry-run", "db.example:5432/wealth", "--readback-only"
+    ]
+    stop = operations.index(["compose", "ws", "stop", "worker", "api"])
+    assert operations.index(migrations[0]) < stop < operations.index(migrations[1])
+    assert operations.index(migrations[-1]) < next(
+        i for i, call in enumerate(operations) if call[2] == "up"
+    )
+    assert "postgresql://" not in json.dumps(operations)
 
 
 def test_default_deploy_requires_explicit_no_build_and_checks_every_runtime_image(

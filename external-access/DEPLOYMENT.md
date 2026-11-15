@@ -518,6 +518,18 @@ WealthSail 更新需先备份，再构建、增量迁移、部署。`build_docke
 2. 在维护窗口停止 Worker 和 API，通过同一 `nas-compose ws` 配置启动一次性迁移容器，以管理员身份运行 `scripts/migrate.py --environment production --confirm-target postgres:5432/wealthsail`，先 `--dry-run` 再实际执行。
 3. 迁移返回 `APPLIED`/`SKIP` 和 `READBACK OK` 后，执行 `bash build_docker_wealthsail.sh --deploy-only` 并验收。
 
+维护窗口内也可以显式选择一键构建、增量迁移和发布。备份完成后，在 NAS 的 WealthSail 仓库目录执行以下命令，将末尾目标换成此次确认的数据库主机、端口和库名。
+
+```bash
+read -rsp "请输入 MIGRATION_DATABASE_URL: " MIGRATION_DATABASE_URL
+echo
+export MIGRATION_DATABASE_URL
+bash build_docker_wealthsail.sh --migrate postgres:5432/wealthsail
+unset MIGRATION_DATABASE_URL
+```
+
+脚本先构建并核对镜像 Git 提交，迁移 dry-run 通过后停止 Worker 与 API，应用迁移并只读复核数据库账本，最后启动应用。发布验收会比对网页 `/build-info.json`、API 健康响应和运行镜像的完整提交号。登录后可在页面右上角查看 Git 描述，鼠标悬停可看完整提交号。
+
 迁移容器使用 `--entrypoint python` 替换 `db-init` 的首装入口；不要直接重跑 `initialize_postgres.py`，也不要用 API/Worker 的受限数据库角色执行 DDL。管理员密码按第 8 节隐藏输入，不放入命令行或历史；checksum 不符时停止更新，不跳过校验。若仍手工执行 Compose，则全程保留第五节三文件完整前缀，遵循同样的停止、迁移和启动顺序。
 
 保留生成 env 和 `codex_auth` 卷，不重新初始化身份密钥。旧三文件配置先补齐 `configure_codex.py`，然后完成 5.4 登录。首次升级至统一 Codex 时按 5.4–5.6 验证。完整数据库、租户验收和备份说明见 [NAS 数据库操作手册](../docs/31.NAS独立PostgreSQL部署与验证操作手册.md)。

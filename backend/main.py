@@ -9,6 +9,8 @@ Run:  uvicorn backend.main:app --reload
 from __future__ import annotations
 
 import logging
+import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -208,11 +210,13 @@ def create_app() -> FastAPI:
             db_ok = True
         except Exception:  # noqa: BLE001
             logger.exception("healthz db probe failed")
+        commit = os.environ.get("WEALTHSAIL_BUILD_COMMIT", "").strip()
         return JSONResponse(
             {
                 "status": "ok" if db_ok else "degraded",
                 "db": "up" if db_ok else "down",
                 "version": __version__,
+                "gitCommit": commit if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) else None,
                 "requestId": request.state.request_id,
             },
             status_code=200 if db_ok else 503,

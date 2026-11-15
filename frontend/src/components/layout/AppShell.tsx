@@ -165,7 +165,14 @@ export default function AppShell() {
             </strong>
           </div>
           <div className="topbar-meta">
-            <span>Asia/Shanghai</span>
+            <span
+              className="topbar-build"
+              aria-label={`网页版本 ${__WEALTHSAIL_BUILD__.describe}`}
+              title={__WEALTHSAIL_BUILD__.commit ?? "此构建缺少 Git 信息"}
+            >
+              版本 <code>{__WEALTHSAIL_BUILD__.describe}</code>
+            </span>
+            <span className="topbar-timezone">Asia/Shanghai</span>
             <button className="icon-button notification" aria-label="通知中心">
               <Bell size={18} />
               <i />

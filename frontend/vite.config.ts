@@ -1,11 +1,27 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readBuildInfo } from "./build-info.ts";
 
 const apiTarget = process.env.WS_LOCAL_API_TARGET ?? "http://127.0.0.1:8000";
+const build = readBuildInfo();
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  define: { __WEALTHSAIL_BUILD__: JSON.stringify(build) },
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "wealthsail-build-info",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "build-info.json",
+          source: JSON.stringify(build) + "\n",
+        });
+      },
+    },
+  ],
   server: {
     port: 5173,
     proxy: {

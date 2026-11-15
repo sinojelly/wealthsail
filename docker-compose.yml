@@ -140,6 +140,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
+        BUILD_DESCRIBE: ${BUILD_DESCRIBE:-unknown}
     image: wealthsail-frontend:latest
     restart: unless-stopped
     ports:

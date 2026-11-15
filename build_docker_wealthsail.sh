@@ -11,28 +11,41 @@ EXPECTED_AVATARS='/data_n002/data/udata/real/15221151691/docker/wealth-sail/avat
 EXPECTED_CODEX_AUTH='/data_n002/data/udata/real/15221151691/docker/codex/wealthsail/auth'
 
 MODE=all
+MIGRATION_TARGET=""
 usage() {
   cat <<'HELP'
-Usage: bash build_docker_wealthsail.sh [--check | --build-only | --deploy-only]
+Usage: bash build_docker_wealthsail.sh [--check | --build-only | --deploy-only] [--migrate HOST:PORT/DB]
 
   (no args)      Validate -> build API/backend + frontend -> deploy -> verify
   --check        Read-only Compose, volumes and container/login checks
   --build-only   Validate, build and verify image revision; do not deploy
   --deploy-only  Verify and deploy already-built images; never build implicitly
+  --migrate      Dry-run, migrate and read back the confirmed production target
+                 before switching services. Export MIGRATION_DATABASE_URL first.
 
 Uses a dedicated nas-compose wrapper. NEVER runs db-init, down -v or prune.
 Override wrapper directory with NAS_TOOLS=/actual/tools if needed.
 HELP
 }
-for arg in "$@"; do
-  case "$arg" in
+while (($#)); do
+  case "$1" in
     --check) [[ "$MODE" == all ]] || { echo 'Only one mode allowed' >&2; exit 2; }; MODE=check ;;
     --build-only) [[ "$MODE" == all ]] || { echo 'Only one mode allowed' >&2; exit 2; }; MODE=build ;;
     --deploy-only) [[ "$MODE" == all ]] || { echo 'Only one mode allowed' >&2; exit 2; }; MODE=deploy ;;
+    --migrate)
+      [[ -z "$MIGRATION_TARGET" && -n "${2:-}" && "$2" != --* ]] || { echo '--migrate requires an exact target' >&2; exit 2; }
+      MIGRATION_TARGET="$2"; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "Unknown option: $arg" >&2; usage; exit 2 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
+  shift
 done
+if [[ -n "$MIGRATION_TARGET" ]]; then
+  [[ "$MODE" != check && "$MODE" != build && -n "${MIGRATION_DATABASE_URL:-}" ]] || {
+    echo '--migrate requires an update mode and an exported MIGRATION_DATABASE_URL' >&2
+    exit 2
+  }
+fi
 [[ -x "$COMPOSE" && -f "$DEPLOY" ]] || {
   echo "Missing nas-compose/deploy.json under $NAS_TOOLS" >&2; exit 1;
 }
@@ -171,16 +184,54 @@ verify_running_services() {
   done
 }
 
+verify_release_endpoints() {
+  local payload field service
+  local api_probe="import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=5).read().decode())"
+  for service in frontend api; do
+    if [[ "$service" == frontend ]]; then
+      payload="$(sudo "$COMPOSE" ws exec -T frontend wget -qO- http://127.0.0.1/build-info.json)"
+      field=commit
+    else
+      payload="$(sudo "$COMPOSE" ws exec -T api python -c "$api_probe")"
+      field=gitCommit
+    fi
+    printf '%s' "$payload" | python3 -c '
+import json,sys
+metadata=json.load(sys.stdin)
+field,expected,service=sys.argv[1:]
+if metadata.get(field) != expected:
+    raise SystemExit(f"ERROR: {service} response Git revision does not match {expected}")
+if service == "frontend" and not metadata.get("describe"):
+    raise SystemExit("ERROR: frontend build is missing git describe")
+if service == "api" and metadata.get("status") != "ok":
+    raise SystemExit("ERROR: backend health response is not ready")
+print(f"OK: {service} response matches Git commit {expected}")
+' "$field" "$EXPECTED_COMMIT" "$service"
+  done
+}
+
 if [[ "$MODE" != deploy ]]; then
   verify_source_commit
+  BUILD_DESCRIBE="$(git -C "$WEALTH_ROOT" describe --tags --always --long --dirty)"
   printf '\n[3/5] Build backend (shared API/Worker/Runner) and frontend\n'
-  sudo env BUILD_COMMIT="$EXPECTED_COMMIT" "$COMPOSE" ws build api worker codex-runner frontend
+  sudo env BUILD_COMMIT="$EXPECTED_COMMIT" BUILD_DESCRIBE="$BUILD_DESCRIBE" "$COMPOSE" ws build api worker codex-runner frontend
 fi
 verify_source_commit
 verify_images
 if [[ "$MODE" == build ]]; then
   echo '[build-only] Images ready; running service unchanged.'
   exit 0
+fi
+
+if [[ -n "$MIGRATION_TARGET" ]]; then
+  migrate=(ws run --rm --no-deps -T -e MIGRATION_DATABASE_URL api python scripts/migrate.py
+    --environment production --confirm-target "$MIGRATION_TARGET")
+  sudo --preserve-env=MIGRATION_DATABASE_URL "$COMPOSE" "${migrate[@]}" --dry-run
+  sudo "$COMPOSE" ws stop worker api
+  sudo --preserve-env=MIGRATION_DATABASE_URL "$COMPOSE" "${migrate[@]}"
+  sudo --preserve-env=MIGRATION_DATABASE_URL "$COMPOSE" "${migrate[@]}" --readback-only
+  verify_source_commit
+  verify_images
 fi
 
 printf '\n[4/5] Deploy only WealthSail runtime services\n'
@@ -194,6 +245,7 @@ sudo "$COMPOSE" ws exec -T codex-runner codex login status
 verify_source_commit
 verify_images
 verify_running_services
+verify_release_endpoints
 verify_source_commit
 verify_images
 echo 'WealthSail deployment checks complete. Check Web login and Codex chat in browser.'

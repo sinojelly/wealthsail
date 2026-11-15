@@ -241,6 +241,21 @@ textarea:focus-visible {
   color: rgba(251, 254, 247, 0.7);
   font-size: 11px;
 }
+.topbar-build {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--slate-500);
+  white-space: nowrap;
+}
+.topbar-build code {
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: min(28vw, 18ch);
+  user-select: all;
+}
 .icon-button {
   width: 34px;
   height: 34px;
@@ -912,7 +927,7 @@ button:disabled {
   .topbar-meta {
     margin-left: auto;
   }
-  .topbar-meta > span {
+  .topbar-meta > .topbar-timezone {
     display: none;
   }
   .page-content {
