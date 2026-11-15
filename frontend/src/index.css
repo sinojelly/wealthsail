@@ -256,6 +256,36 @@ textarea:focus-visible {
   max-width: min(28vw, 18ch);
   user-select: all;
 }
+.topbar-release {
+  position: relative;
+  min-width: 0;
+}
+.topbar-build-update {
+  position: absolute;
+  z-index: 25;
+  inset-block-start: calc(100% + 0.55rem);
+  inset-inline-end: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.7rem;
+  align-items: center;
+  width: max-content;
+  max-width: min(18rem, 65vw);
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #f2cf87;
+  border-radius: 0.5rem;
+  background: #fff4d8;
+  color: #542d11;
+  overflow-wrap: anywhere;
+  box-shadow: 0 3px 14px rgb(0 0 0 / 24%);
+}
+.topbar-build-update > button {
+  color: inherit;
+  border: 1px solid #996723;
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.45rem;
+  background: #fffdf3;
+}
 .icon-button {
   width: 34px;
   height: 34px;

@@ -137,6 +137,7 @@ async function requestOnce<T>(
       ...init,
       headers,
       credentials: "include",
+      cache: "no-store",
     });
   } catch (failure) {
     const failedAt = performance.now();

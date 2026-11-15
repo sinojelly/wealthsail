@@ -61,3 +61,8 @@ def test_current_positions_replace_frozen_price_claims_and_add_backtest():
     assert industry["stage"] == industry["fundPositions"][0]["status"] == "已入买区"
     assert industry["driver"] == "卫星发射排期仍需跟踪。"
     assert plan["tracks"][0]["buyZoneBacktest"]["evaluatedCount"] == 1
+    # Same dates and sample count, revised values. Cache identity follows NAV data.
+    for point in points[2:-1]:
+        point["value"] = "1.06"
+    enrich_live_industry_positions(report)
+    assert plan["tracks"][0]["buyZoneBacktest"]["winRatePct"] == 0

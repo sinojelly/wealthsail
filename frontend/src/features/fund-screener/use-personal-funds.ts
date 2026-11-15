@@ -59,12 +59,13 @@ export function usePersonalFunds(actor: string) {
         )
       )
         void queryClient.invalidateQueries({
-          queryKey: privateQueryKey(session, "opportunity-context"),
+          queryKey: [actor, "opportunity-context"],
         });
       return data;
     },
     enabled: !!actor,
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
   return {
     list,
@@ -83,7 +84,7 @@ export function usePersonalFunds(actor: string) {
       );
       await list.refetch();
       void queryClient.invalidateQueries({
-        queryKey: privateQueryKey(session, "opportunity-context"),
+        queryKey: [actor, "opportunity-context"],
       });
     },
     groups: groupPersonalFunds(

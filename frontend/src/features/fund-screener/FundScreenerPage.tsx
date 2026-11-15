@@ -206,7 +206,7 @@ function ResearchWorkspace({ subject }: { subject: string }) {
         navPolling.current = { report, until: now + 5 * 60_000 };
       return now < navPolling.current.until ? 60_000 : false;
     },
-    refetchOnWindowFocus: (query) => hasPendingTodayNav(query.state.data),
+    refetchOnWindowFocus: true,
     refetchOnReconnect: opportunityArchiveInterval.refetchOnReconnect,
     retry: false,
     enabled:

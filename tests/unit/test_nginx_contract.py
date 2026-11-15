@@ -90,3 +90,19 @@ def test_json_api_is_compressed_without_compressing_sse() -> None:
     stream = _location_body(source, "location = /api/v1/chat/stream")
     assert "gzip on;" not in stream
     assert "proxy_buffering off;" in stream
+
+
+def test_live_release_and_api_cache_headers_keep_server_security_headers() -> None:
+    source = _config()
+    controls = re.search(r"map \$uri \$wealthsail_cache_control\s*\{([^}]+)\}", source)
+    assert controls
+    for route in ("/index.html", "/build-info.json", "~^/api/"):
+        assert re.search(rf"{re.escape(route)}\s+\"no-store\";", controls.group(1))
+    assert "add_header Cache-Control $wealthsail_cache_control always;" in source
+    for declaration in ("location = /api/v1/chat/stream", "location /api/"):
+        body = _location_body(source, declaration)
+        assert "proxy_hide_header Cache-Control;" in body
+        assert not re.search(r"^\s*add_header ", body, re.MULTILINE)
+    for declaration in ("location = /index.html", "location = /build-info.json"):
+        assert "expires -1;" not in _location_body(source, declaration)
+    assert "try_files $uri =404;" in _location_body(source, "location ^~ /assets/")

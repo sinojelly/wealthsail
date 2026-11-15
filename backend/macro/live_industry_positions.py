@@ -2,6 +2,7 @@
 
 import re
 from decimal import Decimal
+from functools import lru_cache
 
 from backend.funds.nav_window import two_year_nav_points
 from backend.indicators.actionable_zones import buy_zone_backtest
@@ -65,7 +66,12 @@ def _without_frozen_position(text, codes, names):
     ).strip()
 
 
-def _add_backtests(plan, cache):
+@lru_cache(maxsize=256)
+def _backtest_for_window(closes, low, high):
+    return buy_zone_backtest(closes, low, high)
+
+
+def _add_backtests(plan):
     series = plan.get("series") or {}
     points = series.get("points", [])
     if (
@@ -74,32 +80,23 @@ def _add_backtests(plan, cache):
         or series.get("asOf") != plan.get("asOf")
     ):
         return
-    closes = [
-        point["value"] for point in two_year_nav_points(points) if "value" in point
-    ]
+    closes = tuple(
+        str(point["value"]) for point in two_year_nav_points(points) if "value" in point
+    )
     for copy in (plan, plan.get("actionableZones")):
         if not isinstance(copy, dict):
             continue
         for track in _rows(copy.get("tracks")):
-            low, high = track.get("entryZoneMin"), track.get("entryZoneMax")
-            key = (
-                plan["fundCode"],
-                series.get("sourceUri"),
-                series.get("asOf"),
-                series.get("retrievedAt"),
-                len(points),
-                str(low),
-                str(high),
+            result = _backtest_for_window(
+                closes, str(track.get("entryZoneMin")), str(track.get("entryZoneMax"))
             )
-            if key not in cache:
-                cache[key] = buy_zone_backtest(closes, low, high)
-            if cache[key] is not None:
-                track["buyZoneBacktest"] = cache[key]
+            if result is not None:
+                track["buyZoneBacktest"] = result.copy()
 
 
 def enrich_live_industry_positions(report):
     """Update public display copies only, after all live price guards run."""
-    current, backtests = {}, {}
+    current = {}
     for plan in _plans(report):
         code = plan.get("fundCode")
         if (
@@ -108,7 +105,7 @@ def enrich_live_industry_positions(report):
             or not _CODE.fullmatch(code)
         ):
             continue
-        _add_backtests(plan, backtests)
+        _add_backtests(plan)
         status = _live_position(plan)
         if not status:
             continue
@@ -159,7 +156,10 @@ def enrich_live_industry_positions(report):
             row.pop("buyDistancePct", None)
         names = [
             name
-            for name in [row.get("label"), *(position["label"] for position in positions)]
+            for name in [
+                row.get("label"),
+                *(position["label"] for position in positions),
+            ]
             if isinstance(name, str) and len(name) >= 2 and not _CODE.fullmatch(name)
         ]
         for field in ("driver", "summary", "action"):

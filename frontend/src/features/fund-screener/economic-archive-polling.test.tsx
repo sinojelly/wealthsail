@@ -1,5 +1,5 @@
 import { act, screen } from "@testing-library/react";
-import { onlineManager } from "@tanstack/react-query";
+import { focusManager, onlineManager } from "@tanstack/react-query";
 import type { DailyResearch, OpportunityContext } from "../../api/investment";
 import * as api from "../../api/investment";
 import FundScreenerPage from "./FundScreenerPage";
@@ -83,7 +83,39 @@ beforeEach(() => {
   onlineManager.setOnline(true);
   vi.useFakeTimers();
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  focusManager.setFocused(undefined);
+  vi.useRealTimers();
+});
+
+it("revalidates completed research when revisiting and preserves it on a temporary read failure", async () => {
+  vi.mocked(api.getOpportunityContext)
+    .mockResolvedValueOnce(context("AVAILABLE"))
+    .mockRejectedValueOnce(new Error("temporary connection reset"))
+    .mockResolvedValue(context("PARTIAL"));
+  renderWithSession(<FundScreenerPage />);
+  await act(async () => vi.advanceTimersByTimeAsync(20));
+  expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
+    "AVAILABLE",
+  );
+  await act(async () => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(20);
+  });
+  expect(api.getOpportunityContext).toHaveBeenCalledTimes(2);
+  expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
+    "AVAILABLE",
+  );
+  await act(async () => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(20);
+  });
+  expect(screen.getByLabelText("economic-delivery")).toHaveTextContent(
+    "PARTIAL",
+  );
+});
 
 it("refreshes a representative NAV gap until local history is available", async () => {
   const pending = context("AVAILABLE");
